@@ -14,6 +14,15 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 
+### Fixed
+
+- A failed guide download no longer wipes the TV guide you already had (#105).
+- Error messages and logs no longer show your API keys or Xtream login (#105).
+- Testing a wrong OpenSubtitles key says the key is invalid instead of showing a request error (#105).
+- Xtream logins that contain & or + now load (#105).
+- The Gemini key is sent in a request header instead of the request URL (#105).
+- Online lookups give up after a timeout instead of waiting forever on a server that stopped responding (#105).
+
 ## [0.5.3] - 2026-10-09
 
 ### Added
