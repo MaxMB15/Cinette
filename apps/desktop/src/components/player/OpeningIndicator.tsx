@@ -18,7 +18,8 @@ interface OpeningIndicatorProps {
 /**
  * Centered spinner shown while a stream opens, so a slow server isn't just a
  * black screen. It ignores the pointer so taps and double-clicks still reach
- * the player underneath. Only the "Try again" button takes them.
+ * the player underneath. Only the "Try again" button takes them, and it sits
+ * above any layer that catches taps on the video.
  */
 export const OpeningIndicator = ({ onRetry }: OpeningIndicatorProps) => {
 	const [slow, setSlow] = useState(false);
@@ -52,7 +53,7 @@ export const OpeningIndicator = ({ onRetry }: OpeningIndicatorProps) => {
 						onRetry();
 					}}
 					onDoubleClick={(e) => e.stopPropagation()}
-					className="pointer-events-auto mt-1 inline-flex min-h-11 items-center gap-2 rounded-full bg-white/10 px-5 text-sm font-medium text-white ring-1 ring-inset ring-white/20 transition hover:bg-white/20 active:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+					className="pointer-events-auto relative z-10 mt-1 inline-flex min-h-11 items-center gap-2 rounded-full bg-white/10 px-5 text-sm font-medium text-white ring-1 ring-inset ring-white/20 transition hover:bg-white/20 active:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
 				>
 					<RotateCw className="h-4 w-4" aria-hidden />
 					Try again
