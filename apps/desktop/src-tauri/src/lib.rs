@@ -137,6 +137,8 @@ pub fn run() {
             commands::get_download_retention,
             commands::set_download_retention,
             commands::count_downloads_due,
+            commands::schedule_recording,
+            commands::stop_recording,
         ])
         .setup(|app| {
             let app_dir = app
@@ -168,12 +170,21 @@ pub fn run() {
                 _ => {}
             }
 
+            // Recordings that were running then keep their files. A program
+            // that's still on gets a new recording for the rest.
+            match crate::downloads::recordings::recover(&cache) {
+                Ok(n) if n > 0 => tracing::info!("Settled {n} interrupted recording(s)"),
+                Err(e) => tracing::warn!("Failed to settle interrupted recordings: {e}"),
+                _ => {}
+            }
+
             app.manage(AppState {
                 cache: Mutex::new(cache),
             });
 
             let downloads_root = app_dir.join("downloads");
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
+            app.manage(crate::downloads::recordings::Recorder::default());
             crate::downloads::manager::restore_settings(app.handle());
             crate::downloads::retention::start(app.handle());
 
@@ -183,6 +194,10 @@ pub fn run() {
                 match app.shell().sidecar("ffmpeg") {
                     Ok(_) => {
                         tracing::info!("ffmpeg sidecar resolved");
+                        // Start or miss the recordings that came due while the
+                        // app was closed, before downloads take the connections.
+                        crate::downloads::recordings::run_check(app.handle());
+                        crate::downloads::recordings::start(app.handle());
                         // Start whatever is still queued from the last run.
                         if let Err(e) = crate::downloads::manager::pump(app.handle()) {
                             tracing::warn!("Failed to start queued downloads: {e}");
@@ -231,6 +246,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 crate::downloads::manager::stop_all_for_exit(app);
+                crate::downloads::recordings::stop_all_for_exit(app);
             }
         });
 }

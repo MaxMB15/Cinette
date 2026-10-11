@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::commands::AppState;
-use crate::downloads::scheduler::start_queued;
+use crate::downloads::recordings;
+use crate::downloads::scheduler::{start_queued, waits_for_recording};
 use mvp_core::cache::store::CacheStore;
 use mvp_core::downloads::ffmpeg::{
     build_ffmpeg_args, container_from_part_path, fold_progress_line, ProgressUpdate,
@@ -205,7 +206,21 @@ pub fn pump<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         || {
             let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
             let active = cache.list_active_downloads().map_err(|e| e.to_string())?;
-            Ok(active.into_iter().map(|r| (r.id, r.status)).collect())
+            let recording = recordings::recording_channels(&cache)?;
+            let providers = if recording.is_empty() {
+                Vec::new()
+            } else {
+                recordings::provider_ids(&cache)?
+            };
+            Ok(active
+                .into_iter()
+                // A download that waits for a recording doesn't take a slot.
+                .filter(|r| {
+                    r.status != DownloadStatus::Queued
+                        || !waits_for_recording(&r.channel_id, &recording, &providers)
+                })
+                .map(|r| (r.id, r.status))
+                .collect())
         },
         |id| {
             let rec = {
@@ -239,6 +254,28 @@ fn fail_to_start<R: Runtime>(app: &AppHandle<R>, rec: &DownloadRecord, err: &str
     emit_progress(app, &rec.id);
 }
 
+/// Put a running download back in the queue and stop its ffmpeg, without
+/// marking it failed. A recording that needs the provider's connection does
+/// this. The download starts over once no recording of its provider runs.
+pub fn requeue<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    update_record(app, id, |r| {
+        if r.status == DownloadStatus::Downloading {
+            r.status = DownloadStatus::Queued;
+            r.downloaded_bytes = 0;
+            r.avg_rate_bps = None;
+        }
+    });
+    let child = {
+        let manager = app.state::<DownloadManager>();
+        let mut running = manager.running.lock().unwrap();
+        running.remove(id)
+    };
+    if let Some(handle) = child {
+        let _ = handle.child.kill();
+    }
+    emit_progress(app, id);
+}
+
 /// Stop every running ffmpeg as the app quits. The shell plugin only stops
 /// processes started from JavaScript, so these would keep downloading after
 /// the app is gone. Their records stay `Downloading`, and the next launch
@@ -263,7 +300,7 @@ pub(crate) fn now_secs() -> i64 {
 }
 
 /// Lightweight unique id without adding a uuid dependency.
-fn uuid_like() -> String {
+pub(crate) fn uuid_like() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -329,6 +366,7 @@ pub fn start_process<R: Runtime>(app: &AppHandle<R>, mut rec: DownloadRecord) ->
     let (mut rx, child) = sidecar
         .spawn()
         .map_err(|e| redact_credentials(&e.to_string()))?;
+    let pid = child.pid();
 
     // Track the child so it can be killed on stop.
     {
@@ -395,10 +433,22 @@ pub fn start_process<R: Runtime>(app: &AppHandle<R>, mut rec: DownloadRecord) ->
             return;
         }
 
-        // Remove from running map.
-        {
+        // Take this run out of the running map. A download that was stopped,
+        // or put back in the queue for a recording, has left the map already.
+        // It may be running again under a new ffmpeg, which then owns the
+        // record and the file.
+        let ours = {
             let manager = app.state::<DownloadManager>();
-            manager.running.lock().unwrap().remove(&id);
+            let mut running = manager.running.lock().unwrap();
+            let ours = running.get(&id).is_some_and(|h| h.child.pid() == pid);
+            if ours {
+                running.remove(&id);
+            }
+            ours
+        };
+        if !ours && !exiting {
+            let _ = pump(&app);
+            return;
         }
 
         if exit_ok {
@@ -410,10 +460,13 @@ pub fn start_process<R: Runtime>(app: &AppHandle<R>, mut rec: DownloadRecord) ->
                 r.finished_at = Some(now_secs());
             });
         } else {
-            // If it was cancelled (child killed), status was already set to
-            // Cancelled by stop_download; don't overwrite that.
-            let was_cancelled = current_status(&app, &id) == Some(DownloadStatus::Cancelled);
-            if !was_cancelled {
+            // A download the user stopped is already Cancelled, and one put
+            // back in the queue is Queued. Neither failed.
+            let was_stopped = matches!(
+                current_status(&app, &id),
+                Some(DownloadStatus::Cancelled | DownloadStatus::Queued)
+            );
+            if !was_stopped {
                 update_record(&app, &id, |r| {
                     r.status = DownloadStatus::Failed;
                     r.error = err_text.clone().or(Some("ffmpeg exited non-zero".into()));
@@ -434,6 +487,16 @@ pub fn start_process<R: Runtime>(app: &AppHandle<R>, mut rec: DownloadRecord) ->
 /// Stop a single in-progress or queued download: mark Cancelled, kill the child
 /// if running, and delete any partial file. Safe to call on any state.
 pub fn stop_one<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
+    // A stopped recording keeps its file, so it has its own stop.
+    let kind = {
+        let app_state = app.state::<AppState>();
+        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+        cache.get_download(id).ok().flatten().map(|r| r.kind)
+    };
+    if kind == Some(DownloadKind::Recording) {
+        return recordings::stop(app, id);
+    }
+
     // Mark cancelled first so the spawn task's exit handler won't flip it to Failed.
     update_record(app, id, |r| {
         if r.status == DownloadStatus::Queued || r.status == DownloadStatus::Downloading {
@@ -469,7 +532,7 @@ pub fn stop_one<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn update_record<R: Runtime>(
+pub(crate) fn update_record<R: Runtime>(
     app: &AppHandle<R>,
     id: &str,
     f: impl FnOnce(&mut DownloadRecord),
@@ -508,17 +571,21 @@ pub fn remove<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
 /// Delete the record `id` and its file. Downloads with the same title share
 /// one file, so the file stays while another record still points at it. When
 /// the file can't be deleted the record stays too, so the app keeps showing
-/// the space it takes.
+/// the space it takes. A recording that's running can't be deleted, and one
+/// that hasn't started has no file yet.
 pub(crate) fn delete_record_and_file(cache: &CacheStore, id: &str) -> Result<(), String> {
     let Some(rec) = cache.get_download(id).map_err(|e| e.to_string())? else {
         return Ok(());
     };
+    if rec.status == DownloadStatus::Recording {
+        return Err("Stop the recording before deleting it.".into());
+    }
     let shared = cache
         .list_downloads()
         .map_err(|e| e.to_string())?
         .iter()
         .any(|r| r.id != rec.id && r.dest_path == rec.dest_path);
-    if !shared {
+    if !shared && !rec.dest_path.is_empty() {
         match std::fs::remove_file(&rec.dest_path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -600,6 +667,32 @@ mod tests {
         cache
             .upsert_download(&completed("a", &dir.path().join("gone.mkv")))
             .unwrap();
+        delete_record_and_file(&cache, "a").unwrap();
+        assert!(cache.get_download("a").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_running_recording_cant_be_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("City News 2026-10-12 20.00.ts");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = CacheStore::open_in_memory().unwrap();
+        let mut rec = completed("r", &file);
+        rec.kind = DownloadKind::Recording;
+        rec.status = DownloadStatus::Recording;
+        cache.upsert_download(&rec).unwrap();
+        assert!(delete_record_and_file(&cache, "r").is_err());
+        assert!(file.exists());
+        assert!(cache.get_download("r").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_scheduled_recording_has_no_file_to_delete() {
+        let cache = CacheStore::open_in_memory().unwrap();
+        let mut rec = completed("a", std::path::Path::new(""));
+        rec.kind = DownloadKind::Recording;
+        rec.status = DownloadStatus::Scheduled;
+        cache.upsert_download(&rec).unwrap();
         delete_record_and_file(&cache, "a").unwrap();
         assert!(cache.get_download("a").unwrap().is_none());
     }
