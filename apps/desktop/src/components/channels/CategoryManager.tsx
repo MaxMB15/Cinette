@@ -127,7 +127,7 @@ export const CategoryManager = ({
 			const groupsWithSamples: [string, string[]][] = groupNames.map((g) => [
 				g,
 				channels
-					.filter((c) => c.groupTitle === g)
+					.filter((c) => c.groupTitle === g && c.contentType === contentType)
 					.slice(0, 5)
 					.map((c) => c.name),
 			]);
