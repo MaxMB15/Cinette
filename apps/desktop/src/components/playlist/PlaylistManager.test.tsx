@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import type { Provider } from "@/lib/types";
 
 vi.mock("@/hooks/useChannels", async (importOriginal) => ({
@@ -68,5 +68,21 @@ describe("PlaylistManager", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(removeProvider).not.toHaveBeenCalled();
 		expect(screen.queryByText(/Remove "My IPTV"\?/)).toBeNull();
+	});
+
+	it("shows a failed refresh on the provider card", async () => {
+		refreshProvider.mockRejectedValue("Server returned 503");
+		renderManager();
+		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+		expect(await screen.findByText("Server returned 503")).toBeTruthy();
+	});
+
+	it("shows a failed refresh in the provider settings", async () => {
+		refreshProvider.mockRejectedValue("Server returned 503");
+		renderManager();
+		fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+		fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+		// One under the modal's button and one on the card behind it.
+		await waitFor(() => expect(screen.getAllByText("Server returned 503")).toHaveLength(2));
 	});
 });

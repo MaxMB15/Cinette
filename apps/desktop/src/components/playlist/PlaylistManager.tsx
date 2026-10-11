@@ -35,6 +35,7 @@ export const PlaylistManager = () => {
 	const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
 	const [settingsProvider, setSettingsProvider] = useState<Provider | null>(null);
 	const [pendingRemoval, setPendingRemoval] = useState<Provider | null>(null);
+	const [refreshErrors, setRefreshErrors] = useState<Record<string, string>>({});
 
 	const handleAddM3u = async (name: string, url: string) => {
 		await loadM3u(name, url);
@@ -53,17 +54,30 @@ export const PlaylistManager = () => {
 		await loadXtream(name, url, username, password);
 	};
 
-	const handleRefresh = async (id: string) => {
+	const refreshNow = async (id: string) => {
 		setRefreshingIds((s) => new Set(s).add(id));
-		try {
-			await refreshProvider(id);
-		} catch {}
-		setRefreshingIds((s) => {
-			const next = new Set(s);
-			next.delete(id);
+		setRefreshErrors((errors) => {
+			const next = { ...errors };
+			delete next[id];
 			return next;
 		});
+		try {
+			await refreshProvider(id);
+		} catch (e) {
+			setRefreshErrors((errors) => ({ ...errors, [id]: String(e) }));
+			// Rethrown so the settings modal can show the error next to its own button.
+			throw e;
+		} finally {
+			setRefreshingIds((s) => {
+				const next = new Set(s);
+				next.delete(id);
+				return next;
+			});
+		}
 	};
+
+	// The card already shows the error, so the click has nothing left to handle.
+	const handleRefresh = (id: string) => refreshNow(id).catch(() => {});
 
 	return (
 		<div className="flex flex-col gap-6 p-4 max-w-2xl mx-auto h-full overflow-y-auto">
@@ -144,6 +158,11 @@ export const PlaylistManager = () => {
 										{p.lastUpdated &&
 											` \u00b7 Updated ${new Date(p.lastUpdated).toLocaleString()}`}
 									</p>
+									{refreshErrors[p.id] && (
+										<p className="text-xs text-destructive mt-1">
+											{refreshErrors[p.id]}
+										</p>
+									)}
 								</CardContent>
 							</Card>
 						);
@@ -155,7 +174,7 @@ export const PlaylistManager = () => {
 				<ProviderSettingsModal
 					provider={settingsProvider}
 					onClose={() => setSettingsProvider(null)}
-					onRefreshNow={handleRefresh}
+					onRefreshNow={refreshNow}
 					onUpdateProvider={updateProvider}
 				/>
 			)}
