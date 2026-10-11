@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { Download, RefreshCw, Play } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 import type { SplashScreenState, SplashStep, StepStatus } from "@/hooks/useSplashScreen";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { openUrl } from "@/lib/openUrl";
 import { isMobilePlatform } from "@/lib/platform";
+import appIcon from "@/assets/app-icon.png";
 import bmcQr from "@/assets/bmc-qr.png";
 
 const BMC_URL = "https://buymeacoffee.com/MaxMB15";
@@ -64,9 +65,13 @@ const LeftPanel = ({
 		<div className="flex-1 flex flex-col items-center justify-center gap-10 px-6 sm:px-16">
 			{/* Logo + branding */}
 			<div className="flex flex-col items-center gap-4 text-center">
-				<div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center text-primary-foreground shadow-lg">
-					<Play className="w-7 h-7 fill-current" />
-				</div>
+				<img
+					src={appIcon}
+					alt=""
+					width={64}
+					height={64}
+					className="w-16 h-16 rounded-2xl shadow-lg"
+				/>
 				<div>
 					<h1 className="text-2xl font-bold tracking-tight">Max Video Player</h1>
 					<p className="text-sm text-muted-foreground mt-0.5">IPTV Player</p>
