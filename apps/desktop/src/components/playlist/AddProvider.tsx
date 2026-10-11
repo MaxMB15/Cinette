@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
 import { Loader2, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
 import { filenameFromPath, isPlaylistFile, nameFromFilename } from "@/lib/file-url";
@@ -13,8 +14,14 @@ import { cn } from "@/lib/utils";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ContentDisclaimer } from "./ContentDisclaimer";
+import { XtreamFields } from "./XtreamFields";
 
 type M3uMode = "url" | "file";
+
+const M3U_MODES: SegmentedOption<M3uMode>[] = [
+	{ value: "url", label: "URL", icon: <Link className="h-3.5 w-3.5" /> },
+	{ value: "file", label: "File", icon: <FileText className="h-3.5 w-3.5" /> },
+];
 
 interface AddProviderProps {
 	onAddM3u: (name: string, url: string) => Promise<void>;
@@ -170,34 +177,13 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					{tab === "m3u" && (
 						<>
 							{showFileBrowse && (
-								<div className="flex gap-1 p-1 bg-secondary rounded-lg">
-									<button
-										type="button"
-										onClick={() => setM3uMode("url")}
-										className={cn(
-											"flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium transition-colors",
-											m3uMode === "url"
-												? "bg-background text-foreground shadow-sm"
-												: "text-muted-foreground hover:text-foreground"
-										)}
-									>
-										<Link className="h-3.5 w-3.5" />
-										URL
-									</button>
-									<button
-										type="button"
-										onClick={() => setM3uMode("file")}
-										className={cn(
-											"flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium transition-colors",
-											m3uMode === "file"
-												? "bg-background text-foreground shadow-sm"
-												: "text-muted-foreground hover:text-foreground"
-										)}
-									>
-										<FileText className="h-3.5 w-3.5" />
-										File
-									</button>
-								</div>
+								<SegmentedControl
+									aria-label="Playlist source"
+									value={m3uMode}
+									onChange={setM3uMode}
+									options={M3U_MODES}
+									fill
+								/>
 							)}
 
 							{m3uMode === "url" && (
@@ -281,27 +267,15 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					)}
 
 					{tab === "xtream" && (
-						<>
-							<Input
-								placeholder="Server URL (e.g. http://example.com:8080)"
-								value={url}
-								onChange={(e) => setUrl(e.target.value)}
-								required
-							/>
-							<Input
-								placeholder="Username"
-								value={username}
-								onChange={(e) => setUsername(e.target.value)}
-								required
-							/>
-							<Input
-								placeholder="Password"
-								type="password"
-								value={password}
-								onChange={(e) => setPassword(e.target.value)}
-								required
-							/>
-						</>
+						<XtreamFields
+							variant="add"
+							url={url}
+							username={username}
+							password={password}
+							onUrlChange={setUrl}
+							onUsernameChange={setUsername}
+							onPasswordChange={setPassword}
+						/>
 					)}
 
 					{error && <p className="text-sm text-destructive">{error}</p>}

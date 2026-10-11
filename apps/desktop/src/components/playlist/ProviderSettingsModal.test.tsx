@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import type { Provider } from "@/lib/types";
 
 vi.mock("@/lib/tauri", () => ({
@@ -12,6 +12,7 @@ vi.mock("@/lib/tauri", () => ({
 }));
 
 import { ProviderSettingsModal } from "./ProviderSettingsModal";
+import { detectEpgUrl } from "@/lib/tauri";
 
 const provider: Provider = {
 	id: "p1",
@@ -23,13 +24,13 @@ const provider: Provider = {
 	channelCount: 12,
 };
 
-const renderModal = () => {
+const renderModal = (onRefreshNow = vi.fn()) => {
 	const onClose = vi.fn();
 	render(
 		<ProviderSettingsModal
 			provider={provider}
 			onClose={onClose}
-			onRefreshNow={vi.fn()}
+			onRefreshNow={onRefreshNow}
 			onUpdateProvider={vi.fn()}
 		/>
 	);
@@ -56,6 +57,53 @@ describe("ProviderSettingsModal", () => {
 		const reads = getItem.mock.calls.filter(([key]) => key === "provider-settings-p1");
 		expect(reads).toHaveLength(1);
 		getItem.mockRestore();
+	});
+
+	it("names each field with its label", () => {
+		renderModal();
+		const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
+		expect(value("Name")).toBe("My IPTV");
+		expect(value("Server URL")).toBe("http://example.com:8080");
+		expect(value("Username")).toBe("me");
+		expect(value("Password")).toBe("secret");
+		expect(value("EPG URL")).toBe("");
+		expect(value("EPG refresh interval")).toBe("24");
+	});
+
+	it("marks the chosen auto-refresh option and shows the interval when on", () => {
+		renderModal();
+		const group = screen.getByRole("group", { name: "Auto-refresh" });
+		const off = within(group).getByRole("button", { name: "Off" });
+		const on = within(group).getByRole("button", { name: "On" });
+		expect(off.getAttribute("aria-pressed")).toBe("true");
+		expect(screen.queryByLabelText("Refresh interval")).toBeNull();
+
+		fireEvent.click(on);
+		expect(on.getAttribute("aria-pressed")).toBe("true");
+		expect(off.getAttribute("aria-pressed")).toBe("false");
+		expect(screen.getByLabelText("Refresh interval")).toBeTruthy();
+	});
+
+	it("shows a refresh error under the refresh button", async () => {
+		let fail: (e: Error) => void = () => {};
+		const onRefreshNow = vi.fn(() => new Promise<void>((_, reject) => (fail = reject)));
+		renderModal(onRefreshNow);
+
+		fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+		const busy = screen.getByRole("button", { name: "Refreshing…" }) as HTMLButtonElement;
+		expect(busy.disabled).toBe(true);
+		expect(onRefreshNow).toHaveBeenCalledWith("p1");
+
+		fail(new Error("Server unreachable"));
+		expect(await screen.findByText("Error: Server unreachable")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Refresh now" })).toBeTruthy();
+	});
+
+	it("says so when no EPG URL is found", async () => {
+		vi.mocked(detectEpgUrl).mockResolvedValue(null);
+		renderModal();
+		fireEvent.click(screen.getByRole("button", { name: "Auto-detect" }));
+		expect(await screen.findByText("No EPG URL detected")).toBeTruthy();
 	});
 
 	it("closes on Escape", () => {
