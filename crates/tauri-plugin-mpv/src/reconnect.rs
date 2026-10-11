@@ -1,83 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Background watcher that auto-recovers playback after network outages.
+//! Background watcher that reloads a stream after a network failure.
 //!
-//! ## Failure signals
+//! Each `load` spawns one watcher thread with its own mpv client. The client
+//! has its own event queue but shares the player core, so its `loadfile`
+//! replaces the main player's file.
 //!
-//! Network problems manifest several ways inside libmpv. We listen for all
-//! of them — duplicated signals are deduplicated by `next_retry_at`:
+//! A soft stall is FFmpeg retrying the read on its own, through the
+//! `stream-lavf-o` reconnect options. The only sign is that the demuxer
+//! cache drains and `paused-for-cache` turns on. The watcher sends
+//! `mpv://buffering` and `mpv://buffered` for it and leaves recovery to
+//! FFmpeg.
 //!
-//! 1. **Soft stall (FFmpeg silently retrying).** With
-//!    `stream-lavf-o=reconnect=1,reconnect_streamed=1`, FFmpeg retries the
-//!    underlying HTTP read forever — the demuxer never raises an error and
-//!    the only outward sign is that mpv's demuxer cache drains and
-//!    `paused-for-cache` flips to `true`. This is the COMMON case during
-//!    Wi-Fi drops / network switches.
+//! A hard failure ends the file. That is an `EndFile` with an error reason,
+//! or an `EndFile(Eof)` well short of the duration, which is how mpv reports
+//! a server closing the connection early. libmpv2 turns every `END_FILE`
+//! that carries an error code into an `Err` from `wait_event`, so most of
+//! these never arrive as `EndFile`. The watcher also observes `eof-reached`
+//! and `idle-active`, which mpv sets whatever the error code. The first
+//! trigger arms the retry and `next_retry_at` makes the rest no-ops.
 //!
-//!    We observe `paused-for-cache` and emit `mpv://buffering` /
-//!    `mpv://buffered` so the UI can show a connection-issues overlay
-//!    within seconds. No `loadfile` is re-issued — FFmpeg's own reconnect
-//!    handles recovery.
-//!
-//! 2. **Hard failure (`EndFile(Error)` or libmpv2-swallowed equivalent).**
-//!    Some providers force-close the connection, return 5xx, or libmpv's
-//!    own `network-timeout` fires before FFmpeg's reconnect could establish
-//!    a session. The demuxer raises `MPV_EVENT_END_FILE` with
-//!    `reason == MPV_END_FILE_REASON_ERROR`. **Important quirk:** libmpv2's
-//!    `wait_event` wrapper short-circuits *any* `END_FILE` whose
-//!    `end_file.error` is non-zero into an opaque `Err(Error::Raw(...))` —
-//!    the `Event::EndFile(reason)` arm never runs in that case. mpv sets
-//!    `end_file.error` on most abnormal ends (premature truncation, network
-//!    error, decode-pipeline shutdown), so the `Event::EndFile(Error)` arm
-//!    fires far less often than naïve reading of the libmpv docs suggests.
-//!
-//! 3. **Premature EOF.** FFmpeg's HTTP demuxer can also exhaust its retry
-//!    budget while the connection itself ended "cleanly" (server closed the
-//!    socket, or `Content-Length` claimed more bytes than were delivered).
-//!    With `keep-open=yes` mpv parks at the truncation point; pressing play
-//!    just bounces back to paused because there is nothing left to read.
-//!
-//! ## Why we observe `eof-reached` and `idle-active`
-//!
-//! Because libmpv2 silently drops most error-flavoured `EndFile` events
-//! (see (2) above), relying on `Event::EndFile` alone leaves the watcher
-//! blind during exactly the scenarios it's supposed to recover from. To
-//! sidestep that limitation we observe two boolean properties whose
-//! `PropertyChange` events are NOT gated by `event.error`:
-//!
-//! - `eof-reached` flips to `true` whenever the demuxer reaches EOF —
-//!   premature or otherwise. Combined with a `time-pos` vs `duration`
-//!   check, it gives us a reliable "stream ran out" signal even when
-//!   `EndFile` is squelched.
-//! - `idle-active` flips to `true` when mpv unloads the file entirely
-//!   (the hard-error path with `keep-open=yes`: errors quit, EOF doesn't).
-//!   We treat it as a trigger only after we've seen real playback
-//!   (`last_known_pos > 1.0`) so the property's initial transient during
-//!   startup doesn't fire a false alarm.
-//!
-//! Whichever signal arrives first arms the retry; subsequent duplicates
-//! are no-ops thanks to the `next_retry_at` guard.
-//!
-//! ## Lifecycle
-//!
-//! - One monitor thread per `load()`. Spawned at the end of `load_impl` once
-//!   playback has actually started.
-//! - The thread owns its own `Mpv` client handle (independent event queue,
-//!   but full command capability — it can re-issue `loadfile`).
-//! - **Cancellation is driven by an explicit `Arc<AtomicBool>` kill flag**,
-//!   tripped by `MpvState::cancel_reconnect_monitor` before the parent `Mpv`
-//!   is dropped (i.e. before every `stop()` and the start of every new
-//!   `load()`). We cannot rely on `MPV_EVENT_SHUTDOWN` for teardown because
-//!   per the libmpv docs the client handle returned by `mpv_create_client`
-//!   holds a *strong* reference to the player core — so dropping the parent
-//!   `Mpv` alone does NOT trigger Shutdown until the client is also dropped.
-//!   Leaving the watcher alive after teardown would leak the libmpv core,
-//!   the macOS hardware decoder, and the audio device into the next load.
-//! - The thread checks `kill.load(Acquire)` at the top of every loop
-//!   iteration (and the `wait_event(1.0)` 1-second timeout bounds the worst
-//!   case latency on a cancellation). When the flag is set, the thread
-//!   returns, drops its client, and the core is finally released.
+//! Each reload sends `mpv://reconnecting`. The first goes out at once, then
+//! the wait doubles from 1 second up to `BACKOFF_CAP_SECS`. A reload counts
+//! as recovered, and sends `mpv://reconnected`, once `time-pos` moves
+//! `RECOVERY_CONFIRM_ADVANCE_SECS` past where playback restarted. After
+//! `MAX_ATTEMPTS` the watcher sends `mpv://load-failed` and exits.
 
 use libmpv2::{
     events::{Event, PropertyData},
@@ -90,69 +38,47 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Runtime};
 
-/// Maximum backoff between consecutive reconnect attempts.
-///
-/// Each `loadfile` call itself can block for up to `reconnect_delay_max`
-/// seconds (5 s, set on the FFmpeg lavf options) while ffmpeg retries the
-/// HTTP handshake, so total time between attempts is roughly
-/// `BACKOFF_CAP_SECS + 5 s`.
+/// Longest wait between reloads, in seconds.
 const BACKOFF_CAP_SECS: u64 = 30;
 
-/// Give up after this many consecutive failed reconnect attempts. Without a
-/// cap, a permanently broken URL (404, DNS gone, user is genuinely offline)
-/// would spin the watcher thread forever. With `MAX_ATTEMPTS=10` and the
-/// backoff schedule (0, 1, 2, 4, 8, 16, 30, 30, 30, 30 s) the user waits
-/// up to about 2 minutes before we surface "stream unavailable" to the UI.
+/// Reloads before the watcher gives up. Without a limit a dead URL would be
+/// retried forever. With the backoff, ten reloads take at least two and a
+/// half minutes.
 const MAX_ATTEMPTS: u32 = 10;
 
-/// Slack (in seconds) when checking whether an EOF is "premature".
-///
-/// On a normal end-of-file, mpv may fire `EndFile(Eof)` a few hundred
-/// milliseconds before `time-pos` reaches the very last sample. Treating
-/// anything less than `duration - PREMATURE_EOF_SLACK_SECS` as premature
-/// gives us a safe window: we won't accidentally re-trigger reconnect on a
-/// VOD that finished playing, but anything that ends materially short of
-/// the declared duration is recognised as a network-induced truncation.
+/// How far short of `duration` an end of file can stop and still count as
+/// the real end, in seconds. mpv can end a file a few hundred milliseconds
+/// before `time-pos` reaches the duration.
 const PREMATURE_EOF_SLACK_SECS: f64 = 5.0;
 
-/// How much `time-pos` must advance after `PlaybackRestart` before we
-/// consider a reconnect attempt successful. `FileLoaded` alone is not a
-/// reliable signal because mpv emits it once metadata is parsed — long
-/// before any actual frames are decoded, and even when the underlying
-/// socket is already dead (mpv may have cached headers from the previous
-/// attempt). Requiring real playback advance ensures the UI doesn't dismiss
-/// the "reconnecting" banner prematurely.
+/// How far `time-pos` must move past the restart point before a reload
+/// counts as recovered, in seconds. mpv sends `FileLoaded` once the headers
+/// parse, even when the socket is already dead, so only real playback shows
+/// that data is flowing again.
 const RECOVERY_CONFIRM_ADVANCE_SECS: f64 = 1.0;
 
-/// If `PlaybackRestart` fires but `time-pos` fails to advance by
-/// `RECOVERY_CONFIRM_ADVANCE_SECS` within this window, treat the recovery
-/// as stalled and trigger another reconnect attempt. Without this safety
-/// net, an mpv instance that loads metadata but can't fetch payload bytes
-/// (which is what the user's logs show) would sit forever between
-/// PlaybackRestart and EOF — no event would fire to drive recovery forward.
+/// How long a reload may sit at its restart point before the watcher tries
+/// again, in seconds. mpv can load the headers and then wait for data that
+/// never comes, with no event to say so.
 const RECOVERY_STALL_TIMEOUT_SECS: u64 = 15;
 
-/// Tauri event emitted when the monitor begins recovering from a hard error.
-/// Payload: `{ "url": string, "attempt": number }`.
+/// Sent when the watcher schedules a reload. The payload is
+/// `{ "url": string, "attempt": number }`.
 const EVENT_RECONNECTING: &str = "mpv://reconnecting";
 
-/// Tauri event emitted when playback successfully resumes after a reconnect.
-/// Payload: `{ "url": string }`.
+/// Sent once a reload is playing again. The payload is `{ "url": string }`.
 const EVENT_RECONNECTED: &str = "mpv://reconnected";
 
-/// Tauri event emitted when `paused-for-cache` becomes `true` — i.e. mpv's
-/// demuxer cache has drained and playback is stalled waiting for more data.
-/// This is the first observable sign of a soft network stall while FFmpeg
-/// silently retries the underlying HTTP read. Payload: `{ "url": string }`.
+/// Sent when the cache runs dry and mpv pauses to wait for data. It is the
+/// first sign of a soft stall. The payload is `{ "url": string }`.
 const EVENT_BUFFERING: &str = "mpv://buffering";
 
-/// Tauri event emitted when `paused-for-cache` returns to `false` (cache
-/// refilled, playback resumed). Payload: `{ "url": string }`.
+/// Sent when the cache refills after `mpv://buffering`. The payload is
+/// `{ "url": string }`.
 const EVENT_BUFFERED: &str = "mpv://buffered";
 
-/// Tauri event emitted when reconnect attempts are exhausted (URL is
-/// permanently unreachable). The user must take action to recover (retry
-/// from the UI, switch network, etc.). Payload: `{ "url": string }`.
+/// Sent after the last reload fails. The watcher exits, so recovery is up to
+/// the user. The payload is `{ "url": string }`.
 const EVENT_LOAD_FAILED: &str = "mpv://load-failed";
 
 /// Properties the watcher observes, with the `reply_userdata` id for each.
@@ -179,13 +105,15 @@ struct UrlPayload<'a> {
     url: &'a str,
 }
 
-/// Spawn the background watcher. The caller is responsible for setting
-/// `kill` to true (and for not reusing the same flag across spawns)
-/// **before** the parent `Mpv` is destroyed — otherwise the still-alive
-/// client handle keeps the libmpv core alive (per the libmpv docs:
-/// regular clients from `mpv_create_client` hold a strong reference to
-/// the player core). Leaking the core causes hardware-decoder and audio
-/// device contention with the next loaded stream.
+/// Starts a watcher thread for `url` on `client`, a client of the player
+/// that is playing it.
+///
+/// Set `kill` before destroying the parent `Mpv`, and use a new flag for
+/// each spawn. A client from `mpv_create_client` holds a strong reference
+/// to the player core, so destroying the parent alone doesn't stop the
+/// thread. A watcher left running keeps the core, the hardware decoder and
+/// the audio device busy while the next stream loads. The thread checks
+/// `kill` at least once a second.
 pub fn spawn<R: Runtime>(client: Mpv, url: String, app: AppHandle<R>, kill: Arc<AtomicBool>) {
     let watcher = Watcher {
         client,
@@ -235,8 +163,8 @@ fn signal(event: Option<libmpv2::Result<Event<'_>>>) -> Signal {
             ("idle-active", PropertyData::Flag(idle)) => Signal::IdleActive(idle),
             _ => Signal::Nothing,
         },
-        // FileLoaded is not a sign of recovery. mpv sends it once the headers
-        // parse, even when the socket is already dead.
+        // FileLoaded doesn't prove a reload worked. See
+        // `RECOVERY_CONFIRM_ADVANCE_SECS`.
         Some(Ok(_)) | None => Signal::Nothing,
         Some(Err(e)) => Signal::WaitFailed(e),
     }
