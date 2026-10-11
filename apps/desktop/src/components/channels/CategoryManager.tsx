@@ -375,7 +375,7 @@ export const CategoryManager = ({
 						<RefreshCw
 							className={`h-3.5 w-3.5 mr-1.5 ${categorizing ? "animate-spin" : ""}`}
 						/>
-						{categorizing ? "Categorizing..." : "Re-categorize All"}
+						{categorizing ? "Categorizing…" : "Re-categorize All"}
 					</Button>
 					<Button size="sm" variant="ghost" onClick={onClose}>
 						Close
@@ -396,7 +396,7 @@ export const CategoryManager = ({
 			<div className="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-border/50">
 				<Plus className="h-4 w-4 text-muted-foreground shrink-0" />
 				<Input
-					placeholder="New category name..."
+					placeholder="New category name…"
 					value={newCategoryName}
 					onChange={(e) => setNewCategoryName(e.target.value)}
 					className="flex-1 h-8 text-xs"
@@ -553,7 +553,7 @@ export const CategoryManager = ({
 									<Sparkles
 										className={`h-3 w-3 mr-1 ${fixingUncategorized ? "animate-pulse" : ""}`}
 									/>
-									{fixingUncategorized ? "Assigning..." : "Assign All with AI"}
+									{fixingUncategorized ? "Assigning…" : "Assign All with AI"}
 								</Button>
 							)}
 						</div>
@@ -654,7 +654,7 @@ export const CategoryManager = ({
 						>
 							{aiPromptLoading ? (
 								<>
-									<RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Working...
+									<RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Working…
 								</>
 							) : (
 								<>

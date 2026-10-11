@@ -79,6 +79,15 @@ describe("CategoryManager", () => {
 		]);
 	});
 
+	it("writes its placeholder and progress text with an ellipsis character", async () => {
+		vi.mocked(categorizeProvider).mockReturnValue(new Promise(() => {}));
+		renderManager([channel("Heat", "Action", "movie")]);
+
+		expect(screen.getByPlaceholderText("New category name…")).toBeTruthy();
+		fireEvent.click(await screen.findByRole("button", { name: /Re-categorize All/ }));
+		expect(await screen.findByRole("button", { name: /Categorizing…/ })).toBeTruthy();
+	});
+
 	it("names its icon-only buttons", async () => {
 		vi.mocked(getGroupHierarchy).mockResolvedValue([
 			entry("Action", "Genres"),
