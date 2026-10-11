@@ -121,45 +121,55 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 			<div className="flex-1 overflow-auto scrollbar-hide px-3 pb-3">
 				<div className="flex flex-col">
 					{entries.map((entry) => (
+						// Play and delete are sibling buttons so each gets its own name and
+						// keyboard focus instead of one nested inside the other.
 						<div
 							key={entry.channelId}
-							onClick={() => onPlay(entry)}
-							className="flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-accent cursor-pointer group"
+							className="flex items-center gap-3 pr-2 rounded-lg hover:bg-accent group"
 						>
-							{/* Logo */}
-							<ChannelLogo
-								url={entry.channelLogo}
-								className="h-9 w-9 rounded-md bg-muted"
-								imgClassName="object-cover"
-								alt={entry.channelName}
-								fallback={
-									<span className="text-sm font-semibold text-muted-foreground">
-										{entry.channelName.charAt(0).toUpperCase()}
-									</span>
-								}
-							/>
+							<button
+								type="button"
+								onClick={() => onPlay(entry)}
+								className="flex flex-1 min-w-0 items-center gap-3 pl-2 py-2.5 rounded-lg text-left cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							>
+								{/* Logo */}
+								<ChannelLogo
+									url={entry.channelLogo}
+									className="h-9 w-9 rounded-md bg-muted"
+									imgClassName="object-cover"
+									fallback={
+										<span
+											aria-hidden="true"
+											className="text-sm font-semibold text-muted-foreground"
+										>
+											{entry.channelName.charAt(0).toUpperCase()}
+										</span>
+									}
+								/>
 
-							{/* Info */}
-							<div className="flex-1 min-w-0">
-								<div className="flex items-center gap-2 mb-0.5">
-									<span className="font-medium text-sm truncate">
-										{entry.channelName}
-									</span>
-									<ContentTypeBadge type={entry.contentType} />
-									<span className="text-xs text-muted-foreground ml-auto shrink-0">
-										{formatRelativeDate(entry.lastWatchedAt)}
-									</span>
+								{/* Info */}
+								<div className="flex-1 min-w-0">
+									<div className="flex items-center gap-2 mb-0.5">
+										<span className="font-medium text-sm truncate">
+											{entry.channelName}
+										</span>
+										<ContentTypeBadge type={entry.contentType} />
+										<span className="text-xs text-muted-foreground ml-auto shrink-0">
+											{formatRelativeDate(entry.lastWatchedAt)}
+										</span>
+									</div>
+									<p className="text-xs text-muted-foreground">
+										{entry.playCount} {entry.playCount === 1 ? "play" : "plays"}{" "}
+										· {formatDuration(entry.totalDurationSeconds)} total
+									</p>
 								</div>
-								<p className="text-xs text-muted-foreground">
-									{entry.playCount} {entry.playCount === 1 ? "play" : "plays"} ·{" "}
-									{formatDuration(entry.totalDurationSeconds)} total
-								</p>
-							</div>
+							</button>
 
 							{/* Delete */}
 							<button
+								type="button"
 								onClick={(e) => handleDelete(e, entry.channelId)}
-								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
+								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
 								aria-label={`Remove ${entry.channelName} from history`}
 							>
 								<Trash2 className="h-3.5 w-3.5" />
