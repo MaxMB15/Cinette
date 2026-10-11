@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Downloading and reading XMLTV programme guides.
+
 use chrono::NaiveDateTime;
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -9,10 +11,13 @@ use thiserror::Error;
 
 use crate::cache::store::StoredEpgProgram;
 
+/// Errors from downloading or reading an XMLTV guide.
 #[derive(Debug, Error)]
 pub enum EpgError {
+    /// The guide is not well formed XML.
     #[error("XML parse error: {0}")]
     Xml(#[from] quick_xml::Error),
+    /// The download failed or the server answered with an error status.
     #[error("network error: {0}")]
     Network(#[source] reqwest::Error),
 }
@@ -25,16 +30,21 @@ impl From<reqwest::Error> for EpgError {
     }
 }
 
+/// One programme in the guide.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgProgram {
     pub channel_id: String,
     pub title: String,
     pub description: String,
-    pub start_time: i64, // Unix timestamp (seconds UTC) — was String
-    pub end_time: i64,   // Unix timestamp (seconds UTC) — was String
+    /// Start as Unix seconds in UTC.
+    pub start_time: i64,
+    /// End as Unix seconds in UTC.
+    pub end_time: i64,
     pub category: Option<String>,
 }
 
+/// A channel as the guide names it. `id` is what playlist entries use to
+/// find their programmes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgChannel {
     pub id: String,
@@ -42,6 +52,7 @@ pub struct EpgChannel {
     pub icon_url: Option<String>,
 }
 
+/// Everything read from one XMLTV guide.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgData {
     pub channels: Vec<EpgChannel>,

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Ratings from MDBList, looked up by IMDb id.
+
 use crate::json::number_or_string;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -47,12 +49,16 @@ pub struct MdbListData {
     pub mdblist_score: Option<i32>,
 }
 
+/// Errors from an MDBList lookup.
 #[derive(Debug, Error)]
 pub enum MdbListError {
+    /// The request failed or the server answered with an error status.
     #[error("HTTP request failed: {0}")]
     Http(#[source] reqwest::Error),
+    /// MDBList answered but reported an error, such as a bad key.
     #[error("MDBList API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
 }

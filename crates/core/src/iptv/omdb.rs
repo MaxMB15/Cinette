@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Film and series details from OMDb, looked up by title.
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Film or series details from OMDb. Ratings stay as the text OMDb sends,
+/// because the UI shows them as they are.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OmdbData {
@@ -22,12 +26,16 @@ pub struct OmdbData {
     pub imdb_votes: Option<String>,
 }
 
+/// Errors from an OMDb lookup.
 #[derive(Debug, Error)]
 pub enum OmdbError {
+    /// The request failed or the server answered with an error status.
     #[error("HTTP request failed: {0}")]
     Http(#[source] reqwest::Error),
+    /// OMDb answered but reported an error, such as a title it doesn't know.
     #[error("OMDB API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
 }

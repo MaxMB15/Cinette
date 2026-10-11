@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Subtitle search and download through the OpenSubtitles API.
+
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// TTL for OpenSubtitles search cache: 24 hours.
+/// How long a cached search stays fresh. New subtitles for a title turn up
+/// rarely, so a day saves requests without hiding much.
 pub const SEARCH_CACHE_TTL_SECS: i64 = 24 * 60 * 60;
 
+/// One subtitle file the user can pick. `file_id` is what a download asks for.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleEntry {
@@ -19,6 +23,8 @@ pub struct SubtitleEntry {
     pub download_count: Option<i64>,
 }
 
+/// The subtitles found for a title, with the languages among them so the
+/// picker can group entries by language.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleSearchResult {
@@ -26,14 +32,20 @@ pub struct SubtitleSearchResult {
     pub languages: Vec<String>,
 }
 
+/// Errors from searching for or downloading subtitles.
 #[derive(Debug, Error)]
 pub enum OpenSubtitlesError {
+    /// The request failed or the server answered with an error status.
     #[error("HTTP request failed: {0}")]
     Http(#[source] reqwest::Error),
+    /// OpenSubtitles rejected the API key. Kept apart from `Http` so a key test
+    /// can report a wrong key rather than a failed request.
     #[error("OpenSubtitles API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
+    /// The subtitle file could not be saved.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

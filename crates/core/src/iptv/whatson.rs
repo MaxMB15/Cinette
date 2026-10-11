@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Ratings from the whatson API, which needs no key, looked up by IMDb id.
+
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -10,8 +12,8 @@ use thiserror::Error;
 /// quiet spell can take most of a minute while it wakes up.
 const WAKE_UP_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Enriched metadata from the whatson-api (aggregates ratings from 13+ platforms).
-/// All fields optional as the API may omit any of them.
+/// Ratings and details from the whatson API, which gathers scores from many
+/// sites. Every field is optional because the API may leave any of them out.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WhatsonData {
@@ -51,14 +53,20 @@ pub struct WhatsonData {
     pub tmdb_votes: Option<i64>,
 }
 
+/// Errors from a whatson lookup.
 #[derive(Debug, Error)]
 pub enum WhatsonError {
+    /// The request failed before the server answered.
     #[error("HTTP request failed: {0}")]
     Http(#[source] reqwest::Error),
+    /// The server answered with an error status or a rate limit.
     #[error("Whatson API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
+    /// The API has no entry for this title. Kept apart from other errors so
+    /// callers can stop asking for it.
     #[error("Not found")]
     NotFound,
 }

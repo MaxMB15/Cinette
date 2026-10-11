@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! A client for Xtream Codes panels, which serve live channels, films and
+//! series through `player_api.php`.
+
 use crate::json::number_or_string;
 use crate::models::channel::Channel;
 use serde::Deserialize;
@@ -8,12 +11,17 @@ use std::collections::HashMap;
 use thiserror::Error;
 use url::form_urlencoded;
 
+/// Errors from talking to an Xtream Codes panel.
 #[derive(Debug, Error)]
 pub enum XtreamError {
+    /// The panel answered but did not accept the login, or the account is not
+    /// active.
     #[error("authentication failed")]
     AuthFailed,
+    /// The request failed or the reply was not the JSON the panel should send.
     #[error("network error: {0}")]
     Network(#[source] reqwest::Error),
+    /// The JSON was valid but not in the expected shape.
     #[error("invalid response: {0}")]
     InvalidResponse(String),
 }
@@ -26,6 +34,7 @@ impl From<reqwest::Error> for XtreamError {
     }
 }
 
+/// The server address and login for one Xtream provider.
 #[derive(Debug, Clone)]
 pub struct XtreamCredentials {
     pub server: String,
@@ -34,6 +43,8 @@ pub struct XtreamCredentials {
 }
 
 impl XtreamCredentials {
+    /// Creates credentials. A trailing slash on `server` is dropped so paths
+    /// can be added without doubling it.
     pub fn new(server: &str, username: &str, password: &str) -> Self {
         let server = server.trim_end_matches('/').to_string();
         Self {
@@ -136,12 +147,15 @@ struct XtreamEpisode {
     container_extension: Option<String>,
 }
 
+/// A client for one Xtream panel's player API.
 pub struct XtreamClient {
     credentials: XtreamCredentials,
     client: &'static reqwest::Client,
 }
 
 impl XtreamClient {
+    /// Creates a client on the shared download client, because a full
+    /// catalogue can take longer than an API call is allowed.
     pub fn new(credentials: XtreamCredentials) -> Self {
         Self {
             credentials,
@@ -149,6 +163,8 @@ impl XtreamClient {
         }
     }
 
+    /// Checks the login. Panels report a good login either as `auth` 1 or as an
+    /// `Active` status, so either one counts.
     pub async fn authenticate(&self) -> Result<(), XtreamError> {
         let url = self.credentials.api_url("", &[]);
         let resp: AuthResponse = self.client.get(&url).send().await?.json().await?;

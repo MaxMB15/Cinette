@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Optional playlist sorting with Google Gemini. The model's answers are
+//! checked against the real group names, because it sometimes invents them.
+
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -16,6 +19,7 @@ const API_KEY_HEADER: &str = "x-goog-api-key";
 /// to answer it.
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// A channel group and the parent category Gemini put it under.
 #[derive(Debug, Clone)]
 pub struct CategorizedGroup {
     pub group_name: String,
@@ -23,12 +27,14 @@ pub struct CategorizedGroup {
     pub sort_order: i64,
 }
 
+/// Gemini's grouping of a playlist, limited to groups the playlist really has.
 #[derive(Debug, Clone)]
 pub struct CategorizationResult {
     pub hierarchy: Vec<CategorizedGroup>,
     pub ungrouped: Vec<String>,
 }
 
+/// A leftover group that Gemini placed in one of the existing categories.
 #[derive(Debug, Clone)]
 pub struct GroupAssignment {
     pub group_name: String,
@@ -86,6 +92,11 @@ struct AssignmentResponse {
     assignments: Vec<AssignmentEntry>,
 }
 
+/// Reads Gemini's grouping of a playlist.
+///
+/// The model sometimes invents group names or lists a group twice, so only
+/// names in `known_groups` are kept, each once. Groups it left out are added to
+/// `ungrouped` so none of the user's channels disappear.
 pub fn parse_categorization_response(
     json: &serde_json::Value,
     known_groups: &[&str],
@@ -170,6 +181,10 @@ pub fn parse_categorization_response(
     })
 }
 
+/// Reads Gemini's placement of leftover groups into existing categories.
+///
+/// Assignments that name an unknown group or a category that doesn't exist are
+/// dropped, because the model sometimes rewords names it was given.
 pub fn parse_assignment_response(
     json: &serde_json::Value,
     known_groups: &[&str],
@@ -220,6 +235,9 @@ pub fn parse_assignment_response(
     Ok(assignments)
 }
 
+/// Builds the prompt that asks Gemini to sort a playlist's groups into
+/// categories. A few channel names per group tell the model what each group
+/// holds when its name alone doesn't.
 pub fn build_categorization_prompt(
     content_type: &str,
     groups_with_samples: &[(&str, Vec<&str>)],
@@ -259,6 +277,8 @@ pub fn build_categorization_prompt(
     prompt
 }
 
+/// Builds the prompt for a playlist with no groups, which asks Gemini to make
+/// groups from a sample of titles instead.
 pub fn build_categorization_prompt_no_groups(content_type: &str, sample_titles: &[&str]) -> String {
     let mut prompt = format!(
         "Organize these IPTV content titles into navigable groups.\n\
@@ -283,6 +303,9 @@ pub fn build_categorization_prompt_no_groups(content_type: &str, sample_titles: 
     prompt
 }
 
+/// Builds the prompt for a second pass over groups the first pass left out.
+/// Gemini may only use the categories it already made, so the layout the user
+/// sees doesn't change.
 pub fn build_fix_uncategorized_prompt(
     uncategorized_groups: &[(&str, Vec<&str>)],
     existing_categories: &[&str],
@@ -313,6 +336,9 @@ pub fn build_fix_uncategorized_prompt(
     prompt
 }
 
+/// Sends a prompt to Gemini and returns the JSON it answered with.
+///
+/// The request asks for a JSON reply, so text that doesn't parse is an error.
 pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Value, GeminiError> {
     let body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }],
@@ -363,6 +389,9 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
     Ok(parsed)
 }
 
+/// Checks a key by listing models, which is quicker and cheaper than a prompt.
+/// Returns false when Google answers with an error status, and an error only
+/// when the request itself fails.
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
     let response = list_models_request(api_key)
         .send()
