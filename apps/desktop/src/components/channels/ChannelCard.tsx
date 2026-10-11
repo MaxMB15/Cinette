@@ -324,33 +324,6 @@ const PosterCard = ({
 							{channel.sources.length + 1}
 						</div>
 					)}
-					{onToggleFavorite && (
-						<div
-							role="button"
-							tabIndex={0}
-							onClick={(e) => {
-								e.stopPropagation();
-								onToggleFavorite(channel);
-							}}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" || e.key === " ") {
-									e.preventDefault();
-									e.stopPropagation();
-									onToggleFavorite(channel);
-								}
-							}}
-							className="absolute top-1 left-1 z-10 h-7 w-7 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors cursor-pointer"
-							aria-label={
-								channel.isFavorite ? "Remove from favorites" : "Add to favorites"
-							}
-						>
-							<Heart
-								className={`h-3.5 w-3.5 transition-colors ${
-									channel.isFavorite ? "fill-current text-red-500" : "text-white"
-								}`}
-							/>
-						</div>
-					)}
 					{!isSeries && dl && (dl.status === "downloading" || dl.status === "queued") && (
 						<div className="absolute left-0 right-0 bottom-0 px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
 							<div className="h-1 rounded-full bg-white/20 overflow-hidden">
@@ -368,6 +341,26 @@ const PosterCard = ({
 					{channel.name}
 				</p>
 			</button>
+			{/* A sibling of the play button, since a control nested inside a button
+			    is not reachable on its own by screen readers. The extra pixel keeps
+			    it where it sat inside the poster's border. */}
+			{onToggleFavorite && (
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation();
+						onToggleFavorite(channel);
+					}}
+					className="absolute top-[5px] left-[5px] z-10 h-7 w-7 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors cursor-pointer"
+					aria-label={channel.isFavorite ? "Remove from favorites" : "Add to favorites"}
+				>
+					<Heart
+						className={`h-3.5 w-3.5 transition-colors ${
+							channel.isFavorite ? "fill-current text-red-500" : "text-white"
+						}`}
+					/>
+				</button>
+			)}
 			<DownloadButton
 				state={iconState}
 				onStart={() => {

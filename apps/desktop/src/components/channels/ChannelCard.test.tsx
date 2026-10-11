@@ -6,6 +6,11 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { ChannelCard } from "./ChannelCard";
 import type { Channel, EpgProgram } from "@/lib/types";
 
+vi.mock("@/hooks/useDownloads", () => ({
+	useDownloads: () => ({ byChannel: new Map(), bySeries: new Map() }),
+	aggregateForSeries: () => "none",
+}));
+
 const channel: Channel = {
 	id: "ch1",
 	name: "News 24",
@@ -82,5 +87,42 @@ describe("ChannelCard compact variant", () => {
 		const favorite = screen.getByRole("button", { name: "Add to favorites" });
 		expect(play.contains(favorite)).toBe(false);
 		expect(favorite.contains(play)).toBe(false);
+	});
+});
+
+describe("ChannelCard poster variant", () => {
+	afterEach(cleanup);
+
+	const movie: Channel = { ...channel, id: "mv1", name: "The Film", contentType: "movie" };
+
+	it("keeps the favorite button out of the play button", () => {
+		render(
+			<ChannelCard
+				channel={movie}
+				onPlay={vi.fn()}
+				variant="poster"
+				onToggleFavorite={vi.fn()}
+			/>
+		);
+		const play = screen.getByRole("button", { name: /The Film/ });
+		const favorite = screen.getByRole("button", { name: "Add to favorites" });
+		expect(favorite.tagName).toBe("BUTTON");
+		expect(play.contains(favorite)).toBe(false);
+	});
+
+	it("toggles the favorite without starting playback", () => {
+		const onPlay = vi.fn();
+		const onToggleFavorite = vi.fn();
+		render(
+			<ChannelCard
+				channel={movie}
+				onPlay={onPlay}
+				variant="poster"
+				onToggleFavorite={onToggleFavorite}
+			/>
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+		expect(onToggleFavorite).toHaveBeenCalledWith(movie);
+		expect(onPlay).not.toHaveBeenCalled();
 	});
 });
