@@ -20,7 +20,10 @@ const extractSeriesTitle = (name: string): string =>
 interface DisplayEntry {
 	key: string;
 	displayName: string;
+	/** The newest entry, which the card plays. */
 	entry: WatchHistoryEntry;
+	/** Every history entry the card stands for. A series card covers each episode watched. */
+	channelIds: string[];
 }
 
 export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPlayedRowProps) => {
@@ -42,7 +45,12 @@ export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPla
 	// For series: deduplicate by series title, showing only the most recent entry per series
 	const displayEntries = useMemo((): DisplayEntry[] => {
 		if (contentType !== "series") {
-			return entries.map((e) => ({ key: e.channelId, displayName: e.channelName, entry: e }));
+			return entries.map((e) => ({
+				key: e.channelId,
+				displayName: e.channelName,
+				entry: e,
+				channelIds: [e.channelId],
+			}));
 		}
 
 		// Build a lookup from channelId -> seriesTitle using the channels list
@@ -55,42 +63,38 @@ export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPla
 			}
 		}
 
-		const seen = new Set<string>();
-		const deduped: DisplayEntry[] = [];
-
+		const bySeries = new Map<string, DisplayEntry>();
 		for (const entry of entries) {
 			// Try channel lookup first, then fall back to regex extraction
 			const seriesTitle =
 				seriesTitleById.get(entry.channelId) ?? extractSeriesTitle(entry.channelName);
-			if (seen.has(seriesTitle)) continue;
-			seen.add(seriesTitle);
-			deduped.push({ key: seriesTitle, displayName: seriesTitle, entry });
+			const card = bySeries.get(seriesTitle);
+			if (card) {
+				card.channelIds.push(entry.channelId);
+			} else {
+				bySeries.set(seriesTitle, {
+					key: seriesTitle,
+					displayName: seriesTitle,
+					entry,
+					channelIds: [entry.channelId],
+				});
+			}
 		}
-		return deduped;
+		return [...bySeries.values()];
 	}, [entries, contentType, channels]);
 
-	// The entry stays when the delete fails, so the row matches what a reload shows.
-	const handleDismiss = async (channelId: string) => {
-		try {
-			await deleteHistoryEntry(channelId);
-			setEntries((prev) => prev.filter((entry) => entry.channelId !== channelId));
-		} catch (err) {
-			console.error("[RecentlyPlayedRow] failed to delete history entry:", err);
+	// Entries whose delete fails stay, so the row matches what a reload shows.
+	const removeEntries = async (channelIds: string[]) => {
+		const results = await Promise.allSettled(channelIds.map((id) => deleteHistoryEntry(id)));
+		const errors = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+		if (errors.length > 0) {
+			console.error("[RecentlyPlayedRow] failed to delete history entries:", errors);
 		}
+		const removed = new Set(channelIds.filter((_, i) => results[i].status === "fulfilled"));
+		setEntries((prev) => prev.filter((entry) => !removed.has(entry.channelId)));
 	};
 
-	const handleClearAll = async () => {
-		const results = await Promise.allSettled(
-			entries.map((entry) => deleteHistoryEntry(entry.channelId))
-		);
-		const failed = new Set(
-			entries.filter((_, i) => results[i].status === "rejected").map((e) => e.channelId)
-		);
-		if (failed.size > 0) {
-			console.error(`[RecentlyPlayedRow] failed to delete ${failed.size} history entries`);
-		}
-		setEntries((prev) => prev.filter((entry) => failed.has(entry.channelId)));
-	};
+	const handleClearAll = () => removeEntries(entries.map((entry) => entry.channelId));
 
 	if (displayEntries.length === 0) return null;
 
@@ -107,16 +111,16 @@ export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPla
 			</div>
 			<ScrollArea className="w-full">
 				<div className="flex gap-2.5 pb-2">
-					{displayEntries.map(({ key, displayName, entry }) => (
+					{displayEntries.map(({ key, displayName, entry, channelIds }) => (
 						<div
 							key={key}
 							className="relative min-w-[160px] max-w-[180px] bg-secondary rounded-lg p-2.5 text-left hover:bg-accent transition-colors group shrink-0"
 						>
 							<button
-								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity p-0.5"
+								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity p-0.5"
 								onClick={(e) => {
 									e.stopPropagation();
-									void handleDismiss(entry.channelId);
+									void removeEntries(channelIds);
 								}}
 								aria-label={`Dismiss ${displayName}`}
 							>

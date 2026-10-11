@@ -18,9 +18,9 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Holding a subtitle delay button keeps stepping the delay again (#104).
 - Settings says when the update check fails, instead of showing the app as up to date (#104).
-- Removing an entry from recently played no longer hides it when the removal fails, and Clear all keeps the entries it couldn't remove (#104).
-- The splash screen and the donation prompt work when the browser storage is blocked (#104).
-- Pressing Enter on a group's pin button pins the group instead of opening it (#104).
+- Clear all in recently played keeps the entries it couldn't remove, and dismissing a series removes every episode you watched, so an older one doesn't take its place (#104).
+- The splash screen and the donation prompt work when the browser storage is blocked, and the splash screen finishes even when a startup step fails (#104).
+- Pressing Enter on a group's pin button pins the group instead of opening it, and Enter on a channel row's favorite button no longer starts the channel (#104).
 - Watch history rows play from the keyboard and show their delete button on focus. Screen readers now find the favorite button on movie and series posters, and name the subtitle picker buttons and the group pin button. Enter or Space steps the subtitle delay (#104).
 
 ## [0.5.3] - 2026-10-09

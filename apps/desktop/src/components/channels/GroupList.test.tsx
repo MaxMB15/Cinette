@@ -29,9 +29,9 @@ describe("GroupList pin buttons", () => {
 	it("names each pin button and reports whether it is pinned", () => {
 		renderList(["Sports"]);
 		const pin = screen.getByRole("button", { name: "Pin News" });
-		const unpin = screen.getByRole("button", { name: "Unpin Sports" });
+		const pinned = screen.getByRole("button", { name: "Pin Sports" });
 		expect(pin).toHaveAttribute("aria-pressed", "false");
-		expect(unpin).toHaveAttribute("aria-pressed", "true");
+		expect(pinned).toHaveAttribute("aria-pressed", "true");
 	});
 
 	it("toggles the pin without opening the group", () => {

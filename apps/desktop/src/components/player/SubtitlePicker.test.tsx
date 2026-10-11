@@ -94,6 +94,47 @@ describe("SubtitlePicker delay buttons", () => {
 		fireEvent.click(minus, { detail: 1 });
 		expect(screen.getByText("-0.1s")).toBeInTheDocument();
 	});
+
+	it("ignores a right click", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		fireEvent.mouseDown(plus, { button: 2 });
+		act(() => {
+			vi.advanceTimersByTime(1000);
+		});
+		expect(screen.getByText("0.0s")).toBeInTheDocument();
+	});
+
+	it("keeps one hold running when a second press arrives without a release", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		fireEvent.mouseDown(plus);
+		fireEvent.mouseDown(plus);
+		expect(screen.getByText("+0.2s")).toBeInTheDocument();
+
+		fireEvent.mouseUp(plus);
+		act(() => {
+			vi.advanceTimersByTime(1000);
+		});
+		expect(screen.getByText("+0.2s")).toBeInTheDocument();
+	});
+
+	it("stops the hold when the window loses focus", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		fireEvent.mouseDown(plus);
+		fireEvent.blur(window);
+		act(() => {
+			vi.advanceTimersByTime(1000);
+		});
+		expect(screen.getByText("+0.1s")).toBeInTheDocument();
+	});
 });
 
 describe("SubtitlePicker button names", () => {

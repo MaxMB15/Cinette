@@ -127,3 +127,22 @@ describe("ChannelCard poster variant", () => {
 		expect(onPlay).not.toHaveBeenCalled();
 	});
 });
+
+describe("ChannelCard row variant", () => {
+	afterEach(cleanup);
+
+	it("leaves Enter on the heart to the heart", () => {
+		const onPlay = vi.fn();
+		render(<ChannelCard channel={channel} onPlay={onPlay} onToggleFavorite={vi.fn()} />);
+		fireEvent.keyDown(screen.getByLabelText("Add to favorites"), { key: "Enter" });
+		expect(onPlay).not.toHaveBeenCalled();
+	});
+
+	it("plays the channel when Enter is pressed on the row", () => {
+		const onPlay = vi.fn();
+		render(<ChannelCard channel={channel} onPlay={onPlay} onToggleFavorite={vi.fn()} />);
+		const row = screen.getByText("News 24").closest('[role="button"]') as HTMLElement;
+		fireEvent.keyDown(row, { key: "Enter" });
+		expect(onPlay).toHaveBeenCalledWith(channel);
+	});
+});

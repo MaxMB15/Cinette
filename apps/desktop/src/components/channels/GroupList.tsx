@@ -45,7 +45,8 @@ export const GroupList = ({
 					<div className="flex items-center gap-2">
 						<button
 							type="button"
-							aria-label={isPinned(name) ? `Unpin ${name}` : `Pin ${name}`}
+							// The label stays fixed and aria-pressed says whether it's pinned.
+							aria-label={`Pin ${name}`}
 							aria-pressed={isPinned(name)}
 							onClick={(e) => {
 								e.stopPropagation();

@@ -115,9 +115,17 @@ export const SubtitlePicker = ({
 		return () => document.removeEventListener("keydown", handleKey);
 	}, [delayHovered, subtitleDelay, onDelayChange]);
 
-	// ── Cleanup hold timer on unmount ───────────────────────────────────────
+	// ── Stop a hold the buttons never hear end ──────────────────────────────
+	// A release outside the window, or switching apps mid-hold, sends the button
+	// no mouseup, so the window's mouseup and blur end the hold too.
 	useEffect(() => {
-		return () => clearHoldTimer();
+		window.addEventListener("mouseup", clearHoldTimer);
+		window.addEventListener("blur", clearHoldTimer);
+		return () => {
+			window.removeEventListener("mouseup", clearHoldTimer);
+			window.removeEventListener("blur", clearHoldTimer);
+			clearHoldTimer();
+		};
 	}, []);
 
 	// ── Search on mount ─────────────────────────────────────────────────────
@@ -190,7 +198,10 @@ export const SubtitlePicker = ({
 		}, interval);
 	};
 
-	const startHold = (direction: 1 | -1) => {
+	const startHold = (direction: 1 | -1) => (e: React.MouseEvent) => {
+		// Only the main button holds. A right click opens the menu and never sends mouseup.
+		if (e.button !== 0) return;
+		clearHoldTimer();
 		holdDirectionRef.current = direction;
 		holdStartRef.current = Date.now();
 		stepDelay(direction * getDelayStep(0));
@@ -291,7 +302,7 @@ export const SubtitlePicker = ({
 							<div className="flex items-center gap-2">
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={() => startHold(-1)}
+									onMouseDown={startHold(-1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
 									onClick={stepOnKeyboardClick(-1)}
@@ -304,7 +315,7 @@ export const SubtitlePicker = ({
 								</span>
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={() => startHold(1)}
+									onMouseDown={startHold(1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
 									onClick={stepOnKeyboardClick(1)}

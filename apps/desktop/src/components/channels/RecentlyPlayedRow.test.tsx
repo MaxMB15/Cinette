@@ -12,10 +12,14 @@ vi.mock("@/lib/tauri", () => ({
 	deleteHistoryEntry: vi.fn(),
 }));
 
-const entry = (channelId: string, channelName: string): WatchHistoryEntry => ({
+const entry = (
+	channelId: string,
+	channelName: string,
+	contentType: WatchHistoryEntry["contentType"] = "live"
+): WatchHistoryEntry => ({
 	channelId,
 	channelName,
-	contentType: "live",
+	contentType,
 	firstWatchedAt: 0,
 	lastWatchedAt: 0,
 	totalDurationSeconds: 0,
@@ -42,7 +46,7 @@ describe("RecentlyPlayedRow", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("keeps an entry whose delete fails", async () => {
+	it("logs a failed dismiss and keeps the entry", async () => {
 		vi.mocked(getWatchHistory).mockResolvedValue([entry("a", "Alpha")]);
 		vi.mocked(deleteHistoryEntry).mockRejectedValue(new Error("db locked"));
 		render(<RecentlyPlayedRow contentType="live" onPlay={() => {}} />);
@@ -64,5 +68,19 @@ describe("RecentlyPlayedRow", () => {
 
 		await waitFor(() => expect(screen.queryByText("Alpha")).not.toBeInTheDocument());
 		expect(screen.getByText("Beta")).toBeInTheDocument();
+	});
+
+	it("dismisses every episode a series card stands for", async () => {
+		vi.mocked(getWatchHistory).mockResolvedValue([
+			entry("e2", "Harbour Lights S01E02", "series"),
+			entry("e1", "Harbour Lights S01E01", "series"),
+		]);
+		vi.mocked(deleteHistoryEntry).mockResolvedValue(undefined);
+		render(<RecentlyPlayedRow contentType="series" onPlay={() => {}} />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Dismiss Harbour Lights" }));
+
+		await waitFor(() => expect(screen.queryByText("Harbour Lights")).not.toBeInTheDocument());
+		expect(vi.mocked(deleteHistoryEntry).mock.calls.map(([id]) => id)).toEqual(["e2", "e1"]);
 	});
 });

@@ -102,6 +102,8 @@ const RowCardView = ({
 			tabIndex={0}
 			onClick={() => onPlay(channel)}
 			onKeyDown={(e) => {
+				// Keys pressed on the heart or a programme belong to that control, not the row.
+				if (e.target !== e.currentTarget) return;
 				if (e.key === "Enter" || e.key === " ") {
 					e.preventDefault();
 					onPlay(channel);
