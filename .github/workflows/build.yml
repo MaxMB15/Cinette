@@ -10,18 +10,17 @@ on:
       - "docs/**"
       - ".vscode/**"
       - ".idea/**"
+  # Pull requests always run, even docs-only ones, because the ruleset requires
+  # `test` and `build-macos`. detect-changes skips the platform builds when no
+  # platform files changed, and a skipped job still counts as passing.
   pull_request:
     branches: [main, dev, release-*]
-    paths-ignore:
-      - "**.md"
-      - "LICENSE"
-      - ".github/workflows/release-*.yml"
-      - "docs/**"
-      - ".vscode/**"
-      - ".idea/**"
   # A manual run builds only macOS, signed and notarized when the Apple secrets
   # are set, so signing can be tested without making a release.
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   # Keep a manual run from cancelling, or being cancelled by, a push build.
@@ -142,13 +141,19 @@ jobs:
           cache: npm
 
       - name: Install deps
-        run: npm ci --ignore-scripts || (rm -f package-lock.json && npm install)
+        run: npm ci --ignore-scripts
 
       - name: TypeScript type-check
         working-directory: apps/desktop
         run: npx tsc -b --noEmit
 
-      - name: Rust type-check (core only — avoids Tauri GTK deps on Linux)
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Rust type-check of mvp-core
         run: cargo check -p mvp-core
 
       - name: Run Rust tests
@@ -318,16 +323,18 @@ jobs:
 
       - name: Install frontend deps
         run: |
-          npm ci || true
+          npm ci
           # npm ci can skip platform-specific optional deps (npm/cli#4828).
           # Ensure the Tauri CLI native binding for Linux is present.
-          npm ls @tauri-apps/cli-linux-x64-gnu 2>/dev/null || npm install @tauri-apps/cli-linux-x64-gnu
-
-      - name: Rust type-check (plugin + core)
-        run: cargo check -p tauri-plugin-mpv -p mvp-core
+          npm ls @tauri-apps/cli-linux-x64-gnu 2>/dev/null || npm install --no-save @tauri-apps/cli-linux-x64-gnu
 
       - name: Build frontend
         run: npm run build:desktop
+
+      # The test job covers only mvp-core. The plugin and the app need GTK and
+      # libmpv, which this job installs.
+      - name: Run plugin and app tests
+        run: cargo test -p tauri-plugin-mpv -p max-video-player
 
       - name: Build Tauri app (Linux)
         run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'

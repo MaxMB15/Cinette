@@ -150,7 +150,7 @@ upload, add the category it names.
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| [iOS](../.github/workflows/ios.yml) | Pushes to `feature/ios-poc`, and pull requests to `dev` and `feature/ios-poc` that touch the app | A debug build for the simulator. Nothing is signed. |
+| [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the simulator. Nothing is signed. |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | A release build for devices, signed for the App Store and uploaded to TestFlight |
 
 The TestFlight workflow uses the `macos-signing` environment, so a reviewer approves

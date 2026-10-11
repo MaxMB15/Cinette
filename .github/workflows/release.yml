@@ -5,6 +5,14 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
+# A tag pushed again while its release is still building waits for that run.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -271,7 +279,11 @@ jobs:
           node-version: 20
 
       - name: Install frontend deps
-        run: rm -f package-lock.json && npm install
+        run: |
+          npm ci
+          # npm ci can skip platform-specific optional deps (npm/cli#4828).
+          # Ensure the Tauri CLI native binding for Linux is present.
+          npm ls @tauri-apps/cli-linux-x64-gnu 2>/dev/null || npm install --no-save @tauri-apps/cli-linux-x64-gnu
 
       - name: Install system deps
         uses: ./.github/actions/install-linux-deps
