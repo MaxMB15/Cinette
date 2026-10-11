@@ -102,6 +102,25 @@ const findScroller = (target: EventTarget | null, sheet: Element): Element | nul
 	return null;
 };
 
+// A dialog opened from inside the sheet, such as a download's confirm, isn't
+// part of it for dragging.
+const inDialog = (target: EventTarget | null, container: Element): boolean => {
+	const dialog = target instanceof Element ? target.closest('[role="dialog"]') : null;
+	return dialog !== null && container.contains(dialog);
+};
+
+// After a mouse drag the browser still clicks whatever the drag started on,
+// such as the close button. This drops that click.
+const dropNextClick = () => {
+	const drop = (e: MouseEvent) => {
+		e.stopPropagation();
+		e.preventDefault();
+	};
+	window.addEventListener("click", drop, { capture: true, once: true });
+	// The click comes in the same task as the pointerup, if at all.
+	setTimeout(() => window.removeEventListener("click", drop, { capture: true }), 0);
+};
+
 // Down slides the sheet, up grows it towards full height. Written straight to
 // the element so a drag doesn't re-render the pane on every move.
 const paint = (sheet: HTMLElement, offset: number, expanded: boolean) => {
@@ -173,9 +192,14 @@ export const useSheetDrag = ({
 				if (Math.abs(dx) >= DRAG_SLOP) g.mode = "ignore";
 				return false;
 			}
-			if (g.scroller && (dy < 0 || g.scroller.scrollTop > 0)) {
-				g.mode = "ignore";
-				return false;
+			if (g.scroller) {
+				if (dy < 0 || g.scroller.scrollTop > 0) {
+					g.mode = "ignore";
+					return false;
+				}
+				// Not a pull down yet. Claiming it would stop the content scrolling
+				// for the rest of the touch.
+				if (dy === 0) return false;
 			}
 			if (Math.abs(dy) < DRAG_SLOP) return true;
 			g.mode = "drag";
@@ -223,33 +247,68 @@ export const useSheetDrag = ({
 	useEffect(() => {
 		const sheet = sheetRef.current;
 		if (!sheet) return;
-		const onTouchStart = (e: TouchEvent) => {
-			if (e.touches.length !== 1) {
-				end(true);
-				return;
-			}
-			const t = e.touches[0];
-			begin(t.clientX, t.clientY, findScroller(e.target, sheet), null);
+		// A touch's events keep going to the element it started on, even after
+		// a re-render removes that element, and then they no longer reach the
+		// sheet. So the touched element gets the listeners too, and an event
+		// that reaches both is handled once.
+		const handled = new WeakSet<Event>();
+		const firstTime = (e: Event) => {
+			if (handled.has(e)) return false;
+			handled.add(e);
+			return true;
 		};
+		let touched: EventTarget | null = null;
+
 		const onTouchMove = (e: TouchEvent) => {
+			if (!firstTime(e)) return;
 			const t = e.touches[0];
 			if (t && move(t.clientX, t.clientY) && e.cancelable) e.preventDefault();
 		};
 		const onTouchEnd = (e: TouchEvent) => {
+			if (!firstTime(e)) return;
+			release();
 			if (end(false) && e.cancelable) e.preventDefault();
 		};
-		const onTouchCancel = () => {
+		const onTouchCancel = (e: TouchEvent) => {
+			if (!firstTime(e)) return;
+			release();
 			end(true);
 		};
+		const listen = (target: EventTarget) => {
+			target.addEventListener("touchmove", onTouchMove as EventListener, { passive: false });
+			target.addEventListener("touchend", onTouchEnd as EventListener, { passive: false });
+			target.addEventListener("touchcancel", onTouchCancel as EventListener);
+		};
+		const unlisten = (target: EventTarget) => {
+			target.removeEventListener("touchmove", onTouchMove as EventListener);
+			target.removeEventListener("touchend", onTouchEnd as EventListener);
+			target.removeEventListener("touchcancel", onTouchCancel as EventListener);
+		};
+		const release = () => {
+			if (touched && touched !== sheet) unlisten(touched);
+			touched = null;
+		};
+
+		const onTouchStart = (e: TouchEvent) => {
+			release();
+			if (e.touches.length !== 1) {
+				end(true);
+				return;
+			}
+			if (inDialog(e.target, sheet)) return;
+			const t = e.touches[0];
+			begin(t.clientX, t.clientY, findScroller(e.target, sheet), null);
+			if (gestureRef.current && e.target && e.target !== sheet) {
+				touched = e.target;
+				listen(touched);
+			}
+		};
 		sheet.addEventListener("touchstart", onTouchStart, { passive: true });
-		sheet.addEventListener("touchmove", onTouchMove, { passive: false });
-		sheet.addEventListener("touchend", onTouchEnd, { passive: false });
-		sheet.addEventListener("touchcancel", onTouchCancel);
+		listen(sheet);
 		return () => {
+			release();
 			sheet.removeEventListener("touchstart", onTouchStart);
-			sheet.removeEventListener("touchmove", onTouchMove);
-			sheet.removeEventListener("touchend", onTouchEnd);
-			sheet.removeEventListener("touchcancel", onTouchCancel);
+			unlisten(sheet);
 		};
 	}, [begin, move, end]);
 
@@ -258,6 +317,7 @@ export const useSheetDrag = ({
 	const handleProps = {
 		onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
 			if (e.pointerType !== "mouse" || e.button !== 0) return;
+			if (inDialog(e.target, e.currentTarget)) return;
 			begin(e.clientX, e.clientY, null, e.pointerId);
 		},
 		onPointerMove: (e: ReactPointerEvent<HTMLElement>) => {
@@ -273,7 +333,7 @@ export const useSheetDrag = ({
 			if (wasPending && g.mode === "drag") e.currentTarget.setPointerCapture(e.pointerId);
 		},
 		onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
-			if (ownsPointer(e)) end(false);
+			if (ownsPointer(e) && end(false)) dropNextClick();
 		},
 		onPointerCancel: (e: ReactPointerEvent<HTMLElement>) => {
 			if (ownsPointer(e)) end(true);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import {
 	CLOSE_DISTANCE,
@@ -101,7 +101,10 @@ const Sheet = ({ onClose }: { onClose: () => void }) => {
 	const { sheetRef, handleProps } = useSheetDrag({ onClose });
 	return (
 		<div ref={sheetRef} data-testid="sheet">
-			<div {...handleProps}>Header</div>
+			<div {...handleProps}>
+				<button onClick={onClose}>Header</button>
+				<div role="dialog">Confirm</div>
+			</div>
 			<div data-testid="list" style={{ overflowY: "auto" }}>
 				Programmes
 			</div>
@@ -110,13 +113,36 @@ const Sheet = ({ onClose }: { onClose: () => void }) => {
 };
 
 // jsdom has no Touch, so build the event by hand with only what the hook reads.
-const touch = (target: Element, type: string, y?: number) => {
+const touch = (target: Element, type: string, y?: number, x = 0) => {
 	const e = new Event(type, { bubbles: true, cancelable: true });
 	Object.defineProperty(e, "touches", {
-		value: y === undefined ? [] : [{ clientX: 0, clientY: y }],
+		value: y === undefined ? [] : [{ clientX: x, clientY: y }],
 	});
 	target.dispatchEvent(e);
 	return e;
+};
+
+// jsdom has no PointerEvent either, so a mouse event stands in for one.
+const pointer = (target: Element, type: string, y: number, buttons = 1) => {
+	const e = new MouseEvent(type, { bubbles: true, cancelable: true, clientY: y, buttons });
+	Object.defineProperty(e, "pointerId", { value: 1 });
+	Object.defineProperty(e, "pointerType", { value: "mouse" });
+	target.dispatchEvent(e);
+};
+
+// Presses the mouse on `target` at the first y and moves through the rest.
+const mouseDrag = (target: Element, ys: number[]) => {
+	let t = 1000;
+	const clock = vi.spyOn(performance, "now").mockImplementation(() => t);
+	act(() => {
+		pointer(target, "pointerdown", ys[0]);
+		for (const y of ys.slice(1)) {
+			t += 16;
+			pointer(target, "pointermove", y);
+		}
+		pointer(target, "pointerup", ys[ys.length - 1], 0);
+	});
+	clock.mockRestore();
 };
 
 // Touches `target` at the first y and moves through the rest, one every 16 ms.
@@ -145,6 +171,9 @@ const scrollable = (list: HTMLElement, scrollTop: number) => {
 
 describe("useSheetDrag", () => {
 	afterEach(() => cleanup());
+	beforeAll(() => {
+		HTMLElement.prototype.setPointerCapture = () => {};
+	});
 
 	it("closes after a drag down and drops the tap", () => {
 		const onClose = vi.fn();
@@ -199,5 +228,56 @@ describe("useSheetDrag", () => {
 		expect(sheet.style.maxHeight).toBe("85vh");
 		drag(getByText("Header"), [200, 150, 100, 50]);
 		expect(sheet.style.maxHeight).toContain("100vh");
+	});
+
+	it("keeps following a touch whose element a re-render removed", () => {
+		const onClose = vi.fn();
+		const { getByText } = render(<Sheet onClose={onClose} />);
+		const header = getByText("Header");
+		act(() => {
+			touch(header, "touchstart", 0);
+			touch(header, "touchmove", 40);
+			header.remove();
+			touch(header, "touchmove", 90);
+			touch(header, "touchmove", 140);
+			touch(header, "touchend");
+		});
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("leaves the list free to scroll until the touch moves down", () => {
+		const onClose = vi.fn();
+		const { getByTestId } = render(<Sheet onClose={onClose} />);
+		const list = getByTestId("list");
+		scrollable(list, 0);
+		touch(list, "touchstart", 100);
+		const still = touch(list, "touchmove", 100);
+		touch(list, "touchend");
+		expect(still.defaultPrevented).toBe(false);
+	});
+
+	it("closes after a mouse drag and drops the click that follows", () => {
+		const onClose = vi.fn();
+		const { getByText } = render(<Sheet onClose={onClose} />);
+		const header = getByText("Header");
+		mouseDrag(header, [0, 40, 80, 130]);
+		expect(onClose).toHaveBeenCalledOnce();
+		act(() => {
+			header.click();
+		});
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("doesn't drag from a dialog opened in the header", () => {
+		const onClose = vi.fn();
+		const { getByTestId, getByText } = render(<Sheet onClose={onClose} />);
+		mouseDrag(getByText("Confirm"), [0, 40, 80, 130]);
+		act(() => {
+			touch(getByText("Confirm"), "touchstart", 0);
+			touch(getByText("Confirm"), "touchmove", 60);
+			touch(getByText("Confirm"), "touchend");
+		});
+		expect(onClose).not.toHaveBeenCalled();
+		expect(getByTestId("sheet").style.transform).toBe("");
 	});
 });
