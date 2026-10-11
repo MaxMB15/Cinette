@@ -70,7 +70,7 @@ const LeftPanel = ({
 					alt=""
 					width={64}
 					height={64}
-					className="w-16 h-16 rounded-2xl shadow-lg"
+					className="w-16 h-16 rounded-2xl shadow-lg ring-1 ring-white/10"
 				/>
 				<div>
 					<h1 className="text-2xl font-bold tracking-tight">Max Video Player</h1>
