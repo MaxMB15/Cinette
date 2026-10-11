@@ -8,30 +8,11 @@ import { getWatchHistory, deleteHistoryEntry, clearWatchHistory } from "@/lib/ta
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
 import { ChannelLogo } from "./ChannelLogo";
+import { formatDuration, formatRelativeDate } from "@/lib/watch-history";
 
 interface HistoryTabProps {
 	onPlay: (entry: WatchHistoryEntry) => void;
 }
-
-const formatDuration = (seconds: number): string => {
-	if (seconds < 60) return `${seconds}s`;
-	const h = Math.floor(seconds / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
-	if (h === 0) return `${m}m`;
-	return `${h}h ${m}m`;
-};
-
-const formatRelativeDate = (unixSeconds: number): string => {
-	const date = new Date(unixSeconds * 1000);
-	const now = new Date();
-	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-	const yesterday = new Date(today.getTime() - 86400000);
-	const entryDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-	if (entryDay.getTime() === today.getTime())
-		return `Today ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-	if (entryDay.getTime() === yesterday.getTime()) return `Yesterday`;
-	return date.toLocaleDateString([], { month: "short", day: "numeric" });
-};
 
 const ContentTypeBadge = ({ type }: { type: string }) => {
 	const normalized = type.toLowerCase();
