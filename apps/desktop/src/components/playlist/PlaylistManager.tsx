@@ -6,6 +6,7 @@ import { Trash2, RefreshCw, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { AddProvider } from "./AddProvider";
 import { ProviderSettingsModal } from "./ProviderSettingsModal";
 import { useChannels } from "@/hooks/useChannels";
@@ -33,6 +34,7 @@ export const PlaylistManager = () => {
 
 	const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
 	const [settingsProvider, setSettingsProvider] = useState<Provider | null>(null);
+	const [pendingRemoval, setPendingRemoval] = useState<Provider | null>(null);
 
 	const handleAddM3u = async (name: string, url: string) => {
 		await loadM3u(name, url);
@@ -126,7 +128,7 @@ export const PlaylistManager = () => {
 												size="icon"
 												className="h-8 w-8 text-destructive hover:text-destructive"
 												title="Remove"
-												onClick={() => removeProvider(p.id)}
+												onClick={() => setPendingRemoval(p)}
 											>
 												<Trash2 className="h-3.5 w-3.5" />
 											</Button>
@@ -157,6 +159,18 @@ export const PlaylistManager = () => {
 					onUpdateProvider={updateProvider}
 				/>
 			)}
+
+			<ConfirmDialog
+				open={pendingRemoval !== null}
+				title="Remove provider?"
+				message={`Remove "${pendingRemoval?.name ?? ""}"? Its channels and favorites are removed too.`}
+				confirmLabel="Remove"
+				onConfirm={() => {
+					if (pendingRemoval) removeProvider(pendingRemoval.id);
+					setPendingRemoval(null);
+				}}
+				onCancel={() => setPendingRemoval(null)}
+			/>
 		</div>
 	);
 };
