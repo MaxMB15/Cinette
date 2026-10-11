@@ -18,6 +18,7 @@ import { useChannels } from "@/hooks/useChannels";
 import {
 	mpvSetBounds,
 	mpvSetMediaInfo,
+	mpvSetSkipIntervals,
 	recordPlayStart,
 	recordPlayEnd,
 	fetchOmdbData,
@@ -778,6 +779,11 @@ export const PlayerView = () => {
 		window.addEventListener(SKIP_INTERVALS_EVENT, update);
 		return () => window.removeEventListener(SKIP_INTERVALS_EVENT, update);
 	}, []);
+	// The lock screen's skip buttons jump the same lengths.
+	useEffect(() => {
+		if (!isMobilePlatform()) return;
+		mpvSetSkipIntervals(skip.back, skip.forward).catch(() => {});
+	}, [skip]);
 	// Same test as the seek bar, which live channels usually don't get.
 	const seekable = mpv.state.duration > 0;
 
