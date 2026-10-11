@@ -193,11 +193,20 @@ fn parse_epg_time(raw: &str) -> i64 {
 }
 
 /// Fetch XMLTV EPG data from a URL and parse it.
+///
+/// An error status from the server comes back as `EpgError::Network`.
 pub async fn fetch_and_parse_epg(url: &str) -> Result<EpgData, EpgError> {
-    let body = crate::http::download_client()
+    fetch_epg(crate::http::download_client(), url).await
+}
+
+async fn fetch_epg(client: &reqwest::Client, url: &str) -> Result<EpgData, EpgError> {
+    // An error page parses as a guide with no programmes, and saving that would
+    // wipe the guide the user already has.
+    let body = client
         .get(url)
         .send()
         .await?
+        .error_for_status()?
         .text()
         .await?;
     parse_epg(&body)
@@ -228,6 +237,24 @@ pub fn epg_data_to_stored(data: &EpgData, provider_id: &str) -> Vec<StoredEpgPro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
+
+    #[tokio::test]
+    async fn an_error_page_is_not_saved_as_an_empty_guide() {
+        let url = test_server::serve_once("404 Not Found", "<html><body>Not found</body></html>");
+        let result = fetch_epg(&test_server::client(), &url).await;
+        assert!(matches!(result, Err(EpgError::Network(_))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_good_response_is_parsed() {
+        let url = test_server::serve_once(
+            "200 OK",
+            r#"<tv><channel id="c1"><display-name>One</display-name></channel></tv>"#,
+        );
+        let data = fetch_epg(&test_server::client(), &url).await.unwrap();
+        assert_eq!(data.channels.len(), 1);
+    }
 
     #[test]
     fn test_parse_epg() {

@@ -62,6 +62,51 @@ fn build(builder: reqwest::ClientBuilder) -> reqwest::Client {
         .expect("HTTP client could not be built, the TLS backend failed to start")
 }
 
+/// A one-shot local HTTP server, so tests can check how a client handles a
+/// response without reaching a real service.
+#[cfg(test)]
+pub(crate) mod test_server {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// Answers a single request with `status` and `body`, and returns the
+    /// server's base URL.
+    pub(crate) fn serve_once(status: &'static str, body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("read the bound address");
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // The request has to be read before replying, or the client may
+            // see the connection reset instead of the response.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => request.extend_from_slice(&buf[..n]),
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        format!("http://{addr}")
+    }
+
+    /// A client that reaches the loopback server even when the machine has a
+    /// proxy configured.
+    pub(crate) fn client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build a test client")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
