@@ -293,6 +293,40 @@ describe("useSplashScreen", () => {
 		expect(sessionStorage.getItem("splash-shown")).toBe("true");
 	});
 
+	it("still dismisses when the session flag can't be saved", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+			throw new DOMException("full", "QuotaExceededError");
+		});
+		try {
+			const updateState = makeUpdateState();
+			const { result } = renderHook(() => useSplashScreen({ updateState }));
+			await waitFor(() => expect(result.current.allDone).toBe(true));
+
+			act(() => result.current.dismiss());
+
+			expect(result.current.dismissed).toBe(true);
+		} finally {
+			setItem.mockRestore();
+			warn.mockRestore();
+		}
+	});
+
+	it("shows the splash when the session flag can't be read", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+			throw new DOMException("blocked", "SecurityError");
+		});
+		try {
+			const updateState = makeUpdateState();
+			const { result } = renderHook(() => useSplashScreen({ updateState }));
+			expect(result.current.dismissed).toBe(false);
+		} finally {
+			getItem.mockRestore();
+			warn.mockRestore();
+		}
+	});
+
 	it("calls onComplete callback when loading finishes", async () => {
 		const onComplete = vi.fn();
 		const updateState = makeUpdateState();

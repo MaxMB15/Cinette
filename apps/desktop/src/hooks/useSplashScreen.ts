@@ -12,6 +12,7 @@ import {
 } from "@/hooks/useChannels";
 import { findDueRefreshes } from "@/lib/refresh-schedule";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
+import { readStorage, SPLASH_SHOWN_KEY, writeStorage } from "@/lib/storage";
 
 export type StepStatus = "pending" | "active" | "done" | "error";
 
@@ -30,8 +31,6 @@ export interface SplashScreenState {
 	hasProviders: boolean;
 	dismiss: () => void;
 }
-
-const SESSION_KEY = "splash-shown";
 
 /** One of the splash steps that refreshes a list of providers. */
 interface RefreshStep {
@@ -61,7 +60,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		onCompleteRef.current = onComplete;
 	}, [onComplete]);
 
-	const alreadyShownRef = useRef(sessionStorage.getItem(SESSION_KEY) === "true");
+	const alreadyShownRef = useRef(readStorage(SPLASH_SHOWN_KEY, "session") === "true");
 
 	// Consume providers from ChannelsContext (already loaded on mount — no extra Tauri calls)
 	const { providers, initialized } = useChannels();
@@ -84,7 +83,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 	const [hasProviders, setHasProviders] = useState(false);
 
 	const dismiss = useCallback(() => {
-		sessionStorage.setItem(SESSION_KEY, "true");
+		writeStorage(SPLASH_SHOWN_KEY, "true", "session");
 		setDismissed(true);
 	}, []);
 
