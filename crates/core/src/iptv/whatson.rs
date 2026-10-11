@@ -54,13 +54,21 @@ pub struct WhatsonData {
 #[derive(Debug, Error)]
 pub enum WhatsonError {
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
     #[error("Whatson API error: {0}")]
     Api(String),
     #[error("Parse error: {0}")]
     Parse(String),
     #[error("Not found")]
     NotFound,
+}
+
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for WhatsonError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
 }
 
 /// Raw platform rating object from the API.
@@ -431,5 +439,12 @@ mod tests {
         assert!(json_str.contains("\"imdbId\""));
         assert!(json_str.contains("\"rtCriticsRating\""));
         assert!(json_str.contains("\"rtAudienceRating\""));
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = WhatsonError::from(crate::http::error_with_url("unix:/?imdbId=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

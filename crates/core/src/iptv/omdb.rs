@@ -25,11 +25,19 @@ pub struct OmdbData {
 #[derive(Debug, Error)]
 pub enum OmdbError {
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
     #[error("OMDB API error: {0}")]
     Api(String),
     #[error("Parse error: {0}")]
     Parse(String),
+}
+
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for OmdbError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
 }
 
 /// Raw OMDB API response shape (for deserialization only).
@@ -400,5 +408,12 @@ mod tests {
         let data = parse_omdb_response(response).unwrap();
         assert!(data.imdb_id.is_none());
         assert!(data.imdb_votes.is_none());
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = OmdbError::from(crate::http::error_with_url("unix:/?apikey=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

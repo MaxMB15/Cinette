@@ -11,9 +11,17 @@ pub enum XtreamError {
     #[error("authentication failed")]
     AuthFailed,
     #[error("network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+}
+
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for XtreamError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -721,5 +729,14 @@ mod tests {
         assert!(series.name.is_none());
         assert!(series.cover.is_none());
         assert!(series.category_id.is_none());
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = XtreamError::from(crate::http::error_with_url(
+            "unix:/player_api.php?username=u&password=SECRET",
+        ));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

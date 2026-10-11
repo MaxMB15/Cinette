@@ -28,13 +28,21 @@ pub struct SubtitleSearchResult {
 #[derive(Debug, Error)]
 pub enum OpenSubtitlesError {
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
     #[error("OpenSubtitles API error: {0}")]
     Api(String),
     #[error("Parse error: {0}")]
     Parse(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for OpenSubtitlesError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
 }
 
 // --- Raw API response shapes ---
@@ -185,8 +193,7 @@ pub async fn search_subtitles(
         .header("Accept", "application/json")
         .send()
         .await?
-        .error_for_status()
-        .map_err(OpenSubtitlesError::Http)?
+        .error_for_status()?
         .json::<serde_json::Value>()
         .await?;
 
@@ -221,8 +228,7 @@ pub async fn download_subtitle(
         .json(&post_body)
         .send()
         .await?
-        .error_for_status()
-        .map_err(OpenSubtitlesError::Http)?
+        .error_for_status()?
         .json()
         .await?;
 
@@ -240,8 +246,7 @@ pub async fn download_subtitle(
         .header("Accept-Encoding", "identity")
         .send()
         .await?
-        .error_for_status()
-        .map_err(OpenSubtitlesError::Http)?
+        .error_for_status()?
         .bytes()
         .await?;
 
@@ -393,5 +398,12 @@ mod tests {
         assert!(!s.contains("\"languageName\""));
         assert!(s.contains("\"releaseName\""));
         assert!(s.contains("\"downloadCount\""));
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = OpenSubtitlesError::from(crate::http::error_with_url("unix:/file?token=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

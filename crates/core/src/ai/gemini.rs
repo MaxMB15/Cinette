@@ -335,8 +335,9 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
         .send()
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "Gemini API request failed");
-            GeminiError::Api(e.to_string())
+            let err = request_error(e);
+            tracing::error!(error = %err, "Gemini API request failed");
+            err
         })?;
 
     if !response.status().is_success() {
@@ -347,6 +348,7 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
     }
 
     let resp_json: serde_json::Value = response.json().await.map_err(|e| {
+        let e = e.without_url();
         tracing::error!(error = %e, "failed to parse Gemini response as JSON");
         GeminiError::Parse(e.to_string())
     })?;
@@ -378,8 +380,14 @@ pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| GeminiError::Api(e.to_string()))?;
+        .map_err(request_error)?;
     Ok(response.status().is_success())
+}
+
+// Request URLs can carry the API key, so they are dropped before the error can
+// reach a log or the UI.
+fn request_error(e: reqwest::Error) -> GeminiError {
+    GeminiError::Api(e.without_url().to_string())
 }
 
 #[cfg(test)]
@@ -479,5 +487,14 @@ mod tests {
         assert!(prompt.contains("Western Europe"));
         assert!(prompt.contains("Only assign a group if it CLEARLY belongs"));
         assert!(prompt.contains("Do NOT create new categories"));
+    }
+
+    #[test]
+    fn request_errors_leave_out_the_request_url() {
+        let err = request_error(crate::http::error_with_url(
+            "unix:/v1beta/models?key=SECRET",
+        ));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

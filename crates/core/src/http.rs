@@ -62,6 +62,19 @@ fn build(builder: reqwest::ClientBuilder) -> reqwest::Client {
         .expect("HTTP client could not be built, the TLS backend failed to start")
 }
 
+/// Builds an error that carries `url` the way a failed request's error does,
+/// without touching the network.
+///
+/// `url` must have no host, such as `unix:/path?key=value`, because that is
+/// what makes reqwest reject the request.
+#[cfg(test)]
+pub(crate) fn error_with_url(url: &str) -> reqwest::Error {
+    reqwest::Client::new()
+        .get(url)
+        .build()
+        .expect_err("a URL without a host is rejected")
+}
+
 /// A one-shot local HTTP server, so tests can check how a client handles a
 /// response without reaching a real service.
 #[cfg(test)]
@@ -114,6 +127,13 @@ mod tests {
     #[test]
     fn user_agent_names_the_app_and_version() {
         assert_eq!(user_agent_for("1.2.3"), "MaxVideoPlayer/1.2.3");
+    }
+
+    #[test]
+    fn test_errors_carry_their_url() {
+        let err = error_with_url("unix:/?key=SECRET");
+        assert!(err.to_string().contains("SECRET"), "{err}");
+        assert!(!err.without_url().to_string().contains("SECRET"));
     }
 
     #[test]
