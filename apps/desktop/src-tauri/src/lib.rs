@@ -156,6 +156,14 @@ pub fn run() {
                 _ => {}
             }
 
+            // Downloads that were running when the app quit have no ffmpeg
+            // anymore. Left as they are, each would hold a download slot for good.
+            match cache.requeue_interrupted_downloads() {
+                Ok(n) if n > 0 => tracing::info!("Requeued {n} interrupted download(s)"),
+                Err(e) => tracing::warn!("Failed to requeue interrupted downloads: {e}"),
+                _ => {}
+            }
+
             app.manage(AppState {
                 cache: Mutex::new(cache),
             });
@@ -168,7 +176,13 @@ pub fn run() {
             {
                 use tauri_plugin_shell::ShellExt;
                 match app.shell().sidecar("ffmpeg") {
-                    Ok(_) => tracing::info!("ffmpeg sidecar resolved"),
+                    Ok(_) => {
+                        tracing::info!("ffmpeg sidecar resolved");
+                        // Start whatever is still queued from the last run.
+                        if let Err(e) = crate::downloads::manager::pump(app.handle()) {
+                            tracing::warn!("Failed to start queued downloads: {e}");
+                        }
+                    }
                     Err(e) => tracing::error!("ffmpeg sidecar missing: {e}"),
                 }
             }

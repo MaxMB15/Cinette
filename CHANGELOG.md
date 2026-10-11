@@ -14,6 +14,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 
+### Fixed
+
+- Downloads that were running when the app quit now start again at the next launch, and queued downloads start too. Before, each interrupted download held one of the download slots until it was stopped or deleted, and the queue sat idle until another download was added. A download whose ffmpeg can't start now shows as failed instead of blocking the queue.
+
 ## [0.5.3] - 2026-10-09
 
 ### Added

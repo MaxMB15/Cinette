@@ -171,12 +171,23 @@ pub fn pump<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         active.iter().map(|r| (r.id.clone(), r.status)).collect();
     let start_ids = ids_to_start(&pairs, limit);
 
+    let mut first_err = None;
     for id in start_ids {
         if let Some(rec) = active.iter().find(|r| r.id == id) {
-            start_process(app, rec.clone())?;
+            if let Err(e) = start_process(app, rec.clone()) {
+                // Mark it failed. Otherwise it stays first in line, or stays
+                // `Downloading` with no ffmpeg, and holds up the queue.
+                update_record(app, &id, |r| {
+                    r.status = DownloadStatus::Failed;
+                    r.error = Some(e.clone());
+                    r.finished_at = Some(now_secs());
+                });
+                emit_progress(app, &id);
+                first_err.get_or_insert(e);
+            }
         }
     }
-    Ok(())
+    first_err.map_or(Ok(()), Err)
 }
 
 pub(crate) fn now_secs() -> i64 {
