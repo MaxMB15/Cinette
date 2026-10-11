@@ -41,6 +41,7 @@ extern "C" {
     fn mvp_ios_set_audio_active(active: bool);
     fn mvp_ios_now_playing(title: *const c_char, duration: f64, position: f64, playing: bool);
     fn mvp_ios_now_playing_clear();
+    fn mvp_ios_now_playing_artwork(data: *const u8, len: usize);
     // From libmpv itself. libmpv2 doesn't re-export its sys crate.
     fn mpv_wakeup(ctx: *mut c_void);
 }
@@ -219,14 +220,74 @@ static MEDIA_INFO: Mutex<MediaInfo> = Mutex::new(MediaInfo {
 /// Bumped on every `set_media_info` so the watcher knows to resend.
 static MEDIA_INFO_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Sets the title and live flag shown on the lock screen. They stay until
-/// the next call, so they cover the next load too.
-pub fn set_media_info(title: Option<String>, live: bool) {
+/// Sets the title, live flag and artwork shown on the lock screen. They stay
+/// until the next call, so they cover the next load too.
+pub fn set_media_info(title: Option<String>, live: bool, artwork: Option<String>) {
     let title = title.filter(|t| !t.is_empty()).and_then(|t| CString::new(t).ok());
     let mut info = MEDIA_INFO.lock().unwrap_or_else(|p| p.into_inner());
     info.title = title;
     info.live = live;
     MEDIA_INFO_GEN.fetch_add(1, Ordering::AcqRel);
+    drop(info);
+    set_artwork(artwork.filter(|url| url.starts_with("http://") || url.starts_with("https://")));
+}
+
+/// The address of the artwork Swift has or is about to get.
+static ARTWORK_URL: Mutex<Option<String>> = Mutex::new(None);
+
+/// Artwork larger than this is left out.
+const MAX_ARTWORK_BYTES: usize = 5 * 1024 * 1024;
+
+/// Downloads the channel logo and hands it to Swift. Rust fetches it
+/// because App Transport Security blocks plain `http` requests from native
+/// code, and most IPTV logos are on `http` servers.
+fn set_artwork(url: Option<String>) {
+    let mut current = ARTWORK_URL.lock().unwrap_or_else(|p| p.into_inner());
+    if *current == url {
+        return;
+    }
+    current.clone_from(&url);
+    // Swift queues this before the image below, so the old logo never
+    // shows with the new title for longer than the download takes.
+    unsafe { mvp_ios_now_playing_artwork(std::ptr::null(), 0) };
+    drop(current);
+    let Some(url) = url else { return };
+    tauri::async_runtime::spawn(async move {
+        let bytes = match fetch_artwork(&url).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::debug!("[MPV iOS] no lock screen artwork from {url}: {e}");
+                return;
+            }
+        };
+        // Holding the lock keeps a newer call from clearing the artwork
+        // before this one sends an old logo.
+        let current = ARTWORK_URL.lock().unwrap_or_else(|p| p.into_inner());
+        if current.as_deref() == Some(url.as_str()) {
+            unsafe { mvp_ios_now_playing_artwork(bytes.as_ptr(), bytes.len()) };
+        }
+    });
+}
+
+async fn fetch_artwork(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len() + chunk.len() > MAX_ARTWORK_BYTES {
+            return Err("too large".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// The Metal view under the web view. The view outlives this value: Swift

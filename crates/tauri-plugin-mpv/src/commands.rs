@@ -100,8 +100,9 @@ pub async fn mpv_set_media_info<R: Runtime>(
     state: State<'_, MpvState>,
     title: Option<String>,
     live: bool,
+    artwork: Option<String>,
 ) -> Result<(), String> {
-    state.set_media_info(title, live);
+    state.set_media_info(title, live, artwork);
     Ok(())
 }
 

@@ -20,7 +20,7 @@ The plan behind the port is in [`apps/ios/DESIGN.md`](../apps/ios/DESIGN.md).
   allow them.
 - An iPhone always gets the phone layout. An iPad picks the phone, tablet or desktop
   layout by window width, so Split View and rotation switch between them.
-- Audio keeps playing on the lock screen, which shows the channel name.
+- Audio keeps playing on the lock screen, which shows the channel name and logo.
 
 ## Building
 

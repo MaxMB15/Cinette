@@ -117,6 +117,8 @@ final class MpvHost: NSObject {
   private var playing = false
   /// Set when an interruption paused a stream that was playing.
   private var resumeAfterInterruption = false
+  /// The channel logo for the lock screen, once Rust has downloaded it.
+  private var artwork: MPMediaItemArtwork?
 
   func attach(webview: WKWebView) {
     self.webview = webview
@@ -255,6 +257,9 @@ final class MpvHost: NSObject {
     if let title, !title.isEmpty {
       info[MPMediaItemPropertyTitle] = title
     }
+    if let artwork {
+      info[MPMediaItemPropertyArtwork] = artwork
+    }
     if duration > 0 {
       info[MPMediaItemPropertyPlaybackDuration] = duration
       info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, position)
@@ -266,6 +271,18 @@ final class MpvHost: NSObject {
     center.nowPlayingInfo = info
     center.playbackState = playing ? .playing : .paused
     self.playing = playing
+  }
+
+  /// Replaces the logo, or removes it when `image` is nil. Shows it right
+  /// away if Now Playing is up.
+  func setArtwork(_ image: UIImage?) {
+    artwork = image.map { image in
+      MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+    }
+    let center = MPNowPlayingInfoCenter.default()
+    guard var info = center.nowPlayingInfo else { return }
+    info[MPMediaItemPropertyArtwork] = artwork
+    center.nowPlayingInfo = info
   }
 
   func clearNowPlaying() {
@@ -419,6 +436,15 @@ func mvpIosNowPlaying(
   DispatchQueue.main.async {
     MpvHost.shared.updateNowPlaying(
       title: name, duration: duration, position: position, playing: playing)
+  }
+}
+
+@_cdecl("mvp_ios_now_playing_artwork")
+func mvpIosNowPlayingArtwork(_ bytes: UnsafePointer<UInt8>?, _ length: Int) {
+  // Copy the bytes now. Rust frees them when this function returns.
+  let data = bytes.map { Data(bytes: $0, count: length) }
+  DispatchQueue.main.async {
+    MpvHost.shared.setArtwork(data.flatMap { UIImage(data: $0) })
   }
 }
 
