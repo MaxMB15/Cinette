@@ -40,13 +40,22 @@ impl MpvEngine {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let mpv = Mpv::with_initializer(move |init| {
+        // Name the option that failed. A bare "Raw(-5)" doesn't say which one
+        // this libmpv build doesn't know.
+        let mut failed: Option<&str> = None;
+        let mpv = Mpv::with_initializer(|init| {
             for (k, v) in &opts {
-                init.set_option(k.as_str(), v.as_str())?;
+                if let Err(e) = init.set_option(k.as_str(), v.as_str()) {
+                    failed = Some(k.as_str());
+                    return Err(e);
+                }
             }
             Ok(())
         })
-        .map_err(|e| format!("mpv init: {}", e))?;
+        .map_err(|e| match failed {
+            Some(k) => format!("mpv init: option {k}: {e}"),
+            None => format!("mpv init: {e}"),
+        })?;
         self.mpv = Some(mpv);
         Ok(self.mpv.as_mut().unwrap())
     }
@@ -226,6 +235,24 @@ impl MpvEngine {
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?
             .command("seek", &[&position.to_string(), "absolute"])
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn seek_relative(&self, offset: f64) -> Result<(), String> {
+        self.mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?
+            .command("seek", &[&offset.to_string(), "relative"])
+            .map_err(|e| e.to_string())
+    }
+
+    /// `vid=no` drops the video track and closes the video output; `vid=auto`
+    /// brings both back.
+    pub fn set_video_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?
+            .set_property("vid", if enabled { "auto" } else { "no" })
             .map_err(|e| e.to_string())
     }
 

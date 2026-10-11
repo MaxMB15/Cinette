@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
+import { isMobilePlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -42,7 +43,8 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 	const [fileName, setFileName] = useState<string | null>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 
-	const showDragDrop = layoutMode === "desktop";
+	// An iPad in landscape gets the desktop layout but can't drop files.
+	const showDragDrop = layoutMode === "desktop" && !isMobilePlatform();
 	const showFileBrowse = layoutMode !== "tv";
 
 	const acceptFileDrop = useCallback(

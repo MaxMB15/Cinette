@@ -15,7 +15,7 @@ MaxVideoPlayer/
 │   │   │   ├── hooks/            useChannels, useMpv, useDownloads, useUpdateChecker, ...
 │   │   │   └── lib/tauri.ts      every invoke() call to the backend
 │   │   └── src-tauri/            Tauri app: commands, download manager, bundle config
-│   ├── ios/                      iOS plans (not built yet)
+│   ├── ios/                      iOS design notes and the first proof of concept
 │   └── android/                  Android plans (not built yet)
 ├── crates/
 │   ├── core/                     mvp-core: platform-independent logic
@@ -66,7 +66,7 @@ plugins, and `commands.rs` exposes the core features to the frontend as Tauri co
 | --- | --- |
 | `engine.rs` | `MpvEngine`, the libmpv instance: load, play, pause, seek, volume. No platform code. |
 | `renderer.rs` | The `PlatformRenderer` trait (`attach`, `resize`, `detach`) each platform implements |
-| `macos.rs`, `linux.rs` | The embedded renderers |
+| `macos.rs`, `linux.rs`, `ios.rs` | The embedded renderers |
 | `mpv.rs` | `MpvState`, the managed state that picks the renderer and falls back to a separate window |
 | `reconnect.rs` | Detects stalls and dropped connections and reloads the stream |
 | `idle_inhibit.rs` | Keeps the display awake during playback |
@@ -95,6 +95,15 @@ with OpenGL enabled (`scripts/build-libmpv.sh`).
 `LinuxGlRenderer` creates a Wayland subsurface below the webview's surface and an EGL
 context on it, and passes the Wayland display to libmpv. All EGL and GL calls run on
 the GLib main thread. X11 sessions use the separate-window fallback.
+
+### iOS
+
+`IosMetalRenderer` passes a `CAMetalLayer` to libmpv as its `wid`, and mpv draws
+into it with `vo=gpu-next` on Vulkan through MoltenVK. mpv runs its own draw loop, so
+there's no render context to drive. The layer belongs to a view that the Swift side of
+the plugin (`ios/Sources/MpvPlugin.swift`) keeps under the transparent webview. The
+Swift side also runs the audio session and the lock screen controls. libmpv comes
+from MPVKit through Swift Package Manager. See [ios.md](ios.md).
 
 ## Data flow
 

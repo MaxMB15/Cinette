@@ -6,6 +6,7 @@ import { Play, Tv2, Heart, Film } from "lucide-react";
 import type { Channel, EpgProgram } from "@/lib/types";
 import { EpgTimelineBar } from "./EpgTimelineBar";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
+import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 
@@ -15,6 +16,9 @@ const brokenImageUrls = new Set<string>();
 /** Width (px) of the left channel-info column in RowCard — must match spacer in ChannelList header. */
 export const ROW_CARD_LEFT_WIDTH = 180;
 
+/** Height (px) of the phone's channel row. The list's virtualizer uses it. */
+export const COMPACT_ROW_HEIGHT = 64;
+
 /** Map a series aggregate state to the DownloadButton icon state. */
 const aggregateToIcon = (
 	agg: "none" | "downloading" | "partial" | "complete"
@@ -23,7 +27,8 @@ const aggregateToIcon = (
 interface ChannelCardProps {
 	channel: Channel;
 	onPlay: (channel: Channel) => void;
-	variant?: "row" | "poster";
+	/** "compact" is the phone's row, which shows what's on now instead of the timeline. */
+	variant?: "row" | "compact" | "poster";
 	onToggleFavorite?: (channel: Channel) => void;
 	/** Programs in the EPG display window for this channel. */
 	epgPrograms?: EpgProgram[];
@@ -49,10 +54,6 @@ const RowCard = memo(function RowCard({
 	windowEnd?: number;
 }) {
 	const now = Math.floor(Date.now() / 1000);
-	const [imgError, setImgError] = useState(() =>
-		channel.logoUrl ? brokenImageUrls.has(channel.logoUrl) : false
-	);
-	const showFallback = !channel.logoUrl || imgError;
 
 	return (
 		/* Outer wrapper is a div (not button) so nested buttons and div[role=button] inside
@@ -74,22 +75,11 @@ const RowCard = memo(function RowCard({
 				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0"
 				style={{ width: `${ROW_CARD_LEFT_WIDTH}px` }}
 			>
-				<div className="relative h-6 w-6 rounded bg-secondary flex items-center justify-center overflow-hidden shrink-0">
-					{!showFallback ? (
-						<img
-							src={channel.logoUrl}
-							alt=""
-							className="h-full w-full object-contain"
-							loading="lazy"
-							onError={() => {
-								if (channel.logoUrl) brokenImageUrls.add(channel.logoUrl);
-								setImgError(true);
-							}}
-						/>
-					) : (
-						<Tv2 className="h-3 w-3 text-muted-foreground" />
-					)}
-				</div>
+				<ChannelLogo
+					url={channel.logoUrl}
+					className="h-6 w-6 rounded"
+					iconClassName="h-3 w-3"
+				/>
 
 				<div className="min-w-0 flex-1">
 					<p className="text-xs leading-tight truncate">{channel.name}</p>
@@ -152,6 +142,119 @@ const RowCard = memo(function RowCard({
 		</div>
 	);
 });
+
+const ChannelLogo = ({
+	url,
+	className,
+	iconClassName,
+}: {
+	url?: string;
+	className: string;
+	iconClassName: string;
+}) => {
+	const [imgError, setImgError] = useState(() => (url ? brokenImageUrls.has(url) : false));
+	return (
+		<div
+			className={`relative bg-secondary flex items-center justify-center overflow-hidden shrink-0 ${className}`}
+		>
+			{url && !imgError ? (
+				<img
+					src={url}
+					alt=""
+					className="h-full w-full object-contain"
+					loading="lazy"
+					onError={() => {
+						brokenImageUrls.add(url);
+						setImgError(true);
+					}}
+				/>
+			) : (
+				<Tv2 className={`text-muted-foreground ${iconClassName}`} />
+			)}
+		</div>
+	);
+};
+
+/** The phone's channel row. A phone is too narrow for the timeline, so it
+ *  shows the programme on now and how far into it the channel is. */
+const CompactRowCard = ({
+	channel,
+	onPlay,
+	onToggleFavorite,
+	epgPrograms,
+}: {
+	channel: Channel;
+	onPlay: (ch: Channel) => void;
+	onToggleFavorite?: (ch: Channel) => void;
+	epgPrograms?: EpgProgram[];
+}) => {
+	const now = useNow();
+	const current = epgPrograms?.find((p) => p.startTime <= now && now < p.endTime);
+	const progress = current
+		? ((now - current.startTime) / (current.endTime - current.startTime)) * 100
+		: 0;
+
+	return (
+		// The play and favorite buttons sit side by side rather than one inside
+		// the other, so VoiceOver reads and activates each one on its own.
+		<div
+			className="flex items-center w-full px-2 rounded-lg active:bg-accent/60 transition-colors"
+			style={{ height: `${COMPACT_ROW_HEIGHT}px` }}
+		>
+			<button
+				type="button"
+				onClick={() => onPlay(channel)}
+				className="flex items-center gap-3 flex-1 min-w-0 h-full text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+			>
+				<ChannelLogo
+					url={channel.logoUrl}
+					className="h-10 w-10 rounded-md"
+					iconClassName="h-4 w-4"
+				/>
+
+				<div className="min-w-0 flex-1">
+					<p className="text-sm font-medium leading-tight truncate">{channel.name}</p>
+					{current ? (
+						<>
+							<p className="text-xs text-muted-foreground truncate mt-0.5">
+								{current.title}
+							</p>
+							<div className="h-0.5 mt-1.5 rounded-full bg-secondary overflow-hidden">
+								<div
+									className="h-full bg-red-400/80"
+									style={{ width: `${progress.toFixed(1)}%` }}
+								/>
+							</div>
+						</>
+					) : (
+						channel.groupTitle && (
+							<p className="text-xs text-muted-foreground/70 truncate mt-0.5">
+								{channel.groupTitle}
+							</p>
+						)
+					)}
+				</div>
+			</button>
+
+			{onToggleFavorite && (
+				<button
+					type="button"
+					onClick={() => onToggleFavorite(channel)}
+					className="h-11 w-11 -mr-2 flex items-center justify-center rounded-full shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+					aria-label={channel.isFavorite ? "Remove from favorites" : "Add to favorites"}
+				>
+					<Heart
+						className={`h-4 w-4 transition-colors ${
+							channel.isFavorite
+								? "fill-current text-red-500"
+								: "text-muted-foreground"
+						}`}
+					/>
+				</button>
+			)}
+		</div>
+	);
+};
 
 const PosterCard = ({
 	channel,
@@ -293,6 +396,16 @@ export const ChannelCard = memo(function ChannelCard({
 	windowStart,
 	windowEnd,
 }: ChannelCardProps) {
+	if (variant === "compact") {
+		return (
+			<CompactRowCard
+				channel={channel}
+				onPlay={onPlay}
+				onToggleFavorite={onToggleFavorite}
+				epgPrograms={epgPrograms}
+			/>
+		);
+	}
 	return variant === "poster" ? (
 		<PosterCard channel={channel} onPlay={onPlay} onToggleFavorite={onToggleFavorite} />
 	) : (

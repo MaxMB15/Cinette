@@ -1,0 +1,6 @@
+xcuserdata/
+build/
+Externals/
+
+# Frontend bundle and license files, copied in by the Tauri CLI at build time
+assets/

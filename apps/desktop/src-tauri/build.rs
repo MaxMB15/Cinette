@@ -2,8 +2,12 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 fn main() {
+    // This `cfg` checks the host, so also check the target: an iOS build
+    // runs this script on macOS too.
     #[cfg(target_os = "macos")]
-    embed_macos_rpath();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        embed_macos_rpath();
+    }
 
     tauri_build::build();
 }

@@ -1,0 +1,124 @@
+name: max-video-player
+options:
+  bundleIdPrefix: com.maxvideoplayer.app
+  deploymentTarget:
+    iOS: 17.5
+fileGroups: [../../src]
+configs:
+  debug: debug
+  release: release
+packages:
+  # The LGPL build of mpv and FFmpeg. Never switch to the MPVKit-GPL product:
+  # the App Store build can't contain anyone else's GPL code.
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.1.0-n9.0.2
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: Max Video Player
+      PRODUCT_BUNDLE_IDENTIFIER: com.maxvideoplayer.app
+      DEVELOPMENT_TEAM: 3MLC4VWP96
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  max-video-player_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      - path: Externals
+      - path: max-video-player_iOS
+      - path: assets
+        buildPhase: resources
+        type: folder
+      - path: LaunchScreen.storyboard
+    info:
+      path: max-video-player_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        # Audio keeps playing on the lock screen.
+        UIBackgroundModes: [audio]
+        # The only encryption is HTTPS and TLS, which is exempt. Without this
+        # key App Store Connect asks about it for every build.
+        ITSAppUsesNonExemptEncryption: false
+        # Channel logos are often plain HTTP. mpv and reqwest open their own
+        # sockets, which App Transport Security doesn't cover.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
+          NSAllowsLocalNetworking: true
+        # iOS asks before the app reaches a server on the local network, such
+        # as a provider on a home server, and shows this text.
+        NSLocalNetworkUsageDescription: Max Video Player connects to IPTV servers on your local network to load playlists and play channels.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: 0.5.3
+        CFBundleVersion: "0.5.3"
+    entitlements:
+      path: max-video-player_iOS/max-video-player_iOS.entitlements
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      base:
+        ENABLE_BITCODE: false
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64 
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+        CLANG_CXX_LIBRARY: libc++
+      groups: [app]
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      # libmpv and its libraries, for the mpv_* symbols libmpv2 calls.
+      - package: MPVKit
+        product: MPVKit
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreFoundation.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      - sdk: Foundation.framework
+      - sdk: MediaPlayer.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+      - sdk: VideoToolbox.framework
+      - sdk: WebKit.framework
+      - sdk: libiconv.tbd
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libc++.tbd
+    preBuildScripts:
+      - script: npm run -- tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a

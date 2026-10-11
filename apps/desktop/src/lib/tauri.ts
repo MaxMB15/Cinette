@@ -21,14 +21,28 @@ import type {
 
 // --- MPV Player Commands ---
 
+// Loads and stops reach mpv one at a time, in the order they were called.
+// Rust runs each command on its own thread, so a stop sent without waiting
+// for it could otherwise land after a newer load and end that stream.
+let lastTransition: Promise<void> = Promise.resolve();
+
+const inOrder = (run: () => Promise<void>): Promise<void> => {
+	const result = lastTransition.then(run);
+	lastTransition = result.then(
+		() => {},
+		() => {}
+	);
+	return result;
+};
+
 export const mpvLoad = (url: string, startPos?: number, hwdec = true): Promise<void> =>
-	invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec });
+	inOrder(() => invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec }));
 
 export const mpvPlay = (): Promise<void> => invoke("plugin:mpv|mpv_play");
 
 export const mpvPause = (): Promise<void> => invoke("plugin:mpv|mpv_pause");
 
-export const mpvStop = (): Promise<void> => invoke("plugin:mpv|mpv_stop");
+export const mpvStop = (): Promise<void> => inOrder(() => invoke("plugin:mpv|mpv_stop"));
 
 export const mpvSeek = (position: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_seek", { position });
@@ -40,6 +54,10 @@ export const mpvGetState = (): Promise<PlayerState> => invoke("plugin:mpv|mpv_ge
 
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
+
+/** The lock screen's title and live flag. Only iOS uses them. */
+export const mpvSetMediaInfo = (title: string | null, live: boolean): Promise<void> =>
+	invoke("plugin:mpv|mpv_set_media_info", { title, live });
 
 export const mpvSetBounds = (x: number, y: number, w: number, h: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_bounds", { x, y, w, h });

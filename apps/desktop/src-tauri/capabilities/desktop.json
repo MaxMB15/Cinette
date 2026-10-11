@@ -1,0 +1,14 @@
+{
+	"identifier": "desktop",
+	"description": "Updates, relaunching and the ffmpeg download sidecar, which only the desktop app has",
+	"windows": ["main"],
+	"platforms": ["macOS", "linux", "windows"],
+	"permissions": [
+		"updater:default",
+		"process:default",
+		{
+			"identifier": "shell:allow-execute",
+			"allow": [{ "name": "binaries/ffmpeg", "sidecar": true, "args": true }]
+		}
+	]
+}

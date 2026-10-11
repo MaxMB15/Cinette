@@ -1,0 +1,78 @@
+name: iOS
+
+# Builds the app for the iOS simulator. Nothing is signed or uploaded; this
+# catches changes that break the iOS build before they reach a release.
+on:
+  push:
+    branches: [feature/ios-poc]
+    paths:
+      - "apps/desktop/**"
+      - "crates/**"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    branches: [dev, feature/ios-poc]
+    paths:
+      - "apps/desktop/**"
+      - "crates/**"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ios.yml"
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-simulator:
+    # macOS 26 ships Xcode 26 and the iOS 26 SDK, which App Store uploads need.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: ios-sim
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Builds the frontend, the Rust library and the Xcode project, which
+      # pulls MPVKit through Swift Package Manager.
+      - name: Build for the simulator
+        working-directory: apps/desktop
+        run: npx tauri ios build --debug --target aarch64-sim --ci
+
+      - name: Check the app bundle
+        run: |
+          APP="apps/desktop/src-tauri/gen/apple/build/arm64-sim/Max Video Player.app"
+          test -d "$APP"
+          plutil -p "$APP/Info.plist" | grep -E 'CFBundleIdentifier|MinimumOSVersion|CFBundleShortVersionString'

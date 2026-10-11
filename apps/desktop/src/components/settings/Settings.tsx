@@ -9,12 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { usePlatform } from "@/hooks/usePlatform";
+import { isMobilePlatform, platformName } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { getVersion } from "@tauri-apps/api/app";
 import {
 	Settings as SettingsIcon,
 	Monitor,
 	Smartphone,
+	Tablet,
 	Tv,
 	Eye,
 	EyeOff,
@@ -187,10 +189,14 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 	const platformIcon = {
 		desktop: Monitor,
+		tablet: Tablet,
 		mobile: Smartphone,
 		tv: Tv,
 	}[layoutMode];
 	const PlatformIcon = platformIcon;
+	// The mobile apps have no downloads, and App Store rules don't allow a
+	// donation link.
+	const mobile = isMobilePlatform(platform);
 
 	const handleSaveOmdbKey = async () => {
 		try {
@@ -361,7 +367,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						<div className="flex items-center gap-3">
 							<PlatformIcon className="h-5 w-5 text-muted-foreground" />
 							<div>
-								<p className="text-sm font-medium capitalize">{platform}</p>
+								<p className="text-sm font-medium">{platformName(platform)}</p>
 								<p className="text-xs text-muted-foreground">
 									Layout: {layoutMode}
 								</p>
@@ -705,90 +711,95 @@ export const Settings = ({ updateState }: SettingsProps) => {
 				</Card>
 
 				{/* Downloads section */}
-				<Card>
-					<CardHeader>
-						<CardTitle className="text-base">Downloads</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-5">
-						{/* Folder */}
-						<div>
-							<p className="text-sm font-medium mb-1">Download folder</p>
-							<p className="text-xs text-muted-foreground mb-2">
-								Where movies and series episodes are saved.
-							</p>
-							<div className="flex items-center gap-2">
+				{!mobile && (
+					<Card>
+						<CardHeader>
+							<CardTitle className="text-base">Downloads</CardTitle>
+						</CardHeader>
+						<CardContent className="space-y-5">
+							{/* Folder */}
+							<div>
+								<p className="text-sm font-medium mb-1">Download folder</p>
+								<p className="text-xs text-muted-foreground mb-2">
+									Where movies and series episodes are saved.
+								</p>
+								<div className="flex items-center gap-2">
+									<Input
+										value={folderInput}
+										placeholder="/path/to/downloads"
+										onChange={(e) => {
+											setFolderInput(e.target.value);
+											setFolderStatus("idle");
+										}}
+									/>
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={handleBrowseFolder}
+										aria-label="Browse for folder"
+									>
+										<FolderOpen className="h-4 w-4" />
+									</Button>
+									<Button
+										size="sm"
+										variant="secondary"
+										onClick={() => applyFolder(folderInput)}
+										disabled={
+											!folderInput.trim() ||
+											folderInput.trim() === downloadFolder
+										}
+									>
+										{folderStatus === "saved" ? (
+											<span className="flex items-center gap-1 text-green-500">
+												<CheckCircle className="h-4 w-4" /> Saved
+											</span>
+										) : folderStatus === "error" ? (
+											<span className="text-destructive">Failed</span>
+										) : (
+											"Save"
+										)}
+									</Button>
+								</div>
+							</div>
+
+							{/* Concurrency */}
+							<div>
+								<div className="flex items-center justify-between mb-1">
+									<p className="text-sm font-medium">Simultaneous downloads</p>
+									<span className="text-sm text-muted-foreground tabular-nums">
+										{concurrency}
+									</span>
+								</div>
+								<p className="text-xs text-muted-foreground mb-2">
+									How many downloads run at once (1–10).
+								</p>
 								<Input
-									value={folderInput}
-									placeholder="/path/to/downloads"
-									onChange={(e) => {
-										setFolderInput(e.target.value);
-										setFolderStatus("idle");
-									}}
+									type="number"
+									min={1}
+									max={10}
+									value={concurrency}
+									onChange={(e) =>
+										handleConcurrencyChange(Number(e.target.value))
+									}
+									className="w-24"
 								/>
-								<Button
-									size="sm"
-									variant="outline"
-									onClick={handleBrowseFolder}
-									aria-label="Browse for folder"
-								>
-									<FolderOpen className="h-4 w-4" />
-								</Button>
+							</div>
+
+							{/* History — opened in a wide popup (Settings is too narrow). */}
+							<div>
+								<p className="text-sm font-medium mb-2">Download history</p>
 								<Button
 									size="sm"
 									variant="secondary"
-									onClick={() => applyFolder(folderInput)}
-									disabled={
-										!folderInput.trim() || folderInput.trim() === downloadFolder
-									}
+									onClick={() => setShowDownloadHistory(true)}
 								>
-									{folderStatus === "saved" ? (
-										<span className="flex items-center gap-1 text-green-500">
-											<CheckCircle className="h-4 w-4" /> Saved
-										</span>
-									) : folderStatus === "error" ? (
-										<span className="text-destructive">Failed</span>
-									) : (
-										"Save"
-									)}
+									<Download className="h-4 w-4 mr-1.5" />
+									View download history
 								</Button>
 							</div>
-						</div>
-
-						{/* Concurrency */}
-						<div>
-							<div className="flex items-center justify-between mb-1">
-								<p className="text-sm font-medium">Simultaneous downloads</p>
-								<span className="text-sm text-muted-foreground tabular-nums">
-									{concurrency}
-								</span>
-							</div>
-							<p className="text-xs text-muted-foreground mb-2">
-								How many downloads run at once (1–10).
-							</p>
-							<Input
-								type="number"
-								min={1}
-								max={10}
-								value={concurrency}
-								onChange={(e) => handleConcurrencyChange(Number(e.target.value))}
-								className="w-24"
-							/>
-						</div>
-
-						{/* History — opened in a wide popup (Settings is too narrow). */}
-						<div>
-							<p className="text-sm font-medium mb-2">Download history</p>
-							<Button
-								size="sm"
-								variant="secondary"
-								onClick={() => setShowDownloadHistory(true)}
-							>
-								<Download className="h-4 w-4 mr-1.5" />
-								View download history
-							</Button>
-						</div>
-					</CardContent>
-				</Card>
+						</CardContent>
+					</Card>
+				)}
 
 				{/* History section */}
 				<Card>
@@ -844,44 +855,46 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					</CardContent>
 				</Card>
 
-				<Card>
-					<CardHeader>
-						<CardTitle className="text-base">Support</CardTitle>
-					</CardHeader>
-					<CardContent className="space-y-3">
-						<p className="text-sm text-muted-foreground">
-							Max Video Player is free and open source. If you find it useful,
-							consider supporting development.
-						</p>
-						<div className="flex items-center gap-4">
-							<button
-								type="button"
-								onClick={() => openUrl("https://buymeacoffee.com/MaxMB15")}
-								className="w-32 shrink-0 rounded-lg overflow-hidden border border-border hover:border-primary transition-colors"
-								aria-label="Donate via Buy Me a Coffee"
-							>
-								<img
-									src={bmcQr}
-									alt="Buy me a coffee QR code"
-									className="w-full h-auto"
-								/>
-							</button>
-							<button
-								type="button"
-								onClick={() => openUrl("https://buymeacoffee.com/MaxMB15")}
-								className="text-sm font-semibold bg-[#5F7FFF] text-white px-5 py-2 rounded-lg hover:opacity-90 transition-opacity"
-							>
-								Buy me a coffee
-							</button>
-						</div>
-						<div className="pt-1 border-t border-border">
-							<p className="text-xs text-muted-foreground mb-2">
-								Reset the donation reminder to show it again.
+				{!mobile && (
+					<Card>
+						<CardHeader>
+							<CardTitle className="text-base">Support</CardTitle>
+						</CardHeader>
+						<CardContent className="space-y-3">
+							<p className="text-sm text-muted-foreground">
+								Max Video Player is free and open source. If you find it useful,
+								consider supporting development.
 							</p>
-							<DonationReset />
-						</div>
-					</CardContent>
-				</Card>
+							<div className="flex items-center gap-4">
+								<button
+									type="button"
+									onClick={() => openUrl("https://buymeacoffee.com/MaxMB15")}
+									className="w-32 shrink-0 rounded-lg overflow-hidden border border-border hover:border-primary transition-colors"
+									aria-label="Donate via Buy Me a Coffee"
+								>
+									<img
+										src={bmcQr}
+										alt="Buy me a coffee QR code"
+										className="w-full h-auto"
+									/>
+								</button>
+								<button
+									type="button"
+									onClick={() => openUrl("https://buymeacoffee.com/MaxMB15")}
+									className="text-sm font-semibold bg-[#5F7FFF] text-white px-5 py-2 rounded-lg hover:opacity-90 transition-opacity"
+								>
+									Buy me a coffee
+								</button>
+							</div>
+							<div className="pt-1 border-t border-border">
+								<p className="text-xs text-muted-foreground mb-2">
+									Reset the donation reminder to show it again.
+								</p>
+								<DonationReset />
+							</div>
+						</CardContent>
+					</Card>
+				)}
 
 				<Card>
 					<CardHeader>
@@ -894,74 +907,79 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 						<LegalNotices version={appVersion || undefined} />
 
-						<div className="space-y-3">
-							<div className="flex items-center gap-3">
-								<Button
-									size="sm"
-									variant="secondary"
-									onClick={() => updateState.checkForUpdates()}
-									disabled={updateState.checking}
-								>
-									{updateState.checking ? (
-										<span className="flex items-center gap-1.5">
-											<RefreshCw className="h-3 w-3 animate-spin" />
-											Checking…
-										</span>
-									) : (
-										"Check for Updates"
-									)}
-								</Button>
-								{!updateState.checking && !updateState.update && (
-									<span className="text-xs text-muted-foreground">
-										You're up to date.
-									</span>
-								)}
-							</div>
-
-							{updateState.update && (
-								<div className="rounded-lg bg-primary/10 border border-primary/25 px-4 py-3 space-y-2">
-									<p className="text-sm font-semibold text-primary">
-										Update available — v{updateState.update.version}
-									</p>
-									<p className="text-xs text-muted-foreground leading-relaxed">
-										{updateState.update.body ??
-											"A new version is ready to install."}
-									</p>
-									{updateState.installing && updateState.progress !== null && (
-										<div className="h-1 w-full rounded-full bg-secondary overflow-hidden">
-											<div
-												className="h-full bg-primary transition-all duration-200"
-												style={{ width: `${updateState.progress}%` }}
-											/>
-										</div>
-									)}
-									{updateState.error && (
-										<p className="text-xs text-destructive">
-											{updateState.error}
-										</p>
-									)}
+						{updateState.supported && (
+							<div className="space-y-3">
+								<div className="flex items-center gap-3">
 									<Button
 										size="sm"
-										onClick={updateState.install}
-										disabled={updateState.installing}
+										variant="secondary"
+										onClick={() => updateState.checkForUpdates()}
+										disabled={updateState.checking}
 									>
-										{updateState.installing ? (
+										{updateState.checking ? (
 											<span className="flex items-center gap-1.5">
 												<RefreshCw className="h-3 w-3 animate-spin" />
-												{updateState.progress !== null
-													? `Downloading… ${updateState.progress}%`
-													: "Installing…"}
+												Checking…
 											</span>
 										) : (
-											<span className="flex items-center gap-1.5">
-												<Download className="h-3 w-3" />
-												Install Update
-											</span>
+											"Check for Updates"
 										)}
 									</Button>
+									{!updateState.checking && !updateState.update && (
+										<span className="text-xs text-muted-foreground">
+											You're up to date.
+										</span>
+									)}
 								</div>
-							)}
-						</div>
+
+								{updateState.update && (
+									<div className="rounded-lg bg-primary/10 border border-primary/25 px-4 py-3 space-y-2">
+										<p className="text-sm font-semibold text-primary">
+											Update available — v{updateState.update.version}
+										</p>
+										<p className="text-xs text-muted-foreground leading-relaxed">
+											{updateState.update.body ??
+												"A new version is ready to install."}
+										</p>
+										{updateState.installing &&
+											updateState.progress !== null && (
+												<div className="h-1 w-full rounded-full bg-secondary overflow-hidden">
+													<div
+														className="h-full bg-primary transition-all duration-200"
+														style={{
+															width: `${updateState.progress}%`,
+														}}
+													/>
+												</div>
+											)}
+										{updateState.error && (
+											<p className="text-xs text-destructive">
+												{updateState.error}
+											</p>
+										)}
+										<Button
+											size="sm"
+											onClick={updateState.install}
+											disabled={updateState.installing}
+										>
+											{updateState.installing ? (
+												<span className="flex items-center gap-1.5">
+													<RefreshCw className="h-3 w-3 animate-spin" />
+													{updateState.progress !== null
+														? `Downloading… ${updateState.progress}%`
+														: "Installing…"}
+												</span>
+											) : (
+												<span className="flex items-center gap-1.5">
+													<Download className="h-3 w-3" />
+													Install Update
+												</span>
+											)}
+										</Button>
+									</div>
+								)}
+							</div>
+						)}
 					</CardContent>
 				</Card>
 			</div>

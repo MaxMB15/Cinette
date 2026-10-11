@@ -16,6 +16,7 @@ import { useMpv } from "@/hooks/useMpv";
 import { useChannels } from "@/hooks/useChannels";
 import {
 	mpvSetBounds,
+	mpvSetMediaInfo,
 	recordPlayStart,
 	recordPlayEnd,
 	fetchOmdbData,
@@ -47,6 +48,9 @@ import { sortEpisodes } from "@/lib/episodes";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
 import { formatTime } from "@/lib/format";
 import { addWatchedTime } from "@/lib/browse-state";
+import { usePlatform } from "@/hooks/usePlatform";
+import { isMobilePlatform } from "@/lib/platform";
+import { ChevronLeft } from "lucide-react";
 
 /** How often (ms) watch progress is persisted while playing. */
 const PROGRESS_SAVE_INTERVAL = 5000;
@@ -137,6 +141,14 @@ export const PlayerView = () => {
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
 	const [seriesEpisodes, setSeriesEpisodes] = useState<Channel[]>([]);
 	const { isFullscreen, setFullscreen } = useFullscreen();
+	// The phone layout hides the tab bar on this route, so the player needs
+	// its own way back.
+	const { layoutMode } = usePlatform();
+	const showBack = layoutMode === "mobile";
+	// Phones and tablets already play full screen, and the hardware buttons
+	// set the volume. An Android TV box has no touch screen, so it keeps the
+	// full screen, volume and shortcut controls for its remote.
+	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
 	const [enrichedMeta, setEnrichedMeta] = useState<EnrichedMeta | null>(null);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
@@ -457,6 +469,14 @@ export const PlayerView = () => {
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on URL only; re-running on mpv/channel refs would cause loops
 	}, [navState?.url]);
 
+	// mpv only knows the stream URL, so tell the lock screen the channel name
+	// and whether it's live.
+	const activeIsLive = activeChannel?.contentType === "live";
+	useEffect(() => {
+		if (!isMobilePlatform()) return;
+		mpvSetMediaInfo(activeChannelName, activeIsLive).catch(() => {});
+	}, [activeChannelName, activeIsLive]);
+
 	// Persist last active channel and series episode list so they can be restored when navigating back
 	useEffect(() => {
 		if (activeChannel) {
@@ -733,6 +753,12 @@ export const PlayerView = () => {
 
 	const handleMouseMove = useCallback(() => setShowControls(true), []);
 
+	const goBack = useCallback(() => {
+		// "default" is the first history entry, so there's nothing to go back to.
+		if (location.key !== "default") navigate(-1);
+		else navigate("/");
+	}, [location.key, navigate]);
+
 	// --- Fullscreen ---
 	const toggleFullscreen = useCallback(() => {
 		const next = !isFullscreen;
@@ -974,14 +1000,16 @@ export const PlayerView = () => {
 
 			<div
 				className="absolute inset-0 flex flex-col items-center justify-center bg-transparent"
-				onDoubleClick={toggleFullscreen}
+				onDoubleClick={touchDevice ? undefined : toggleFullscreen}
 			>
 				{mpv.error && (
 					<div className="text-center p-6 max-w-md">
 						<p className="text-destructive text-sm mb-2">{mpv.error}</p>
-						<p className="text-muted-foreground text-xs">
-							Check that libmpv is installed. See README for setup instructions.
-						</p>
+						{!isMobilePlatform() && (
+							<p className="text-muted-foreground text-xs">
+								Check that libmpv is installed. See README for setup instructions.
+							</p>
+						)}
 					</div>
 				)}
 				{!mpv.error &&
@@ -994,9 +1022,26 @@ export const PlayerView = () => {
 					)}
 			</div>
 
-			{activeChannelName && showControls && (
-				<div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/60 to-transparent p-4">
-					<p className="text-white text-sm font-medium">{activeChannelName}</p>
+			{(activeChannelName || showBack) && showControls && (
+				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-gradient-to-b from-black/60 to-transparent p-4 pt-[calc(1rem_+_env(safe-area-inset-top))] pl-[calc(1rem_+_env(safe-area-inset-left))] pr-[calc(1rem_+_env(safe-area-inset-right))]">
+					{showBack && (
+						<button
+							type="button"
+							onClick={(e) => {
+								e.stopPropagation();
+								goBack();
+							}}
+							aria-label="Back"
+							className="-my-2 -ml-3 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-white active:bg-white/10"
+						>
+							<ChevronLeft className="h-6 w-6" />
+						</button>
+					)}
+					{activeChannelName && (
+						<p className="min-w-0 truncate text-white text-sm font-medium">
+							{activeChannelName}
+						</p>
+					)}
 				</div>
 			)}
 
@@ -1030,7 +1075,7 @@ export const PlayerView = () => {
 					onSeek={mpv.seek}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
-					onFullscreen={toggleFullscreen}
+					onFullscreen={touchDevice ? undefined : toggleFullscreen}
 					onInfo={activeChannel ? () => setShowInfoDrawer(true) : undefined}
 					onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
 					onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
@@ -1043,7 +1088,8 @@ export const PlayerView = () => {
 					sources={availableSources}
 					currentSource={activeChannel?.url ?? null}
 					onSelectSource={switchSource}
-					onShortcuts={() => setShowShortcuts((v) => !v)}
+					onShortcuts={touchDevice ? undefined : () => setShowShortcuts((v) => !v)}
+					showVolumeSlider={!touchDevice}
 					downloadSlot={downloadSlot}
 				/>
 			)}

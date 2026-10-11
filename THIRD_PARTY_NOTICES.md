@@ -5,22 +5,23 @@ Max Video Player is built on other people's open source software. Each component
 ## Getting the source code
 
 - **Max Video Player.** Every release has a tag in this repository. Settings > About in the app links to the source for the version you're running.
-- **mpv.** The app's libmpv is built from the [mpv v0.40.0 tag](https://github.com/mpv-player/mpv/tree/v0.40.0) by [scripts/build-libmpv.sh](scripts/build-libmpv.sh).
+- **mpv.** The macOS and Linux apps' libmpv is built from the [mpv v0.40.0 tag](https://github.com/mpv-player/mpv/tree/v0.40.0) by [scripts/build-libmpv.sh](scripts/build-libmpv.sh). The iOS app's libmpv comes from MPVKit, described [below](#libraries-bundled-in-the-ios-app).
 - **FFmpeg.** Source releases are at [ffmpeg.org/download.html](https://ffmpeg.org/download.html).
-- **Other libraries.** Each project in the tables below links to its home page, where its source is published. On macOS they come from [Homebrew](https://github.com/Homebrew/homebrew-core), whose formulas record the exact source archive and build options.
+- **Other libraries.** Each project in the tables below links to its home page, where its source is published. On macOS they come from [Homebrew](https://github.com/Homebrew/homebrew-core), whose formulas record the exact source archive and build options. On iOS they come from MPVKit, whose build scripts record the same.
 
 If you received a copy of Max Video Player and can't find the source for one of its components, [open an issue](https://github.com/MaxMB15/MaxVideoPlayer/issues) and it will be provided.
 
 ## mpv
 
-Max Video Player plays video with libmpv from [mpv](https://mpv.io), licensed under the GNU General Public License version 2 or later. Some of its files are under the GNU Lesser General Public License version 2.1 or later. The macOS app and the Linux AppImage include libmpv. The Linux `.deb` and `.rpm` packages use the libmpv package from your distribution instead.
+Max Video Player plays video with libmpv from [mpv](https://mpv.io), licensed under the GNU General Public License version 2 or later. Some of its files are under the GNU Lesser General Public License version 2.1 or later. The macOS app and the Linux AppImage include libmpv. The Linux `.deb` and `.rpm` packages use the libmpv package from your distribution instead. The iOS app includes a build of libmpv without mpv's GPL parts, which is licensed under the GNU Lesser General Public License version 2.1 or later.
 
 ## FFmpeg
 
 Max Video Player includes [FFmpeg](https://ffmpeg.org) in two forms. FFmpeg is a trademark of Fabrice Bellard.
 
 - **FFmpeg 7.1 libraries** (`libavcodec`, `libavfilter`, `libavformat`, `libavutil`, `libpostproc`, `libswresample`, `libswscale`), used by libmpv. The macOS app includes them as built by Homebrew's `ffmpeg@7` formula, with `--enable-gpl` and `--enable-version3`. That build is licensed under the GNU General Public License version 3 or later.
-- **The `ffmpeg` program**, which the app runs to download movies and episodes. It is a static build licensed under the GNU General Public License version 3 or later, downloaded by [scripts/fetch-ffmpeg.sh](scripts/fetch-ffmpeg.sh) from [osxexperts.net](https://www.osxexperts.net) for macOS, [johnvansickle.com](https://johnvansickle.com/ffmpeg/) for Linux and [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) for Windows builds.
+- **FFmpeg 9.0.2 libraries** (`libavcodec`, `libavdevice`, `libavfilter`, `libavformat`, `libavutil`, `libswresample`, `libswscale`), used by libmpv in the iOS app. They're built with `--enable-version3` and without `--enable-gpl`, so they're licensed under the GNU Lesser General Public License version 3 or later.
+- **The `ffmpeg` program**, which the desktop app runs to download movies and episodes. The iOS app doesn't include it. It is a static build licensed under the GNU General Public License version 3 or later, downloaded by [scripts/fetch-ffmpeg.sh](scripts/fetch-ffmpeg.sh) from [osxexperts.net](https://www.osxexperts.net) for macOS, [johnvansickle.com](https://johnvansickle.com/ffmpeg/) for Linux and [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) for Windows builds.
 
 ## Libraries bundled in the macOS app
 
@@ -107,6 +108,33 @@ The macOS app includes these shared libraries in `Contents/Frameworks`, alongsid
 ## Libraries bundled in the Linux AppImage
 
 The AppImage includes libmpv, built from source as above, and the shared libraries it needs from the Ubuntu packages on the build machine, including Ubuntu's FFmpeg libraries. Their licenses are recorded in each package's copyright file, and Ubuntu publishes their source at [launchpad.net/ubuntu](https://launchpad.net/ubuntu).
+
+## Libraries bundled in the iOS app
+
+The iOS app gets libmpv, the FFmpeg libraries and the libraries below from release 1.1.0-n9.0.2 of [MPVKit](https://github.com/mpvkit/MPVKit), through its LGPL `MPVKit` product. MPVKit's `MPVKit-GPL` product isn't used. MPVKit builds them all as static libraries, so they're linked into the app's executable. MPVKit's [build scripts](https://github.com/mpvkit/MPVKit/tree/1.1.0-n9.0.2/Sources/BuildScripts) list the source and options for each one.
+
+| Project | MPVKit target | License |
+| --- | --- | --- |
+| [dav1d](https://code.videolan.org/videolan/dav1d) | `Libdav1d` | BSD-2-Clause |
+| [freetype](https://www.freetype.org/) | `Libfreetype` | FTL |
+| [fribidi](https://github.com/fribidi/fribidi) | `Libfribidi` | LGPL-2.1-or-later |
+| [gmp](https://gmplib.org/) | `gmp` | LGPL-3.0-or-later OR GPL-2.0-or-later |
+| [gnutls](https://gnutls.org/) | `gnutls` | LGPL-2.1-or-later |
+| [harfbuzz](https://github.com/harfbuzz/harfbuzz) | `Libharfbuzz` | MIT |
+| [libass](https://github.com/libass/libass) | `Libass` | ISC |
+| [libbluray](https://www.videolan.org/developers/libbluray.html) | `Libbluray` | LGPL-2.1-or-later |
+| [libdovi](https://github.com/quietvoid/dovi_tool) | `Libdovi` | MIT |
+| [libplacebo](https://code.videolan.org/videolan/libplacebo) | `Libplacebo` | LGPL-2.1-or-later |
+| [libunibreak](https://github.com/adah1972/libunibreak) | `Libunibreak` | Zlib |
+| [little-cms2](https://www.littlecms.com/) | `lcms2` | MIT |
+| [MoltenVK](https://github.com/KhronosGroup/MoltenVK) | `MoltenVK` | Apache-2.0 |
+| [nettle](https://www.lysator.liu.se/~nisse/nettle/) | `nettle`, `hogweed` | LGPL-3.0-or-later OR GPL-2.0-or-later |
+| [openssl](https://openssl-library.org) | `Libcrypto`, `Libssl` | Apache-2.0 |
+| [shaderc](https://github.com/google/shaderc) | `Libshaderc_combined` | Apache-2.0 |
+| [uavs3d](https://github.com/uavs3/uavs3d) | `Libuavs3d` | BSD-3-Clause |
+| [uchardet](https://www.freedesktop.org/wiki/Software/uchardet/) | `Libuchardet` | MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later |
+
+`Libshaderc_combined` also contains [glslang](https://github.com/KhronosGroup/glslang) and [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools), each under its own license.
 
 ## Rust crates and npm packages
 

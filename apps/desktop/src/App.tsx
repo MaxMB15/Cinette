@@ -16,6 +16,7 @@ import { useSplashScreen } from "./hooks/useSplashScreen";
 import { useDonationPrompt } from "./hooks/useDonationPrompt";
 import { FullscreenProvider } from "./lib/fullscreen-context";
 import { DownloadsProvider } from "@/hooks/useDownloads";
+import { isMobilePlatform } from "@/lib/platform";
 
 export default function App() {
 	const channelsValue = useChannelsProvider();
@@ -52,7 +53,8 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 		},
 	});
 
-	const donation = useDonationPrompt({ enabled: splash.dismissed });
+	// No donation prompt on mobile, where App Store rules don't allow one.
+	const donation = useDonationPrompt({ enabled: splash.dismissed && !isMobilePlatform() });
 
 	return (
 		<>

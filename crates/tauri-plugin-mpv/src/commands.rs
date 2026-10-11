@@ -95,6 +95,17 @@ pub async fn mpv_set_visible<R: Runtime>(
 }
 
 #[command]
+pub async fn mpv_set_media_info<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, MpvState>,
+    title: Option<String>,
+    live: bool,
+) -> Result<(), String> {
+    state.set_media_info(title, live);
+    Ok(())
+}
+
+#[command]
 pub async fn mpv_sub_add<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, MpvState>,

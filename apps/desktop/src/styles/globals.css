@@ -42,6 +42,9 @@
 	}
 	body {
 		@apply bg-background text-foreground;
+		/* iOS: no grey flash on tap and no font resize on rotation. */
+		-webkit-tap-highlight-color: transparent;
+		-webkit-text-size-adjust: 100%;
 		font-feature-settings:
 			"rlig" 1,
 			"calt" 1;
@@ -57,6 +60,32 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
 	display: none;
+}
+
+/* Room for the notch, status bar and home indicator on iOS. All four are 0
+   on desktop. */
+@layer utilities {
+	.pt-safe {
+		padding-top: env(safe-area-inset-top);
+	}
+	.pb-safe {
+		padding-bottom: env(safe-area-inset-bottom);
+	}
+	.pl-safe {
+		padding-left: env(safe-area-inset-left);
+	}
+	.pr-safe {
+		padding-right: env(safe-area-inset-right);
+	}
+	/* Paints the top, bottom and right insets black and leaves the middle
+	   transparent. The player page is transparent so the video shows through,
+	   and iOS fills transparent insets with a light color. */
+	.safe-insets-black {
+		background:
+			linear-gradient(#000, #000) top / 100% env(safe-area-inset-top) no-repeat,
+			linear-gradient(#000, #000) bottom / 100% env(safe-area-inset-bottom) no-repeat,
+			linear-gradient(#000, #000) right / env(safe-area-inset-right) 100% no-repeat;
+	}
 }
 
 /* Transparent video area for MPV rendering beneath */

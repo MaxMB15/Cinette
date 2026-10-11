@@ -7,7 +7,9 @@ dist/
 *.tsbuildinfo
 
 # Tauri
-apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/gen/*
+# The Xcode project is hand-edited (MPVKit, signing), so it's checked in.
+!apps/desktop/src-tauri/gen/apple/
 apps/desktop/src-tauri/target/
 
 # IDE
@@ -58,3 +60,5 @@ docs/superpowers/
 CLAUDE.md
 .superpowers/
 
+# Copied in by tauri-plugin-mpv's build script for the iOS Swift package
+crates/tauri-plugin-mpv/.tauri/

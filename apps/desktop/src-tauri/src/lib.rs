@@ -48,12 +48,17 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     apply_linux_workarounds();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // On iOS the App Store handles updates, and there's nothing to relaunch.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    builder
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_mpv::init())
         .plugin(tauri_plugin_shell::init())
@@ -159,6 +164,7 @@ pub fn run() {
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             crate::downloads::manager::restore_settings(app.handle());
 
+            #[cfg(desktop)]
             {
                 use tauri_plugin_shell::ShellExt;
                 match app.shell().sidecar("ffmpeg") {

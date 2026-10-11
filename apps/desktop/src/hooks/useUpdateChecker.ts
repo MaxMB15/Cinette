@@ -6,6 +6,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { listen } from "@tauri-apps/api/event";
 import { getInstallInfo, packageUpdate } from "@/lib/tauri";
+import { isMobilePlatform } from "@/lib/platform";
 
 export interface UpdateState {
 	update: Update | null;
@@ -15,6 +16,8 @@ export interface UpdateState {
 	error: string | null;
 	/** true when using package manager update (deb/rpm) instead of Tauri updater */
 	packageInstall: boolean;
+	/** false on iOS and Android, where the app store updates the app */
+	supported: boolean;
 	dismiss: () => void;
 	install: () => Promise<void>;
 	checkForUpdates: () => Promise<Update | null>;
@@ -27,6 +30,7 @@ export const useUpdateChecker = (): UpdateState => {
 	const [progress, setProgress] = useState<number | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [packageInstall, setPackageInstall] = useState(false);
+	const [supported] = useState(() => !isMobilePlatform());
 
 	// Cache install info so we only call it once
 	const installInfoRef = useRef<{ installType: string; releaseUrl: string } | null>(null);
@@ -36,6 +40,7 @@ export const useUpdateChecker = (): UpdateState => {
 	const inflightRef = useRef<Promise<Update | null> | null>(null);
 
 	const checkForUpdates = useCallback((): Promise<Update | null> => {
+		if (!supported) return Promise.resolve(null);
 		if (inflightRef.current) return inflightRef.current;
 
 		const promise = (async () => {
@@ -66,7 +71,7 @@ export const useUpdateChecker = (): UpdateState => {
 
 		inflightRef.current = promise;
 		return promise;
-	}, []);
+	}, [supported]);
 
 	// Check on mount
 	useEffect(() => {
@@ -75,6 +80,7 @@ export const useUpdateChecker = (): UpdateState => {
 
 	// Re-check every 2 hours
 	useEffect(() => {
+		if (!supported) return;
 		const id = setInterval(
 			() => {
 				checkForUpdates();
@@ -82,7 +88,7 @@ export const useUpdateChecker = (): UpdateState => {
 			2 * 60 * 60 * 1000
 		);
 		return () => clearInterval(id);
-	}, [checkForUpdates]);
+	}, [checkForUpdates, supported]);
 
 	const dismiss = useCallback(() => {
 		setUpdate(null);
@@ -140,6 +146,7 @@ export const useUpdateChecker = (): UpdateState => {
 		progress,
 		error,
 		packageInstall,
+		supported,
 		dismiss,
 		install,
 		checkForUpdates,

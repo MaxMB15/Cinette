@@ -35,6 +35,7 @@ const makeUpdateState = (overrides: Partial<UpdateState> = {}): UpdateState => (
 	progress: null,
 	error: null,
 	packageInstall: false,
+	supported: true,
 	dismiss: vi.fn(),
 	install: vi.fn().mockResolvedValue(undefined),
 	checkForUpdates: vi.fn().mockResolvedValue(null),

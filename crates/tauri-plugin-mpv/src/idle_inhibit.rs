@@ -8,6 +8,7 @@
 //!
 //! - macOS: IOPMAssertionCreateWithName / IOPMAssertionRelease
 //! - Linux: D-Bus org.freedesktop.ScreenSaver.Inhibit / UnInhibit
+//! - iOS: UIApplication.isIdleTimerDisabled
 
 use std::sync::Mutex;
 
@@ -157,14 +158,28 @@ impl IdleInhibitor {
         }
     }
 
+    // ── iOS ──────────────────────────────────────────────────────────────
+
+    /// `UIApplication.isIdleTimerDisabled`, set by the plugin's Swift side.
+    #[cfg(target_os = "ios")]
+    fn platform_inhibit(&self, _state: &mut InhibitState) -> bool {
+        crate::ios::set_idle_timer_disabled(true);
+        true
+    }
+
+    #[cfg(target_os = "ios")]
+    fn platform_uninhibit(&self, _state: &mut InhibitState) {
+        crate::ios::set_idle_timer_disabled(false);
+    }
+
     // ── Fallback (other platforms) ───────────────────────────────────────
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     fn platform_inhibit(&self, _state: &mut InhibitState) -> bool {
         false
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     fn platform_uninhibit(&self, _state: &mut InhibitState) {}
 }
 

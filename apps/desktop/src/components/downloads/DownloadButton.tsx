@@ -4,6 +4,10 @@
 import { useState } from "react";
 import { Download, DownloadCloud, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { isMobilePlatform } from "@/lib/platform";
+
+/** The mobile apps can't run the ffmpeg sidecar, so they have no downloads. */
+const DOWNLOADS_SUPPORTED = !isMobilePlatform();
 
 export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" | "failed";
 
@@ -34,6 +38,8 @@ export const DownloadButton = ({
 	className = "",
 }: DownloadButtonProps) => {
 	const [confirm, setConfirm] = useState<null | "stop" | "remove">(null);
+
+	if (!DOWNLOADS_SUPPORTED) return null;
 
 	const handleClick = (e: React.MouseEvent) => {
 		e.stopPropagation();

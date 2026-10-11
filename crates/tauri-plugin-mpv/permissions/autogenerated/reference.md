@@ -13,6 +13,7 @@ Allows all MPV player commands
 - `allow-mpv-set-bounds`
 - `allow-mpv-set-visible`
 - `allow-mpv-get-state`
+- `allow-mpv-set-media-info`
 
 ## Permission Table
 
@@ -175,6 +176,32 @@ Enables the mpv_set_bounds command without any pre-configured scope.
 <td>
 
 Denies the mpv_set_bounds command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-set-media-info`
+
+</td>
+<td>
+
+Enables the mpv_set_media_info command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-set-media-info`
+
+</td>
+<td>
+
+Denies the mpv_set_media_info command without any pre-configured scope.
 
 </td>
 </tr>

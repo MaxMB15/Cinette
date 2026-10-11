@@ -11,7 +11,7 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
-supported yet.
+supported yet. For the iPhone and iPad app, see [ios.md](ios.md).
 
 ### macOS
 
@@ -142,6 +142,8 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Tests, coverage, and macOS and Linux builds uploaded as artifacts. A manual run builds a signed macOS app. |
+| [iOS](../.github/workflows/ios.yml) | Pushes to `feature/ios-poc`, and pull requests to `dev` and `feature/ios-poc` that touch the app | A debug build for the iOS simulator |
+| [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |
 | [Release — one-click pipeline](../.github/workflows/release-pipeline.yml) | Manual | Merges `dev` into `main`, bumps the version and pushes the tag. |
 | [Release — bump version (PR)](../.github/workflows/release-bump.yml), [Release — push tag](../.github/workflows/release-tag.yml) | Manual | The same release in two steps, for when `main` requires pull requests. |

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-set-media-info"
+description = "Enables the mpv_set_media_info command without any pre-configured scope."
+commands.allow = ["mpv_set_media_info"]
+
+[[permission]]
+identifier = "deny-mpv-set-media-info"
+description = "Denies the mpv_set_media_info command without any pre-configured scope."
+commands.deny = ["mpv_set_media_info"]

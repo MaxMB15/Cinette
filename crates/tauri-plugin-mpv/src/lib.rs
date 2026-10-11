@@ -30,6 +30,10 @@ use tauri::{
 
 pub use mpv::MpvState;
 
+// The Swift half of the plugin, in `ios/Sources/MpvPlugin.swift`.
+#[cfg(target_os = "ios")]
+tauri::ios_plugin_binding!(init_plugin_mpv);
+
 /// Set LC_NUMERIC=C once at plugin init (before any threads use locale-dependent code).
 /// libmpv requires this for correct number parsing; without it mpv_create() returns null
 /// on non-C locales (common on Linux).
@@ -58,11 +62,17 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::mpv_sub_remove,
             commands::mpv_set_sub_pos,
             commands::mpv_set_sub_delay,
+            commands::mpv_set_media_info,
         ])
         .setup(|app, _api| {
             #[cfg(target_os = "linux")]
             ensure_c_locale();
             app.manage(MpvState::new());
+            #[cfg(target_os = "ios")]
+            {
+                _api.register_ios_plugin(init_plugin_mpv)?;
+                ios::install(app);
+            }
             tracing::info!("MPV plugin initialized");
             Ok(())
         })

@@ -48,6 +48,8 @@ interface ControlsProps {
 	currentSource?: string | null;
 	onSelectSource?: (url: string) => void;
 	onShortcuts?: () => void;
+	/** False on phones and tablets, where the hardware buttons set the volume. */
+	showVolumeSlider?: boolean;
 	/** Optional download control rendered in the right cluster. */
 	downloadSlot?: React.ReactNode;
 }
@@ -74,6 +76,7 @@ export const Controls = ({
 	currentSource,
 	onSelectSource,
 	onShortcuts,
+	showVolumeSlider = true,
 	downloadSlot,
 }: ControlsProps) => {
 	const [localPos, setLocalPos] = useState(state.position);
@@ -115,7 +118,7 @@ export const Controls = ({
 	return (
 		<div
 			className={cn(
-				"absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 pt-12 transition-opacity duration-300",
+				"absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 pt-12 pb-[calc(1rem_+_env(safe-area-inset-bottom))] pl-[calc(1rem_+_env(safe-area-inset-left))] pr-[calc(1rem_+_env(safe-area-inset-right))] transition-opacity duration-300",
 				visible ? "opacity-100" : "opacity-0 pointer-events-none"
 			)}
 		>
@@ -160,6 +163,7 @@ export const Controls = ({
 						size="icon"
 						onClick={onPlay}
 						className="text-white hover:bg-white/20"
+						aria-label="Play"
 					>
 						<Play className="h-5 w-5" />
 					</Button>
@@ -169,6 +173,7 @@ export const Controls = ({
 						size="icon"
 						onClick={onPause}
 						className="text-white hover:bg-white/20"
+						aria-label="Pause"
 					>
 						<Pause className="h-5 w-5" />
 					</Button>
@@ -179,6 +184,7 @@ export const Controls = ({
 					size="icon"
 					onClick={onStop}
 					className="text-white hover:bg-white/20"
+					aria-label="Stop"
 				>
 					<Square className="h-4 w-4" />
 				</Button>
@@ -198,15 +204,17 @@ export const Controls = ({
 							<Volume2 className="h-5 w-5" />
 						)}
 					</Button>
-					<div className="w-24">
-						<Slider
-							value={state.volume}
-							min={0}
-							max={150}
-							step={1}
-							onValueChange={onVolumeChange}
-						/>
-					</div>
+					{showVolumeSlider && (
+						<div className="w-24">
+							<Slider
+								value={state.volume}
+								min={0}
+								max={150}
+								step={1}
+								onValueChange={onVolumeChange}
+							/>
+						</div>
+					)}
 				</div>
 
 				<div className="flex-1" />
@@ -372,19 +380,21 @@ export const Controls = ({
 					</Button>
 				)}
 
-				{/* Fullscreen */}
-				<Button
-					variant="ghost"
-					size="icon"
-					className="text-white hover:bg-white/20"
-					onClick={onFullscreen}
-				>
-					{isFullscreen ? (
-						<Minimize2 className="h-5 w-5" />
-					) : (
-						<Maximize className="h-5 w-5" />
-					)}
-				</Button>
+				{onFullscreen && (
+					<Button
+						variant="ghost"
+						size="icon"
+						className="text-white hover:bg-white/20"
+						onClick={onFullscreen}
+						aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+					>
+						{isFullscreen ? (
+							<Minimize2 className="h-5 w-5" />
+						) : (
+							<Maximize className="h-5 w-5" />
+						)}
+					</Button>
+				)}
 			</div>
 		</div>
 	);

@@ -1,0 +1,5 @@
+xcuserdata/
+build/
+Externals/
+# Frontend bundle, copied in by the Tauri CLI at build time
+assets/

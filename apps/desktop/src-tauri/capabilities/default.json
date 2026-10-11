@@ -9,12 +9,6 @@
 		"dialog:default",
 		"mpv:default",
 		"store:default",
-		"updater:default",
-		"process:default",
-		"opener:default",
-		{
-			"identifier": "shell:allow-execute",
-			"allow": [{ "name": "binaries/ffmpeg", "sidecar": true, "args": true }]
-		}
+		"opener:default"
 	]
 }

@@ -50,14 +50,17 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 	// Consume providers from ChannelsContext (already loaded on mount — no extra Tauri calls)
 	const { providers, initialized } = useChannels();
 
-	// Initialize all 4 steps immediately so they're visible from the first render
+	// Initialize all steps immediately so they're visible from the first render.
+	// The app store updates the mobile apps, so they skip the update check.
 	const [steps, setSteps] = useState<SplashStep[]>(() => {
 		if (alreadyShownRef.current) return [];
 		return [
 			{ id: "providers", label: "Loading providers & channels", status: "active" },
 			{ id: "playlists", label: "Checking playlists…", status: "pending" },
 			{ id: "epg", label: "Checking EPG…", status: "pending" },
-			{ id: "updates", label: "Checking for updates", status: "pending" },
+			...(updateState.supported
+				? [{ id: "updates", label: "Checking for updates", status: "pending" as const }]
+				: []),
 		];
 	});
 	const [allDone, setAllDone] = useState(alreadyShownRef.current);
@@ -170,6 +173,12 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 					"done",
 					hasAnyProviders ? "EPG up to date" : "No EPG configured"
 				);
+			}
+
+			if (!updateState.supported) {
+				setAllDone(true);
+				onCompleteRef.current?.(didRefreshProviders);
+				return;
 			}
 
 			// Step 4: Check for updates via the shared hook.

@@ -5,6 +5,8 @@ members = [
     "crates/tauri-plugin-mpv",
     "apps/desktop/src-tauri",
 ]
+# Standalone iOS proof of concept, built with its own Tauri CLI setup
+exclude = ["apps/ios/poc/src-tauri"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

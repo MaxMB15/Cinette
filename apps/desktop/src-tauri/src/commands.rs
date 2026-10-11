@@ -1218,7 +1218,10 @@ pub struct InstallInfo {
 
 #[command]
 pub fn get_install_info() -> InstallInfo {
-    let install_type = if cfg!(target_os = "linux") {
+    let install_type = if cfg!(mobile) {
+        // The App Store updates the app.
+        "store"
+    } else if cfg!(target_os = "linux") {
         if std::env::var("APPIMAGE").is_ok() {
             "appimage"
         } else if std::path::Path::new("/usr/bin/dpkg").exists() {
@@ -1358,6 +1361,14 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     Ok(())
 }
 
+/// Downloads run the bundled ffmpeg, which only ships with the desktop app.
+fn ensure_downloads_supported() -> Result<(), String> {
+    if cfg!(mobile) {
+        return Err("Downloads aren't available on this device".to_string());
+    }
+    Ok(())
+}
+
 /// Enqueue a single movie download.
 #[command]
 pub async fn enqueue_movie_download(
@@ -1365,6 +1376,7 @@ pub async fn enqueue_movie_download(
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<String, String> {
+    ensure_downloads_supported()?;
     let (title, url) = {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
         let ch = cache
@@ -1390,6 +1402,7 @@ pub async fn enqueue_episode_download(
     series_channel_id: String,
     series_title: String,
 ) -> Result<String, String> {
+    ensure_downloads_supported()?;
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
         cache.upsert_channel("__downloads__", &episode).map_err(|e| e.to_string())?;
@@ -1417,6 +1430,7 @@ pub async fn enqueue_episodes_batch(
     series_channel_id: String,
     series_title: String,
 ) -> Result<Vec<String>, String> {
+    ensure_downloads_supported()?;
     let mut ids = Vec::new();
     for ep in episodes {
         {

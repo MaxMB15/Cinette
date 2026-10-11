@@ -1,0 +1,16 @@
+[package]
+name = "mvp-ios-poc"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mvp_ios_poc_lib"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-os = "2"
+log = "0.4"

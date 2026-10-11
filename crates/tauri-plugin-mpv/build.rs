@@ -11,11 +11,17 @@ const COMMANDS: &[&str] = &[
     "mpv_set_bounds",
     "mpv_set_visible",
     "mpv_get_state",
+    "mpv_set_media_info",
 ];
 
 fn main() {
-    link_libmpv();
-    tauri_plugin::Builder::new(COMMANDS).build();
+    // iOS gets libmpv from MPVKit, which the Xcode project links. The
+    // `#[cfg]` blocks in `link_libmpv` check the host, not the target, so
+    // they'd point an iOS build at the macOS dylib.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("ios") {
+        link_libmpv();
+    }
+    tauri_plugin::Builder::new(COMMANDS).ios_path("ios").build();
 }
 
 /// Configure linking to libmpv from libs/<platform>/ or pkg-config.

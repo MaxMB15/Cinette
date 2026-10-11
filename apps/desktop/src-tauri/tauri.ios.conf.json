@@ -1,0 +1,14 @@
+{
+	"$schema": "https://raw.githubusercontent.com/nichobi/tauri-apps/tauri-v2/core/tauri-config-schema/schema.json",
+	"build": {
+		"beforeBundleCommand": null
+	},
+	"bundle": {
+		"createUpdaterArtifacts": false,
+		"externalBin": [],
+		"iOS": {
+			"developmentTeam": "3MLC4VWP96",
+			"minimumSystemVersion": "17.5"
+		}
+	}
+}

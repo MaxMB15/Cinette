@@ -169,7 +169,7 @@ export interface SubtitleCue {
 }
 
 export type Platform = "macos" | "ios" | "android" | "windows" | "linux";
-export type LayoutMode = "desktop" | "mobile" | "tv";
+export type LayoutMode = "desktop" | "tablet" | "mobile" | "tv";
 
 export interface GroupHierarchyEntry {
 	providerId: string;

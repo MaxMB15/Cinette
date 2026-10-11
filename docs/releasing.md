@@ -87,6 +87,9 @@ assets:
 Don't rename these. The README, `latest.json` and the Linux package updater in
 `commands.rs` all depend on the names.
 
+The iPhone and iPad app isn't part of this. It goes to TestFlight through its own
+manual workflow, described in [ios.md](ios.md#continuous-integration).
+
 ## Publishing
 
 1. Open the draft on the [releases page](https://github.com/MaxMB15/MaxVideoPlayer/releases).
@@ -114,6 +117,7 @@ are in Settings → Environments → `macos-signing`.
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Secret | The key's password, if it has one. |
 | `RELEASE_AUTOMATION_PAT` | Secret | Fine-grained token with Contents and Pull requests write access. The release workflows push to `main` and open pull requests with it, because `GITHUB_TOKEN` often isn't allowed to. Required. |
 | `APPLE_CERTIFICATE` and four others | Environment secrets | Optional macOS signing and notarization, in the `macos-signing` environment. See [macos-signing.md](macos-signing.md). |
+| `IOS_CERTIFICATE`, `IOS_CERTIFICATE_PASSWORD`, `IOS_MOBILE_PROVISION` | Environment secrets | Signing for TestFlight uploads, in the `macos-signing` environment. Optional when the API key has the Admin role. See [ios.md](ios.md#testflight-setup). |
 | `RELEASE_ALLOWED_ACTORS` | Variable | Comma-separated GitHub usernames allowed to run the release workflows. Defaults to the repository owner. |
 
 The updater key pair is created once:
