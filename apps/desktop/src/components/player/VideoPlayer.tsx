@@ -7,6 +7,7 @@ import { SubtitlePicker } from "./SubtitlePicker";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
+import { VideoTapLayer } from "./VideoTapLayer";
 import { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -46,7 +47,8 @@ import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
-import { formatTime } from "@/lib/format";
+import { formatSkip, formatTime } from "@/lib/format";
+import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
@@ -58,6 +60,10 @@ const MAX_VOLUME = 150;
 const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 /** Position jumps larger than this between polls are seeks, not watching. */
 const MAX_WATCH_STEP_SECONDS = 5;
+/** A skip this soon after the last one in the same direction adds to it. */
+const SKIP_CHAIN_MS = 1500;
+/** How long the controls stay up after they appear or the player is clicked or tapped. */
+const CONTROLS_HIDE_MS = 4000;
 
 interface PlaybackProgress {
 	/** Resume key (see playbackKey); null for live or nothing playing. */
@@ -745,13 +751,69 @@ export const PlayerView = () => {
 	}, [mpv.state.isPlaying, playEpisode]);
 
 	// --- Controls visibility ---
+	// Bumped by each click or tap so pressing a button, such as skip a few
+	// times in a row, keeps the controls up.
+	const [controlsActivity, setControlsActivity] = useState(0);
 	useEffect(() => {
 		if (!showControls) return;
-		const timer = setTimeout(() => setShowControls(false), 4000);
+		const timer = setTimeout(() => setShowControls(false), CONTROLS_HIDE_MS);
 		return () => clearTimeout(timer);
-	}, [showControls]);
+	}, [showControls, controlsActivity]);
 
+	const revealControls = useCallback(() => {
+		setShowControls(true);
+		setControlsActivity((n) => n + 1);
+	}, []);
 	const handleMouseMove = useCallback(() => setShowControls(true), []);
+	// A tap on a touch screen also sends a mousemove, which would undo the
+	// tap's toggle, so there only a real mouse or trackpad shows the controls.
+	const handlePointerMove = useCallback((e: React.PointerEvent) => {
+		if (e.pointerType === "mouse") setShowControls(true);
+	}, []);
+
+	// --- Skipping ---
+	const [skip, setSkip] = useState(readSkipIntervals);
+	useEffect(() => {
+		const update = () => setSkip(readSkipIntervals());
+		window.addEventListener(SKIP_INTERVALS_EVENT, update);
+		return () => window.removeEventListener(SKIP_INTERVALS_EVENT, update);
+	}, []);
+	// Same test as the seek bar, which live channels usually don't get.
+	const seekable = mpv.state.duration > 0;
+
+	// The polled position lags behind a seek, so a skip soon after another one
+	// in the same direction starts from where that one was going. The returned
+	// total is how far the run of skips has gone.
+	const lastSkipRef = useRef<{ target: number; total: number; at: number } | null>(null);
+	useEffect(() => {
+		lastSkipRef.current = null;
+	}, [mpv.state.currentUrl]);
+	const skipBy = useCallback(
+		(seconds: number): number => {
+			const s = mpvStateRef.current;
+			const last = lastSkipRef.current;
+			const chain =
+				last &&
+				Date.now() - last.at < SKIP_CHAIN_MS &&
+				Math.sign(last.total) === Math.sign(seconds)
+					? last
+					: null;
+			const wanted = Math.max(0, (chain ? chain.target : s.position) + seconds);
+			const target = s.duration > 0 ? Math.min(wanted, s.duration - 1) : wanted;
+			const total = (chain ? chain.total : 0) + seconds;
+			lastSkipRef.current = { target, total, at: Date.now() };
+			mpv.seek(target);
+			return total;
+		},
+		[mpv]
+	);
+	const seekTo = useCallback(
+		(position: number) => {
+			lastSkipRef.current = null;
+			mpv.seek(position);
+		},
+		[mpv]
+	);
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
@@ -799,7 +861,7 @@ export const PlayerView = () => {
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
 
-			const action = resolvePlayerHotkey(e);
+			const action = resolvePlayerHotkey(e, skip);
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
@@ -821,16 +883,13 @@ export const PlayerView = () => {
 					mpv.toggleMute();
 					flashOsd(s.volume > 0 ? "Muted" : "Unmuted");
 					break;
-				case "seekBy": {
-					const target = Math.max(0, s.position + action.seconds);
-					mpv.seek(s.duration > 0 ? Math.min(target, s.duration - 1) : target);
-					flashOsd(`${action.seconds > 0 ? "+" : "−"}${Math.abs(action.seconds)}s`);
+				case "seekBy":
+					flashOsd(formatSkip(skipBy(action.seconds)));
 					break;
-				}
 				case "seekToPercent":
 					if (s.duration > 0) {
 						const target = (s.duration * action.percent) / 100;
-						mpv.seek(target);
+						seekTo(target);
 						flashOsd(formatTime(target));
 					}
 					break;
@@ -903,6 +962,9 @@ export const PlayerView = () => {
 			canShowSubtitles,
 			activeChannel,
 			flushProgress,
+			skip,
+			skipBy,
+			seekTo,
 		]
 	);
 
@@ -962,8 +1024,9 @@ export const PlayerView = () => {
 					? "player-container fixed inset-0 z-[9999] bg-transparent focus:outline-none"
 					: "player-container relative h-full w-full bg-transparent focus:outline-none"
 			}
-			onMouseMove={handleMouseMove}
-			onClick={() => setShowControls(true)}
+			onMouseMove={touchDevice ? undefined : handleMouseMove}
+			onPointerMove={touchDevice ? handlePointerMove : undefined}
+			onClick={revealControls}
 			onKeyDown={handleKeyDown}
 			tabIndex={0}
 		>
@@ -1022,6 +1085,15 @@ export const PlayerView = () => {
 					)}
 			</div>
 
+			{touchDevice && (
+				<VideoTapLayer
+					seekable={seekable}
+					skip={skip}
+					onSkip={skipBy}
+					onTap={() => setShowControls((v) => !v)}
+				/>
+			)}
+
 			{(activeChannelName || showBack) && showControls && (
 				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-gradient-to-b from-black/60 to-transparent p-4 pt-[calc(1rem_+_env(safe-area-inset-top))] pl-[calc(1rem_+_env(safe-area-inset-left))] pr-[calc(1rem_+_env(safe-area-inset-right))]">
 					{showBack && (
@@ -1072,7 +1144,10 @@ export const PlayerView = () => {
 					onPlay={mpv.play}
 					onPause={mpv.pause}
 					onStop={handleStop}
-					onSeek={mpv.seek}
+					onSeek={seekTo}
+					skip={seekable ? skip : undefined}
+					onSkip={(seconds) => flashOsd(formatSkip(skipBy(seconds)))}
+					touchLayout={touchDevice}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={touchDevice ? undefined : toggleFullscreen}
@@ -1192,7 +1267,9 @@ export const PlayerView = () => {
 				<LiveInfoDrawer channel={activeChannel} onClose={() => setShowInfoDrawer(false)} />
 			)}
 
-			{showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+			{showShortcuts && (
+				<ShortcutsOverlay skip={skip} onClose={() => setShowShortcuts(false)} />
+			)}
 
 			{pendingResume && (
 				<ResumePrompt

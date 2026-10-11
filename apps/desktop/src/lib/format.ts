@@ -15,3 +15,7 @@ export const formatTime = (seconds: number): string => {
 	}
 	return `${m}:${String(s).padStart(2, "0")}`;
 };
+
+/** A skip as the player shows it, like "+10s" or "−30s". The minus is U+2212, not a hyphen. */
+export const formatSkip = (seconds: number): string =>
+	`${seconds > 0 ? "+" : "−"}${Math.abs(seconds)}s`;

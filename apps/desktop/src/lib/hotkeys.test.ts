@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
 	isKeyboardFocusedControl,
+	playerShortcuts,
 	resolvePlayerHotkey,
 	SEEK_LONG,
 	SEEK_SHORT,
@@ -53,6 +54,18 @@ describe("resolvePlayerHotkey", () => {
 			seconds: SEEK_LONG,
 		});
 	});
+	it("uses the skip lengths passed in, keeping shift at the long seek", () => {
+		const skip = { back: 5, forward: 30 };
+		expect(resolvePlayerHotkey(key("ArrowLeft"), skip)).toEqual({
+			type: "seekBy",
+			seconds: -5,
+		});
+		expect(resolvePlayerHotkey(key("l"), skip)).toEqual({ type: "seekBy", seconds: 30 });
+		expect(resolvePlayerHotkey(key("J", { shiftKey: true }), skip)).toEqual({
+			type: "seekBy",
+			seconds: -SEEK_LONG,
+		});
+	});
 	it("changes volume with up/down", () => {
 		expect(resolvePlayerHotkey(key("ArrowUp"))).toEqual({
 			type: "volumeBy",
@@ -74,6 +87,24 @@ describe("resolvePlayerHotkey", () => {
 	});
 	it("returns null for unbound keys", () => {
 		expect(resolvePlayerHotkey(key("z"))).toBeNull();
+	});
+});
+
+describe("playerShortcuts", () => {
+	const seekLabels = (skip?: { back: number; forward: number }) =>
+		playerShortcuts(skip)
+			.filter(({ keys }) => keys[0] === "←" || keys[0] === "J")
+			.map(({ label }) => label);
+
+	it("describes the default skip", () => {
+		expect(seekLabels()).toEqual(["Seek 10s back / forward", "Seek 10s back / forward"]);
+	});
+
+	it("names both lengths when they differ", () => {
+		expect(seekLabels({ back: 15, forward: 30 })).toEqual([
+			"Seek 15s back / 30s forward",
+			"Seek 15s back / 30s forward",
+		]);
 	});
 });
 
