@@ -257,6 +257,12 @@ fn set_artwork(url: Option<String>) {
             Ok(bytes) => bytes,
             Err(e) => {
                 tracing::debug!("[MPV iOS] no lock screen artwork from {url}: {e}");
+                // Forget the address, so the next play of this channel
+                // tries again.
+                let mut current = ARTWORK_URL.lock().unwrap_or_else(|p| p.into_inner());
+                if current.as_deref() == Some(url.as_str()) {
+                    *current = None;
+                }
                 return;
             }
         };
