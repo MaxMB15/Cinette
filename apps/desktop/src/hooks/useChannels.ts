@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { Channel, Category, Provider } from "@/lib/types";
 import { findDueRefreshes } from "@/lib/refresh-schedule";
+import { deriveCategories } from "@/lib/channels";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -115,25 +116,11 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		return m;
 	}, [channels]);
 
-	const deriveCategories = (chs: Channel[]) => {
-		const map = new Map<string, number>();
-		for (const ch of chs) {
-			map.set(ch.groupTitle, (map.get(ch.groupTitle) ?? 0) + 1);
-		}
-		setCategories(
-			Array.from(map.entries()).map(([name, count], i) => ({
-				id: `cat-${i}`,
-				name,
-				channelCount: count,
-			}))
-		);
-	};
-
 	const refreshChannels = useCallback(async () => {
 		try {
 			const chs = await getAllChannels();
 			setChannels(chs);
-			deriveCategories(chs);
+			setCategories(deriveCategories(chs));
 		} catch (e) {
 			setError(String(e));
 		}

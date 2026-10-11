@@ -2,22 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import type { Channel, Category, PlayerState } from "./types";
-
-// Pure category derivation — mirrors the logic in useChannels.
-// Tested independently so regressions surface without needing Tauri mocks.
-const deriveCategories = (channels: Channel[]): Category[] => {
-	const counts: Record<string, number> = {};
-	for (const ch of channels) {
-		const key = ch.groupTitle || "";
-		counts[key] = (counts[key] ?? 0) + 1;
-	}
-	return Object.entries(counts).map(([name, channelCount]) => ({
-		id: name,
-		name,
-		channelCount,
-	}));
-};
+import type { Channel, PlayerState } from "./types";
+import { categoriesByCount, channelCountFor, dedupeByTitle, deriveCategories } from "./channels";
 
 const makeChannel = (overrides: Partial<Channel> = {}): Channel => {
 	return {
@@ -32,22 +18,7 @@ const makeChannel = (overrides: Partial<Channel> = {}): Channel => {
 	};
 };
 
-// ── Deduplication helpers (mirrored in ChannelList) ──────────────────────
-
-const dedupeByTitle = (channels: Channel[]): Channel[] => {
-	const seen = new Map<string, Channel>();
-	for (const ch of channels) {
-		if (!seen.has(ch.name)) {
-			seen.set(ch.name, { ...ch, sources: [...ch.sources] });
-		} else {
-			const existing = seen.get(ch.name)!;
-			existing.sources.push(ch.url);
-			existing.sources.push(...ch.sources);
-			if (!existing.logoUrl && ch.logoUrl) existing.logoUrl = ch.logoUrl;
-		}
-	}
-	return Array.from(seen.values());
-};
+// ── Episode dedupe, mirrored from lib/episodes ───────────────────────────
 
 const dedupeEpisodes = (episodes: Channel[]): Channel[] => {
 	const seen = new Map<string, Channel>();
@@ -104,10 +75,16 @@ describe("deriveCategories", () => {
 		expect(cats[0].channelCount).toBe(2);
 	});
 
-	it("each category id equals its name", () => {
-		const channels = [makeChannel({ groupTitle: "Movies" })];
-		const cats = deriveCategories(channels);
-		expect(cats[0].id).toBe(cats[0].name);
+	it("numbers category ids in the order groups first appear", () => {
+		const channels = [
+			makeChannel({ id: "ch-1", groupTitle: "Sports" }),
+			makeChannel({ id: "ch-2", groupTitle: "News" }),
+			makeChannel({ id: "ch-3", groupTitle: "News" }),
+		];
+		expect(deriveCategories(channels)).toEqual([
+			{ id: "cat-0", name: "Sports", channelCount: 1 },
+			{ id: "cat-1", name: "News", channelCount: 2 },
+		]);
 	});
 
 	it("handles large number of groups", () => {
@@ -266,6 +243,49 @@ describe("dedupeEpisodes", () => {
 		const ep1 = makeChannel({ id: "e-1", contentType: "series", season: 1, episode: 1 });
 		const ep2 = makeChannel({ id: "e-2", contentType: "series", season: 2, episode: 1 });
 		expect(dedupeEpisodes([ep1, ep2])).toHaveLength(2);
+	});
+});
+
+// ── Channel list categories ──────────────────────────────────────────────
+
+describe("categoriesByCount", () => {
+	it("uses each group name as its id and puts the largest group first", () => {
+		const channels = [
+			makeChannel({ id: "ch-1", groupTitle: "Sports" }),
+			makeChannel({ id: "ch-2", groupTitle: "News" }),
+			makeChannel({ id: "ch-3", groupTitle: "News" }),
+		];
+		expect(categoriesByCount(channels)).toEqual([
+			{ id: "News", name: "News", channelCount: 2 },
+			{ id: "Sports", name: "Sports", channelCount: 1 },
+		]);
+	});
+
+	it("counts channels with no group under an empty name", () => {
+		const channels = [
+			makeChannel({ id: "ch-1", groupTitle: "" }),
+			makeChannel({ id: "ch-2", groupTitle: undefined as unknown as string }),
+		];
+		expect(categoriesByCount(channels)).toEqual([{ id: "", name: "", channelCount: 2 }]);
+	});
+
+	it("returns an empty list for no channels", () => {
+		expect(categoriesByCount([])).toEqual([]);
+	});
+});
+
+describe("channelCountFor", () => {
+	const categories = [
+		{ id: "News", name: "News", channelCount: 2 },
+		{ id: "Sports", name: "Sports", channelCount: 1 },
+	];
+
+	it("returns the count for a listed group", () => {
+		expect(channelCountFor(categories, "News")).toBe(2);
+	});
+
+	it("returns 0 for a group that is not listed", () => {
+		expect(channelCountFor(categories, "Kids")).toBe(0);
 	});
 });
 

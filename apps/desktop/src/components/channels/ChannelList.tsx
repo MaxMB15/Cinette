@@ -36,6 +36,7 @@ import {
 } from "@/lib/tauri";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
+import { categoriesByCount, dedupeByTitle } from "@/lib/channels";
 import type {
 	Channel,
 	Category,
@@ -285,20 +286,7 @@ export const ChannelList = () => {
 		[xtreamSeriesByTitle]
 	);
 
-	const movieTitles = useMemo(() => {
-		const seen = new Map<string, Channel>();
-		for (const ch of byType.movie) {
-			if (!seen.has(ch.name)) {
-				seen.set(ch.name, { ...ch, sources: [...ch.sources] });
-			} else {
-				const existing = seen.get(ch.name)!;
-				existing.sources.push(ch.url);
-				existing.sources.push(...ch.sources);
-				if (!existing.logoUrl && ch.logoUrl) existing.logoUrl = ch.logoUrl;
-			}
-		}
-		return Array.from(seen.values());
-	}, [byType.movie]);
+	const movieTitles = useMemo(() => dedupeByTitle(byType.movie), [byType.movie]);
 
 	const activeChannels = useMemo(() => {
 		if (activeTab === "favorites") return channels.filter((ch) => ch.isFavorite);
@@ -316,14 +304,7 @@ export const ChannelList = () => {
 			activeTab === "downloads"
 		)
 			return [];
-		const counts: Record<string, number> = {};
-		for (const ch of byType[activeTab as "live" | "movie"]) {
-			const key = ch.groupTitle || "";
-			counts[key] = (counts[key] ?? 0) + 1;
-		}
-		return Object.entries(counts)
-			.map(([name, channelCount]) => ({ id: name, name, channelCount }))
-			.sort((a, b) => b.channelCount - a.channelCount);
+		return categoriesByCount(byType[activeTab as "live" | "movie"]);
 	}, [byType, activeTab]);
 
 	const handleTabChange = (tab: Tab) => {
