@@ -10,7 +10,7 @@ import {
 	setEpgLastRefresh,
 	useChannels,
 } from "@/hooks/useChannels";
-import { parseDateMs } from "@/lib/date";
+import { findDueRefreshes } from "@/lib/refresh-schedule";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 
 export type StepStatus = "pending" | "active" | "done" | "error";
@@ -91,33 +91,10 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// Step 1 complete — providers came from ChannelsContext, no extra fetch needed
 			setStepStatus("providers", "done", "Providers & channels loaded");
 
-			// Determine which providers need refresh
-			const now = Date.now();
-			const providerRefreshIds: string[] = [];
-			const epgRefreshIds: string[] = [];
-
-			for (const p of providers) {
-				const {
-					autoRefresh,
-					refreshIntervalHours,
-					epgAutoRefresh,
-					epgRefreshIntervalHours,
-				} = loadProviderSettings(p.id);
-
-				if (autoRefresh) {
-					const lastMs = parseDateMs(p.lastUpdated);
-					if (now - lastMs >= refreshIntervalHours * 60 * 60 * 1000) {
-						providerRefreshIds.push(p.id);
-					}
-				}
-
-				if (epgAutoRefresh && p.epgUrl) {
-					const lastMs = getEpgLastRefresh(p.id);
-					if (now - lastMs >= epgRefreshIntervalHours * 60 * 60 * 1000) {
-						epgRefreshIds.push(p.id);
-					}
-				}
-			}
+			const { playlistIds: providerRefreshIds, epgIds: epgRefreshIds } = findDueRefreshes(
+				providers,
+				{ settingsFor: loadProviderSettings, epgLastRefreshFor: getEpgLastRefresh }
+			);
 
 			const didRefreshProviders = providerRefreshIds.length > 0;
 

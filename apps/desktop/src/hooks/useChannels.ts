@@ -11,7 +11,7 @@ import {
 	useRef,
 } from "react";
 import type { Channel, Category, Provider } from "@/lib/types";
-import { parseDateMs } from "@/lib/date";
+import { findDueRefreshes } from "@/lib/refresh-schedule";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -267,30 +267,17 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	// Using a ref-based approach avoids resetting timers on every providers update.
 	useEffect(() => {
 		const tick = () => {
-			const now = Date.now();
-			for (const p of providersRef.current) {
-				const {
-					autoRefresh,
-					refreshIntervalHours,
-					epgAutoRefresh,
-					epgRefreshIntervalHours,
-				} = loadProviderSettings(p.id);
-
-				if (autoRefresh) {
-					const lastMs = parseDateMs(p.lastUpdated);
-					if (now - lastMs >= refreshIntervalHours * 60 * 60 * 1000) {
-						refreshProviderRef.current(p.id).catch(console.error);
-					}
-				}
-
-				if (epgAutoRefresh && p.epgUrl) {
-					const lastMs = getEpgLastRefresh(p.id);
-					if (now - lastMs >= epgRefreshIntervalHours * 60 * 60 * 1000) {
-						refreshEpgApi(p.id)
-							.then(() => setEpgLastRefresh(p.id))
-							.catch(console.error);
-					}
-				}
+			const { playlistIds, epgIds } = findDueRefreshes(providersRef.current, {
+				settingsFor: loadProviderSettings,
+				epgLastRefreshFor: getEpgLastRefresh,
+			});
+			for (const id of playlistIds) {
+				refreshProviderRef.current(id).catch(console.error);
+			}
+			for (const id of epgIds) {
+				refreshEpgApi(id)
+					.then(() => setEpgLastRefresh(id))
+					.catch(console.error);
 			}
 		};
 
