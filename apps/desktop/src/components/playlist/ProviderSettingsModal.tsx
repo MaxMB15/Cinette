@@ -212,7 +212,7 @@ export const ProviderSettingsModal = ({
 				</button>
 			</div>
 
-			{/* Body — scrollable */}
+			{/* Scrollable body */}
 			<div className="px-5 py-4 space-y-5 overflow-y-auto">
 				{/* Details section */}
 				<div>

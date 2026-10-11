@@ -18,7 +18,7 @@ export const groupTitles = (channels: Channel[], contentType: string): string[] 
 ];
 
 /**
- * Pairs each group with the names of its first few channels, so the AI can
+ * Pairs each group with the names of its first few channels, so Gemini can
  * judge a group by what it holds and not only by its title. Only channels of
  * the given content type count, since a provider can reuse a group title
  * across live, movies and series.

@@ -14,6 +14,15 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 
+### Fixed
+
+- Removing a provider now asks you to confirm first (#103).
+- A failed provider refresh now shows its error on the provider card (#103).
+- Re-categorize All in the category manager now sends Gemini sample titles from the content type on screen only (#103).
+- Escape now closes the playlist settings and download history dialogs (#103).
+- Screen readers now name the provider form fields, the icon-only buttons in the category manager and the clear file button, and say which option of each toggle is on (#103).
+- The playlist file drop zone now opens with the keyboard (#103).
+
 ## [0.5.3] - 2026-10-09
 
 ### Added

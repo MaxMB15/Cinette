@@ -33,7 +33,7 @@ import { groupSamples, groupTitles, superCategoryNames } from "@/lib/group-hiera
 import type { Channel, GroupHierarchyEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// Enough channel names for the AI to tell what a group holds.
+// Enough channel names for Gemini to tell what a group holds.
 const SAMPLES_PER_GROUP = 5;
 // Adding to one category sends every other group, so fewer names each keeps the request small.
 const SAMPLES_PER_CANDIDATE = 3;
@@ -43,7 +43,7 @@ const CATEGORY_SORT_BLOCK = 1000;
 interface GroupChipProps {
 	name: string;
 	selected: boolean;
-	/** Groups placed by hand keep their place when the AI sorts again, so they get a badge. */
+	/** Groups placed by hand keep their place when Gemini sorts again, so they get a badge. */
 	userPlaced?: boolean;
 	/** Uncategorized groups are drawn a little fainter. */
 	muted?: boolean;
