@@ -121,6 +121,24 @@ mpv:
 If App Store Connect emails an `ITMS-91053` warning about a missing reason after an
 upload, add the category it names.
 
+## Logs
+
+On iOS the Rust logs go to the system log under the subsystem
+`com.maxvideoplayer.app`, and the Swift plugin's messages go there too. To watch
+them live, open Console on the Mac, select the device, click Start, and search for
+`subsystem:com.maxvideoplayer.app`. Xcode's debug console shows them when Xcode
+started the app.
+
+The app also writes the Rust logs to `Library/Caches/Logs/app.log` in its container,
+up to 5 MB per run, and keeps the last run's file as `app.previous.log`. To copy it
+to the Mac:
+
+```bash
+xcrun devicectl device copy from --device <identifier> \
+  --domain-type appDataContainer --domain-identifier com.maxvideoplayer.app \
+  --source Library/Caches/Logs/app.log --destination app.log
+```
+
 ## Continuous integration
 
 | Workflow | Runs on | What it does |
