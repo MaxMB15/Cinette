@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import { Play, Tv2, Heart, Film } from "lucide-react";
 import type { Channel, EpgProgram } from "@/lib/types";
 import { EpgTimelineBar } from "./EpgTimelineBar";
@@ -10,9 +10,7 @@ import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
-
-/** Module-level cache of URLs that failed to load — persists across remounts from virtual list scrolling. */
-const brokenImageUrls = new Set<string>();
+import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
 /** Width (px) of the left channel-info column in RowCard — must match spacer in ChannelList header. */
 export const ROW_CARD_LEFT_WIDTH = 180;
@@ -116,7 +114,7 @@ const RowCardView = ({
 				<ChannelLogo
 					url={channel.logoUrl}
 					className="h-6 w-6 rounded"
-					iconClassName="h-3 w-3"
+					fallback={<Tv2 className="text-muted-foreground h-3 w-3" />}
 				/>
 
 				<div className="min-w-0 flex-1">
@@ -171,38 +169,6 @@ const RowCardView = ({
 const RowCard = memo(RowCardView);
 RowCard.displayName = "RowCard";
 
-const ChannelLogo = ({
-	url,
-	className,
-	iconClassName,
-}: {
-	url?: string;
-	className: string;
-	iconClassName: string;
-}) => {
-	const [imgError, setImgError] = useState(() => (url ? brokenImageUrls.has(url) : false));
-	return (
-		<div
-			className={`relative bg-secondary flex items-center justify-center overflow-hidden shrink-0 ${className}`}
-		>
-			{url && !imgError ? (
-				<img
-					src={url}
-					alt=""
-					className="h-full w-full object-contain"
-					loading="lazy"
-					onError={() => {
-						brokenImageUrls.add(url);
-						setImgError(true);
-					}}
-				/>
-			) : (
-				<Tv2 className={`text-muted-foreground ${iconClassName}`} />
-			)}
-		</div>
-	);
-};
-
 /** The phone's channel row. A phone is too narrow for the timeline, so it
  *  shows the programme on now and how far into it the channel is. */
 const CompactRowCard = ({
@@ -237,7 +203,7 @@ const CompactRowCard = ({
 				<ChannelLogo
 					url={channel.logoUrl}
 					className="h-10 w-10 rounded-md"
-					iconClassName="h-4 w-4"
+					fallback={<Tv2 className="text-muted-foreground h-4 w-4" />}
 				/>
 
 				<div className="min-w-0 flex-1">
@@ -286,9 +252,7 @@ const PosterCard = ({
 	onToggleFavorite?: (ch: Channel) => void;
 }) => {
 	const hasSources = channel.sources.length > 0;
-	const [imgError, setImgError] = useState(() =>
-		channel.logoUrl ? brokenImageUrls.has(channel.logoUrl) : false
-	);
+	const [imgError, markImgFailed] = useImageFailed(channel.logoUrl);
 	const showFallback = !channel.logoUrl || imgError;
 
 	const { byChannel, bySeries } = useDownloads();
@@ -321,10 +285,7 @@ const PosterCard = ({
 							alt=""
 							className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
 							loading="lazy"
-							onError={() => {
-								if (channel.logoUrl) brokenImageUrls.add(channel.logoUrl);
-								setImgError(true);
-							}}
+							onError={markImgFailed}
 						/>
 					) : (
 						<div className="h-full w-full bg-gradient-to-br from-secondary via-secondary/80 to-secondary/50 flex flex-col items-center justify-center gap-1">

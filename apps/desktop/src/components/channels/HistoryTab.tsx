@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { getWatchHistory, deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
+import { ChannelLogo } from "./ChannelLogo";
 
 interface HistoryTabProps {
 	onPlay: (entry: WatchHistoryEntry) => void;
@@ -145,34 +146,17 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 							className="flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-accent cursor-pointer group"
 						>
 							{/* Logo */}
-							<div className="shrink-0 h-9 w-9 rounded-md overflow-hidden bg-muted flex items-center justify-center">
-								{entry.channelLogo ? (
-									<img
-										src={entry.channelLogo}
-										alt={entry.channelName}
-										className="h-full w-full object-cover"
-										onError={(e) => {
-											(e.currentTarget as HTMLImageElement).style.display =
-												"none";
-											const parent = e.currentTarget.parentElement;
-											if (parent) {
-												parent.textContent = entry.channelName
-													.charAt(0)
-													.toUpperCase();
-												parent.classList.add(
-													"text-sm",
-													"font-semibold",
-													"text-muted-foreground"
-												);
-											}
-										}}
-									/>
-								) : (
+							<ChannelLogo
+								url={entry.channelLogo}
+								className="h-9 w-9 rounded-md bg-muted"
+								imgClassName="object-cover"
+								alt={entry.channelName}
+								fallback={
 									<span className="text-sm font-semibold text-muted-foreground">
 										{entry.channelName.charAt(0).toUpperCase()}
 									</span>
-								)}
-							</div>
+								}
+							/>
 
 							{/* Info */}
 							<div className="flex-1 min-w-0">
