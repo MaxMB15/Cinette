@@ -19,9 +19,7 @@ use cocoa::base::nil;
 use cocoa::foundation::{NSAutoreleasePool, NSRect};
 use dispatch::Queue;
 use libmpv2::{
-    render::{
-        mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType,
-    },
+    render::{mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType},
     Mpv,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -53,8 +51,7 @@ const NS_OPENGL_PROFILE_VERSION_3_2_CORE: u32 = 0x3200;
 fn gl_get_proc_address(name: *const c_char) -> *mut c_void {
     static HANDLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     let lib = *HANDLE.get_or_init(|| {
-        let path =
-            CString::new("/System/Library/Frameworks/OpenGL.framework/OpenGL").unwrap();
+        let path = CString::new("/System/Library/Frameworks/OpenGL.framework/OpenGL").unwrap();
         unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_GLOBAL) as usize }
     });
     if lib == 0 {
@@ -167,8 +164,11 @@ impl MacosGlRenderer {
         {
             let class_ns: *mut objc::runtime::Object = msg_send![content_view, className];
             let class_ptr: *const c_char = msg_send![class_ns, UTF8String];
-            let cv_name = if class_ptr.is_null() { "?" }
-                else { std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("?") };
+            let cv_name = if class_ptr.is_null() {
+                "?"
+            } else {
+                std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("?")
+            };
             tracing::debug!("[macOS renderer] content_view class = {cv_name}");
 
             let subs: *mut objc::runtime::Object = msg_send![content_view, subviews];
@@ -178,11 +178,16 @@ impl MacosGlRenderer {
                 let sv: *mut objc::runtime::Object = msg_send![subs, objectAtIndex: i];
                 let sv_class_ns: *mut objc::runtime::Object = msg_send![sv, className];
                 let sv_ptr: *const c_char = msg_send![sv_class_ns, UTF8String];
-                let sv_name = if sv_ptr.is_null() { "?" }
-                    else { std::ffi::CStr::from_ptr(sv_ptr).to_str().unwrap_or("?") };
+                let sv_name = if sv_ptr.is_null() {
+                    "?"
+                } else {
+                    std::ffi::CStr::from_ptr(sv_ptr).to_str().unwrap_or("?")
+                };
                 let sub_subs: *mut objc::runtime::Object = msg_send![sv, subviews];
                 let sub_count: usize = msg_send![sub_subs, count];
-                tracing::debug!("[macOS renderer]   subview[{i}] = {sv_name} ({sub_count} children)");
+                tracing::debug!(
+                    "[macOS renderer]   subview[{i}] = {sv_name} ({sub_count} children)"
+                );
             }
         }
 

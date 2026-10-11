@@ -461,9 +461,7 @@ fn run<R: Runtime>(mut client: Mpv, url: String, app: AppHandle<R>, kill: Arc<At
                 // to. We don't trigger from here directly because the same
                 // failure also flips `eof-reached` or `idle-active`, but
                 // log at warn so the cause is visible in field logs.
-                tracing::warn!(
-                    "[MPV reconnect] wait_event Err (likely a swallowed EndFile): {e}"
-                );
+                tracing::warn!("[MPV reconnect] wait_event Err (likely a swallowed EndFile): {e}");
             }
             None => {} // timeout — fall through to retry check
         }

@@ -34,8 +34,8 @@ use wayland_client::{
     backend::{Backend, ObjectId},
     globals::{registry_queue_init, GlobalListContents},
     protocol::{
-        wl_compositor::WlCompositor, wl_registry::WlRegistry,
-        wl_subcompositor::WlSubcompositor, wl_subsurface::WlSubsurface, wl_surface::WlSurface,
+        wl_compositor::WlCompositor, wl_registry::WlRegistry, wl_subcompositor::WlSubcompositor,
+        wl_subsurface::WlSubsurface, wl_surface::WlSurface,
     },
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
 };
@@ -301,7 +301,11 @@ impl LinuxGlRenderer {
 
 impl PlatformRenderer for LinuxGlRenderer {
     fn attach(&mut self, mpv: &mut Mpv) -> Result<(), String> {
-        let Pending { egl: egl_res, wayland, csd_offset } = self
+        let Pending {
+            egl: egl_res,
+            wayland,
+            csd_offset,
+        } = self
             .pending
             .take()
             .ok_or_else(|| "Renderer has already been attached".to_string())?;
@@ -406,7 +410,9 @@ impl PlatformRenderer for LinuxGlRenderer {
     }
 
     fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64) {
-        let Some(inner) = self.active.as_ref() else { return };
+        let Some(inner) = self.active.as_ref() else {
+            return;
+        };
         let wi = (w as i32).max(1);
         let hi = (h as i32).max(1);
 
@@ -438,7 +444,9 @@ impl PlatformRenderer for LinuxGlRenderer {
     }
 
     fn set_visible(&mut self, visible: bool) {
-        let Some(inner) = self.active.as_ref() else { return };
+        let Some(inner) = self.active.as_ref() else {
+            return;
+        };
         inner.video_active.store(visible, Ordering::Release);
 
         if visible {
@@ -477,7 +485,9 @@ impl PlatformRenderer for LinuxGlRenderer {
     }
 
     fn detach(&mut self) {
-        let Some(inner) = self.active.take() else { return };
+        let Some(inner) = self.active.take() else {
+            return;
+        };
         inner.valid.store(false, Ordering::Release);
         inner.video_active.store(false, Ordering::Release);
 
@@ -616,12 +626,7 @@ fn recreate_egl_surface(
 ) -> Option<(WlEglSurface, egl::Surface)> {
     let new_wl = WlEglSurface::new(child_id, w, h).ok()?;
     let new_egl = unsafe {
-        egl.create_window_surface(
-            display,
-            config,
-            new_wl.ptr() as egl::NativeWindowType,
-            None,
-        )
+        egl.create_window_surface(display, config, new_wl.ptr() as egl::NativeWindowType, None)
     }
     .ok()?;
     Some((new_wl, new_egl))
@@ -683,10 +688,8 @@ fn build_wayland(
     //
     // SAFETY: `wl_surface_ptr` is a valid `wl_surface *` on the same
     // connection we are using (shared fd via `from_foreign_display`).
-    let parent_id = unsafe {
-        ObjectId::from_ptr(WlSurface::interface(), wl_surface_ptr as *mut _)
-    }
-    .map_err(|_| "invalid parent wl_surface pointer")?;
+    let parent_id = unsafe { ObjectId::from_ptr(WlSurface::interface(), wl_surface_ptr as *mut _) }
+        .map_err(|_| "invalid parent wl_surface pointer")?;
     let parent_surface = WlSurface::from_id(&conn, parent_id)
         .map_err(|_| "cannot build proxy for parent wl_surface")?;
 
@@ -712,14 +715,22 @@ fn build_wayland(
     }
 
     let config_attribs = [
-        egl::RED_SIZE, 8,
-        egl::GREEN_SIZE, 8,
-        egl::BLUE_SIZE, 8,
-        egl::ALPHA_SIZE, 8,
-        egl::DEPTH_SIZE, 0,
-        egl::STENCIL_SIZE, 0,
-        egl::RENDERABLE_TYPE, egl::OPENGL_BIT,
-        egl::SURFACE_TYPE, egl::WINDOW_BIT,
+        egl::RED_SIZE,
+        8,
+        egl::GREEN_SIZE,
+        8,
+        egl::BLUE_SIZE,
+        8,
+        egl::ALPHA_SIZE,
+        8,
+        egl::DEPTH_SIZE,
+        0,
+        egl::STENCIL_SIZE,
+        0,
+        egl::RENDERABLE_TYPE,
+        egl::OPENGL_BIT,
+        egl::SURFACE_TYPE,
+        egl::WINDOW_BIT,
         egl::NONE,
     ];
     let config = egl
@@ -745,9 +756,12 @@ fn build_wayland(
     .map_err(|e| format!("eglCreateWindowSurface: {e:?}"))?;
 
     let context_attribs = [
-        egl::CONTEXT_MAJOR_VERSION, 3,
-        egl::CONTEXT_MINOR_VERSION, 2,
-        egl::CONTEXT_OPENGL_PROFILE_MASK, egl::CONTEXT_OPENGL_CORE_PROFILE_BIT,
+        egl::CONTEXT_MAJOR_VERSION,
+        3,
+        egl::CONTEXT_MINOR_VERSION,
+        2,
+        egl::CONTEXT_OPENGL_PROFILE_MASK,
+        egl::CONTEXT_OPENGL_CORE_PROFILE_BIT,
         egl::NONE,
     ];
     let egl_context = egl
@@ -776,8 +790,7 @@ fn wayland_egl_display(
     wl_display_ptr: *mut c_void,
     platform_enum: u32,
 ) -> Result<egl::Display, String> {
-    type GetPlatformDisplayExt =
-        unsafe extern "C" fn(u32, *mut c_void, *const i32) -> *mut c_void;
+    type GetPlatformDisplayExt = unsafe extern "C" fn(u32, *mut c_void, *const i32) -> *mut c_void;
 
     if let Some(get_fn) = egl.get_proc_address("eglGetPlatformDisplayEXT") {
         // SAFETY: `eglGetPlatformDisplayEXT` has the documented signature
@@ -785,9 +798,8 @@ fn wayland_egl_display(
         // address to that fn pointer matches the loader's contract.
         let get_platform_display: GetPlatformDisplayExt = unsafe { std::mem::transmute(get_fn) };
         // SAFETY: calls into libEGL with a valid wl_display pointer.
-        let d_ptr = unsafe {
-            get_platform_display(platform_enum, wl_display_ptr, std::ptr::null())
-        };
+        let d_ptr =
+            unsafe { get_platform_display(platform_enum, wl_display_ptr, std::ptr::null()) };
         if !d_ptr.is_null() {
             // SAFETY: `egl::Display` is `repr(transparent)` over `*mut c_void`.
             return Ok(unsafe { std::mem::transmute::<*mut c_void, egl::Display>(d_ptr) });
@@ -830,7 +842,8 @@ fn query_csd_offsets<R: Runtime>(app: &AppHandle<R>) -> (i32, i32) {
         })();
         let _ = tx.send(offsets.unwrap_or((0, 0)));
     });
-    rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or((0, 0))
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap_or((0, 0))
 }
 
 // =========================================================================
@@ -869,7 +882,9 @@ where
 // =========================================================================
 
 fn drain_wayland_queue(inner: &Inner) {
-    let Ok(mut queue) = inner.wayland.queue.lock() else { return };
+    let Ok(mut queue) = inner.wayland.queue.lock() else {
+        return;
+    };
     let mut dummy = WlGlobals;
     let _ = queue.dispatch_pending(&mut dummy);
 }

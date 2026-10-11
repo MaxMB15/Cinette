@@ -73,10 +73,10 @@ impl IdleInhibitor {
         #[link(name = "IOKit", kind = "framework")]
         extern "C" {
             fn IOPMAssertionCreateWithName(
-                assertion_type: *const c_void,   // CFStringRef
-                level: u32,                       // IOPMAssertionLevel
-                reason: *const c_void,            // CFStringRef
-                assertion_id: *mut u32,           // IOPMAssertionID*
+                assertion_type: *const c_void, // CFStringRef
+                level: u32,                    // IOPMAssertionLevel
+                reason: *const c_void,         // CFStringRef
+                assertion_id: *mut u32,        // IOPMAssertionID*
             ) -> i32; // IOReturn
         }
 
@@ -84,22 +84,20 @@ impl IdleInhibitor {
         let assertion_type = cfstring("PreventUserIdleDisplaySleep");
         let reason = cfstring("Max Video Player: video playback active");
         if assertion_type.is_null() || reason.is_null() {
-            if !assertion_type.is_null() { unsafe { CFRelease(assertion_type) }; }
-            if !reason.is_null() { unsafe { CFRelease(reason) }; }
+            if !assertion_type.is_null() {
+                unsafe { CFRelease(assertion_type) };
+            }
+            if !reason.is_null() {
+                unsafe { CFRelease(reason) };
+            }
             tracing::warn!("[idle-inhibit] CFStringCreateWithBytes returned null");
             return false;
         }
         let mut assertion_id: u32 = 0;
 
         // kIOPMAssertionLevelOn = 255
-        let ret = unsafe {
-            IOPMAssertionCreateWithName(
-                assertion_type,
-                255,
-                reason,
-                &mut assertion_id,
-            )
-        };
+        let ret =
+            unsafe { IOPMAssertionCreateWithName(assertion_type, 255, reason, &mut assertion_id) };
 
         unsafe {
             CFRelease(reason);
@@ -139,7 +137,9 @@ impl IdleInhibitor {
             state.cookie = Some(cookie);
             return true;
         }
-        tracing::info!("[idle-inhibit] D-Bus ScreenSaver.Inhibit unavailable, trying GNOME SessionManager");
+        tracing::info!(
+            "[idle-inhibit] D-Bus ScreenSaver.Inhibit unavailable, trying GNOME SessionManager"
+        );
         if let Some(cookie) = dbus_gnome_inhibit() {
             state.cookie = Some(cookie);
             return true;
@@ -232,10 +232,14 @@ fn dbus_call_u32(bus: &str, path: &str, method: &str, args: &[&str]) -> Option<u
     let mut cmd = std::process::Command::new("gdbus");
     cmd.arg("call")
         .arg("--session")
-        .arg("--timeout").arg("3") // seconds; avoid blocking playback on a hung bus
-        .arg("--dest").arg(bus)
-        .arg("--object-path").arg(path)
-        .arg("--method").arg(method);
+        .arg("--timeout")
+        .arg("3") // seconds; avoid blocking playback on a hung bus
+        .arg("--dest")
+        .arg(bus)
+        .arg("--object-path")
+        .arg(path)
+        .arg("--method")
+        .arg(method);
     for arg in args {
         cmd.arg(arg);
     }
@@ -253,10 +257,14 @@ fn dbus_call_void(bus: &str, path: &str, method: &str, args: &[&str]) -> bool {
     let mut cmd = std::process::Command::new("gdbus");
     cmd.arg("call")
         .arg("--session")
-        .arg("--timeout").arg("3")
-        .arg("--dest").arg(bus)
-        .arg("--object-path").arg(path)
-        .arg("--method").arg(method);
+        .arg("--timeout")
+        .arg("3")
+        .arg("--dest")
+        .arg(bus)
+        .arg("--object-path")
+        .arg(path)
+        .arg("--method")
+        .arg(method);
     for arg in args {
         cmd.arg(arg);
     }
@@ -304,7 +312,12 @@ fn dbus_gnome_inhibit() -> Option<u32> {
         "org.gnome.SessionManager",
         "/org/gnome/SessionManager",
         "org.gnome.SessionManager.Inhibit",
-        &["Max Video Player", "uint32 0", "Video playback active", "uint32 8"],
+        &[
+            "Max Video Player",
+            "uint32 0",
+            "Video playback active",
+            "uint32 8",
+        ],
     )
 }
 
