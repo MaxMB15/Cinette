@@ -36,11 +36,12 @@ pub trait PlatformRenderer: Send + Sync {
     /// Shows or hides the video surface without stopping playback.
     fn set_visible(&mut self, visible: bool);
 
-    /// Register a one-shot callback fired when the first rendered frame is
-    /// presented. Used by the frontend to make the WKWebView/WebKit layer
-    /// transparent only after pixels arrive. Default no-op for platforms that
-    /// set their callback on the concrete type prior to boxing.
-    fn set_first_frame_callback(&mut self, _cb: Box<dyn FnOnce() + Send>) {}
+    /// Registers a callback that runs once, when the first video frame is
+    /// shown. Call it before `attach`.
+    ///
+    /// `MpvState` uses it to tell the frontend that the web view can turn
+    /// transparent over the video.
+    fn set_first_frame_callback(&mut self, cb: Box<dyn FnOnce() + Send>);
 
     /// Tears down the surface. Must be safe to call more than once.
     fn detach(&mut self);

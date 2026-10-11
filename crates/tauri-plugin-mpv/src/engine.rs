@@ -63,6 +63,7 @@ impl MpvEngine {
     /// Set audio properties after mpv_initialize. Options like `aid` and `mute`
     /// must be set as properties (not init options) because `mpv_set_option_string`
     /// rejects them with MPV_ERROR_OPTION_ERROR (-7) on many libmpv builds.
+    #[cfg(target_os = "linux")]
     pub fn configure_audio(&self) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
         if let Err(e) = mpv.set_property("aid", "auto") {

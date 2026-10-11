@@ -281,12 +281,6 @@ impl LinuxGlRenderer {
             first_frame_cb: Mutex::new(None),
         })
     }
-
-    /// Register a callback invoked once, on the first presented frame. Must
-    /// be called before `attach`; it is moved into `Inner` at that point.
-    pub fn set_first_frame_callback(&mut self, cb: Box<dyn FnOnce() + Send>) {
-        *lock_or_recover(&self.first_frame_cb) = Some(cb);
-    }
 }
 
 // =========================================================================
@@ -363,7 +357,7 @@ impl PlatformRenderer for LinuxGlRenderer {
             let _ = egl.swap_buffers(display, surface);
             let _ = egl.make_current(display, None, None, None);
 
-            let inner = Arc::new_cyclic(move |weak: &std::sync::Weak<Inner>| {
+            let inner = Arc::new_cyclic(move |weak: &Weak<Inner>| {
                 let weak = weak.clone();
                 render_ctx.set_update_callback(move || {
                     if let Some(alive) = weak.upgrade() {
@@ -460,13 +454,11 @@ impl PlatformRenderer for LinuxGlRenderer {
     }
 
     fn set_first_frame_callback(&mut self, cb: Box<dyn FnOnce() + Send>) {
-        if let Some(inner) = self.active.as_ref() {
-            if let Ok(mut slot) = inner.first_frame_cb.lock() {
-                *slot = Some(cb);
-            }
-        } else if let Ok(mut slot) = self.first_frame_cb.lock() {
-            *slot = Some(cb);
-        }
+        let slot = match self.active.as_ref() {
+            Some(inner) => &inner.first_frame_cb,
+            None => &self.first_frame_cb,
+        };
+        *lock_or_recover(slot) = Some(cb);
     }
 
     fn detach(&mut self) {
@@ -934,9 +926,3 @@ pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
         ("msg-level", "all=info"),
     ]
 }
-
-// Silence the `Weak` import warning if refactors ever remove the callback
-// path (kept so the weak-ref intent is obvious at the import site).
-const _: fn() = || {
-    let _: Option<Weak<Inner>> = None;
-};
