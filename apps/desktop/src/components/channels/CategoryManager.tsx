@@ -29,8 +29,15 @@ import {
 	deleteSuperCategory,
 } from "@/lib/tauri";
 import { ask } from "@tauri-apps/plugin-dialog";
-import type { GroupHierarchyEntry } from "@/lib/types";
-import type { Channel } from "@/lib/types";
+import { groupSamples, groupTitles, superCategoryNames } from "@/lib/group-hierarchy";
+import type { Channel, GroupHierarchyEntry } from "@/lib/types";
+
+// Enough channel names for the AI to tell what a group holds.
+const SAMPLES_PER_GROUP = 5;
+// Adding to one category sends every other group, so fewer names each keeps the request small.
+const SAMPLES_PER_CANDIDATE = 3;
+// Each category owns a block of sort orders, so its groups stay together in their own order.
+const CATEGORY_SORT_BLOCK = 1000;
 
 interface CategoryManagerProps {
 	providerId: string;
@@ -71,21 +78,12 @@ export const CategoryManager = ({
 			if (h.length > 0) {
 				setEntries(h);
 				// Remove empty categories that now have groups in DB
-				const dbCatNames = new Set(
-					h.filter((e) => e.superCategory).map((e) => e.superCategory!)
-				);
+				const dbCatNames = new Set(superCategoryNames(h));
 				setEmptyCategories((prev) => prev.filter((c) => !dbCatNames.has(c)));
 			} else {
 				// No hierarchy yet — show all provider groups as uncategorized
-				const groupNames = [
-					...new Set(
-						channels
-							.filter((c) => c.contentType === contentType)
-							.map((c) => c.groupTitle)
-					),
-				];
 				setEntries(
-					groupNames.map((g, i) => ({
+					groupTitles(channels, contentType).map((g, i) => ({
 						providerId,
 						contentType,
 						groupName: g,
@@ -104,9 +102,7 @@ export const CategoryManager = ({
 		load();
 	}, [load]);
 
-	const dbCats = [
-		...new Set(entries.filter((e) => e.superCategory).map((e) => e.superCategory!)),
-	];
+	const dbCats = superCategoryNames(entries);
 	const superCats = [...dbCats, ...emptyCategories.filter((c) => !dbCats.includes(c))];
 	const uncategorized = entries.filter((e) => !e.superCategory);
 
@@ -119,18 +115,12 @@ export const CategoryManager = ({
 				setError("No Gemini API key configured. Add one in Settings → AI.");
 				return;
 			}
-			const groupNames = [
-				...new Set(
-					channels.filter((c) => c.contentType === contentType).map((c) => c.groupTitle)
-				),
-			];
-			const groupsWithSamples: [string, string[]][] = groupNames.map((g) => [
-				g,
-				channels
-					.filter((c) => c.groupTitle === g && c.contentType === contentType)
-					.slice(0, 5)
-					.map((c) => c.name),
-			]);
+			const groupsWithSamples = groupSamples(
+				channels,
+				groupTitles(channels, contentType),
+				contentType,
+				SAMPLES_PER_GROUP
+			);
 			const result = await categorizeProvider(
 				providerId,
 				contentType,
@@ -156,13 +146,12 @@ export const CategoryManager = ({
 				setError("No Gemini API key configured. Add one in Settings → AI.");
 				return;
 			}
-			const uncatGroups: [string, string[]][] = uncategorized.map((e) => [
-				e.groupName,
-				channels
-					.filter((c) => c.groupTitle === e.groupName && c.contentType === contentType)
-					.slice(0, 5)
-					.map((c) => c.name),
-			]);
+			const uncatGroups = groupSamples(
+				channels,
+				uncategorized.map((e) => e.groupName),
+				contentType,
+				SAMPLES_PER_GROUP
+			);
 			const result = await fixUncategorizedGroups(
 				providerId,
 				contentType,
@@ -190,22 +179,12 @@ export const CategoryManager = ({
 				return;
 			}
 			// Send ALL groups not already in the target category
-			const candidateGroups: [string, string[]][] = entries
-				.filter((e) => e.superCategory !== aiPromptCategory)
-				.map(
-					(e) =>
-						[
-							e.groupName,
-							channels
-								.filter(
-									(c) =>
-										c.groupTitle === e.groupName &&
-										c.contentType === contentType
-								)
-								.slice(0, 3)
-								.map((c) => c.name),
-						] as [string, string[]]
-				);
+			const candidateGroups = groupSamples(
+				channels,
+				entries.filter((e) => e.superCategory !== aiPromptCategory).map((e) => e.groupName),
+				contentType,
+				SAMPLES_PER_CANDIDATE
+			);
 
 			if (candidateGroups.length === 0) {
 				setError("No other groups available to assign.");
@@ -299,7 +278,7 @@ export const CategoryManager = ({
 		const newOrder = [...superCats];
 		[newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]];
 
-		// Reassign sort_order for ALL groups: category at position i gets block i*1000
+		// Reassign sort_order for ALL groups, so the category at position i gets block i
 		try {
 			for (let catIdx = 0; catIdx < newOrder.length; catIdx++) {
 				const groups = entries.filter((e) => e.superCategory === newOrder[catIdx]);
@@ -308,7 +287,7 @@ export const CategoryManager = ({
 						providerId,
 						contentType,
 						groups[gi].groupName,
-						catIdx * 1000 + gi
+						catIdx * CATEGORY_SORT_BLOCK + gi
 					);
 				}
 			}
@@ -319,7 +298,7 @@ export const CategoryManager = ({
 					providerId,
 					contentType,
 					uncatEntries[i].groupName,
-					newOrder.length * 1000 + i
+					newOrder.length * CATEGORY_SORT_BLOCK + i
 				);
 			}
 			await load();
