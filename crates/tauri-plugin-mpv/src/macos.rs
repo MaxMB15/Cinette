@@ -116,7 +116,7 @@ impl MacosGlRenderer {
             .as_raw();
 
         let ns_view_ptr = match raw {
-            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut c_void,
+            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
             _ => return Err("Expected AppKit window handle".to_string()),
         };
 
@@ -468,7 +468,7 @@ unsafe fn render_frame(inner_ptr: usize) {
                 cocoa::appkit::NSOpenGLContext::flushBuffer(ctx);
                 rc.report_swap();
                 let n = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
-                if n < 5 || n % 60 == 0 {
+                if n < 5 || n.is_multiple_of(60) {
                     tracing::debug!("[macOS renderer] frame presented (#{n})");
                 }
                 // Notify on first frame so the frontend can switch from opaque to transparent.
