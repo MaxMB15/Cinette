@@ -27,8 +27,12 @@ export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPla
 	const [entries, setEntries] = useState<WatchHistoryEntry[]>([]);
 
 	const load = useCallback(async () => {
-		const history = await getWatchHistory(50);
-		setEntries(history.filter((e) => e.contentType === contentType));
+		try {
+			const history = await getWatchHistory(50);
+			setEntries(history.filter((e) => e.contentType === contentType));
+		} catch (err) {
+			console.error("[RecentlyPlayedRow] failed to load watch history:", err);
+		}
 	}, [contentType]);
 
 	useEffect(() => {
@@ -65,15 +69,27 @@ export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPla
 		return deduped;
 	}, [entries, contentType, channels]);
 
-	const handleDismiss = async (e: React.MouseEvent, channelId: string) => {
-		e.stopPropagation();
-		await deleteHistoryEntry(channelId);
-		setEntries((prev) => prev.filter((entry) => entry.channelId !== channelId));
+	// The entry stays when the delete fails, so the row matches what a reload shows.
+	const handleDismiss = async (channelId: string) => {
+		try {
+			await deleteHistoryEntry(channelId);
+			setEntries((prev) => prev.filter((entry) => entry.channelId !== channelId));
+		} catch (err) {
+			console.error("[RecentlyPlayedRow] failed to delete history entry:", err);
+		}
 	};
 
 	const handleClearAll = async () => {
-		await Promise.allSettled(entries.map((entry) => deleteHistoryEntry(entry.channelId)));
-		setEntries([]);
+		const results = await Promise.allSettled(
+			entries.map((entry) => deleteHistoryEntry(entry.channelId))
+		);
+		const failed = new Set(
+			entries.filter((_, i) => results[i].status === "rejected").map((e) => e.channelId)
+		);
+		if (failed.size > 0) {
+			console.error(`[RecentlyPlayedRow] failed to delete ${failed.size} history entries`);
+		}
+		setEntries((prev) => prev.filter((entry) => failed.has(entry.channelId)));
 	};
 
 	if (displayEntries.length === 0) return null;
@@ -100,7 +116,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay, channels }: RecentlyPla
 								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity p-0.5"
 								onClick={(e) => {
 									e.stopPropagation();
-									handleDismiss(e, entry.channelId);
+									void handleDismiss(entry.channelId);
 								}}
 								aria-label={`Dismiss ${displayName}`}
 							>
