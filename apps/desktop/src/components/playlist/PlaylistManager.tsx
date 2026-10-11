@@ -10,16 +10,9 @@ import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { AddProvider } from "./AddProvider";
 import { ProviderSettingsModal } from "./ProviderSettingsModal";
 import { useChannels } from "@/hooks/useChannels";
+import { displayUrl, isFileUrl } from "@/lib/file-url";
 import type { Provider } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const displayUrl = (url: string): string => {
-	if (url.startsWith("file://")) {
-		const path = url.slice(7);
-		return path.split("/").pop() || path;
-	}
-	return url;
-};
 
 export const PlaylistManager = () => {
 	const {
@@ -94,7 +87,7 @@ export const PlaylistManager = () => {
 					<h2 className="text-lg font-semibold">Your Providers</h2>
 					{providers.map((p) => {
 						const isRefreshing = refreshingIds.has(p.id);
-						const isFile = p.url.startsWith("file://");
+						const isFile = isFileUrl(p.url);
 						return (
 							<Card key={p.id}>
 								<CardHeader className="py-4">

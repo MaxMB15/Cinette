@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
+import { filenameFromPath, isPlaylistFile, nameFromFilename } from "@/lib/file-url";
 import { isMobilePlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -20,13 +21,6 @@ interface AddProviderProps {
 	onAddM3uFile: (name: string, path: string) => Promise<void>;
 	onAddXtream: (name: string, url: string, username: string, password: string) => Promise<void>;
 }
-
-const filenameFromPath = (path: string): string => {
-	const parts = path.replace(/\\/g, "/").split("/");
-	return parts[parts.length - 1] || path;
-};
-
-const nameFromFilename = (filename: string): string => filename.replace(/\.(m3u8?|txt)$/i, "");
 
 export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProviderProps) => {
 	const { layoutMode } = usePlatform();
@@ -49,7 +43,7 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 
 	const acceptFileDrop = useCallback(
 		(paths: string[]) => {
-			const m3uPath = paths.find((p) => /\.(m3u8?|txt)$/i.test(p));
+			const m3uPath = paths.find(isPlaylistFile);
 			if (!m3uPath) {
 				setError("Please drop an .m3u or .m3u8 file");
 				return;

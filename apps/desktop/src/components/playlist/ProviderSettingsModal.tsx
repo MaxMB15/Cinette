@@ -6,6 +6,7 @@ import { X, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { fileUrlFromPath, isFileUrl, pathFromFileUrl } from "@/lib/file-url";
 import { cn } from "@/lib/utils";
 import type { Provider } from "@/lib/types";
 import {
@@ -59,12 +60,12 @@ export const ProviderSettingsModal = ({
 }: ProviderSettingsModalProps) => {
 	const titleId = useId();
 	const initial = loadProviderSettings(provider.id);
-	const isFile = provider.url.startsWith("file://");
+	const isFile = isFileUrl(provider.url);
 	const isXtream = provider.type === "xtream";
 
 	// Details fields
 	const [name, setName] = useState(provider.name);
-	const [url, setUrl] = useState(isFile ? provider.url.slice(7) : provider.url);
+	const [url, setUrl] = useState(pathFromFileUrl(provider.url));
 	const [username, setUsername] = useState(provider.username ?? "");
 	const [password, setPassword] = useState(provider.password ?? "");
 
@@ -141,7 +142,7 @@ export const ProviderSettingsModal = ({
 		setSaveError(null);
 		try {
 			// Update credentials if anything changed
-			const storedUrl = isFile ? `file://${url}` : url;
+			const storedUrl = isFile ? fileUrlFromPath(url) : url;
 			const credentialsChanged =
 				name !== provider.name ||
 				storedUrl !== provider.url ||
