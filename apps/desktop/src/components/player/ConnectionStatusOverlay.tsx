@@ -135,11 +135,14 @@ export const ConnectionStatusOverlay = ({
 		},
 	}[status];
 
+	// Inset from both sides and centered with auto margins, so a phone gets
+	// nearly its full width. With left-1/2 the banner could only use half. The
+	// top clears the notch or Dynamic Island.
 	return (
 		<div
 			role="status"
 			aria-live="polite"
-			className={`absolute top-6 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-xl border ${config.container} px-4 py-3 shadow-lg backdrop-blur-md max-w-md`}
+			className={`absolute left-4 right-4 top-[calc(1.5rem_+_env(safe-area-inset-top))] z-50 mx-auto w-fit max-w-md flex items-center gap-3 rounded-xl border ${config.container} px-4 py-3 shadow-lg backdrop-blur-md`}
 		>
 			<div
 				className={`flex h-9 w-9 items-center justify-center rounded-full ${config.iconWrap}`}
