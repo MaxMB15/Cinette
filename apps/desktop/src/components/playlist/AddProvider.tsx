@@ -8,7 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
 import { Loader2, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
-import { filenameFromPath, isPlaylistFile, nameFromFilename } from "@/lib/file-url";
+import {
+	filenameFromPath,
+	isPlaylistFile,
+	nameFromFilename,
+	PLAYLIST_EXTENSIONS,
+} from "@/lib/file-url";
 import { isMobilePlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -48,6 +53,20 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 	const showDragDrop = layoutMode === "desktop" && !isMobilePlatform();
 	const showFileBrowse = layoutMode !== "tv";
 
+	// A picked or dropped file names the provider unless the user typed a name.
+	const selectFile = useCallback(
+		(path: string) => {
+			const fname = filenameFromPath(path);
+			setFilePath(path);
+			setFileName(fname);
+			setError(null);
+			if (!name) {
+				setName(nameFromFilename(fname));
+			}
+		},
+		[name]
+	);
+
 	const acceptFileDrop = useCallback(
 		(paths: string[]) => {
 			const m3uPath = paths.find(isPlaylistFile);
@@ -55,17 +74,11 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 				setError("Please drop an .m3u or .m3u8 file");
 				return;
 			}
-			setError(null);
-			const fname = filenameFromPath(m3uPath);
-			setFilePath(m3uPath);
-			setFileName(fname);
+			selectFile(m3uPath);
 			setM3uMode("file");
 			setTab("m3u");
-			if (!name) {
-				setName(nameFromFilename(fname));
-			}
 		},
-		[name]
+		[selectFile]
 	);
 
 	useEffect(() => {
@@ -93,23 +106,15 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 				filters: [
 					{
 						name: "M3U Playlist",
-						extensions: ["m3u", "m3u8", "txt"],
+						extensions: PLAYLIST_EXTENSIONS,
 					},
 				],
 			});
-			if (selected) {
-				const fname = filenameFromPath(selected);
-				setFilePath(selected);
-				setFileName(fname);
-				setError(null);
-				if (!name) {
-					setName(nameFromFilename(fname));
-				}
-			}
+			if (selected) selectFile(selected);
 		} catch (e) {
 			setError(String(e));
 		}
-	}, [name]);
+	}, [selectFile]);
 
 	const clearFile = useCallback(() => {
 		setFilePath(null);

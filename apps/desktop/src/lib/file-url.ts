@@ -5,8 +5,10 @@
 // provider's url field with remote playlists.
 const FILE_SCHEME = "file://";
 
-// The same extensions the file picker offers.
-const PLAYLIST_EXTENSION = /\.(m3u8?|txt)$/i;
+/** The extensions the file picker offers, without the dot. */
+export const PLAYLIST_EXTENSIONS = ["m3u", "m3u8", "txt"];
+
+const PLAYLIST_EXTENSION = new RegExp(`\\.(${PLAYLIST_EXTENSIONS.join("|")})$`, "i");
 
 export const isFileUrl = (url: string): boolean => url.startsWith(FILE_SCHEME);
 
