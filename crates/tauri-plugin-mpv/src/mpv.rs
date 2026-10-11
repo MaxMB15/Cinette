@@ -302,6 +302,12 @@ impl MpvState {
 
         let attach_result = {
             let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            // Start without video if the app is in the background. This is
+            // read with the engine locked, so the lifecycle job that turns
+            // video back on can only run after mpv exists.
+            if crate::ios::in_background() {
+                options.push(("vid", "no"));
+            }
             match engine.create(&options) {
                 Ok(mpv) => metal_renderer.attach(mpv),
                 Err(e) => Err(e),
