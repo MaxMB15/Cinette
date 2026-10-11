@@ -20,7 +20,13 @@ vi.mock("@/lib/tauri", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
 import { CategoryManager } from "./CategoryManager";
-import { categorizeProvider, getGeminiApiKey, getGroupHierarchy } from "@/lib/tauri";
+import {
+	categorizeProvider,
+	getGeminiApiKey,
+	getGroupHierarchy,
+	renameSuperCategory,
+	updateGroupHierarchyEntry,
+} from "@/lib/tauri";
 
 const channel = (name: string, groupTitle: string, contentType: Channel["contentType"]) =>
 	({
@@ -33,23 +39,27 @@ const channel = (name: string, groupTitle: string, contentType: Channel["content
 		sources: [],
 	}) satisfies Channel;
 
-const entry = (groupName: string, superCategory: string | null): GroupHierarchyEntry => ({
+const entry = (
+	groupName: string,
+	superCategory: string | null,
+	sortOrder = 0
+): GroupHierarchyEntry => ({
 	providerId: "p1",
 	contentType: "movie",
 	groupName,
 	superCategory,
-	sortOrder: 0,
+	sortOrder,
 	isUserOverride: false,
 });
 
-const renderManager = (channels: Channel[] = []) =>
+const renderManager = (channels: Channel[] = [], onHierarchyChanged = vi.fn()) =>
 	render(
 		<CategoryManager
 			providerId="p1"
 			contentType="movie"
 			channels={channels}
 			onClose={vi.fn()}
-			onHierarchyChanged={vi.fn()}
+			onHierarchyChanged={onHierarchyChanged}
 		/>
 	);
 
@@ -77,6 +87,59 @@ describe("CategoryManager", () => {
 		expect(categorizeProvider).toHaveBeenCalledWith("p1", "movie", "key", [
 			["Action", ["Heat", "Die Hard"]],
 		]);
+	});
+
+	it("asks for a Gemini key before calling the AI", async () => {
+		vi.mocked(getGeminiApiKey).mockResolvedValue(null);
+		renderManager([channel("Heat", "Action", "movie")]);
+		fireEvent.click(await screen.findByRole("button", { name: /Re-categorize All/ }));
+
+		expect(await screen.findByText(/No Gemini API key configured/)).toBeTruthy();
+		expect(categorizeProvider).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: /Re-categorize All/ })).toBeTruthy();
+	});
+
+	it("moves a group to the end of another category and reloads", async () => {
+		vi.mocked(getGroupHierarchy).mockResolvedValue([
+			entry("Action", "Genres", 0),
+			entry("Comedy", "Genres", 1),
+			entry("UK", "Countries", 0),
+			entry("US", "Countries", 4),
+		]);
+		const onHierarchyChanged = vi.fn();
+		renderManager([], onHierarchyChanged);
+
+		const chip = await screen.findByRole("button", { name: "Action" });
+		fireEvent.click(chip);
+		expect(chip.getAttribute("aria-pressed")).toBe("true");
+		fireEvent.click(screen.getByRole("button", { name: "Countries" }));
+
+		await waitFor(() => expect(screen.queryByText(/to:/)).toBeNull());
+		expect(updateGroupHierarchyEntry).toHaveBeenCalledWith(
+			"p1",
+			"movie",
+			"Action",
+			"Countries",
+			5
+		);
+		expect(getGroupHierarchy).toHaveBeenCalledTimes(2);
+		expect(onHierarchyChanged).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the rename open and shows the error when it fails", async () => {
+		vi.mocked(getGroupHierarchy).mockResolvedValue([entry("Action", "Genres")]);
+		vi.mocked(renameSuperCategory).mockRejectedValue("Name taken");
+		const onHierarchyChanged = vi.fn();
+		renderManager([], onHierarchyChanged);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
+		fireEvent.change(screen.getByDisplayValue("Genres"), { target: { value: "Kinds" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+
+		expect(await screen.findByText("Name taken")).toBeTruthy();
+		expect(renameSuperCategory).toHaveBeenCalledWith("p1", "movie", "Genres", "Kinds");
+		expect(screen.getByRole("button", { name: "Save name" })).toBeTruthy();
+		expect(onHierarchyChanged).not.toHaveBeenCalled();
 	});
 
 	it("writes its placeholder and progress text with an ellipsis character", async () => {
