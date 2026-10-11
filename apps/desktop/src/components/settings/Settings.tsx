@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { openUrl } from "@/lib/openUrl";
 import bmcQr from "@/assets/bmc-qr.png";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,7 @@ import {
 	writeHwdecEnabled,
 } from "@/lib/player-prefs";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { OMDB_KEY_FOCUS } from "@/components/channels/OmdbKeyHint";
 import { LegalNotices } from "./LegalNotices";
 import { DownloadHistoryDialog } from "./DownloadHistory";
 
@@ -114,6 +116,15 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [omdbTesting, setOmdbTesting] = useState(false);
 	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const omdbSectionRef = useRef<HTMLDivElement>(null);
+	const location = useLocation();
+
+	// The OMDb hint in an info sheet opens Settings at the key field.
+	useEffect(() => {
+		const state = location.state as { focus?: string } | null;
+		if (state?.focus !== OMDB_KEY_FOCUS.focus) return;
+		omdbSectionRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+	}, [location.state]);
 
 	// OpenSubtitles state
 	const [openSubtitlesKey, setOpenSubtitlesKey] = useState("");
@@ -520,7 +531,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						<CardTitle className="text-base">Integrations</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-4">
-						<div>
+						<div ref={omdbSectionRef}>
 							<p className="text-sm font-medium mb-1">OMDB API</p>
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">

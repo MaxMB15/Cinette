@@ -15,7 +15,9 @@ import {
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
+import { useHasOmdbKey } from "@/hooks/useHasOmdbKey";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { OmdbKeyHint } from "./OmdbKeyHint";
 
 interface MovieInfoDrawerProps {
 	movie: Channel;
@@ -43,6 +45,9 @@ export const MovieInfoDrawer = ({
 	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
 		prefetchedWhatsonData ?? null
 	);
+	const hasOmdbKey = useHasOmdbKey();
+	// Without OMDb data, wait for the key check too, so the hint doesn't flash.
+	const infoLoading = omdbLoading || (!omdbData && hasOmdbKey === null);
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
@@ -179,7 +184,7 @@ export const MovieInfoDrawer = ({
 
 					{/* Movie info */}
 					<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
-						{omdbLoading ? (
+						{infoLoading ? (
 							<div className="flex items-center gap-2 text-muted-foreground">
 								<Loader2 className="h-3.5 w-3.5 animate-spin" />
 								<span className="text-xs">Loading info…</span>
@@ -226,9 +231,12 @@ export const MovieInfoDrawer = ({
 								)}
 
 								{/* Fallback: no OMDB data */}
-								{!omdbData && (
-									<p className="text-xs text-muted-foreground">— · —</p>
-								)}
+								{!omdbData &&
+									(hasOmdbKey ? (
+										<p className="text-xs text-muted-foreground">— · —</p>
+									) : (
+										<OmdbKeyHint onNavigate={onClose} />
+									))}
 							</>
 						)}
 					</div>
