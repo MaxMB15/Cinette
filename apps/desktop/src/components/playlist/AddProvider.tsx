@@ -237,19 +237,27 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 												size="icon"
 												className="h-7 w-7 shrink-0"
 												onClick={clearFile}
+												aria-label="Clear selected file"
 											>
 												<X className="h-3.5 w-3.5" />
 											</Button>
 										</div>
 									) : (
 										<div
+											role="button"
+											tabIndex={0}
 											className={cn(
-												"flex flex-col items-center justify-center gap-2 p-6 rounded-lg border-2 border-dashed transition-colors cursor-pointer",
+												"flex flex-col items-center justify-center gap-2 p-6 rounded-lg border-2 border-dashed transition-colors cursor-pointer ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
 												isDragOver
 													? "border-primary bg-primary/10"
 													: "border-border hover:border-muted-foreground/50"
 											)}
 											onClick={handleBrowse}
+											onKeyDown={(e) => {
+												if (e.key !== "Enter" && e.key !== " ") return;
+												e.preventDefault();
+												handleBrowse();
+											}}
 										>
 											<Upload
 												className={cn(
