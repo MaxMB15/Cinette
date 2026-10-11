@@ -225,7 +225,6 @@ jobs:
           set -euo pipefail
           git add apps/desktop/src-tauri/tauri.conf.json \
                   apps/desktop/src-tauri/Cargo.toml \
-                  apps/desktop/src/components/settings/Settings.tsx \
                   Cargo.lock
           git commit -m "chore: bump version to $NEW"
 

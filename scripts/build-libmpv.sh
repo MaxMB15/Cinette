@@ -4,10 +4,11 @@
 
 set -euo pipefail
 
-# Build/download libmpv for target platform.
-# Output: libs/<platform>/ (workspace root — desktop uses macos/linux/windows, ios uses ios/, android uses android/)
+# Builds libmpv from source for the desktop app. iOS gets libmpv from MPVKit
+# through Swift Package Manager instead, so it has no case here.
+# Output: libs/<platform>/ at the repository root.
 #
-# Usage: ./scripts/build-libmpv.sh macos|ios|android
+# Usage: ./scripts/build-libmpv.sh macos|linux
 
 PLATFORM="${1:-}"
 LIBS_DIR="$(cd "$(dirname "$0")/.." && pwd)/libs"
@@ -92,25 +93,6 @@ case "$PLATFORM" in
     ln -sf libmpv.dylib "$LIBS_DIR/macos/libmpv.2.dylib"
     echo "    Built libmpv -> $LIBS_DIR/macos/libmpv.dylib"
     echo "    Done."
-    ;;
-
-  ios)
-    echo "==> Building libmpv for iOS (arm64)..."
-    mkdir -p "$LIBS_DIR/ios"
-    echo "    iOS static library build requires cross-compiling mpv + ffmpeg"
-    echo "    for aarch64-apple-ios. Use mpv-build with iOS toolchain or"
-    echo "    download pre-built from: https://github.com/nichobi/iina-plus"
-    echo "    Place libmpv.a in libs/ios/ (for apps/ios)"
-    ;;
-
-  android)
-    echo "==> Building libmpv for Android..."
-    mkdir -p "$LIBS_DIR/android/arm64-v8a"
-    mkdir -p "$LIBS_DIR/android/armeabi-v7a"
-    echo "    Android .so build requires NDK cross-compilation."
-    echo "    Use mpv-android build scripts or download pre-built from:"
-    echo "    https://github.com/nichobi/mpv-android"
-    echo "    Place libmpv.so in libs/android/<abi>/ (for apps/android)"
     ;;
 
   linux)
@@ -236,9 +218,9 @@ case "$PLATFORM" in
     ;;
 
   *)
-    echo "Usage: $0 {macos|linux|ios|android}"
+    echo "Usage: $0 {macos|linux}"
     echo ""
-    echo "Downloads or builds libmpv for the target platform."
+    echo "Builds libmpv for the target platform."
     echo "Output goes to libs/<platform>/"
     exit 1
     ;;

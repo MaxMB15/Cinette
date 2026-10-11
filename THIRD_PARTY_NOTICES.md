@@ -138,4 +138,4 @@ The iOS app gets libmpv, the FFmpeg libraries and the libraries below from relea
 
 ## Rust crates and npm packages
 
-Max Video Player is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [apps/desktop/package-lock.json](apps/desktop/package-lock.json) list every one, with the exact version.
+Max Video Player is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [package-lock.json](package-lock.json) list every one, with the exact version.

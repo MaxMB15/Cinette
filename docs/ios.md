@@ -7,7 +7,7 @@ through libmpv from [MPVKit](https://github.com/mpvkit/MPVKit) release
 they do on desktop. The app needs iOS or iPadOS 17.5 and ships through TestFlight and
 then the App Store.
 
-The plan behind the port is in [`apps/ios/DESIGN.md`](../apps/ios/DESIGN.md).
+How the iOS pieces fit together is in [architecture.md](architecture.md#ios).
 
 ## How it differs from desktop
 
@@ -235,3 +235,18 @@ and signing through the key needs Admin.
   server and no analytics. Requests for metadata, subtitles and category sorting go
   straight from the device to those services, with the user's own keys where one is
   needed.
+
+## Licensing
+
+The App Store's terms add restrictions that GPLv3 forbids, so a third party can't
+put GPL code on the store. The copyright owner can, because the owner isn't bound
+by their own license, and the [contributor agreement](../CLA.md) gives the owner
+the rights to ship contributions too.
+
+That only holds while nobody else's GPL code is in the iOS build:
+
+- Use the `MPVKit` product, never `MPVKit-GPL`.
+- Add no other GPL dependencies.
+
+The LGPL requires that users can relink the app with a changed library. The full
+source is public, so anyone can rebuild it.
