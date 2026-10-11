@@ -6,7 +6,6 @@ use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
-use mvp_core::downloads::redact::redact_credentials;
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
 use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
@@ -37,9 +36,9 @@ pub async fn load_m3u_playlist(
     url: String,
 ) -> Result<Vec<Channel>, String> {
     tracing::info!(
-        "[IPTV] loading M3U playlist name={:?} url={}",
+        "[IPTV] loading M3U playlist name={:?} from {}",
         name,
-        redact_credentials(&url)
+        mvp_core::http::origin_for_log(&url)
     );
     let playlist = fetch_and_parse_m3u_with_epg(&url)
         .await
@@ -372,7 +371,7 @@ pub async fn refresh_epg(
         return Err("No EPG URL configured for this provider".into());
     };
 
-    tracing::info!("[EPG] fetching EPG from {}", redact_credentials(&url));
+    tracing::info!("[EPG] fetching EPG from {}", mvp_core::http::origin_for_log(&url));
     let epg_data = fetch_and_parse_epg(&url)
         .await
         .map_err(|e| format!("Failed to fetch EPG: {e}"))?;

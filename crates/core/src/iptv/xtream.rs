@@ -273,8 +273,8 @@ impl XtreamClient {
 }
 
 /// Authenticate then fetch all 6 Xtream endpoints simultaneously (3 stream lists + 3 category
-/// lists). Each fetch is independent; partial failures are tolerated so a server that supports
-/// only some endpoints still returns what it can.
+/// lists). Each fetch is independent. A failed one is logged and skipped, so a server that
+/// supports only some endpoints still returns what it can.
 pub async fn fetch_xtream_channels(
     server: &str,
     username: &str,
@@ -292,6 +292,13 @@ pub async fn fetch_xtream_channels(
         client.fetch_series_raw(),
         client.get_categories("get_series_categories"),
     );
+
+    warn_if_failed("get_live_streams", &live_streams_r);
+    warn_if_failed("get_live_categories", &live_cats_r);
+    warn_if_failed("get_vod_streams", &vod_streams_r);
+    warn_if_failed("get_vod_categories", &vod_cats_r);
+    warn_if_failed("get_series", &series_r);
+    warn_if_failed("get_series_categories", &series_cats_r);
 
     let live_cats = live_cats_r.unwrap_or_default();
     let vod_cats = vod_cats_r.unwrap_or_default();
@@ -334,6 +341,14 @@ pub async fn fetch_xtream_channels(
     }
 
     Ok(all)
+}
+
+/// Logs an endpoint that failed. The errors carry no URL, so the login stays out
+/// of the log.
+fn warn_if_failed<T>(action: &str, result: &Result<T, XtreamError>) {
+    if let Err(e) = result {
+        tracing::warn!("[Xtream] {action} failed: {e}");
+    }
 }
 
 fn live_channel(

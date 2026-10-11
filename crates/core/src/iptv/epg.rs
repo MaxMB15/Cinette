@@ -20,6 +20,10 @@ pub enum EpgError {
     /// The download failed or the server answered with an error status.
     #[error("network error: {0}")]
     Network(#[source] reqwest::Error),
+    /// The server answered without any programmes, such as an empty body or
+    /// an "account expired" page.
+    #[error("the guide has no programmes")]
+    Empty,
 }
 
 // Request URLs can carry API keys and logins, so they are dropped before the
@@ -219,8 +223,8 @@ pub async fn fetch_and_parse_epg(url: &str) -> Result<EpgData, EpgError> {
 }
 
 async fn fetch_epg(client: &reqwest::Client, url: &str) -> Result<EpgData, EpgError> {
-    // An error page parses as a guide with no programmes, and saving that would
-    // wipe the guide the user already has.
+    // An error page or an empty reply parses as a guide with no programmes, and
+    // saving that would wipe the guide the user already has.
     let body = client
         .get(url)
         .send()
@@ -228,7 +232,11 @@ async fn fetch_epg(client: &reqwest::Client, url: &str) -> Result<EpgData, EpgEr
         .error_for_status()?
         .text()
         .await?;
-    parse_epg(&body)
+    let data = parse_epg(&body)?;
+    if data.programs.is_empty() {
+        return Err(EpgError::Empty);
+    }
+    Ok(data)
 }
 
 /// Convert parsed EpgData into StoredEpgPrograms ready for DB insertion.
@@ -266,13 +274,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reply_without_programmes_is_not_saved_as_an_empty_guide() {
+        for body in [
+            "",
+            "<html><body>Account expired</body></html>",
+            r#"{"user_info":{"auth":0}}"#,
+            r#"<tv><channel id="c1"><display-name>One</display-name></channel></tv>"#,
+        ] {
+            let url = test_server::serve_once("200 OK", body);
+            let result = fetch_epg(&test_server::client(), &url).await;
+            assert!(
+                matches!(result, Err(EpgError::Empty)),
+                "{body:?}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_good_response_is_parsed() {
         let url = test_server::serve_once(
             "200 OK",
-            r#"<tv><channel id="c1"><display-name>One</display-name></channel></tv>"#,
+            r#"<tv><channel id="c1"><display-name>One</display-name></channel><programme start="20260304120000 +0000" stop="20260304130000 +0000" channel="c1"><title>News</title></programme></tv>"#,
         );
         let data = fetch_epg(&test_server::client(), &url).await.unwrap();
         assert_eq!(data.channels.len(), 1);
+        assert_eq!(data.programs.len(), 1);
     }
 
     #[test]

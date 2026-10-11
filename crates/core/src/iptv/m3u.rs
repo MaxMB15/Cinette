@@ -12,11 +12,19 @@ pub enum M3uError {
     #[error("invalid M3U format: missing #EXTM3U header")]
     MissingHeader,
     #[error("network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("parse error at line {line}: {message}")]
     Parse { line: usize, message: String },
+}
+
+// Playlist URLs often carry the login, so it is dropped before the error can
+// reach a log or the UI.
+impl From<reqwest::Error> for M3uError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 /// Parse an M3U playlist from an in-memory string.
@@ -488,6 +496,15 @@ fn group_movie_sources(channels: Vec<Channel>) -> Vec<Channel> {
 mod tests {
     use super::*;
     use std::io::BufReader;
+
+    #[test]
+    fn http_errors_leave_out_the_playlist_url() {
+        let err = M3uError::from(crate::http::error_with_url(
+            "unix:/get.php?username=u&password=SECRET&type=m3u_plus",
+        ));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
 
     #[test]
     fn test_parse_basic_m3u() {

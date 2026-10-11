@@ -14,8 +14,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const API_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// XMLTV guides and Xtream catalogues can be tens of megabytes on a slow server,
-/// so downloads get no total limit and fail only when the data stops arriving.
-const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// so downloads get no total limit, only this one on each wait for data.
+///
+/// The first wait runs from sending the request to the response headers, so it
+/// also covers the panel building its reply. Large panels can take minutes to
+/// build a full catalogue or guide before they send a byte.
+const READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 static USER_AGENT: OnceLock<String> = OnceLock::new();
 
@@ -60,6 +64,17 @@ pub fn client() -> &'static reqwest::Client {
 pub fn download_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| build(reqwest::Client::builder().read_timeout(READ_TIMEOUT)))
+}
+
+/// The scheme, host and port of `url`, for log lines.
+///
+/// IPTV panels put the login in the path, the query or before the host,
+/// depending on the panel, so logs get only the part that can't hold one.
+pub fn origin_for_log(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(parsed) => parsed.origin().ascii_serialization(),
+        Err(_) => "<unreadable URL>".to_string(),
+    }
 }
 
 fn build(builder: reqwest::ClientBuilder) -> reqwest::Client {
@@ -135,6 +150,18 @@ mod tests {
     #[test]
     fn user_agent_names_the_app_and_version() {
         assert_eq!(user_agent_for("1.2.3"), "MaxVideoPlayer/1.2.3");
+    }
+
+    #[test]
+    fn log_lines_get_only_the_server() {
+        for url in [
+            "http://host.test:8080/get.php?username=U&password=SECRET&type=m3u_plus",
+            "http://host.test:8080/playlist/U/SECRET/m3u_plus",
+            "http://U:SECRET@host.test:8080/list.m3u",
+        ] {
+            assert_eq!(origin_for_log(url), "http://host.test:8080", "{url}");
+        }
+        assert_eq!(origin_for_log("not a url SECRET"), "<unreadable URL>");
     }
 
     #[test]

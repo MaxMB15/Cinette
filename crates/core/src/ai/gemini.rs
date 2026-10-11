@@ -348,8 +348,8 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
     });
 
     tracing::info!(prompt_len = prompt.len(), "sending Gemini API request");
-    // Prompts list every group name in the playlist, which is too much for the
-    // default log.
+    // Prompts list every group name in the playlist, so they're logged only at
+    // the debug level. The desktop app turns that level on for mvp-core.
     tracing::debug!(prompt = %prompt, "Gemini prompt");
 
     let response = generate_request(api_key, &body).send().await.map_err(|e| {
@@ -393,17 +393,19 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
 /// Returns false when Google answers with an error status, and an error only
 /// when the request itself fails.
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
-    let response = list_models_request(api_key)
-        .send()
-        .await
-        .map_err(request_error)?;
-    Ok(response.status().is_success())
+    match list_models_request(api_key).send().await {
+        Ok(response) => Ok(response.status().is_success()),
+        // A key with characters a header can't carry is no real key.
+        Err(e) if e.is_builder() => Ok(false),
+        Err(e) => Err(request_error(e)),
+    }
 }
 
+// Keys are pasted in, often with a trailing newline, and a header can't carry one.
 fn generate_request(api_key: &str, body: &serde_json::Value) -> reqwest::RequestBuilder {
     crate::http::client()
         .post(format!("{API_BASE}/models/{MODEL}:generateContent"))
-        .header(API_KEY_HEADER, api_key)
+        .header(API_KEY_HEADER, api_key.trim())
         .json(body)
         .timeout(GENERATE_TIMEOUT)
 }
@@ -411,7 +413,7 @@ fn generate_request(api_key: &str, body: &serde_json::Value) -> reqwest::Request
 fn list_models_request(api_key: &str) -> reqwest::RequestBuilder {
     crate::http::client()
         .get(format!("{API_BASE}/models"))
-        .header(API_KEY_HEADER, api_key)
+        .header(API_KEY_HEADER, api_key.trim())
 }
 
 // Request URLs can carry the API key, so they are dropped before the error can
@@ -517,6 +519,18 @@ mod tests {
         assert!(prompt.contains("Western Europe"));
         assert!(prompt.contains("Only assign a group if it CLEARLY belongs"));
         assert!(prompt.contains("Do NOT create new categories"));
+    }
+
+    #[test]
+    fn a_pasted_key_loses_its_surrounding_whitespace() {
+        let list = list_models_request("  SECRET\n").build().unwrap();
+        assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
+    }
+
+    #[tokio::test]
+    async fn a_key_no_header_can_carry_is_invalid() {
+        // The bad character stops the request before it reaches the network.
+        assert!(!test_gemini_key("SEC\nRET").await.unwrap());
     }
 
     #[test]
