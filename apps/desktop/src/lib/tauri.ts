@@ -410,3 +410,18 @@ export const setDownloadRetention = (days: number | null): Promise<number> =>
 
 export const countDownloadsDue = (days: number | null): Promise<number> =>
 	invoke("count_downloads_due", { days });
+
+/**
+ * Record the live channel `channelId` from `startAt` to `endAt`, in Unix
+ * seconds. A start that has passed records from now.
+ */
+export const scheduleRecording = (
+	channelId: string,
+	startAt: number,
+	endAt: number,
+	programTitle: string | null
+): Promise<DownloadRecord> =>
+	invoke("schedule_recording", { channelId, startAt, endAt, programTitle });
+
+/** Stop a recording and keep what it recorded, or cancel one that hasn't started. */
+export const stopRecording = (id: string): Promise<void> => invoke("stop_recording", { id });

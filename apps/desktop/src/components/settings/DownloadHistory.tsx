@@ -11,9 +11,14 @@ const fmtRate = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).to
 const fmtTime = (t: number | null) => (t == null ? "—" : new Date(t * 1000).toLocaleString());
 
 const statusCell = (d: DownloadRecord) => {
+	if (d.status === "completed" && d.kind === "recording" && d.error)
+		return <span className="text-amber-500">Ended early. {d.error}</span>;
 	if (d.status === "completed") return <span className="text-emerald-500">Done</span>;
 	if (d.status === "failed")
-		return <span className="text-red-400">Failed{d.error ? ` — ${d.error}` : ""}</span>;
+		return <span className="text-red-400">Failed{d.error ? `. ${d.error}` : ""}</span>;
+	if (d.status === "missed") return <span className="text-amber-500">Missed</span>;
+	if (d.status === "scheduled") return <span className="text-muted-foreground">Scheduled</span>;
+	if (d.status === "recording") return <span className="text-red-400">Recording</span>;
 	if (d.status === "downloading") {
 		const pct = d.totalBytes ? Math.round((d.downloadedBytes / d.totalBytes) * 100) : null;
 		return <span className="text-blue-400">{pct == null ? "…" : `${pct}%`}</span>;

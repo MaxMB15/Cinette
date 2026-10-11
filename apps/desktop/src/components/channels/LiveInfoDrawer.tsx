@@ -2,10 +2,17 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Tv2, Loader2 } from "lucide-react";
-import type { Channel, EpgProgram } from "@/lib/types";
-import { getEpgProgrammes } from "@/lib/tauri";
+import { X, Tv2, Loader2, Circle, Square, CalendarClock } from "lucide-react";
+import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
+import { getEpgProgrammes, stopRecording } from "@/lib/tauri";
+import { isMobilePlatform } from "@/lib/platform";
+import { recordingOfProgram, runningRecordingOf } from "@/lib/recordings";
+import { useDownloads } from "@/hooks/useDownloads";
+import { RecordDialog, type RecordRequest } from "@/components/downloads/RecordDialog";
 import { EpgTimelineBar, WINDOW_PAST, WINDOW_FUTURE } from "./EpgTimelineBar";
+
+// Recording runs ffmpeg on the computer, so phones and tablets don't offer it.
+const RECORDING_SUPPORTED = !isMobilePlatform();
 
 interface LiveInfoDrawerProps {
 	channel: Channel;
@@ -30,6 +37,10 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 	const [selectedProg, setSelectedProg] = useState<EpgProgram | null>(null);
 	const currentRowRef = useRef<HTMLLIElement | null>(null);
+	const { downloads } = useDownloads();
+	const [recordRequest, setRecordRequest] = useState<RecordRequest | null>(null);
+	const running = RECORDING_SUPPORTED ? runningRecordingOf(downloads, channel.id) : undefined;
+	const onAir = programmes.find((p) => p.startTime <= now && p.endTime > now) ?? null;
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
@@ -134,6 +145,37 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 						</p>
 					</div>
 
+					{RECORDING_SUPPORTED &&
+						(running ? (
+							<button
+								onClick={() =>
+									setRecordRequest({ type: "stop", recording: running })
+								}
+								className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+							>
+								<Square className="h-3 w-3 fill-current" />
+								Stop recording
+							</button>
+						) : (
+							<button
+								onClick={() => setRecordRequest({ type: "now", onAir })}
+								className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium hover:bg-secondary/60 transition-colors shrink-0"
+							>
+								<Circle className="h-3 w-3 fill-red-500 text-red-500" />
+								Record
+							</button>
+						))}
+					{RECORDING_SUPPORTED && (
+						<button
+							onClick={() => setRecordRequest({ type: "range" })}
+							aria-label="Record a time range"
+							title="Record a time range"
+							className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+						>
+							<CalendarClock className="h-4 w-4" />
+						</button>
+					)}
+
 					<button
 						onClick={handleClose}
 						aria-label="Close"
@@ -207,10 +249,11 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 									<li
 										key={`${prog.channelId}-${prog.startTime}-${idx}`}
 										ref={isCurrent ? currentRowRef : null}
+										className="flex items-center gap-1"
 									>
 										<button
 											onClick={() => setSelectedProg(prog)}
-											className={`w-full flex items-center gap-3 py-2.5 px-3 rounded-lg mb-0.5 transition-colors text-left ${
+											className={`flex-1 min-w-0 flex items-center gap-3 py-2.5 px-3 rounded-lg mb-0.5 transition-colors text-left ${
 												isSelected
 													? "bg-primary/15"
 													: isCurrent
@@ -271,6 +314,29 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 												</span>
 											) : null}
 										</button>
+										{RECORDING_SUPPORTED && isPast && (
+											<span className="w-8 shrink-0" aria-hidden />
+										)}
+										{RECORDING_SUPPORTED && !isPast && (
+											<ProgramRecordButton
+												program={prog}
+												covering={recordingOfProgram(
+													downloads,
+													channel.id,
+													prog,
+													now
+												)}
+												onRecord={() =>
+													setRecordRequest({
+														type: "program",
+														program: prog,
+													})
+												}
+												onStop={(recording) =>
+													setRecordRequest({ type: "stop", recording })
+												}
+											/>
+										)}
 									</li>
 								);
 							})}
@@ -280,6 +346,72 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 
 				<div className="shrink-0 pb-2" />
 			</div>
+
+			{RECORDING_SUPPORTED && (
+				<RecordDialog
+					channel={channel}
+					request={recordRequest}
+					onClose={() => setRecordRequest(null)}
+				/>
+			)}
 		</div>
+	);
+};
+
+/**
+ * The record button on a program in the schedule. It records the program, or
+ * cancels or stops the recording that covers it.
+ */
+const ProgramRecordButton = ({
+	program,
+	covering,
+	onRecord,
+	onStop,
+}: {
+	program: EpgProgram;
+	covering: DownloadRecord | undefined;
+	onRecord: () => void;
+	onStop: (recording: DownloadRecord) => void;
+}) => {
+	const [error, setError] = useState<string | null>(null);
+	const base =
+		"shrink-0 h-8 w-8 mb-0.5 flex items-center justify-center rounded-lg transition-colors";
+
+	if (covering?.status === "recording") {
+		return (
+			<button
+				onClick={() => onStop(covering)}
+				aria-label={`Stop recording ${program.title}`}
+				title="Recording"
+				className={`${base} hover:bg-red-500/10`}
+			>
+				<span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+			</button>
+		);
+	}
+	if (covering) {
+		return (
+			<button
+				onClick={() => {
+					setError(null);
+					stopRecording(covering.id).catch((e) => setError(String(e)));
+				}}
+				aria-label={`Cancel the recording of ${program.title}`}
+				title={error ?? "Scheduled. Click to cancel."}
+				className={`${base} hover:bg-red-500/10`}
+			>
+				<Circle className="h-3 w-3 fill-red-500 text-red-500" />
+			</button>
+		);
+	}
+	return (
+		<button
+			onClick={onRecord}
+			aria-label={`Record ${program.title}`}
+			title="Record"
+			className={`${base} text-muted-foreground/50 hover:text-red-400 hover:bg-secondary/40`}
+		>
+			<Circle className="h-3 w-3" />
+		</button>
 	);
 };

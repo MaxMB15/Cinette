@@ -48,6 +48,7 @@ import { Select } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { useDownloads } from "@/hooks/useDownloads";
 import { RETENTION_OPTIONS } from "@/lib/retention";
+import { MARGIN_OPTIONS, readMargins, writeMargins } from "@/lib/recordings";
 import {
 	MAX_VOLUME,
 	readDefaultVolume,
@@ -155,6 +156,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [showDownloadHistory, setShowDownloadHistory] = useState(false);
 	const folderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const { retentionDays, setRetentionDays } = useDownloads();
+	const [margins, setMargins] = useState(readMargins);
 	/**
 	 * A shorter retention that would delete downloads at once, waiting on a
 	 * yes. `count` is null when counting failed.
@@ -363,6 +365,12 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		const clamped = Math.max(1, Math.min(10, Math.round(n)));
 		setConcurrency(clamped);
 		setDownloadConcurrency(clamped).catch(() => {});
+	};
+
+	const handleMarginChange = (side: "before" | "after", minutes: number) => {
+		const next = { ...margins, [side]: minutes };
+		setMargins(next);
+		writeMargins(next);
 	};
 
 	/** `value` is a choice from RETENTION_OPTIONS, where 0 means never delete. */
@@ -824,6 +832,37 @@ export const Settings = ({ updateState }: SettingsProps) => {
 									aria-label="Delete downloads after"
 									className="w-40"
 								/>
+							</div>
+
+							{/* Recording margins */}
+							<div>
+								<p className="text-sm font-medium mb-1">Recording margins</p>
+								<p className="text-xs text-muted-foreground mb-2">
+									A program you record from the guide starts early and runs over
+									by these amounts, in case the guide's times are off.
+								</p>
+								<div className="flex flex-wrap gap-4">
+									<div className="text-xs text-muted-foreground">
+										<p className="mb-1">Start early by</p>
+										<Select
+											value={margins.before}
+											onChange={(v) => handleMarginChange("before", v)}
+											options={MARGIN_OPTIONS}
+											aria-label="Start recordings early by"
+											className="w-36"
+										/>
+									</div>
+									<div className="text-xs text-muted-foreground">
+										<p className="mb-1">Run over by</p>
+										<Select
+											value={margins.after}
+											onChange={(v) => handleMarginChange("after", v)}
+											options={MARGIN_OPTIONS}
+											aria-label="Run recordings over by"
+											className="w-36"
+										/>
+									</div>
+								</div>
 							</div>
 
 							{/* History — opened in a wide popup (Settings is too narrow). */}
