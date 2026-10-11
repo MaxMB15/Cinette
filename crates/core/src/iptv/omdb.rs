@@ -184,17 +184,17 @@ pub async fn fetch_omdb(
     content_type: &str,
     api_key: &str,
 ) -> Result<OmdbData, OmdbError> {
-    let client = reqwest::Client::new();
+    let client = crate::http::client();
 
     if let Some(stripped) = strip_trailing_year(title) {
-        match do_fetch(&client, stripped, content_type, api_key).await {
+        match do_fetch(client, stripped, content_type, api_key).await {
             Ok(data) => return Ok(data),
             Err(OmdbError::Api(_)) => { /* fall through to full title */ }
             Err(e) => return Err(e),
         }
     }
 
-    do_fetch(&client, title, content_type, api_key).await
+    do_fetch(client, title, content_type, api_key).await
 }
 
 #[cfg(test)]

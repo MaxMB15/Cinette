@@ -190,8 +190,7 @@ pub async fn fetch_mdblist(
     media_type: &str,
     api_key: &str,
 ) -> Result<MdbListData, MdbListError> {
-    let client = reqwest::Client::new();
-    let response = client
+    let response = crate::http::client()
         .get("https://mdblist.com/api/")
         .query(&[("apikey", api_key), ("i", imdb_id), ("m", media_type)])
         .send()

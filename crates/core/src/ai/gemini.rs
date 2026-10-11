@@ -3,6 +3,11 @@
 
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::time::Duration;
+
+/// Sorting a large playlist makes a long prompt, and the model can take minutes
+/// to answer it.
+const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub struct CategorizedGroup {
@@ -323,11 +328,16 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
         "sending Gemini API request"
     );
 
-    let client = reqwest::Client::new();
-    let response = client.post(&url).json(&body).send().await.map_err(|e| {
-        tracing::error!(error = %e, "Gemini API request failed");
-        GeminiError::Api(e.to_string())
-    })?;
+    let response = crate::http::client()
+        .post(&url)
+        .json(&body)
+        .timeout(GENERATE_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Gemini API request failed");
+            GeminiError::Api(e.to_string())
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -364,8 +374,7 @@ pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
         "https://generativelanguage.googleapis.com/v1beta/models?key={}",
         api_key
     );
-    let client = reqwest::Client::new();
-    let response = client
+    let response = crate::http::client()
         .get(&url)
         .send()
         .await

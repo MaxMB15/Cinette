@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// The API runs on a host that sleeps when idle, and the first request after a
+/// quiet spell can take most of a minute while it wakes up.
+const WAKE_UP_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Enriched metadata from the whatson-api (aggregates ratings from 13+ platforms).
 /// All fields optional as the API may omit any of them.
@@ -194,10 +200,10 @@ pub fn parse_whatson_response(json: serde_json::Value) -> Result<WhatsonData, Wh
 /// Fetch whatson-api data for the given IMDB ID.
 /// `item_type` should be `"movie"` or `"tvshow"`.
 pub async fn fetch_whatson(imdb_id: &str, item_type: &str) -> Result<WhatsonData, WhatsonError> {
-    let client = reqwest::Client::new();
-    let response = client
+    let response = crate::http::client()
         .get("https://whatson-api.onrender.com/")
         .query(&[("imdbId", imdb_id), ("item_type", item_type)])
+        .timeout(WAKE_UP_TIMEOUT)
         .send()
         .await?;
 

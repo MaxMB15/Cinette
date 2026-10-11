@@ -97,13 +97,6 @@ fn extract_extension(file_name: &str) -> String {
         .to_lowercase()
 }
 
-fn build_client() -> Result<reqwest::Client, OpenSubtitlesError> {
-    reqwest::Client::builder()
-        .user_agent("MaxVideoPlayer/0.1.0")
-        .build()
-        .map_err(OpenSubtitlesError::Http)
-}
-
 /// Parse a raw search API JSON value into a `SubtitleSearchResult`.
 /// Separated from the HTTP call for unit testing.
 pub fn parse_search_response(
@@ -184,7 +177,7 @@ pub async fn search_subtitles(
         }
     }
 
-    let client = build_client()?;
+    let client = crate::http::client();
     let response = client
         .get("https://api.opensubtitles.com/api/v1/subtitles")
         .query(&query)
@@ -217,7 +210,7 @@ pub async fn download_subtitle(
     }
 
     // Step 1: POST /download to get a pre-signed download link.
-    let client = build_client()?;
+    let client = crate::http::client();
     let post_body = serde_json::json!({ "file_id": file_id });
 
     let dl_response: DownloadResponse = client

@@ -194,7 +194,12 @@ fn parse_epg_time(raw: &str) -> i64 {
 
 /// Fetch XMLTV EPG data from a URL and parse it.
 pub async fn fetch_and_parse_epg(url: &str) -> Result<EpgData, EpgError> {
-    let body = reqwest::get(url).await?.text().await?;
+    let body = crate::http::download_client()
+        .get(url)
+        .send()
+        .await?
+        .text()
+        .await?;
     parse_epg(&body)
 }
 

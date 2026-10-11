@@ -4,5 +4,6 @@
 pub mod ai;
 pub mod cache;
 pub mod downloads;
+pub mod http;
 pub mod iptv;
 pub mod models;

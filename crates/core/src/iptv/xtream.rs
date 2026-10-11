@@ -145,14 +145,14 @@ fn coerce_u64(v: &serde_json::Value) -> Option<u64> {
 
 pub struct XtreamClient {
     credentials: XtreamCredentials,
-    client: reqwest::Client,
+    client: &'static reqwest::Client,
 }
 
 impl XtreamClient {
     pub fn new(credentials: XtreamCredentials) -> Self {
         Self {
             credentials,
-            client: reqwest::Client::new(),
+            client: crate::http::download_client(),
         }
     }
 
