@@ -78,6 +78,12 @@ export const SubtitlePicker = ({
 	const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const holdStartRef = useRef<number>(0);
 	const holdDirectionRef = useRef<1 | -1>(1);
+	// The hold timer outlives the render that started it, so it reads the delay
+	// from here. Each step writes an absolute value, so a stale one would repeat.
+	const delayRef = useRef(subtitleDelay);
+	useEffect(() => {
+		delayRef.current = subtitleDelay;
+	}, [subtitleDelay]);
 
 	// ── Click-outside to close ──────────────────────────────────────────────
 	useEffect(() => {
@@ -168,14 +174,18 @@ export const SubtitlePicker = ({
 		}
 	};
 
+	const stepDelay = (delta: number) => {
+		const next = Math.round((delayRef.current + delta) * 10) / 10;
+		delayRef.current = next;
+		onDelayChange?.(next);
+	};
+
 	const scheduleNextStep = () => {
 		const elapsed = Date.now() - holdStartRef.current;
 		const step = getDelayStep(elapsed);
 		const interval = getDelayInterval(elapsed);
 		holdTimerRef.current = setTimeout(() => {
-			onDelayChange?.(
-				Math.round((subtitleDelay + holdDirectionRef.current * step) * 10) / 10
-			);
+			stepDelay(holdDirectionRef.current * step);
 			scheduleNextStep();
 		}, interval);
 	};
@@ -183,7 +193,7 @@ export const SubtitlePicker = ({
 	const startHold = (direction: 1 | -1) => {
 		holdDirectionRef.current = direction;
 		holdStartRef.current = Date.now();
-		onDelayChange?.(Math.round((subtitleDelay + direction * getDelayStep(0)) * 10) / 10);
+		stepDelay(direction * getDelayStep(0));
 		scheduleNextStep();
 	};
 
