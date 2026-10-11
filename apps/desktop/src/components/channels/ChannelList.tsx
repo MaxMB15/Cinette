@@ -24,7 +24,7 @@ import { NoSearchResults } from "./NoSearchResults";
 import { DownloadsTab } from "./DownloadsTab";
 import { isMobilePlatform } from "@/lib/platform";
 import { usePlatform } from "@/hooks/usePlatform";
-import { getGridMarks, toPct, formatHHMM } from "./EpgTimelineBar";
+import { getGridMarks, toPct, formatHHMM } from "@/lib/epg-window";
 import { useChannels } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
