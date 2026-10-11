@@ -67,7 +67,6 @@ impl From<reqwest::Error> for MdbListError {
 
 /// Raw top-level MDBList API response (deserialization only).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct MdbListApiResponse {
     // Error shape: { "error": true, "message": "..." }
     error: Option<serde_json::Value>,

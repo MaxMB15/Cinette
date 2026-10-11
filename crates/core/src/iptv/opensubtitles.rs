@@ -51,14 +51,10 @@ impl From<reqwest::Error> for OpenSubtitlesError {
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     data: Vec<SubtitleItem>,
-    #[allow(dead_code)]
-    total_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SubtitleItem {
-    #[allow(dead_code)]
-    id: Option<String>,
     attributes: SubtitleAttributes,
 }
 
@@ -73,8 +69,6 @@ struct SubtitleAttributes {
 #[derive(Debug, Deserialize)]
 struct SubtitleFile {
     file_id: Option<i64>,
-    #[allow(dead_code)]
-    cd_number: Option<i64>,
     file_name: Option<String>,
 }
 
@@ -82,10 +76,6 @@ struct SubtitleFile {
 struct DownloadResponse {
     link: String,
     file_name: String,
-    #[allow(dead_code)]
-    requests: Option<i64>,
-    #[allow(dead_code)]
-    remaining: Option<i64>,
 }
 
 // --- Helpers ---

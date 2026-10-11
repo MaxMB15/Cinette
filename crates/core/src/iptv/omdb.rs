@@ -42,7 +42,6 @@ impl From<reqwest::Error> for OmdbError {
 
 /// Raw OMDB API response shape (for deserialization only).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct OmdbApiResponse {
     #[serde(rename = "Response")]
     response: String,
