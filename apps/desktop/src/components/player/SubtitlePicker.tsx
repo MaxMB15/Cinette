@@ -199,6 +199,12 @@ export const SubtitlePicker = ({
 
 	const stopHold = () => clearHoldTimer();
 
+	// A mouse press already stepped in startHold. A click with no pointer press
+	// behind it comes from Enter, Space or a screen reader, so step once here.
+	const stepOnKeyboardClick = (direction: 1 | -1) => (e: React.MouseEvent) => {
+		if (e.detail === 0) stepDelay(direction * getDelayStep(0));
+	};
+
 	// ─── Helpers ────────────────────────────────────────────────────────────
 	const formatDelay = (d: number) => {
 		if (d === 0) return "0.0s";
@@ -253,6 +259,7 @@ export const SubtitlePicker = ({
 											onFontSizeChange?.(Math.max(12, subtitleFontSize - 2))
 										}
 										className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white text-xs font-bold"
+										aria-label="Smaller subtitles"
 									>
 										A−
 									</button>
@@ -264,6 +271,7 @@ export const SubtitlePicker = ({
 											onFontSizeChange?.(Math.min(40, subtitleFontSize + 2))
 										}
 										className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white text-sm font-bold"
+										aria-label="Larger subtitles"
 									>
 										A+
 									</button>
@@ -286,6 +294,8 @@ export const SubtitlePicker = ({
 									onMouseDown={() => startHold(-1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
+									onClick={stepOnKeyboardClick(-1)}
+									aria-label="Decrease subtitle delay"
 								>
 									−
 								</button>
@@ -297,6 +307,8 @@ export const SubtitlePicker = ({
 									onMouseDown={() => startHold(1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
+									onClick={stepOnKeyboardClick(1)}
+									aria-label="Increase subtitle delay"
 								>
 									+
 								</button>
@@ -341,6 +353,7 @@ export const SubtitlePicker = ({
 						<button
 							onClick={onClose}
 							className="p-1 rounded text-white/50 hover:text-white hover:bg-white/10"
+							aria-label="Close"
 						>
 							<X className="h-4 w-4" />
 						</button>

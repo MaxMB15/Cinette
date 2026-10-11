@@ -44,7 +44,7 @@ describe("SubtitlePicker delay buttons", () => {
 	it("keeps stepping while the button is held", () => {
 		render(<Harness />);
 		openSettings();
-		const plus = screen.getByText("+");
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
 
 		fireEvent.mouseDown(plus);
 		expect(screen.getByText("+0.1s")).toBeInTheDocument();
@@ -64,7 +64,7 @@ describe("SubtitlePicker delay buttons", () => {
 	it("steps backwards while minus is held", () => {
 		render(<Harness />);
 		openSettings();
-		const minus = screen.getByText("−");
+		const minus = screen.getByRole("button", { name: "Decrease subtitle delay" });
 
 		fireEvent.mouseDown(minus);
 		act(() => {
@@ -72,5 +72,46 @@ describe("SubtitlePicker delay buttons", () => {
 		});
 		fireEvent.mouseLeave(minus);
 		expect(screen.getByText("-0.2s")).toBeInTheDocument();
+	});
+
+	it("steps once for a keyboard click", () => {
+		render(<Harness />);
+		openSettings();
+		const plus = screen.getByRole("button", { name: "Increase subtitle delay" });
+
+		// Enter and Space fire a click with no press count and no mousedown.
+		fireEvent.click(plus, { detail: 0 });
+		expect(screen.getByText("+0.1s")).toBeInTheDocument();
+	});
+
+	it("does not step twice for a mouse click", () => {
+		render(<Harness />);
+		openSettings();
+		const minus = screen.getByRole("button", { name: "Decrease subtitle delay" });
+
+		fireEvent.mouseDown(minus);
+		fireEvent.mouseUp(minus);
+		fireEvent.click(minus, { detail: 1 });
+		expect(screen.getByText("-0.1s")).toBeInTheDocument();
+	});
+});
+
+describe("SubtitlePicker button names", () => {
+	afterEach(() => {
+		cleanup();
+	});
+
+	it("names the icon and symbol buttons", () => {
+		render(<Harness />);
+		expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+		openSettings();
+		for (const name of [
+			"Smaller subtitles",
+			"Larger subtitles",
+			"Decrease subtitle delay",
+			"Increase subtitle delay",
+		]) {
+			expect(screen.getByRole("button", { name })).toBeInTheDocument();
+		}
 	});
 });
