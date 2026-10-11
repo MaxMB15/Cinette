@@ -59,7 +59,8 @@ export const ProviderSettingsModal = ({
 	onUpdateProvider,
 }: ProviderSettingsModalProps) => {
 	const titleId = useId();
-	const initial = loadProviderSettings(provider.id);
+	// Only seeds the form state below, so storage is read once and not on every keystroke.
+	const [initial] = useState(() => loadProviderSettings(provider.id));
 	const isFile = isFileUrl(provider.url);
 	const isXtream = provider.type === "xtream";
 

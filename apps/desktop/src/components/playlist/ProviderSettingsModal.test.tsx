@@ -49,6 +49,15 @@ describe("ProviderSettingsModal", () => {
 		expect(dialog.contains(document.activeElement)).toBe(true);
 	});
 
+	it("reads the saved settings once, not on every render", () => {
+		const getItem = vi.spyOn(Storage.prototype, "getItem");
+		renderModal();
+		fireEvent.change(screen.getByDisplayValue("My IPTV"), { target: { value: "Renamed" } });
+		const reads = getItem.mock.calls.filter(([key]) => key === "provider-settings-p1");
+		expect(reads).toHaveLength(1);
+		getItem.mockRestore();
+	});
+
 	it("closes on Escape", () => {
 		const onClose = renderModal();
 		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
