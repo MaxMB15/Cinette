@@ -36,7 +36,7 @@ import {
 } from "@/lib/tauri";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
-import { categoriesByCount, dedupeByTitle } from "@/lib/channels";
+import { categoriesByCount, channelCountFor, dedupeByTitle } from "@/lib/channels";
 import { nowSeconds } from "@/lib/date";
 import type {
 	Channel,
@@ -811,18 +811,14 @@ export const ChannelList = () => {
 												groupCount: groups.length,
 												channelCount: groups.reduce(
 													(sum, g) =>
-														sum +
-														(categories.find((c) => c.name === g)
-															?.channelCount ?? 0),
+														sum + channelCountFor(categories, g),
 													0
 												),
 											};
 										})}
 										topLevelGroups={hierarchy.topLevelGroups.map((name) => ({
 											name,
-											channelCount:
-												categories.find((c) => c.name === name)
-													?.channelCount ?? 0,
+											channelCount: channelCountFor(categories, name),
 										}))}
 										onSelectCategory={(name) =>
 											setNavState({ level: "category", name })

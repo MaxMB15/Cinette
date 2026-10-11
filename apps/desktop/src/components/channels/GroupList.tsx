@@ -3,6 +3,7 @@
 
 import { Pin, PinOff, ChevronRight } from "lucide-react";
 import type { Category } from "@/lib/types";
+import { channelCountFor } from "@/lib/channels";
 
 interface GroupListProps {
 	groups: string[];
@@ -19,9 +20,6 @@ export const GroupList = ({
 	isPinned,
 	onTogglePin,
 }: GroupListProps) => {
-	const getChannelCount = (groupName: string) =>
-		categories.find((c) => c.name === groupName)?.channelCount ?? 0;
-
 	return (
 		<div className="px-4 pt-2 flex flex-col gap-1">
 			{groups.map((name) => (
@@ -41,7 +39,7 @@ export const GroupList = ({
 					<div className="flex items-center gap-2">
 						<span className="text-sm">{name}</span>
 						<span className="text-xs text-muted-foreground">
-							{getChannelCount(name)} ch
+							{channelCountFor(categories, name)} ch
 						</span>
 					</div>
 					<div className="flex items-center gap-2">
