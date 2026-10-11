@@ -22,6 +22,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Xtream logins that contain & or + now load (#105).
 - The Gemini key is sent in a request header instead of the request URL, and spaces or a line break pasted around it are ignored (#105).
 - Online lookups give up after a timeout instead of waiting forever on a server that stopped responding (#105).
+- Favorites, watch history, downloads and film details stay with the right Xtream channel when the provider adds or reorders channels. Before, they could move to a different channel, and a downloaded film could play in place of the one you picked (#107).
 
 ## [0.5.3] - 2026-10-09
 
