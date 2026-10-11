@@ -9,6 +9,7 @@ import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
+import { cn } from "@/lib/utils";
 
 /** Module-level cache of URLs that failed to load — persists across remounts from virtual list scrolling. */
 const brokenImageUrls = new Set<string>();
@@ -23,6 +24,43 @@ export const COMPACT_ROW_HEIGHT = 64;
 const aggregateToIcon = (
 	agg: "none" | "downloading" | "partial" | "complete"
 ): DownloadIconState => (agg === "none" ? "idle" : agg);
+
+/** The heart toggle each card variant shows. It stops the click so the row or
+ *  poster around it does not start playback too. */
+const FavoriteButton = ({
+	isFavorite,
+	onToggle,
+	className,
+	iconClassName,
+	idleIconClassName = "text-muted-foreground",
+}: {
+	isFavorite: boolean;
+	onToggle: () => void;
+	className: string;
+	iconClassName: string;
+	idleIconClassName?: string;
+}) => (
+	<button
+		type="button"
+		onClick={(e) => {
+			e.stopPropagation();
+			onToggle();
+		}}
+		className={cn(
+			"flex items-center justify-center shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+			className
+		)}
+		aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+	>
+		<Heart
+			className={cn(
+				"transition-colors",
+				iconClassName,
+				isFavorite ? "fill-current text-red-500" : idleIconClassName
+			)}
+		/>
+	</button>
+);
 
 interface ChannelCardProps {
 	channel: Channel;
@@ -118,25 +156,12 @@ const RowCardView = ({
 				</span>
 
 				{onToggleFavorite && (
-					<button
-						tabIndex={0}
-						onClick={(e) => {
-							e.stopPropagation();
-							onToggleFavorite(channel);
-						}}
-						className="h-6 w-6 flex items-center justify-center rounded hover:bg-accent shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-						aria-label={
-							channel.isFavorite ? "Remove from favorites" : "Add to favorites"
-						}
-					>
-						<Heart
-							className={`h-3 w-3 transition-colors ${
-								channel.isFavorite
-									? "fill-current text-red-500"
-									: "text-muted-foreground"
-							}`}
-						/>
-					</button>
+					<FavoriteButton
+						isFavorite={channel.isFavorite}
+						onToggle={() => onToggleFavorite(channel)}
+						className="h-6 w-6 rounded hover:bg-accent"
+						iconClassName="h-3 w-3"
+					/>
 				)}
 			</div>
 		</div>
@@ -240,20 +265,12 @@ const CompactRowCard = ({
 			</button>
 
 			{onToggleFavorite && (
-				<button
-					type="button"
-					onClick={() => onToggleFavorite(channel)}
-					className="h-11 w-11 -mr-2 flex items-center justify-center rounded-full shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-					aria-label={channel.isFavorite ? "Remove from favorites" : "Add to favorites"}
-				>
-					<Heart
-						className={`h-4 w-4 transition-colors ${
-							channel.isFavorite
-								? "fill-current text-red-500"
-								: "text-muted-foreground"
-						}`}
-					/>
-				</button>
+				<FavoriteButton
+					isFavorite={channel.isFavorite}
+					onToggle={() => onToggleFavorite(channel)}
+					className="h-11 w-11 -mr-2 rounded-full"
+					iconClassName="h-4 w-4"
+				/>
 			)}
 		</div>
 	);
@@ -348,21 +365,13 @@ const PosterCard = ({
 			    is not reachable on its own by screen readers. The extra pixel keeps
 			    it where it sat inside the poster's border. */}
 			{onToggleFavorite && (
-				<button
-					type="button"
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleFavorite(channel);
-					}}
-					className="absolute top-[5px] left-[5px] z-10 h-7 w-7 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors cursor-pointer"
-					aria-label={channel.isFavorite ? "Remove from favorites" : "Add to favorites"}
-				>
-					<Heart
-						className={`h-3.5 w-3.5 transition-colors ${
-							channel.isFavorite ? "fill-current text-red-500" : "text-white"
-						}`}
-					/>
-				</button>
+				<FavoriteButton
+					isFavorite={channel.isFavorite}
+					onToggle={() => onToggleFavorite(channel)}
+					className="absolute top-[5px] left-[5px] z-10 h-7 w-7 rounded-full bg-black/50 hover:bg-black/70 transition-colors cursor-pointer"
+					iconClassName="h-3.5 w-3.5"
+					idleIconClassName="text-white"
+				/>
 			)}
 			<DownloadButton
 				state={iconState}
