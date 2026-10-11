@@ -307,7 +307,12 @@ export const PlayerView = () => {
 	// player is visible again.
 	useEffect(() => {
 		const handOff = () => {
-			const { key, url, pendingStart } = progressRef.current;
+			const p = progressRef.current;
+			// Rust saves from here on. The position held here goes stale, and
+			// flushing it later, say on a stop right after the app comes back,
+			// would overwrite the newer one Rust saved.
+			p.dirty = false;
+			const { key, url, pendingStart } = p;
 			handOffProgress(key && url ? { key, url, pendingStart } : null).catch(() => {});
 		};
 		const onVisibilityChange = () => {

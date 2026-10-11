@@ -19,6 +19,10 @@ use tauri_plugin_mpv::MpvState;
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
 /// Same as `MIN_RESUME_SECONDS` in `lib/playback.ts`.
 const MIN_RESUME_SECONDS: f64 = 30.0;
+/// Ticks in a row that mpv may play something else before the thread stops.
+/// The item may still be loading when the page hands it over, and a
+/// reconnect reloads it, so a short gap doesn't mean mpv moved on.
+const MAX_MISSES: u32 = 6;
 
 /// Bumped on every hand-over, so the thread for an older one stops.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -47,7 +51,11 @@ pub fn hand_off_progress<R: Runtime>(app: AppHandle<R>, item: Option<ProgressIte
     let Some(item) = item else { return };
     tracing::debug!("[Progress] saving {} from Rust", item.key);
     std::thread::spawn(move || {
-        let mut tracker = Tracker { item, last: None };
+        let mut tracker = Tracker {
+            item,
+            last: None,
+            misses: 0,
+        };
         while GENERATION.load(Ordering::SeqCst) == generation && tracker.tick(&app) {
             std::thread::sleep(SAVE_INTERVAL);
         }
@@ -58,17 +66,24 @@ struct Tracker {
     item: ProgressItem,
     /// The position and duration saved last.
     last: Option<(f64, f64)>,
+    /// Ticks in a row that mpv wasn't playing the item.
+    misses: u32,
 }
 
 impl Tracker {
     /// Saves the position if it moved, like `flushProgress` in
-    /// `VideoPlayer.tsx`. Returns false once mpv isn't playing the item.
+    /// `VideoPlayer.tsx`. Returns false once mpv has stopped playing the
+    /// item.
     fn tick<R: Runtime>(&mut self, app: &AppHandle<R>) -> bool {
         let s = app.state::<MpvState>().get_state();
         if s.current_url.as_deref() != Some(self.item.url.as_str()) {
+            if self.missed() {
+                return true;
+            }
             tracing::debug!("[Progress] {} is no longer playing", self.item.key);
             return false;
         }
+        self.misses = 0;
         let (position, duration) = (s.position, s.duration);
         if duration <= 0.0 || position <= 1.0 {
             return true;
@@ -99,11 +114,35 @@ impl Tracker {
         }
         true
     }
+
+    /// Counts a tick where mpv wasn't playing the item. False once that has
+    /// happened `MAX_MISSES` times in a row.
+    fn missed(&mut self) -> bool {
+        self.misses += 1;
+        self.misses < MAX_MISSES
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waits_a_few_ticks_for_the_item_to_play() {
+        let mut tracker = Tracker {
+            item: ProgressItem {
+                key: "movie:test".into(),
+                url: "http://example.com/movie.mkv".into(),
+                pending_start: None,
+            },
+            last: None,
+            misses: 0,
+        };
+        for _ in 1..MAX_MISSES {
+            assert!(tracker.missed());
+        }
+        assert!(!tracker.missed());
+    }
 
     #[test]
     fn finished_near_the_end() {
