@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::commands::AppState;
-use crate::downloads::scheduler::ids_to_start;
+use crate::downloads::scheduler::start_queued;
 use mvp_core::downloads::ffmpeg::{
     build_ffmpeg_args, container_from_part_path, fold_progress_line, ProgressUpdate,
 };
@@ -11,6 +11,7 @@ use mvp_core::downloads::paths::derive_dest_path;
 use mvp_core::downloads::redact::redact_credentials;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_shell::process::CommandEvent;
@@ -37,6 +38,9 @@ pub struct DownloadManager {
     pub concurrency: Mutex<usize>,
     pub root: Mutex<PathBuf>,
     pub running: Mutex<HashMap<String, RunningChildHandle>>,
+    /// Set as the app quits, so a download that ends because the app killed
+    /// its ffmpeg isn't marked failed.
+    pub exiting: AtomicBool,
 }
 
 impl DownloadManager {
@@ -45,6 +49,7 @@ impl DownloadManager {
             concurrency: Mutex::new(3),
             root: Mutex::new(default_root),
             running: Mutex::new(HashMap::new()),
+            exiting: AtomicBool::new(false),
         }
     }
 
@@ -159,35 +164,65 @@ pub fn enqueue_record<R: Runtime>(
 
 /// Inspect the active set and start ffmpeg for any items the scheduler selects.
 pub fn pump<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let app_state = app.state::<AppState>();
     let manager = app.state::<DownloadManager>();
-    let limit = manager.concurrency();
-
-    let active = {
-        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
-        cache.list_active_downloads().map_err(|e| e.to_string())?
-    };
-    let pairs: Vec<(String, DownloadStatus)> =
-        active.iter().map(|r| (r.id.clone(), r.status)).collect();
-    let start_ids = ids_to_start(&pairs, limit);
-
-    let mut first_err = None;
-    for id in start_ids {
-        if let Some(rec) = active.iter().find(|r| r.id == id) {
-            if let Err(e) = start_process(app, rec.clone()) {
-                // Mark it failed. Otherwise it stays first in line, or stays
-                // `Downloading` with no ffmpeg, and holds up the queue.
-                update_record(app, &id, |r| {
-                    r.status = DownloadStatus::Failed;
-                    r.error = Some(e.clone());
-                    r.finished_at = Some(now_secs());
-                });
-                emit_progress(app, &id);
-                first_err.get_or_insert(e);
-            }
-        }
+    // A download that finishes while the app quits mustn't start another one.
+    if manager.exiting.load(Ordering::SeqCst) {
+        return Ok(());
     }
-    first_err.map_or(Ok(()), Err)
+    let app_state = app.state::<AppState>();
+    let limit = manager.concurrency();
+    start_queued(
+        limit,
+        || {
+            let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+            let active = cache.list_active_downloads().map_err(|e| e.to_string())?;
+            Ok(active.into_iter().map(|r| (r.id, r.status)).collect())
+        },
+        |id| {
+            let rec = {
+                let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+                cache.get_download(id).map_err(|e| e.to_string())?
+            }
+            .ok_or_else(|| format!("download not found: {id}"))?;
+            start_process(app, rec.clone()).inspect_err(|e| fail_to_start(app, &rec, e))
+        },
+    )
+}
+
+/// Mark a download that couldn't start as failed and remove its partial file.
+/// Otherwise it stays first in line, or stays `Downloading` with no ffmpeg,
+/// and holds up the queue.
+fn fail_to_start<R: Runtime>(app: &AppHandle<R>, rec: &DownloadRecord, err: &str) {
+    update_record(app, &rec.id, |r| {
+        // A download the user stopped in the meantime stays cancelled.
+        if matches!(
+            r.status,
+            DownloadStatus::Queued | DownloadStatus::Downloading
+        ) {
+            r.status = DownloadStatus::Failed;
+            r.error = Some(err.to_string());
+            r.finished_at = Some(now_secs());
+        }
+    });
+    if rec.dest_path.ends_with(".part") {
+        let _ = std::fs::remove_file(&rec.dest_path);
+    }
+    emit_progress(app, &rec.id);
+}
+
+/// Stop every running ffmpeg as the app quits. The shell plugin only stops
+/// processes started from JavaScript, so these would keep downloading after
+/// the app is gone. Their records stay `Downloading`, and the next launch
+/// queues them again.
+pub fn stop_all_for_exit<R: Runtime>(app: &AppHandle<R>) {
+    let Some(manager) = app.try_state::<DownloadManager>() else {
+        return;
+    };
+    manager.exiting.store(true, Ordering::SeqCst);
+    let children: Vec<_> = manager.running.lock().unwrap().drain().collect();
+    for (_, handle) in children {
+        let _ = handle.child.kill();
+    }
 }
 
 pub(crate) fn now_secs() -> i64 {
@@ -236,6 +271,12 @@ pub fn start_process<R: Runtime>(app: &AppHandle<R>, mut rec: DownloadRecord) ->
     // Ensure destination directory exists.
     if let Some(parent) = std::path::Path::new(&rec.dest_path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // An ffmpeg left over from a crash may still have the old partial file
+    // open. Removing the file gives this run a new one the old process can't
+    // write into.
+    if rec.dest_path.ends_with(".part") {
+        let _ = std::fs::remove_file(&rec.dest_path);
     }
 
     // Mark downloading + persist.
@@ -313,6 +354,16 @@ pub fn start_process<R: Runtime>(app: &AppHandle<R>, mut rec: DownloadRecord) ->
                 }
                 _ => {}
             }
+        }
+
+        // The app is quitting and killed this ffmpeg. Leave the record as it
+        // is, so the next launch queues it again.
+        let exiting = app
+            .state::<DownloadManager>()
+            .exiting
+            .load(Ordering::SeqCst);
+        if !exit_ok && exiting {
+            return;
         }
 
         // Remove from running map.
