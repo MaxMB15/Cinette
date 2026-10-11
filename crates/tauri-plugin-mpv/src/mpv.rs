@@ -102,9 +102,11 @@ impl MpvState {
         let result = self.load_impl(url, start_pos, app);
         if result.is_ok() {
             self.idle_inhibitor.inhibit();
-            #[cfg(target_os = "ios")]
-            crate::ios::set_audio_active(true);
         }
+        // The old stream stopped above, so a failed load leaves nothing
+        // playing. Turning the session off also clears its Now Playing info.
+        #[cfg(target_os = "ios")]
+        crate::ios::set_audio_active(result.is_ok());
         result
     }
 

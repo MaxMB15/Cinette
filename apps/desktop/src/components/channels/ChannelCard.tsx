@@ -6,6 +6,7 @@ import { Play, Tv2, Heart, Film } from "lucide-react";
 import type { Channel, EpgProgram } from "@/lib/types";
 import { EpgTimelineBar } from "./EpgTimelineBar";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
+import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 
@@ -187,7 +188,7 @@ const CompactRowCard = ({
 	onToggleFavorite?: (ch: Channel) => void;
 	epgPrograms?: EpgProgram[];
 }) => {
-	const now = Math.floor(Date.now() / 1000);
+	const now = useNow();
 	const current = epgPrograms?.find((p) => p.startTime <= now && now < p.endTime);
 	const progress = current
 		? ((now - current.startTime) / (current.endTime - current.startTime)) * 100

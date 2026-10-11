@@ -20,9 +20,10 @@ use libmpv2::{
     Format, Mpv,
 };
 use std::ffi::{c_char, c_void, CString};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc, Mutex, OnceLock,
+    mpsc, Arc, Mutex, OnceLock,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -82,41 +83,54 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 /// Called once from plugin setup. Hands Swift the callbacks for the app
 /// lifecycle and the lock screen controls, which need the app's `MpvState`.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
+    let (tx, rx) = mpsc::channel::<Job>();
+    if JOBS.set(tx).is_err() {
+        return;
+    }
     let app = app.clone();
-    let with_state: StateFn = Box::new(move |f: &dyn Fn(&MpvState)| f(&app.state::<MpvState>()));
-    if HANDLERS.set(with_state).is_err() {
+    let spawned = std::thread::Builder::new()
+        .name("mpv-ios-callbacks".into())
+        .spawn(move || {
+            for job in rx {
+                let state = app.state::<MpvState>();
+                if panic::catch_unwind(AssertUnwindSafe(|| job(&state))).is_err() {
+                    tracing::warn!("[MPV ios] a callback panicked");
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("[MPV ios] failed to spawn the callback thread: {e}");
         return;
     }
     unsafe { mvp_ios_register_callbacks(Some(on_lifecycle), Some(on_remote), Some(on_resized)) };
 }
 
-type StateFn = Box<dyn Fn(&dyn Fn(&MpvState)) + Send + Sync>;
+type Job = Box<dyn FnOnce(&MpvState) + Send>;
 
-static HANDLERS: OnceLock<StateFn> = OnceLock::new();
+/// Feeds the thread that runs the callbacks.
+static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
 
-/// Runs `f` with the app's `MpvState` on a new thread. The callbacks arrive
-/// on the main thread, and an mpv call can wait on a lock held by a load.
-fn with_state_async(f: impl Fn(&MpvState) + Send + 'static) {
-    let spawned = std::thread::Builder::new()
-        .name("mpv-ios-callback".into())
-        .spawn(move || {
-            if let Some(with_state) = HANDLERS.get() {
-                with_state(&f);
-            }
-        });
-    if let Err(e) = spawned {
-        tracing::warn!("[MPV ios] failed to spawn callback thread: {e}");
+/// Runs `f` with the app's `MpvState` on the callback thread. The callbacks
+/// arrive on the main thread, and an mpv call can wait on a lock held by a
+/// load, so they can't run there. One thread runs them in the order they
+/// arrived. With a thread each, a quick trip to the background and back
+/// could turn video on and then off again.
+fn run_in_order(f: impl FnOnce(&MpvState) + Send + 'static) {
+    if let Some(jobs) = JOBS.get() {
+        if jobs.send(Box::new(f)).is_err() {
+            tracing::warn!("[MPV ios] the callback thread has stopped");
+        }
     }
 }
 
 /// iOS stops apps that use the GPU in the background, so video output is
 /// off while the app is in the background. Audio keeps playing.
 extern "C" fn on_lifecycle(background: bool) {
-    with_state_async(move |state| state.set_video_enabled(!background));
+    run_in_order(move |state| state.set_video_enabled(!background));
 }
 
 extern "C" fn on_remote(command: i32, value: f64) {
-    with_state_async(move |state| {
+    run_in_order(move |state| {
         let result = match command {
             REMOTE_PLAY => state.play(),
             REMOTE_PAUSE => state.pause(),

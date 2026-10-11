@@ -2,7 +2,9 @@ name: iOS TestFlight
 
 # Builds the iOS app for the App Store and uploads it to TestFlight. Run it by
 # hand. The Apple secrets live in the macos-signing environment, which waits
-# for approval and only runs on dev, main and v* tags.
+# for approval and only runs on dev, main and v* tags. The users listed in
+# RELEASE_ALLOWED_ACTORS can start it. When that variable isn't set, only the
+# repository owner can. Setting it replaces the owner, so list the owner too.
 on:
   workflow_dispatch:
 
@@ -14,13 +16,64 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Runs before anything can read the signing secrets. The macos-signing
+  # environment also refuses other refs, so this is a second check.
+  authorize:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      attempt: ${{ steps.check.outputs.attempt }}
+    steps:
+      - name: Check the ref and who started the run
+        id: check
+        env:
+          REF: ${{ github.ref }}
+          ACTOR: ${{ github.triggering_actor }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          ALLOWED_ACTORS: ${{ vars.RELEASE_ALLOWED_ACTORS }}
+        run: |
+          set -euo pipefail
+          case "$REF" in
+            refs/heads/dev | refs/heads/main | refs/tags/v*) ;;
+            *)
+              echo "::error::TestFlight builds only run from dev, main or a v* tag, not $REF."
+              exit 1
+              ;;
+          esac
+          # The release workflows use the same rule. The comma-separated users
+          # in RELEASE_ALLOWED_ACTORS can start a run, or the repository owner
+          # when that variable isn't set.
+          allowed="$(tr -d '[:space:]' <<<"$ALLOWED_ACTORS")"
+          allowed="${allowed:-$REPO_OWNER}"
+          if ! tr ',' '\n' <<<"$allowed" | grep -qxF "$ACTOR"; then
+            echo "::error::$ACTOR can't run TestFlight builds. Allowed: $allowed. Set the RELEASE_ALLOWED_ACTORS variable to change this."
+            exit 1
+          fi
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
   testflight:
+    needs: authorize
     runs-on: macos-26
     timeout-minutes: 90
     environment: macos-signing
     permissions:
       contents: read
     steps:
+      # Re-running only this job skips the authorize job, which passed in an
+      # earlier attempt and checked someone else. Then the rerun has to come
+      # from whoever started the run.
+      - name: Check who started this attempt
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          CHECKED_ATTEMPT: ${{ needs.authorize.outputs.attempt }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$CHECKED_ATTEMPT" != "$ATTEMPT" ] && [ "$TRIGGERING_ACTOR" != "$ACTOR" ]; then
+            echo "::error::$ACTOR started this run, so only $ACTOR can re-run this job on its own. Re-run all jobs or start a new run instead."
+            exit 1
+          fi
+
       - uses: actions/checkout@v5
 
       - name: Install Rust
