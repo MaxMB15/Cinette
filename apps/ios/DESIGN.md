@@ -225,7 +225,12 @@ user leaves the app and shows its progress in a Live Activity.
 - One task covers the whole queue. Its identifier is
   `com.maxvideoplayer.app.downloads.` plus a queue ID, and `Info.ios.plist`
   lists `com.maxvideoplayer.app.downloads.*` under
-  `BGTaskSchedulerPermittedIdentifiers`.
+  `BGTaskSchedulerPermittedIdentifiers`. iOS doesn't accept a handler for the
+  wildcard, so the app registers one for the exact identifier just before it
+  submits the request.
+- The request uses the `.fail` strategy. With the default, iOS can queue the
+  task and start it later. With `.fail` the app knows at once, and keeps the
+  work in the foreground with the note below.
 - The title names the current item and the subtitle says how many are left,
   such as "2 of 5". `updateTitle(_:subtitle:)` changes them as the queue moves.
 - Rust sends progress to Swift, which updates the task's `progress`. iOS ends a
@@ -249,9 +254,9 @@ downloads finish."
 `Library/Application Support/Downloads` in the app's container, not in
 `Documents`, and the app doesn't set `UIFileSharingEnabled` or
 `LSSupportsOpeningDocumentsInPlace`. So they don't show up in the Files app or
-in Finder's file sharing. Each file has `isExcludedFromBackup` set, because
-downloads are large and can be fetched again, and Apple asks apps to keep that
-kind of file out of iCloud backups. The download folder setting stays hidden on
+in Finder's file sharing. The folder has `isExcludedFromBackup` set, which
+covers every file in it, because downloads are large and can be fetched again,
+and Apple asks apps to keep that kind of file out of iCloud backups. The download folder setting stays hidden on
 iOS. A download plays offline through mpv and uses the same resume points as
 the stream. Deleting the app deletes its downloads.
 
@@ -262,12 +267,46 @@ only, and keep each file until the user deletes it. The shared parts go in
 `mvp-core`, and desktop gets both features first. iOS then adds only the parts
 that differ, in milestone 6.
 
+**Fixes to make first.** Two gaps in today's download code already affect
+desktop, and recordings would make both worse.
+
+- Nothing recovers at launch. A record left `downloading` when the app quit
+  stays that way, and the queue counts it as running for good, so it holds one
+  of the download slots until the user deletes it. At launch the app should put
+  those records back in the queue, or keep what a recording got and mark it
+  finished.
+- A file with no record stays on disk. At launch the app should delete files in
+  the downloads folder that no record points to. This matters more on iOS,
+  where the Files app can't see the folder, so the space would never come back.
+
+**One record per recording.** The download code keeps one record per channel.
+Queuing a download deletes the channel's finished and failed records,
+`prune_redundant_downloads` keeps one row per channel at launch, and
+`resolve_local_download` plays a channel's finished download in place of the
+stream. If a recording used the live channel's ID, the second recording would
+delete the first, and tapping the channel would play an old recording instead
+of live TV. So each recording uses its own ID as its channel ID, and a new
+`source_channel_id` field points at the live channel. The file name has the
+channel name and the start time, such as `City News 2026-10-12 20.00.ts`, so
+recordings of one channel don't overwrite each other. The Downloads tab gets a
+Recordings section next to movies and series.
+
 **Recording a live channel.** A recording is a download of a live channel
-between a start and an end time. It uses the same queue, records and Downloads
-tab, with a new `DownloadKind::Recording`. The copy is the same as for a
-download, with an end time. On desktop ffmpeg gets `-t` with the length. On iOS
-`mvp_remux` stops when its interrupt callback sees that the end time has
-passed. Progress is the time recorded over the length.
+between a start and an end time, with a new `DownloadKind::Recording`. It uses
+the same queue, records and Downloads tab, and the same stream copy, with these
+differences:
+
+- It always writes MPEG-TS. A `.ts` file that stops halfway still plays, so a
+  recording that gets cut off keeps what it recorded.
+- The app stops it by the clock. ffmpeg's `-t` counts media time, so a gap
+  while the stream reconnects would push the end later. On desktop the app
+  sends `q` to ffmpeg's standard input at the end time, which closes the file
+  cleanly. On iOS `mvp_remux` stops when its interrupt callback sees that the
+  end time has passed.
+- A recording that fails or is stopped early keeps its file. Downloads delete
+  the partial file today, both when ffmpeg fails and when the user stops one.
+- It skips the HEAD request that downloads use for the file size, since a live
+  stream has none. Progress is the time recorded over the length.
 
 There are three ways to start one:
 
@@ -282,35 +321,51 @@ There are three ways to start one:
 
 Recording every episode of a show is left for later.
 
-A scheduled recording is a record with a start time and the status
-`scheduled`. The statuses also gain `recording` and `missed`. A timer in Rust
-wakes at the next start time and starts the recording. Recordings don't wait
-for a free slot under the download concurrency limit, because starting late
-loses the beginning. If the app wasn't running at the start time, it checks
+**Scheduling.** A scheduled recording is a record with a start time and the
+status `scheduled`. The statuses also gain `recording` and `missed`. A timer in
+Rust checks the clock every 30 seconds and when the computer wakes, and starts
+any recording that's due. One long sleep until the start time would run late,
+because Rust's timers don't count time the computer spends asleep and don't
+follow clock changes. If the app wasn't running at the start time, it checks
 when it next opens. If the program is still on, it records the rest. If it has
 ended, the record is marked missed.
 
-Many providers allow only one or two connections at a time, so a recording
-that overlaps another recording, or overlaps watching another channel, may be
-refused. Scheduling warns when two recordings overlap. Xtream reports the
-account's limit as `max_connections` from `player_api.php`, which the app
-doesn't read yet. Reading it would let the warning use the real limit.
+With the margins, two programs in a row on one channel overlap by 7 minutes,
+which would take two connections. So when a recording on a channel is due while
+another recording of that channel is still running, the app extends the running
+one to the later end time. The two programs end up in one file.
+
+**Connections.** Recordings don't wait for a free download slot, because
+starting late loses the beginning. A running recording has the status
+`recording`, which the queue doesn't count against its limit. Many providers
+allow only one or two connections at a time, watching a channel takes one, and
+the default of three downloads at once is already past that. So when a
+recording starts, the app puts that provider's running downloads back in the
+queue, and they start again when it ends. Scheduling warns when two recordings
+overlap. Xtream reports the account's limit as `max_connections` from
+`player_api.php`, which the app doesn't read yet. Reading it would let the
+warning use the real limit, and let downloads keep running when the account
+has room.
 
 On desktop, the app has to be running at the start time. It doesn't wake a
 sleeping computer. While a recording runs, the app keeps the computer from
 going to sleep.
 
 On iOS, a recording can't start on its own while the app is in the background.
-The iOS 26 task has to be submitted from the foreground, and iOS has no other
-way to start long network work at a set time. So:
+The iOS 26 task can only be submitted from the foreground in response to
+something the user does, and iOS has no other way to start long network work
+at a set time. So:
 
 - Scheduling a recording also schedules a local notification for its start,
-  such as "The news starts at 20:00. Open Max Video Player to record it." Tapping
-  it opens the app, which starts the recording. On iOS 26 the app also submits
-  the background task, so the recording goes on after the user leaves the app.
-- If the app is open at the start time, or a background task for downloads is
-  already running, the recording starts by itself.
-- If the user opens the app late, it records the rest of the program.
+  such as "The news starts at 20:00. Open Max Video Player to record it."
+  Tapping it opens the app on the recording, with a Record button. Tapping
+  Record starts the recording, and on iOS 26 also submits the background task,
+  so it goes on after the user leaves the app. A tap on a button in the app is
+  clearly the user's action. Opening from a notification alone may not count.
+- If the app is open at the start time, the recording starts by itself, and a
+  banner offers the same Record button to keep it going in the background.
+- If the user opens the app late, the same screen offers to record the rest of
+  the program.
 - The app asks for notification permission the first time the user schedules a
   recording, not at launch.
 - Before iOS 26, a recording runs only while the app is open, the same as a
@@ -322,22 +377,28 @@ recordings the phone couldn't start. That's a possible follow-up.
 
 **Retention.** One setting, "Delete downloads after", with Never, 7, 14, 30 and
 90 days. It covers downloads and recordings, and the default is Never. The
-count starts when the download or recording finished. Each item in the
+count starts when the download or recording finished, and starts over each time
+it's played, so something the user is still watching stays. Each item in the
 Downloads tab shows when it will be deleted, such as "Deletes in 3 days", and
 has a Keep option that excludes it.
 
 The app checks when it starts and every hour while it runs. On iOS it also
 checks when the app comes back to the foreground. It deletes the file and the
 record, the same as the Delete button. It skips a file that's playing, and
-anything queued, scheduled or still downloading. When a change to the setting
-would delete files right away, the app asks first, for example "This deletes 4
-downloads now."
+anything queued, scheduled, downloading or recording. When a change to the
+setting would delete files right away, the app asks first, for example "This
+deletes 4 downloads now."
 
 **What goes where.** `mvp-core` gets the recording fields and statuses on
 `DownloadRecord`, the overlap check, and the function that picks expired items
 from the records, the setting and the time. They're plain functions with unit
-tests. Desktop adds the timer, ffmpeg's `-t` and keeping the computer awake.
-iOS adds the notification, the end time in `mvp_remux` and the background task.
+tests. The database gets columns for the start and end times, the source
+channel, Keep and the last play, added with `ALTER TABLE ... ADD COLUMN` like
+the other migrations in `store.rs`, and `upsert_download` writes them.
+`row_to_download` reads a kind it doesn't know as a movie, so it learns
+`recording` in the same change. Desktop adds the launch recovery, the timer,
+stopping ffmpeg through standard input and keeping the computer awake. iOS
+adds the notification, the end time in `mvp_remux` and the background task.
 
 ## 3. Layouts
 
@@ -412,10 +473,11 @@ battery drain over an hour. Nothing else starts until this works.
 
 **6. Downloads, recordings and retention.** An update after the App Store
 release, following "Later: downloads" and "Later: recordings and retention" in
-section 2. Desktop gets recordings and retention before this. Test the
+section 2. Desktop gets the launch fixes, recordings and retention before this. Test the
 background task on an iPhone with iOS 26 and the in-app note on one with an
 earlier version. Test a scheduled recording with the app open, in the
-background, and closed, where the notification starts it.
+background, and closed, where the notification opens the app and Record starts
+it.
 
 **Later:** AVPlayer for picture in picture and AirPlay, M3U file import from
 Files, iCloud sync for favorites and history, and iPad keyboard shortcuts.
