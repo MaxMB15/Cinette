@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import type { Channel } from "@/lib/types";
+import type { Channel, GroupHierarchyEntry } from "@/lib/types";
 
 vi.mock("@/lib/tauri", () => ({
 	getGroupHierarchy: vi.fn(),
@@ -33,7 +33,16 @@ const channel = (name: string, groupTitle: string, contentType: Channel["content
 		sources: [],
 	}) satisfies Channel;
 
-const renderManager = (channels: Channel[]) =>
+const entry = (groupName: string, superCategory: string | null): GroupHierarchyEntry => ({
+	providerId: "p1",
+	contentType: "movie",
+	groupName,
+	superCategory,
+	sortOrder: 0,
+	isUserOverride: false,
+});
+
+const renderManager = (channels: Channel[] = []) =>
 	render(
 		<CategoryManager
 			providerId="p1"
@@ -68,5 +77,29 @@ describe("CategoryManager", () => {
 		expect(categorizeProvider).toHaveBeenCalledWith("p1", "movie", "key", [
 			["Action", ["Heat", "Die Hard"]],
 		]);
+	});
+
+	it("names its icon-only buttons", async () => {
+		vi.mocked(getGroupHierarchy).mockResolvedValue([
+			entry("Action", "Genres"),
+			entry("Comedy", "Genres"),
+			entry("Misc", null),
+		]);
+		renderManager();
+
+		expect(await screen.findByRole("button", { name: "Move category up" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Move category down" })).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+		expect(screen.getByRole("button", { name: "Save name" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel rename" }));
+
+		fireEvent.click(screen.getByRole("button", { name: "Misc" }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel move" }));
+		expect(screen.queryByText(/to:/)).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "AI: add groups to this category" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close AI prompt" }));
+		expect(screen.queryByText(/AI will look at all other groups/)).toBeNull();
 	});
 });

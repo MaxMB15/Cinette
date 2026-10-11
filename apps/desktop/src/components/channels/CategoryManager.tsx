@@ -438,12 +438,14 @@ export const CategoryManager = ({
 										<button
 											onClick={() => handleRenameCategory(catName)}
 											className="text-green-500 hover:text-green-400 p-1"
+											aria-label="Save name"
 										>
 											<Check className="h-3.5 w-3.5" />
 										</button>
 										<button
 											onClick={() => setRenamingCategory(null)}
 											className="text-muted-foreground hover:text-foreground p-1"
+											aria-label="Cancel rename"
 										>
 											<X className="h-3.5 w-3.5" />
 										</button>
@@ -479,6 +481,7 @@ export const CategoryManager = ({
 											onClick={() => handleReorderCategory(catName, "up")}
 											disabled={catIdx === 0}
 											className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-20 rounded hover:bg-accent"
+											aria-label="Move category up"
 										>
 											<ChevronUp className="h-3.5 w-3.5" />
 										</button>
@@ -486,6 +489,7 @@ export const CategoryManager = ({
 											onClick={() => handleReorderCategory(catName, "down")}
 											disabled={catIdx === superCats.length - 1}
 											className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-20 rounded hover:bg-accent"
+											aria-label="Move category down"
 										>
 											<ChevronDown className="h-3.5 w-3.5" />
 										</button>
@@ -588,6 +592,7 @@ export const CategoryManager = ({
 						<button
 							onClick={() => setMovingGroup(null)}
 							className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+							aria-label="Cancel move"
 						>
 							<X className="h-4 w-4" />
 						</button>
@@ -632,6 +637,7 @@ export const CategoryManager = ({
 						<button
 							onClick={() => setAiPromptCategory(null)}
 							className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+							aria-label="Close AI prompt"
 						>
 							<X className="h-4 w-4" />
 						</button>
