@@ -184,7 +184,8 @@ pub fn set_audio_active(active: bool) {
 /// The watcher allowed to update Now Playing, by the id `attach` gave it.
 /// Zero after playback stops, until the next stream starts. A watcher from
 /// an old stream can still be running for a moment after its stream
-/// stopped.
+/// stopped. `MpvState` runs one load or stop at a time, so a stop never
+/// takes this from a stream that started after it.
 static NOW_PLAYING_OWNER: Mutex<u64> = Mutex::new(0);
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);

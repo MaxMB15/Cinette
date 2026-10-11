@@ -44,6 +44,12 @@ pub struct MpvState {
     /// exits the next time it wakes from `wait_event`, dropping its client
     /// and releasing the core.
     reconnect_kill: Mutex<Option<Arc<AtomicBool>>>,
+    /// Held through each whole `load()` and `stop()`. Both are async
+    /// commands, so without it they can run at once, and a stop could stop
+    /// the engine that a newer load had just created. Nothing on the main
+    /// thread takes it, so they can still wait on the main thread while
+    /// holding it.
+    transition: Mutex<()>,
 }
 
 impl MpvState {
@@ -55,6 +61,7 @@ impl MpvState {
             hwdec_enabled: AtomicBool::new(true),
             idle_inhibitor: IdleInhibitor::new(),
             reconnect_kill: Mutex::new(None),
+            transition: Mutex::new(()),
         }
     }
 
@@ -83,6 +90,7 @@ impl MpvState {
         hwdec: bool,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
+        let _transition = self.transition.lock().unwrap_or_else(|p| p.into_inner());
         // Trip the old reconnect monitor BEFORE we destroy the parent mpv,
         // so its client handle is dropped on the next loop iteration and the
         // old libmpv core is actually released (see field docstring).
@@ -443,6 +451,7 @@ impl MpvState {
     }
 
     pub fn stop(&self) {
+        let _transition = self.transition.lock().unwrap_or_else(|p| p.into_inner());
         // Same ordering rule as `load()`: cancel the monitor BEFORE the
         // engine drops the parent `Mpv`, otherwise the watcher's client
         // keeps the libmpv core alive (hardware decoder + audio device).
