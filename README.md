@@ -169,7 +169,7 @@ If you find the app useful, you can [buy me a coffee](https://buymeacoffee.com/M
 
 ## Privacy
 
-The app doesn't collect any data about you. The [privacy policy](docs/privacy.md) lists what it keeps on your device and which services it connects to.
+The app sends nothing to the developer. The [privacy policy](docs/privacy.md) lists what it keeps on your device, which services it connects to and what it sends them.
 
 ## Disclaimer
 

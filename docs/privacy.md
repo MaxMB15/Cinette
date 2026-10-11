@@ -2,7 +2,7 @@
 
 Last updated October 11, 2026. This policy covers Max Video Player on macOS, Linux, iPhone and iPad.
 
-Max Video Player doesn't collect, sell or share any data about you. It has no accounts, ads or analytics, and no server of its own. The app sends nothing to the developer.
+The developer of Max Video Player receives no data from the app. The app has no accounts, ads or analytics, and no server of its own. Your data stays on your device. The app sends data only to the services listed under "Who the app talks to", and only when you use a feature that needs one.
 
 ## What stays on your device
 
@@ -10,25 +10,34 @@ The app keeps these in its own storage on your device:
 
 - The playlists and providers you add, including Xtream Codes usernames and passwords
 - Your favorites, watch history and where you stopped in each movie or episode
-- Your settings, and any API keys you enter for OMDb, MDBList, OpenSubtitles or Google Gemini
-- Movie and series details it looked up, so it doesn't fetch them again
-- On iPhone and iPad, a log of what the app did, for troubleshooting. It stays on the device unless you copy it off yourself.
+- Your settings, and any API keys you enter for OMDb, OpenSubtitles or Google Gemini
+- Movie and series details and program guide data it downloaded, so it doesn't fetch them again
+- On iPhone and iPad, a log of what the app did, for troubleshooting. The app removes usernames, passwords and API keys from web addresses before it logs them. The log stays on the device unless you copy it off yourself. The same lines go to the device's system log, which iOS keeps for a limited time and clears on its own.
 - On macOS and Linux, videos you download, in the folder you pick
 
-On iPhone and iPad, deleting the app deletes all of it. On macOS and Linux, the data stays in the app's data folder until you delete that folder, and downloads stay where you saved them.
+## Deleting your data
+
+The developer holds no data about you, so there's nothing to ask the developer to delete. Everything is on your device, and you can delete it there.
+
+In the app, you can remove a playlist or provider on the Playlists page. In Settings, you can clear your watch history, and Clear All Caches deletes the saved movie, series and guide details.
+
+On iPhone and iPad, deleting the app deletes all of its data from the device. Copies in your iCloud or computer backups stay until those backups are replaced.
+
+On macOS, the app's data is in `~/Library/Application Support/com.maxvideoplayer.app`, `~/Library/WebKit/com.maxvideoplayer.app` and `~/Library/Caches/com.maxvideoplayer.app`. On Linux, it's in `~/.local/share/com.maxvideoplayer.app`, with cached files under `~/.cache`. Deleting these folders deletes the data. Downloads stay where you saved them until you delete them.
 
 ## Who the app talks to
 
 The app connects to these, and only when it needs them:
 
 - The playlist, guide and stream addresses you add, to load your channels and play them. Channel logos load from the addresses in your playlist.
-- OMDb, for movie and series details, if you add an OMDb key. It sends the title you're looking at. When OMDb finds it, the app sends its IMDb ID to whatson-api at whatson-api.onrender.com for more ratings. Posters load from the image addresses these services return.
-- MDBList, for more ratings, if you add an MDBList key. It sends the IMDb ID.
+- OMDb, for movie and series details, if you add an OMDb key. When you open or play a movie or series, the app sends its title. When OMDb finds it, the app sends its IMDb ID to whatson-api at whatson-api.onrender.com for more ratings. Posters load from the image addresses these services return.
 - OpenSubtitles, to find and download subtitles, if you add a key. It sends the IMDb ID, and the season and episode for a series.
-- Google Gemini, to sort categories, if you add a key and turn sorting on. It sends your category names and some channel and title names from your playlist, not what you watch.
-- GitHub, on macOS and Linux only, to check for a new version when the app starts and to download it.
+- Google Gemini, if you add a key, when you ask it to sort your categories with Re-categorize All or Assign All with AI. It sends your category names and a few channel names from each one. It doesn't send what you watch.
+- GitHub, on macOS and Linux only, to check for a new version when the app starts and every two hours after that, and to download it.
 
-Each of these sees your IP address and what the app asks it for, under its own privacy policy.
+Each of these sees your IP address and what the app sends it, and handles that under its own terms and privacy policy. Google's is at https://policies.google.com/privacy and GitHub's is at https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement.
+
+To stop the app from contacting OMDb, OpenSubtitles or Gemini, remove its key in Settings. Removing the OMDb key also stops the requests to whatson-api.
 
 ## Crash reports on iPhone and iPad
 
