@@ -122,8 +122,9 @@ sends new bounds, the device rotates or Split View changes the window. It sets t
 audio session to playback so audio continues on the lock screen, fills in Now
 Playing, handles the lock screen controls and keeps the screen awake during playback.
 Rust calls the `mvp_ios_*` C functions the Swift package exports, and Swift calls
-back through two C callbacks that Rust registers at startup, one for moving to and
-from the background and one for lock screen commands.
+back through three C callbacks that Rust registers at startup. One reports moving to
+and from the background, one passes on lock screen commands, and one tells mpv that
+the video view changed size so it redraws at the new size.
 
 #### What iOS leaves out
 
