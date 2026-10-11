@@ -184,7 +184,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// Step 4: Check for updates via the shared hook.
 			// checkForUpdates() joins the in-flight promise if the mount check is
 			// still running, so only one actual check() call happens.
-			// Timeout after 10s so the splash never gets stuck.
+			// Give up after 7s so the splash never gets stuck.
 			setStepStatus("updates", "active");
 			let foundUpdate: Update | null = null;
 			try {
@@ -218,7 +218,11 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		return () => {
 			cancelled = true;
 		};
-	}, [initialized]); // eslint-disable-line react-hooks/exhaustive-deps
+		// The steps run once, with the providers loaded at startup. Listing
+		// providers or updateState here would restart them whenever a refresh
+		// above updates the provider list.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [initialized]);
 
 	const progress =
 		steps.length === 0
