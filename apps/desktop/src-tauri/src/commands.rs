@@ -6,9 +6,11 @@ use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
+use mvp_core::downloads::redact::redact_credentials;
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
 use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
+use mvp_core::iptv::opensubtitles::SEARCH_CACHE_TTL_SECS;
 use mvp_core::iptv::whatson::WhatsonData;
 use mvp_core::iptv::xtream::{fetch_xtream_channels, fetch_xtream_series_episodes, get_xtream_epg_url};
 use mvp_core::models::channel::Channel;
@@ -34,7 +36,11 @@ pub async fn load_m3u_playlist(
     name: String,
     url: String,
 ) -> Result<Vec<Channel>, String> {
-    tracing::info!("[IPTV] loading M3U playlist name={:?} url={}", name, url);
+    tracing::info!(
+        "[IPTV] loading M3U playlist name={:?} url={}",
+        name,
+        redact_credentials(&url)
+    );
     let playlist = fetch_and_parse_m3u_with_epg(&url)
         .await
         .map_err(|e| {
@@ -366,7 +372,7 @@ pub async fn refresh_epg(
         return Err("No EPG URL configured for this provider".into());
     };
 
-    tracing::info!("[EPG] fetching EPG from {}", url);
+    tracing::info!("[EPG] fetching EPG from {}", redact_credentials(&url));
     let epg_data = fetch_and_parse_epg(&url)
         .await
         .map_err(|e| format!("Failed to fetch EPG: {e}"))?;
@@ -759,8 +765,6 @@ pub async fn test_opensubtitles_api_key(key: String) -> Result<bool, String> {
     }
 }
 
-const OPENSUBTITLES_SEARCH_CACHE_TTL: i64 = 24 * 60 * 60;
-
 /// Search subtitles for a channel. Resolves IMDB ID from OMDB cache first.
 /// Returns None if no OpenSubtitles API key is configured or no OMDB data.
 #[command]
@@ -774,7 +778,7 @@ pub async fn search_subtitles<R: Runtime>(
     // 1. Check search cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        match cache.get_opensubtitles_search_cache(&imdb_id, season, episode, OPENSUBTITLES_SEARCH_CACHE_TTL) {
+        match cache.get_opensubtitles_search_cache(&imdb_id, season, episode, SEARCH_CACHE_TTL_SECS) {
             Ok(Some(data)) => {
                 tracing::debug!("[OpenSubtitles] search cache hit for imdb_id={}", imdb_id);
                 return Ok(Some(data));
