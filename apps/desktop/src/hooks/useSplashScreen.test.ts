@@ -252,6 +252,36 @@ describe("useSplashScreen", () => {
 		expect(result.current.allDone).toBe(true);
 	});
 
+	it("counts the EPG sources that failed when only some do", async () => {
+		const epgUrl = "http://epg.example.com/guide.xml";
+		mockUseChannels.mockReturnValue({
+			providers: [
+				{ id: "p1", lastUpdated: new Date().toISOString(), epgUrl },
+				{ id: "p2", lastUpdated: new Date().toISOString(), epgUrl },
+			],
+			initialized: true,
+		} as never);
+		mockLoadProviderSettings.mockReturnValue({
+			autoRefresh: false,
+			refreshIntervalHours: 24,
+			epgAutoRefresh: true,
+			epgRefreshIntervalHours: 24,
+		});
+		mockRefreshEpg.mockImplementation((id: string) =>
+			id === "p2" ? Promise.reject(new Error("offline")) : Promise.resolve()
+		);
+
+		const updateState = makeUpdateState();
+		const { result } = renderHook(() => useSplashScreen({ updateState }));
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+
+		const epg = result.current.steps.find((s) => s.id === "epg");
+		expect(epg?.status).toBe("error");
+		expect(epg?.label).toBe("Failed to refresh 1 of 2 EPG sources");
+		const playlists = result.current.steps.find((s) => s.id === "playlists");
+		expect(playlists?.label).toBe("Playlists up to date");
+	});
+
 	it("dismiss() sets dismissed=true and stores session key", async () => {
 		const updateState = makeUpdateState();
 		const { result } = renderHook(() => useSplashScreen({ updateState }));

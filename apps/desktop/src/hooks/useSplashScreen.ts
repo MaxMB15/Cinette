@@ -33,6 +33,22 @@ export interface SplashScreenState {
 
 const SESSION_KEY = "splash-shown";
 
+/** One of the splash steps that refreshes a list of providers. */
+interface RefreshStep {
+	id: string;
+	ids: string[];
+	refresh: (id: string) => Promise<unknown>;
+	labels: {
+		active: string;
+		failed: string;
+		/** Plural noun for the partial failure message. */
+		sources: string;
+		done: string;
+		upToDate: string;
+		none: string;
+	};
+}
+
 interface UseSplashScreenOptions {
 	updateState: UpdateState;
 	onComplete?: (didRefreshProviders: boolean) => void;
@@ -98,59 +114,66 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 
 			const didRefreshProviders = providerRefreshIds.length > 0;
 
-			// Step 2: Refresh playlists (always shown; mark done immediately if nothing to do)
-			setStepStatus("playlists", "active", "Refreshing playlists…");
-			if (didRefreshProviders) {
-				const results = await Promise.allSettled(
-					providerRefreshIds.map((id) => refreshProvider(id))
-				);
-				if (cancelled) return;
+			// Runs one refresh step and returns false if the effect was cleaned up
+			// while it waited, so the caller stops too.
+			const runRefreshStep = async (step: RefreshStep): Promise<boolean> => {
+				setStepStatus(step.id, "active", step.labels.active);
+				if (step.ids.length === 0) {
+					setStepStatus(
+						step.id,
+						"done",
+						hasAnyProviders ? step.labels.upToDate : step.labels.none
+					);
+					return true;
+				}
+				const results = await Promise.allSettled(step.ids.map((id) => step.refresh(id)));
+				if (cancelled) return false;
 				const failed = results.filter((r) => r.status === "rejected").length;
 				if (failed === results.length) {
-					setStepStatus("playlists", "error", "Failed to refresh playlists");
+					setStepStatus(step.id, "error", step.labels.failed);
 				} else if (failed > 0) {
 					setStepStatus(
-						"playlists",
+						step.id,
 						"error",
-						`Failed to refresh ${failed} of ${results.length} playlists`
+						`Failed to refresh ${failed} of ${results.length} ${step.labels.sources}`
 					);
 				} else {
-					setStepStatus("playlists", "done", "Playlists refreshed");
+					setStepStatus(step.id, "done", step.labels.done);
 				}
-			} else {
-				setStepStatus(
-					"playlists",
-					"done",
-					hasAnyProviders ? "Playlists up to date" : "No playlists configured"
-				);
-			}
+				return true;
+			};
+
+			// Step 2: Refresh playlists (always shown; mark done immediately if nothing to do)
+			const playlistsFinished = await runRefreshStep({
+				id: "playlists",
+				ids: providerRefreshIds,
+				refresh: refreshProvider,
+				labels: {
+					active: "Refreshing playlists…",
+					failed: "Failed to refresh playlists",
+					sources: "playlists",
+					done: "Playlists refreshed",
+					upToDate: "Playlists up to date",
+					none: "No playlists configured",
+				},
+			});
+			if (!playlistsFinished) return;
 
 			// Step 3: Refresh EPG (always shown; mark done immediately if nothing to do)
-			setStepStatus("epg", "active", "Checking EPG…");
-			if (epgRefreshIds.length > 0) {
-				const results = await Promise.allSettled(
-					epgRefreshIds.map((id) => refreshEpg(id).then(() => setEpgLastRefresh(id)))
-				);
-				if (cancelled) return;
-				const failed = results.filter((r) => r.status === "rejected").length;
-				if (failed === results.length) {
-					setStepStatus("epg", "error", "Failed to refresh EPG");
-				} else if (failed > 0) {
-					setStepStatus(
-						"epg",
-						"error",
-						`Failed to refresh ${failed} of ${results.length} EPG sources`
-					);
-				} else {
-					setStepStatus("epg", "done", "EPG refreshed");
-				}
-			} else {
-				setStepStatus(
-					"epg",
-					"done",
-					hasAnyProviders ? "EPG up to date" : "No EPG configured"
-				);
-			}
+			const epgFinished = await runRefreshStep({
+				id: "epg",
+				ids: epgRefreshIds,
+				refresh: (id) => refreshEpg(id).then(() => setEpgLastRefresh(id)),
+				labels: {
+					active: "Checking EPG…",
+					failed: "Failed to refresh EPG",
+					sources: "EPG sources",
+					done: "EPG refreshed",
+					upToDate: "EPG up to date",
+					none: "No EPG configured",
+				},
+			});
+			if (!epgFinished) return;
 
 			if (!updateState.supported) {
 				setAllDone(true);
