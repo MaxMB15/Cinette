@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Tv2, Loader2 } from "lucide-react";
 import type { Channel, EpgProgram } from "@/lib/types";
 import { getEpgProgrammes } from "@/lib/tauri";
+import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { EpgTimelineBar, WINDOW_PAST, WINDOW_FUTURE } from "./EpgTimelineBar";
 
 interface LiveInfoDrawerProps {
@@ -85,6 +86,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 		setVisible(false);
 		setTimeout(onClose, 300);
 	}, [onClose]);
+	const { sheetRef, handleProps } = useSheetDrag({ onClose: handleClose, enabled: visible });
 
 	return (
 		<div className="fixed inset-0 z-50">
@@ -98,17 +100,24 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 
 			{/* Drawer */}
 			<div
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-transform duration-300 ease-out max-h-[85vh] overflow-hidden ${
+				ref={sheetRef}
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
 				{/* Handle */}
-				<div className="flex justify-center pt-3 pb-1 shrink-0">
+				<div
+					{...handleProps}
+					className="flex justify-center pt-3 pb-1 shrink-0 select-none"
+				>
 					<div className="w-9 h-1 rounded-full bg-border" />
 				</div>
 
 				{/* Header row: logo + name + close */}
-				<div className="flex items-center gap-3 px-5 pt-2 pb-4 shrink-0">
+				<div
+					{...handleProps}
+					className="flex items-center gap-3 px-5 pt-2 pb-4 shrink-0 select-none"
+				>
 					<div className="w-10 h-10 rounded-lg bg-secondary overflow-hidden shrink-0 flex items-center justify-center">
 						{channel.logoUrl ? (
 							<img

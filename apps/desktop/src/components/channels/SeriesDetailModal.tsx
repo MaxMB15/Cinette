@@ -25,6 +25,7 @@ import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
+import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 
@@ -122,6 +123,7 @@ export const SeriesDetailModal = ({
 		setVisible(false);
 		setTimeout(onClose, 300);
 	};
+	const { sheetRef, handleProps } = useSheetDrag({ onClose: handleClose, enabled: visible });
 
 	const { bySeries } = useDownloads();
 	// Episode channelId → its download record, for this series.
@@ -266,17 +268,24 @@ export const SeriesDetailModal = ({
 
 			{/* Drawer */}
 			<div
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-transform duration-300 ease-out max-h-[85vh] ${
+				ref={sheetRef}
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
 				{/* Handle */}
-				<div className="flex justify-center pt-3 pb-1 shrink-0">
+				<div
+					{...handleProps}
+					className="flex justify-center pt-3 pb-1 shrink-0 select-none"
+				>
 					<div className="w-9 h-1 rounded-full bg-border" />
 				</div>
 
 				{/* Header row */}
-				<div className="flex items-center justify-between px-5 py-2 shrink-0">
+				<div
+					{...handleProps}
+					className="flex items-center justify-between px-5 py-2 shrink-0 select-none"
+				>
 					{step !== "seasons" ? (
 						<button
 							onClick={handleBack}
