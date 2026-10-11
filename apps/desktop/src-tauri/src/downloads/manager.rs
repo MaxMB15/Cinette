@@ -17,11 +17,12 @@ use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_store::StoreExt;
 
-/// The download folder and concurrency live in the same store file as the
-/// other settings so they survive a restart.
+/// The download settings live in the same store file as the other settings
+/// so they survive a restart.
 const SETTINGS_STORE_FILE: &str = "settings.json";
 const FOLDER_KEY: &str = "download_folder";
 const CONCURRENCY_KEY: &str = "download_concurrency";
+const RETENTION_KEY: &str = "download_retention_days";
 /// Matches the range the Settings page allows.
 const MAX_CONCURRENCY: usize = 10;
 
@@ -37,6 +38,9 @@ pub struct DownloadManager {
     pub concurrency: Mutex<usize>,
     pub root: Mutex<PathBuf>,
     pub running: Mutex<HashMap<String, RunningChildHandle>>,
+    /// Days to keep a finished download before deleting it, or `None` to keep
+    /// downloads until the user removes them.
+    pub retention_days: Mutex<Option<u32>>,
 }
 
 impl DownloadManager {
@@ -45,6 +49,7 @@ impl DownloadManager {
             concurrency: Mutex::new(3),
             root: Mutex::new(default_root),
             running: Mutex::new(HashMap::new()),
+            retention_days: Mutex::new(None),
         }
     }
 
@@ -63,9 +68,17 @@ impl DownloadManager {
     pub fn set_concurrency(&self, n: usize) {
         *self.concurrency.lock().unwrap() = n.max(1);
     }
+
+    pub fn retention_days(&self) -> Option<u32> {
+        *self.retention_days.lock().unwrap()
+    }
+
+    pub fn set_retention_days(&self, days: Option<u32>) {
+        *self.retention_days.lock().unwrap() = days;
+    }
 }
 
-/// Apply the download folder and concurrency saved in an earlier session.
+/// Apply the download settings saved in an earlier session.
 /// Call once after `DownloadManager` is managed. A missing or unreadable
 /// store leaves the defaults in place.
 pub fn restore_settings<R: Runtime>(app: &AppHandle<R>) {
@@ -87,6 +100,9 @@ pub fn restore_settings<R: Runtime>(app: &AppHandle<R>) {
     if let Some(n) = store.get(CONCURRENCY_KEY).and_then(|v| v.as_u64()) {
         manager.set_concurrency((n as usize).min(MAX_CONCURRENCY));
     }
+    if let Some(days) = store.get(RETENTION_KEY).and_then(|v| v.as_u64()) {
+        manager.set_retention_days(u32::try_from(days).ok());
+    }
 }
 
 /// Save the download folder so the next launch uses it.
@@ -97,6 +113,11 @@ pub fn save_folder<R: Runtime>(app: &AppHandle<R>, folder: &str) -> Result<(), S
 /// Save the download concurrency so the next launch uses it.
 pub fn save_concurrency<R: Runtime>(app: &AppHandle<R>, n: usize) -> Result<(), String> {
     save_setting(app, CONCURRENCY_KEY, serde_json::Value::from(n))
+}
+
+/// Save the retention setting so the next launch uses it. `None` saves null.
+pub fn save_retention<R: Runtime>(app: &AppHandle<R>, days: Option<u32>) -> Result<(), String> {
+    save_setting(app, RETENTION_KEY, serde_json::Value::from(days))
 }
 
 fn save_setting<R: Runtime>(
@@ -141,6 +162,8 @@ pub fn enqueue_record<R: Runtime>(
         error: None,
         created_at: now,
         finished_at: None,
+        keep: false,
+        last_played_at: None,
     };
     {
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
@@ -402,7 +425,23 @@ fn current_status<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<DownloadSt
     status
 }
 
-fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
+/// Delete a download's file and record, then tell the frontend so it drops
+/// the download from its list.
+pub fn remove<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
+    {
+        let app_state = app.state::<AppState>();
+        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+        if let Some(rec) = cache.get_download(id).map_err(|e| e.to_string())? {
+            let _ = std::fs::remove_file(&rec.dest_path);
+        }
+        cache.delete_download(id).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("download://removed", id);
+    Ok(())
+}
+
+/// Send the download's current record to the frontend.
+pub(crate) fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let app_state = app.state::<AppState>();
     let rec = {
         let Ok(cache) = app_state.cache.lock() else {

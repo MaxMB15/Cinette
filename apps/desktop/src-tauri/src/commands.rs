@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::downloads::manager::{self, DownloadManager};
+use crate::downloads::retention;
 use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
@@ -1501,27 +1502,32 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 
 /// Remove a completed download: delete the file and the DB row.
 #[command]
-pub async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let path = {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        cache.get_download(&id).map_err(|e| e.to_string())?.map(|r| r.dest_path)
-    };
-    if let Some(p) = path {
-        let _ = std::fs::remove_file(&p);
-    }
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.delete_download(&id).map_err(|e| e.to_string())
+pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
+    manager::remove(&app, &id)
 }
 
 #[command]
-pub async fn remove_downloads(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
     for id in ids {
-        if let Ok(Some(rec)) = cache.get_download(&id) {
-            let _ = std::fs::remove_file(&rec.dest_path);
-        }
-        cache.delete_download(&id).map_err(|e| e.to_string())?;
+        manager::remove(&app, &id)?;
     }
+    Ok(())
+}
+
+/// Keep a download even when the retention setting would delete it, or stop
+/// keeping it.
+#[command]
+pub async fn set_download_keep(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    keep: bool,
+) -> Result<(), String> {
+    {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        cache.set_download_keep(&id, keep).map_err(|e| e.to_string())?;
+    }
+    manager::emit_progress(&app, &id);
     Ok(())
 }
 
@@ -1561,23 +1567,59 @@ pub async fn get_download_folder(manager: State<'_, DownloadManager>) -> Result<
     Ok(manager.root().to_string_lossy().to_string())
 }
 
+#[command]
+pub async fn get_download_retention(
+    manager: State<'_, DownloadManager>,
+) -> Result<Option<u32>, String> {
+    Ok(manager.retention_days())
+}
+
+/// Save how many days finished downloads are kept, or `None` for no limit,
+/// then delete what's already past it. Returns how many were deleted.
+#[command]
+pub async fn set_download_retention(
+    manager: State<'_, DownloadManager>,
+    app: AppHandle,
+    days: Option<u32>,
+) -> Result<usize, String> {
+    // Save first, so a failed write doesn't delete anything.
+    manager::save_retention(&app, days)?;
+    manager.set_retention_days(days);
+    retention::sweep(&app)
+}
+
+/// How many downloads a retention of `days` would delete right now, so
+/// Settings can ask before changing it.
+#[command]
+pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<usize, String> {
+    Ok(retention::due_ids(&app, days)?.len())
+}
+
 /// Given a channel id, return the local file path if a completed download
 /// exists (and the file is present on disk), else None. The frontend calls this
-/// before playback and passes the local path to mpvLoad when present.
+/// before playback and passes the local path to mpvLoad when present, so this
+/// also records the play, which restarts the retention count.
 #[command]
 pub async fn resolve_local_download(
+    app: AppHandle,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<String>, String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let rec = cache
-        .completed_download_for_channel(&channel_id)
-        .map_err(|e| e.to_string())?;
-    Ok(rec.and_then(|r| {
-        if std::path::Path::new(&r.dest_path).exists() {
-            Some(r.dest_path)
-        } else {
-            None
+    let rec = {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        let rec = cache
+            .completed_download_for_channel(&channel_id)
+            .map_err(|e| e.to_string())?
+            .filter(|r| std::path::Path::new(&r.dest_path).exists());
+        if let Some(r) = &rec {
+            cache
+                .mark_download_played(&r.id, manager::now_secs())
+                .map_err(|e| e.to_string())?;
         }
+        rec
+    };
+    Ok(rec.map(|r| {
+        manager::emit_progress(&app, &r.id);
+        r.dest_path
     }))
 }

@@ -42,7 +42,12 @@ import {
 	setDownloadFolder,
 	getDownloadConcurrency,
 	setDownloadConcurrency,
+	countDownloadsDue,
 } from "@/lib/tauri";
+import { Select } from "@/components/ui/select";
+import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { useDownloads } from "@/hooks/useDownloads";
+import { RETENTION_OPTIONS } from "@/lib/retention";
 import {
 	MAX_VOLUME,
 	readDefaultVolume,
@@ -149,6 +154,12 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [concurrency, setConcurrency] = useState(3);
 	const [showDownloadHistory, setShowDownloadHistory] = useState(false);
 	const folderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const { retentionDays, setRetentionDays } = useDownloads();
+	/** A shorter retention that would delete downloads at once, waiting on a yes. */
+	const [pendingRetention, setPendingRetention] = useState<{
+		days: number | null;
+		count: number;
+	} | null>(null);
 
 	useEffect(() => {
 		getVersion()
@@ -349,6 +360,15 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		const clamped = Math.max(1, Math.min(10, Math.round(n)));
 		setConcurrency(clamped);
 		setDownloadConcurrency(clamped).catch(() => {});
+	};
+
+	/** `value` is a choice from RETENTION_OPTIONS, where 0 means never delete. */
+	const handleRetentionChange = async (value: number) => {
+		const days = value > 0 ? value : null;
+		if (days === retentionDays) return;
+		const count = days === null ? 0 : await countDownloadsDue(days).catch(() => 0);
+		if (count > 0) setPendingRetention({ days, count });
+		else setRetentionDays(days).catch(() => {});
 	};
 
 	return (
@@ -785,6 +805,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								/>
 							</div>
 
+							{/* Retention */}
+							<div>
+								<p className="text-sm font-medium mb-1">Delete downloads after</p>
+								<p className="text-xs text-muted-foreground mb-2">
+									The app deletes a finished download this long after it was
+									downloaded or last played. Choose Keep on a download to hold on
+									to it.
+								</p>
+								<Select
+									value={retentionDays ?? 0}
+									onChange={(v) => void handleRetentionChange(v)}
+									options={RETENTION_OPTIONS}
+									aria-label="Delete downloads after"
+									className="w-40"
+								/>
+							</div>
+
 							{/* History — opened in a wide popup (Settings is too narrow). */}
 							<div>
 								<p className="text-sm font-medium mb-2">Download history</p>
@@ -984,6 +1021,21 @@ export const Settings = ({ updateState }: SettingsProps) => {
 				</Card>
 			</div>
 
+			<ConfirmDialog
+				open={pendingRetention !== null}
+				title="Delete downloads now?"
+				message={
+					pendingRetention?.count === 1
+						? "1 download is already past this setting. It will be deleted now."
+						: `${pendingRetention?.count} downloads are already past this setting. They will be deleted now.`
+				}
+				confirmLabel="Delete"
+				onConfirm={() => {
+					if (pendingRetention) setRetentionDays(pendingRetention.days).catch(() => {});
+					setPendingRetention(null);
+				}}
+				onCancel={() => setPendingRetention(null)}
+			/>
 			<DownloadHistoryDialog
 				open={showDownloadHistory}
 				onClose={() => setShowDownloadHistory(false)}

@@ -16,6 +16,7 @@ import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { RetentionNote } from "@/components/downloads/RetentionNote";
 
 interface MovieInfoDrawerProps {
 	movie: Channel;
@@ -260,6 +261,7 @@ export const MovieInfoDrawer = ({
 								className="w-full justify-center rounded-xl border border-border py-2.5 text-sm font-semibold hover:bg-accent"
 							/>
 						)}
+						{dl && <RetentionNote records={[dl]} className="px-1" />}
 					</div>
 				</div>
 

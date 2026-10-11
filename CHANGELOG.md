@@ -13,6 +13,11 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
+- Settings > Downloads > Delete downloads after. It deletes finished downloads 7, 14, 30 or 90 days after they were downloaded or last played. Keep on a download holds on to it. The Downloads tab, the movie and series pages and the download history show when each download goes (#100).
+
+### Fixed
+
+- A removed download stayed on the Downloads tab until the app restarted (#100).
 
 ## [0.5.3] - 2026-10-09
 

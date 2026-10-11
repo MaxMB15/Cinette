@@ -397,3 +397,16 @@ export const setDownloadFolder = (path: string): Promise<void> =>
 
 export const resolveLocalDownload = (channelId: string): Promise<string | null> =>
 	invoke("resolve_local_download", { channelId });
+
+export const setDownloadKeep = (id: string, keep: boolean): Promise<void> =>
+	invoke("set_download_keep", { id, keep });
+
+/** Days finished downloads are kept, or null to keep them until removed. */
+export const getDownloadRetention = (): Promise<number | null> => invoke("get_download_retention");
+
+/** Resolves to how many downloads the new setting deleted right away. */
+export const setDownloadRetention = (days: number | null): Promise<number> =>
+	invoke("set_download_retention", { days });
+
+export const countDownloadsDue = (days: number | null): Promise<number> =>
+	invoke("count_downloads_due", { days });

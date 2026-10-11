@@ -26,6 +26,7 @@ import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { RetentionNote } from "@/components/downloads/RetentionNote";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 
 interface SeriesDetailDrawerProps {
@@ -286,7 +287,7 @@ export const SeriesDetailModal = ({
 							{backLabel}
 						</button>
 					) : (
-						<div className="flex-1">
+						<div className="flex-1 flex items-center gap-3">
 							<DownloadButton
 								showLabel
 								state={seriesState}
@@ -297,6 +298,7 @@ export const SeriesDetailModal = ({
 								removeSummary={`${seriesCompletedIds.length} ${seriesCompletedIds.length === 1 ? "episode" : "episodes"}`}
 								className="text-sm text-muted-foreground hover:text-foreground"
 							/>
+							<RetentionNote records={seriesRecs} compact />
 						</div>
 					)}
 					<button
@@ -533,6 +535,13 @@ export const SeriesDetailModal = ({
 											{sourceCount} sources
 											<ChevronRight className="h-3 w-3" />
 										</button>
+									)}
+									{epDl && (
+										<RetentionNote
+											records={[epDl]}
+											compact
+											className="shrink-0 px-1"
+										/>
 									)}
 									<DownloadButton
 										state={epState}

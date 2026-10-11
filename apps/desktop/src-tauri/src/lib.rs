@@ -133,6 +133,10 @@ pub fn run() {
             commands::set_download_folder,
             commands::get_download_folder,
             commands::resolve_local_download,
+            commands::set_download_keep,
+            commands::get_download_retention,
+            commands::set_download_retention,
+            commands::count_downloads_due,
         ])
         .setup(|app| {
             let app_dir = app
@@ -163,6 +167,7 @@ pub fn run() {
             let downloads_root = app_dir.join("downloads");
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             crate::downloads::manager::restore_settings(app.handle());
+            crate::downloads::retention::start(app.handle());
 
             #[cfg(desktop)]
             {
