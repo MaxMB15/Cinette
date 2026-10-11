@@ -21,14 +21,28 @@ import type {
 
 // --- MPV Player Commands ---
 
+// Loads and stops reach mpv one at a time, in the order they were called.
+// Rust runs each command on its own thread, so a stop sent without waiting
+// for it could otherwise land after a newer load and end that stream.
+let lastTransition: Promise<void> = Promise.resolve();
+
+const inOrder = (run: () => Promise<void>): Promise<void> => {
+	const result = lastTransition.then(run);
+	lastTransition = result.then(
+		() => {},
+		() => {}
+	);
+	return result;
+};
+
 export const mpvLoad = (url: string, startPos?: number, hwdec = true): Promise<void> =>
-	invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec });
+	inOrder(() => invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec }));
 
 export const mpvPlay = (): Promise<void> => invoke("plugin:mpv|mpv_play");
 
 export const mpvPause = (): Promise<void> => invoke("plugin:mpv|mpv_pause");
 
-export const mpvStop = (): Promise<void> => invoke("plugin:mpv|mpv_stop");
+export const mpvStop = (): Promise<void> => inOrder(() => invoke("plugin:mpv|mpv_stop"));
 
 export const mpvSeek = (position: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_seek", { position });

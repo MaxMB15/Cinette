@@ -69,8 +69,13 @@ The app hasn't run on a physical device yet, so treat this as the first test.
    Pick the Mac's Wi-Fi address if it asks. Keep the command running, because the
    app loads its pages from it and Xcode's "Build Rust Code" step talks to it.
 3. In Xcode, choose the device as the run destination and click Run. The project
-   signs automatically with team `3MLC4VWP96`. The first time, Xcode registers
-   `com.maxvideoplayer.app` and makes a development profile for it.
+   signs automatically with team `3MLC4VWP96`, the maintainer's. The first time,
+   Xcode registers `com.maxvideoplayer.app` and makes a development profile for it.
+
+   If you're not on that team, select the `max-video-player_iOS` target, open
+   Signing & Capabilities, and pick your own team. Change the bundle identifier
+   too, because `com.maxvideoplayer.app` belongs to the maintainer's team. Don't
+   commit either change.
 
 The phone and the Mac have to be on the same network. TestFlight builds don't need
 the Mac, as described below.

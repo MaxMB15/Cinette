@@ -172,9 +172,23 @@ pub fn set_idle_timer_disabled(disabled: bool) {
 pub fn set_audio_active(active: bool) {
     unsafe { mvp_ios_set_audio_active(active) };
     if !active {
+        // Swift queues both calls on the main queue in order. Holding the
+        // lock means an update a watcher already queued runs before the
+        // clear, and no watcher can queue one after it.
+        let mut owner = NOW_PLAYING_OWNER.lock().unwrap_or_else(|p| p.into_inner());
+        *owner = 0;
         unsafe { mvp_ios_now_playing_clear() };
     }
 }
+
+/// The watcher allowed to update Now Playing, by the id `attach` gave it.
+/// Zero after playback stops, until the next stream starts. A watcher from
+/// an old stream can still be running for a moment after its stream
+/// stopped. `MpvState` runs one load or stop at a time, so a stop never
+/// takes this from a stream that started after it.
+static NOW_PLAYING_OWNER: Mutex<u64> = Mutex::new(0);
+
+static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
 
 /// What the frontend knows about the stream that mpv can't tell: the
 /// channel name, and whether it's live. mpv's `media-title` for a stream is
@@ -249,9 +263,11 @@ impl PlatformRenderer for IosMetalRenderer {
             .get_mut()
             .unwrap_or_else(|p| p.into_inner())
             .take();
+        let id = NEXT_WATCHER_ID.fetch_add(1, Ordering::Relaxed);
+        *NOW_PLAYING_OWNER.lock().unwrap_or_else(|p| p.into_inner()) = id;
         std::thread::Builder::new()
             .name("mpv-ios-watcher".into())
-            .spawn(move || run_watcher(client, kill, first_frame))
+            .spawn(move || run_watcher(client, id, kill, first_frame))
             .map_err(|e| format!("spawn watcher: {e}"))?;
         Ok(())
     }
@@ -300,6 +316,7 @@ const OBSERVE_TITLE: u64 = 4;
 /// resize its output when the view changes size, see [`OutputResize`].
 fn run_watcher(
     mut client: Mpv,
+    id: u64,
     kill: Arc<AtomicBool>,
     mut first_frame: Option<Box<dyn FnOnce() + Send>>,
 ) {
@@ -387,7 +404,10 @@ fn run_watcher(
             let title_ptr = title.map_or(std::ptr::null(), |t| t.as_ptr());
             // Zero duration tells Swift the stream is live.
             let length = if info.live { 0.0 } else { duration };
-            unsafe { mvp_ios_now_playing(title_ptr, length, position, !paused) };
+            let owner = NOW_PLAYING_OWNER.lock().unwrap_or_else(|p| p.into_inner());
+            if *owner == id {
+                unsafe { mvp_ios_now_playing(title_ptr, length, position, !paused) };
+            }
         }
     }
 
