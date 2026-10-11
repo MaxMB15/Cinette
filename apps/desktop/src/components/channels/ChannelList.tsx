@@ -37,6 +37,7 @@ import {
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, dedupeByTitle } from "@/lib/channels";
+import { nowSeconds } from "@/lib/date";
 import type {
 	Channel,
 	Category,
@@ -207,7 +208,7 @@ export const ChannelList = () => {
 
 	// Compute dynamic EPG display window: now line at 1/3 mark, 100–200 px per hour
 	const { windowStart, windowEnd } = useMemo(() => {
-		const now = Math.floor(Date.now() / 1000);
+		const now = nowSeconds();
 		// containerWidth is content-box width (inside px-3 padding).
 		// Rows inside have no extra padding, so timeline = containerWidth minus the two fixed columns.
 		const effectiveWidth = containerWidth > 0 ? containerWidth : 400;
@@ -349,7 +350,7 @@ export const ChannelList = () => {
 	// Fetch EPG for all live channels: 2h past + 4h future = 6h window (generous for wider displays)
 	useEffect(() => {
 		if (activeTab !== "live" || channels.length === 0) return;
-		const now = Math.floor(Date.now() / 1000);
+		const now = nowSeconds();
 		getEpgForLiveChannels(now - 7200, now + 14400)
 			.then((progs) => {
 				const map = new Map<string, EpgProgram[]>();
@@ -370,7 +371,7 @@ export const ChannelList = () => {
 			return;
 		}
 		const timer = setTimeout(() => {
-			const now = Math.floor(Date.now() / 1000);
+			const now = nowSeconds();
 			searchEpgProgrammes(search.trim(), now)
 				.then(setEpgSearchResults)
 				.catch(() => {});
@@ -629,7 +630,7 @@ export const ChannelList = () => {
 		navState.level === "group" ||
 		activeTab === "favorites" ||
 		activeTab === "history";
-	const nowSec = Math.floor(Date.now() / 1000);
+	const nowSec = nowSeconds();
 
 	// Grid marks for sticky header and background gridlines (uses same window as ChannelCard)
 	const headerGridMarks = useMemo(

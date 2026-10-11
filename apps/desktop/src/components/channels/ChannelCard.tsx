@@ -10,6 +10,7 @@ import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { nowSeconds } from "@/lib/date";
 import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
 /** Width (px) of the left channel-info column in RowCard — must match spacer in ChannelList header. */
@@ -89,7 +90,7 @@ const RowCardView = ({
 	windowStart?: number;
 	windowEnd?: number;
 }) => {
-	const now = Math.floor(Date.now() / 1000);
+	const now = nowSeconds();
 
 	return (
 		/* Outer wrapper is a div (not button) so nested buttons and div[role=button] inside

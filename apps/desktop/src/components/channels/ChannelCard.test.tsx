@@ -5,6 +5,7 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { ChannelCard } from "./ChannelCard";
 import type { Channel, EpgProgram } from "@/lib/types";
+import { nowSeconds } from "@/lib/date";
 
 vi.mock("@/hooks/useDownloads", () => ({
 	useDownloads: () => ({ byChannel: new Map(), bySeries: new Map() }),
@@ -21,7 +22,7 @@ const channel: Channel = {
 	sources: [],
 };
 
-const now = Math.floor(Date.now() / 1000);
+const now = nowSeconds();
 const programme = (title: string, start: number, end: number): EpgProgram => ({
 	channelId: "news24",
 	title,
