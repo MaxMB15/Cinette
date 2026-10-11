@@ -275,6 +275,10 @@ impl XtreamClient {
 /// Authenticate then fetch all 6 Xtream endpoints simultaneously (3 stream lists + 3 category
 /// lists). Each fetch is independent. A failed one is logged and skipped, so a server that
 /// supports only some endpoints still returns what it can.
+///
+/// Channel ids come from the panel's own stream and series ids, so favorites,
+/// history and downloads stay with the same channel when the panel reorders
+/// its lists.
 pub async fn fetch_xtream_channels(
     server: &str,
     username: &str,
@@ -311,8 +315,7 @@ pub async fn fetch_xtream_channels(
         all.extend(
             streams
                 .into_iter()
-                .enumerate()
-                .filter_map(|(i, s)| live_channel(creds, &live_cats, i, s)),
+                .filter_map(|s| live_channel(creds, &live_cats, s)),
         );
     }
 
@@ -320,8 +323,7 @@ pub async fn fetch_xtream_channels(
         all.extend(
             streams
                 .into_iter()
-                .enumerate()
-                .filter_map(|(i, s)| vod_channel(creds, &vod_cats, i, s)),
+                .filter_map(|s| vod_channel(creds, &vod_cats, s)),
         );
     }
 
@@ -329,8 +331,7 @@ pub async fn fetch_xtream_channels(
         all.extend(
             series_list
                 .into_iter()
-                .enumerate()
-                .filter_map(|(i, s)| series_channel(&series_cats, i, s)),
+                .filter_map(|s| series_channel(&series_cats, s)),
         );
     }
 
@@ -340,7 +341,21 @@ pub async fn fetch_xtream_channels(
         ));
     }
 
+    make_ids_unique(&mut all);
     Ok(all)
+}
+
+/// Gives a repeated id a `-2`, `-3` and so on suffix, in list order. Panels
+/// shouldn't list a stream twice, but the cache needs every id to be unique.
+fn make_ids_unique(channels: &mut [Channel]) {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for ch in channels.iter_mut() {
+        let count = seen.entry(ch.id.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            ch.id = format!("{}-{count}", ch.id);
+        }
+    }
 }
 
 /// Logs an endpoint that failed. The errors carry no URL, so the login stays out
@@ -354,13 +369,12 @@ fn warn_if_failed<T>(action: &str, result: &Result<T, XtreamError>) {
 fn live_channel(
     creds: &XtreamCredentials,
     categories: &HashMap<String, String>,
-    index: usize,
     stream: XtreamStream,
 ) -> Option<Channel> {
     let stream_id = stream.stream_id?;
     let ext = stream.container_extension.as_deref().unwrap_or("ts");
     Some(Channel {
-        id: format!("xt-{index}"),
+        id: format!("live-{stream_id}"),
         url: creds.live_stream_url(stream_id, ext),
         name: stream.name.unwrap_or_else(|| format!("Stream {stream_id}")),
         logo_url: stream.stream_icon.filter(|u| !u.is_empty()),
@@ -374,13 +388,12 @@ fn live_channel(
 fn vod_channel(
     creds: &XtreamCredentials,
     categories: &HashMap<String, String>,
-    index: usize,
     stream: XtreamStream,
 ) -> Option<Channel> {
     let stream_id = stream.stream_id?;
     let ext = stream.container_extension.as_deref().unwrap_or("mp4");
     Some(Channel {
-        id: format!("vod-{index}"),
+        id: format!("movie-{stream_id}"),
         url: creds.vod_stream_url(stream_id, ext),
         name: stream.name.unwrap_or_else(|| format!("VOD {stream_id}")),
         logo_url: stream.stream_icon.filter(|u| !u.is_empty()),
@@ -392,14 +405,10 @@ fn vod_channel(
 
 /// Series come without episodes, which are fetched when the user opens one,
 /// so the URL only records which series it is.
-fn series_channel(
-    categories: &HashMap<String, String>,
-    index: usize,
-    series: XtreamSeries,
-) -> Option<Channel> {
+fn series_channel(categories: &HashMap<String, String>, series: XtreamSeries) -> Option<Channel> {
     let series_id = series.series_id?;
     Some(Channel {
-        id: format!("ser-{index}"),
+        id: format!("series-{series_id}"),
         name: series.name.unwrap_or_else(|| format!("Series {series_id}")),
         url: format!("xtream://series/{series_id}"),
         logo_url: series.cover.filter(|u| !u.is_empty()),
@@ -797,9 +806,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            live_channel(&creds, &categories(), 2, stream),
+            live_channel(&creds, &categories(), stream),
             Some(Channel {
-                id: "xt-2".into(),
+                id: "live-7".into(),
                 name: "CNN".into(),
                 url: "http://srv/live/u/p/7.ts".into(),
                 logo_url: Some("http://img/cnn.png".into()),
@@ -822,9 +831,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            vod_channel(&creds, &categories(), 0, stream),
+            vod_channel(&creds, &categories(), stream),
             Some(Channel {
-                id: "vod-0".into(),
+                id: "movie-9".into(),
                 name: "VOD 9".into(),
                 url: "http://srv/movie/u/p/9.mp4".into(),
                 group_title: "Uncategorized".into(),
@@ -843,9 +852,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            series_channel(&categories(), 1, series),
+            series_channel(&categories(), series),
             Some(Channel {
-                id: "ser-1".into(),
+                id: "series-5".into(),
                 name: "Series 5".into(),
                 url: "xtream://series/5".into(),
                 logo_url: Some("http://img/wire.jpg".into()),
@@ -860,9 +869,26 @@ mod tests {
     fn test_entries_without_an_id_are_skipped() {
         let creds = XtreamCredentials::new("http://srv", "u", "p");
         let stream = || serde_json::from_value::<XtreamStream>(json!({ "name": "x" })).unwrap();
-        assert_eq!(live_channel(&creds, &categories(), 0, stream()), None);
-        assert_eq!(vod_channel(&creds, &categories(), 0, stream()), None);
+        assert_eq!(live_channel(&creds, &categories(), stream()), None);
+        assert_eq!(vod_channel(&creds, &categories(), stream()), None);
         let series: XtreamSeries = serde_json::from_value(json!({ "name": "x" })).unwrap();
-        assert_eq!(series_channel(&categories(), 0, series), None);
+        assert_eq!(series_channel(&categories(), series), None);
+    }
+
+    #[test]
+    fn a_stream_listed_twice_gets_a_second_id() {
+        let channel = |id: &str| Channel {
+            id: id.into(),
+            ..Default::default()
+        };
+        let mut channels = vec![
+            channel("live-7"),
+            channel("live-8"),
+            channel("live-7"),
+            channel("live-7"),
+        ];
+        make_ids_unique(&mut channels);
+        let ids: Vec<&str> = channels.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["live-7", "live-8", "live-7-2", "live-7-3"]);
     }
 }
