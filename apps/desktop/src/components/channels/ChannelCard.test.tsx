@@ -68,4 +68,19 @@ describe("ChannelCard compact variant", () => {
 		fireEvent.click(screen.getByText("News 24"));
 		expect(onPlay).toHaveBeenCalledWith(channel);
 	});
+
+	it("keeps the play and favorite buttons apart for VoiceOver", () => {
+		render(
+			<ChannelCard
+				channel={channel}
+				onPlay={vi.fn()}
+				variant="compact"
+				onToggleFavorite={vi.fn()}
+			/>
+		);
+		const play = screen.getByRole("button", { name: /News 24/ });
+		const favorite = screen.getByRole("button", { name: "Add to favorites" });
+		expect(play.contains(favorite)).toBe(false);
+		expect(favorite.contains(play)).toBe(false);
+	});
 });

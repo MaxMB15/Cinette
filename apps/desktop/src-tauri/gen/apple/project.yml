@@ -59,6 +59,9 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
           NSAllowsLocalNetworking: true
+        # iOS asks before the app reaches a server on the local network, such
+        # as a provider on a home server, and shows this text.
+        NSLocalNetworkUsageDescription: Max Video Player connects to IPTV servers on your local network to load playlists and play channels.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
