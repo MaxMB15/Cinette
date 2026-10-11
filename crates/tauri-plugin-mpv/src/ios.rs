@@ -149,17 +149,19 @@ extern "C" fn on_remote(command: i32, value: f64) {
 /// Bumped whenever the Metal layer's drawable changes size.
 static RESIZE_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// The running watcher's mpv client as an address, so a resize can wake it.
-/// Zero while there's no watcher.
-static WATCHER_CLIENT: Mutex<usize> = Mutex::new(0);
+/// The newest watcher's id, and its mpv client as an address so a resize
+/// can wake it. The address is zero while that watcher isn't running. A
+/// watcher from an old stream can start late, after the next one has, so
+/// only the newest id may fill or clear the slot.
+static WATCHER_CLIENT: Mutex<(u64, usize)> = Mutex::new((0, 0));
 
 /// The video view's drawable changed size, after a rotation or a layout
 /// change. The watcher gets mpv to pick up the new size.
 extern "C" fn on_resized() {
     RESIZE_GEN.fetch_add(1, Ordering::AcqRel);
-    let client = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
-    if *client != 0 {
-        unsafe { mpv_wakeup(*client as *mut c_void) };
+    let slot = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
+    if slot.1 != 0 {
+        unsafe { mpv_wakeup(slot.1 as *mut c_void) };
     }
 }
 
@@ -334,7 +336,12 @@ fn run_watcher(
     }
 
     let client_addr = client.ctx.as_ptr() as usize;
-    *WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner()) = client_addr;
+    {
+        let mut slot = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
+        if id > slot.0 {
+            *slot = (id, client_addr);
+        }
+    }
 
     let mut paused = false;
     let mut duration = 0.0;
@@ -414,8 +421,8 @@ fn run_watcher(
     // Clear the address before the client goes, so no resize wakes a freed
     // handle. A newer watcher may already have replaced it.
     let mut slot = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
-    if *slot == client_addr {
-        *slot = 0;
+    if slot.0 == id {
+        slot.1 = 0;
     }
 }
 
