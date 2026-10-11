@@ -13,6 +13,9 @@ pub mod mpv;
 mod reconnect;
 mod renderer;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod options;
+
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "linux")]

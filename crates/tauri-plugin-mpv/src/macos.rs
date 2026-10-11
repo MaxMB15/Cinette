@@ -13,6 +13,7 @@
 
 #![allow(deprecated)] // cocoa crate uses deprecated NSOpenGL APIs; migration to objc2 deferred
 
+use crate::options::shared_options;
 use crate::renderer::PlatformRenderer;
 use cocoa::appkit::{NSOpenGLPixelFormat, NSOpenGLView, NSView};
 use cocoa::base::nil;
@@ -484,63 +485,30 @@ unsafe fn render_frame(inner_ptr: usize) {
 // MPV option sets for macOS
 // ---------------------------------------------------------------------------
 
-/// FFmpeg lavf reconnect options shared by every macOS option set.
-///
-/// IPTV streams are HTTP/HLS-based and FFmpeg does NOT auto-reconnect by
-/// default. Without these, a transient network drop causes the demuxer to
-/// hit EOF and playback freezes forever (mpv just sits at the last frame
-/// because `keep-open=yes`). With these set, FFmpeg transparently retries
-/// the underlying HTTP read with exponential backoff capped at
-/// `reconnect_delay_max` seconds.
-///
-/// - `reconnect=1` — enable auto-reconnect for HTTP-backed protocols
-/// - `reconnect_streamed=1` — required for live (non-seekable) streams
-/// - `reconnect_on_network_error=1` — reconnect on TCP/socket errors
-/// - `reconnect_delay_max=5` — cap retry backoff at 5 s (was 30 s; smaller
-///   value makes recovery far snappier once the network returns, at the
-///   cost of slightly more retry attempts during a real outage).
-///
-/// We rely on `paused-for-cache` observation in `reconnect.rs` to surface
-/// the stall to the UI while these retries run silently underneath.
-const LAVF_RECONNECT_OPTS: &str =
-    "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5";
-
-/// Options for embedded playback via OpenGL render context (vo=libmpv).
+/// Options for embedded playback through the OpenGL render context.
 pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
-    vec![
+    let mut options = vec![
         ("vo", "libmpv"),
         ("hwdec", "videotoolbox"),
         ("ao", "coreaudio"),
         ("video-sync", "display-resample"),
-        ("cache", "yes"),
-        ("cache-secs", "30"),
-        ("demuxer-max-bytes", "150MiB"),
-        ("demuxer-max-back-bytes", "75MiB"),
-        ("stream-lavf-o", LAVF_RECONNECT_OPTS),
-        ("network-timeout", "30"),
-        // Keep the last frame visible at EOF instead of going idle.
-        // This lets the frontend detect EOF via position proximity and show controls.
-        ("keep-open", "yes"),
-        ("terminal", "yes"),
-        ("msg-level", "all=status"),
-    ]
+    ];
+    options.extend(shared_options());
+    options.push(("msg-level", "all=status"));
+    options
 }
 
-/// Options for fallback separate window (vo=gpu, native OSC shown automatically).
+/// Options for the separate fallback window.
+///
+/// mpv picks `vo=gpu` on its own. Leave its on-screen controller on, since
+/// this window has no other controls.
 pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
-    vec![
+    let mut options = vec![
         ("hwdec", "videotoolbox"),
         ("ao", "coreaudio"),
         ("video-sync", "display-resample"),
-        ("cache", "yes"),
-        ("cache-secs", "30"),
-        ("demuxer-max-bytes", "150MiB"),
-        ("demuxer-max-back-bytes", "75MiB"),
-        ("stream-lavf-o", LAVF_RECONNECT_OPTS),
-        ("network-timeout", "30"),
-        ("keep-open", "yes"),
-        ("terminal", "yes"),
-        ("msg-level", "all=status"),
-        // vo=gpu is the default; do NOT add --no-osc so native controls are visible.
-    ]
+    ];
+    options.extend(shared_options());
+    options.push(("msg-level", "all=status"));
+    options
 }
