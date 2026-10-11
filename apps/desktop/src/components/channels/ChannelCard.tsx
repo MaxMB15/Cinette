@@ -38,7 +38,7 @@ interface ChannelCardProps {
 	windowEnd?: number;
 }
 
-const RowCard = memo(function RowCard({
+const RowCardView = ({
 	channel,
 	onPlay,
 	onToggleFavorite,
@@ -52,7 +52,7 @@ const RowCard = memo(function RowCard({
 	epgPrograms?: EpgProgram[];
 	windowStart?: number;
 	windowEnd?: number;
-}) {
+}) => {
 	const now = Math.floor(Date.now() / 1000);
 
 	return (
@@ -141,7 +141,10 @@ const RowCard = memo(function RowCard({
 			</div>
 		</div>
 	);
-});
+};
+
+const RowCard = memo(RowCardView);
+RowCard.displayName = "RowCard";
 
 const ChannelLogo = ({
 	url,
@@ -380,7 +383,7 @@ const PosterCard = ({
 	);
 };
 
-export const ChannelCard = memo(function ChannelCard({
+const ChannelCardView = ({
 	channel,
 	onPlay,
 	variant = "row",
@@ -388,7 +391,7 @@ export const ChannelCard = memo(function ChannelCard({
 	epgPrograms,
 	windowStart,
 	windowEnd,
-}: ChannelCardProps) {
+}: ChannelCardProps) => {
 	if (variant === "compact") {
 		return (
 			<CompactRowCard
@@ -411,4 +414,7 @@ export const ChannelCard = memo(function ChannelCard({
 			windowEnd={windowEnd}
 		/>
 	);
-});
+};
+
+export const ChannelCard = memo(ChannelCardView);
+ChannelCard.displayName = "ChannelCard";
