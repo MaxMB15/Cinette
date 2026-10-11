@@ -146,8 +146,8 @@ export const PlayerView = () => {
 	const { layoutMode } = usePlatform();
 	const showBack = layoutMode === "mobile";
 	// Phones and tablets already play full screen, and the hardware buttons
-	// set the volume.
-	const touchDevice = isMobilePlatform();
+	// set the volume. An Android TV box keeps the desktop controls.
+	const touchDevice = isMobilePlatform() && layoutMode !== "tv";
 	const [enrichedMeta, setEnrichedMeta] = useState<EnrichedMeta | null>(null);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);

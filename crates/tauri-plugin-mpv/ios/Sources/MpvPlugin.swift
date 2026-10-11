@@ -113,6 +113,10 @@ final class MpvHost: NSObject {
   private var remoteCallback: MvpRemoteCallback?
   private var resizeCallback: MvpResizeCallback?
   private var remoteCommandsReady = false
+  /// Whether the last Now Playing update said the stream was playing.
+  private var playing = false
+  /// Set when an interruption paused a stream that was playing.
+  private var resumeAfterInterruption = false
 
   func attach(webview: WKWebView) {
     self.webview = webview
@@ -261,12 +265,15 @@ final class MpvHost: NSObject {
     let center = MPNowPlayingInfoCenter.default()
     center.nowPlayingInfo = info
     center.playbackState = playing ? .playing : .paused
+    self.playing = playing
   }
 
   func clearNowPlaying() {
     let center = MPNowPlayingInfoCenter.default()
     center.nowPlayingInfo = nil
     center.playbackState = .stopped
+    playing = false
+    resumeAfterInterruption = false
   }
 
   private func setUpRemoteCommands() {
@@ -316,21 +323,30 @@ final class MpvHost: NSObject {
     lifecycleCallback?(false)
   }
 
-  /// Pauses for a phone call or an alarm, and resumes after it if iOS says so.
+  /// Pauses for a phone call or an alarm. Afterwards it resumes only if the
+  /// stream was playing when the call came in and iOS says to resume, so a
+  /// stream the user had paused stays paused.
   @objc private func audioInterrupted(_ note: Notification) {
     guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
       let type = AVAudioSession.InterruptionType(rawValue: raw)
     else { return }
-    switch type {
-    case .began:
-      _ = sendRemote(.pause)
-    case .ended:
-      let rawOptions = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
-      if AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume) {
-        _ = sendRemote(.play)
+    let rawOptions = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+    let shouldResume = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+      .contains(.shouldResume)
+    // iOS can post this on any thread, and the flags are main thread only.
+    DispatchQueue.main.async {
+      switch type {
+      case .began:
+        self.resumeAfterInterruption = self.playing
+        _ = self.sendRemote(.pause)
+      case .ended:
+        if self.resumeAfterInterruption && shouldResume {
+          _ = self.sendRemote(.play)
+        }
+        self.resumeAfterInterruption = false
+      @unknown default:
+        break
       }
-    @unknown default:
-      break
     }
   }
 
