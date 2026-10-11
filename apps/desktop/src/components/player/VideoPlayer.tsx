@@ -40,6 +40,7 @@ import { parseSrt } from "@/lib/subtitle-parser";
 import type { Channel, OmdbData, WhatsonData, SubtitleCue, SubtitleEntry } from "@/lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFullscreen } from "@/lib/fullscreen-context";
+import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "@/lib/playback";
@@ -141,6 +142,7 @@ export const PlayerView = () => {
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
 	const [seriesEpisodes, setSeriesEpisodes] = useState<Channel[]>([]);
 	const { isFullscreen, setFullscreen } = useFullscreen();
+	useLeaveFullscreenOnUnmount();
 	// The phone layout hides the tab bar on this route, so the player needs
 	// its own way back.
 	const { layoutMode } = usePlatform();
