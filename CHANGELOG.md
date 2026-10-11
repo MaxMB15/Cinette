@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Max Video Player is now licensed under the GNU General Public License version 3. Its additional terms require modified versions to credit the original on their About screen and to use their own name and icon. Releases up to 0.5.3 stay under the PolyForm Noncommercial License 1.0.0. See NOTICE and TRADEMARKS.md (#75).
 - Pull requests now need the contributor agreement in CLA.md (#75).
+- The channel, movie and series info panes close when you drag them down by the handle, and grow to full height when you drag them up (#91).
 
 ### Added
 
