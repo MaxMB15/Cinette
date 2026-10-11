@@ -18,7 +18,7 @@ Every entry is a stream its owner publishes for anyone to play. The three test s
 | Sintel | download.blender.org | CC BY 3.0 |
 | Tears of Steel | Unified Streaming's public demo server | CC BY 3.0 |
 
-The posters come from Wikimedia Commons, under the same license as each film.
+Each movie's picture is a still from the film, taken from Wikimedia Commons under the film's license. The app shows movies in wide cards, so a still fits better than a poster.
 
 These servers belong to other people, and an entry can stop working when they move things. If one does, swap in another public test stream and check that the new one allows anyone to play it.
 

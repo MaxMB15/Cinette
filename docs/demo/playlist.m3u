@@ -5,11 +5,11 @@ https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_exam
 https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
 #EXTINF:-1 group-title="Test streams",Unified Streaming live test
 https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/500px-Big_buck_bunny_poster_big.jpg" group-title="Blender open movies",Big Buck Bunny
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Big.Buck.Bunny.-.Frank.Rinky.Gimera.png/500px-Big.Buck.Bunny.-.Frank.Rinky.Gimera.png" group-title="Blender open movies",Big Buck Bunny
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Elephants_Dream_cover.jpg/500px-Elephants_Dream_cover.jpg" group-title="Blender open movies",Elephants Dream
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Elephants_Dream_s5_both.jpg/500px-Elephants_Dream_s5_both.jpg" group-title="Blender open movies",Elephants Dream
 https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Sintel_poster.jpg/500px-Sintel_poster.jpg" group-title="Blender open movies",Sintel
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Sintel-screenshot-3.jpg/500px-Sintel-screenshot-3.jpg" group-title="Blender open movies",Sintel
 https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/Tos-poster.png/500px-Tos-poster.png" group-title="Blender open movies",Tears of Steel
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Tears_of_Steel_frame_03_1a.jpg/500px-Tears_of_Steel_frame_03_1a.jpg" group-title="Blender open movies",Tears of Steel
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8
