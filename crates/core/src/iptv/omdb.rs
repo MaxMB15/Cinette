@@ -78,12 +78,21 @@ struct OmdbRating {
 
 /// Convert an OMDB "N/A" string to None.
 fn na_to_none(s: Option<String>) -> Option<String> {
-    s.and_then(|v| if v == "N/A" || v.is_empty() { None } else { Some(v) })
+    s.and_then(|v| {
+        if v == "N/A" || v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    })
 }
 
 /// Extract the Rotten Tomatoes rating from the Ratings array.
 fn extract_rotten_tomatoes(ratings: Option<Vec<OmdbRating>>) -> Option<String> {
-    ratings?.into_iter().find(|r| r.source == "Rotten Tomatoes").map(|r| r.value)
+    ratings?
+        .into_iter()
+        .find(|r| r.source == "Rotten Tomatoes")
+        .map(|r| r.value)
 }
 
 /// Strip a trailing ` (YYYY)` year suffix from a title if present.
@@ -113,14 +122,18 @@ fn strip_trailing_year(title: &str) -> Option<&str> {
 /// Parse an OMDB API JSON response (as serde_json::Value) into OmdbData.
 /// Separated from the HTTP call so it can be unit-tested without network access.
 pub fn parse_omdb_response(json: serde_json::Value) -> Result<OmdbData, OmdbError> {
-    let resp: OmdbApiResponse = serde_json::from_value(json)
-        .map_err(|e| OmdbError::Parse(e.to_string()))?;
+    let resp: OmdbApiResponse =
+        serde_json::from_value(json).map_err(|e| OmdbError::Parse(e.to_string()))?;
 
     if resp.response != "True" {
-        return Err(OmdbError::Api(resp.error.unwrap_or_else(|| "Unknown OMDB error".into())));
+        return Err(OmdbError::Api(
+            resp.error.unwrap_or_else(|| "Unknown OMDB error".into()),
+        ));
     }
 
-    let title = resp.title.ok_or_else(|| OmdbError::Parse("Missing title".into()))?;
+    let title = resp
+        .title
+        .ok_or_else(|| OmdbError::Parse("Missing title".into()))?;
 
     Ok(OmdbData {
         title,
@@ -148,7 +161,12 @@ async fn do_fetch(
 ) -> Result<OmdbData, OmdbError> {
     let response = client
         .get("https://www.omdbapi.com/")
-        .query(&[("t", title), ("type", content_type), ("plot", "full"), ("apikey", api_key)])
+        .query(&[
+            ("t", title),
+            ("type", content_type),
+            ("plot", "full"),
+            ("apikey", api_key),
+        ])
         .send()
         .await?
         .json::<serde_json::Value>()
@@ -161,7 +179,11 @@ async fn do_fetch(
 /// If the title matches the pattern `Title (Year)` (e.g. `"Inception (2010)"`), the year
 /// suffix is stripped and OMDB is queried with the bare title first. If that lookup fails,
 /// the full title is tried as a fallback.
-pub async fn fetch_omdb(title: &str, content_type: &str, api_key: &str) -> Result<OmdbData, OmdbError> {
+pub async fn fetch_omdb(
+    title: &str,
+    content_type: &str,
+    api_key: &str,
+) -> Result<OmdbData, OmdbError> {
     let client = reqwest::Client::new();
 
     if let Some(stripped) = strip_trailing_year(title) {
@@ -206,8 +228,14 @@ mod tests {
     #[test]
     fn test_strip_trailing_year() {
         assert_eq!(strip_trailing_year("Inception (2010)"), Some("Inception"));
-        assert_eq!(strip_trailing_year("Breaking Bad (2008)"), Some("Breaking Bad"));
-        assert_eq!(strip_trailing_year("The Dark Knight (2008)"), Some("The Dark Knight"));
+        assert_eq!(
+            strip_trailing_year("Breaking Bad (2008)"),
+            Some("Breaking Bad")
+        );
+        assert_eq!(
+            strip_trailing_year("The Dark Knight (2008)"),
+            Some("The Dark Knight")
+        );
         assert_eq!(strip_trailing_year("Plain Title"), None);
         assert_eq!(strip_trailing_year("Avatar"), None);
         assert_eq!(strip_trailing_year("Movie (I)"), None); // roman numeral, not year
@@ -224,7 +252,10 @@ mod tests {
         assert_eq!(data.director.as_deref(), Some("Christopher Nolan"));
         assert_eq!(data.actors.as_deref(), Some("Christian Bale, Heath Ledger"));
         assert!(data.plot.is_some());
-        assert_eq!(data.poster_url.as_deref(), Some("https://example.com/poster.jpg"));
+        assert_eq!(
+            data.poster_url.as_deref(),
+            Some("https://example.com/poster.jpg")
+        );
         assert_eq!(data.imdb_rating.as_deref(), Some("9.0"));
         assert_eq!(data.rotten_tomatoes.as_deref(), Some("94%"));
         assert_eq!(data.imdb_id.as_deref(), Some("tt0468569"));

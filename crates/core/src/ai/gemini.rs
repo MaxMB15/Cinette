@@ -134,7 +134,12 @@ pub fn parse_categorization_response(
                 }
             }
         }
-        other => return Err(GeminiError::InvalidResponse(format!("unknown type: {}", other))),
+        other => {
+            return Err(GeminiError::InvalidResponse(format!(
+                "unknown type: {}",
+                other
+            )))
+        }
     }
 
     // Add any known groups not mentioned in the response to ungrouped
@@ -150,7 +155,10 @@ pub fn parse_categorization_response(
         "parsed categorization response"
     );
 
-    Ok(CategorizationResult { hierarchy, ungrouped })
+    Ok(CategorizationResult {
+        hierarchy,
+        ungrouped,
+    })
 }
 
 pub fn parse_assignment_response(
@@ -242,10 +250,7 @@ pub fn build_categorization_prompt(
     prompt
 }
 
-pub fn build_categorization_prompt_no_groups(
-    content_type: &str,
-    sample_titles: &[&str],
-) -> String {
+pub fn build_categorization_prompt_no_groups(content_type: &str, sample_titles: &[&str]) -> String {
     let mut prompt = format!(
         "Organize these IPTV content titles into navigable groups.\n\
          Content type: {}\n\n\
@@ -275,7 +280,7 @@ pub fn build_fix_uncategorized_prompt(
 ) -> String {
     let mut prompt = String::from(
         "You are assigning uncategorized IPTV channel groups to existing categories.\n\n\
-         Existing categories:\n"
+         Existing categories:\n",
     );
     for cat in existing_categories {
         prompt.push_str(&format!("- \"{}\"\n", cat));
@@ -319,11 +324,10 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
     );
 
     let client = reqwest::Client::new();
-    let response = client.post(&url).json(&body).send().await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Gemini API request failed");
-            GeminiError::Api(e.to_string())
-        })?;
+    let response = client.post(&url).json(&body).send().await.map_err(|e| {
+        tracing::error!(error = %e, "Gemini API request failed");
+        GeminiError::Api(e.to_string())
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -332,11 +336,10 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
         return Err(GeminiError::Api(format!("HTTP {}: {}", status, text)));
     }
 
-    let resp_json: serde_json::Value = response.json().await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to parse Gemini response as JSON");
-            GeminiError::Parse(e.to_string())
-        })?;
+    let resp_json: serde_json::Value = response.json().await.map_err(|e| {
+        tracing::error!(error = %e, "failed to parse Gemini response as JSON");
+        GeminiError::Parse(e.to_string())
+    })?;
 
     let text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
@@ -347,11 +350,10 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
 
     tracing::info!(response_text = %text, "Gemini API response text");
 
-    let parsed: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| {
-            tracing::error!(error = %e, raw_text = %text, "LLM returned invalid JSON");
-            GeminiError::Parse(format!("LLM returned invalid JSON: {}", e))
-        })?;
+    let parsed: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+        tracing::error!(error = %e, raw_text = %text, "LLM returned invalid JSON");
+        GeminiError::Parse(format!("LLM returned invalid JSON: {}", e))
+    })?;
 
     tracing::info!("Gemini API call successful");
     Ok(parsed)
@@ -363,7 +365,10 @@ pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
         api_key
     );
     let client = reqwest::Client::new();
-    let response = client.get(&url).send().await
+    let response = client
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| GeminiError::Api(e.to_string()))?;
     Ok(response.status().is_success())
 }
@@ -382,10 +387,16 @@ mod tests {
             ],
             "ungrouped": ["Misc"]
         });
-        let result = parse_categorization_response(&json, &["US: Sports", "US: News", "UK: Drama", "Misc"]).unwrap();
+        let result =
+            parse_categorization_response(&json, &["US: Sports", "US: News", "UK: Drama", "Misc"])
+                .unwrap();
         assert_eq!(result.hierarchy.len(), 3);
         assert_eq!(result.ungrouped, vec!["Misc"]);
-        let sports = result.hierarchy.iter().find(|h| h.group_name == "US: Sports").unwrap();
+        let sports = result
+            .hierarchy
+            .iter()
+            .find(|h| h.group_name == "US: Sports")
+            .unwrap();
         assert_eq!(sports.super_category.as_deref(), Some("United States"));
     }
 
@@ -437,11 +448,9 @@ mod tests {
                 { "group": "FakeGroup", "category": "Western Europe" }
             ]
         });
-        let result = parse_assignment_response(
-            &json,
-            &["Belgium", "Norway"],
-            &["Western Europe", "Nordic"],
-        ).unwrap();
+        let result =
+            parse_assignment_response(&json, &["Belgium", "Norway"], &["Western Europe", "Nordic"])
+                .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].group_name, "Belgium");
         assert_eq!(result[0].category, "Western Europe");

@@ -12,10 +12,10 @@ pub struct WhatsonData {
     // Core
     pub imdb_id: Option<String>,
     pub title: Option<String>,
-    pub image: Option<String>,        // TMDB CDN poster URL
-    pub item_type: Option<String>,    // "movie" or "tvshow"
+    pub image: Option<String>,     // TMDB CDN poster URL
+    pub item_type: Option<String>, // "movie" or "tvshow"
     pub release_date: Option<String>,
-    pub runtime: Option<i64>,         // seconds
+    pub runtime: Option<i64>, // seconds
     pub certification: Option<String>,
     pub tagline: Option<String>,
 
@@ -169,7 +169,11 @@ pub fn parse_whatson_response(json: serde_json::Value) -> Result<WhatsonData, Wh
     if json.is_object() && json.get("results").is_some() {
         let resp: WhatsonResponse =
             serde_json::from_value(json).map_err(|e| WhatsonError::Parse(e.to_string()))?;
-        let item = resp.results.into_iter().next().ok_or(WhatsonError::NotFound)?;
+        let item = resp
+            .results
+            .into_iter()
+            .next()
+            .ok_or(WhatsonError::NotFound)?;
         return Ok(item_to_data(item));
     }
 
@@ -323,7 +327,10 @@ mod tests {
         assert!(data.image.is_some());
         assert_eq!(data.item_type.as_deref(), Some("movie"));
         assert_eq!(data.runtime, Some(8520));
-        assert_eq!(data.tagline.as_deref(), Some("Fear can hold you prisoner. Hope can set you free."));
+        assert_eq!(
+            data.tagline.as_deref(),
+            Some("Fear can hold you prisoner. Hope can set you free.")
+        );
 
         assert_eq!(data.imdb_rating, Some(9.3));
         assert_eq!(data.imdb_votes, Some(3168950));
@@ -370,7 +377,8 @@ mod tests {
 
     #[test]
     fn test_parse_empty_results() {
-        let err = parse_whatson_response(json!({"page": 1, "results": [], "total_results": 0})).unwrap_err();
+        let err = parse_whatson_response(json!({"page": 1, "results": [], "total_results": 0}))
+            .unwrap_err();
         assert!(matches!(err, WhatsonError::NotFound));
     }
 

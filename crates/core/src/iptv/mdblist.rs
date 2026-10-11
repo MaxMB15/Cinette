@@ -110,8 +110,8 @@ fn value_to_f64(v: &serde_json::Value) -> Option<f64> {
 /// Parse an MDBList JSON response (as `serde_json::Value`) into `MdbListData`.
 /// Separated from the HTTP call so it can be unit-tested without network access.
 pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, MdbListError> {
-    let resp: MdbListApiResponse = serde_json::from_value(json)
-        .map_err(|e| MdbListError::Parse(e.to_string()))?;
+    let resp: MdbListApiResponse =
+        serde_json::from_value(json).map_err(|e| MdbListError::Parse(e.to_string()))?;
 
     // Detect API-level errors. The error field may be a bool `true` or a string.
     let is_error = match &resp.error {
@@ -121,7 +121,9 @@ pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, Md
         None => false,
     };
     if is_error {
-        let msg = resp.message.unwrap_or_else(|| "Unknown MDBList error".into());
+        let msg = resp
+            .message
+            .unwrap_or_else(|| "Unknown MDBList error".into());
         return Err(MdbListError::Api(msg));
     }
 

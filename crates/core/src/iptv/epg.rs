@@ -22,8 +22,8 @@ pub struct EpgProgram {
     pub channel_id: String,
     pub title: String,
     pub description: String,
-    pub start_time: i64,   // Unix timestamp (seconds UTC) — was String
-    pub end_time: i64,     // Unix timestamp (seconds UTC) — was String
+    pub start_time: i64, // Unix timestamp (seconds UTC) — was String
+    pub end_time: i64,   // Unix timestamp (seconds UTC) — was String
     pub category: Option<String>,
 }
 
@@ -176,7 +176,11 @@ fn parse_epg_time(raw: &str) -> i64 {
 
     // Parse timezone offset like "+0100" → seconds offset
     let tz_offset_secs: i64 = if tz_offset_str.len() == 5 {
-        let sign: i64 = if tz_offset_str.starts_with('-') { -1 } else { 1 };
+        let sign: i64 = if tz_offset_str.starts_with('-') {
+            -1
+        } else {
+            1
+        };
         let hh: i64 = tz_offset_str[1..3].parse().unwrap_or(0);
         let mm: i64 = tz_offset_str[3..5].parse().unwrap_or(0);
         sign * (hh * 3600 + mm * 60)
@@ -202,7 +206,11 @@ pub fn epg_data_to_stored(data: &EpgData, provider_id: &str) -> Vec<StoredEpgPro
         .map(|p| StoredEpgProgram {
             channel_id: p.channel_id.clone(),
             title: p.title.clone(),
-            description: if p.description.is_empty() { None } else { Some(p.description.clone()) },
+            description: if p.description.is_empty() {
+                None
+            } else {
+                Some(p.description.clone())
+            },
             start_time: p.start_time,
             end_time: p.end_time,
             category: p.category.clone(),
@@ -312,8 +320,14 @@ mod tests {
         let data = parse_epg(xml).unwrap();
         assert_eq!(data.programs.len(), 1);
         assert_eq!(data.programs[0].title, "Untitled Show");
-        assert_eq!(data.programs[0].description, "", "missing desc should be empty");
-        assert!(data.programs[0].category.is_none(), "missing category should be None");
+        assert_eq!(
+            data.programs[0].description, "",
+            "missing desc should be empty"
+        );
+        assert!(
+            data.programs[0].category.is_none(),
+            "missing category should be None"
+        );
     }
 
     #[test]

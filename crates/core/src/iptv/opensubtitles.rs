@@ -106,9 +106,11 @@ fn build_client() -> Result<reqwest::Client, OpenSubtitlesError> {
 
 /// Parse a raw search API JSON value into a `SubtitleSearchResult`.
 /// Separated from the HTTP call for unit testing.
-pub fn parse_search_response(json: serde_json::Value) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
-    let resp: SearchResponse = serde_json::from_value(json)
-        .map_err(|e| OpenSubtitlesError::Parse(e.to_string()))?;
+pub fn parse_search_response(
+    json: serde_json::Value,
+) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
+    let resp: SearchResponse =
+        serde_json::from_value(json).map_err(|e| OpenSubtitlesError::Parse(e.to_string()))?;
 
     let mut entries: Vec<SubtitleEntry> = Vec::new();
 
@@ -169,9 +171,7 @@ pub async fn search_subtitles(
 ) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
     let numeric_id = strip_tt_prefix(imdb_id);
 
-    let mut query: Vec<(&str, String)> = vec![
-        ("imdb_id", numeric_id.to_string()),
-    ];
+    let mut query: Vec<(&str, String)> = vec![("imdb_id", numeric_id.to_string())];
 
     match (season, episode) {
         (Some(s), Some(e)) => {
@@ -234,7 +234,11 @@ pub async fn download_subtitle(
         .await?;
 
     let extension = extract_extension(&dl_response.file_name);
-    let extension = if extension.is_empty() { "srt".to_string() } else { extension };
+    let extension = if extension.is_empty() {
+        "srt".to_string()
+    } else {
+        extension
+    };
 
     // Step 2: GET the pre-signed link (no auth headers needed).
     // Request uncompressed content so the bytes written to disk are valid SRT/VTT.
@@ -315,13 +319,24 @@ mod tests {
         let result = parse_search_response(json).unwrap();
         assert_eq!(result.entries.len(), 2);
 
-        let en = result.entries.iter().find(|e| e.language_code == "en").unwrap();
+        let en = result
+            .entries
+            .iter()
+            .find(|e| e.language_code == "en")
+            .unwrap();
         assert_eq!(en.file_id, 4052244);
         assert_eq!(en.format, "srt");
-        assert_eq!(en.release_name.as_deref(), Some("The.Dark.Knight.2008.BluRay"));
+        assert_eq!(
+            en.release_name.as_deref(),
+            Some("The.Dark.Knight.2008.BluRay")
+        );
         assert_eq!(en.download_count, Some(5000));
 
-        let fr = result.entries.iter().find(|e| e.language_code == "fr").unwrap();
+        let fr = result
+            .entries
+            .iter()
+            .find(|e| e.language_code == "fr")
+            .unwrap();
         assert_eq!(fr.file_id, 9988776);
 
         // Languages list is sorted and unique.
