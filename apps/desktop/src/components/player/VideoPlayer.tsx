@@ -955,6 +955,20 @@ export const PlayerView = () => {
 		/>
 	) : undefined;
 
+	const retryStream = () => {
+		const url = mpv.state.currentUrl;
+		if (!url) return;
+		// Preserve playback position across the hard restart so
+		// the user resumes where they were when the stream broke,
+		// not from the beginning of the movie/episode. We use the
+		// sticky `getLastKnownPosition()` (rather than the polled
+		// `state.position`) so the retry is symmetric with the
+		// `online`-triggered auto-recovery and robust to the
+		// transient position=0 window during the `loadfile`.
+		const resumeAt = mpv.getLastKnownPosition();
+		mpv.load(url, resumeAt > 1.0 ? resumeAt : undefined).catch(() => {});
+	};
+
 	return (
 		<div
 			ref={containerRef}
@@ -987,19 +1001,7 @@ export const PlayerView = () => {
 				loadFailed={mpv.loadFailed}
 				openFailed={mpv.openFailed}
 				recentlyRecovered={mpv.recentlyRecovered}
-				onRetry={() => {
-					const url = mpv.state.currentUrl;
-					if (!url) return;
-					// Preserve playback position across the hard restart so
-					// the user resumes where they were when the stream broke,
-					// not from the beginning of the movie/episode. We use the
-					// sticky `getLastKnownPosition()` (rather than the polled
-					// `state.position`) so the retry is symmetric with the
-					// `online`-triggered auto-recovery and robust to the
-					// transient position=0 window during the `loadfile`.
-					const resumeAt = mpv.getLastKnownPosition();
-					mpv.load(url, resumeAt > 1.0 ? resumeAt : undefined).catch(() => {});
-				}}
+				onRetry={retryStream}
 			/>
 
 			<div
@@ -1025,7 +1027,7 @@ export const PlayerView = () => {
 							Select a channel to start watching
 						</p>
 					)}
-				{mpv.opening && <OpeningIndicator key={mpv.state.currentUrl ?? ""} />}
+				{mpv.opening && <OpeningIndicator key={mpv.loadId} onRetry={retryStream} />}
 			</div>
 
 			{(activeChannelName || showBack) && showControls && (

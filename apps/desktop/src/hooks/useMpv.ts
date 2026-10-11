@@ -32,9 +32,16 @@ export const useMpv = () => {
 	const [error, setError] = useState<string | null>(null);
 	const [fallbackActive, setFallbackActive] = useState(false);
 	const [firstFrameReady, setFirstFrameReady] = useState(false);
+	// Set only by the first-frame event. The mount check below also sets
+	// `firstFrameReady`, but it can't tell a stream that's still opening from
+	// one that's playing, so the spinner doesn't use it.
+	const [firstFrameSeen, setFirstFrameSeen] = useState(false);
 	// True while `mpvLoad` is in flight. Drives the "Opening stream" spinner
 	// until the polled state describes the new load.
 	const [loadPending, setLoadPending] = useState(false);
+	// Goes up by one on every load, so the spinner starts over even when the
+	// same URL is loaded again.
+	const [loadId, setLoadId] = useState(0);
 	// Set while the Rust-side reconnect monitor is re-issuing loadfile after
 	// a network-induced EndFile(Error). Cleared on the matching `mpv://reconnected`
 	// event or whenever the user starts a fresh load.
@@ -99,6 +106,7 @@ export const useMpv = () => {
 	useEffect(() => {
 		const unlistenPromise = listen("mpv://first-frame", () => {
 			setFirstFrameReady(true);
+			setFirstFrameSeen(true);
 		});
 		return () => {
 			unlistenPromise.then((fn) => fn());
@@ -204,6 +212,7 @@ export const useMpv = () => {
 	// Refs that mirror state so the `online` listener (registered once)
 	// reads the latest values without re-binding on every poll.
 	const loadFailedRef = useRef(false);
+	const openFailedRef = useRef(false);
 	const reconnectingRef = useRef(false);
 	const currentUrlRef = useRef<string | null>(null);
 	// Sticky last-good position. We need this (rather than `state.position`)
@@ -217,8 +226,11 @@ export const useMpv = () => {
 	// answered with an error. Reconnect and retries-exhausted states outrank it.
 	const openFailed = state.openFailed && !reconnecting && !loadFailed;
 	useEffect(() => {
-		loadFailedRef.current = loadFailed || openFailed;
-	}, [loadFailed, openFailed]);
+		loadFailedRef.current = loadFailed;
+	}, [loadFailed]);
+	useEffect(() => {
+		openFailedRef.current = openFailed;
+	}, [openFailed]);
 	useEffect(() => {
 		reconnectingRef.current = reconnecting;
 	}, [reconnecting]);
@@ -240,9 +252,11 @@ export const useMpv = () => {
 		loadingRef.current = true;
 		loadedThisMountRef.current = true;
 		setLoadPending(true);
+		setLoadId((id) => id + 1);
 		setError(null);
 		setFallbackActive(false);
 		setFirstFrameReady(false);
+		setFirstFrameSeen(false);
 		setReconnecting(false);
 		setReconnectAttempt(0);
 		setBuffering(false);
@@ -305,19 +319,23 @@ export const useMpv = () => {
 	// instance immediately: the new load clears `reconnecting`/`loadFailed`
 	// in the same tick, and `flashRecovered()` lights the green "Connection
 	// restored" banner so the user gets positive confirmation.
+	//
+	// A stream that failed to open is retried too, but without the green
+	// banner: it never played, and the spinner shows while it tries again.
 	useEffect(() => {
 		const handleOnline = () => {
 			const url = currentUrlRef.current;
-			const needsRecover = loadFailedRef.current || reconnectingRef.current;
+			const neverOpened = openFailedRef.current;
+			const needsRecover = loadFailedRef.current || reconnectingRef.current || neverOpened;
 			if (needsRecover && url) {
 				const resumeAt = lastKnownPositionRef.current;
 				console.info(
-					`[useMpv] online event (loadFailed=${loadFailedRef.current} reconnecting=${reconnectingRef.current}) — auto-recovering at pos=${resumeAt.toFixed(2)}:`,
+					`[useMpv] online event (loadFailed=${loadFailedRef.current} reconnecting=${reconnectingRef.current} openFailed=${neverOpened}) — auto-recovering at pos=${resumeAt.toFixed(2)}:`,
 					url
 				);
 				load(url, resumeAt > 1.0 ? resumeAt : undefined)
 					.then(() => {
-						flashRecovered();
+						if (!neverOpened) flashRecovered();
 					})
 					.catch((e) => {
 						console.warn("[useMpv] auto-recover load failed:", e);
@@ -435,7 +453,7 @@ export const useMpv = () => {
 		loadPending,
 		currentUrl: state.currentUrl,
 		playbackStarted: state.playbackStarted,
-		firstFrameReady,
+		firstFrameReady: firstFrameSeen,
 		isPaused: state.isPaused,
 		error,
 		failed: loadFailed || openFailed,
@@ -448,6 +466,7 @@ export const useMpv = () => {
 		fallbackActive,
 		firstFrameReady,
 		opening,
+		loadId,
 		reconnecting,
 		reconnectAttempt,
 		buffering,

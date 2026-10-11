@@ -620,6 +620,37 @@ describe("useMpv", () => {
 				window.dispatchEvent(new Event("online"));
 			});
 			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", undefined, true);
+			// It never played, so "playing again" would be wrong. The spinner
+			// shows instead.
+			expect(result.current.recentlyRecovered).toBe(false);
+			expect(result.current.opening).toBe(true);
+		});
+
+		it("keeps showing after the player is left and reopened mid-open", async () => {
+			// The mount check sees isPlaying, which is true from loadfile on.
+			mockMpvGetState.mockResolvedValue(polled());
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(result.current.firstFrameReady).toBe(true));
+			await waitFor(() => expect(result.current.state.currentUrl).toBe("http://live.url"));
+			expect(result.current.opening).toBe(true);
+
+			mockMpvGetState.mockResolvedValue(polled({ position: 0.4, playbackStarted: true }));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.opening).toBe(false);
+		});
+
+		it("counts loads, including a reload of the same URL", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			const before = result.current.loadId;
+
+			await loadAndWait(result);
+			expect(result.current.loadId).toBe(before + 1);
+
+			await loadAndWait(result);
+			expect(result.current.loadId).toBe(before + 2);
 		});
 	});
 
@@ -815,6 +846,7 @@ describe("useMpv", () => {
 
 			expect(mockMpvLoad).toHaveBeenCalledTimes(1);
 			expect(mockMpvLoad).toHaveBeenCalledWith("http://s", 42, true);
+			expect(result.current.recentlyRecovered).toBe(true);
 		});
 
 		it("online event is a no-op when not in a failure state", async () => {
