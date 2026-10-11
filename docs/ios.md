@@ -124,14 +124,22 @@ upload, add the category it names.
 ## Logs
 
 On iOS the Rust logs go to the system log under the subsystem
-`com.maxvideoplayer.app`, and the Swift plugin's messages go there too. To watch
-them live, open Console on the Mac, select the device, click Start, and search for
-`subsystem:com.maxvideoplayer.app`. Xcode's debug console shows them when Xcode
-started the app.
+`com.maxvideoplayer.app`, category `rust`. The Swift plugin uses `NSLog`, which has
+no subsystem, so its messages only carry the app's process name. To watch both
+live, open Console on the Mac, select the device and click Start. Then type
+`Max Video Player` in the search field and pick Process from the menu that appears.
+Searching for `subsystem:com.maxvideoplayer.app` shows only the Rust lines. Xcode's
+debug console shows both when Xcode started the app.
 
-The app also writes the Rust logs to `Library/Caches/Logs/app.log` in its container,
-up to 5 MB per run, and keeps the last run's file as `app.previous.log`. To copy it
-to the Mac:
+The Rust side takes logins, passwords and API keys out of every address before it
+logs it. A stream address keeps only its server and stream ID, such as
+`http://host:8080/…/12345.ts`. The Swift plugin only logs audio session errors,
+which carry no addresses.
+
+The app also writes the Rust logs to `Library/Caches/Logs/app.log` in its container.
+When the file reaches 5 MB it becomes `app.log.1` and a new `app.log` starts, so the
+newest lines are always kept. At launch the last run's `app.log` becomes
+`app.previous.log`. To copy a file to the Mac:
 
 ```bash
 xcrun devicectl device copy from --device <identifier> \
