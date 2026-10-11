@@ -74,7 +74,10 @@ impl From<reqwest::Error> for WhatsonError {
 /// Raw platform rating object from the API.
 #[derive(Debug, Deserialize)]
 struct PlatformRating {
-    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    #[serde(
+        default,
+        deserialize_with = "crate::json::deserialize_number_or_string"
+    )]
     id: Option<String>,
     #[serde(default)]
     users_rating: Option<f64>,
@@ -84,21 +87,6 @@ struct PlatformRating {
     critics_rating: Option<f64>,
     #[serde(default)]
     critics_rating_count: Option<i64>,
-}
-
-/// Deserialize a value that can be a string or a number into Option<String>.
-fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde_json::Value;
-    let v = Option::<Value>::deserialize(deserializer)?;
-    Ok(v.and_then(|v| match v {
-        Value::String(s) => Some(s),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Null => None,
-        _ => None,
-    }))
 }
 
 /// Raw API response item.

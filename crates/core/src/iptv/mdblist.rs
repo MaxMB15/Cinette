@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+use crate::json::number_or_string;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -97,24 +98,6 @@ struct MdbListRating {
     votes: Option<serde_json::Value>,
 }
 
-/// Extract an `i32` score from a `serde_json::Value` that may be a number or a numeric string.
-fn value_to_i32(v: &serde_json::Value) -> Option<i32> {
-    match v {
-        serde_json::Value::Number(n) => n.as_f64().map(|f| f as i32),
-        serde_json::Value::String(s) => s.parse::<i32>().ok(),
-        _ => None,
-    }
-}
-
-/// Extract an `f64` rating from a `serde_json::Value` that may be a number or a numeric string.
-fn value_to_f64(v: &serde_json::Value) -> Option<f64> {
-    match v {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::String(s) => s.parse::<f64>().ok(),
-        _ => None,
-    }
-}
-
 /// Parse an MDBList JSON response (as `serde_json::Value`) into `MdbListData`.
 /// Separated from the HTTP call so it can be unit-tested without network access.
 pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, MdbListError> {
@@ -148,19 +131,19 @@ pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, Md
         for r in ratings {
             match r.source.as_str() {
                 "metacritic" => {
-                    metacritic_score = r.score.as_ref().and_then(value_to_i32);
-                    metacritic_votes = r.votes.as_ref().and_then(value_to_i32);
+                    metacritic_score = r.score.as_ref().and_then(number_or_string::<i32>);
+                    metacritic_votes = r.votes.as_ref().and_then(number_or_string::<i32>);
                 }
                 "tmdb" => {
-                    tmdb_rating = r.score.as_ref().and_then(value_to_f64);
-                    tmdb_votes = r.votes.as_ref().and_then(value_to_i32);
+                    tmdb_rating = r.score.as_ref().and_then(number_or_string::<f64>);
+                    tmdb_votes = r.votes.as_ref().and_then(number_or_string::<i32>);
                 }
                 "trakt" => {
-                    trakt_rating = r.score.as_ref().and_then(value_to_f64);
-                    trakt_votes = r.votes.as_ref().and_then(value_to_i32);
+                    trakt_rating = r.score.as_ref().and_then(number_or_string::<f64>);
+                    trakt_votes = r.votes.as_ref().and_then(number_or_string::<i32>);
                 }
                 "letterboxd" => {
-                    letterboxd_rating = r.score.as_ref().and_then(value_to_f64);
+                    letterboxd_rating = r.score.as_ref().and_then(number_or_string::<f64>);
                 }
                 _ => {}
             }

@@ -6,4 +6,5 @@ pub mod cache;
 pub mod downloads;
 pub mod http;
 pub mod iptv;
+mod json;
 pub mod models;

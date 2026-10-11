@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+use crate::json::number_or_string;
 use crate::models::channel::Channel;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -135,15 +136,6 @@ struct XtreamEpisode {
     container_extension: Option<String>,
 }
 
-/// Coerce a JSON value that could be a string or number into u64.
-fn coerce_u64(v: &serde_json::Value) -> Option<u64> {
-    match v {
-        serde_json::Value::Number(n) => n.as_u64(),
-        serde_json::Value::String(s) => s.parse().ok(),
-        _ => None,
-    }
-}
-
 pub struct XtreamClient {
     credentials: XtreamCredentials,
     client: &'static reqwest::Client,
@@ -225,7 +217,7 @@ impl XtreamClient {
         for (season_str, episodes) in &episodes_map {
             let season: u32 = season_str.parse().unwrap_or(0);
             for (i, ep) in episodes.iter().enumerate() {
-                let ep_id = match ep.id.as_ref().and_then(coerce_u64) {
+                let ep_id = match ep.id.as_ref().and_then(number_or_string::<u64>) {
                     Some(id) => id,
                     None => continue,
                 };
@@ -233,7 +225,7 @@ impl XtreamClient {
                 let ep_num = ep
                     .episode_num
                     .as_ref()
-                    .and_then(coerce_u64)
+                    .and_then(number_or_string::<u64>)
                     .map(|n| n as u32);
                 let ep_title = ep.title.as_deref().filter(|t| !t.is_empty());
 
@@ -547,39 +539,6 @@ mod tests {
         );
     }
 
-    // ── coerce_u64 ────────────────────────────────────────────────────
-
-    #[test]
-    fn test_coerce_u64_from_number() {
-        assert_eq!(coerce_u64(&json!(42)), Some(42));
-    }
-
-    #[test]
-    fn test_coerce_u64_from_string() {
-        assert_eq!(coerce_u64(&json!("123")), Some(123));
-    }
-
-    #[test]
-    fn test_coerce_u64_from_invalid_string() {
-        assert_eq!(coerce_u64(&json!("abc")), None);
-    }
-
-    #[test]
-    fn test_coerce_u64_from_null() {
-        assert_eq!(coerce_u64(&json!(null)), None);
-    }
-
-    #[test]
-    fn test_coerce_u64_from_float_string() {
-        assert_eq!(coerce_u64(&json!("3.14")), None);
-    }
-
-    #[test]
-    fn test_coerce_u64_from_negative_number() {
-        // serde_json stores -1 as i64, as_u64() returns None
-        assert_eq!(coerce_u64(&json!(-1)), None);
-    }
-
     // ── Deserialization: XtreamStream ──────────────────────────────────
 
     #[test]
@@ -714,12 +673,24 @@ mod tests {
         assert_eq!(s1.len(), 2);
 
         // First episode: id as string, episode_num as number
-        assert_eq!(coerce_u64(s1[0].id.as_ref().unwrap()), Some(1001));
-        assert_eq!(coerce_u64(s1[0].episode_num.as_ref().unwrap()), Some(1));
+        assert_eq!(
+            number_or_string::<u64>(s1[0].id.as_ref().unwrap()),
+            Some(1001)
+        );
+        assert_eq!(
+            number_or_string::<u64>(s1[0].episode_num.as_ref().unwrap()),
+            Some(1)
+        );
 
         // Second episode: id as number, episode_num as string
-        assert_eq!(coerce_u64(s1[1].id.as_ref().unwrap()), Some(1002));
-        assert_eq!(coerce_u64(s1[1].episode_num.as_ref().unwrap()), Some(2));
+        assert_eq!(
+            number_or_string::<u64>(s1[1].id.as_ref().unwrap()),
+            Some(1002)
+        );
+        assert_eq!(
+            number_or_string::<u64>(s1[1].episode_num.as_ref().unwrap()),
+            Some(2)
+        );
     }
 
     #[test]
@@ -778,8 +749,6 @@ mod tests {
         assert!(!err.to_string().contains("SECRET"), "{err}");
         assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
-
-    // ── Channel builders ──────────────────────────────────────────────
 
     fn categories() -> HashMap<String, String> {
         HashMap::from([("3".to_string(), "News".to_string())])
