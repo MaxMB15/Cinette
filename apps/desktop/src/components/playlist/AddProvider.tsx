@@ -91,15 +91,12 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 				],
 			});
 			if (selected) {
-				const path = typeof selected === "string" ? selected : selected;
-				if (path) {
-					const fname = filenameFromPath(path);
-					setFilePath(path);
-					setFileName(fname);
-					setError(null);
-					if (!name) {
-						setName(nameFromFilename(fname));
-					}
+				const fname = filenameFromPath(selected);
+				setFilePath(selected);
+				setFileName(fname);
+				setError(null);
+				if (!name) {
+					setName(nameFromFilename(fname));
 				}
 			}
 		} catch (e) {

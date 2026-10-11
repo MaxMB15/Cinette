@@ -30,23 +30,6 @@ export const PlaylistManager = () => {
 	const [pendingRemoval, setPendingRemoval] = useState<Provider | null>(null);
 	const [refreshErrors, setRefreshErrors] = useState<Record<string, string>>({});
 
-	const handleAddM3u = async (name: string, url: string) => {
-		await loadM3u(name, url);
-	};
-
-	const handleAddM3uFile = async (name: string, path: string) => {
-		await loadM3uFile(name, path);
-	};
-
-	const handleAddXtream = async (
-		name: string,
-		url: string,
-		username: string,
-		password: string
-	) => {
-		await loadXtream(name, url, username, password);
-	};
-
 	const refreshNow = async (id: string) => {
 		setRefreshingIds((s) => new Set(s).add(id));
 		setRefreshErrors((errors) => {
@@ -76,11 +59,7 @@ export const PlaylistManager = () => {
 		<div className="flex flex-col gap-6 p-4 max-w-2xl mx-auto h-full overflow-y-auto">
 			<h1 className="text-2xl font-bold">Playlists</h1>
 
-			<AddProvider
-				onAddM3u={handleAddM3u}
-				onAddM3uFile={handleAddM3uFile}
-				onAddXtream={handleAddXtream}
-			/>
+			<AddProvider onAddM3u={loadM3u} onAddM3uFile={loadM3uFile} onAddXtream={loadXtream} />
 
 			{providers.length > 0 && (
 				<div className="flex flex-col gap-3">
