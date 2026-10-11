@@ -44,10 +44,14 @@ export const GroupList = ({
 					</div>
 					<div className="flex items-center gap-2">
 						<button
+							type="button"
+							aria-label={isPinned(name) ? `Unpin ${name}` : `Pin ${name}`}
+							aria-pressed={isPinned(name)}
 							onClick={(e) => {
 								e.stopPropagation();
 								onTogglePin(name);
 							}}
+							onKeyDown={(e) => e.stopPropagation()}
 							className={`p-1 rounded hover:bg-background transition-colors ${
 								isPinned(name) ? "text-primary" : "text-muted-foreground"
 							}`}
