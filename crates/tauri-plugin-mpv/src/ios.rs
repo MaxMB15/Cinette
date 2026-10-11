@@ -123,9 +123,19 @@ fn run_in_order(f: impl FnOnce(&MpvState) + Send + 'static) {
     }
 }
 
+/// Whether the app is in the background. Set as soon as iOS says so,
+/// before the job below is queued, so a load that creates mpv before that
+/// job runs still starts without video.
+static IN_BACKGROUND: AtomicBool = AtomicBool::new(false);
+
+pub fn in_background() -> bool {
+    IN_BACKGROUND.load(Ordering::Acquire)
+}
+
 /// iOS stops apps that use the GPU in the background, so video output is
 /// off while the app is in the background. Audio keeps playing.
 extern "C" fn on_lifecycle(background: bool) {
+    IN_BACKGROUND.store(background, Ordering::Release);
     run_in_order(move |state| state.set_video_enabled(!background));
 }
 

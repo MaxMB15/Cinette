@@ -50,11 +50,6 @@ pub struct MpvState {
     /// thread takes it, so they can still wait on the main thread while
     /// holding it.
     transition: Mutex<()>,
-    /// Whether video output should be on. iOS turns it off while the app
-    /// is in the background. Only read or written with `inner` locked, so a
-    /// load that is creating mpv can't miss a change.
-    #[cfg(target_os = "ios")]
-    video_enabled: AtomicBool,
 }
 
 impl MpvState {
@@ -67,8 +62,6 @@ impl MpvState {
             idle_inhibitor: IdleInhibitor::new(),
             reconnect_kill: Mutex::new(None),
             transition: Mutex::new(()),
-            #[cfg(target_os = "ios")]
-            video_enabled: AtomicBool::new(true),
         }
     }
 
@@ -309,9 +302,10 @@ impl MpvState {
 
         let attach_result = {
             let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
-            // If the app went to the background during this load, start
-            // without video. set_video_enabled() turns it back on later.
-            if !self.video_enabled.load(Ordering::Acquire) {
+            // Start without video if the app is in the background. This is
+            // read with the engine locked, so the lifecycle job that turns
+            // video back on can only run after mpv exists.
+            if crate::ios::in_background() {
                 options.push(("vid", "no"));
             }
             match engine.create(&options) {
@@ -507,14 +501,11 @@ impl MpvState {
     /// Turn video output off or back on while audio keeps playing. iOS
     /// uses this when the app goes to the background.
     pub fn set_video_enabled(&self, enabled: bool) {
-        let engine = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        // Stored with the engine locked. A load that is creating mpv either
-        // reads it first and starts without video, or creates mpv first and
-        // gets the property set below.
-        #[cfg(target_os = "ios")]
-        self.video_enabled.store(enabled, Ordering::Release);
-        if let Err(e) = engine.set_video_enabled(enabled) {
-            // Expected between streams, when there's no mpv instance.
+        let result = match self.inner.lock() {
+            Ok(engine) => engine.set_video_enabled(enabled),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Err(e) = result {
             tracing::debug!("[MPV] set_video_enabled({enabled}): {e}");
         }
     }
