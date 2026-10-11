@@ -14,6 +14,7 @@ import {
 	mpvGetState,
 } from "@/lib/tauri";
 import { readHwdecEnabled, readVolumePreference, writeVolumePreference } from "@/lib/player-prefs";
+import { isOpeningStream } from "@/lib/stream-opening";
 
 const DEFAULT_STATE: PlayerState = {
 	isPlaying: false,
@@ -22,6 +23,8 @@ const DEFAULT_STATE: PlayerState = {
 	volume: 100,
 	position: 0,
 	duration: 0,
+	playbackStarted: false,
+	openFailed: false,
 };
 
 export const useMpv = () => {
@@ -29,6 +32,9 @@ export const useMpv = () => {
 	const [error, setError] = useState<string | null>(null);
 	const [fallbackActive, setFallbackActive] = useState(false);
 	const [firstFrameReady, setFirstFrameReady] = useState(false);
+	// True while `mpvLoad` is in flight. Drives the "Opening stream" spinner
+	// until the polled state describes the new load.
+	const [loadPending, setLoadPending] = useState(false);
 	// Set while the Rust-side reconnect monitor is re-issuing loadfile after
 	// a network-induced EndFile(Error). Cleared on the matching `mpv://reconnected`
 	// event or whenever the user starts a fresh load.
@@ -207,9 +213,12 @@ export const useMpv = () => {
 	// 00:00. `lastKnownPositionRef` only ever takes ON forward progress,
 	// so an outage-time recovery sees the pre-outage position.
 	const lastKnownPositionRef = useRef(0);
+	// The stream stopped before it ever played, for example because the server
+	// answered with an error. Reconnect and retries-exhausted states outrank it.
+	const openFailed = state.openFailed && !reconnecting && !loadFailed;
 	useEffect(() => {
-		loadFailedRef.current = loadFailed;
-	}, [loadFailed]);
+		loadFailedRef.current = loadFailed || openFailed;
+	}, [loadFailed, openFailed]);
 	useEffect(() => {
 		reconnectingRef.current = reconnecting;
 	}, [reconnecting]);
@@ -230,6 +239,7 @@ export const useMpv = () => {
 		if (loadingRef.current) return;
 		loadingRef.current = true;
 		loadedThisMountRef.current = true;
+		setLoadPending(true);
 		setError(null);
 		setFallbackActive(false);
 		setFirstFrameReady(false);
@@ -259,6 +269,8 @@ export const useMpv = () => {
 			isPaused: false,
 			position: startPos ?? 0,
 			duration: 0,
+			playbackStarted: false,
+			openFailed: false,
 		}));
 		try {
 			await mpvLoad(url, startPos, readHwdecEnabled());
@@ -280,6 +292,7 @@ export const useMpv = () => {
 			throw e;
 		} finally {
 			loadingRef.current = false;
+			setLoadPending(false);
 		}
 	}, []);
 
@@ -390,6 +403,9 @@ export const useMpv = () => {
 		try {
 			const s = await mpvGetState();
 			console.debug("[useMpv] poll state:", JSON.stringify(s));
+			// A poll that lands mid-load may describe the previous stream (or
+			// none at all). Keep the reset state until the load returns.
+			if (loadingRef.current) return;
 			setState({
 				isPlaying: s.isPlaying,
 				isPaused: s.isPaused,
@@ -397,6 +413,8 @@ export const useMpv = () => {
 				volume: s.volume,
 				position: s.position,
 				duration: s.duration,
+				playbackStarted: s.playbackStarted,
+				openFailed: s.openFailed,
 			});
 		} catch (e) {
 			console.warn("[useMpv] poll failed:", e);
@@ -413,15 +431,28 @@ export const useMpv = () => {
 		};
 	}, [refresh]);
 
+	const opening = isOpeningStream({
+		loadPending,
+		currentUrl: state.currentUrl,
+		playbackStarted: state.playbackStarted,
+		firstFrameReady,
+		isPaused: state.isPaused,
+		error,
+		failed: loadFailed || openFailed,
+		reconnecting,
+	});
+
 	return {
 		state,
 		error,
 		fallbackActive,
 		firstFrameReady,
+		opening,
 		reconnecting,
 		reconnectAttempt,
 		buffering,
 		loadFailed,
+		openFailed,
 		recentlyRecovered,
 		load,
 		getLastKnownPosition,

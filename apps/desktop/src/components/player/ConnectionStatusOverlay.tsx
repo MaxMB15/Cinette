@@ -17,6 +17,10 @@ interface ConnectionStatusOverlayProps {
 	 *  (URL genuinely unreachable). User must take action — show a retry
 	 *  button so they don't get stuck. */
 	loadFailed: boolean;
+	/** True when the stream stopped before it ever played, for example
+	 *  because the server answered with an error. Shown like `loadFailed`
+	 *  with wording that fits a first open. */
+	openFailed?: boolean;
 	/** Transient flag set by `useMpv` for ~2.5 s right after a successful
 	 *  reconnect (either via `mpv://reconnected` or the navigator.onLine
 	 *  auto-recovery path). Powers the green "Connection restored" banner. */
@@ -51,18 +55,20 @@ export const ConnectionStatusOverlay = ({
 	reconnectAttempt,
 	buffering,
 	loadFailed,
+	openFailed = false,
 	recentlyRecovered,
 	onRetry,
 }: ConnectionStatusOverlayProps) => {
-	const status: Status = loadFailed
-		? "failed"
-		: reconnecting
-			? "reconnecting"
-			: recentlyRecovered
-				? "recovered"
-				: buffering
-					? "buffering"
-					: "idle";
+	const status: Status =
+		loadFailed || openFailed
+			? "failed"
+			: reconnecting
+				? "reconnecting"
+				: recentlyRecovered
+					? "recovered"
+					: buffering
+						? "buffering"
+						: "idle";
 
 	if (status === "idle") return null;
 
@@ -90,7 +96,9 @@ export const ConnectionStatusOverlay = ({
 			container: "border-red-400/60 bg-red-950/90 text-red-100 shadow-red-500/30",
 			iconWrap: "bg-red-500/25 text-red-200",
 			title: "Stream unavailable",
-			detail: "Couldn't connect after several attempts. Check your network.",
+			detail: loadFailed
+				? "Couldn't connect after several attempts. Check your network."
+				: "The stream didn't open. The server may be down or the link may have expired.",
 			Icon: <WifiOff className="h-5 w-5" />,
 			Trailing: onRetry ? (
 				<button

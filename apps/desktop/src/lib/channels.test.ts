@@ -72,6 +72,8 @@ const DEFAULT_PLAYER_STATE: PlayerState = {
 	volume: 100,
 	position: 0,
 	duration: 0,
+	playbackStarted: false,
+	openFailed: false,
 };
 
 // ── Category derivation ──────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 
 import { Controls } from "./Controls";
 import { ConnectionStatusOverlay } from "./ConnectionStatusOverlay";
+import { OpeningIndicator } from "./OpeningIndicator";
 import { SubtitlePicker } from "./SubtitlePicker";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
@@ -980,8 +981,11 @@ export const PlayerView = () => {
 			<ConnectionStatusOverlay
 				reconnecting={mpv.reconnecting}
 				reconnectAttempt={mpv.reconnectAttempt}
-				buffering={mpv.buffering}
+				// Buffering before the first frame is part of opening, which has
+				// its own spinner. Failures and reconnects still outrank it.
+				buffering={mpv.buffering && !mpv.opening}
 				loadFailed={mpv.loadFailed}
+				openFailed={mpv.openFailed}
 				recentlyRecovered={mpv.recentlyRecovered}
 				onRetry={() => {
 					const url = mpv.state.currentUrl;
@@ -1013,6 +1017,7 @@ export const PlayerView = () => {
 					</div>
 				)}
 				{!mpv.error &&
+					!mpv.opening &&
 					!mpv.state.currentUrl &&
 					!mpv.state.isPlaying &&
 					!mpv.state.isPaused && (
@@ -1020,6 +1025,7 @@ export const PlayerView = () => {
 							Select a channel to start watching
 						</p>
 					)}
+				{mpv.opening && <OpeningIndicator key={mpv.state.currentUrl ?? ""} />}
 			</div>
 
 			{(activeChannelName || showBack) && showControls && (
@@ -1066,6 +1072,8 @@ export const PlayerView = () => {
 						volume: mpv.state.volume,
 						position: mpv.state.position,
 						duration: mpv.state.duration,
+						playbackStarted: mpv.state.playbackStarted,
+						openFailed: mpv.state.openFailed,
 					}}
 					visible={showControls}
 					isFullscreen={isFullscreen}
