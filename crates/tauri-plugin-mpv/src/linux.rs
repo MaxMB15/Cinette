@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Linux MPV embedding — Wayland subsurface + EGL + OpenGL render context.
+//! Linux video embedding with a Wayland subsurface, EGL and an OpenGL render
+//! context.
 //!
-//! Architecture:
-//! - Create a `wl_subsurface` + `wl_egl_window` underneath the Tauri `wl_surface`.
-//! - Build an EGL (OpenGL Core 3.2) context on that window.
-//! - Give libmpv an `MPV_RENDER_API_TYPE_OPENGL` render context and, crucially,
-//!   the native `wl_display` pointer via `MPV_RENDER_PARAM_WL_DISPLAY` so
-//!   libmpv can interoperate with the compositor (required for dmabuf/zwp
-//!   colorspace and for correct presentation timing on Wayland).
-//! - Every EGL / GL / `wl_egl_window_resize` call is dispatched to the GLib
-//!   main thread: the same thread that owns the EGL context for the entire
-//!   lifetime of the renderer. This is the Wayland-safe equivalent of the
-//!   NSOpenGLView + main-thread pattern used on macOS.
+//! The renderer puts a `wl_subsurface` and `wl_egl_window` under the Tauri
+//! `wl_surface` and builds an OpenGL Core 3.2 EGL context on that window.
+//! libmpv gets an OpenGL render context plus the native `wl_display` through
+//! `MPV_RENDER_PARAM_WL_DISPLAY`. It needs the display for dmabuf and color
+//! space interop with the compositor, and for presentation timing.
 //!
-//! X11 is intentionally unsupported on this platform: X11 sessions fall through
-//! to the separate-window fallback in `MpvState`.
+//! Every EGL, GL and `wl_egl_window` call runs on the GLib main thread, which
+//! owns the EGL context for the renderer's whole life. It is the Wayland
+//! counterpart of the main thread rule on macOS.
+//!
+//! X11 sessions aren't embedded. They use the separate window fallback in
+//! `MpvState`.
 
 use crate::lock::lock_or_recover;
 use crate::options::shared_options;
@@ -43,13 +42,10 @@ use wayland_client::{
 };
 use wayland_egl::WlEglSurface;
 
-// =========================================================================
-// libEGL loader
-// =========================================================================
-
-/// Dynamically loaded `libEGL.so.1`. Cached for the lifetime of the process
-/// so we pay the `dlopen` cost once and every subsequent lookup is a pointer
-/// read. Returns `Err` (never panics) so `LinuxGlRenderer::new` can fall back.
+/// The dynamically loaded `libEGL.so.1`, opened once per process.
+///
+/// It returns `Err` rather than panicking so `LinuxGlRenderer::new` can fall
+/// back to the separate window.
 fn egl() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, String> {
     static INSTANCE: OnceLock<Result<egl::DynamicInstance<egl::EGL1_4>, String>> = OnceLock::new();
     INSTANCE
@@ -64,11 +60,11 @@ fn egl() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, String> {
         .map_err(|e| e.clone())
 }
 
-/// Resolve a GL function pointer via the EGL loader.
+/// Resolves a GL function pointer through the EGL loader.
 ///
-/// Returned as `*mut c_void` for both `gl::load_with` (the `gl` crate) and
-/// libmpv's `get_proc_address` callback. `gl::load_with` is called exactly
-/// once per attach, on the GLib main thread, while the EGL context is current.
+/// Both the `gl` crate's `load_with` and libmpv's `get_proc_address` callback
+/// use it. `attach` calls `gl::load_with` once, on the GLib main thread, while
+/// the EGL context is current.
 fn gl_proc_address(name: &str) -> *mut c_void {
     match egl() {
         Ok(egl) => egl
@@ -78,10 +74,8 @@ fn gl_proc_address(name: &str) -> *mut c_void {
     }
 }
 
-// =========================================================================
-// Wayland globals dispatcher (registry-only, silent otherwise)
-// =========================================================================
-
+/// Event handler for the renderer's Wayland queue. The renderer only binds
+/// globals through it and ignores every event.
 struct WlGlobals;
 
 impl Dispatch<WlRegistry, GlobalListContents> for WlGlobals {
@@ -101,14 +95,11 @@ wayland_client::delegate_noop!(WlGlobals: ignore WlSubcompositor);
 wayland_client::delegate_noop!(WlGlobals: ignore WlSurface);
 wayland_client::delegate_noop!(WlGlobals: ignore WlSubsurface);
 
-// =========================================================================
-// RAII-owned platform resources
-// =========================================================================
-
-/// Owns the EGL context. The initial surface is transported here but taken
-/// by `attach` and moved into `SessionState` (which handles ongoing
-/// surface lifecycle). The EGL *display* is not terminated on drop because
-/// on Wayland it is shared with GTK/WebKit.
+/// Owns the EGL context.
+///
+/// `attach` takes the first surface and moves it into `SessionState`, which
+/// replaces it on resize. Drop leaves the display alone because GTK and
+/// WebKit share it on Wayland.
 struct OwnedEgl {
     display: egl::Display,
     surface: Option<egl::Surface>,
@@ -133,8 +124,8 @@ impl Drop for OwnedEgl {
 unsafe impl Send for OwnedEgl {}
 unsafe impl Sync for OwnedEgl {}
 
-/// Owns the Wayland subsurface tree. The initial `WlEglSurface` is
-/// transported here but taken by `attach` and moved into `SessionState`.
+/// Owns the Wayland subsurface tree. `attach` takes the first
+/// `WlEglSurface` and moves it into `SessionState`.
 struct WaylandSession {
     wl_egl_surface: Option<WlEglSurface>,
     subsurface: WlSubsurface,
@@ -153,15 +144,13 @@ impl Drop for WaylandSession {
     }
 }
 
-// SAFETY: Subsurface / surface protocol requests go through
+// SAFETY: Subsurface and surface protocol requests go through
 // wayland-client's internally-locked Backend and are safe from any thread.
 unsafe impl Send for WaylandSession {}
 unsafe impl Sync for WaylandSession {}
 
-// =========================================================================
-// Mutable state shared across threads
-// =========================================================================
-
+/// Surface state that `set_frame`, `set_visible` and `render_frame` share
+/// through `Inner::state`.
 struct SessionState {
     egl_display: egl::Display,
     egl_surface: egl::Surface,
@@ -185,17 +174,16 @@ impl Drop for SessionState {
 // ensures exclusive access.
 unsafe impl Send for SessionState {}
 
-// =========================================================================
-// Inner (shared between renderer and libmpv update callback)
-// =========================================================================
-
+/// Everything one attached session owns. The renderer and the libmpv update
+/// callback share it.
 struct Inner {
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     video_active: AtomicBool,
     valid: AtomicBool,
-    // Drop order: render_ctx (frees mpv GL resources) → state (destroys
-    // EGL surface + WlEglSurface) → egl (destroys GL context) → wayland
-    // (destroys subsurface tree and Wayland connection).
+    // Keep this order, since fields drop top to bottom. The render context
+    // frees mpv's GL resources, `state` destroys the EGL surface and
+    // WlEglSurface, `egl` destroys the GL context and `wayland` tears down
+    // the subsurface tree.
     render_ctx: RenderContext,
     state: Mutex<SessionState>,
     egl: OwnedEgl,
@@ -205,27 +193,25 @@ struct Inner {
 // SAFETY: `RenderContext`, `OwnedEgl`, and `WaylandSession` are only
 // dereferenced from the GLib main thread (via `render_frame`). The libmpv
 // update callback runs on an arbitrary thread but only schedules an idle
-// task; it does not touch any of these fields directly. Mutex/Atomic fields
-// are inherently thread-safe.
+// task; it does not touch any of these fields directly. The mutex and
+// atomic fields are thread safe on their own.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
 
-// =========================================================================
-// LinuxGlRenderer
-// =========================================================================
-
+/// Embeds libmpv video in the Tauri window through a Wayland subsurface and
+/// EGL.
 pub struct LinuxGlRenderer {
-    /// Pre-attach resources owned by the renderer until `attach` consumes them.
+    /// What `new` built, held until `attach` takes it.
     pending: Option<Pending>,
-    /// Active render state. `Some` between `attach` and `detach`.
+    /// The attached session. `Some` between `attach` and `detach`.
     active: Option<Arc<Inner>>,
-    /// Queued up by the caller before `attach`; moved into `Inner` there.
-    /// `Mutex` only exists to satisfy `Sync`; we never contend it
-    /// (`set_first_frame_callback` / `attach` are both called from the
-    /// command thread before the renderer becomes shared).
+    /// The callback set before `attach`, which moves it into `Inner`. The
+    /// mutex is only there for `Sync`. Nothing contends it, because the
+    /// command thread sets and takes it before the renderer is shared.
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
+/// The EGL and Wayland resources `new` builds for `attach`.
 struct Pending {
     egl: OwnedEgl,
     wayland: WaylandSession,
@@ -233,9 +219,8 @@ struct Pending {
 }
 
 impl LinuxGlRenderer {
-    /// Build the EGL context and Wayland subsurface tree. Runs on the GLib
-    /// main thread (via `MainContext::invoke`) because every EGL call in the
-    /// construction path must use the same thread as rendering.
+    /// Builds the EGL context and Wayland subsurface tree on the GLib main
+    /// thread, because construction has to use the same thread as rendering.
     pub fn new<R: Runtime>(app: &AppHandle<R>) -> Result<Self, String> {
         // Fail fast if libEGL is not installed on the host.
         egl()?;
@@ -284,10 +269,6 @@ impl LinuxGlRenderer {
     }
 }
 
-// =========================================================================
-// PlatformRenderer impl
-// =========================================================================
-
 impl PlatformRenderer for LinuxGlRenderer {
     fn attach(&mut self, mpv: &mut Mpv) -> Result<(), String> {
         let Pending {
@@ -305,19 +286,16 @@ impl PlatformRenderer for LinuxGlRenderer {
             .ok()
             .and_then(|mut slot| slot.take());
 
-        // `NonNull<mpv_handle>::as_ptr()` returns a `!Send` raw pointer.
-        // Transport it through the dispatch closure as `usize` (which is
-        // unconditionally `Send + Sync`) and cast back on the other side.
-        // This avoids a wrapper type with its own `unsafe impl Send`.
-        // The pointer is owned by the `MpvEngine` mutex held by the
-        // caller for the duration of this call and is dereferenced only
-        // on the GLib main thread.
+        // Raw pointers aren't Send, so the handle crosses to the GLib main
+        // thread as a `usize`, which saves a wrapper with its own
+        // `unsafe impl Send`. The caller holds the `MpvEngine` lock for the
+        // whole call, so the handle stays valid, and only the main thread
+        // dereferences it.
         let mpv_ptr_usize = mpv.ctx.as_ptr() as usize;
 
-        // Build the render context, `Arc<Inner>`, and wire the update
-        // callback all on the GLib main thread. `Arc<Inner>` is `Send` via
-        // the existing `unsafe impl Send for Inner`, so the dispatch
-        // channel needs no extra send-assertion wrapper on the return.
+        // The render context and its update callback have to be set up on
+        // the GLib main thread as well. `Inner` is Send, so the Arc comes back
+        // over the channel without a wrapper.
         let inner = run_on_glib_main(move || -> Result<Arc<Inner>, String> {
             let mpv_ptr = mpv_ptr_usize as *mut c_void;
             let egl = egl()?;
@@ -444,9 +422,9 @@ impl PlatformRenderer for LinuxGlRenderer {
                 }
             }
         } else {
-            // Move the subsurface off-screen rather than `wl_surface.attach`
-            // a null buffer — attaching null on an EGL-managed surface would
-            // trigger a protocol error with some compositors.
+            // Move the subsurface off screen instead of attaching a null
+            // buffer. Some compositors raise a protocol error for a null
+            // buffer on a surface that EGL manages.
             inner.wayland.subsurface.set_position(-32000, -32000);
         }
         inner.wayland.child_surface.commit();
@@ -484,17 +462,13 @@ impl PlatformRenderer for LinuxGlRenderer {
 impl Drop for LinuxGlRenderer {
     fn drop(&mut self) {
         self.detach();
-        // `pending` (if attach never ran) drops here, also requires GLib
-        // thread for the EGL handles. Construction happened there, and
-        // dropping on a different thread is usually fine for destroy_*
-        // calls because no render thread touches them in that case.
+        // If attach never ran, `pending` drops here on the calling thread
+        // rather than the GLib main thread. That is usually fine for the EGL
+        // destroy calls, because nothing has rendered with these handles.
     }
 }
 
-// =========================================================================
-// Per-frame render — GLib main thread only
-// =========================================================================
-
+/// Renders one frame. Only call it on the GLib main thread.
 fn render_frame(inner: &Inner) {
     if !inner.video_active.load(Ordering::Acquire) {
         return;
@@ -607,11 +581,7 @@ fn recreate_egl_surface(
     Some((new_wl, new_egl))
 }
 
-// =========================================================================
-// Construction helpers
-// =========================================================================
-
-/// Build EGL + Wayland subsurface resources on the GLib main thread.
+/// Builds the EGL and Wayland subsurface resources on the GLib main thread.
 fn build_wayland_on_main_thread(
     wl_surface_ptr: *mut c_void,
     wl_display_ptr: *mut c_void,
@@ -658,8 +628,9 @@ fn build_wayland(
         .map_err(|e| format!("wayland roundtrip: {e}"))?;
 
     // Wrap the parent surface pointer as a wayland-client proxy so we can
-    // pass it to `get_subsurface`. We never receive events on it and its
-    // Drop does not send `wl_surface.destroy` — GTK owns the surface.
+    // pass it to `get_subsurface`. We never receive events on it, and its
+    // Drop doesn't send `wl_surface.destroy`, which matters because GTK owns
+    // the surface.
     //
     // SAFETY: `wl_surface_ptr` is a valid `wl_surface *` on the same
     // connection we are using (shared fd via `from_foreign_display`).
@@ -675,9 +646,9 @@ fn build_wayland(
     child_surface.commit();
     conn.flush().map_err(|e| format!("wayland flush: {e}"))?;
 
-    // EGL: prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)` so
-    // libmpv's internal Wayland integration recognises the display as a
-    // Wayland-backed one. Fall back to `eglGetDisplay` for old drivers.
+    // Prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)` so libmpv's
+    // Wayland integration recognises the display as a Wayland one.
+    // `eglGetDisplay` covers older drivers.
     const EGL_PLATFORM_WAYLAND_EXT: u32 = 0x31D8;
     let egl_display = wayland_egl_display(egl, wl_display_ptr, EGL_PLATFORM_WAYLAND_EXT)?;
 
@@ -787,9 +758,11 @@ fn wayland_egl_display(
         .ok_or_else(|| "eglGetDisplay returned EGL_NO_DISPLAY".to_string())
 }
 
-/// Query GTK for the CSD (Client-Side Decoration) offset so subsurface
-/// coordinates (which are relative to the parent `wl_surface`, inclusive of
-/// shadow + titlebar) line up with frontend content-area coordinates.
+/// Asks GTK for the client side decoration offset.
+///
+/// Subsurface coordinates are relative to the parent `wl_surface`, shadow and
+/// titlebar included. Adding this offset lines them up with the frontend's
+/// content area.
 fn query_csd_offsets<R: Runtime>(app: &AppHandle<R>) -> (i32, i32) {
     use gtk::prelude::*;
 
@@ -821,15 +794,12 @@ fn query_csd_offsets<R: Runtime>(app: &AppHandle<R>) -> (i32, i32) {
         .unwrap_or((0, 0))
 }
 
-// =========================================================================
-// GLib main-thread dispatch helper
-// =========================================================================
-
-/// Run `f` on the GLib main thread, blocking until it returns.
+/// Runs `f` on the GLib main thread and blocks until it returns.
 ///
-/// Uses `MainContext::invoke` (higher priority than idle) when dispatching,
-/// and runs inline if already on the main thread to avoid deadlocking on
-/// our own callback.
+/// On the main thread it runs `f` inline, since waiting for its own callback
+/// would deadlock. Elsewhere it uses `MainContext::invoke`, which runs ahead
+/// of idle callbacks. It panics if the main thread doesn't answer within 5
+/// seconds.
 fn run_on_glib_main<F, T>(f: F) -> T
 where
     F: FnOnce() -> T + Send + 'static,
@@ -852,10 +822,8 @@ where
     }
 }
 
-// =========================================================================
-// Wayland event-queue drain
-// =========================================================================
-
+/// Dispatches the events waiting on the renderer's Wayland queue. Every
+/// handler ignores them, so this only empties the queue.
 fn drain_wayland_queue(inner: &Inner) {
     let Ok(mut queue) = inner.wayland.queue.lock() else {
         return;
@@ -864,10 +832,6 @@ fn drain_wayland_queue(inner: &Inner) {
     let _ = queue.dispatch_pending(&mut dummy);
 }
 
-// =========================================================================
-// MPV option sets
-// =========================================================================
-
 /// Options for embedded playback through the OpenGL render context.
 pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
@@ -875,11 +839,11 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
         // `auto-copy` decodes on the GPU but copies frames to CPU for GL
         // upload. Plain `auto` can map VAAPI surfaces directly as GL
         // textures, which produces colour corruption on drivers that
-        // cannot handle the NV12→RGB interop.
+        // cannot handle the NV12 to RGB interop.
         ("hwdec", "auto-copy"),
         ("ao", "pulse,pipewire,alsa,"),
-        // Ignore config files so system-wide /etc/mpv/mpv.conf (or
-        // user-level) cannot silently set audio=no / aid=no.
+        // Ignore config files, so neither /etc/mpv/mpv.conf nor a user
+        // config can turn audio off with audio=no or aid=no.
         ("config", "no"),
         ("video-sync", "audio"),
     ];
@@ -888,7 +852,8 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
     options
 }
 
-/// Options for the separate-window fallback (vo=gpu, native OSC).
+/// Options for the separate fallback window, where mpv picks `vo=gpu` and
+/// shows its own controls.
 pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
         ("hwdec", "auto"),
