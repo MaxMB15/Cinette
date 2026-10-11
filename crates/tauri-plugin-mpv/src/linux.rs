@@ -18,6 +18,7 @@
 //! X11 is intentionally unsupported on this platform: X11 sessions fall through
 //! to the separate-window fallback in `MpvState`.
 
+use crate::lock::lock_or_recover;
 use crate::renderer::PlatformRenderer;
 use khronos_egl as egl;
 use libmpv2::{
@@ -284,14 +285,7 @@ impl LinuxGlRenderer {
     /// Register a callback invoked once, on the first presented frame. Must
     /// be called before `attach`; it is moved into `Inner` at that point.
     pub fn set_first_frame_callback(&mut self, cb: Box<dyn FnOnce() + Send>) {
-        let mut slot = match self.first_frame_cb.lock() {
-            Ok(slot) => slot,
-            Err(poisoned) => {
-                tracing::warn!("[MPV] first_frame_cb mutex was poisoned; recovering");
-                poisoned.into_inner()
-            }
-        };
-        *slot = Some(cb);
+        *lock_or_recover(&self.first_frame_cb) = Some(cb);
     }
 }
 
@@ -417,10 +411,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         let hi = (h as i32).max(1);
 
         {
-            let mut state = match inner.state.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
+            let mut state = lock_or_recover(&inner.state);
             let ax = x as i32 + state.csd_offset.0;
             let ay = y as i32 + state.csd_offset.1;
             state.last_frame = (ax, ay, wi, hi);
@@ -450,13 +441,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         inner.video_active.store(visible, Ordering::Release);
 
         if visible {
-            let (lx, ly, lw, lh) = {
-                let state = match inner.state.lock() {
-                    Ok(g) => g,
-                    Err(p) => p.into_inner(),
-                };
-                state.last_frame
-            };
+            let (lx, ly, lw, lh) = lock_or_recover(&inner.state).last_frame;
             inner.wayland.subsurface.set_position(lx, ly);
             if lw > 0 && lh > 0 {
                 if let Ok(mut state) = inner.state.lock() {
@@ -525,10 +510,7 @@ fn render_frame(inner: &Inner) {
     let display = inner.egl.display;
     let context = inner.egl.context;
 
-    let mut state = match inner.state.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
+    let mut state = lock_or_recover(&inner.state);
 
     // Recreate the EGL surface at the new size instead of calling
     // wl_egl_window_resize, which corrupts mpv's internal textures

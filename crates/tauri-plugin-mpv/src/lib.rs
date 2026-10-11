@@ -10,6 +10,7 @@ extern crate objc;
 mod commands;
 mod engine;
 mod idle_inhibit;
+mod lock;
 pub mod mpv;
 mod reconnect;
 mod renderer;

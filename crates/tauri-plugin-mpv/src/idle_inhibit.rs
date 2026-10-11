@@ -10,6 +10,7 @@
 //! - Linux: D-Bus org.freedesktop.ScreenSaver.Inhibit / UnInhibit
 //! - iOS: UIApplication.isIdleTimerDisabled
 
+use crate::lock::lock_or_recover;
 use std::sync::Mutex;
 
 /// Manages a single idle-inhibit assertion. Thread-safe — callers can
@@ -42,7 +43,7 @@ impl IdleInhibitor {
 
     /// Prevent the display from sleeping. No-op if already inhibited.
     pub fn inhibit(&self) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = lock_or_recover(&self.inner);
         if state.active {
             return;
         }
@@ -54,7 +55,7 @@ impl IdleInhibitor {
 
     /// Allow the display to sleep again. No-op if not inhibited.
     pub fn uninhibit(&self) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = lock_or_recover(&self.inner);
         if !state.active {
             return;
         }
