@@ -5,6 +5,7 @@ use crate::models::channel::Channel;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
+use url::form_urlencoded;
 
 #[derive(Debug, Error)]
 pub enum XtreamError {
@@ -41,11 +42,17 @@ impl XtreamCredentials {
         }
     }
 
-    fn api_url(&self, action: &str) -> String {
-        format!(
-            "{}/player_api.php?username={}&password={}&action={action}",
-            self.server, self.username, self.password
-        )
+    /// Logins can contain characters such as `&`, `#` or `+` that would
+    /// otherwise end the value early or change its meaning, so the whole query
+    /// is form encoded.
+    fn api_url(&self, action: &str, extra: &[(&str, &str)]) -> String {
+        let query = form_urlencoded::Serializer::new(String::new())
+            .append_pair("username", &self.username)
+            .append_pair("password", &self.password)
+            .append_pair("action", action)
+            .extend_pairs(extra)
+            .finish();
+        format!("{}/player_api.php?{query}", self.server)
     }
 
     fn live_stream_url(&self, stream_id: u64, extension: &str) -> String {
@@ -165,7 +172,7 @@ impl XtreamClient {
     }
 
     pub async fn authenticate(&self) -> Result<(), XtreamError> {
-        let url = self.credentials.api_url("");
+        let url = self.credentials.api_url("", &[]);
         let resp: AuthResponse = self.client.get(&url).send().await?.json().await?;
 
         match resp.user_info {
@@ -182,7 +189,7 @@ impl XtreamClient {
     }
 
     async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
-        let url = self.credentials.api_url(action);
+        let url = self.credentials.api_url(action, &[]);
         let cats: Vec<XtreamCategory> = self.client.get(&url).send().await?.json().await?;
         Ok(cats
             .into_iter()
@@ -191,12 +198,12 @@ impl XtreamClient {
     }
 
     async fn fetch_streams_raw(&self, action: &str) -> Result<Vec<XtreamStream>, XtreamError> {
-        let url = self.credentials.api_url(action);
+        let url = self.credentials.api_url(action, &[]);
         Ok(self.client.get(&url).send().await?.json().await?)
     }
 
     async fn fetch_series_raw(&self) -> Result<Vec<XtreamSeries>, XtreamError> {
-        let url = self.credentials.api_url("get_series");
+        let url = self.credentials.api_url("get_series", &[]);
         Ok(self.client.get(&url).send().await?.json().await?)
     }
 
@@ -208,9 +215,9 @@ impl XtreamClient {
         show_logo: Option<&str>,
         group: &str,
     ) -> Result<Vec<Channel>, XtreamError> {
-        let url = format!(
-            "{}/player_api.php?username={}&password={}&action=get_series_info&series_id={series_id}",
-            self.credentials.server, self.credentials.username, self.credentials.password
+        let url = self.credentials.api_url(
+            "get_series_info",
+            &[("series_id", series_id.to_string().as_str())],
         );
         let resp: XtreamSeriesInfoResponse = self.client.get(&url).send().await?.json().await?;
 
@@ -411,14 +418,14 @@ pub async fn fetch_xtream_channels(
     Ok(all)
 }
 
-/// Returns the XMLTV EPG URL for an Xtream provider.
+/// Returns the XMLTV EPG URL for an Xtream provider, with the login form
+/// encoded the same way as the API calls.
 pub fn get_xtream_epg_url(server: &str, username: &str, password: &str) -> String {
-    format!(
-        "{}/xmltv.php?username={}&password={}",
-        server.trim_end_matches('/'),
-        username,
-        password
-    )
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("username", username)
+        .append_pair("password", password)
+        .finish();
+    format!("{}/xmltv.php?{query}", server.trim_end_matches('/'))
 }
 
 /// Fetch all episodes for a specific Xtream series by its series_id.
@@ -476,8 +483,65 @@ mod tests {
     fn test_api_url() {
         let creds = XtreamCredentials::new("http://srv:8080", "user1", "pass1");
         assert_eq!(
-            creds.api_url("get_live_streams"),
+            creds.api_url("get_live_streams", &[]),
             "http://srv:8080/player_api.php?username=user1&password=pass1&action=get_live_streams"
+        );
+    }
+
+    #[test]
+    fn test_api_url_for_authentication_keeps_an_empty_action() {
+        let creds = XtreamCredentials::new("http://srv:8080", "user1", "pass1");
+        assert_eq!(
+            creds.api_url("", &[]),
+            "http://srv:8080/player_api.php?username=user1&password=pass1&action="
+        );
+    }
+
+    const AWKWARD_USER: &str = "me&you #1";
+    const AWKWARD_PASS: &str = "a+b/c d&action=x#e";
+
+    fn query_pairs(url: &str) -> Vec<(String, String)> {
+        url::Url::parse(url)
+            .unwrap()
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+        expected
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_api_url_encodes_awkward_credentials() {
+        let creds = XtreamCredentials::new("http://srv:8080", AWKWARD_USER, AWKWARD_PASS);
+        let url = creds.api_url("get_series_info", &[("series_id", "42")]);
+        assert_eq!(
+            url,
+            "http://srv:8080/player_api.php?username=me%26you+%231\
+             &password=a%2Bb%2Fc+d%26action%3Dx%23e&action=get_series_info&series_id=42"
+        );
+        assert_eq!(
+            query_pairs(&url),
+            pairs(&[
+                ("username", AWKWARD_USER),
+                ("password", AWKWARD_PASS),
+                ("action", "get_series_info"),
+                ("series_id", "42"),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_get_xtream_epg_url_encodes_awkward_credentials() {
+        let url = get_xtream_epg_url("http://srv:8080/", AWKWARD_USER, AWKWARD_PASS);
+        assert!(url.starts_with("http://srv:8080/xmltv.php?"), "{url}");
+        assert_eq!(
+            query_pairs(&url),
+            pairs(&[("username", AWKWARD_USER), ("password", AWKWARD_PASS)])
         );
     }
 
