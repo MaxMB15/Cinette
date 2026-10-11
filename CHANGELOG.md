@@ -14,6 +14,15 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 
+### Fixed
+
+- Holding a subtitle delay button keeps stepping the delay again (#104).
+- Settings says when the update check fails, instead of showing the app as up to date (#104).
+- Removing an entry from recently played no longer hides it when the removal fails, and Clear all keeps the entries it couldn't remove (#104).
+- The splash screen and the donation prompt work when the browser storage is blocked (#104).
+- Pressing Enter on a group's pin button pins the group instead of opening it (#104).
+- Watch history rows play from the keyboard and show their delete button on focus. Screen readers now find the favorite button on movie and series posters, and name the subtitle picker buttons and the group pin button. Enter or Space steps the subtitle delay (#104).
+
 ## [0.5.3] - 2026-10-09
 
 ### Added

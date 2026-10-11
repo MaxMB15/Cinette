@@ -4,8 +4,10 @@
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-/** Logo URLs that failed to load. It lives at module level because the virtual
- *  lists remount cards while scrolling, and each remount would retry a dead URL. */
+/**
+ * Logo URLs that failed to load. It lives at module level because the virtual
+ * lists remount cards while scrolling, and each remount would retry a dead URL.
+ */
 const brokenImageUrls = new Set<string>();
 
 /** Whether the image at url has failed before, and a callback for its onError. */

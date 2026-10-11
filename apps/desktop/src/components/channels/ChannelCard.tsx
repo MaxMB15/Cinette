@@ -24,8 +24,10 @@ const aggregateToIcon = (
 	agg: "none" | "downloading" | "partial" | "complete"
 ): DownloadIconState => (agg === "none" ? "idle" : agg);
 
-/** The heart toggle each card variant shows. It stops the click so the row or
- *  poster around it does not start playback too. */
+/**
+ * The heart toggle each card variant shows. It stops the click so the row or
+ * poster around it does not start playback too.
+ */
 const FavoriteButton = ({
 	isFavorite,
 	onToggle,

@@ -3,8 +3,10 @@
 
 import type { Category, Channel } from "@/lib/types";
 
-/** Categories in the order their groups first appear, with ids cat-0, cat-1
- *  and so on. This is the list useChannels exposes. */
+/**
+ * Categories in the order their groups first appear, with ids cat-0, cat-1
+ * and so on. This is the list useChannels exposes.
+ */
 export const deriveCategories = (channels: Channel[]): Category[] => {
 	const counts = new Map<string, number>();
 	for (const ch of channels) {
@@ -17,8 +19,10 @@ export const deriveCategories = (channels: Channel[]): Category[] => {
 	}));
 };
 
-/** The channel list's categories. Each id is the group name, a channel with
- *  no group counts under "", and the largest group comes first. */
+/**
+ * The channel list's categories. Each id is the group name, a channel with
+ * no group counts under "", and the largest group comes first.
+ */
 export const categoriesByCount = (channels: Channel[]): Category[] => {
 	const counts: Record<string, number> = {};
 	for (const ch of channels) {
@@ -34,8 +38,10 @@ export const categoriesByCount = (channels: Channel[]): Category[] => {
 export const channelCountFor = (categories: Category[], groupName: string): number =>
 	categories.find((c) => c.name === groupName)?.channelCount ?? 0;
 
-/** Merges movies that share a title, so a film offered by several providers
- *  shows once with the other streams as alternate sources. */
+/**
+ * Merges movies that share a title, so a film offered by several providers
+ * shows once with the other streams as alternate sources.
+ */
 export const dedupeByTitle = (channels: Channel[]): Channel[] => {
 	const seen = new Map<string, Channel>();
 	for (const ch of channels) {

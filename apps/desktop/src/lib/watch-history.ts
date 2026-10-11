@@ -14,8 +14,10 @@ export const formatDuration = (seconds: number): string => {
 	return `${h}h ${m}m`;
 };
 
-/** When an entry was last watched. Today shows the time, yesterday says so,
- *  and anything older shows the month and day. */
+/**
+ * When an entry was last watched. Today shows the time, yesterday says so,
+ * and anything older shows the month and day.
+ */
 export const formatRelativeDate = (unixSeconds: number): string => {
 	const date = new Date(unixSeconds * 1000);
 	const now = new Date();

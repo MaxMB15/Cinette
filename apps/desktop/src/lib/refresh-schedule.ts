@@ -14,9 +14,11 @@ export interface RefreshSettings {
 	epgRefreshIntervalHours: number;
 }
 
-/** Where the schedule reads each provider's settings and last EPG refresh.
- *  The caller passes them in, since they live in hooks/useChannels, which
- *  imports this module. */
+/**
+ * Where the schedule reads each provider's settings and last EPG refresh.
+ * The caller passes them in, since they live in hooks/useChannels, which
+ * imports this module.
+ */
 export interface RefreshLookups {
 	settingsFor: (providerId: string) => RefreshSettings;
 	epgLastRefreshFor: (providerId: string) => number;

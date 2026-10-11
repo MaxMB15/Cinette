@@ -23,8 +23,10 @@ export const readStorage = (key: string, area: StorageArea = "local"): string | 
 	}
 };
 
-/** Stores a value and reports whether it was saved. A full quota or blocked
- *  storage returns false instead of throwing. */
+/**
+ * Stores a value and reports whether it was saved. A full quota or blocked
+ * storage returns false instead of throwing.
+ */
 export const writeStorage = (key: string, value: string, area: StorageArea = "local"): boolean => {
 	try {
 		storageFor(area).setItem(key, value);
