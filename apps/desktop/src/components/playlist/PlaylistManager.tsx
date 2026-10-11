@@ -28,7 +28,11 @@ export const PlaylistManager = () => {
 	const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
 	const [settingsProvider, setSettingsProvider] = useState<Provider | null>(null);
 	const [pendingRemoval, setPendingRemoval] = useState<Provider | null>(null);
-	const [refreshErrors, setRefreshErrors] = useState<Record<string, string>>({});
+	// Keeps the provider's update time from when the refresh failed, so the error
+	// hides once a later refresh succeeds, including an automatic one.
+	const [refreshErrors, setRefreshErrors] = useState<
+		Record<string, { message: string; lastUpdated?: string }>
+	>({});
 
 	const refreshNow = async (id: string) => {
 		setRefreshingIds((s) => new Set(s).add(id));
@@ -40,7 +44,11 @@ export const PlaylistManager = () => {
 		try {
 			await refreshProvider(id);
 		} catch (e) {
-			setRefreshErrors((errors) => ({ ...errors, [id]: String(e) }));
+			const lastUpdated = providers.find((p) => p.id === id)?.lastUpdated;
+			setRefreshErrors((errors) => ({
+				...errors,
+				[id]: { message: String(e), lastUpdated },
+			}));
 			// Rethrown so the settings modal can show the error next to its own button.
 			throw e;
 		} finally {
@@ -67,6 +75,10 @@ export const PlaylistManager = () => {
 					{providers.map((p) => {
 						const isRefreshing = refreshingIds.has(p.id);
 						const isFile = isFileUrl(p.url);
+						const refreshError = refreshErrors[p.id];
+						const showRefreshError =
+							refreshError !== undefined &&
+							refreshError.lastUpdated === p.lastUpdated;
 						return (
 							<Card key={p.id}>
 								<CardHeader className="py-4">
@@ -130,9 +142,9 @@ export const PlaylistManager = () => {
 										{p.lastUpdated &&
 											` \u00b7 Updated ${new Date(p.lastUpdated).toLocaleString()}`}
 									</p>
-									{refreshErrors[p.id] && (
+									{showRefreshError && (
 										<p className="text-xs text-destructive mt-1">
-											{refreshErrors[p.id]}
+											{refreshError.message}
 										</p>
 									)}
 								</CardContent>

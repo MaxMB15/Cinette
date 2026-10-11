@@ -188,7 +188,8 @@ export const ProviderSettingsModal = ({
 
 	return (
 		<Dialog
-			onClose={onClose}
+			// Closing mid-save would drop a save error, so the modal stays until it's done.
+			onClose={save.busy ? () => {} : onClose}
 			labelledBy={titleId}
 			overlayClassName="backdrop-blur-sm"
 			className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[90vh]"

@@ -27,9 +27,9 @@ const provider: Provider = {
 const removeProvider = vi.fn();
 const refreshProvider = vi.fn();
 
-const renderManager = () => {
+const mockChannels = (providers: Provider[]) =>
 	vi.mocked(useChannels).mockReturnValue({
-		providers: [provider],
+		providers,
 		loadM3u: vi.fn(),
 		loadM3uFile: vi.fn(),
 		loadXtream: vi.fn(),
@@ -37,6 +37,9 @@ const renderManager = () => {
 		refreshProvider,
 		updateProvider: vi.fn(),
 	} as unknown as ReturnType<typeof useChannels>);
+
+const renderManager = () => {
+	mockChannels([provider]);
 	return render(<PlaylistManager />);
 };
 
@@ -75,6 +78,18 @@ describe("PlaylistManager", () => {
 		renderManager();
 		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 		expect(await screen.findByText("Server returned 503")).toBeTruthy();
+	});
+
+	it("hides a refresh error once a later refresh updates the provider", async () => {
+		refreshProvider.mockRejectedValue("Server returned 503");
+		const { rerender } = renderManager();
+		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+		expect(await screen.findByText("Server returned 503")).toBeTruthy();
+
+		// The automatic refresh succeeded and moved the update time.
+		mockChannels([{ ...provider, lastUpdated: "2026-10-12T08:00:00Z" }]);
+		rerender(<PlaylistManager />);
+		expect(screen.queryByText("Server returned 503")).toBeNull();
 	});
 
 	it("shows a failed refresh in the provider settings", async () => {
