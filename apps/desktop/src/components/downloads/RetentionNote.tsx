@@ -3,7 +3,8 @@
 
 import { Clock, Pin } from "lucide-react";
 import { useDownloads } from "@/hooks/useDownloads";
-import { deleteLabel, summarize } from "@/lib/retention";
+import { useNow } from "@/hooks/useNow";
+import { daysUntil, deleteLabel, summarize } from "@/lib/retention";
 import { setDownloadKeep } from "@/lib/tauri";
 import type { DownloadRecord } from "@/lib/types";
 
@@ -21,31 +22,38 @@ interface RetentionNoteProps {
  */
 export const RetentionNote = ({ records, compact = false, className = "" }: RetentionNoteProps) => {
 	const { retentionDays } = useDownloads();
+	const now = useNow();
 	const summary = summarize(records, retentionDays);
 	if (summary.state === "none") return null;
 
 	const kept = summary.state === "kept";
-	const label = kept ? "Kept" : deleteLabel(summary.at, Date.now() / 1000);
-	const action = kept ? "Don't keep" : "Keep";
+	const many = summary.count > 1;
+	const label = kept ? (many ? "All kept" : "Kept") : deleteLabel(summary.at, now, many);
+	const action = kept ? "Don't keep" : many ? "Keep all" : "Keep";
 
 	const toggle = (e: React.MouseEvent) => {
 		e.stopPropagation();
 		for (const r of records) {
-			if (r.status === "completed" && r.keep === kept) void setDownloadKeep(r.id, !kept);
+			if (r.status === "completed" && r.keep === kept) {
+				setDownloadKeep(r.id, !kept).catch((err) =>
+					console.error("[Downloads] failed to change Keep:", err)
+				);
+			}
 		}
 	};
 
 	if (compact) {
-		const days = kept ? null : Math.max(0, Math.ceil((summary.at - Date.now() / 1000) / 86400));
+		const days = kept ? null : daysUntil(summary.at, now);
+		const hint = kept ? "Click to stop keeping." : `Click to ${action.toLowerCase()}.`;
 		return (
 			<button
 				onClick={toggle}
-				title={`${label}. Click to ${action.toLowerCase()}.`}
+				title={`${label}. ${hint}`}
 				aria-label={`${label}. ${action}`}
 				className={`flex items-center gap-0.5 text-[10px] tabular-nums text-muted-foreground hover:text-foreground ${className}`}
 			>
 				{kept ? <Pin className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
-				{days !== null && `${days}d`}
+				{days !== null && (days > 0 ? `${days}d` : "soon")}
 			</button>
 		);
 	}

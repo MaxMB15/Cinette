@@ -7,6 +7,7 @@
 use crate::commands::AppState;
 use crate::downloads::manager::{self, DownloadManager};
 use mvp_core::downloads::retention;
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_mpv::MpvState;
@@ -20,11 +21,14 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     let spawned = std::thread::Builder::new()
         .name("download-retention".into())
         .spawn(move || loop {
-            match sweep(&app) {
-                Ok(n) if n > 0 => {
+            // A panic in one check, such as from a poisoned lock, must not
+            // end every check after it.
+            match std::panic::catch_unwind(AssertUnwindSafe(|| sweep(&app))) {
+                Ok(Ok(n)) if n > 0 => {
                     tracing::info!("Deleted {n} download(s) past the retention setting")
                 }
-                Err(e) => tracing::warn!("Retention check failed: {e}"),
+                Ok(Err(e)) => tracing::warn!("Retention check failed: {e}"),
+                Err(_) => tracing::error!("Retention check panicked"),
                 _ => {}
             }
             std::thread::sleep(CHECK_INTERVAL);
@@ -35,34 +39,54 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Delete every download that's due under the current setting. Returns how
-/// many were deleted.
+/// many were deleted. A download that can't be deleted is logged and skipped.
 pub fn sweep<R: Runtime>(app: &AppHandle<R>) -> Result<usize, String> {
     let days = app.state::<DownloadManager>().retention_days();
-    let ids = due_ids(app, days)?;
-    for id in &ids {
-        manager::remove(app, id)?;
+    if days.is_none() {
+        return Ok(0);
     }
-    Ok(ids.len())
+    // Read before taking the cache lock, so the two locks are never held together.
+    let playing = playing_file(app);
+    let removed = {
+        let app_state = app.state::<AppState>();
+        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+        // Choose and delete under one lock. A Keep or a play that lands while
+        // a sweep runs then either comes first and is seen, or finds the
+        // record already gone.
+        let records = cache.list_downloads().map_err(|e| e.to_string())?;
+        let mut removed = Vec::new();
+        for rec in retention::due(&records, days, manager::now_secs(), playing.as_deref()) {
+            match manager::delete_record_and_file(&cache, &rec.id) {
+                Ok(()) => removed.push(rec.id.clone()),
+                Err(e) => tracing::warn!("Retention could not delete a download: {e}"),
+            }
+        }
+        removed
+    };
+    for id in &removed {
+        manager::emit_removed(app, id);
+    }
+    Ok(removed.len())
 }
 
-/// The downloads a retention of `days` makes due now. The file the player has
-/// open is left out, so a long film isn't deleted while it's being watched.
-pub fn due_ids<R: Runtime>(app: &AppHandle<R>, days: Option<u32>) -> Result<Vec<String>, String> {
+/// How many downloads a retention of `days` would delete now, so Settings can
+/// ask before saving a shorter one.
+pub fn count_due<R: Runtime>(app: &AppHandle<R>, days: Option<u32>) -> Result<usize, String> {
     if days.is_none() {
-        return Ok(Vec::new());
+        return Ok(0);
     }
+    let playing = playing_file(app);
     let records = {
         let app_state = app.state::<AppState>();
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
         cache.list_downloads().map_err(|e| e.to_string())?
     };
-    let playing = app
-        .try_state::<MpvState>()
-        .and_then(|mpv| mpv.get_state().current_url);
-    Ok(
-        retention::due(&records, days, manager::now_secs(), playing.as_deref())
-            .into_iter()
-            .map(|r| r.id.clone())
-            .collect(),
-    )
+    Ok(retention::due(&records, days, manager::now_secs(), playing.as_deref()).len())
+}
+
+/// The file the player has open. Retention leaves it alone, so a long film
+/// isn't deleted while it's being watched.
+fn playing_file<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    app.try_state::<MpvState>()
+        .and_then(|mpv| mpv.get_state().current_url)
 }

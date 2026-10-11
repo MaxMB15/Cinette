@@ -60,7 +60,8 @@ describe("RetentionNote", () => {
 			rec({ id: "c", status: "downloading" }),
 		];
 		render(<RetentionNote records={records} />);
-		fireEvent.click(screen.getByText("Keep"));
+		expect(screen.getByText("Episodes start deleting in 5 days")).toBeDefined();
+		fireEvent.click(screen.getByText("Keep all"));
 		expect(setDownloadKeep).toHaveBeenCalledTimes(1);
 		expect(setDownloadKeep).toHaveBeenCalledWith("a", true);
 	});
@@ -77,5 +78,28 @@ describe("RetentionNote", () => {
 		const button = screen.getByRole("button");
 		expect(button.textContent).toBe("5d");
 		expect(button.getAttribute("title")).toBe("Deletes in 5 days. Click to keep.");
+	});
+
+	it("says soon rather than 0d when compact and due", () => {
+		render(<RetentionNote records={[rec({ finishedAt: now - 8 * DAY })]} compact />);
+		const button = screen.getByRole("button");
+		expect(button.textContent).toBe("soon");
+		expect(button.getAttribute("title")).toBe("Deletes soon. Click to keep.");
+	});
+
+	it("explains how to stop keeping when compact and kept", () => {
+		render(<RetentionNote records={[rec({ keep: true })]} compact />);
+		expect(screen.getByRole("button").getAttribute("title")).toBe(
+			"Kept. Click to stop keeping."
+		);
+	});
+
+	it("handles a failed Keep without an unhandled rejection", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.mocked(setDownloadKeep).mockRejectedValueOnce(new Error("locked"));
+		render(<RetentionNote records={[rec()]} />);
+		fireEvent.click(screen.getByText("Keep"));
+		await vi.waitFor(() => expect(error).toHaveBeenCalled());
+		error.mockRestore();
 	});
 });

@@ -155,10 +155,13 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [showDownloadHistory, setShowDownloadHistory] = useState(false);
 	const folderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const { retentionDays, setRetentionDays } = useDownloads();
-	/** A shorter retention that would delete downloads at once, waiting on a yes. */
+	/**
+	 * A shorter retention that would delete downloads at once, waiting on a
+	 * yes. `count` is null when counting failed.
+	 */
 	const [pendingRetention, setPendingRetention] = useState<{
 		days: number | null;
-		count: number;
+		count: number | null;
 	} | null>(null);
 
 	useEffect(() => {
@@ -366,9 +369,10 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const handleRetentionChange = async (value: number) => {
 		const days = value > 0 ? value : null;
 		if (days === retentionDays) return;
-		const count = days === null ? 0 : await countDownloadsDue(days).catch(() => 0);
-		if (count > 0) setPendingRetention({ days, count });
-		else setRetentionDays(days).catch(() => {});
+		// When counting fails, ask anyway rather than delete without asking.
+		const count = days === null ? 0 : await countDownloadsDue(days).catch(() => null);
+		if (count === 0) setRetentionDays(days).catch(() => {});
+		else setPendingRetention({ days, count });
 	};
 
 	return (
@@ -1025,9 +1029,11 @@ export const Settings = ({ updateState }: SettingsProps) => {
 				open={pendingRetention !== null}
 				title="Delete downloads now?"
 				message={
-					pendingRetention?.count === 1
-						? "1 download is already past this setting. It will be deleted now."
-						: `${pendingRetention?.count} downloads are already past this setting. They will be deleted now.`
+					pendingRetention?.count == null
+						? "Downloads already past this setting will be deleted now."
+						: pendingRetention.count === 1
+							? "1 download is already past this setting. It will be deleted now."
+							: `${pendingRetention.count} downloads are already past this setting. They will be deleted now.`
 				}
 				confirmLabel="Delete"
 				onConfirm={() => {

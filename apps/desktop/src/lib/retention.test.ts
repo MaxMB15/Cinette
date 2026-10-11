@@ -53,6 +53,11 @@ describe("deleteLabel", () => {
 		expect(deleteLabel(0, 0)).toBe("Deletes soon");
 		expect(deleteLabel(0, 100)).toBe("Deletes soon");
 	});
+
+	it("talks about the first episode to go for a series", () => {
+		expect(deleteLabel(3 * DAY, 0, true)).toBe("Episodes start deleting in 3 days");
+		expect(deleteLabel(0, 0, true)).toBe("Episodes start deleting soon");
+	});
 });
 
 describe("summarize", () => {
@@ -62,12 +67,12 @@ describe("summarize", () => {
 			finished({ id: "b", finishedAt: 2000 }),
 			finished({ id: "c", finishedAt: 100, keep: true }),
 		];
-		expect(summarize(records, 7)).toEqual({ state: "due", at: 2000 + 7 * DAY });
+		expect(summarize(records, 7)).toEqual({ state: "due", at: 2000 + 7 * DAY, count: 3 });
 	});
 
 	it("is kept when every finished download is kept", () => {
 		const records = [finished({ keep: true }), finished({ id: "b", status: "failed" })];
-		expect(summarize(records, 7)).toEqual({ state: "kept" });
+		expect(summarize(records, 7)).toEqual({ state: "kept", count: 1 });
 	});
 
 	it("is none with the setting off or nothing finished", () => {

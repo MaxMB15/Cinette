@@ -1582,17 +1582,27 @@ pub async fn set_download_retention(
     app: AppHandle,
     days: Option<u32>,
 ) -> Result<usize, String> {
+    // 0 is "never" in the app, so it mustn't reach the sweep as "delete now".
+    let days = days.filter(|&d| d > 0);
     // Save first, so a failed write doesn't delete anything.
     manager::save_retention(&app, days)?;
     manager.set_retention_days(days);
-    retention::sweep(&app)
+    // The setting is saved, so report success even if the sweep fails. The
+    // hourly check tries again.
+    match retention::sweep(&app) {
+        Ok(n) => Ok(n),
+        Err(e) => {
+            tracing::warn!("Retention check failed: {e}");
+            Ok(0)
+        }
+    }
 }
 
 /// How many downloads a retention of `days` would delete right now, so
 /// Settings can ask before changing it.
 #[command]
 pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<usize, String> {
-    Ok(retention::due_ids(&app, days)?.len())
+    retention::count_due(&app, days.filter(|&d| d > 0))
 }
 
 /// Given a channel id, return the local file path if a completed download

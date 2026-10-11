@@ -26,14 +26,24 @@ export const deleteAt = (rec: DownloadRecord, days: number | null): number | nul
 	return since + days * DAY_SECS;
 };
 
-/** "Deletes in 3 days" for a deletion time `at`, both in Unix seconds. */
-export const deleteLabel = (at: number, now: number): string => {
-	const days = Math.ceil((at - now) / DAY_SECS);
-	if (days <= 0) return "Deletes soon";
-	return days === 1 ? "Deletes in 1 day" : `Deletes in ${days} days`;
+/** Whole days from `now` until `at`, rounded up, both in Unix seconds. 0 or less once `at` has passed. */
+export const daysUntil = (at: number, now: number): number => Math.ceil((at - now) / DAY_SECS);
+
+/**
+ * "Deletes in 3 days" for a deletion time `at`, both in Unix seconds. With
+ * `many`, the text is about the first of a series' episodes to go.
+ */
+export const deleteLabel = (at: number, now: number, many = false): string => {
+	const days = daysUntil(at, now);
+	const when = days <= 0 ? "soon" : days === 1 ? "in 1 day" : `in ${days} days`;
+	return many ? `Episodes start deleting ${when}` : `Deletes ${when}`;
 };
 
-export type RetentionSummary = { state: "none" } | { state: "kept" } | { state: "due"; at: number };
+/** `count` is how many finished downloads the summary covers. */
+export type RetentionSummary =
+	| { state: "none" }
+	| { state: "kept"; count: number }
+	| { state: "due"; at: number; count: number };
 
 /**
  * What the retention setting will do to a set of downloads: a movie, an
@@ -45,6 +55,7 @@ export const summarize = (records: DownloadRecord[], days: number | null): Reten
 	const finished = records.filter((r) => r.status === "completed");
 	if (!days || finished.length === 0) return { state: "none" };
 	const dates = finished.map((r) => deleteAt(r, days)).filter((at): at is number => at !== null);
-	if (dates.length === 0) return { state: "kept" };
-	return { state: "due", at: Math.min(...dates) };
+	const count = finished.length;
+	if (dates.length === 0) return { state: "kept", count };
+	return { state: "due", at: Math.min(...dates), count };
 };

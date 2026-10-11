@@ -3,6 +3,7 @@
 
 use crate::commands::AppState;
 use crate::downloads::scheduler::ids_to_start;
+use mvp_core::cache::store::CacheStore;
 use mvp_core::downloads::ffmpeg::{
     build_ffmpeg_args, container_from_part_path, fold_progress_line, ProgressUpdate,
 };
@@ -101,7 +102,8 @@ pub fn restore_settings<R: Runtime>(app: &AppHandle<R>) {
         manager.set_concurrency((n as usize).min(MAX_CONCURRENCY));
     }
     if let Some(days) = store.get(RETENTION_KEY).and_then(|v| v.as_u64()) {
-        manager.set_retention_days(u32::try_from(days).ok());
+        // 0 is "never" in the app, so a hand-edited 0 mustn't mean "delete now".
+        manager.set_retention_days(u32::try_from(days).ok().filter(|&d| d > 0));
     }
 }
 
@@ -431,13 +433,38 @@ pub fn remove<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     {
         let app_state = app.state::<AppState>();
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
-        if let Some(rec) = cache.get_download(id).map_err(|e| e.to_string())? {
-            let _ = std::fs::remove_file(&rec.dest_path);
-        }
-        cache.delete_download(id).map_err(|e| e.to_string())?;
+        delete_record_and_file(&cache, id)?;
     }
-    let _ = app.emit("download://removed", id);
+    emit_removed(app, id);
     Ok(())
+}
+
+/// Delete the record `id` and its file. Downloads with the same title share
+/// one file, so the file stays while another record still points at it. When
+/// the file can't be deleted the record stays too, so the app keeps showing
+/// the space it takes.
+pub(crate) fn delete_record_and_file(cache: &CacheStore, id: &str) -> Result<(), String> {
+    let Some(rec) = cache.get_download(id).map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let shared = cache
+        .list_downloads()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|r| r.id != rec.id && r.dest_path == rec.dest_path);
+    if !shared {
+        match std::fs::remove_file(&rec.dest_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("Could not delete {}: {e}", rec.dest_path)),
+        }
+    }
+    cache.delete_download(id).map_err(|e| e.to_string())
+}
+
+/// Tell the frontend a download is gone so it drops it from its list.
+pub(crate) fn emit_removed<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    let _ = app.emit("download://removed", id);
 }
 
 /// Send the download's current record to the frontend.
@@ -451,5 +478,72 @@ pub(crate) fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
     };
     if let Some(rec) = rec {
         let _ = app.emit("download://progress", rec);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completed(id: &str, dest_path: &std::path::Path) -> DownloadRecord {
+        DownloadRecord {
+            id: id.into(),
+            channel_id: format!("c-{id}"),
+            title: "Dune (2021)".into(),
+            kind: DownloadKind::Movie,
+            series_channel_id: None,
+            status: DownloadStatus::Completed,
+            dest_path: dest_path.to_string_lossy().into_owned(),
+            total_bytes: None,
+            downloaded_bytes: 0,
+            avg_rate_bps: None,
+            error: None,
+            created_at: 0,
+            finished_at: Some(0),
+            keep: false,
+            last_played_at: None,
+        }
+    }
+
+    #[test]
+    fn a_file_two_records_share_stays_until_the_last_one_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Dune (2021).mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = CacheStore::open_in_memory().unwrap();
+        cache.upsert_download(&completed("a", &file)).unwrap();
+        cache.upsert_download(&completed("b", &file)).unwrap();
+
+        delete_record_and_file(&cache, "a").unwrap();
+        assert!(cache.get_download("a").unwrap().is_none());
+        assert!(file.exists(), "b still points at the file");
+
+        delete_record_and_file(&cache, "b").unwrap();
+        assert!(cache.get_download("b").unwrap().is_none());
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_missing_file_still_removes_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = CacheStore::open_in_memory().unwrap();
+        cache
+            .upsert_download(&completed("a", &dir.path().join("gone.mkv")))
+            .unwrap();
+        delete_record_and_file(&cache, "a").unwrap();
+        assert!(cache.get_download("a").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_file_that_cant_be_deleted_keeps_its_record() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory where the file should be makes remove_file fail with
+        // something other than NotFound.
+        let blocked = dir.path().join("blocked.mkv");
+        std::fs::create_dir(&blocked).unwrap();
+        let cache = CacheStore::open_in_memory().unwrap();
+        cache.upsert_download(&completed("a", &blocked)).unwrap();
+        assert!(delete_record_and_file(&cache, "a").is_err());
+        assert!(cache.get_download("a").unwrap().is_some());
     }
 }

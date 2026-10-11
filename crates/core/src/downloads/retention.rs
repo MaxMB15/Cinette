@@ -10,10 +10,10 @@ const DAY_SECS: i64 = 24 * 60 * 60;
 /// When the retention setting deletes `rec`, in Unix seconds, with downloads
 /// kept for `days`. The count starts when the download finished and starts
 /// over each time it's played, so something the user is still watching stays.
-/// `None` when nothing will delete it: the setting is off, the user chose Keep,
-/// or the download hasn't finished.
+/// `None` when nothing will delete it: the setting is off (`None` or 0, as in
+/// the app's "Never"), the user chose Keep, or the download hasn't finished.
 pub fn delete_at(rec: &DownloadRecord, days: Option<u32>) -> Option<i64> {
-    let days = days?;
+    let days = days.filter(|&d| d > 0)?;
     if rec.keep || rec.status != DownloadStatus::Completed {
         return None;
     }
@@ -85,6 +85,7 @@ mod tests {
     fn nothing_is_deleted_when_off_kept_or_unfinished() {
         let rec = finished("a", 1_000);
         assert_eq!(delete_at(&rec, None), None);
+        assert_eq!(delete_at(&rec, Some(0)), None);
 
         let mut kept = finished("a", 1_000);
         kept.keep = true;
