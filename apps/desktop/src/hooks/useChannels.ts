@@ -174,12 +174,13 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		[refreshProviders]
 	);
 
-	const loadM3u = useCallback(
-		async (name: string, url: string) => {
+	// Adding a provider of any kind runs the same steps around a different backend call.
+	const addProvider = useCallback(
+		async (add: () => Promise<unknown>) => {
 			setLoading(true);
 			setError(null);
 			try {
-				await loadM3uPlaylist(name, url);
+				await add();
 				await refreshProviders();
 				await refreshChannels();
 			} catch (e) {
@@ -190,42 +191,22 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			}
 		},
 		[refreshProviders, refreshChannels]
+	);
+
+	const loadM3u = useCallback(
+		(name: string, url: string) => addProvider(() => loadM3uPlaylist(name, url)),
+		[addProvider]
 	);
 
 	const loadM3uFile = useCallback(
-		async (name: string, path: string) => {
-			setLoading(true);
-			setError(null);
-			try {
-				await loadM3uFileApi(name, path);
-				await refreshProviders();
-				await refreshChannels();
-			} catch (e) {
-				setError(String(e));
-				throw e;
-			} finally {
-				setLoading(false);
-			}
-		},
-		[refreshProviders, refreshChannels]
+		(name: string, path: string) => addProvider(() => loadM3uFileApi(name, path)),
+		[addProvider]
 	);
 
 	const loadXtream = useCallback(
-		async (name: string, url: string, username: string, password: string) => {
-			setLoading(true);
-			setError(null);
-			try {
-				await loadXtreamProvider(name, url, username, password);
-				await refreshProviders();
-				await refreshChannels();
-			} catch (e) {
-				setError(String(e));
-				throw e;
-			} finally {
-				setLoading(false);
-			}
-		},
-		[refreshProviders, refreshChannels]
+		(name: string, url: string, username: string, password: string) =>
+			addProvider(() => loadXtreamProvider(name, url, username, password)),
+		[addProvider]
 	);
 
 	const removeProvider = useCallback(
@@ -282,11 +263,6 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		refreshProviderRef.current = refreshProvider;
 	}, [refreshProvider]);
 
-	const refreshEpgApiRef = useRef(refreshEpgApi);
-	useEffect(() => {
-		refreshEpgApiRef.current = refreshEpgApi;
-	}, []);
-
 	// Poll every 60s to check if any provider/EPG is due for refresh.
 	// Using a ref-based approach avoids resetting timers on every providers update.
 	useEffect(() => {
@@ -310,8 +286,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				if (epgAutoRefresh && p.epgUrl) {
 					const lastMs = getEpgLastRefresh(p.id);
 					if (now - lastMs >= epgRefreshIntervalHours * 60 * 60 * 1000) {
-						refreshEpgApiRef
-							.current(p.id)
+						refreshEpgApi(p.id)
 							.then(() => setEpgLastRefresh(p.id))
 							.catch(console.error);
 					}
