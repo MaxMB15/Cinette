@@ -59,6 +59,10 @@ export const mpvSetVisible = (visible: boolean): Promise<void> =>
 export const mpvSetMediaInfo = (title: string | null, live: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_media_info", { title, live });
 
+/** How many seconds the lock screen's skip buttons jump. Only iOS has them. */
+export const mpvSetSkipIntervals = (back: number, forward: number): Promise<void> =>
+	invoke("plugin:mpv|mpv_set_skip_intervals", { back, forward });
+
 export const mpvSetBounds = (x: number, y: number, w: number, h: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_bounds", { x, y, w, h });
 
