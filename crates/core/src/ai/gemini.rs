@@ -5,6 +5,13 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::Duration;
 
+const API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
+const MODEL: &str = "gemini-3-flash-preview";
+
+/// Google accepts the key as a query parameter too, but a URL ends up in logs
+/// and error messages where a header does not.
+const API_KEY_HEADER: &str = "x-goog-api-key";
+
 /// Sorting a large playlist makes a long prompt, and the model can take minutes
 /// to answer it.
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -28,21 +35,18 @@ pub struct GroupAssignment {
     pub category: String,
 }
 
-#[derive(Debug)]
+/// Errors from calling Gemini or reading what it sent back.
+#[derive(Debug, thiserror::Error)]
 pub enum GeminiError {
+    /// The response was not the JSON that was asked for.
+    #[error("Parse error: {0}")]
     Parse(String),
+    /// The request failed or Gemini answered with an error status.
+    #[error("API error: {0}")]
     Api(String),
+    /// The JSON was valid but not in the expected shape.
+    #[error("Invalid response: {0}")]
     InvalidResponse(String),
-}
-
-impl std::fmt::Display for GeminiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GeminiError::Parse(s) => write!(f, "Parse error: {}", s),
-            GeminiError::Api(s) => write!(f, "API error: {}", s),
-            GeminiError::InvalidResponse(s) => write!(f, "Invalid response: {}", s),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -310,10 +314,6 @@ pub fn build_fix_uncategorized_prompt(
 }
 
 pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Value, GeminiError> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
-        api_key
-    );
     let body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }],
         "generationConfig": {
@@ -321,24 +321,16 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
         }
     });
 
-    // Log full prompt
-    tracing::info!(
-        prompt_len = prompt.len(),
-        prompt = %prompt,
-        "sending Gemini API request"
-    );
+    tracing::info!(prompt_len = prompt.len(), "sending Gemini API request");
+    // Prompts list every group name in the playlist, which is too much for the
+    // default log.
+    tracing::debug!(prompt = %prompt, "Gemini prompt");
 
-    let response = crate::http::client()
-        .post(&url)
-        .json(&body)
-        .timeout(GENERATE_TIMEOUT)
-        .send()
-        .await
-        .map_err(|e| {
-            let err = request_error(e);
-            tracing::error!(error = %err, "Gemini API request failed");
-            err
-        })?;
+    let response = generate_request(api_key, &body).send().await.map_err(|e| {
+        let err = request_error(e);
+        tracing::error!(error = %err, "Gemini API request failed");
+        err
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -360,7 +352,7 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
             GeminiError::Parse("no text in response".into())
         })?;
 
-    tracing::info!(response_text = %text, "Gemini API response text");
+    tracing::debug!(response_text = %text, "Gemini API response text");
 
     let parsed: serde_json::Value = serde_json::from_str(text).map_err(|e| {
         tracing::error!(error = %e, raw_text = %text, "LLM returned invalid JSON");
@@ -372,16 +364,25 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
 }
 
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models?key={}",
-        api_key
-    );
-    let response = crate::http::client()
-        .get(&url)
+    let response = list_models_request(api_key)
         .send()
         .await
         .map_err(request_error)?;
     Ok(response.status().is_success())
+}
+
+fn generate_request(api_key: &str, body: &serde_json::Value) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .post(format!("{API_BASE}/models/{MODEL}:generateContent"))
+        .header(API_KEY_HEADER, api_key)
+        .json(body)
+        .timeout(GENERATE_TIMEOUT)
+}
+
+fn list_models_request(api_key: &str) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .get(format!("{API_BASE}/models"))
+        .header(API_KEY_HEADER, api_key)
 }
 
 // Request URLs can carry the API key, so they are dropped before the error can
@@ -496,5 +497,35 @@ mod tests {
         ));
         assert!(!err.to_string().contains("SECRET"), "{err}");
         assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    #[test]
+    fn the_api_key_goes_in_a_header() {
+        let generate = generate_request("SECRET", &serde_json::json!({}))
+            .build()
+            .unwrap();
+        assert_eq!(
+            generate.url().as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent"
+        );
+        assert_eq!(generate.headers()[API_KEY_HEADER], "SECRET");
+        assert_eq!(generate.timeout(), Some(&GENERATE_TIMEOUT));
+
+        let list = list_models_request("SECRET").build().unwrap();
+        assert_eq!(
+            list.url().as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+        assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
+    }
+
+    #[test]
+    fn errors_keep_their_messages() {
+        assert_eq!(GeminiError::Parse("x".into()).to_string(), "Parse error: x");
+        assert_eq!(GeminiError::Api("x".into()).to_string(), "API error: x");
+        assert_eq!(
+            GeminiError::InvalidResponse("x".into()).to_string(),
+            "Invalid response: x"
+        );
     }
 }
