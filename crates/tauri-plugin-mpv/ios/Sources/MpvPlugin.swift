@@ -207,9 +207,11 @@ final class MpvHost: NSObject {
     updateSystemBars()
   }
 
-  /// tao's view controller always asks for the status bar, so on an iPhone
-  /// in landscape it would sit on top of the video. iOS normally hides it
-  /// there. The home indicator fades out while video is on screen.
+  /// iOS hides the status bar in every app on an iPhone in landscape, but
+  /// tao's view controller always asks for it, so it would sit on top of
+  /// the video. Hiding it whenever the height is compact matches other
+  /// apps, on every screen and not only the player. The home indicator
+  /// fades out only while video is on screen.
   private func updateSystemBars() {
     guard let webview, let controller = webview.window?.rootViewController else { return }
     let compactHeight = webview.traitCollection.verticalSizeClass == .compact
