@@ -1,7 +1,7 @@
 # iOS and iPadOS design spec
 
 **First written:** 2026-04-18
-**Revised:** 2026-10-10
+**Revised:** 2026-10-11
 **Status:** pending approval
 **Platforms:** iOS and iPadOS 17 or later, on iPhone and iPad
 
@@ -12,7 +12,7 @@ frontend, `mvp-core` and the Rust side of `tauri-plugin-mpv`. Every stream plays
 through mpv, using the LGPL build of [MPVKit](https://github.com/mpvkit/MPVKit).
 Builds go to TestFlight first and the App Store after that.
 
-The work is split into five milestones, listed in section 4.
+The work is split into six milestones, listed in section 4.
 
 ## What changed since the first draft
 
@@ -167,14 +167,14 @@ and it only plays HLS and MP4. When that work starts:
 
 ## 2. What's off on iOS
 
-| Feature                | Why                                                                                              | How                                                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| Downloads              | iOS can't run the ffmpeg sidecar, and App Review rejects apps that save media from other sources | The download commands return an error, and the tab, buttons and settings are hidden |
-| Updater                | The App Store updates the app                                                                    | Desktop-only plugin, `useUpdateChecker` skips iOS                                   |
-| Support popup and card | Apple requires in-app purchase for tips to the developer                                         | Hidden on iOS                                                                       |
-| Separate player window | iOS has one window                                                                               | No fallback. If the Metal view fails, show an error                                 |
-| `process` plugin       | Only used to relaunch after an update                                                            | Desktop-only dependency                                                             |
-| ffmpeg sidecar         | iOS apps can't run other programs                                                                | No sidecar lookup on mobile, and its permission is desktop only                     |
+| Feature                | Why                                                      | How                                                                 |
+| ---------------------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
+| Downloads              | iOS can't run the ffmpeg sidecar                         | Hidden until milestone 6, and the download commands return an error |
+| Updater                | The App Store updates the app                            | Desktop-only plugin, `useUpdateChecker` skips iOS                   |
+| Support popup and card | Apple requires in-app purchase for tips to the developer | Hidden on iOS                                                       |
+| Separate player window | iOS has one window                                       | No fallback. If the Metal view fails, show an error                 |
+| `process` plugin       | Only used to relaunch after an update                    | Desktop-only dependency                                             |
+| ffmpeg sidecar         | iOS apps can't run other programs                        | No sidecar lookup on mobile, and its permission is desktop only     |
 
 The `shell` plugin stays in the iOS build so the downloads code compiles
 unchanged. Nothing calls it on iOS.
@@ -183,6 +183,73 @@ Rust uses `#[cfg(desktop)]` and target-specific dependencies in `Cargo.toml`.
 Permissions for the desktop-only plugins and the sidecar live in
 `capabilities/desktop.json`, which only applies on macOS, Linux and Windows.
 React checks `isMobilePlatform()` from `src/lib/platform.ts`.
+
+### Later: downloads
+
+Downloads come back in an update after the first App Store release, which is
+milestone 6. They keep the desktop's queue, records and Downloads tab. Only the
+part that runs ffmpeg changes.
+
+**Getting the file.** On iOS, `start_process` in `downloads/manager.rs` uses one
+of two ways instead of the ffmpeg sidecar:
+
+- Plain files, which covers most Xtream movies and episodes. Rust streams the
+  file to the `.part` path with `reqwest`, and resumes with a range request
+  after a dropped connection or a pause.
+- HLS and `.ts` streams. A C function, `mvp_remux`, copies the stream into a
+  file with the FFmpeg libraries already inside MPVKit, so the app doesn't
+  grow. In about 150 lines it does what `ffmpeg -c copy` does on desktop. It
+  opens the URL with the same reconnect options, adds each input stream to the
+  output, copies packets to the end and closes the file. It picks the muxer
+  with `muxer_for_container` and sets `+faststart` for MP4 and MOV.
+
+A background URLSession download would keep going after the app closes, but
+App Transport Security blocks plain HTTP in URLSession, and many providers only
+serve HTTP. `reqwest` and FFmpeg open their own sockets, the same as mpv, so ATS
+can stay strict.
+
+`mvp_remux` lives in the app target in `gen/apple`, next to MPVKit. It includes
+MPVKit's FFmpeg headers and links in the same Xcode step that resolves libmpv's
+symbols. Rust calls it on a worker thread. It reports progress through a
+callback, using the time of the last packet over the stream's length, and stops
+when its interrupt callback sees the cancel flag.
+
+MPVKit `1.1.0-n9.0.2` has the mp4, mov, matroska, webm and mpegts muxers and
+the http, https, tls and hls protocols. It has no avi muxer, so on iOS
+`muxer_for_container` maps avi to matroska.
+
+**In the background on iOS 26 and later.** Tapping Download submits a
+`BGContinuedProcessingTaskRequest`. iOS then keeps the work going after the
+user leaves the app and shows its progress in a Live Activity.
+
+- One task covers the whole queue. Its identifier is
+  `com.maxvideoplayer.app.downloads.` plus a queue ID, and `Info.ios.plist`
+  lists `com.maxvideoplayer.app.downloads.*` under
+  `BGTaskSchedulerPermittedIdentifiers`.
+- The title names the current item and the subtitle says how many are left,
+  such as "2 of 5". `updateTitle(_:subtitle:)` changes them as the queue moves.
+- Rust sends progress to Swift, which updates the task's `progress`. iOS ends a
+  task that looks stalled, so it has to keep moving.
+- The task needs only the default resources, which are background CPU and
+  network. It doesn't ask for the GPU.
+- The request has to come from the app in the foreground, so only a tap on
+  Download submits it.
+- When the task expires, because the user stopped it from the Live Activity or
+  iOS ended it, the downloads pause. A plain file keeps its `.part` and
+  resumes. A stream copy starts over. The queue picks up again the next time
+  the app opens.
+
+**Before iOS 26.** Nothing keeps this kind of work running in the background.
+Downloads run while the app is open, and pause when it goes to the background
+after a short `beginBackgroundTask` to close the files cleanly. The Downloads
+tab and the download button say "Keep Max Video Player open until your
+downloads finish."
+
+**Storage.** Downloads go in the app's own storage, with `isExcludedFromBackup`
+set, because they're large and can be downloaded again. Apple asks apps to keep
+that kind of file out of iCloud backups. The download folder setting stays
+hidden on iOS. A download plays offline through mpv and uses the same resume
+points as the stream.
 
 ## 3. Layouts
 
@@ -255,9 +322,12 @@ battery drain over an hour. Nothing else starts until this works.
 - Take screenshots that show no real channels or logos.
 - Have a lawyer check the licensing in section 5.
 
+**6. Downloads.** An update after the App Store release, following "Later:
+downloads" in section 2. Test the background task on an iPhone with iOS 26 and
+the in-app note on one with an earlier version.
+
 **Later:** AVPlayer for picture in picture and AirPlay, M3U file import from
-Files, iCloud sync for favorites and history, iPad keyboard shortcuts, and
-downloads if Apple's rules allow them.
+Files, iCloud sync for favorites and history, and iPad keyboard shortcuts.
 
 ## 5. Licensing on the App Store
 
@@ -305,6 +375,12 @@ Store build stays public for the same reason.
    outright, because the CLI merges it over the macOS `Info.plist`, which
    allows everything. HTTP logos load in the simulator. Check this on a
    device.
+9. **Downloads and App Review.** Guideline 5.2.3 bars apps that save media from
+   third-party sources without the source's permission. The app only downloads
+   from the provider the user added, and the review notes for milestone 6 will
+   say so, but a reviewer may still reject it. Downloads ship in their own
+   update so a rejection can't hold up the first release. If Apple rejects
+   them, that update goes out with downloads still hidden.
 
 ## 7. Success criteria
 
@@ -321,7 +397,6 @@ Store build stays public for the same reason.
 - Android and Fire TV, which need their own spec.
 - tvOS, which needs a focus-based UI.
 - Mac Catalyst. The native macOS app already exists.
-- Downloads on iOS, for now.
 - Swift rewrites of anything React already does.
 
 ## Open questions
@@ -329,3 +404,10 @@ Store build stays public for the same reason.
 - **Price.** Free, paid, or free with a purchase. Decide before milestone 5.
 - **iCloud sync.** Whether to sync favorites and history, and whether through
   CloudKit or something else.
+- **Recording live channels.** Desktop downloads cover movies and episodes
+  only. Whether iOS should also record a live channel now or on a schedule. A
+  scheduled recording couldn't start by itself in the background, because the
+  iOS 26 task has to be submitted from the app in the foreground.
+- **Downloads in the Files app.** Whether downloads go in `Documents` with
+  `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace`, so they show
+  up in Files and can be copied off the device, or stay private to the app.
