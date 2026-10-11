@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { CenterControls } from "./CenterControls";
+import { CenterControls, EPISODE_PRESS_GAP_MS } from "./CenterControls";
 
 const noop = () => {};
 
@@ -60,5 +60,33 @@ describe("CenterControls", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Play" }));
 		expect(onPause).toHaveBeenCalledTimes(1);
 		expect(onPlay).toHaveBeenCalledTimes(1);
+	});
+
+	it("moves one episode for a double-tap on an episode button", () => {
+		let t = 1000;
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => t);
+		const onPrev = vi.fn();
+		const onNext = vi.fn();
+		render(
+			<CenterControls
+				visible
+				paused={false}
+				onPlay={noop}
+				onPause={noop}
+				onPrevEpisode={onPrev}
+				onNextEpisode={onNext}
+			/>
+		);
+		const prev = screen.getByRole("button", { name: "Previous episode" });
+		fireEvent.click(prev);
+		t += 250;
+		fireEvent.click(prev);
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		expect(onPrev).toHaveBeenCalledTimes(1);
+		expect(onNext).not.toHaveBeenCalled();
+		t += EPISODE_PRESS_GAP_MS;
+		fireEvent.click(prev);
+		expect(onPrev).toHaveBeenCalledTimes(2);
+		clock.mockRestore();
 	});
 });

@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { useRef } from "react";
 import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SkipIntervals } from "@/lib/player-prefs";
 import { SkipIcon } from "./SkipIcon";
+
+/**
+ * An episode button press this soon after the last one is dropped. On a phone
+ * the episode buttons sit where a double-tap skips, so a double-tap aimed at
+ * the video could otherwise move two episodes.
+ */
+export const EPISODE_PRESS_GAP_MS = 1000;
 
 interface CenterControlsProps {
 	visible: boolean;
@@ -36,6 +44,13 @@ export const CenterControls = ({
 	onNextEpisode,
 }: CenterControlsProps) => {
 	const hasEpisodes = !!onPrevEpisode || !!onNextEpisode;
+	const lastEpisodePressRef = useRef(-Infinity);
+	const episodePress = (go: () => void) => () => {
+		const now = performance.now();
+		if (now - lastEpisodePressRef.current < EPISODE_PRESS_GAP_MS) return;
+		lastEpisodePressRef.current = now;
+		go();
+	};
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
 	const button = cn(
 		"flex shrink-0 items-center justify-center rounded-full text-white transition-transform active:scale-90",
@@ -56,7 +71,7 @@ export const CenterControls = ({
 					(onPrevEpisode ? (
 						<button
 							type="button"
-							onClick={onPrevEpisode}
+							onClick={episodePress(onPrevEpisode)}
 							aria-label="Previous episode"
 							className={cn(button, "h-11 w-11 bg-black/30 active:bg-white/20")}
 						>
@@ -118,7 +133,7 @@ export const CenterControls = ({
 					(onNextEpisode ? (
 						<button
 							type="button"
-							onClick={onNextEpisode}
+							onClick={episodePress(onNextEpisode)}
 							aria-label="Next episode"
 							className={cn(button, "h-11 w-11 bg-black/30 active:bg-white/20")}
 						>
