@@ -146,8 +146,9 @@ export const PlayerView = () => {
 	const { layoutMode } = usePlatform();
 	const showBack = layoutMode === "mobile";
 	// Phones and tablets already play full screen, and the hardware buttons
-	// set the volume.
-	const touchDevice = isMobilePlatform();
+	// set the volume. An Android TV box has no touch screen, so it keeps the
+	// full screen, volume and shortcut controls for its remote.
+	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
 	const [enrichedMeta, setEnrichedMeta] = useState<EnrichedMeta | null>(null);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
@@ -1004,7 +1005,7 @@ export const PlayerView = () => {
 				{mpv.error && (
 					<div className="text-center p-6 max-w-md">
 						<p className="text-destructive text-sm mb-2">{mpv.error}</p>
-						{!touchDevice && (
+						{!isMobilePlatform() && (
 							<p className="text-muted-foreground text-xs">
 								Check that libmpv is installed. See README for setup instructions.
 							</p>
