@@ -6,25 +6,23 @@ on:
   push:
     branches: [feature/ios-poc]
     paths:
-      - "apps/desktop/src/**"
-      - "apps/desktop/src-tauri/**"
-      - "apps/desktop/index.html"
-      - "apps/desktop/package.json"
+      - "apps/desktop/**"
       - "crates/**"
+      - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
       - "package-lock.json"
       - ".github/workflows/ios.yml"
   pull_request:
     branches: [dev, feature/ios-poc]
     paths:
-      - "apps/desktop/src/**"
-      - "apps/desktop/src-tauri/**"
-      - "apps/desktop/index.html"
-      - "apps/desktop/package.json"
+      - "apps/desktop/**"
       - "crates/**"
+      - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
       - "package-lock.json"
       - ".github/workflows/ios.yml"
 

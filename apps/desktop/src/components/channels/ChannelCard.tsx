@@ -195,54 +195,51 @@ const CompactRowCard = ({
 		: 0;
 
 	return (
+		// The play and favorite buttons sit side by side rather than one inside
+		// the other, so VoiceOver reads and activates each one on its own.
 		<div
-			role="button"
-			tabIndex={0}
-			onClick={() => onPlay(channel)}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onPlay(channel);
-				}
-			}}
-			className="flex items-center gap-3 w-full px-2 rounded-lg active:bg-accent/60 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+			className="flex items-center w-full px-2 rounded-lg active:bg-accent/60 transition-colors"
 			style={{ height: `${COMPACT_ROW_HEIGHT}px` }}
 		>
-			<ChannelLogo
-				url={channel.logoUrl}
-				className="h-10 w-10 rounded-md"
-				iconClassName="h-4 w-4"
-			/>
+			<button
+				type="button"
+				onClick={() => onPlay(channel)}
+				className="flex items-center gap-3 flex-1 min-w-0 h-full text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+			>
+				<ChannelLogo
+					url={channel.logoUrl}
+					className="h-10 w-10 rounded-md"
+					iconClassName="h-4 w-4"
+				/>
 
-			<div className="min-w-0 flex-1">
-				<p className="text-sm font-medium leading-tight truncate">{channel.name}</p>
-				{current ? (
-					<>
-						<p className="text-xs text-muted-foreground truncate mt-0.5">
-							{current.title}
-						</p>
-						<div className="h-0.5 mt-1.5 rounded-full bg-secondary overflow-hidden">
-							<div
-								className="h-full bg-red-400/80"
-								style={{ width: `${progress.toFixed(1)}%` }}
-							/>
-						</div>
-					</>
-				) : (
-					channel.groupTitle && (
-						<p className="text-xs text-muted-foreground/70 truncate mt-0.5">
-							{channel.groupTitle}
-						</p>
-					)
-				)}
-			</div>
+				<div className="min-w-0 flex-1">
+					<p className="text-sm font-medium leading-tight truncate">{channel.name}</p>
+					{current ? (
+						<>
+							<p className="text-xs text-muted-foreground truncate mt-0.5">
+								{current.title}
+							</p>
+							<div className="h-0.5 mt-1.5 rounded-full bg-secondary overflow-hidden">
+								<div
+									className="h-full bg-red-400/80"
+									style={{ width: `${progress.toFixed(1)}%` }}
+								/>
+							</div>
+						</>
+					) : (
+						channel.groupTitle && (
+							<p className="text-xs text-muted-foreground/70 truncate mt-0.5">
+								{channel.groupTitle}
+							</p>
+						)
+					)}
+				</div>
+			</button>
 
 			{onToggleFavorite && (
 				<button
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleFavorite(channel);
-					}}
+					type="button"
+					onClick={() => onToggleFavorite(channel)}
 					className="h-11 w-11 -mr-2 flex items-center justify-center rounded-full shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					aria-label={channel.isFavorite ? "Remove from favorites" : "Add to favorites"}
 				>

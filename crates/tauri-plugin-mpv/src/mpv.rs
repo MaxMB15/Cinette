@@ -110,6 +110,18 @@ impl MpvState {
         let result = self.load_impl(url, start_pos, app);
         if result.is_ok() {
             self.idle_inhibitor.inhibit();
+        } else {
+            // A load can fail after the renderer is attached, such as when
+            // mpv rejects the file. Tear down what it set up, in the same
+            // order as stop(), so no empty video surface or core is left.
+            let renderer = self
+                .renderer
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            drop(renderer);
+            self.inner.lock().unwrap_or_else(|p| p.into_inner()).stop();
+            self.fallback_active.store(false, Ordering::Release);
         }
         // The old stream stopped above, so a failed load leaves nothing
         // playing. Turning the session off also clears its Now Playing info.
