@@ -1468,6 +1468,20 @@ impl CacheStore {
         Ok(rows.collect::<SqlResult<Vec<_>>>()?)
     }
 
+    /// Put downloads that were running when the app last quit back in the
+    /// queue. No ffmpeg is running for them after a restart, but the scheduler
+    /// would still count each one against the concurrency limit. ffmpeg starts
+    /// over and overwrites the partial file, so the progress resets too.
+    /// Returns how many were requeued.
+    pub fn requeue_interrupted_downloads(&self) -> Result<usize, CacheError> {
+        let n = self.conn.execute(
+            "UPDATE downloads SET status = 'queued', downloaded_bytes = 0, avg_rate_bps = NULL
+             WHERE status = 'downloading'",
+            [],
+        )?;
+        Ok(n)
+    }
+
     /// Whether a completed download already exists for a given channel id.
     pub fn completed_download_for_channel(
         &self,
@@ -2523,6 +2537,35 @@ mod tests {
         assert!(ids.contains(&"d1"));
         assert!(ids.contains(&"d2"));
         assert!(!ids.contains(&"d3"));
+    }
+
+    #[test]
+    fn requeues_interrupted_downloads() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let mut running = movie_record("d1", "c1");
+        running.status = DownloadStatus::Downloading;
+        running.downloaded_bytes = 4096;
+        running.avg_rate_bps = Some(512);
+        store.upsert_download(&running).unwrap();
+        store.upsert_download(&movie_record("d2", "c2")).unwrap(); // queued
+        let mut done = movie_record("d3", "c3");
+        done.status = DownloadStatus::Completed;
+        done.downloaded_bytes = 8192;
+        store.upsert_download(&done).unwrap();
+
+        assert_eq!(store.requeue_interrupted_downloads().unwrap(), 1);
+
+        let d1 = store.get_download("d1").unwrap().unwrap();
+        assert_eq!(d1.status, DownloadStatus::Queued);
+        assert_eq!(d1.downloaded_bytes, 0);
+        assert_eq!(d1.avg_rate_bps, None);
+        assert_eq!(
+            store.get_download("d2").unwrap().unwrap().status,
+            DownloadStatus::Queued
+        );
+        let d3 = store.get_download("d3").unwrap().unwrap();
+        assert_eq!(d3.status, DownloadStatus::Completed);
+        assert_eq!(d3.downloaded_bytes, 8192);
     }
 
     #[test]
