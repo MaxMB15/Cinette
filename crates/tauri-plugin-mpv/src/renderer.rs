@@ -1,35 +1,39 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! PlatformRenderer trait — the contract each OS must implement.
-//! All platform code lives in its own file (macos.rs / windows.rs / etc.)
-//! and is selected at compile time via #[cfg]. This file has no #[cfg] blocks.
+//! The contract each platform's video surface implements.
+//!
+//! Platform code lives in its own file and `mpv.rs` picks the type with
+//! `#[cfg]`, so this file stays free of platform code.
 
 use libmpv2::Mpv;
 
-/// Handles embedding the libmpv video surface into the native window.
+/// Embeds the libmpv video surface in the app window.
 ///
 /// Implementations:
-/// - macOS   → `macos::MacosGlRenderer`  (NSOpenGLView + OpenGL Core 3.2 render context)
-/// - Windows → `windows::WindowsRenderer` (stub; HWND wid works on Win32)
-/// - iOS     → `ios::IosRenderer`         (stub)
-/// - Android → `android::AndroidRenderer` (stub)
+/// - `macos::MacosGlRenderer` draws through an OpenGL render context into an
+///   NSOpenGLView below the web view.
+/// - `linux::LinuxGlRenderer` draws through an EGL render context into a
+///   Wayland subsurface below the web view.
+/// - `ios::IosMetalRenderer` hands mpv a CAMetalLayer and lets mpv run its
+///   own draw loop.
 pub trait PlatformRenderer: Send + Sync {
-    /// Set up the video surface and attach libmpv's render context.
+    /// Sets up the video surface and connects it to `mpv`.
     ///
-    /// Called once per stream load. `mpv` has been created with platform
-    /// options (vo=libmpv, hwdec, audio) but `loadfile` has NOT been called yet.
-    /// On success the renderer pumps frames until `detach` is called.
+    /// Called once per stream load, after `mpv` is created with the platform
+    /// options and before `loadfile`. On success video reaches the surface
+    /// until `detach` is called.
     fn attach(&mut self, mpv: &mut Mpv) -> Result<(), String>;
 
-    /// Update render surface dimensions on window resize.
+    /// Updates the surface size after the window resizes.
     fn resize(&mut self, width: u32, height: u32);
 
-    /// Reposition and resize the video surface to a specific rect (in CSS/logical pixels).
-    /// Called by the frontend to align the NSOpenGLView with the player content area.
+    /// Moves and sizes the video surface to a rect in logical pixels.
+    ///
+    /// The frontend calls this to line the video up with the player area.
     fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64);
 
-    /// Show or hide the video surface without stopping playback.
+    /// Shows or hides the video surface without stopping playback.
     fn set_visible(&mut self, visible: bool);
 
     /// Register a one-shot callback fired when the first rendered frame is
@@ -38,6 +42,6 @@ pub trait PlatformRenderer: Send + Sync {
     /// set their callback on the concrete type prior to boxing.
     fn set_first_frame_callback(&mut self, _cb: Box<dyn FnOnce() + Send>) {}
 
-    /// Tear down the surface. Must be idempotent.
+    /// Tears down the surface. Must be safe to call more than once.
     fn detach(&mut self);
 }
