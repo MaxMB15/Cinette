@@ -140,8 +140,7 @@ impl MacosGlRenderer {
         let pixel_format = NSOpenGLPixelFormat::initWithAttributes_(pixel_format, &attrs);
         if pixel_format == nil {
             return Err(
-                "NSOpenGLPixelFormat (Core 3.2) init failed — check OpenGL availability"
-                    .to_string(),
+                "NSOpenGLPixelFormat (Core 3.2) init failed, check OpenGL availability".to_string(),
             );
         }
 

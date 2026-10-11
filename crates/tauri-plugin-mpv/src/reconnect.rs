@@ -211,14 +211,14 @@ impl<R: Runtime> Watcher<R> {
             // MpvState sets this before it destroys the parent mpv. Returning
             // drops this client, which would otherwise keep the core alive.
             if self.kill.load(Ordering::Acquire) {
-                tracing::info!("[MPV reconnect] kill flag set — exiting watcher");
+                tracing::info!("[MPV reconnect] kill flag set, exiting watcher");
                 return;
             }
 
             // The timeout keeps the retry timers running while mpv is quiet.
             match signal(self.client.wait_event(1.0)) {
                 Signal::Shutdown => {
-                    tracing::info!("[MPV reconnect] received Shutdown — exiting watcher");
+                    tracing::info!("[MPV reconnect] received Shutdown, exiting watcher");
                     return;
                 }
                 Signal::PausedForCache(paused) => self.on_paused_for_cache(paused),
@@ -234,7 +234,7 @@ impl<R: Runtime> Watcher<R> {
                     if self.next_retry_at.is_none() && self.is_premature_eof() =>
                 {
                     tracing::warn!(
-                        "[MPV reconnect] eof-reached=true (premature) — likely a swallowed EndFile, arming retry ({})",
+                        "[MPV reconnect] eof-reached=true (premature), likely a swallowed EndFile; arming retry ({})",
                         self.url
                     );
                     if self.arm_retry("eof-reached (premature)").is_break() {
@@ -245,7 +245,7 @@ impl<R: Runtime> Watcher<R> {
                 // so only count it once playback got going.
                 Signal::IdleActive(true) if self.next_retry_at.is_none() && self.had_playback() => {
                     tracing::warn!(
-                        "[MPV reconnect] idle-active=true after playback — mpv unloaded the file, arming retry ({})",
+                        "[MPV reconnect] idle-active=true after playback, mpv unloaded the file; arming retry ({})",
                         self.url
                     );
                     if self.arm_retry("idle-active").is_break() {
@@ -282,7 +282,7 @@ impl<R: Runtime> Watcher<R> {
     fn on_paused_for_cache(&mut self, paused: bool) {
         if paused && !self.buffering_emitted {
             tracing::warn!(
-                "[MPV reconnect] paused-for-cache=true — cache drained, likely network stall ({})",
+                "[MPV reconnect] paused-for-cache=true, cache drained; likely a network stall ({})",
                 self.url
             );
             let _ = self
@@ -291,7 +291,7 @@ impl<R: Runtime> Watcher<R> {
             self.buffering_emitted = true;
         } else if !paused && self.buffering_emitted {
             tracing::info!(
-                "[MPV reconnect] paused-for-cache=false — cache refilled ({})",
+                "[MPV reconnect] paused-for-cache=false, cache refilled ({})",
                 self.url
             );
             let _ = self.app.emit(EVENT_BUFFERED, UrlPayload { url: &self.url });
@@ -308,7 +308,7 @@ impl<R: Runtime> Watcher<R> {
                 // end of file, so check how far playback got.
                 if !self.is_premature_eof() {
                     tracing::info!(
-                        "[MPV reconnect] EndFile(Eof) at end of stream — not reconnecting"
+                        "[MPV reconnect] EndFile(Eof) at end of stream, not reconnecting"
                     );
                     return None;
                 }
@@ -316,7 +316,7 @@ impl<R: Runtime> Watcher<R> {
             }
             _ => {
                 tracing::debug!(
-                    "[MPV reconnect] EndFile (reason={}) — not auto-reconnecting",
+                    "[MPV reconnect] EndFile (reason={}), not auto-reconnecting",
                     reason
                 );
                 return None;
@@ -324,7 +324,7 @@ impl<R: Runtime> Watcher<R> {
         };
         if self.next_retry_at.is_some() {
             tracing::debug!(
-                "[MPV reconnect] {} arrived but retry already armed — dedup skip",
+                "[MPV reconnect] {} arrived but a retry is already armed, skipping",
                 label
             );
             return None;
@@ -360,7 +360,7 @@ impl<R: Runtime> Watcher<R> {
             .filter(|p| p.is_finite())
             .unwrap_or_else(|| self.last_known_pos.unwrap_or(0.0));
         tracing::debug!(
-            "[MPV reconnect] PlaybackRestart — recovery baseline={:.3}",
+            "[MPV reconnect] PlaybackRestart, recovery baseline={:.3}",
             pos
         );
         self.recovery_baseline = Some(pos);
