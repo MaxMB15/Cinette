@@ -84,6 +84,10 @@ jobs:
               - 'crates/tauri-plugin-mpv/src/engine.rs'
               - 'crates/tauri-plugin-mpv/src/mpv.rs'
               - 'crates/tauri-plugin-mpv/src/lib.rs'
+              - 'crates/tauri-plugin-mpv/src/reconnect.rs'
+              - 'crates/tauri-plugin-mpv/src/idle_inhibit.rs'
+              - 'crates/tauri-plugin-mpv/build.rs'
+              - 'crates/tauri-plugin-mpv/permissions/**'
               - 'crates/tauri-plugin-mpv/Cargo.toml'
               - 'crates/core/**'
               - 'apps/desktop/src-tauri/**'
@@ -95,6 +99,7 @@ jobs:
               - 'scripts/bundle-libmpv-linux.sh'
               - 'scripts/fetch-ffmpeg.sh'
               - '.github/actions/install-linux-deps/**'
+              - '.github/workflows/build.yml'
             macos:
               - 'crates/tauri-plugin-mpv/src/macos.rs'
               - 'crates/tauri-plugin-mpv/src/renderer.rs'
@@ -102,6 +107,10 @@ jobs:
               - 'crates/tauri-plugin-mpv/src/engine.rs'
               - 'crates/tauri-plugin-mpv/src/mpv.rs'
               - 'crates/tauri-plugin-mpv/src/lib.rs'
+              - 'crates/tauri-plugin-mpv/src/reconnect.rs'
+              - 'crates/tauri-plugin-mpv/src/idle_inhibit.rs'
+              - 'crates/tauri-plugin-mpv/build.rs'
+              - 'crates/tauri-plugin-mpv/permissions/**'
               - 'crates/tauri-plugin-mpv/Cargo.toml'
               - 'crates/core/**'
               - 'apps/desktop/src-tauri/**'
@@ -112,6 +121,7 @@ jobs:
               - 'scripts/build-libmpv.sh'
               - 'scripts/bundle-libmpv.sh'
               - 'scripts/fetch-ffmpeg.sh'
+              - '.github/workflows/build.yml'
 
   # ── Tests (run on every push and PR) ────────────────────────────────────
   test:
