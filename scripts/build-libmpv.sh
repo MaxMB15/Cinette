@@ -113,7 +113,7 @@ case "$PLATFORM" in
       exit 1
     fi
 
-    # Check audio dev packages — at least one is REQUIRED for playback with sound.
+    # Check audio dev packages. At least one is REQUIRED for playback with sound.
     # Without these, the resulting libmpv.so will have zero AO (audio output)
     # drivers and mpv will silently disable all audio.
     AUDIO_FOUND=false
@@ -149,8 +149,8 @@ case "$PLATFORM" in
 
     # Build with audio + video output support.
     # Audio backends are conditionally enabled based on available dev headers.
-    # If no audio dev headers are found, the build will warn but continue —
-    # the AUDIO_FOUND check above already warns the user.
+    # If no audio dev headers are found, the build continues, since the
+    # AUDIO_FOUND check above already warns the user.
     BUILD_DIR="$MPV_SRC/build-linux"
     echo "    Running meson setup..."
 
@@ -164,7 +164,7 @@ case "$PLATFORM" in
       -Dx11=enabled
       -Dwayland=enabled
       -Dvulkan=disabled
-      # Disable optional features we don't need — avoids auto-detection pulling
+      # Disable optional features we don't need, so auto-detection doesn't pull
       # in deps that may not be on the CI runner (lua, javascript, etc.)
       # Note: libplacebo is a hard requirement of mpv 0.40.0 (not a meson option),
       # so libplacebo-dev must be installed.
@@ -201,7 +201,7 @@ case "$PLATFORM" in
     meson setup "$BUILD_DIR" "$MPV_SRC" "${MESON_ARGS[@]}"
 
     echo "    Building libmpv.so (this takes a few minutes)..."
-    # Build all targets — the .so name varies by mpv version/config
+    # Build all targets, because the .so name varies by mpv version and config
     ninja -C "$BUILD_DIR"
 
     # Copy .so to libs/linux/

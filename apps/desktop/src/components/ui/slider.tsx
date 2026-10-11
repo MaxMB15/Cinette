@@ -14,7 +14,7 @@ interface SliderProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 
 
 // Half the thumb width in px (thumb is w-4 = 16px). The browser offsets the thumb
 // so its centre sits exactly at the theoretical percentage position, but it can't
-// move past the track edges — at 0 % the centre is 8 px in, at 100 % it is 8 px
+// move past the track edges. At 0 % the centre is 8 px in, at 100 % it is 8 px
 // from the right. We apply the same correction to the gradient stop so the filled
 // portion always ends exactly at the thumb centre.
 const THUMB_HALF = 8;
