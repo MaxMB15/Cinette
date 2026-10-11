@@ -14,6 +14,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 - Settings > Downloads > Delete downloads after. It deletes finished downloads 7, 14, 30 or 90 days after they were downloaded or last played. Keep on a download holds on to it. The Downloads tab, the movie and series pages and the download history show when each download goes (#100).
+- Recordings of live channels on macOS and Linux. In the player's info drawer, record the channel now, record a program from the schedule or record a time range. A program's recording starts 2 minutes early and runs 5 minutes over, which you can change in Settings > Downloads. Recordings are MPEG-TS files in a recordings folder inside the download folder, and the Downloads tab lists them with buttons to cancel, stop, play or delete. While a recording runs, other downloads from the same provider wait, since many providers allow one stream at a time. A recording that was running when the app quit keeps what it got, and if its program is still on at the next launch, the rest is recorded too (#NN).
 
 ### Fixed
 
