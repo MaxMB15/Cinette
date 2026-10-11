@@ -148,6 +148,25 @@ describe("getEpgLastRefresh / setEpgLastRefresh", () => {
 		expect(getEpgLastRefresh("a")).toBeGreaterThan(0);
 		expect(getEpgLastRefresh("b")).toBe(0);
 	});
+
+	it("keeps the time for the session when storage is blocked", () => {
+		const blocked = () => {
+			throw new DOMException("blocked", "SecurityError");
+		};
+		const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			expect(getEpgLastRefresh("blocked")).toBe(0);
+			const before = Date.now();
+			setEpgLastRefresh("blocked");
+			expect(getEpgLastRefresh("blocked")).toBeGreaterThanOrEqual(before);
+		} finally {
+			getItem.mockRestore();
+			setItem.mockRestore();
+			vi.mocked(console.warn).mockRestore();
+		}
+	});
 });
 
 // ── useChannelsProvider hook tests ────────────────────────────────────

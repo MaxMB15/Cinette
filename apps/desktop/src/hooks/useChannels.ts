@@ -13,6 +13,7 @@ import {
 import type { Channel, Category, Provider } from "@/lib/types";
 import { findDueRefreshes } from "@/lib/refresh-schedule";
 import { deriveCategories } from "@/lib/channels";
+import { readStorage, writeStorage } from "@/lib/storage";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -70,10 +71,17 @@ export const saveProviderSettings = (id: string, settings: ProviderSettings) => 
 
 // EPG last-refresh timestamp stored separately (providers have no epg_last_updated field)
 const epgLastRefreshKey = (id: string) => `epg-last-refresh-${id}`;
-export const getEpgLastRefresh = (id: string): number =>
-	parseInt(localStorage.getItem(epgLastRefreshKey(id)) ?? "0", 10);
-export const setEpgLastRefresh = (id: string) =>
-	localStorage.setItem(epgLastRefreshKey(id), String(Date.now()));
+// A copy in memory keeps blocked storage from making every poll refresh the guide again.
+const epgLastRefreshThisSession = new Map<string, number>();
+export const getEpgLastRefresh = (id: string): number => {
+	const stored = parseInt(readStorage(epgLastRefreshKey(id)) ?? "0", 10) || 0;
+	return Math.max(stored, epgLastRefreshThisSession.get(id) ?? 0);
+};
+export const setEpgLastRefresh = (id: string) => {
+	const now = Date.now();
+	epgLastRefreshThisSession.set(id, now);
+	writeStorage(epgLastRefreshKey(id), String(now));
+};
 
 // --- Context ---
 

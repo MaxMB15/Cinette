@@ -213,7 +213,18 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			onCompleteRef.current?.(didRefreshProviders);
 		};
 
-		run();
+		run().catch((err) => {
+			// A step that throws must still leave the splash with a way out.
+			console.error("[splash] startup steps failed:", err);
+			if (cancelled) return;
+			setSteps((prev) =>
+				prev.map((s) =>
+					s.status === "pending" || s.status === "active" ? { ...s, status: "error" } : s
+				)
+			);
+			setAllDone(true);
+			onCompleteRef.current?.(true);
+		});
 		return () => {
 			cancelled = true;
 		};

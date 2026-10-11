@@ -157,6 +157,44 @@ describe("useSplashScreen", () => {
 		expect(mockRefreshEpg).toHaveBeenCalledWith("p1");
 	});
 
+	it("finishes with the remaining steps failed when a step throws", async () => {
+		mockUseChannels.mockReturnValue({
+			providers: [
+				{
+					id: "p1",
+					lastUpdated: new Date().toISOString(),
+					epgUrl: "http://epg.example.com/guide.xml",
+				},
+			],
+			initialized: true,
+		} as never);
+		mockLoadProviderSettings.mockReturnValue({
+			autoRefresh: false,
+			refreshIntervalHours: 24,
+			epgAutoRefresh: true,
+			epgRefreshIntervalHours: 24,
+		});
+		mockGetEpgLastRefresh.mockImplementation(() => {
+			throw new Error("storage blocked");
+		});
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		const onComplete = vi.fn();
+
+		const { result } = renderHook(() =>
+			useSplashScreen({ updateState: makeUpdateState(), onComplete })
+		);
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+
+		expect(result.current.steps.map((s) => s.status)).toEqual([
+			"done",
+			"error",
+			"error",
+			"error",
+		]);
+		expect(onComplete).toHaveBeenCalledWith(true);
+		consoleError.mockRestore();
+	});
+
 	it("does not call refreshEpg when epgAutoRefresh=true but interval not elapsed", async () => {
 		mockUseChannels.mockReturnValue({
 			providers: [
