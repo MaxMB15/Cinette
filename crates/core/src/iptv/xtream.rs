@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::models::channel::Channel;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
 use url::form_urlencoded;
@@ -80,24 +80,12 @@ impl XtreamCredentials {
 #[derive(Debug, Deserialize)]
 struct AuthResponse {
     user_info: Option<UserInfo>,
-    #[allow(dead_code)]
-    server_info: Option<ServerInfo>,
 }
 
 #[derive(Debug, Deserialize)]
 struct UserInfo {
     auth: Option<u8>,
     status: Option<String>,
-    #[allow(dead_code)]
-    username: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ServerInfo {
-    #[allow(dead_code)]
-    url: Option<String>,
-    #[allow(dead_code)]
-    port: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,8 +96,6 @@ struct XtreamCategory {
 
 #[derive(Debug, Deserialize)]
 struct XtreamStream {
-    #[allow(dead_code)]
-    num: Option<u64>,
     name: Option<String>,
     stream_id: Option<u64>,
     stream_icon: Option<String>,
@@ -239,7 +225,7 @@ impl XtreamClient {
         for (season_str, episodes) in &episodes_map {
             let season: u32 = season_str.parse().unwrap_or(0);
             for (i, ep) in episodes.iter().enumerate() {
-                let ep_id = match ep.id.as_ref().and_then(|v| coerce_u64(v)) {
+                let ep_id = match ep.id.as_ref().and_then(coerce_u64) {
                     Some(id) => id,
                     None => continue,
                 };
@@ -247,7 +233,7 @@ impl XtreamClient {
                 let ep_num = ep
                     .episode_num
                     .as_ref()
-                    .and_then(|v| coerce_u64(v))
+                    .and_then(coerce_u64)
                     .map(|n| n as u32);
                 let ep_title = ep.title.as_deref().filter(|t| !t.is_empty());
 
@@ -264,14 +250,11 @@ impl XtreamClient {
                     url: self.credentials.series_stream_url(&ep_id.to_string(), ext),
                     logo_url: logo.map(|s| s.to_string()),
                     group_title: group.to_string(),
-                    tvg_id: None,
-                    tvg_name: None,
-                    is_favorite: false,
                     content_type: "series".to_string(),
-                    sources: Vec::new(),
                     series_title: Some(display_name.to_string()),
                     season: Some(season),
                     episode: ep_num,
+                    ..Default::default()
                 });
             }
         }
@@ -307,106 +290,33 @@ pub async fn fetch_xtream_channels(
     let series_cats = series_cats_r.unwrap_or_default();
 
     let mut all: Vec<Channel> = Vec::new();
+    let creds = &client.credentials;
 
     if let Ok(streams) = live_streams_r {
-        let channels: Vec<Channel> = streams
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let stream_id = s.stream_id?;
-                let name = s.name.unwrap_or_else(|| format!("Stream {stream_id}"));
-                let ext = s.container_extension.as_deref().unwrap_or("ts");
-                let group = s
-                    .category_id
-                    .as_ref()
-                    .and_then(|cid| live_cats.get(cid))
-                    .cloned()
-                    .unwrap_or_else(|| "Uncategorized".to_string());
-                Some(Channel {
-                    id: format!("xt-{i}"),
-                    name,
-                    url: client.credentials.live_stream_url(stream_id, ext),
-                    logo_url: s.stream_icon.filter(|u| !u.is_empty()),
-                    group_title: group,
-                    tvg_id: s.epg_channel_id,
-                    tvg_name: None,
-                    is_favorite: false,
-                    content_type: "live".to_string(),
-                    sources: Vec::new(),
-                    series_title: None,
-                    season: None,
-                    episode: None,
-                })
-            })
-            .collect();
-        all.extend(channels);
+        all.extend(
+            streams
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, s)| live_channel(creds, &live_cats, i, s)),
+        );
     }
 
     if let Ok(streams) = vod_streams_r {
-        let channels: Vec<Channel> = streams
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let stream_id = s.stream_id?;
-                let name = s.name.unwrap_or_else(|| format!("VOD {stream_id}"));
-                let ext = s.container_extension.as_deref().unwrap_or("mp4");
-                let group = s
-                    .category_id
-                    .as_ref()
-                    .and_then(|cid| vod_cats.get(cid))
-                    .cloned()
-                    .unwrap_or_else(|| "Uncategorized".to_string());
-                Some(Channel {
-                    id: format!("vod-{i}"),
-                    name,
-                    url: client.credentials.vod_stream_url(stream_id, ext),
-                    logo_url: s.stream_icon.filter(|u| !u.is_empty()),
-                    group_title: group,
-                    tvg_id: None,
-                    tvg_name: None,
-                    is_favorite: false,
-                    content_type: "movie".to_string(),
-                    sources: Vec::new(),
-                    series_title: None,
-                    season: None,
-                    episode: None,
-                })
-            })
-            .collect();
-        all.extend(channels);
+        all.extend(
+            streams
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, s)| vod_channel(creds, &vod_cats, i, s)),
+        );
     }
 
     if let Ok(series_list) = series_r {
-        let channels: Vec<Channel> = series_list
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let series_id = s.series_id?;
-                let name = s.name.unwrap_or_else(|| format!("Series {series_id}"));
-                let group = s
-                    .category_id
-                    .as_ref()
-                    .and_then(|cid| series_cats.get(cid))
-                    .cloned()
-                    .unwrap_or_else(|| "Uncategorized".to_string());
-                Some(Channel {
-                    id: format!("ser-{i}"),
-                    name,
-                    url: format!("xtream://series/{series_id}"),
-                    logo_url: s.cover.filter(|u| !u.is_empty()),
-                    group_title: group,
-                    tvg_id: None,
-                    tvg_name: None,
-                    is_favorite: false,
-                    content_type: "series".to_string(),
-                    sources: Vec::new(),
-                    series_title: None,
-                    season: None,
-                    episode: None,
-                })
-            })
-            .collect();
-        all.extend(channels);
+        all.extend(
+            series_list
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, s)| series_channel(&series_cats, i, s)),
+        );
     }
 
     if all.is_empty() {
@@ -416,6 +326,71 @@ pub async fn fetch_xtream_channels(
     }
 
     Ok(all)
+}
+
+fn live_channel(
+    creds: &XtreamCredentials,
+    categories: &HashMap<String, String>,
+    index: usize,
+    stream: XtreamStream,
+) -> Option<Channel> {
+    let stream_id = stream.stream_id?;
+    let ext = stream.container_extension.as_deref().unwrap_or("ts");
+    Some(Channel {
+        id: format!("xt-{index}"),
+        url: creds.live_stream_url(stream_id, ext),
+        name: stream.name.unwrap_or_else(|| format!("Stream {stream_id}")),
+        logo_url: stream.stream_icon.filter(|u| !u.is_empty()),
+        group_title: category_name(categories, stream.category_id.as_deref()),
+        tvg_id: stream.epg_channel_id,
+        content_type: "live".to_string(),
+        ..Default::default()
+    })
+}
+
+fn vod_channel(
+    creds: &XtreamCredentials,
+    categories: &HashMap<String, String>,
+    index: usize,
+    stream: XtreamStream,
+) -> Option<Channel> {
+    let stream_id = stream.stream_id?;
+    let ext = stream.container_extension.as_deref().unwrap_or("mp4");
+    Some(Channel {
+        id: format!("vod-{index}"),
+        url: creds.vod_stream_url(stream_id, ext),
+        name: stream.name.unwrap_or_else(|| format!("VOD {stream_id}")),
+        logo_url: stream.stream_icon.filter(|u| !u.is_empty()),
+        group_title: category_name(categories, stream.category_id.as_deref()),
+        content_type: "movie".to_string(),
+        ..Default::default()
+    })
+}
+
+/// Series come without episodes, which are fetched when the user opens one,
+/// so the URL only records which series it is.
+fn series_channel(
+    categories: &HashMap<String, String>,
+    index: usize,
+    series: XtreamSeries,
+) -> Option<Channel> {
+    let series_id = series.series_id?;
+    Some(Channel {
+        id: format!("ser-{index}"),
+        name: series.name.unwrap_or_else(|| format!("Series {series_id}")),
+        url: format!("xtream://series/{series_id}"),
+        logo_url: series.cover.filter(|u| !u.is_empty()),
+        group_title: category_name(categories, series.category_id.as_deref()),
+        content_type: "series".to_string(),
+        ..Default::default()
+    })
+}
+
+fn category_name(categories: &HashMap<String, String>, category_id: Option<&str>) -> String {
+    category_id
+        .and_then(|id| categories.get(id))
+        .cloned()
+        .unwrap_or_else(|| "Uncategorized".to_string())
 }
 
 /// Returns the XMLTV EPG URL for an Xtream provider, with the login form
@@ -802,5 +777,92 @@ mod tests {
         ));
         assert!(!err.to_string().contains("SECRET"), "{err}");
         assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    // ── Channel builders ──────────────────────────────────────────────
+
+    fn categories() -> HashMap<String, String> {
+        HashMap::from([("3".to_string(), "News".to_string())])
+    }
+
+    #[test]
+    fn test_live_channel() {
+        let creds = XtreamCredentials::new("http://srv", "u", "p");
+        let stream: XtreamStream = serde_json::from_value(json!({
+            "stream_id": 7,
+            "name": "CNN",
+            "stream_icon": "http://img/cnn.png",
+            "epg_channel_id": "cnn.us",
+            "category_id": "3"
+        }))
+        .unwrap();
+        assert_eq!(
+            live_channel(&creds, &categories(), 2, stream),
+            Some(Channel {
+                id: "xt-2".into(),
+                name: "CNN".into(),
+                url: "http://srv/live/u/p/7.ts".into(),
+                logo_url: Some("http://img/cnn.png".into()),
+                group_title: "News".into(),
+                tvg_id: Some("cnn.us".into()),
+                content_type: "live".into(),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn test_vod_channel_fills_gaps() {
+        let creds = XtreamCredentials::new("http://srv", "u", "p");
+        let stream: XtreamStream = serde_json::from_value(json!({
+            "stream_id": 9,
+            "stream_icon": "",
+            "epg_channel_id": "ignored",
+            "category_id": "99"
+        }))
+        .unwrap();
+        assert_eq!(
+            vod_channel(&creds, &categories(), 0, stream),
+            Some(Channel {
+                id: "vod-0".into(),
+                name: "VOD 9".into(),
+                url: "http://srv/movie/u/p/9.mp4".into(),
+                group_title: "Uncategorized".into(),
+                content_type: "movie".into(),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn test_series_channel() {
+        let series: XtreamSeries = serde_json::from_value(json!({
+            "series_id": 5,
+            "cover": "http://img/wire.jpg",
+            "category_id": "3"
+        }))
+        .unwrap();
+        assert_eq!(
+            series_channel(&categories(), 1, series),
+            Some(Channel {
+                id: "ser-1".into(),
+                name: "Series 5".into(),
+                url: "xtream://series/5".into(),
+                logo_url: Some("http://img/wire.jpg".into()),
+                group_title: "News".into(),
+                content_type: "series".into(),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn test_entries_without_an_id_are_skipped() {
+        let creds = XtreamCredentials::new("http://srv", "u", "p");
+        let stream = || serde_json::from_value::<XtreamStream>(json!({ "name": "x" })).unwrap();
+        assert_eq!(live_channel(&creds, &categories(), 0, stream()), None);
+        assert_eq!(vod_channel(&creds, &categories(), 0, stream()), None);
+        let series: XtreamSeries = serde_json::from_value(json!({ "name": "x" })).unwrap();
+        assert_eq!(series_channel(&categories(), 0, series), None);
     }
 }
