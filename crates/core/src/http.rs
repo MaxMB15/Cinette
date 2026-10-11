@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! HTTP clients shared by the online services, so every request gets the same
-//! timeouts and user agent and reuses pooled connections.
+//! HTTP clients shared by the online services, so requests get the same
+//! timeouts and reuse pooled connections.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -44,10 +44,19 @@ fn user_agent_for(version: &str) -> String {
 /// `RequestBuilder::timeout`.
 pub fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| build(reqwest::Client::builder().timeout(API_TIMEOUT)))
+    CLIENT.get_or_init(|| {
+        build(
+            reqwest::Client::builder()
+                .timeout(API_TIMEOUT)
+                .user_agent(user_agent()),
+        )
+    })
 }
 
 /// The client for large downloads such as EPG guides and Xtream catalogues.
+///
+/// It sends no user agent. Some IPTV panels filter requests by user agent, and
+/// these requests have always gone out without one.
 pub fn download_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| build(reqwest::Client::builder().read_timeout(READ_TIMEOUT)))
@@ -56,7 +65,6 @@ pub fn download_client() -> &'static reqwest::Client {
 fn build(builder: reqwest::ClientBuilder) -> reqwest::Client {
     builder
         .connect_timeout(CONNECT_TIMEOUT)
-        .user_agent(user_agent())
         .build()
         // Same failure as reqwest::Client::new, which the services used before.
         .expect("HTTP client could not be built, the TLS backend failed to start")
