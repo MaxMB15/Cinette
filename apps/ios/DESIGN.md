@@ -245,11 +245,99 @@ after a short `beginBackgroundTask` to close the files cleanly. The Downloads
 tab and the download button say "Keep Max Video Player open until your
 downloads finish."
 
-**Storage.** Downloads go in the app's own storage, with `isExcludedFromBackup`
-set, because they're large and can be downloaded again. Apple asks apps to keep
-that kind of file out of iCloud backups. The download folder setting stays
-hidden on iOS. A download plays offline through mpv and uses the same resume
-points as the stream.
+**Storage.** Downloads stay private to the app. They go in
+`Library/Application Support/Downloads` in the app's container, not in
+`Documents`, and the app doesn't set `UIFileSharingEnabled` or
+`LSSupportsOpeningDocumentsInPlace`. So they don't show up in the Files app or
+in Finder's file sharing. Each file has `isExcludedFromBackup` set, because
+downloads are large and can be fetched again, and Apple asks apps to keep that
+kind of file out of iCloud backups. The download folder setting stays hidden on
+iOS. A download plays offline through mpv and uses the same resume points as
+the stream. Deleting the app deletes its downloads.
+
+### Later: recordings and retention
+
+Desktop doesn't have these yet either. Its downloads cover movies and episodes
+only, and keep each file until the user deletes it. The shared parts go in
+`mvp-core`, and desktop gets both features first. iOS then adds only the parts
+that differ, in milestone 6.
+
+**Recording a live channel.** A recording is a download of a live channel
+between a start and an end time. It uses the same queue, records and Downloads
+tab, with a new `DownloadKind::Recording`. The copy is the same as for a
+download, with an end time. On desktop ffmpeg gets `-t` with the length. On iOS
+`mvp_remux` stops when its interrupt callback sees that the end time has
+passed. Progress is the time recorded over the length.
+
+There are three ways to start one:
+
+- Record now, from the player or the channel's info pane. It records until the
+  current program ends, going by the guide, or for an hour when the channel has
+  no guide. The user can stop it sooner.
+- Record a program, from a program later in the guide. The guide gives the
+  start and end, and the app adds a margin, 2 minutes before and 5 after, since
+  channels rarely run on time. The margins are settings.
+- Record a time range, for channels without a guide. The user picks the start
+  and the length.
+
+Recording every episode of a show is left for later.
+
+A scheduled recording is a record with a start time and the status
+`scheduled`. The statuses also gain `recording` and `missed`. A timer in Rust
+wakes at the next start time and starts the recording. Recordings don't wait
+for a free slot under the download concurrency limit, because starting late
+loses the beginning. If the app wasn't running at the start time, it checks
+when it next opens. If the program is still on, it records the rest. If it has
+ended, the record is marked missed.
+
+Many providers allow only one or two connections at a time, so a recording
+that overlaps another recording, or overlaps watching another channel, may be
+refused. Scheduling warns when two recordings overlap. Xtream reports the
+account's limit as `max_connections` from `player_api.php`, which the app
+doesn't read yet. Reading it would let the warning use the real limit.
+
+On desktop, the app has to be running at the start time. It doesn't wake a
+sleeping computer. While a recording runs, the app keeps the computer from
+going to sleep.
+
+On iOS, a recording can't start on its own while the app is in the background.
+The iOS 26 task has to be submitted from the foreground, and iOS has no other
+way to start long network work at a set time. So:
+
+- Scheduling a recording also schedules a local notification for its start,
+  such as "The news starts at 20:00. Open Max Video Player to record it." Tapping
+  it opens the app, which starts the recording. On iOS 26 the app also submits
+  the background task, so the recording goes on after the user leaves the app.
+- If the app is open at the start time, or a background task for downloads is
+  already running, the recording starts by itself.
+- If the user opens the app late, it records the rest of the program.
+- The app asks for notification permission the first time the user schedules a
+  recording, not at launch.
+- Before iOS 26, a recording runs only while the app is open, the same as a
+  download, and shows the same note.
+
+Many Xtream providers keep a few days of past programs, shown by `tv_archive`
+on the channel. Downloading a missed program from that archive would cover
+recordings the phone couldn't start. That's a possible follow-up.
+
+**Retention.** One setting, "Delete downloads after", with Never, 7, 14, 30 and
+90 days. It covers downloads and recordings, and the default is Never. The
+count starts when the download or recording finished. Each item in the
+Downloads tab shows when it will be deleted, such as "Deletes in 3 days", and
+has a Keep option that excludes it.
+
+The app checks when it starts and every hour while it runs. On iOS it also
+checks when the app comes back to the foreground. It deletes the file and the
+record, the same as the Delete button. It skips a file that's playing, and
+anything queued, scheduled or still downloading. When a change to the setting
+would delete files right away, the app asks first, for example "This deletes 4
+downloads now."
+
+**What goes where.** `mvp-core` gets the recording fields and statuses on
+`DownloadRecord`, the overlap check, and the function that picks expired items
+from the records, the setting and the time. They're plain functions with unit
+tests. Desktop adds the timer, ffmpeg's `-t` and keeping the computer awake.
+iOS adds the notification, the end time in `mvp_remux` and the background task.
 
 ## 3. Layouts
 
@@ -322,9 +410,12 @@ battery drain over an hour. Nothing else starts until this works.
 - Take screenshots that show no real channels or logos.
 - Have a lawyer check the licensing in section 5.
 
-**6. Downloads.** An update after the App Store release, following "Later:
-downloads" in section 2. Test the background task on an iPhone with iOS 26 and
-the in-app note on one with an earlier version.
+**6. Downloads, recordings and retention.** An update after the App Store
+release, following "Later: downloads" and "Later: recordings and retention" in
+section 2. Desktop gets recordings and retention before this. Test the
+background task on an iPhone with iOS 26 and the in-app note on one with an
+earlier version. Test a scheduled recording with the app open, in the
+background, and closed, where the notification starts it.
 
 **Later:** AVPlayer for picture in picture and AirPlay, M3U file import from
 Files, iCloud sync for favorites and history, and iPad keyboard shortcuts.
@@ -376,11 +467,12 @@ Store build stays public for the same reason.
    allows everything. HTTP logos load in the simulator. Check this on a
    device.
 9. **Downloads and App Review.** Guideline 5.2.3 bars apps that save media from
-   third-party sources without the source's permission. The app only downloads
-   from the provider the user added, and the review notes for milestone 6 will
-   say so, but a reviewer may still reject it. Downloads ship in their own
-   update so a rejection can't hold up the first release. If Apple rejects
-   them, that update goes out with downloads still hidden.
+   third-party sources without the source's permission. Recordings of live
+   channels fall under it too. The app only downloads and records from the
+   provider the user added, and the review notes for milestone 6 will say so,
+   but a reviewer may still reject it. Downloads ship in their own update so a
+   rejection can't hold up the first release. If Apple rejects them, that
+   update goes out with downloads and recordings still hidden.
 
 ## 7. Success criteria
 
@@ -404,10 +496,3 @@ Store build stays public for the same reason.
 - **Price.** Free, paid, or free with a purchase. Decide before milestone 5.
 - **iCloud sync.** Whether to sync favorites and history, and whether through
   CloudKit or something else.
-- **Recording live channels.** Desktop downloads cover movies and episodes
-  only. Whether iOS should also record a live channel now or on a schedule. A
-  scheduled recording couldn't start by itself in the background, because the
-  iOS 26 task has to be submitted from the app in the foreground.
-- **Downloads in the Files app.** Whether downloads go in `Documents` with
-  `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace`, so they show
-  up in Files and can be copied off the device, or stay private to the app.
