@@ -38,6 +38,8 @@ pub(crate) fn shared_options() -> [(&'static str, &'static str); 8] {
     ]
 }
 
+// These pin the exact options each platform passes to mpv, in order, so a
+// change to the shared list shows up here.
 #[cfg(test)]
 mod tests {
     const LAVF: &str =
@@ -45,7 +47,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_option_sets_are_unchanged() {
+    fn macos_option_sets_are_pinned() {
         assert_eq!(
             crate::macos::embedded_options(),
             vec![
@@ -85,7 +87,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_option_sets_are_unchanged() {
+    fn linux_option_sets_are_pinned() {
         assert_eq!(
             crate::linux::embedded_options(),
             vec![
