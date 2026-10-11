@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -185,19 +186,16 @@ pub async fn search_subtitles(
         }
     }
 
-    let client = crate::http::client();
-    let response = client
+    let response = crate::http::client()
         .get("https://api.opensubtitles.com/api/v1/subtitles")
         .query(&query)
         .header("Api-Key", api_key)
         .header("Accept", "application/json")
         .send()
-        .await?
-        .error_for_status()?
-        .json::<serde_json::Value>()
         .await?;
+    let json = check_status(response)?.json::<serde_json::Value>().await?;
 
-    parse_search_response(response)
+    parse_search_response(json)
 }
 
 /// Download a subtitle file by file_id to the given directory.
@@ -220,17 +218,15 @@ pub async fn download_subtitle(
     let client = crate::http::client();
     let post_body = serde_json::json!({ "file_id": file_id });
 
-    let dl_response: DownloadResponse = client
+    let response = client
         .post("https://api.opensubtitles.com/api/v1/download")
         .header("Api-Key", api_key)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .json(&post_body)
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
+    let dl_response: DownloadResponse = check_status(response)?.json().await?;
 
     let extension = extract_extension(&dl_response.file_name);
     let extension = if extension.is_empty() {
@@ -255,6 +251,21 @@ pub async fn download_subtitle(
     std::fs::write(&dest_path, content)?;
 
     Ok(dest_path)
+}
+
+fn check_status(response: reqwest::Response) -> Result<reqwest::Response, OpenSubtitlesError> {
+    match rejected_key(response.status()) {
+        Some(err) => Err(err),
+        None => Ok(response.error_for_status()?),
+    }
+}
+
+/// OpenSubtitles answers a wrong or revoked key with 401 or 403. Reporting that
+/// as an API error rather than an HTTP one lets the app tell the user the key is
+/// wrong instead of blaming the network.
+fn rejected_key(status: StatusCode) -> Option<OpenSubtitlesError> {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        .then(|| OpenSubtitlesError::Api(format!("key rejected with HTTP {}", status.as_u16())))
 }
 
 #[cfg(test)]
@@ -405,5 +416,25 @@ mod tests {
         let err = OpenSubtitlesError::from(crate::http::error_with_url("unix:/file?token=SECRET"));
         assert!(!err.to_string().contains("SECRET"), "{err}");
         assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    #[test]
+    fn a_rejected_key_is_an_api_error() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let err = rejected_key(status);
+            assert!(matches!(err, Some(OpenSubtitlesError::Api(_))), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn other_statuses_are_left_to_the_http_check() {
+        for status in [
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(rejected_key(status).is_none(), "{status}");
+        }
     }
 }
