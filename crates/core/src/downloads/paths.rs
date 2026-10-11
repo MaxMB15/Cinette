@@ -4,6 +4,9 @@
 use crate::downloads::model::DownloadKind;
 use std::path::{Path, PathBuf};
 
+/// The folder under the download folder that holds recordings.
+pub const RECORDINGS_DIR: &str = "recordings";
+
 /// Make a filesystem-safe filename component. Replaces path separators and
 /// reserved/control characters with `_`, trims trailing dots/spaces, and caps
 /// length to keep within filesystem limits.
@@ -42,6 +45,8 @@ pub fn extension_from_url(url: &str) -> String {
 /// Derive the final destination path under `root`.
 /// Movies:   `<root>/movies/<title>.<ext>`
 /// Episodes: `<root>/series/<series_title>/<title>.<ext>`
+/// Recordings: `<root>/recordings/<title>.<ext>`. The recording module names
+/// recordings itself, with the start time in the name.
 pub fn derive_dest_path(
     root: &Path,
     kind: DownloadKind,
@@ -57,6 +62,7 @@ pub fn derive_dest_path(
             let show = sanitize_filename(series_title.unwrap_or("Unknown Series"));
             root.join("series").join(show).join(file)
         }
+        DownloadKind::Recording => root.join(RECORDINGS_DIR).join(file),
     }
 }
 

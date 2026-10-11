@@ -171,6 +171,10 @@ pub fn enqueue_record<R: Runtime>(
         finished_at: None,
         keep: false,
         last_played_at: None,
+        source_channel_id: None,
+        start_at: None,
+        end_at: None,
+        program_title: None,
     };
     {
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
@@ -564,6 +568,10 @@ mod tests {
             finished_at: Some(0),
             keep: false,
             last_played_at: None,
+            source_channel_id: None,
+            start_at: None,
+            end_at: None,
+            program_title: None,
         }
     }
 

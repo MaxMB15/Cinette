@@ -61,6 +61,10 @@ mod tests {
             finished_at: Some(finished_at),
             keep: false,
             last_played_at: None,
+            source_channel_id: None,
+            start_at: None,
+            end_at: None,
+            program_title: None,
         }
     }
 
@@ -96,11 +100,21 @@ mod tests {
             DownloadStatus::Downloading,
             DownloadStatus::Failed,
             DownloadStatus::Cancelled,
+            DownloadStatus::Scheduled,
+            DownloadStatus::Recording,
+            DownloadStatus::Missed,
         ] {
             let mut rec = finished("a", 1_000);
             rec.status = status;
             assert_eq!(delete_at(&rec, Some(7)), None, "{status:?}");
         }
+    }
+
+    #[test]
+    fn a_finished_recording_goes_like_any_download() {
+        let mut rec = finished("a", 1_000);
+        rec.kind = DownloadKind::Recording;
+        assert_eq!(delete_at(&rec, Some(7)), Some(1_000 + 7 * DAY_SECS));
     }
 
     #[test]

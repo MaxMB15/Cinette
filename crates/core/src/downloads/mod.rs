@@ -4,5 +4,6 @@
 pub mod ffmpeg;
 pub mod model;
 pub mod paths;
+pub mod recording;
 pub mod redact;
 pub mod retention;

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub enum DownloadKind {
     Movie,
     Episode,
+    /// A recording of a live channel.
+    Recording,
 }
 
 /// Lifecycle of a single download item.
@@ -20,6 +22,12 @@ pub enum DownloadStatus {
     Completed,
     Failed,
     Cancelled,
+    /// A recording waiting for its start time.
+    Scheduled,
+    /// A recording that is running.
+    Recording,
+    /// A recording whose time passed while the app was closed.
+    Missed,
 }
 
 impl DownloadStatus {
@@ -30,6 +38,9 @@ impl DownloadStatus {
             DownloadStatus::Completed => "completed",
             DownloadStatus::Failed => "failed",
             DownloadStatus::Cancelled => "cancelled",
+            DownloadStatus::Scheduled => "scheduled",
+            DownloadStatus::Recording => "recording",
+            DownloadStatus::Missed => "missed",
         }
     }
 
@@ -40,6 +51,9 @@ impl DownloadStatus {
             "completed" => Some(DownloadStatus::Completed),
             "failed" => Some(DownloadStatus::Failed),
             "cancelled" => Some(DownloadStatus::Cancelled),
+            "scheduled" => Some(DownloadStatus::Scheduled),
+            "recording" => Some(DownloadStatus::Recording),
+            "missed" => Some(DownloadStatus::Missed),
             _ => None,
         }
     }
@@ -72,6 +86,20 @@ pub struct DownloadRecord {
     /// this or `finished_at`, whichever is later.
     #[serde(default)]
     pub last_played_at: Option<i64>,
+    /// Recordings only. The live channel being recorded. A recording's own
+    /// `channel_id` is its id, so nothing that looks up downloads by channel,
+    /// such as playing the live channel, ever finds it.
+    #[serde(default)]
+    pub source_channel_id: Option<String>,
+    /// Recordings only. When recording starts, in Unix seconds.
+    #[serde(default)]
+    pub start_at: Option<i64>,
+    /// Recordings only. When recording stops, in Unix seconds.
+    #[serde(default)]
+    pub end_at: Option<i64>,
+    /// Recordings only. The guide's title for the program being recorded.
+    #[serde(default)]
+    pub program_title: Option<String>,
 }
 
 impl DownloadRecord {
@@ -99,10 +127,28 @@ mod tests {
             DownloadStatus::Completed,
             DownloadStatus::Failed,
             DownloadStatus::Cancelled,
+            DownloadStatus::Scheduled,
+            DownloadStatus::Recording,
+            DownloadStatus::Missed,
         ] {
             assert_eq!(DownloadStatus::from_str(s.as_str()), Some(s));
         }
         assert_eq!(DownloadStatus::from_str("bogus"), None);
+    }
+
+    #[test]
+    fn recording_fields_reach_the_frontend_in_camel_case() {
+        let mut r = sample();
+        r.kind = DownloadKind::Recording;
+        r.status = DownloadStatus::Scheduled;
+        r.source_channel_id = Some("c9".into());
+        r.start_at = Some(100);
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["kind"], "recording");
+        assert_eq!(json["status"], "scheduled");
+        assert_eq!(json["sourceChannelId"], "c9");
+        assert_eq!(json["startAt"], 100);
+        assert!(json["endAt"].is_null());
     }
 
     #[test]
@@ -140,6 +186,10 @@ mod tests {
             finished_at: None,
             keep: false,
             last_played_at: None,
+            source_channel_id: None,
+            start_at: None,
+            end_at: None,
+            program_title: None,
         }
     }
 }
