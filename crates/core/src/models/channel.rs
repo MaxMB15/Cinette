@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Channels and the playlist groups they belong to.
+
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A playable entry from a playlist, which may be a live channel, a movie or a
+/// series episode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
     pub id: String,
@@ -31,6 +35,7 @@ pub struct Channel {
     pub episode: Option<u32>,
 }
 
+/// A playlist group and how many channels it holds.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Category {
@@ -40,6 +45,8 @@ pub struct Category {
 }
 
 impl Category {
+    /// Counts the channels in each group, sorted by name. The ids follow hash
+    /// order, so they are only unique within one call and must not be stored.
     pub fn from_channels(channels: &[Channel]) -> Vec<Category> {
         let mut map = std::collections::HashMap::<String, usize>::new();
         for ch in channels {

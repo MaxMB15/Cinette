@@ -44,6 +44,9 @@ const EPG_INTERVAL_OPTIONS = [
 	{ label: "Every 3 days", hours: 72 },
 ];
 
+/** Shown when a guide refreshed by hand had no programs. */
+const EMPTY_GUIDE_MESSAGE = "The guide came back with no programs, so nothing changed.";
+
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
 	<p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
 		{children}
@@ -80,6 +83,7 @@ export const ProviderSettingsModal = ({
 	// EPG refresh-now state
 	const [epgRefreshing, setEpgRefreshing] = useState(false);
 	const [epgRefreshError, setEpgRefreshError] = useState<string | null>(null);
+	const [epgRefreshEmpty, setEpgRefreshEmpty] = useState(false);
 
 	// EPG auto-detect state
 	const [detecting, setDetecting] = useState(false);
@@ -125,8 +129,10 @@ export const ProviderSettingsModal = ({
 	const handleEpgRefreshNow = async () => {
 		setEpgRefreshing(true);
 		setEpgRefreshError(null);
+		setEpgRefreshEmpty(false);
 		try {
-			await refreshEpg(provider.id);
+			const saved = await refreshEpg(provider.id);
+			setEpgRefreshEmpty(saved === 0);
 		} catch (e) {
 			setEpgRefreshError(String(e));
 		} finally {
@@ -492,6 +498,11 @@ export const ProviderSettingsModal = ({
 								</div>
 								{epgRefreshError && (
 									<p className="text-xs text-destructive">{epgRefreshError}</p>
+								)}
+								{epgRefreshEmpty && (
+									<p className="text-xs text-muted-foreground">
+										{EMPTY_GUIDE_MESSAGE}
+									</p>
 								)}
 							</div>
 						</div>

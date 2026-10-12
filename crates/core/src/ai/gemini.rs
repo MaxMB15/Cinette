@@ -1,9 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Optional playlist sorting with Google Gemini. The model's answers are
+//! checked against the real group names, because it sometimes invents them.
+
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::time::Duration;
 
+const API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
+const MODEL: &str = "gemini-3-flash-preview";
+
+/// Google accepts the key as a query parameter too, but a URL ends up in logs
+/// and error messages where a header does not.
+const API_KEY_HEADER: &str = "x-goog-api-key";
+
+/// Sorting a large playlist makes a long prompt, and the model can take minutes
+/// to answer it.
+const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A channel group and the parent category Gemini put it under.
 #[derive(Debug, Clone)]
 pub struct CategorizedGroup {
     pub group_name: String,
@@ -11,33 +27,32 @@ pub struct CategorizedGroup {
     pub sort_order: i64,
 }
 
+/// Gemini's grouping of a playlist, limited to groups the playlist really has.
 #[derive(Debug, Clone)]
 pub struct CategorizationResult {
     pub hierarchy: Vec<CategorizedGroup>,
     pub ungrouped: Vec<String>,
 }
 
+/// A leftover group that Gemini placed in one of the existing categories.
 #[derive(Debug, Clone)]
 pub struct GroupAssignment {
     pub group_name: String,
     pub category: String,
 }
 
-#[derive(Debug)]
+/// Errors from calling Gemini or reading what it sent back.
+#[derive(Debug, thiserror::Error)]
 pub enum GeminiError {
+    /// The response was not the JSON that was asked for.
+    #[error("Parse error: {0}")]
     Parse(String),
+    /// The request failed or Gemini answered with an error status.
+    #[error("API error: {0}")]
     Api(String),
+    /// The JSON was valid but not in the expected shape.
+    #[error("Invalid response: {0}")]
     InvalidResponse(String),
-}
-
-impl std::fmt::Display for GeminiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GeminiError::Parse(s) => write!(f, "Parse error: {}", s),
-            GeminiError::Api(s) => write!(f, "API error: {}", s),
-            GeminiError::InvalidResponse(s) => write!(f, "Invalid response: {}", s),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -77,6 +92,11 @@ struct AssignmentResponse {
     assignments: Vec<AssignmentEntry>,
 }
 
+/// Reads Gemini's grouping of a playlist.
+///
+/// The model sometimes invents group names or lists a group twice, so only
+/// names in `known_groups` are kept, each once. Groups it left out are added to
+/// `ungrouped` so none of the user's channels disappear.
 pub fn parse_categorization_response(
     json: &serde_json::Value,
     known_groups: &[&str],
@@ -134,7 +154,12 @@ pub fn parse_categorization_response(
                 }
             }
         }
-        other => return Err(GeminiError::InvalidResponse(format!("unknown type: {}", other))),
+        other => {
+            return Err(GeminiError::InvalidResponse(format!(
+                "unknown type: {}",
+                other
+            )))
+        }
     }
 
     // Add any known groups not mentioned in the response to ungrouped
@@ -150,9 +175,16 @@ pub fn parse_categorization_response(
         "parsed categorization response"
     );
 
-    Ok(CategorizationResult { hierarchy, ungrouped })
+    Ok(CategorizationResult {
+        hierarchy,
+        ungrouped,
+    })
 }
 
+/// Reads Gemini's placement of leftover groups into existing categories.
+///
+/// Assignments that name an unknown group or a category that doesn't exist are
+/// dropped, because the model sometimes rewords names it was given.
 pub fn parse_assignment_response(
     json: &serde_json::Value,
     known_groups: &[&str],
@@ -203,6 +235,9 @@ pub fn parse_assignment_response(
     Ok(assignments)
 }
 
+/// Builds the prompt that asks Gemini to sort a playlist's groups into
+/// categories. A few channel names per group tell the model what each group
+/// holds when its name alone doesn't.
 pub fn build_categorization_prompt(
     content_type: &str,
     groups_with_samples: &[(&str, Vec<&str>)],
@@ -242,10 +277,9 @@ pub fn build_categorization_prompt(
     prompt
 }
 
-pub fn build_categorization_prompt_no_groups(
-    content_type: &str,
-    sample_titles: &[&str],
-) -> String {
+/// Builds the prompt for a playlist with no groups, which asks Gemini to make
+/// groups from a sample of titles instead.
+pub fn build_categorization_prompt_no_groups(content_type: &str, sample_titles: &[&str]) -> String {
     let mut prompt = format!(
         "Organize these IPTV content titles into navigable groups.\n\
          Content type: {}\n\n\
@@ -269,13 +303,16 @@ pub fn build_categorization_prompt_no_groups(
     prompt
 }
 
+/// Builds the prompt for a second pass over groups the first pass left out.
+/// Gemini may only use the categories it already made, so the layout the user
+/// sees doesn't change.
 pub fn build_fix_uncategorized_prompt(
     uncategorized_groups: &[(&str, Vec<&str>)],
     existing_categories: &[&str],
 ) -> String {
     let mut prompt = String::from(
         "You are assigning uncategorized IPTV channel groups to existing categories.\n\n\
-         Existing categories:\n"
+         Existing categories:\n",
     );
     for cat in existing_categories {
         prompt.push_str(&format!("- \"{}\"\n", cat));
@@ -299,11 +336,10 @@ pub fn build_fix_uncategorized_prompt(
     prompt
 }
 
+/// Sends a prompt to Gemini and returns the JSON it answered with.
+///
+/// The request asks for a JSON reply, so text that doesn't parse is an error.
 pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Value, GeminiError> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
-        api_key
-    );
     let body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }],
         "generationConfig": {
@@ -311,19 +347,16 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
         }
     });
 
-    // Log full prompt
-    tracing::info!(
-        prompt_len = prompt.len(),
-        prompt = %prompt,
-        "sending Gemini API request"
-    );
+    tracing::info!(prompt_len = prompt.len(), "sending Gemini API request");
+    // Prompts list every group name in the playlist, so they're logged only at
+    // the debug level. The desktop app turns that level on for mvp-core.
+    tracing::debug!(prompt = %prompt, "Gemini prompt");
 
-    let client = reqwest::Client::new();
-    let response = client.post(&url).json(&body).send().await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Gemini API request failed");
-            GeminiError::Api(e.to_string())
-        })?;
+    let response = generate_request(api_key, &body).send().await.map_err(|e| {
+        let err = request_error(e);
+        tracing::error!(error = %err, "Gemini API request failed");
+        err
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -332,11 +365,11 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
         return Err(GeminiError::Api(format!("HTTP {}: {}", status, text)));
     }
 
-    let resp_json: serde_json::Value = response.json().await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to parse Gemini response as JSON");
-            GeminiError::Parse(e.to_string())
-        })?;
+    let resp_json: serde_json::Value = response.json().await.map_err(|e| {
+        let e = e.without_url();
+        tracing::error!(error = %e, "failed to parse Gemini response as JSON");
+        GeminiError::Parse(e.to_string())
+    })?;
 
     let text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
@@ -345,27 +378,48 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
             GeminiError::Parse("no text in response".into())
         })?;
 
-    tracing::info!(response_text = %text, "Gemini API response text");
+    tracing::debug!(response_text = %text, "Gemini API response text");
 
-    let parsed: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| {
-            tracing::error!(error = %e, raw_text = %text, "LLM returned invalid JSON");
-            GeminiError::Parse(format!("LLM returned invalid JSON: {}", e))
-        })?;
+    let parsed: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+        tracing::error!(error = %e, raw_text = %text, "LLM returned invalid JSON");
+        GeminiError::Parse(format!("LLM returned invalid JSON: {}", e))
+    })?;
 
     tracing::info!("Gemini API call successful");
     Ok(parsed)
 }
 
+/// Checks a key by listing models, which is quicker and cheaper than a prompt.
+/// Returns false when Google answers with an error status, and an error only
+/// when the request itself fails.
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models?key={}",
-        api_key
-    );
-    let client = reqwest::Client::new();
-    let response = client.get(&url).send().await
-        .map_err(|e| GeminiError::Api(e.to_string()))?;
-    Ok(response.status().is_success())
+    match list_models_request(api_key).send().await {
+        Ok(response) => Ok(response.status().is_success()),
+        // A key with characters a header can't carry is no real key.
+        Err(e) if e.is_builder() => Ok(false),
+        Err(e) => Err(request_error(e)),
+    }
+}
+
+// Keys are pasted in, often with a trailing newline, and a header can't carry one.
+fn generate_request(api_key: &str, body: &serde_json::Value) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .post(format!("{API_BASE}/models/{MODEL}:generateContent"))
+        .header(API_KEY_HEADER, api_key.trim())
+        .json(body)
+        .timeout(GENERATE_TIMEOUT)
+}
+
+fn list_models_request(api_key: &str) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .get(format!("{API_BASE}/models"))
+        .header(API_KEY_HEADER, api_key.trim())
+}
+
+// Request URLs can carry the API key, so they are dropped before the error can
+// reach a log or the UI.
+fn request_error(e: reqwest::Error) -> GeminiError {
+    GeminiError::Api(e.without_url().to_string())
 }
 
 #[cfg(test)]
@@ -382,10 +436,16 @@ mod tests {
             ],
             "ungrouped": ["Misc"]
         });
-        let result = parse_categorization_response(&json, &["US: Sports", "US: News", "UK: Drama", "Misc"]).unwrap();
+        let result =
+            parse_categorization_response(&json, &["US: Sports", "US: News", "UK: Drama", "Misc"])
+                .unwrap();
         assert_eq!(result.hierarchy.len(), 3);
         assert_eq!(result.ungrouped, vec!["Misc"]);
-        let sports = result.hierarchy.iter().find(|h| h.group_name == "US: Sports").unwrap();
+        let sports = result
+            .hierarchy
+            .iter()
+            .find(|h| h.group_name == "US: Sports")
+            .unwrap();
         assert_eq!(sports.super_category.as_deref(), Some("United States"));
     }
 
@@ -437,11 +497,9 @@ mod tests {
                 { "group": "FakeGroup", "category": "Western Europe" }
             ]
         });
-        let result = parse_assignment_response(
-            &json,
-            &["Belgium", "Norway"],
-            &["Western Europe", "Nordic"],
-        ).unwrap();
+        let result =
+            parse_assignment_response(&json, &["Belgium", "Norway"], &["Western Europe", "Nordic"])
+                .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].group_name, "Belgium");
         assert_eq!(result[0].category, "Western Europe");
@@ -461,5 +519,56 @@ mod tests {
         assert!(prompt.contains("Western Europe"));
         assert!(prompt.contains("Only assign a group if it CLEARLY belongs"));
         assert!(prompt.contains("Do NOT create new categories"));
+    }
+
+    #[test]
+    fn a_pasted_key_loses_its_surrounding_whitespace() {
+        let list = list_models_request("  SECRET\n").build().unwrap();
+        assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
+    }
+
+    #[tokio::test]
+    async fn a_key_no_header_can_carry_is_invalid() {
+        // The bad character stops the request before it reaches the network.
+        assert!(!test_gemini_key("SEC\nRET").await.unwrap());
+    }
+
+    #[test]
+    fn request_errors_leave_out_the_request_url() {
+        let err = request_error(crate::http::error_with_url(
+            "unix:/v1beta/models?key=SECRET",
+        ));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    #[test]
+    fn the_api_key_goes_in_a_header() {
+        let generate = generate_request("SECRET", &serde_json::json!({}))
+            .build()
+            .unwrap();
+        assert_eq!(
+            generate.url().as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent"
+        );
+        assert_eq!(generate.headers()[API_KEY_HEADER], "SECRET");
+        assert_eq!(generate.timeout(), Some(&GENERATE_TIMEOUT));
+
+        let list = list_models_request("SECRET").build().unwrap();
+        assert_eq!(
+            list.url().as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+        assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
+    }
+
+    #[test]
+    fn errors_keep_their_messages() {
+        assert_eq!(GeminiError::Parse("x".into()).to_string(), "Parse error: x");
+        assert_eq!(GeminiError::Api("x".into()).to_string(), "API error: x");
+        assert_eq!(
+            GeminiError::InvalidResponse("x".into()).to_string(),
+            "Invalid response: x"
+        );
     }
 }

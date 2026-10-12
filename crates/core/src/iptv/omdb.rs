@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Movie and series details from OMDb, looked up by title.
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Movie or series details from OMDb. Ratings stay as the text OMDb sends,
+/// because the UI shows them as they are.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OmdbData {
@@ -22,19 +26,30 @@ pub struct OmdbData {
     pub imdb_votes: Option<String>,
 }
 
+/// Errors from an OMDb lookup.
 #[derive(Debug, Error)]
 pub enum OmdbError {
+    /// The request failed or the server answered with an error status.
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
+    /// OMDb answered but reported an error, such as a title it doesn't know.
     #[error("OMDB API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
 }
 
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for OmdbError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
+}
+
 /// Raw OMDB API response shape (for deserialization only).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct OmdbApiResponse {
     #[serde(rename = "Response")]
     response: String,
@@ -78,12 +93,21 @@ struct OmdbRating {
 
 /// Convert an OMDB "N/A" string to None.
 fn na_to_none(s: Option<String>) -> Option<String> {
-    s.and_then(|v| if v == "N/A" || v.is_empty() { None } else { Some(v) })
+    s.and_then(|v| {
+        if v == "N/A" || v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    })
 }
 
 /// Extract the Rotten Tomatoes rating from the Ratings array.
 fn extract_rotten_tomatoes(ratings: Option<Vec<OmdbRating>>) -> Option<String> {
-    ratings?.into_iter().find(|r| r.source == "Rotten Tomatoes").map(|r| r.value)
+    ratings?
+        .into_iter()
+        .find(|r| r.source == "Rotten Tomatoes")
+        .map(|r| r.value)
 }
 
 /// Strip a trailing ` (YYYY)` year suffix from a title if present.
@@ -113,14 +137,18 @@ fn strip_trailing_year(title: &str) -> Option<&str> {
 /// Parse an OMDB API JSON response (as serde_json::Value) into OmdbData.
 /// Separated from the HTTP call so it can be unit-tested without network access.
 pub fn parse_omdb_response(json: serde_json::Value) -> Result<OmdbData, OmdbError> {
-    let resp: OmdbApiResponse = serde_json::from_value(json)
-        .map_err(|e| OmdbError::Parse(e.to_string()))?;
+    let resp: OmdbApiResponse =
+        serde_json::from_value(json).map_err(|e| OmdbError::Parse(e.to_string()))?;
 
     if resp.response != "True" {
-        return Err(OmdbError::Api(resp.error.unwrap_or_else(|| "Unknown OMDB error".into())));
+        return Err(OmdbError::Api(
+            resp.error.unwrap_or_else(|| "Unknown OMDB error".into()),
+        ));
     }
 
-    let title = resp.title.ok_or_else(|| OmdbError::Parse("Missing title".into()))?;
+    let title = resp
+        .title
+        .ok_or_else(|| OmdbError::Parse("Missing title".into()))?;
 
     Ok(OmdbData {
         title,
@@ -140,15 +168,8 @@ pub fn parse_omdb_response(json: serde_json::Value) -> Result<OmdbData, OmdbErro
 }
 
 /// Perform an OMDB API lookup for the given title.
-async fn do_fetch(
-    client: &reqwest::Client,
-    title: &str,
-    content_type: &str,
-    api_key: &str,
-) -> Result<OmdbData, OmdbError> {
-    let response = client
-        .get("https://www.omdbapi.com/")
-        .query(&[("t", title), ("type", content_type), ("plot", "full"), ("apikey", api_key)])
+async fn do_fetch(title: &str, content_type: &str, api_key: &str) -> Result<OmdbData, OmdbError> {
+    let response = lookup_request(title, content_type, api_key)
         .send()
         .await?
         .json::<serde_json::Value>()
@@ -156,29 +177,52 @@ async fn do_fetch(
     parse_omdb_response(response)
 }
 
+// Keys are pasted in, often with a trailing newline, which OMDb would reject.
+fn lookup_request(title: &str, content_type: &str, api_key: &str) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .get("https://www.omdbapi.com/")
+        .query(&[
+            ("t", title),
+            ("type", content_type),
+            ("plot", "full"),
+            ("apikey", api_key.trim()),
+        ])
+}
+
 /// Fetch OMDB data for a title. `content_type` should be `"movie"` or `"series"`.
 ///
 /// If the title matches the pattern `Title (Year)` (e.g. `"Inception (2010)"`), the year
 /// suffix is stripped and OMDB is queried with the bare title first. If that lookup fails,
 /// the full title is tried as a fallback.
-pub async fn fetch_omdb(title: &str, content_type: &str, api_key: &str) -> Result<OmdbData, OmdbError> {
-    let client = reqwest::Client::new();
-
+pub async fn fetch_omdb(
+    title: &str,
+    content_type: &str,
+    api_key: &str,
+) -> Result<OmdbData, OmdbError> {
     if let Some(stripped) = strip_trailing_year(title) {
-        match do_fetch(&client, stripped, content_type, api_key).await {
+        match do_fetch(stripped, content_type, api_key).await {
             Ok(data) => return Ok(data),
             Err(OmdbError::Api(_)) => { /* fall through to full title */ }
             Err(e) => return Err(e),
         }
     }
 
-    do_fetch(&client, title, content_type, api_key).await
+    do_fetch(title, content_type, api_key).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spaces_around_the_key_are_ignored() {
+        let request = lookup_request("Inception", "movie", " KEY\n")
+            .build()
+            .unwrap();
+        let key = request.url().query_pairs().find(|(k, _)| k == "apikey");
+        assert_eq!(key.unwrap().1, "KEY");
+    }
 
     fn full_response() -> serde_json::Value {
         json!({
@@ -206,8 +250,14 @@ mod tests {
     #[test]
     fn test_strip_trailing_year() {
         assert_eq!(strip_trailing_year("Inception (2010)"), Some("Inception"));
-        assert_eq!(strip_trailing_year("Breaking Bad (2008)"), Some("Breaking Bad"));
-        assert_eq!(strip_trailing_year("The Dark Knight (2008)"), Some("The Dark Knight"));
+        assert_eq!(
+            strip_trailing_year("Breaking Bad (2008)"),
+            Some("Breaking Bad")
+        );
+        assert_eq!(
+            strip_trailing_year("The Dark Knight (2008)"),
+            Some("The Dark Knight")
+        );
         assert_eq!(strip_trailing_year("Plain Title"), None);
         assert_eq!(strip_trailing_year("Avatar"), None);
         assert_eq!(strip_trailing_year("Movie (I)"), None); // roman numeral, not year
@@ -224,7 +274,10 @@ mod tests {
         assert_eq!(data.director.as_deref(), Some("Christopher Nolan"));
         assert_eq!(data.actors.as_deref(), Some("Christian Bale, Heath Ledger"));
         assert!(data.plot.is_some());
-        assert_eq!(data.poster_url.as_deref(), Some("https://example.com/poster.jpg"));
+        assert_eq!(
+            data.poster_url.as_deref(),
+            Some("https://example.com/poster.jpg")
+        );
         assert_eq!(data.imdb_rating.as_deref(), Some("9.0"));
         assert_eq!(data.rotten_tomatoes.as_deref(), Some("94%"));
         assert_eq!(data.imdb_id.as_deref(), Some("tt0468569"));
@@ -369,5 +422,12 @@ mod tests {
         let data = parse_omdb_response(response).unwrap();
         assert!(data.imdb_id.is_none());
         assert!(data.imdb_votes.is_none());
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = OmdbError::from(crate::http::error_with_url("unix:/?apikey=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }
