@@ -26,6 +26,11 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 pub struct MpvState {
     inner: Mutex<MpvEngine>,
     renderer: Mutex<Option<Box<dyn PlatformRenderer>>>,
+    /// Where the frontend last put the video, in logical pixels, as x, y,
+    /// width and height. Each load makes a new renderer, and the frontend
+    /// only reports the player area when it moves, so a new renderer starts
+    /// here.
+    bounds: Mutex<Option<[f64; 4]>>,
     fallback_active: AtomicBool,
     /// Whether the next mpv instance may use hardware decoding. Set from the
     /// Settings toggle on every `load()`; mpv is recreated per load, so a
@@ -58,6 +63,7 @@ impl MpvState {
         Self {
             inner: Mutex::new(MpvEngine::new()),
             renderer: Mutex::new(None),
+            bounds: Mutex::new(None),
             fallback_active: AtomicBool::new(false),
             hwdec_enabled: AtomicBool::new(true),
             idle_inhibitor: IdleInhibitor::new(),
@@ -132,6 +138,23 @@ impl MpvState {
         with_hwdec(base, self.hwdec_enabled.load(Ordering::Acquire))
     }
 
+    /// Makes `renderer` the active one and moves its surface to where the
+    /// frontend last put the video. Without this, reloading the same stream
+    /// leaves the new surface at its starting frame, which is the whole
+    /// window on macOS and the top left corner on Linux.
+    ///
+    /// The bounds are read with the renderer locked, so a `set_bounds` that
+    /// lands in between still reaches the new renderer.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    fn install_renderer(&self, mut renderer: Box<dyn PlatformRenderer>) {
+        let mut active = lock_or_recover(&self.renderer);
+        let bounds = *lock_or_recover(&self.bounds);
+        if let Some([x, y, w, h]) = bounds {
+            renderer.set_frame(x, y, w, h);
+        }
+        *active = Some(renderer);
+    }
+
     /// Helper: spawn the auto-reconnect monitor for the currently loaded URL.
     /// `client` may be `None` if the engine failed to create one — we just log
     /// and continue without auto-recovery in that case rather than failing the
@@ -199,10 +222,7 @@ impl MpvState {
             return self.launch_fallback(url, start_pos, app, &e);
         }
 
-        {
-            let mut renderer = lock_or_recover(&self.renderer);
-            *renderer = Some(Box::new(gl_renderer));
-        }
+        self.install_renderer(Box::new(gl_renderer));
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
@@ -247,10 +267,7 @@ impl MpvState {
             return self.launch_fallback(url, start_pos, app, &e);
         }
 
-        {
-            let mut renderer = lock_or_recover(&self.renderer);
-            *renderer = Some(Box::new(gl_renderer));
-        }
+        self.install_renderer(Box::new(gl_renderer));
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
@@ -307,10 +324,7 @@ impl MpvState {
             return Err(e);
         }
 
-        {
-            let mut renderer = lock_or_recover(&self.renderer);
-            *renderer = Some(Box::new(metal_renderer));
-        }
+        self.install_renderer(Box::new(metal_renderer));
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
@@ -389,14 +403,19 @@ impl MpvState {
         Ok(engine.create_event_client("reconnect-watcher").ok())
     }
 
-    /// Reposition the video surface to a CSS-pixel rect reported by the frontend.
+    /// Shows or hides the video surface without stopping playback.
     pub fn set_visible(&self, visible: bool) {
         if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
             r.set_visible(visible);
         }
     }
 
+    /// Moves the video surface to a rect in CSS pixels reported by the
+    /// frontend, and keeps it for the renderer the next load makes.
     pub fn set_bounds(&self, x: f64, y: f64, w: f64, h: f64) {
+        // Stored before the renderer is locked, never while it is, so this
+        // can't deadlock with `install_renderer`.
+        *lock_or_recover(&self.bounds) = Some([x, y, w, h]);
         if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
             r.set_frame(x, y, w, h);
         }
