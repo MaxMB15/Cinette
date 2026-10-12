@@ -41,6 +41,14 @@ const advance = (ms: number) => {
 	});
 };
 
+type Load = ReturnType<typeof deferred<string | null>>;
+
+/** The ways a load that comes back late can end. */
+const LATE_LOADS = [
+	["resolves", (load: Load) => load.resolve("old-key")],
+	["fails", (load: Load) => load.reject(new Error("store"))],
+] as const;
+
 afterEach(() => {
 	vi.useRealTimers();
 });
@@ -97,6 +105,83 @@ describe("useApiKey loading", () => {
 		type(view, "other-key");
 
 		expect(service.load).toHaveBeenCalledOnce();
+	});
+
+	it.each(LATE_LOADS)("ignores a load that %s after a save", async (_, settle) => {
+		const load = deferred<string | null>();
+		const service = makeService();
+		service.load.mockReturnValue(load.promise);
+		const view = renderHook(() => useApiKey(service));
+		type(view, "new-key");
+		await save(view);
+
+		await act(async () => settle(load));
+		expect(view.result.current).toMatchObject({
+			value: "new-key",
+			saved: "new-key",
+			loadFailed: false,
+			dirty: false,
+		});
+	});
+
+	it("still takes the saved key when it loads after a failed save", async () => {
+		const load = deferred<string | null>();
+		const service = makeService();
+		service.load.mockReturnValue(load.promise);
+		service.save.mockRejectedValue(new Error("disk full"));
+		const view = renderHook(() => useApiKey(service));
+		type(view, "new-key");
+		await save(view);
+
+		await act(async () => load.resolve("saved-key"));
+		expect(view.result.current).toMatchObject({
+			value: "new-key",
+			saved: "saved-key",
+			saveStatus: "error",
+		});
+	});
+
+	it.each(LATE_LOADS)(
+		"ignores a load from a service it no longer uses when it %s",
+		async (_, settle) => {
+			const oldLoad = deferred<string | null>();
+			const oldService = makeService();
+			oldService.load.mockReturnValue(oldLoad.promise);
+			const newService = makeService("new-key");
+			const view = renderHook(({ service }) => useApiKey(service), {
+				initialProps: { service: oldService },
+			});
+			view.rerender({ service: newService });
+			await act(async () => {});
+
+			await act(async () => settle(oldLoad));
+			expect(view.result.current).toMatchObject({
+				value: "new-key",
+				saved: "new-key",
+				loadFailed: false,
+			});
+		}
+	);
+
+	it("doesn't count spaces around the saved key as a change", async () => {
+		const view = await renderKey(makeService("saved-key"));
+		type(view, " saved-key  ");
+		expect(view.result.current.dirty).toBe(false);
+	});
+
+	it("lets a blank field be saved when the saved key can't be read, which removes it", async () => {
+		const service = makeService();
+		service.load.mockRejectedValue(new Error("store"));
+		const view = await renderKey(service);
+		expect(view.result.current.dirty).toBe(true);
+
+		await save(view);
+		expect(service.save).toHaveBeenCalledExactlyOnceWith("");
+		expect(view.result.current).toMatchObject({
+			loadFailed: false,
+			dirty: false,
+			saveStatus: "removed",
+		});
 	});
 });
 
@@ -300,6 +385,42 @@ describe("useApiKey saving", () => {
 		});
 
 		expect(service.onSaved).toHaveBeenCalledExactlyOnceWith("new-key");
+	});
+
+	it("starts no Saved timer for a save that lands after the field has gone", async () => {
+		vi.useFakeTimers();
+		const pending = deferred();
+		const service = makeService();
+		service.save.mockReturnValue(pending.promise);
+		const view = await renderKey(service);
+		type(view, "new-key");
+
+		let saving!: Promise<void>;
+		act(() => {
+			saving = view.result.current.save();
+		});
+		view.unmount();
+		await act(async () => {
+			pending.resolve();
+			await saving;
+		});
+
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("shows Saved even when reporting the save throws", async () => {
+		const service = makeService();
+		service.onSaved.mockImplementation(() => {
+			throw new Error("listener");
+		});
+		const view = await renderKey(service);
+		type(view, "new-key");
+
+		let thrown: unknown;
+		await act(() => view.result.current.save().catch((e: unknown) => void (thrown = e)));
+
+		expect(thrown).toEqual(new Error("listener"));
+		expect(view.result.current.saveStatus).toBe("saved");
 	});
 
 	it("stops the Saved timer when the field goes", async () => {

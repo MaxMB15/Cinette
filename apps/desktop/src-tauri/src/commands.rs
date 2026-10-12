@@ -602,7 +602,7 @@ pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Res
     save_key(&app, OMDB_STORE_FILE, OMDB_API_KEY, &key)
 }
 
-/// Checks an OMDb API key by looking up a well known movie with it. The key
+/// Checks an OMDb API key by looking up a well-known movie with it. The key
 /// doesn't have to be saved, and the lookup skips the cache.
 #[command]
 pub async fn test_omdb_api_key(key: String) -> Result<bool, String> {

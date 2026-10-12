@@ -50,6 +50,8 @@ const KeyStatus = ({ field, validNote }: { field: ApiKeyState; validNote?: strin
 			</StatusLine>
 		);
 	}
+	// The buttons show these. The status line says them for screen readers.
+	if (field.saveStatus === "saving") return <span className="sr-only">Saving the key</span>;
 	switch (field.testStatus) {
 		case "testing":
 			return <span className="sr-only">Checking the key</span>;
@@ -79,13 +81,12 @@ const KeyStatus = ({ field, validNote }: { field: ApiKeyState; validNote?: strin
 			</StatusLine>
 		);
 	}
-	// The button shows these. The status line says them for screen readers.
 	if (field.saveStatus === "saved") return <span className="sr-only">Key saved</span>;
 	if (field.saveStatus === "removed") return <span className="sr-only">Key removed</span>;
 	return null;
 };
 
-/** What the Save button says. Its name always ends with the key's name, for screen readers. */
+/** What the Save button says. Save and Remove name the key for screen readers. */
 const SaveLabel = ({ field, name }: { field: ApiKeyState; name: string }) => {
 	switch (field.saveStatus) {
 		case "saving":
@@ -128,8 +129,7 @@ export const ApiKeyField = ({
 	const inputId = useId();
 	const descriptionId = useId();
 	const statusId = useId();
-	// Saving again while Saved shows restarts its timer and keeps focus on the
-	// button, rather than disabling the button under the pointer.
+	// Pressing Saved or Removed saves again, which restarts its timer.
 	const canSave = field.dirty || field.saveStatus === "saved" || field.saveStatus === "removed";
 
 	const handleSubmit = (e: FormEvent) => {
@@ -179,13 +179,16 @@ export const ApiKeyField = ({
 					</button>
 				</div>
 				{/* While busy, the buttons stay enabled so they keep focus, and the hook
-				    ignores clicks. aria-disabled tells screen readers. */}
+				    ignores clicks. Save also stays enabled when it has nothing to do, so
+				    it keeps focus when Saved turns back into Save. aria-disabled tells
+				    screen readers. */}
 				<Button
 					type="submit"
 					size="sm"
 					variant="secondary"
-					disabled={!canSave}
-					aria-disabled={field.saveStatus === "saving" || undefined}
+					aria-disabled={!canSave || field.saveStatus === "saving" || undefined}
+					// Dim, with no hover or pointer, as a disabled button looks.
+					className={canSave ? undefined : "cursor-default opacity-50 hover:bg-secondary"}
 				>
 					<SaveLabel field={field} name={name} />
 				</Button>

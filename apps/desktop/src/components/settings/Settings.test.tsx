@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getVersion } from "@tauri-apps/api/app";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { SAVED_MS } from "@/hooks/useApiKey";
 import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
 import { OMDB_KEY_FOCUS } from "@/hooks/useScrollToOmdbKey";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
@@ -31,6 +32,7 @@ import {
 } from "@/lib/tauri";
 import type { LayoutMode, Platform } from "@/lib/types";
 import { fakeUpdate, makeUpdateState } from "@/test/app-fixtures";
+import { deferred } from "@/test/deferred";
 import { REPO_URL } from "./LegalNotices";
 import { Settings } from "./Settings";
 
@@ -212,7 +214,7 @@ describe("Settings when it opens", () => {
 		).toHaveAttribute("href", "https://aistudio.google.com/apikey");
 		expect(screen.queryByLabelText("OpenSubtitles API key")).toBeNull();
 		expect(screen.queryByText("Uses your OMDb key")).toBeNull();
-		expect(keyButton("OMDb", "Save")).toBeDisabled();
+		expect(keyButton("OMDb", "Save")).toHaveAttribute("aria-disabled", "true");
 		expect(keyButton("OMDb", "Test")).toBeDisabled();
 	});
 
@@ -373,14 +375,21 @@ describe("Settings OpenSubtitles key", () => {
 	});
 
 	it("stays, with focus on its button, when its own key is removed", async () => {
+		vi.useFakeTimers();
 		vi.mocked(getOpenSubtitlesApiKey).mockResolvedValue("subs-test-key");
 		await renderSettings();
 		typeInto(keyInput("OpenSubtitles"), "");
 		const remove = keyButton("OpenSubtitles", "Remove");
 		remove.focus();
 		await click(remove);
-
 		expect(keyField("OpenSubtitles").getByRole("button", { name: "Removed" })).toHaveFocus();
+
+		// Removed turns back into Save, with nothing left to save.
+		advance(SAVED_MS);
+		const save = keyButton("OpenSubtitles", "Save");
+		expect(save).toHaveAttribute("aria-disabled", "true");
+		expect(save).toBeEnabled();
+		expect(save).toHaveFocus();
 	});
 
 	it("stays when the OMDb key is removed", async () => {
@@ -701,6 +710,37 @@ describe("Settings simultaneous downloads", () => {
 
 		expect(setDownloadConcurrency).not.toHaveBeenCalled();
 		expect(concurrencyInput()).toHaveValue(4);
+	});
+
+	it("puts back the last number saved, not the one it opened with", async () => {
+		await renderSettings();
+		await act(async () => {
+			typeInto(concurrencyInput(), "6");
+		});
+		typeInto(concurrencyInput(), "");
+		fireEvent.blur(concurrencyInput());
+		expect(concurrencyInput()).toHaveValue(6);
+
+		await act(async () => {
+			typeInto(concurrencyInput(), "4");
+		});
+		expect(vi.mocked(setDownloadConcurrency).mock.calls).toEqual([[6], [4]]);
+	});
+
+	it("saves one number at a time, so the last one typed sticks", async () => {
+		const first = deferred();
+		vi.mocked(setDownloadConcurrency).mockReturnValueOnce(first.promise);
+		await renderSettings();
+
+		await act(async () => {
+			typeInto(concurrencyInput(), "1");
+			typeInto(concurrencyInput(), "10");
+		});
+		expect(setDownloadConcurrency).toHaveBeenCalledExactlyOnceWith(1);
+
+		await act(async () => first.reject(new Error("store")));
+		expect(vi.mocked(setDownloadConcurrency).mock.calls).toEqual([[1], [10]]);
+		expect(concurrencyInput()).toHaveValue(10);
 	});
 });
 

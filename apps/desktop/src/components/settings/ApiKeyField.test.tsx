@@ -119,13 +119,14 @@ describe("ApiKeyField Save", () => {
 		],
 		["a save just worked", { saveStatus: "saved" }, "Saved", true],
 		["a removal just worked", { saveStatus: "removed" }, "Removed", true],
-	] as const)("is called %s", (_, state, name, enabled) => {
+	] as const)("is called %s", (_, state, name, available) => {
 		renderField(state);
 		const button = screen.getByRole("button", { name });
 		expect(button).toHaveAttribute("type", "submit");
-		if (enabled) expect(button).toBeEnabled();
-		else expect(button).toBeDisabled();
-		expect(button).not.toHaveAttribute("aria-disabled");
+		// It stays enabled either way, so it never drops focus.
+		expect(button).toBeEnabled();
+		if (available) expect(button).not.toHaveAttribute("aria-disabled");
+		else expect(button).toHaveAttribute("aria-disabled", "true");
 	});
 
 	it("says Saving and tells screen readers it's busy while a save runs", () => {
@@ -135,9 +136,10 @@ describe("ApiKeyField Save", () => {
 		expect(saveButton()).toHaveAttribute("aria-disabled", "true");
 	});
 
-	it("saves when the form is sent, as Enter in the field does", () => {
+	it("saves when the form is sent, as Enter in the field does, and stays on the page", () => {
 		const field = renderField({ dirty: true, value: "new-key" });
-		fireEvent.submit(input());
+		// fireEvent returns false when the default action was stopped.
+		expect(fireEvent.submit(input())).toBe(false);
 		expect(field.save).toHaveBeenCalledOnce();
 	});
 
@@ -147,9 +149,10 @@ describe("ApiKeyField Save", () => {
 		expect(field.save).toHaveBeenCalledOnce();
 	});
 
-	it("doesn't save when nothing has changed", () => {
+	it("doesn't save when nothing has changed, from Enter or the button", () => {
 		const field = renderField({ value: "saved-key", saved: "saved-key" });
-		fireEvent.submit(input());
+		expect(fireEvent.submit(input())).toBe(false);
+		fireEvent.click(saveButton());
 		expect(field.save).not.toHaveBeenCalled();
 	});
 });
@@ -178,6 +181,7 @@ describe("ApiKeyField Test", () => {
 describe("ApiKeyField status", () => {
 	it.each([
 		["a save failed", { saveStatus: "error" }, "Couldn't save the key. Try again."],
+		["a save is running", { saveStatus: "saving" }, "Saving the key"],
 		["the key is valid", { testStatus: "valid" }, "Valid key"],
 		["the key is invalid", { testStatus: "invalid" }, "Invalid key"],
 		[

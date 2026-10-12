@@ -33,7 +33,10 @@ export interface ApiKeyState {
 	loadFailed: boolean;
 	saveStatus: KeySaveStatus;
 	testStatus: KeyTestStatus;
-	/** Whether the field differs from the saved key, so Save has something to do. */
+	/**
+	 * Whether Save has something to do. It does when the field differs from
+	 * the saved key, and always when the saved key couldn't be read.
+	 */
 	dirty: boolean;
 	setValue: (value: string) => void;
 	save: () => Promise<void>;
@@ -62,6 +65,8 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 	const generation = useRef(0);
 	const edited = useRef(false);
 	const saving = useRef(false);
+	// Once a save lands, the key that was loading is out of date.
+	const savedOnce = useRef(false);
 	const alive = useRef(true);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -72,19 +77,24 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 
 	useEffect(() => {
 		alive.current = true;
+		// Each run drops its own load when it ends, so a load from an earlier
+		// run, or from Strict Mode's first one, can't land after a newer one.
+		let current = true;
+		const isStale = () => !current || savedOnce.current;
 		service
 			.load()
 			.then((key) => {
-				if (!alive.current) return;
+				if (isStale()) return;
 				const stored = key?.trim() ?? "";
 				setSaved(stored);
 				// Text typed while the key loaded stays.
 				if (!edited.current) setValueState(stored);
 			})
 			.catch(() => {
-				if (alive.current) setLoadFailed(true);
+				if (!isStale()) setLoadFailed(true);
 			});
 		return () => {
+			current = false;
 			alive.current = false;
 			clearTimer();
 		};
@@ -109,23 +119,28 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		setSaveStatus("saving");
 		try {
 			await service.save(key);
-			service.onSaved?.(key);
-			if (!alive.current) return;
-			setSaved(key);
-			setLoadFailed(false);
-			if (generation.current !== started) {
-				setSaveStatus("idle");
-				return;
-			}
-			setValueState(key);
-			setTestStatus("idle");
-			setSaveStatus(key ? "saved" : "removed");
-			timer.current = setTimeout(() => setSaveStatus("idle"), SAVED_MS);
+			savedOnce.current = true;
 		} catch {
 			if (alive.current) setSaveStatus(generation.current === started ? "error" : "idle");
+			return;
 		} finally {
 			saving.current = false;
 		}
+		if (alive.current) {
+			setSaved(key);
+			setLoadFailed(false);
+			if (generation.current === started) {
+				setValueState(key);
+				// The status line says the key saved, which a check result would
+				// cover up. The saved key can be checked again.
+				setTestStatus("idle");
+				setSaveStatus(key ? "saved" : "removed");
+				timer.current = setTimeout(() => setSaveStatus("idle"), SAVED_MS);
+			} else {
+				setSaveStatus("idle");
+			}
+		}
+		service.onSaved?.(key);
 	}, [service, value]);
 
 	const test = useCallback(async () => {
@@ -148,7 +163,7 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		loadFailed,
 		saveStatus,
 		testStatus,
-		dirty: value.trim() !== saved,
+		dirty: loadFailed || value.trim() !== saved,
 		setValue,
 		save,
 		test,

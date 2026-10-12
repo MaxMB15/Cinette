@@ -390,14 +390,28 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
 }
 
 /// Checks a key by listing models, which is quicker and cheaper than a prompt.
-/// Returns false when Google answers with an error status, and an error only
-/// when the request itself fails.
+/// Returns whether Google takes the key, or an error when the request fails or
+/// the answer says nothing about the key.
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
     match list_models_request(api_key).send().await {
-        Ok(response) => Ok(response.status().is_success()),
+        Ok(response) => key_accepted(response.status()),
         // A key with characters a header can't carry is no real key.
         Err(e) if e.is_builder() => Ok(false),
         Err(e) => Err(request_error(e)),
+    }
+}
+
+/// What the status of a models list says about the key. Google turns down a
+/// bad key with 400, and a key it won't serve with 401 or 403. A 429 means it
+/// knew the key and is limiting it. Any other error, such as a 503, is about
+/// the service and not the key.
+fn key_accepted(status: reqwest::StatusCode) -> Result<bool, GeminiError> {
+    use reqwest::StatusCode;
+    match status {
+        StatusCode::TOO_MANY_REQUESTS => Ok(true),
+        StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Ok(false),
+        _ if status.is_success() => Ok(true),
+        _ => Err(GeminiError::Api(format!("Gemini answered {status}"))),
     }
 }
 
@@ -525,6 +539,26 @@ mod tests {
     fn a_pasted_key_loses_its_surrounding_whitespace() {
         let list = list_models_request("  SECRET\n").build().unwrap();
         assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
+    }
+
+    #[test]
+    fn the_models_list_status_says_whether_the_key_works() {
+        use reqwest::StatusCode;
+        for (code, accepted) in [
+            (200, true),
+            (429, true),
+            (400, false),
+            (401, false),
+            (403, false),
+        ] {
+            let status = StatusCode::from_u16(code).unwrap();
+            assert_eq!(key_accepted(status).unwrap(), accepted, "{code}");
+        }
+        for code in [404, 500, 503] {
+            let status = StatusCode::from_u16(code).unwrap();
+            let err = key_accepted(status).unwrap_err();
+            assert!(err.to_string().contains(&code.to_string()), "{err}");
+        }
     }
 
     #[tokio::test]

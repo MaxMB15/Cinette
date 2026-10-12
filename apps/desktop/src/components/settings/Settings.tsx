@@ -108,10 +108,10 @@ const OPENSUBTITLES_KEY: ApiKeyService = {
 const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 10;
 
-/** A whole number of downloads from 1 to 10, or null when the text isn't a number. */
+/** The number typed, rounded and kept from 1 to 10, or null when the field holds no number. */
 const parseConcurrency = (text: string): number | null => {
-	const n = Number(text);
-	if (!text.trim() || !Number.isFinite(n)) return null;
+	const n = Number.parseFloat(text);
+	if (Number.isNaN(n)) return null;
 	return Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, Math.round(n)));
 };
 
@@ -197,6 +197,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [concurrencyText, setConcurrencyText] = useState("3");
 	const concurrencyId = useId();
 	const concurrencyHintId = useId();
+	// Saves go one at a time. Typing 10 saves 1 on the way, and two saves at
+	// once could land in either order and leave 1 behind.
+	const concurrencySaves = useRef<Promise<void>>(Promise.resolve());
 	const [showDownloadHistory, setShowDownloadHistory] = useState(false);
 	const folderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const { retentionDays, setRetentionDays } = useDownloads();
@@ -315,7 +318,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		setConcurrencyText(String(n));
 		if (n === concurrency) return;
 		setConcurrency(n);
-		setDownloadConcurrency(n).catch(() => {});
+		concurrencySaves.current = concurrencySaves.current
+			.then(() => setDownloadConcurrency(n))
+			.catch(() => {});
 	};
 
 	/**
@@ -325,8 +330,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	 */
 	const handleConcurrencyInput = (text: string) => {
 		setConcurrencyText(text);
+		// A blank field reads as 0, which is out of range.
 		const n = Number(text);
-		if (text.trim() && Number.isInteger(n) && n >= MIN_CONCURRENCY && n <= MAX_CONCURRENCY) {
+		if (Number.isInteger(n) && n >= MIN_CONCURRENCY && n <= MAX_CONCURRENCY) {
 			applyConcurrency(n);
 		}
 	};

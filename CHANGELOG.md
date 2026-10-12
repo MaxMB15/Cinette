@@ -12,7 +12,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Without an OMDb API key, the movie and series info sheets say that a key adds the plot, cast and ratings, and link to the key field in Settings (#96).
 - The channel, movie and series info panes close when you drag them down, and grow to full height when you drag them up (#91).
 - The start screen shows the app icon in place of the blue play badge (#95).
-- The OpenSubtitles key field shows up once an OMDb key is saved, not as soon as one is typed, and then stays until you leave Settings (#120).
+- The OpenSubtitles key field shows up once an OMDb or OpenSubtitles key is saved, not as soon as an OMDb key is typed, and then stays until you leave Settings (#120).
 
 ### Added
 
@@ -78,10 +78,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - A rating with no votes no longer shows a stray 0 beside it (#114).
 - Screen readers name the search bar's clear button and the icon buttons in Manage Categories, and say which category or provider card a button is on (#114).
 - Test next to the OMDb key now checks the key in the field. Before, it checked the saved key, so a new key failed until it was saved (#120).
-- When a key can't be checked because the service can't be reached, Settings now says so instead of calling the key invalid (#120).
+- When a key can't be checked because the service can't be reached or has a fault of its own, Settings now says so instead of calling the key invalid. A Gemini key over its rate limit no longer shows as invalid either (#120).
 - A saved API key can now be removed. Clearing the field turns Save into Remove. Before, Save stayed off while the field was blank (#120).
-- Clearing the simultaneous downloads field to type a new number no longer sets it to 1 straight away. A number outside 1 to 10 is fixed once you leave the field or press Enter (#120).
-- Settings now says when it can't read a saved API key, and no longer replaces a key you started typing before the saved one loaded (#120).
+- Clearing the simultaneous downloads field to type a new number no longer sets it to 1 straight away. A number outside 1 to 10 is fixed once you leave the field or press Enter. Typing 10 could leave 1 saved, because the two saves raced. They now go one at a time (#120).
+- Settings now says when it can't read a saved API key, and keeps Save on so the key can still be replaced or removed. It no longer replaces a key you started typing before the saved one loaded (#120).
 - Enter in an API key field saves the key. Screen readers name each key field and its Save, Test and show buttons, and read out whether a save or check worked (#120).
 
 ## [0.5.3] - 2026-10-09
