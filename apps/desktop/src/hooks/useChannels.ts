@@ -11,7 +11,12 @@ import {
 	useRef,
 } from "react";
 import type { Channel, Category, Provider } from "@/lib/types";
-import { createRefreshTracker, findDueRefreshes } from "@/lib/refresh-schedule";
+import {
+	createRefreshTracker,
+	findDueRefreshes,
+	refreshKeys,
+	type RefreshTracker,
+} from "@/lib/refresh-schedule";
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
 import {
@@ -107,6 +112,8 @@ interface ChannelsContextValue {
 	) => Promise<void>;
 	removeProvider: (id: string) => Promise<void>;
 	toggleFavorite: (channelId: string) => Promise<void>;
+	/** Runs the automatic refreshes, shared by the splash screen and the poll. */
+	autoRefresh: RefreshTracker;
 }
 
 export const ChannelsContext = createContext<ChannelsContextValue | null>(null);
@@ -258,28 +265,33 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		refreshProviderRef.current = refreshProvider;
 	}, [refreshProvider]);
 
+	// The splash screen runs its startup refreshes through this tracker too, so
+	// the poll skips one the splash started that is still running.
+	const [autoRefresh] = useState(() => createRefreshTracker());
+
 	// Poll every 60s to check if any provider/EPG is due for refresh.
 	// Using a ref-based approach avoids resetting timers on every providers update.
 	// The tracker skips refreshes still running and backs off after failures.
 	useEffect(() => {
-		const tracker = createRefreshTracker();
 		const tick = () => {
 			const { playlistIds, epgIds } = findDueRefreshes(providersRef.current, {
 				settingsFor: loadProviderSettings,
 				epgLastRefreshFor: getEpgLastRefresh,
 			});
 			for (const id of playlistIds) {
-				tracker.run(`playlist:${id}`, () => refreshProviderRef.current(id));
+				autoRefresh.run(refreshKeys.playlist(id), () => refreshProviderRef.current(id));
 			}
 			for (const id of epgIds) {
-				tracker.run(`epg:${id}`, () => refreshEpgApi(id).then(() => setEpgLastRefresh(id)));
+				autoRefresh.run(refreshKeys.epg(id), () =>
+					refreshEpgApi(id).then(() => setEpgLastRefresh(id))
+				);
 			}
 		};
 
 		tick(); // fire immediately on mount
 		const id = setInterval(tick, 60_000);
 		return () => clearInterval(id);
-	}, []);
+	}, [autoRefresh]);
 
 	return {
 		channels,
@@ -297,6 +309,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		updateProvider,
 		removeProvider,
 		toggleFavorite,
+		autoRefresh,
 	};
 };
 

@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useSplashScreen } from "./useSplashScreen";
 import type { UpdateState } from "./useUpdateChecker";
+import { createRefreshTracker, type RefreshTracker } from "@/lib/refresh-schedule";
 
 // Mock Tauri API calls
 vi.mock("@/lib/tauri", () => ({
@@ -44,12 +45,16 @@ const makeUpdateState = (overrides: Partial<UpdateState> = {}): UpdateState => (
 });
 
 describe("useSplashScreen", () => {
+	let tracker: RefreshTracker;
+
 	beforeEach(() => {
 		sessionStorage.clear();
+		tracker = createRefreshTracker();
 		// Default: no providers, already initialized
 		mockUseChannels.mockReturnValue({
 			providers: [],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -95,6 +100,7 @@ describe("useSplashScreen", () => {
 		mockUseChannels.mockReturnValue({
 			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -114,6 +120,7 @@ describe("useSplashScreen", () => {
 		mockUseChannels.mockReturnValue({
 			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: true,
@@ -140,6 +147,7 @@ describe("useSplashScreen", () => {
 				},
 			],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -167,6 +175,7 @@ describe("useSplashScreen", () => {
 				},
 			],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -205,6 +214,7 @@ describe("useSplashScreen", () => {
 				},
 			],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -237,9 +247,12 @@ describe("useSplashScreen", () => {
 	});
 
 	it("marks the playlists step as error when a refresh fails but still allows continuing", async () => {
+		// The tracker logs each failed refresh.
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 		mockUseChannels.mockReturnValue({
 			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: true,
@@ -258,9 +271,12 @@ describe("useSplashScreen", () => {
 		expect(playlists?.label).toMatch(/failed/i);
 		// The user must still be able to proceed past the splash.
 		expect(result.current.allDone).toBe(true);
+		consoleError.mockRestore();
 	});
 
 	it("marks the EPG step as error when a refresh fails but still allows continuing", async () => {
+		// The tracker logs each failed refresh.
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 		mockUseChannels.mockReturnValue({
 			providers: [
 				{
@@ -270,6 +286,7 @@ describe("useSplashScreen", () => {
 				},
 			],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -288,9 +305,12 @@ describe("useSplashScreen", () => {
 		expect(epg?.status).toBe("error");
 		expect(epg?.label).toMatch(/failed/i);
 		expect(result.current.allDone).toBe(true);
+		consoleError.mockRestore();
 	});
 
 	it("counts the EPG sources that failed when only some do", async () => {
+		// The tracker logs each failed refresh.
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 		const epgUrl = "http://epg.example.com/guide.xml";
 		mockUseChannels.mockReturnValue({
 			providers: [
@@ -298,6 +318,7 @@ describe("useSplashScreen", () => {
 				{ id: "p2", lastUpdated: new Date().toISOString(), epgUrl },
 			],
 			initialized: true,
+			autoRefresh: tracker,
 		} as never);
 		mockLoadProviderSettings.mockReturnValue({
 			autoRefresh: false,
@@ -318,6 +339,66 @@ describe("useSplashScreen", () => {
 		expect(epg?.label).toBe("Failed to refresh 1 of 2 EPG sources");
 		const playlists = result.current.steps.find((s) => s.id === "playlists");
 		expect(playlists?.label).toBe("Playlists up to date");
+		consoleError.mockRestore();
+	});
+
+	it("leaves its refresh with the poll's tracker so the poll doesn't start it again", async () => {
+		mockUseChannels.mockReturnValue({
+			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
+			initialized: true,
+			autoRefresh: tracker,
+		} as never);
+		mockLoadProviderSettings.mockReturnValue({
+			autoRefresh: true,
+			refreshIntervalHours: 24,
+			epgAutoRefresh: false,
+			epgRefreshIntervalHours: 24,
+		});
+		let finish = () => {};
+		mockRefreshProvider.mockImplementation(
+			() => new Promise<void>((resolve) => (finish = resolve))
+		);
+
+		const { result } = renderHook(() => useSplashScreen({ updateState: makeUpdateState() }));
+		await waitFor(() => expect(mockRefreshProvider).toHaveBeenCalledTimes(1));
+
+		// The poll comes round while the slow refresh is still running.
+		const pollRefresh = vi.fn(() => Promise.resolve());
+		void tracker.run("playlist:p1", pollRefresh);
+		expect(pollRefresh).not.toHaveBeenCalled();
+
+		finish();
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+		const playlists = result.current.steps.find((s) => s.id === "playlists");
+		expect(playlists?.label).toBe("Playlists refreshed");
+	});
+
+	it("waits for a guide refresh the poll already started", async () => {
+		const epgUrl = "http://epg.example.com/guide.xml";
+		mockUseChannels.mockReturnValue({
+			providers: [{ id: "p1", lastUpdated: new Date().toISOString(), epgUrl }],
+			initialized: true,
+			autoRefresh: tracker,
+		} as never);
+		mockLoadProviderSettings.mockReturnValue({
+			autoRefresh: false,
+			refreshIntervalHours: 24,
+			epgAutoRefresh: true,
+			epgRefreshIntervalHours: 24,
+		});
+		let finish = () => {};
+		void tracker.run("epg:p1", () => new Promise<void>((resolve) => (finish = resolve)));
+
+		const { result } = renderHook(() => useSplashScreen({ updateState: makeUpdateState() }));
+		await waitFor(() =>
+			expect(result.current.steps.find((s) => s.id === "epg")?.status).toBe("active")
+		);
+		expect(result.current.allDone).toBe(false);
+
+		finish();
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+		expect(mockRefreshEpg).not.toHaveBeenCalled();
+		expect(result.current.steps.find((s) => s.id === "epg")?.label).toBe("EPG refreshed");
 	});
 
 	it("dismiss() sets dismissed=true and stores session key", async () => {

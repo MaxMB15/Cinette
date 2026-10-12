@@ -69,46 +69,62 @@ export const RETRY_MAX_DELAY_MS = 6 * HOUR_MS;
 export const retryDelayMs = (failures: number): number =>
 	Math.min(RETRY_FIRST_DELAY_MS * 2 ** Math.max(failures - 1, 0), RETRY_MAX_DELAY_MS);
 
+/** Tracker keys for a provider's automatic playlist and guide refreshes. */
+export const refreshKeys = {
+	playlist: (providerId: string): string => `playlist:${providerId}`,
+	epg: (providerId: string): string => `epg:${providerId}`,
+};
+
 export interface RefreshTracker {
 	/**
-	 * Starts the refresh for this key unless one is still running or the last
-	 * one failed too recently. Returns whether it started.
+	 * Starts the refresh for this key and returns its promise, which rejects if
+	 * the refresh fails. If one is already running for the key, returns that
+	 * one's promise instead of starting another. Returns null when the last try
+	 * failed too recently to try again.
 	 */
-	run: (key: string, refresh: () => Promise<unknown>) => boolean;
+	run: (key: string, refresh: () => Promise<unknown>) => Promise<void> | null;
 }
 
 /**
- * Keeps the auto refresh poll from piling up work. A refresh that runs longer
- * than a poll interval isn't started a second time, and a refresh that fails
- * waits longer before each new try instead of running every poll. For Xtream
- * every try sends the login, so a provider that's down would otherwise get one
- * a minute.
+ * Keeps automatic refreshes from piling up work. The splash screen and the
+ * poll share one tracker, so a refresh that is still running when the poll
+ * comes round isn't started a second time. A refresh that fails waits longer
+ * before each new try instead of running every poll. For Xtream every try
+ * sends the login, so a provider that's down would otherwise get one a minute.
  */
 export const createRefreshTracker = (clock: () => number = Date.now): RefreshTracker => {
-	const running = new Set<string>();
+	const running = new Map<string, Promise<void>>();
 	const failures = new Map<string, { count: number; retryAt: number }>();
 
-	const run = (key: string, refresh: () => Promise<unknown>): boolean => {
+	const run = (key: string, refresh: () => Promise<unknown>): Promise<void> | null => {
+		const inFlight = running.get(key);
+		if (inFlight) return inFlight;
 		const failure = failures.get(key);
-		if (running.has(key) || (failure && clock() < failure.retryAt)) return false;
-		running.add(key);
-		refresh()
-			.then(() => {
-				failures.delete(key);
-			})
-			.catch((e: unknown) => {
-				const count = (failure?.count ?? 0) + 1;
-				const delay = retryDelayMs(count);
-				failures.set(key, { count, retryAt: clock() + delay });
-				console.error(
-					`[refresh] ${key} failed, trying again in ${Math.round(delay / 60_000)} min:`,
-					e
-				);
-			})
+		if (failure && clock() < failure.retryAt) return null;
+		const done = refresh()
+			.then(
+				() => {
+					failures.delete(key);
+				},
+				(e: unknown) => {
+					const count = (failure?.count ?? 0) + 1;
+					const delay = retryDelayMs(count);
+					failures.set(key, { count, retryAt: clock() + delay });
+					console.error(
+						`[refresh] ${key} failed, trying again in ${Math.round(delay / 60_000)} min:`,
+						e
+					);
+					throw e;
+				}
+			)
 			.finally(() => {
 				running.delete(key);
 			});
-		return true;
+		// The poll doesn't wait for the result, so a failure it ignores must not
+		// show up as an unhandled rejection. Callers that wait still see it.
+		done.catch(() => {});
+		running.set(key, done);
+		return done;
 	};
 
 	return { run };

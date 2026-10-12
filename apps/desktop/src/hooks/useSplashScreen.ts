@@ -10,7 +10,7 @@ import {
 	setEpgLastRefresh,
 	useChannels,
 } from "@/hooks/useChannels";
-import { findDueRefreshes } from "@/lib/refresh-schedule";
+import { findDueRefreshes, refreshKeys } from "@/lib/refresh-schedule";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { readStorage, SPLASH_SHOWN_KEY, writeStorage } from "@/lib/storage";
 
@@ -63,7 +63,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 	const alreadyShownRef = useRef(readStorage(SPLASH_SHOWN_KEY, "session") === "true");
 
 	// Consume providers from ChannelsContext (already loaded on mount — no extra Tauri calls)
-	const { providers, initialized } = useChannels();
+	const { providers, initialized, autoRefresh } = useChannels();
 
 	// Initialize all steps immediately so they're visible from the first render.
 	// The app store updates the mobile apps, so they skip the update check.
@@ -113,6 +113,14 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 
 			const didRefreshProviders = providerRefreshIds.length > 0;
 
+			// Runs the refresh through the poll's tracker. A refresh the poll already
+			// started is joined, not run twice, and the poll won't start this one
+			// again while it runs. One still waiting to retry after a failure
+			// counts as failed.
+			const tracked = (key: string, refresh: () => Promise<unknown>) =>
+				autoRefresh.run(key, refresh) ??
+				Promise.reject(new Error(`${key} failed recently, waiting to retry`));
+
 			// Runs one refresh step and returns false if the effect was cleaned up
 			// while it waited, so the caller stops too.
 			const runRefreshStep = async (step: RefreshStep): Promise<boolean> => {
@@ -146,7 +154,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			const playlistsFinished = await runRefreshStep({
 				id: "playlists",
 				ids: providerRefreshIds,
-				refresh: refreshProvider,
+				refresh: (id) => tracked(refreshKeys.playlist(id), () => refreshProvider(id)),
 				labels: {
 					active: "Refreshing playlists…",
 					failed: "Failed to refresh playlists",
@@ -162,7 +170,10 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			const epgFinished = await runRefreshStep({
 				id: "epg",
 				ids: epgRefreshIds,
-				refresh: (id) => refreshEpg(id).then(() => setEpgLastRefresh(id)),
+				refresh: (id) =>
+					tracked(refreshKeys.epg(id), () =>
+						refreshEpg(id).then(() => setEpgLastRefresh(id))
+					),
 				labels: {
 					active: "Checking EPG…",
 					failed: "Failed to refresh EPG",
