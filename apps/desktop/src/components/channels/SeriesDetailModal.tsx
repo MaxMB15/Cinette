@@ -24,6 +24,7 @@ import {
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
+import { formatCount } from "@/lib/format";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
@@ -307,7 +308,7 @@ export const SeriesDetailModal = ({
 								onStop={() => void stopDownloads(seriesActiveIds)}
 								stopCount={seriesActiveIds.length}
 								onRemove={() => removeDownloads(seriesCompletedIds)}
-								removeSummary={`${seriesCompletedIds.length} ${seriesCompletedIds.length === 1 ? "episode" : "episodes"}`}
+								removeSummary={formatCount(seriesCompletedIds.length, "episode")}
 								className="text-sm text-muted-foreground hover:text-foreground"
 							/>
 							<RetentionNote records={seriesRecs} compact />
@@ -475,7 +476,7 @@ export const SeriesDetailModal = ({
 												{s === 0 ? "Unknown Season" : `Season ${s}`}
 											</p>
 											<p className="text-xs text-muted-foreground mt-0.5">
-												{eps.length} episodes
+												{formatCount(eps.length, "episode")}
 											</p>
 										</div>
 										<ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -486,7 +487,7 @@ export const SeriesDetailModal = ({
 										onStop={() => void stopDownloads(activeIds)}
 										stopCount={activeIds.length}
 										onRemove={() => removeDownloads(completedIds)}
-										removeSummary={`${completedIds.length} ${completedIds.length === 1 ? "episode" : "episodes"}`}
+										removeSummary={formatCount(completedIds.length, "episode")}
 										className="shrink-0 h-8 w-8 justify-center rounded-md hover:bg-accent"
 									/>
 								</div>

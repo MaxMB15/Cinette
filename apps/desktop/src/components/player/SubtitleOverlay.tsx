@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useRef } from "react";
+import { clampSubtitlePosition, DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import type { SubtitleCue } from "@/lib/types";
 
 interface SubtitleOverlayProps {
@@ -22,8 +23,8 @@ export const SubtitleOverlay = ({
 	delay = 0,
 	fontSize = 18,
 	fontFamily = "system-ui, sans-serif",
-	posX = 50,
-	posY = 88,
+	posX = DEFAULT_SUBTITLE_POSITION.x,
+	posY = DEFAULT_SUBTITLE_POSITION.y,
 	editMode = false,
 	onPositionChange,
 }: SubtitleOverlayProps) => {
@@ -49,15 +50,11 @@ export const SubtitleOverlay = ({
 		const startPosY = posY;
 
 		const handleMove = (me: MouseEvent) => {
-			const newX = Math.min(
-				95,
-				Math.max(5, startPosX + ((me.clientX - startX) / rect.width) * 100)
-			);
-			const newY = Math.min(
-				97,
-				Math.max(3, startPosY + ((me.clientY - startY) / rect.height) * 100)
-			);
-			onPositionChange(newX, newY);
+			const next = clampSubtitlePosition({
+				x: startPosX + ((me.clientX - startX) / rect.width) * 100,
+				y: startPosY + ((me.clientY - startY) / rect.height) * 100,
+			});
+			onPositionChange(next.x, next.y);
 		};
 
 		const handleUp = () => {

@@ -13,6 +13,7 @@
 //! screen controls. Rust calls it through the `mvp_ios_*` functions, and it
 //! calls back through the C callbacks registered in [`install`].
 
+use crate::lock::lock_or_recover;
 use crate::mpv::MpvState;
 use crate::renderer::PlatformRenderer;
 use libmpv2::{
@@ -175,7 +176,7 @@ static WATCHER_CLIENT: Mutex<(u64, usize)> = Mutex::new((0, 0));
 /// change. The watcher gets mpv to pick up the new size.
 extern "C" fn on_resized() {
     RESIZE_GEN.fetch_add(1, Ordering::AcqRel);
-    let slot = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
+    let slot = lock_or_recover(&WATCHER_CLIENT);
     if slot.1 != 0 {
         unsafe { mpv_wakeup(slot.1 as *mut c_void) };
     }
@@ -193,7 +194,7 @@ pub fn set_audio_active(active: bool) {
         // Swift queues both calls on the main queue in order. Holding the
         // lock means an update a watcher already queued runs before the
         // clear, and no watcher can queue one after it.
-        let mut owner = NOW_PLAYING_OWNER.lock().unwrap_or_else(|p| p.into_inner());
+        let mut owner = lock_or_recover(&NOW_PLAYING_OWNER);
         *owner = 0;
         unsafe { mvp_ios_now_playing_clear() };
     }
@@ -229,7 +230,7 @@ static MEDIA_INFO_GEN: AtomicU64 = AtomicU64::new(0);
 /// the next call, so they cover the next load too.
 pub fn set_media_info(title: Option<String>, live: bool) {
     let title = title.filter(|t| !t.is_empty()).and_then(|t| CString::new(t).ok());
-    let mut info = MEDIA_INFO.lock().unwrap_or_else(|p| p.into_inner());
+    let mut info = lock_or_recover(&MEDIA_INFO);
     info.title = title;
     info.live = live;
     MEDIA_INFO_GEN.fetch_add(1, Ordering::AcqRel);
@@ -278,8 +279,9 @@ impl PlatformRenderer for IosMetalRenderer {
     /// mpv already has the layer through `wid`. This only starts the thread
     /// that reports the first frame and keeps Now Playing up to date.
     fn attach(&mut self, mpv: &mut Mpv) -> Result<(), String> {
+        // No name, for the reason `MpvEngine::create_event_client` gives.
         let client = mpv
-            .create_client(Some("ios-watcher"))
+            .create_client(None)
             .map_err(|e| format!("mpv_create_client: {e}"))?;
         let kill = Arc::new(AtomicBool::new(false));
         self.watcher_kill = Some(kill.clone());
@@ -289,7 +291,7 @@ impl PlatformRenderer for IosMetalRenderer {
             .unwrap_or_else(|p| p.into_inner())
             .take();
         let id = NEXT_WATCHER_ID.fetch_add(1, Ordering::Relaxed);
-        *NOW_PLAYING_OWNER.lock().unwrap_or_else(|p| p.into_inner()) = id;
+        *lock_or_recover(&NOW_PLAYING_OWNER) = id;
         std::thread::Builder::new()
             .name("mpv-ios-watcher".into())
             .spawn(move || run_watcher(client, id, kill, first_frame))
@@ -360,7 +362,7 @@ fn run_watcher(
 
     let client_addr = client.ctx.as_ptr() as usize;
     {
-        let mut slot = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
+        let mut slot = lock_or_recover(&WATCHER_CLIENT);
         if id > slot.0 {
             *slot = (id, client_addr);
         }
@@ -401,7 +403,7 @@ fn run_watcher(
                     // A live stream's duration grows with the buffer. Each
                     // update would restart the lock screen's progress, so
                     // only a file with a real length counts.
-                    !MEDIA_INFO.lock().unwrap_or_else(|p| p.into_inner()).live
+                    !lock_or_recover(&MEDIA_INFO).live
                 }
                 ("media-title", PropertyData::Str(t)) => {
                     mpv_title = CString::new(t).ok();
@@ -429,12 +431,12 @@ fn run_watcher(
         seen_gen = gen;
         if event_changed || info_changed {
             let position = client.get_property::<f64>("time-pos").unwrap_or(0.0);
-            let info = MEDIA_INFO.lock().unwrap_or_else(|p| p.into_inner());
+            let info = lock_or_recover(&MEDIA_INFO);
             let title = info.title.as_ref().or(mpv_title.as_ref());
             let title_ptr = title.map_or(std::ptr::null(), |t| t.as_ptr());
             // Zero duration tells Swift the stream is live.
             let length = if info.live { 0.0 } else { duration };
-            let owner = NOW_PLAYING_OWNER.lock().unwrap_or_else(|p| p.into_inner());
+            let owner = lock_or_recover(&NOW_PLAYING_OWNER);
             if *owner == id {
                 unsafe { mvp_ios_now_playing(title_ptr, length, position, !paused) };
             }
@@ -443,7 +445,7 @@ fn run_watcher(
 
     // Clear the address before the client goes, so no resize wakes a freed
     // handle. A newer watcher may already have replaced it.
-    let mut slot = WATCHER_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut slot = lock_or_recover(&WATCHER_CLIENT);
     if slot.0 == id {
         slot.1 = 0;
     }

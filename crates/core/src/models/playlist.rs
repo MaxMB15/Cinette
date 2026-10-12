@@ -104,4 +104,33 @@ mod tests {
         assert!(!printed.contains("user1"));
         assert!(!printed.contains("s3cret"));
     }
+
+    #[test]
+    fn a_playlist_lists_the_groups_of_its_channels() {
+        let provider: Provider = serde_json::from_value(serde_json::json!({
+            "id": "p1",
+            "name": "Home",
+            "type": "m3u",
+            "url": "http://example.test/list.m3u",
+            "channelCount": 2
+        }))
+        .unwrap();
+        let news = |id: &str| Channel {
+            id: id.into(),
+            group_title: "News".into(),
+            ..Channel::default()
+        };
+        let channels = vec![news("a"), news("b")];
+
+        let playlist = Playlist::new(provider, channels.clone());
+
+        assert_eq!(playlist.provider.id, "p1");
+        assert_eq!(playlist.channels, channels);
+        let groups: Vec<(&str, usize)> = playlist
+            .categories
+            .iter()
+            .map(|c| (c.name.as_str(), c.channel_count))
+            .collect();
+        assert_eq!(groups, [("News", 2)]);
+    }
 }

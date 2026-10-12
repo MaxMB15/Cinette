@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useId, useRef, type ReactNode } from "react";
-import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Dialog } from "@/components/ui/dialog";
 
 interface ConfirmDialogProps {
 	open: boolean;
@@ -10,7 +11,7 @@ interface ConfirmDialogProps {
 	message: string;
 	confirmLabel: string;
 	onConfirm: () => void;
-	/** Leave out for a notice. It then has one button, and clicking outside it confirms. */
+	/** Leave out for a notice. It then has one button, and clicking outside it or Escape confirms. */
 	onCancel?: () => void;
 	/** The label of the button that closes the dialog without acting. */
 	cancelLabel?: string;
@@ -24,17 +25,17 @@ interface ConfirmDialogProps {
 	children?: ReactNode;
 }
 
-/**
- * A modal that asks before an action, or a notice with one button. Focus
- * moves into it when it opens and stays there, Escape closes it the way a
- * click outside it does, and keys pressed in it don't reach what is behind
- * it, such as the player's shortcuts.
- */
-export const ConfirmDialog = (props: ConfirmDialogProps) =>
-	props.open ? <ConfirmPanel {...props} /> : null;
+const BUTTON =
+	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-/** Mounted only while the dialog is open, so the focus trap starts on each open. */
-const ConfirmPanel = ({
+/**
+ * Asks before an action, or gives a notice with a single button. It renders
+ * into the page body so a parent that clips or transforms, like a sheet,
+ * can't cut it off. Focus starts on its first button, and keys pressed in it
+ * don't reach what is behind it, such as the player's shortcuts.
+ */
+export const ConfirmDialog = ({
+	open,
 	title,
 	message,
 	confirmLabel,
@@ -46,28 +47,22 @@ const ConfirmPanel = ({
 	children,
 }: ConfirmDialogProps) => {
 	const titleId = useId();
-	const dialogRef = useRef<HTMLDivElement>(null);
-	useFocusTrap(dialogRef);
-	const dismiss = onCancel ?? onConfirm;
-	return (
-		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-			onClick={dismiss}
-			onKeyDown={(e) => {
-				// The focus trap listens for Tab on the document, so Tab carries on.
-				if (e.key === "Tab") return;
-				e.stopPropagation();
-				if (e.key === "Escape") dismiss();
-			}}
+	if (!open) return null;
+	return createPortal(
+		<Dialog
+			onClose={onCancel ?? onConfirm}
+			labelledBy={titleId}
+			// Above the full screen player, which sits at z-[9999].
+			overlayClassName="z-[10000]"
+			className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl"
 		>
 			<div
-				ref={dialogRef}
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby={titleId}
-				tabIndex={-1}
-				className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl outline-none"
-				onClick={(e) => e.stopPropagation()}
+				onKeyDown={(e) => {
+					// React passes keys from a portal on to the components that
+					// rendered it, and one of them can be the player. Escape still
+					// reaches the dialog so it closes, and Tab the focus trap.
+					if (e.key !== "Escape" && e.key !== "Tab") e.stopPropagation();
+				}}
 			>
 				<h3 id={titleId} className="text-sm font-semibold mb-1.5">
 					{title}
@@ -79,14 +74,16 @@ const ConfirmPanel = ({
 				<div className="flex justify-end gap-2">
 					{onCancel && (
 						<button
-							className="px-3 py-1.5 text-xs rounded-md hover:bg-accent"
+							type="button"
+							className={`${BUTTON} hover:bg-accent`}
 							onClick={onCancel}
 						>
 							{cancelLabel}
 						</button>
 					)}
 					<button
-						className={`px-3 py-1.5 text-xs rounded-md disabled:opacity-50 disabled:pointer-events-none ${
+						type="button"
+						className={`${BUTTON} disabled:opacity-50 disabled:pointer-events-none ${
 							destructive
 								? "bg-red-600 text-white hover:bg-red-500"
 								: "bg-primary text-primary-foreground hover:bg-primary/90"
@@ -98,6 +95,7 @@ const ConfirmPanel = ({
 					</button>
 				</div>
 			</div>
-		</div>
+		</Dialog>,
+		document.body
 	);
 };

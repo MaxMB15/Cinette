@@ -62,12 +62,11 @@ pub fn dest_path(root: &Path, channel_name: &str, start: NaiveDateTime) -> PathB
 pub fn ffmpeg_args(url: &str, dest: &str, max_secs: i64) -> Vec<String> {
     let input = [
         // A stream that sends nothing for 15 seconds counts as dropped, so
-        // ffmpeg reconnects instead of waiting on it for good. In
-        // microseconds.
+        // ffmpeg stops instead of waiting on it for good, and the recording
+        // tries again. In microseconds.
         "-rw_timeout",
         "15000000",
-        // Reconnect after a network error too, not only at the end of the
-        // stream.
+        // Connect again when connecting fails with a network error.
         "-reconnect_on_network_error",
         "1",
         // Report the size of the file every 5 seconds, not twice a second.

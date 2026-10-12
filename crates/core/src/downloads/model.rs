@@ -109,19 +109,6 @@ pub struct DownloadRecord {
     pub program_end: Option<i64>,
 }
 
-impl DownloadRecord {
-    /// Percentage 0–100 when total size is known, else None (indeterminate).
-    pub fn percent(&self) -> Option<u8> {
-        match self.total_bytes {
-            Some(total) if total > 0 => {
-                let pct = (self.downloaded_bytes.saturating_mul(100) / total).clamp(0, 100);
-                Some(pct as u8)
-            }
-            _ => None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,24 +143,6 @@ mod tests {
         assert_eq!(json["sourceChannelId"], "c9");
         assert_eq!(json["startAt"], 100);
         assert!(json["endAt"].is_null());
-    }
-
-    #[test]
-    fn percent_is_none_when_total_unknown() {
-        let mut r = sample();
-        r.total_bytes = None;
-        r.downloaded_bytes = 500;
-        assert_eq!(r.percent(), None);
-    }
-
-    #[test]
-    fn percent_computes_and_clamps() {
-        let mut r = sample();
-        r.total_bytes = Some(1000);
-        r.downloaded_bytes = 620;
-        assert_eq!(r.percent(), Some(62));
-        r.downloaded_bytes = 5000; // overshoot clamps to 100
-        assert_eq!(r.percent(), Some(100));
     }
 
     fn sample() -> DownloadRecord {

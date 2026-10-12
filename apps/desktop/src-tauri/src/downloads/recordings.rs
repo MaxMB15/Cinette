@@ -359,7 +359,7 @@ fn try_begin<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     }
     let (rx, child) = app
         .shell()
-        .sidecar("ffmpeg")
+        .sidecar(super::FFMPEG_SIDECAR)
         .map_err(|e| redact_credentials(&e.to_string()))?
         .args(recording::ffmpeg_args(
             &claim.url,

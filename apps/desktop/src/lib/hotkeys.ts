@@ -16,6 +16,7 @@ export type PlayerAction =
 	| { type: "toggleSubtitles" }
 	| { type: "toggleInfo" }
 	| { type: "toggleShortcuts" }
+	| { type: "skipSegment" }
 	| { type: "escape" };
 
 /** How far the plain arrow and J/L keys jump when no skip lengths are passed in. */
@@ -88,12 +89,23 @@ export const resolvePlayerHotkey = (
 			return { type: "toggleInfo" };
 		case "?":
 			return { type: "toggleShortcuts" };
+		case "Enter":
+			return { type: "skipSegment" };
 		case "Escape":
 			return { type: "escape" };
 		default:
 			return null;
 	}
 };
+
+/**
+ * Whether the action runs again while its key is held down. Seeking and
+ * volume keep going. The rest run once per press, since a held F, Space or M
+ * would flip back and forth, a held Escape would leave fullscreen and then
+ * the player, and a held N, P or Enter would skip several episodes.
+ */
+export const repeatsWhenHeld = (action: PlayerAction): boolean =>
+	action.type === "seekBy" || action.type === "volumeBy";
 
 const skipLabel = ({ back, forward }: SkipIntervals): string =>
 	back === forward ? `Seek ${back}s back / forward` : `Seek ${back}s back / ${forward}s forward`;
@@ -115,9 +127,19 @@ export const playerShortcuts = (
 	{ keys: ["N", "P"], label: "Next / previous episode" },
 	{ keys: ["S"], label: "Subtitles" },
 	{ keys: ["I"], label: "Info" },
+	{ keys: ["Enter"], label: "Skip intro or credits / next episode" },
 	{ keys: ["?"], label: "Show / hide this list" },
 	{ keys: ["Esc"], label: "Exit fullscreen / close panel / leave player" },
 ];
+
+/**
+ * True when `target` sits inside `container` in the page. React passes a key
+ * pressed in a portal, such as a confirm opened from the player's controls, to
+ * the key handlers of the components that rendered it, even though the portal
+ * is elsewhere in the page.
+ */
+export const isInside = (container: Element | null, target: EventTarget | null): boolean =>
+	container !== null && target instanceof Node && container.contains(target);
 
 /** True when the event target is a text field, so typing shouldn't trigger hotkeys. */
 export const isTypingTarget = (target: EventTarget | null): boolean => {
@@ -155,4 +177,50 @@ export const isKeyboardFocusedControl = (target: EventTarget | null): boolean =>
 	} catch {
 		return true;
 	}
+};
+
+/** Keys a focused slider moves its value with. */
+const SLIDER_KEYS = new Set([
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowUp",
+	"ArrowDown",
+	"Home",
+	"End",
+	"PageUp",
+	"PageDown",
+]);
+
+/**
+ * True when a slider reached with the keyboard should move its own value for
+ * this key, such as an arrow on the seek or volume bar after Tab. A slider
+ * focused by a press leaves these keys to the player, so the arrows keep
+ * seeking by the skip length instead of nudging the bar one step.
+ *
+ * The `Slider` component records how its thumb got focus in
+ * `data-focus-source`. `:focus-visible` can't be used here, because WebKit
+ * starts matching it on a pressed element as soon as a key goes down.
+ */
+export const isSliderOwnKey = (target: EventTarget | null, key: string): boolean =>
+	target instanceof HTMLElement &&
+	target.getAttribute("role") === "slider" &&
+	SLIDER_KEYS.has(key) &&
+	target.getAttribute("data-focus-source") !== "pointer";
+
+/**
+ * keydown handler for a slider inside the player. A slider that owns the key
+ * (see `isSliderOwnKey`) moves and keeps the key from the player's own
+ * handlers, such as the subtitle position arrows. Otherwise the slider stays
+ * put and the key goes on to the player. There Left, Right and Home seek, Up
+ * and Down change the volume, and End, Page Up and Page Down do nothing.
+ */
+export const leaveSliderKeysToPlayer = (e: {
+	key: string;
+	target: EventTarget | null;
+	preventDefault: () => void;
+	stopPropagation: () => void;
+}): void => {
+	if (!SLIDER_KEYS.has(e.key)) return;
+	if (isSliderOwnKey(e.target, e.key)) e.stopPropagation();
+	else e.preventDefault();
 };

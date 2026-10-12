@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+use crate::log_url::origin_for_log;
 use crate::mpv::{MpvState, PlayerState};
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -13,7 +14,12 @@ pub async fn mpv_load<R: Runtime>(
     hwdec: Option<bool>,
 ) -> Result<(), String> {
     let hwdec = hwdec.unwrap_or(true);
-    tracing::info!("[MPV cmd] load url={} start_pos={:?} hwdec={}", url, start_pos, hwdec);
+    tracing::info!(
+        "[MPV cmd] load origin={} start_pos={:?} hwdec={}",
+        origin_for_log(&url),
+        start_pos,
+        hwdec
+    );
     state.load(&url, start_pos, hwdec, &app)?;
     tracing::debug!("[MPV cmd] load complete, state={:?}", state.get_state());
     Ok(())
@@ -122,7 +128,7 @@ pub async fn mpv_sub_add<R: Runtime>(
     state: State<'_, MpvState>,
     path: String,
 ) -> Result<(), String> {
-    tracing::info!("[MPV cmd] sub_add path={}", path);
+    tracing::info!("[MPV cmd] sub_add");
     state.sub_add(&path)?;
     Ok(())
 }
@@ -162,6 +168,9 @@ pub async fn mpv_get_state<R: Runtime>(
     state: State<'_, MpvState>,
 ) -> Result<PlayerState, String> {
     let s = state.get_state();
-    tracing::trace!("[MPV cmd] get_state -> playing={} url={:?}", s.is_playing, s.current_url);
+    tracing::trace!("[MPV cmd] get_state -> {s:?}");
     Ok(s)
 }
+
+#[cfg(test)]
+mod tests;

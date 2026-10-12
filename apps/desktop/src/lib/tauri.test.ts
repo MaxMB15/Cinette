@@ -6,17 +6,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
+import { deferred } from "@/test/deferred";
 import { mpvLoad, mpvStop } from "./tauri";
-
-const deferred = () => {
-	let resolve!: () => void;
-	let reject!: (e: Error) => void;
-	const promise = new Promise<void>((res, rej) => {
-		resolve = res;
-		reject = rej;
-	});
-	return { promise, resolve, reject };
-};
+import * as tauri from "./tauri";
+import type { Channel } from "./types";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -50,5 +43,542 @@ describe("mpv load and stop", () => {
 		await expect(failed).rejects.toThrow("load failed");
 		await stopped;
 		expect(commands()).toEqual(["plugin:mpv|mpv_load", "plugin:mpv|mpv_stop"]);
+	});
+});
+
+describe("mpvLoad arguments", () => {
+	beforeEach(() => invoke.mockReset().mockResolvedValue(undefined));
+
+	it("starts from the beginning with hardware decoding unless told otherwise", async () => {
+		await mpvLoad("http://example.com/live.ts");
+		expect(invoke).toHaveBeenLastCalledWith("plugin:mpv|mpv_load", {
+			url: "http://example.com/live.ts",
+			startPos: null,
+			hwdec: true,
+		});
+	});
+
+	it("passes a resume position and software decoding through", async () => {
+		await mpvLoad("http://example.com/movie.mkv", 125, false);
+		expect(invoke).toHaveBeenLastCalledWith("plugin:mpv|mpv_load", {
+			url: "http://example.com/movie.mkv",
+			startPos: 125,
+			hwdec: false,
+		});
+	});
+});
+
+/**
+ * Tauri matches arguments by name, after turning the Rust parameter names
+ * into camelCase. A misspelled key doesn't fail to compile, the command just
+ * gets nothing, so each wrapper's command and keys are checked here against
+ * the `#[command]` functions in src-tauri and the mpv plugin.
+ */
+describe("backend commands", () => {
+	beforeEach(() => invoke.mockReset());
+
+	const episode = { id: "ep-1", name: "Pilot" } as Channel;
+	const episodes = [episode, { id: "ep-2", name: "Second" } as Channel];
+	const samples: [string, string[]][] = [["News", ["CNN", "BBC"]]];
+
+	type Case = [name: string, call: () => Promise<unknown>, command: string, args?: object];
+
+	const cases: Case[] = [
+		// mpv
+		["mpvPlay", () => tauri.mpvPlay(), "plugin:mpv|mpv_play"],
+		["mpvPause", () => tauri.mpvPause(), "plugin:mpv|mpv_pause"],
+		["mpvStop", () => tauri.mpvStop(), "plugin:mpv|mpv_stop"],
+		["mpvSeek", () => tauri.mpvSeek(42.5), "plugin:mpv|mpv_seek", { position: 42.5 }],
+		["mpvSetVolume", () => tauri.mpvSetVolume(80), "plugin:mpv|mpv_set_volume", { volume: 80 }],
+		["mpvGetState", () => tauri.mpvGetState(), "plugin:mpv|mpv_get_state"],
+		[
+			"mpvSetVisible",
+			() => tauri.mpvSetVisible(false),
+			"plugin:mpv|mpv_set_visible",
+			{ visible: false },
+		],
+		[
+			"mpvSetMediaInfo",
+			() => tauri.mpvSetMediaInfo("News at Ten", true),
+			"plugin:mpv|mpv_set_media_info",
+			{ title: "News at Ten", live: true },
+		],
+		[
+			"mpvSetSkipIntervals",
+			() => tauri.mpvSetSkipIntervals(5, 30),
+			"plugin:mpv|mpv_set_skip_intervals",
+			{ back: 5, forward: 30 },
+		],
+		[
+			"mpvSetBounds",
+			() => tauri.mpvSetBounds(1, 2, 3, 4),
+			"plugin:mpv|mpv_set_bounds",
+			{ x: 1, y: 2, w: 3, h: 4 },
+		],
+		[
+			"mpvSubAdd",
+			() => tauri.mpvSubAdd("/tmp/a.srt"),
+			"plugin:mpv|mpv_sub_add",
+			{ path: "/tmp/a.srt" },
+		],
+		["mpvSubRemove", () => tauri.mpvSubRemove(3), "plugin:mpv|mpv_sub_remove", { id: 3 }],
+		["mpvSetSubPos", () => tauri.mpvSetSubPos(90), "plugin:mpv|mpv_set_sub_pos", { pos: 90 }],
+		[
+			"mpvSetSubDelay",
+			() => tauri.mpvSetSubDelay(-0.5),
+			"plugin:mpv|mpv_set_sub_delay",
+			{ delay: -0.5 },
+		],
+		// Providers and channels
+		[
+			"loadM3uPlaylist",
+			() => tauri.loadM3uPlaylist("Home", "http://example.com/list.m3u"),
+			"load_m3u_playlist",
+			{ name: "Home", url: "http://example.com/list.m3u" },
+		],
+		[
+			"loadM3uFile",
+			() => tauri.loadM3uFile("Local", "/music/list.m3u"),
+			"load_m3u_file",
+			{ name: "Local", path: "/music/list.m3u" },
+		],
+		[
+			"loadXtreamProvider",
+			() => tauri.loadXtreamProvider("Xt", "http://xt.example", "user", "secret"),
+			"load_xtream_provider",
+			{ name: "Xt", url: "http://xt.example", username: "user", password: "secret" },
+		],
+		["getProviders", () => tauri.getProviders(), "get_providers"],
+		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
+		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],
+		[
+			"toggleFavorite",
+			() => tauri.toggleFavorite("c1"),
+			"toggle_favorite",
+			{ channelId: "c1" },
+		],
+		["refreshProvider", () => tauri.refreshProvider("p1"), "refresh_provider", { id: "p1" }],
+		[
+			"updateProvider",
+			() => tauri.updateProvider("p1", "Renamed", "http://new.example", "user", "secret"),
+			"update_provider",
+			{
+				id: "p1",
+				name: "Renamed",
+				url: "http://new.example",
+				username: "user",
+				password: "secret",
+			},
+		],
+		[
+			"getXtreamSeriesEpisodes",
+			() => tauri.getXtreamSeriesEpisodes("s1"),
+			"get_xtream_series_episodes",
+			{ channelId: "s1" },
+		],
+		// EPG
+		["refreshEpg", () => tauri.refreshEpg("p1"), "refresh_epg", { providerId: "p1" }],
+		[
+			"getEpgProgrammes",
+			() => tauri.getEpgProgrammes("c1", 100, 200),
+			"get_epg_programmes",
+			{ channelId: "c1", rangeStart: 100, rangeEnd: 200 },
+		],
+		[
+			"getEpgForLiveChannels",
+			() => tauri.getEpgForLiveChannels(100, 200),
+			"get_epg_for_live_channels",
+			{ rangeStart: 100, rangeEnd: 200 },
+		],
+		[
+			"searchEpgProgrammes",
+			() => tauri.searchEpgProgrammes("match", 100),
+			"search_epg_programmes",
+			{ query: "match", rangeStart: 100 },
+		],
+		[
+			"setEpgUrl",
+			() => tauri.setEpgUrl("p1", "http://epg.example/guide.xml"),
+			"set_epg_url",
+			{ providerId: "p1", epgUrl: "http://epg.example/guide.xml" },
+		],
+		["detectEpgUrl", () => tauri.detectEpgUrl("p1"), "detect_epg_url", { id: "p1" }],
+		// Metadata services
+		["getOmdbApiKey", () => tauri.getOmdbApiKey(), "get_omdb_api_key"],
+		["setOmdbApiKey", () => tauri.setOmdbApiKey("k1"), "set_omdb_api_key", { key: "k1" }],
+		[
+			"fetchOmdbData",
+			() => tauri.fetchOmdbData("c1", "Heat", "movie"),
+			"fetch_omdb_data",
+			{ channelId: "c1", title: "Heat", contentType: "movie" },
+		],
+		["getMdbListApiKey", () => tauri.getMdbListApiKey(), "get_mdblist_api_key"],
+		[
+			"setMdbListApiKey",
+			() => tauri.setMdbListApiKey("k2"),
+			"set_mdblist_api_key",
+			{ key: "k2" },
+		],
+		["testOmdbApiKey", () => tauri.testOmdbApiKey("k1"), "test_omdb_api_key", { key: "k1" }],
+		[
+			"testMdbListApiKey",
+			() => tauri.testMdbListApiKey("k2"),
+			"test_mdblist_api_key",
+			{ key: "k2" },
+		],
+		[
+			"fetchMdbListData",
+			() => tauri.fetchMdbListData("tt0113277", "movie"),
+			"fetch_mdblist_data",
+			{ imdbId: "tt0113277", mediaType: "movie" },
+		],
+		[
+			"fetchWhatsonData",
+			() => tauri.fetchWhatsonData("tt0113277", "show"),
+			"fetch_whatson_data",
+			{ imdbId: "tt0113277", mediaType: "show" },
+		],
+		// Skip segments
+		[
+			"getSkipSegments",
+			() => tauri.getSkipSegments("tt0903747", 1, 2, 2820),
+			"get_skip_segments",
+			{ imdbId: "tt0903747", season: 1, episode: 2, duration: 2820 },
+		],
+		// Subtitles
+		[
+			"getOpenSubtitlesApiKey",
+			() => tauri.getOpenSubtitlesApiKey(),
+			"get_opensubtitles_api_key",
+		],
+		[
+			"setOpenSubtitlesApiKey",
+			() => tauri.setOpenSubtitlesApiKey("k3"),
+			"set_opensubtitles_api_key",
+			{ key: "k3" },
+		],
+		[
+			"testOpenSubtitlesApiKey",
+			() => tauri.testOpenSubtitlesApiKey("k3"),
+			"test_opensubtitles_api_key",
+			{ key: "k3" },
+		],
+		[
+			"searchSubtitles",
+			() => tauri.searchSubtitles("tt0903747", 2, 7),
+			"search_subtitles",
+			{ imdbId: "tt0903747", season: 2, episode: 7 },
+		],
+		[
+			"downloadSubtitle",
+			() => tauri.downloadSubtitle(991),
+			"download_subtitle",
+			{ fileId: 991 },
+		],
+		[
+			"readSubtitleFile",
+			() => tauri.readSubtitleFile("/tmp/b.srt"),
+			"read_subtitle_file",
+			{ path: "/tmp/b.srt" },
+		],
+		// Watch history and resume points
+		[
+			"recordPlayStart",
+			() => tauri.recordPlayStart("c1", "CNN", "http://logo.example/cnn.png", "live"),
+			"record_play_start",
+			{
+				channelId: "c1",
+				channelName: "CNN",
+				channelLogo: "http://logo.example/cnn.png",
+				contentType: "live",
+			},
+		],
+		[
+			"recordPlayEnd",
+			() => tauri.recordPlayEnd("c1", 360),
+			"record_play_end",
+			{ channelId: "c1", durationSeconds: 360 },
+		],
+		[
+			"getWatchHistory",
+			() => tauri.getWatchHistory(50, "movie"),
+			"get_watch_history",
+			{ limit: 50, contentType: "movie" },
+		],
+		[
+			"deleteHistoryEntry",
+			() => tauri.deleteHistoryEntry("c1"),
+			"delete_history_entry",
+			{ channelId: "c1" },
+		],
+		[
+			"deleteHistorySeries",
+			() => tauri.deleteHistorySeries("Lost"),
+			"delete_history_series",
+			{ seriesTitle: "Lost" },
+		],
+		["clearWatchHistory", () => tauri.clearWatchHistory(), "clear_watch_history"],
+		[
+			"clearWatchHistoryOfType",
+			() => tauri.clearWatchHistoryOfType("series"),
+			"clear_watch_history_of_type",
+			{ contentType: "series" },
+		],
+		[
+			"savePlaybackPosition",
+			() => tauri.savePlaybackPosition("movie:c1", 600, 7200),
+			"save_playback_position",
+			{ contentKey: "movie:c1", positionSeconds: 600, durationSeconds: 7200 },
+		],
+		[
+			"getPlaybackPosition",
+			() => tauri.getPlaybackPosition("movie:c1"),
+			"get_playback_position",
+			{ contentKey: "movie:c1" },
+		],
+		[
+			"deletePlaybackPosition",
+			() => tauri.deletePlaybackPosition("movie:c1"),
+			"delete_playback_position",
+			{ contentKey: "movie:c1" },
+		],
+		[
+			"handOffProgress",
+			() =>
+				tauri.handOffProgress({
+					key: "movie:c1",
+					url: "http://v.example",
+					pendingStart: 30,
+				}),
+			"hand_off_progress",
+			{ item: { key: "movie:c1", url: "http://v.example", pendingStart: 30 } },
+		],
+		["clearAllCaches", () => tauri.clearAllCaches(), "clear_all_caches"],
+		// Category hierarchy and pinned groups
+		[
+			"getGroupHierarchy",
+			() => tauri.getGroupHierarchy("p1", "live"),
+			"get_group_hierarchy",
+			{ providerId: "p1", contentType: "live" },
+		],
+		[
+			"reorderGroupHierarchyEntry",
+			() => tauri.reorderGroupHierarchyEntry("p1", "live", "News", 300),
+			"reorder_group_hierarchy_entry",
+			{ providerId: "p1", contentType: "live", groupName: "News", newSortOrder: 300 },
+		],
+		[
+			"updateGroupHierarchyEntry",
+			() => tauri.updateGroupHierarchyEntry("p1", "live", "News", "World", 400),
+			"update_group_hierarchy_entry",
+			{
+				providerId: "p1",
+				contentType: "live",
+				groupName: "News",
+				newSuperCategory: "World",
+				newSortOrder: 400,
+			},
+		],
+		[
+			"deleteGroupHierarchy",
+			() => tauri.deleteGroupHierarchy("p1", "live"),
+			"delete_group_hierarchy",
+			{ providerId: "p1", contentType: "live" },
+		],
+		[
+			"pinGroup",
+			() => tauri.pinGroup("p1", "live", "News", 100),
+			"pin_group",
+			{ providerId: "p1", contentType: "live", groupName: "News", sortOrder: 100 },
+		],
+		[
+			"unpinGroup",
+			() => tauri.unpinGroup("p1", "live", "News"),
+			"unpin_group",
+			{ providerId: "p1", contentType: "live", groupName: "News" },
+		],
+		[
+			"getPinnedGroups",
+			() => tauri.getPinnedGroups("p1", "live"),
+			"get_pinned_groups",
+			{ providerId: "p1", contentType: "live" },
+		],
+		// Gemini category sorting
+		["getGeminiApiKey", () => tauri.getGeminiApiKey(), "get_gemini_api_key"],
+		["setGeminiApiKey", () => tauri.setGeminiApiKey("k4"), "set_gemini_api_key", { key: "k4" }],
+		[
+			"testGeminiApiKey",
+			() => tauri.testGeminiApiKey("k4"),
+			"test_gemini_api_key",
+			{ key: "k4" },
+		],
+		[
+			"categorizeProvider",
+			() => tauri.categorizeProvider("p1", "live", "k4", samples),
+			"categorize_provider",
+			{ providerId: "p1", contentType: "live", apiKey: "k4", groupsWithSamples: samples },
+		],
+		[
+			"fixUncategorizedGroups",
+			() => tauri.fixUncategorizedGroups("p1", "live", "k4", samples, ["Sports"]),
+			"fix_uncategorized_groups",
+			{
+				providerId: "p1",
+				contentType: "live",
+				apiKey: "k4",
+				uncategorizedGroups: samples,
+				existingCategories: ["Sports"],
+			},
+		],
+		[
+			"renameSuperCategory",
+			() => tauri.renameSuperCategory("p1", "live", "World", "International"),
+			"rename_super_category",
+			{ providerId: "p1", contentType: "live", oldName: "World", newName: "International" },
+		],
+		[
+			"deleteSuperCategory",
+			() => tauri.deleteSuperCategory("p1", "live", "World"),
+			"delete_super_category",
+			{ providerId: "p1", contentType: "live", categoryName: "World" },
+		],
+		// Install and updates
+		["getInstallInfo", () => tauri.getInstallInfo(), "get_install_info"],
+		["packageUpdate", () => tauri.packageUpdate(), "package_update"],
+		// Downloads
+		[
+			"enqueueMovieDownload",
+			() => tauri.enqueueMovieDownload("m1"),
+			"enqueue_movie_download",
+			{ channelId: "m1" },
+		],
+		[
+			"enqueueEpisodeDownload",
+			() => tauri.enqueueEpisodeDownload(episode, "s1", "Lost"),
+			"enqueue_episode_download",
+			{ episode, seriesChannelId: "s1", seriesTitle: "Lost" },
+		],
+		[
+			"enqueueEpisodesBatch",
+			() => tauri.enqueueEpisodesBatch(episodes, "s1", "Lost"),
+			"enqueue_episodes_batch",
+			{ episodes, seriesChannelId: "s1", seriesTitle: "Lost" },
+		],
+		["listDownloads", () => tauri.listDownloads(), "list_downloads"],
+		[
+			"cacheSeriesEpisodes",
+			() => tauri.cacheSeriesEpisodes("s1", episodes),
+			"cache_series_episodes",
+			{ seriesChannelId: "s1", episodes },
+		],
+		[
+			"getCachedSeriesEpisodes",
+			() => tauri.getCachedSeriesEpisodes("s1"),
+			"get_cached_series_episodes",
+			{ seriesChannelId: "s1" },
+		],
+		["stopDownload", () => tauri.stopDownload("d1"), "stop_download", { id: "d1" }],
+		[
+			"stopDownloads",
+			() => tauri.stopDownloads(["d1", "d2"]),
+			"stop_downloads",
+			{ ids: ["d1", "d2"] },
+		],
+		["removeDownload", () => tauri.removeDownload("d1"), "remove_download", { id: "d1" }],
+		[
+			"removeDownloads",
+			() => tauri.removeDownloads(["d1", "d2"]),
+			"remove_downloads",
+			{ ids: ["d1", "d2"] },
+		],
+		[
+			"getDownloadConcurrency",
+			() => tauri.getDownloadConcurrency(),
+			"get_download_concurrency",
+		],
+		[
+			"setDownloadConcurrency",
+			() => tauri.setDownloadConcurrency(3),
+			"set_download_concurrency",
+			{ n: 3 },
+		],
+		["getDownloadFolder", () => tauri.getDownloadFolder(), "get_download_folder"],
+		[
+			"setDownloadFolder",
+			() => tauri.setDownloadFolder("/Movies"),
+			"set_download_folder",
+			{ path: "/Movies" },
+		],
+		[
+			"resolveLocalDownload",
+			() => tauri.resolveLocalDownload("m1"),
+			"resolve_local_download",
+			{ channelId: "m1" },
+		],
+		[
+			"setDownloadKeep",
+			() => tauri.setDownloadKeep("d1", true),
+			"set_download_keep",
+			{ id: "d1", keep: true },
+		],
+		["getDownloadRetention", () => tauri.getDownloadRetention(), "get_download_retention"],
+		[
+			"setDownloadRetention",
+			() => tauri.setDownloadRetention(14),
+			"set_download_retention",
+			{ days: 14 },
+		],
+		[
+			"countDownloadsDue",
+			() => tauri.countDownloadsDue(null),
+			"count_downloads_due",
+			{ days: null },
+		],
+		[
+			"scheduleRecording",
+			() =>
+				tauri.scheduleRecording("ch1", 1_000, 4_900, {
+					title: "Evening News",
+					start: 1_120,
+					end: 4_600,
+				}),
+			"schedule_recording",
+			{
+				channelId: "ch1",
+				startAt: 1_000,
+				endAt: 4_900,
+				program: { title: "Evening News", start: 1_120, end: 4_600 },
+			},
+		],
+		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
+	];
+
+	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));
+
+	it.each(rows)("$name sends $command with its arguments", async ({ call, command, args }) => {
+		await call();
+		expect(invoke).toHaveBeenCalledTimes(1);
+		expect(invoke.mock.calls[0]).toStrictEqual(
+			args === undefined ? [command] : [command, args]
+		);
+	});
+
+	it.each(rows)("$name resolves to what the backend returns", async ({ call }) => {
+		const answer = { from: "backend" };
+		invoke.mockResolvedValue(answer);
+		await expect(call()).resolves.toBe(answer);
+	});
+
+	it("passes a backend error on to the caller", async () => {
+		invoke.mockRejectedValueOnce("provider not found");
+		await expect(tauri.removeProvider("missing")).rejects.toBe("provider not found");
+	});
+
+	it("covers every wrapper the bridge exports", () => {
+		const exported = Object.entries(tauri)
+			.filter(([, value]) => typeof value === "function")
+			.map(([name]) => name)
+			.filter((name) => name !== "mpvLoad");
+		expect(cases.map(([name]) => name).sort()).toEqual(exported.sort());
 	});
 });

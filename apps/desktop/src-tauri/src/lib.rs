@@ -5,6 +5,8 @@ mod commands;
 mod downloads;
 mod logging;
 mod progress;
+#[cfg(test)]
+mod test_support;
 
 use commands::AppState;
 use mvp_core::cache::store::CacheStore;
@@ -86,6 +88,95 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+/// Every command the frontend can call. Tests build their mock app with it
+/// too, so they reach the commands the same way the app does.
+fn invoke_handler<R: tauri::Runtime>(
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        commands::load_m3u_playlist,
+        commands::load_m3u_file,
+        commands::load_xtream_provider,
+        commands::get_providers,
+        commands::remove_provider,
+        commands::get_all_channels,
+        commands::toggle_favorite,
+        commands::refresh_provider,
+        commands::update_provider,
+        commands::get_xtream_series_episodes,
+        commands::refresh_epg,
+        commands::get_epg_programmes,
+        commands::get_epg_for_live_channels,
+        commands::search_epg_programmes,
+        commands::set_epg_url,
+        commands::detect_epg_url,
+        commands::get_omdb_api_key,
+        commands::set_omdb_api_key,
+        commands::test_omdb_api_key,
+        commands::fetch_omdb_data,
+        commands::get_mdblist_api_key,
+        commands::set_mdblist_api_key,
+        commands::test_mdblist_api_key,
+        commands::fetch_mdblist_data,
+        commands::fetch_whatson_data,
+        commands::get_skip_segments,
+        commands::get_opensubtitles_api_key,
+        commands::set_opensubtitles_api_key,
+        commands::test_opensubtitles_api_key,
+        commands::search_subtitles,
+        commands::download_subtitle,
+        commands::read_subtitle_file,
+        commands::record_play_start,
+        commands::record_play_end,
+        commands::get_watch_history,
+        commands::delete_history_entry,
+        commands::delete_history_series,
+        commands::clear_watch_history,
+        commands::clear_watch_history_of_type,
+        commands::save_playback_position,
+        commands::get_playback_position,
+        commands::delete_playback_position,
+        progress::hand_off_progress,
+        commands::get_group_hierarchy,
+        commands::update_group_hierarchy_entry,
+        commands::delete_group_hierarchy,
+        commands::pin_group,
+        commands::unpin_group,
+        commands::get_pinned_groups,
+        commands::get_gemini_api_key,
+        commands::set_gemini_api_key,
+        commands::test_gemini_api_key,
+        commands::categorize_provider,
+        commands::clear_all_caches,
+        commands::reorder_group_hierarchy_entry,
+        commands::fix_uncategorized_groups,
+        commands::rename_super_category,
+        commands::delete_super_category,
+        commands::get_install_info,
+        commands::package_update,
+        commands::enqueue_movie_download,
+        commands::enqueue_episode_download,
+        commands::enqueue_episodes_batch,
+        commands::list_downloads,
+        commands::cache_series_episodes,
+        commands::get_cached_series_episodes,
+        commands::stop_download,
+        commands::stop_downloads,
+        commands::remove_download,
+        commands::remove_downloads,
+        commands::set_download_concurrency,
+        commands::get_download_concurrency,
+        commands::set_download_folder,
+        commands::get_download_folder,
+        commands::resolve_local_download,
+        commands::set_download_keep,
+        commands::get_download_retention,
+        commands::set_download_retention,
+        commands::count_downloads_due,
+        commands::schedule_recording,
+        commands::stop_recording,
+    ]
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logging::init();
@@ -128,6 +219,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    // Metadata and subtitle lookups name the app's version in their user agent.
+    mvp_core::http::set_app_version(env!("CARGO_PKG_VERSION"));
+
     builder
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
@@ -135,87 +229,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_mpv::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![
-            commands::load_m3u_playlist,
-            commands::load_m3u_file,
-            commands::load_xtream_provider,
-            commands::get_providers,
-            commands::remove_provider,
-            commands::get_all_channels,
-            commands::toggle_favorite,
-            commands::refresh_provider,
-            commands::update_provider,
-            commands::get_xtream_series_episodes,
-            commands::refresh_epg,
-            commands::get_epg_programmes,
-            commands::get_epg_for_live_channels,
-            commands::search_epg_programmes,
-            commands::set_epg_url,
-            commands::detect_epg_url,
-            commands::get_omdb_api_key,
-            commands::set_omdb_api_key,
-            commands::fetch_omdb_data,
-            commands::get_mdblist_api_key,
-            commands::set_mdblist_api_key,
-            commands::test_mdblist_api_key,
-            commands::fetch_mdblist_data,
-            commands::fetch_whatson_data,
-            commands::get_opensubtitles_api_key,
-            commands::set_opensubtitles_api_key,
-            commands::test_opensubtitles_api_key,
-            commands::search_subtitles,
-            commands::download_subtitle,
-            commands::read_subtitle_file,
-            commands::record_play_start,
-            commands::record_play_end,
-            commands::get_watch_history,
-            commands::delete_history_entry,
-            commands::delete_history_series,
-            commands::clear_watch_history,
-            commands::clear_watch_history_of_type,
-            commands::save_playback_position,
-            commands::get_playback_position,
-            commands::delete_playback_position,
-            progress::hand_off_progress,
-            commands::get_group_hierarchy,
-            commands::update_group_hierarchy_entry,
-            commands::delete_group_hierarchy,
-            commands::pin_group,
-            commands::unpin_group,
-            commands::get_pinned_groups,
-            commands::get_gemini_api_key,
-            commands::set_gemini_api_key,
-            commands::test_gemini_api_key,
-            commands::categorize_provider,
-            commands::clear_all_caches,
-            commands::reorder_group_hierarchy_entry,
-            commands::fix_uncategorized_groups,
-            commands::rename_super_category,
-            commands::delete_super_category,
-            commands::get_install_info,
-            commands::package_update,
-            commands::enqueue_movie_download,
-            commands::enqueue_episode_download,
-            commands::enqueue_episodes_batch,
-            commands::list_downloads,
-            commands::cache_series_episodes,
-            commands::get_cached_series_episodes,
-            commands::stop_download,
-            commands::stop_downloads,
-            commands::remove_download,
-            commands::remove_downloads,
-            commands::set_download_concurrency,
-            commands::get_download_concurrency,
-            commands::set_download_folder,
-            commands::get_download_folder,
-            commands::resolve_local_download,
-            commands::set_download_keep,
-            commands::get_download_retention,
-            commands::set_download_retention,
-            commands::count_downloads_due,
-            commands::schedule_recording,
-            commands::stop_recording,
-        ])
+        .invoke_handler(invoke_handler())
         .setup(|app| {
             let app_dir = app
                 .path()
@@ -267,7 +281,7 @@ pub fn run() {
             {
                 use tauri_plugin_shell::ShellExt;
                 crate::downloads::retention::start(app.handle());
-                match app.shell().sidecar("ffmpeg") {
+                match app.shell().sidecar(crate::downloads::FFMPEG_SIDECAR) {
                     Ok(_) => {
                         tracing::info!("ffmpeg sidecar resolved");
                         // Start or miss the recordings that came due while the

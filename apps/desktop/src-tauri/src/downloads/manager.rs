@@ -13,6 +13,7 @@ use mvp_core::downloads::paths::{
     derive_dest_path, part_path, path_key, unique_dest_path, PART_SUFFIX,
 };
 use mvp_core::downloads::redact::redact_credentials;
+use mvp_core::downloads::size::media_size;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -386,16 +387,19 @@ pub(crate) fn uuid_like() -> String {
     format!("{nanos:x}")
 }
 
-/// Probe Content-Length so the UI can show a byte-based percentage. Best-effort.
+/// Ask the server how big the video is, so the UI can show a percentage.
+/// None when it can't say, as for an HLS stream, whose URL is a playlist.
+///
+/// The URL is an IPTV panel's, so this goes through the panel client. It gets
+/// the API limit, because the download's progress isn't read until it returns.
 async fn probe_total_bytes(url: &str) -> Option<i64> {
-    let client = reqwest::Client::new();
-    let resp = client.head(url).send().await.ok()?;
-    resp.headers()
-        .get(reqwest::header::CONTENT_LENGTH)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()
+    let resp = mvp_core::http::download_client()
+        .head(url)
+        .timeout(mvp_core::http::API_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+    media_size(resp.url().as_str(), resp.status(), resp.headers())
 }
 
 /// Start ffmpeg for a record `claim_queued` returned. Spawns the sidecar,
@@ -427,7 +431,7 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
     let args = build_ffmpeg_args(&url, &rec.dest_path, &container);
     let sidecar = app
         .shell()
-        .sidecar("ffmpeg")
+        .sidecar(super::FFMPEG_SIDECAR)
         .map_err(|e| redact_credentials(&e.to_string()))?
         .args(args);
 
@@ -467,11 +471,11 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
     let started = now_secs();
 
     tauri::async_runtime::spawn(async move {
-        // Probe size up front (best-effort).
+        // Save the size on every start, even when there's none, so a wrong
+        // size from an older version, such as an HLS playlist's, doesn't
+        // outlive a restart.
         let total = probe_total_bytes(&url_for_probe).await;
-        if let Some(t) = total {
-            update_record(&app, &id, |r| r.total_bytes = Some(t));
-        }
+        update_record(&app, &id, |r| r.total_bytes = total);
 
         let mut acc = ProgressUpdate::default();
         let mut last_bytes: i64 = 0;
@@ -536,6 +540,9 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
             if current_status(&app, &id) == Some(DownloadStatus::Cancelled) {
                 let _ = std::fs::remove_file(format!("{final_path}{PART_SUFFIX}"));
             }
+            // The record stays as the stop or the new run left it. Sending it
+            // tells the page this ffmpeg is gone.
+            emit_progress(&app, &id);
             let _ = pump(&app);
             return;
         }
@@ -576,11 +583,12 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
 /// Stop a single in-progress or queued download: mark Cancelled, kill the child
 /// if running, and delete any partial file. Safe to call on any state.
 pub fn stop_one<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
-    // A stopped recording keeps its file, so it has its own stop.
+    // A stopped recording keeps its file, so it has its own stop. When the
+    // cache can't be read, the plain stop below runs and does nothing.
     let kind = {
         let app_state = app.state::<AppState>();
-        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
-        cache.get_download(id).ok().flatten().map(|r| r.kind)
+        let cache = app_state.cache.lock();
+        cache.ok().and_then(|c| c.get_download(id).ok().flatten()).map(|r| r.kind)
     };
     if kind == Some(DownloadKind::Recording) {
         return recordings::stop(app, id);
@@ -905,385 +913,4 @@ pub(crate) fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use mvp_core::models::channel::Channel;
-
-    fn record(id: &str, status: DownloadStatus, dest_path: &str) -> DownloadRecord {
-        DownloadRecord {
-            id: id.into(),
-            channel_id: format!("c-{id}"),
-            title: "Dune (2021)".into(),
-            kind: DownloadKind::Movie,
-            series_channel_id: None,
-            status,
-            dest_path: dest_path.into(),
-            total_bytes: None,
-            downloaded_bytes: 0,
-            avg_rate_bps: None,
-            error: None,
-            created_at: 0,
-            finished_at: None,
-            keep: false,
-            last_played_at: None,
-            source_channel_id: None,
-            start_at: None,
-            end_at: None,
-            program_title: None,
-            program_start: None,
-            program_end: None,
-        }
-    }
-
-    fn queued(id: &str, dest_path: &str) -> DownloadRecord {
-        record(id, DownloadStatus::Queued, dest_path)
-    }
-
-    fn completed(id: &str, dest_path: &Path) -> DownloadRecord {
-        DownloadRecord {
-            finished_at: Some(0),
-            ..record(id, DownloadStatus::Completed, &dest_path.to_string_lossy())
-        }
-    }
-
-    fn channel(id: &str, name: &str) -> Channel {
-        Channel {
-            id: id.into(),
-            name: name.into(),
-            url: format!("http://h/movie/u/p/{id}.mkv"),
-            logo_url: None,
-            group_title: "Movies".into(),
-            tvg_id: None,
-            tvg_name: None,
-            is_favorite: false,
-            content_type: "movie".into(),
-            sources: Vec::new(),
-            series_title: None,
-            season: None,
-            episode: None,
-        }
-    }
-
-    /// Delete the downloads `ids` the way `delete_downloads` does.
-    fn delete(cache: &Mutex<CacheStore>, ids: &[&str], missing: MissingFile) -> Deleted {
-        delete_selected(cache, &Deleting::default(), missing, |c| select(c, ids)).unwrap()
-    }
-
-    fn select(cache: &CacheStore, ids: &[&str]) -> Result<Vec<DownloadRecord>, String> {
-        Ok(ids
-            .iter()
-            .filter_map(|id| cache.get_download(id).unwrap())
-            .collect())
-    }
-
-    fn exists(cache: &Mutex<CacheStore>, id: &str) -> bool {
-        cache.lock().unwrap().get_download(id).unwrap().is_some()
-    }
-
-    #[test]
-    fn a_file_two_records_share_stays_until_the_last_one_goes() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("Dune (2021).mkv");
-        std::fs::write(&file, b"video").unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        {
-            let c = cache.lock().unwrap();
-            c.upsert_download(&completed("a", &file)).unwrap();
-            // Name the file in another case where the file system ignores
-            // case, as the default macOS one does. Elsewhere that would be
-            // another file, so use the same name.
-            let upper = dir.path().join("DUNE (2021).MKV");
-            let shared = if upper.exists() { upper } else { file.clone() };
-            c.upsert_download(&completed("b", &shared)).unwrap();
-        }
-
-        let deleted = delete(&cache, &["a"], MissingFile::Forget);
-        assert_eq!(deleted.removed, vec!["a"]);
-        assert!(!exists(&cache, "a"));
-        assert!(file.exists(), "b still points at the file");
-
-        delete(&cache, &["b"], MissingFile::Forget);
-        assert!(!exists(&cache, "b"));
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn a_file_another_download_is_writing_stays() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("Dune (2021).mkv");
-        std::fs::write(&file, b"video").unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        {
-            let c = cache.lock().unwrap();
-            c.upsert_download(&completed("a", &file)).unwrap();
-            c.upsert_download(&queued("b", &part_path(&file).to_string_lossy()))
-                .unwrap();
-        }
-        delete(&cache, &["a"], MissingFile::Forget);
-        assert!(!exists(&cache, "a"));
-        assert!(file.exists());
-    }
-
-    #[test]
-    fn deleting_every_record_of_a_shared_file_deletes_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("Dune (2021).mkv");
-        std::fs::write(&file, b"video").unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        {
-            let c = cache.lock().unwrap();
-            c.upsert_download(&completed("a", &file)).unwrap();
-            c.upsert_download(&completed("b", &file)).unwrap();
-        }
-        let deleted = delete(&cache, &["a", "b"], MissingFile::KeepWithoutFolder);
-        assert_eq!(deleted.removed, vec!["a", "b"]);
-        assert!(deleted.errors.is_empty());
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn a_missing_file_still_removes_the_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        {
-            let c = cache.lock().unwrap();
-            c.upsert_download(&completed("a", &dir.path().join("gone.mkv")))
-                .unwrap();
-            c.upsert_download(&completed("b", &dir.path().join("gone too.mkv")))
-                .unwrap();
-        }
-        delete(&cache, &["a"], MissingFile::Forget);
-        assert!(!exists(&cache, "a"));
-        // Its folder is there, so the file was deleted rather than unplugged.
-        delete(&cache, &["b"], MissingFile::KeepWithoutFolder);
-        assert!(!exists(&cache, "b"));
-    }
-
-    #[test]
-    fn a_missing_folder_keeps_the_record_unless_the_user_removes_it() {
-        let dir = tempfile::tempdir().unwrap();
-        // As if the drive with this folder were unplugged.
-        let file = dir.path().join("Unplugged").join("Dune (2021).mkv");
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        cache
-            .lock()
-            .unwrap()
-            .upsert_download(&completed("a", &file))
-            .unwrap();
-
-        let deleted = delete(&cache, &["a"], MissingFile::KeepWithoutFolder);
-        assert!(deleted.removed.is_empty());
-        assert_eq!(deleted.errors.len(), 1);
-        assert!(exists(&cache, "a"));
-
-        delete(&cache, &["a"], MissingFile::Forget);
-        assert!(!exists(&cache, "a"));
-    }
-
-    #[test]
-    fn a_file_that_cant_be_deleted_keeps_its_record_and_the_rest_go() {
-        let dir = tempfile::tempdir().unwrap();
-        // A directory where the file should be makes remove_file fail with
-        // something other than NotFound.
-        let blocked = dir.path().join("blocked.mkv");
-        std::fs::create_dir(&blocked).unwrap();
-        let file = dir.path().join("fine.mkv");
-        std::fs::write(&file, b"video").unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        let mut played = completed("a", &blocked);
-        played.last_played_at = Some(42);
-        {
-            let c = cache.lock().unwrap();
-            c.upsert_download(&played).unwrap();
-            c.upsert_download(&completed("b", &file)).unwrap();
-        }
-
-        let deleted = delete(&cache, &["a", "b"], MissingFile::Forget);
-        assert_eq!(deleted.removed, vec!["b"]);
-        assert_eq!(deleted.errors.len(), 1);
-        assert!(!file.exists());
-        let back = cache.lock().unwrap().get_download("a").unwrap().unwrap();
-        assert_eq!(back.last_played_at, Some(42));
-    }
-
-    #[test]
-    fn a_keep_set_while_the_files_are_deleted_comes_back_with_a_file_that_stayed() {
-        let dir = tempfile::tempdir().unwrap();
-        let blocked = dir.path().join("blocked.mkv");
-        std::fs::create_dir(&blocked).unwrap();
-        let file = dir.path().join("fine.mkv");
-        std::fs::write(&file, b"video").unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        {
-            let c = cache.lock().unwrap();
-            c.upsert_download(&completed("a", &blocked)).unwrap();
-            c.upsert_download(&completed("b", &file)).unwrap();
-        }
-        let deleting = Deleting::default();
-
-        // The steps of `delete_selected`, with the user pressing Keep on both
-        // downloads while their files are being deleted.
-        let (taken, _) = take_selected(&cache, &deleting, |c| select(c, &["a", "b"])).unwrap();
-        set_keep(&cache, &deleting, "a", true).unwrap();
-        set_keep(&cache, &deleting, "b", true).unwrap();
-        let (deleted, failed) = delete_files(taken, MissingFile::Forget);
-        let put = put_back(&cache, &deleting, &deleted.removed, failed).unwrap();
-
-        assert_eq!(deleted.removed, vec!["b"]);
-        assert_eq!(put, vec!["a"]);
-        let back = cache.lock().unwrap().get_download("a").unwrap().unwrap();
-        assert!(back.keep);
-        assert!(!exists(&cache, "b"));
-        assert!(deleting.ids().is_empty());
-    }
-
-    #[test]
-    fn a_running_recording_cant_be_deleted() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("City News 2026-10-12 20.00.ts");
-        std::fs::write(&file, b"video").unwrap();
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        let rec = DownloadRecord {
-            kind: DownloadKind::Recording,
-            title: "City News".into(),
-            ..record("r", DownloadStatus::Recording, &file.to_string_lossy())
-        };
-        cache.lock().unwrap().upsert_download(&rec).unwrap();
-        let deleted = delete(&cache, &["r"], MissingFile::Forget);
-        assert!(deleted.removed.is_empty());
-        assert_eq!(
-            deleted.errors,
-            ["Stop the recording of City News before deleting it."]
-        );
-        assert!(file.exists());
-        assert!(exists(&cache, "r"));
-    }
-
-    #[test]
-    fn a_scheduled_recording_has_no_file_to_delete() {
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        for id in ["a", "b"] {
-            let rec = DownloadRecord {
-                kind: DownloadKind::Recording,
-                ..record(id, DownloadStatus::Scheduled, "")
-            };
-            cache.lock().unwrap().upsert_download(&rec).unwrap();
-        }
-        let deleted = delete(&cache, &["a"], MissingFile::KeepWithoutFolder);
-        assert_eq!(deleted.removed, ["a"]);
-        assert!(deleted.errors.is_empty());
-        assert!(!exists(&cache, "a"));
-        assert!(exists(&cache, "b"));
-    }
-
-    #[test]
-    fn a_keep_for_a_download_that_isnt_there_does_nothing() {
-        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
-        let deleting = Deleting::default();
-        set_keep(&cache, &deleting, "gone", true).unwrap();
-        assert!(!exists(&cache, "gone"));
-        assert!(deleting.ids().is_empty());
-    }
-
-    #[test]
-    fn says_which_downloads_were_not_deleted() {
-        let mut deleted = Deleted::default();
-        assert_eq!(removal_error(&deleted), None);
-
-        deleted
-            .errors
-            .push("Could not delete /a.mkv: denied".into());
-        assert_eq!(
-            removal_error(&deleted).unwrap(),
-            "Could not delete /a.mkv: denied"
-        );
-
-        deleted.removed.push("b".into());
-        deleted
-            .errors
-            .push("Could not delete /c.mkv: denied".into());
-        assert_eq!(
-            removal_error(&deleted).unwrap(),
-            "Deleted 1 of 3.\nCould not delete /a.mkv: denied\nCould not delete /c.mkv: denied"
-        );
-    }
-
-    #[test]
-    fn a_download_is_claimed_once() {
-        let cache = CacheStore::open_in_memory().unwrap();
-        cache
-            .upsert_download(&queued("a", "/dl/a.mkv.part"))
-            .unwrap();
-
-        let claimed = claim_queued(&cache, "a").unwrap().unwrap();
-        assert_eq!(claimed.status, DownloadStatus::Downloading);
-        assert_eq!(
-            cache.get_download("a").unwrap().unwrap().status,
-            DownloadStatus::Downloading
-        );
-        assert!(claim_queued(&cache, "a").unwrap().is_none());
-        assert!(claim_queued(&cache, "missing").unwrap().is_none());
-    }
-
-    #[test]
-    fn a_stopped_download_is_not_claimed() {
-        let cache = CacheStore::open_in_memory().unwrap();
-        let mut rec = queued("a", "/dl/a.mkv.part");
-        rec.status = DownloadStatus::Cancelled;
-        cache.upsert_download(&rec).unwrap();
-
-        assert!(claim_queued(&cache, "a").unwrap().is_none());
-        assert_eq!(
-            cache.get_download("a").unwrap().unwrap().status,
-            DownloadStatus::Cancelled
-        );
-    }
-
-    #[test]
-    fn picks_a_path_no_download_or_file_uses() {
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("Dune (2021).mkv");
-        let cache = CacheStore::open_in_memory().unwrap();
-        assert_eq!(unused_dest_path(&cache, &dest).unwrap(), dest);
-
-        // Another download writing the same file, in another case.
-        let upper = dir.path().join("DUNE (2021).MKV");
-        cache
-            .upsert_download(&queued("a", &part_path(&upper).to_string_lossy()))
-            .unwrap();
-        let second = dir.path().join("Dune (2021) (2).mkv");
-        assert_eq!(unused_dest_path(&cache, &dest).unwrap(), second);
-
-        // A file already in the folder that no download knows about, and a
-        // partial file left behind.
-        std::fs::write(&second, b"video").unwrap();
-        let third = dir.path().join("Dune (2021) (3).mkv");
-        std::fs::write(part_path(&third), b"vid").unwrap();
-        assert_eq!(
-            unused_dest_path(&cache, &dest).unwrap(),
-            dir.path().join("Dune (2021) (4).mkv")
-        );
-    }
-
-    #[test]
-    fn starts_only_while_the_channel_keeps_its_title() {
-        let cache = CacheStore::open_in_memory().unwrap();
-        let rec = queued("a", "/dl/a.mkv.part");
-        cache
-            .upsert_channel("p1", &channel(&rec.channel_id, "Dune (2021)"))
-            .unwrap();
-        assert_eq!(
-            source_url(&cache, &rec).unwrap(),
-            "http://h/movie/u/p/c-a.mkv"
-        );
-
-        // A refresh moved another title to this position in the playlist.
-        cache
-            .upsert_channel("p1", &channel(&rec.channel_id, "Arrival (2016)"))
-            .unwrap();
-        assert!(source_url(&cache, &rec).is_err());
-
-        let gone = queued("b", "/dl/b.mkv.part");
-        assert!(source_url(&cache, &gone).is_err());
-    }
-}
+mod tests;

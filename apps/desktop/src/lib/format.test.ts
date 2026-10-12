@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { formatBytes, formatSkip, formatTime } from "./format";
+import { formatBytes, formatCount, formatSkip, formatTime } from "./format";
 
 describe("formatTime", () => {
 	// ── Under one hour (M:SS) ─────────────────────────────────────────
@@ -85,5 +85,24 @@ describe("formatSkip", () => {
 	it("leaves a skip that went nowhere unsigned", () => {
 		expect(formatSkip(0)).toBe("0s");
 		expect(formatSkip(-0)).toBe("0s");
+	});
+});
+
+describe("formatCount", () => {
+	it("uses the noun as is for one", () => {
+		expect(formatCount(1, "episode")).toBe("1 episode");
+	});
+
+	it("adds an s for any other count", () => {
+		expect(formatCount(0, "episode")).toBe("0 episodes");
+		expect(formatCount(3, "play")).toBe("3 plays");
+	});
+
+	it("groups the digits of a large count", () => {
+		expect(formatCount(12_345, "channel")).toBe(`${(12_345).toLocaleString()} channels`);
+	});
+
+	it("takes a plural that isn't just an s", () => {
+		expect(formatCount(2, "series", "series")).toBe("2 series");
 	});
 });

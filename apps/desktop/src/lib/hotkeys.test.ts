@@ -3,8 +3,12 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+	isInside,
 	isKeyboardFocusedControl,
+	isSliderOwnKey,
+	leaveSliderKeysToPlayer,
 	playerShortcuts,
+	repeatsWhenHeld,
 	resolvePlayerHotkey,
 	SEEK_LONG,
 	SEEK_SHORT,
@@ -27,6 +31,10 @@ describe("resolvePlayerHotkey", () => {
 	it("maps space and K to play/pause", () => {
 		expect(resolvePlayerHotkey(key(" "))).toEqual({ type: "togglePlay" });
 		expect(resolvePlayerHotkey(key("k"))).toEqual({ type: "togglePlay" });
+	});
+	it("maps Enter to skipping an intro or credits", () => {
+		expect(resolvePlayerHotkey(key("Enter"))).toEqual({ type: "skipSegment" });
+		expect(resolvePlayerHotkey(key("Enter", { metaKey: true }))).toBeNull();
 	});
 	it("maps F and M regardless of case", () => {
 		expect(resolvePlayerHotkey(key("F"))).toEqual({ type: "toggleFullscreen" });
@@ -90,6 +98,34 @@ describe("resolvePlayerHotkey", () => {
 	});
 });
 
+describe("repeatsWhenHeld", () => {
+	it("keeps seeking and changing the volume while a key is held", () => {
+		for (const k of ["ArrowLeft", "ArrowRight", "j", "L", "ArrowUp", "ArrowDown"]) {
+			expect(repeatsWhenHeld(resolvePlayerHotkey(key(k))!)).toBe(true);
+		}
+	});
+
+	it("runs everything else once per press", () => {
+		for (const k of [
+			" ",
+			"k",
+			"f",
+			"m",
+			"Escape",
+			"n",
+			"p",
+			"s",
+			"i",
+			"?",
+			"5",
+			"Home",
+			"Enter",
+		]) {
+			expect(repeatsWhenHeld(resolvePlayerHotkey(key(k))!)).toBe(false);
+		}
+	});
+});
+
 describe("playerShortcuts", () => {
 	const seekLabels = (skip?: { back: number; forward: number }) =>
 		playerShortcuts(skip)
@@ -105,6 +141,30 @@ describe("playerShortcuts", () => {
 			"Seek 15s back / 30s forward",
 			"Seek 15s back / 30s forward",
 		]);
+	});
+});
+
+describe("isInside", () => {
+	afterEach(() => {
+		document.body.innerHTML = "";
+	});
+
+	it("is true only for nodes inside the container", () => {
+		const container = document.createElement("div");
+		const child = document.createElement("button");
+		const outside = document.createElement("button");
+		container.appendChild(child);
+		document.body.append(container, outside);
+		expect(isInside(container, child)).toBe(true);
+		expect(isInside(container, container)).toBe(true);
+		expect(isInside(container, outside)).toBe(false);
+	});
+
+	it("is false without a container or a node", () => {
+		const child = document.createElement("button");
+		expect(isInside(null, child)).toBe(false);
+		expect(isInside(document.body, null)).toBe(false);
+		expect(isInside(document.body, window)).toBe(false);
 	});
 });
 
@@ -137,5 +197,123 @@ describe("isKeyboardFocusedControl", () => {
 		document.body.appendChild(button);
 		vi.spyOn(button, "matches").mockReturnValue(false);
 		expect(isKeyboardFocusedControl(button)).toBe(false);
+	});
+});
+
+describe("slider keys", () => {
+	afterEach(() => {
+		document.body.innerHTML = "";
+	});
+
+	/** A slider thumb, focused by a press or by the keyboard, as `Slider` marks it. */
+	const thumb = (focusSource?: "pointer" | "keyboard") => {
+		const el = document.createElement("span");
+		el.setAttribute("role", "slider");
+		if (focusSource) el.setAttribute("data-focus-source", focusSource);
+		document.body.appendChild(el);
+		return el;
+	};
+
+	const keyDown = (target: EventTarget, k: string) => {
+		const e = { key: k, target, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+		leaveSliderKeysToPlayer(e);
+		return e;
+	};
+
+	const SLIDER_KEYS = [
+		"ArrowLeft",
+		"ArrowRight",
+		"ArrowUp",
+		"ArrowDown",
+		"Home",
+		"End",
+		"PageUp",
+		"PageDown",
+	];
+
+	it("lets a slider reached with the keyboard move with its keys and keep them", () => {
+		const el = thumb("keyboard");
+		for (const k of SLIDER_KEYS) {
+			expect(isSliderOwnKey(el, k)).toBe(true);
+			const e = keyDown(el, k);
+			expect(e.preventDefault).not.toHaveBeenCalled();
+			expect(e.stopPropagation).toHaveBeenCalled();
+		}
+	});
+
+	it("keeps a pressed slider still and passes its keys on to the player", () => {
+		const el = thumb("pointer");
+		for (const k of SLIDER_KEYS) {
+			expect(isSliderOwnKey(el, k)).toBe(false);
+			const e = keyDown(el, k);
+			expect(e.preventDefault).toHaveBeenCalled();
+			expect(e.stopPropagation).not.toHaveBeenCalled();
+		}
+	});
+
+	it("treats a slider with no recorded focus source as reached with the keyboard", () => {
+		expect(isSliderOwnKey(thumb(), "ArrowLeft")).toBe(true);
+	});
+
+	it("never touches other keys", () => {
+		for (const el of [thumb("keyboard"), thumb("pointer")]) {
+			for (const k of [" ", "f", "m", "Escape", "Tab"]) {
+				expect(isSliderOwnKey(el, k)).toBe(false);
+				const e = keyDown(el, k);
+				expect(e.preventDefault).not.toHaveBeenCalled();
+				expect(e.stopPropagation).not.toHaveBeenCalled();
+			}
+		}
+	});
+
+	it("only applies to sliders", () => {
+		const button = document.createElement("button");
+		document.body.appendChild(button);
+		expect(isSliderOwnKey(button, "ArrowLeft")).toBe(false);
+		expect(isSliderOwnKey(null, "ArrowLeft")).toBe(false);
+	});
+});
+
+import { isTypingTarget } from "./hotkeys";
+
+describe("isTypingTarget", () => {
+	/** jsdom doesn't compute isContentEditable, so set it the way a browser would. */
+	const block = (editable: boolean) => {
+		const div = document.createElement("div");
+		Object.defineProperty(div, "isContentEditable", { value: editable });
+		return div;
+	};
+
+	it.each([
+		{ name: "a text input", tag: "input" },
+		{ name: "a text area", tag: "textarea" },
+		{ name: "a dropdown", tag: "select" },
+	])("is true for $name", ({ tag }) => {
+		expect(isTypingTarget(document.createElement(tag))).toBe(true);
+	});
+
+	it("is true for editable text and false for plain content", () => {
+		expect(isTypingTarget(block(true))).toBe(true);
+		expect(isTypingTarget(block(false))).toBe(false);
+	});
+
+	it("is false for targets that aren't elements", () => {
+		expect(isTypingTarget(null)).toBe(false);
+		expect(isTypingTarget(window)).toBe(false);
+		expect(isTypingTarget(document)).toBe(false);
+	});
+});
+
+describe("isKeyboardFocusedControl without :focus-visible support", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("lets Space activate a button when the browser can't tell how it was focused", () => {
+		const button = document.createElement("button");
+		vi.spyOn(button, "matches").mockImplementation(() => {
+			throw new DOMException("':focus-visible' is not a valid selector", "SyntaxError");
+		});
+		expect(isKeyboardFocusedControl(button)).toBe(true);
 	});
 });

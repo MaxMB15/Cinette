@@ -11,6 +11,7 @@ import type {
 	OmdbData,
 	MdbListData,
 	WhatsonData,
+	SkipSegment,
 	WatchHistoryEntry,
 	SubtitleSearchResult,
 	GroupHierarchyEntry,
@@ -104,7 +105,12 @@ export const updateProvider = (
 export const getXtreamSeriesEpisodes = (channelId: string): Promise<Channel[]> =>
 	invoke("get_xtream_series_episodes", { channelId });
 
-export const refreshEpg = (providerId: string): Promise<void> =>
+/**
+ * Downloads a provider's guide and saves it. Resolves to the number of
+ * programs saved, which is 0 when the guide came back empty and the saved one
+ * was kept.
+ */
+export const refreshEpg = (providerId: string): Promise<number> =>
 	invoke("refresh_epg", { providerId });
 
 export const getEpgProgrammes = (
@@ -135,6 +141,10 @@ export const getOmdbApiKey = (): Promise<string | null> => invoke("get_omdb_api_
 
 export const setOmdbApiKey = (key: string): Promise<void> => invoke("set_omdb_api_key", { key });
 
+/** Whether OMDb takes `key`, which needn't be saved. Rejects when OMDb can't be reached. */
+export const testOmdbApiKey = (key: string): Promise<boolean> =>
+	invoke("test_omdb_api_key", { key });
+
 export const fetchOmdbData = (
 	channelId: string,
 	title: string,
@@ -158,6 +168,21 @@ export const fetchMdbListData = (imdbId: string, mediaType: string): Promise<Mdb
 
 export const fetchWhatsonData = (imdbId: string, mediaType: string): Promise<WhatsonData | null> =>
 	invoke("fetch_whatson_data", { imdbId, mediaType });
+
+// --- Skip Segments ---
+
+/**
+ * The intro, recap, credits and preview of a movie, or of an episode when
+ * `season` and `episode` are set. `duration` is the length of the video being
+ * played, in seconds, which the backend checks the times against. Empty when
+ * no OMDb key is set or nothing is known.
+ */
+export const getSkipSegments = (
+	imdbId: string,
+	season: number | null,
+	episode: number | null,
+	duration: number
+): Promise<SkipSegment[]> => invoke("get_skip_segments", { imdbId, season, episode, duration });
 
 // --- OpenSubtitles Commands ---
 

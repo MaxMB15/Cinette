@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState } from "react";
-import { X, RefreshCw } from "lucide-react";
+import { useId, useState } from "react";
+import { X } from "lucide-react";
+import { BusyButton } from "@/components/ui/busy-button";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
+import { fileUrlFromPath, isFileUrl, pathFromFileUrl } from "@/lib/file-url";
 import type { Provider } from "@/lib/types";
 import {
 	type ProviderSettings,
@@ -13,6 +17,7 @@ import {
 	saveProviderSettings,
 } from "@/hooks/useChannels";
 import { refreshEpg, setEpgUrl, detectEpgUrl } from "@/lib/tauri";
+import { XtreamFields } from "./XtreamFields";
 
 interface ProviderSettingsModalProps {
 	provider: Provider;
@@ -44,11 +49,64 @@ const EPG_INTERVAL_OPTIONS = [
 	{ label: "Every 3 days", hours: 72 },
 ];
 
+const OFF_ON: SegmentedOption<boolean>[] = [
+	{ value: false, label: "Off" },
+	{ value: true, label: "On" },
+];
+
+/** Shown when a guide refreshed by hand had no programs. */
+const EMPTY_GUIDE_MESSAGE = "The guide came back with no programs, so nothing changed.";
+
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
 	<p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
 		{children}
 	</p>
 );
+
+interface IntervalSelectProps {
+	id: string;
+	value: number;
+	onChange: (hours: number) => void;
+	options: { label: string; hours: number }[];
+}
+
+const IntervalSelect = ({ id, value, onChange, options }: IntervalSelectProps) => (
+	<select
+		id={id}
+		value={value}
+		onChange={(e) => onChange(Number(e.target.value))}
+		className="w-full bg-secondary text-sm rounded-lg px-3 py-2 border border-transparent focus:outline-none focus:border-primary appearance-none cursor-pointer"
+	>
+		{options.map((opt) => (
+			<option key={opt.hours} value={opt.hours}>
+				{opt.label}
+			</option>
+		))}
+	</select>
+);
+
+/**
+ * Each button in the modal runs one action and shows how its last run went
+ * right under it, independent of the other buttons.
+ */
+const useAction = () => {
+	const [busy, setBusy] = useState(false);
+	const [message, setMessage] = useState<string | null>(null);
+
+	const run = async (action: () => Promise<void>) => {
+		setBusy(true);
+		setMessage(null);
+		try {
+			await action();
+		} catch (e) {
+			setMessage(String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return { busy, message, setMessage, run };
+};
 
 export const ProviderSettingsModal = ({
 	provider,
@@ -56,13 +114,15 @@ export const ProviderSettingsModal = ({
 	onRefreshNow,
 	onUpdateProvider,
 }: ProviderSettingsModalProps) => {
-	const initial = loadProviderSettings(provider.id);
-	const isFile = provider.url.startsWith("file://");
+	const titleId = useId();
+	// Only seeds the form state below, so storage is read once and not on every keystroke.
+	const [initial] = useState(() => loadProviderSettings(provider.id));
+	const isFile = isFileUrl(provider.url);
 	const isXtream = provider.type === "xtream";
 
 	// Details fields
 	const [name, setName] = useState(provider.name);
-	const [url, setUrl] = useState(isFile ? provider.url.slice(7) : provider.url);
+	const [url, setUrl] = useState(pathFromFileUrl(provider.url));
 	const [username, setUsername] = useState(provider.username ?? "");
 	const [password, setPassword] = useState(provider.password ?? "");
 
@@ -77,69 +137,37 @@ export const ProviderSettingsModal = ({
 	const [epgAutoRefresh, setEpgAutoRefresh] = useState(initial.epgAutoRefresh);
 	const [epgIntervalHours, setEpgIntervalHours] = useState(initial.epgRefreshIntervalHours);
 
-	// EPG refresh-now state
-	const [epgRefreshing, setEpgRefreshing] = useState(false);
-	const [epgRefreshError, setEpgRefreshError] = useState<string | null>(null);
+	const refresh = useAction();
+	const detect = useAction();
+	const epgRefresh = useAction();
+	const save = useAction();
+	// Set when a guide refreshed by hand saved no programs.
+	const [epgRefreshEmpty, setEpgRefreshEmpty] = useState(false);
 
-	// EPG auto-detect state
-	const [detecting, setDetecting] = useState(false);
-	const [detectMessage, setDetectMessage] = useState<string | null>(null);
+	const handleRefreshNow = () => refresh.run(() => onRefreshNow(provider.id));
 
-	// Refresh-now state
-	const [refreshing, setRefreshing] = useState(false);
-	const [refreshError, setRefreshError] = useState<string | null>(null);
-
-	// Save state
-	const [saving, setSaving] = useState(false);
-	const [saveError, setSaveError] = useState<string | null>(null);
-
-	const handleRefreshNow = async () => {
-		setRefreshing(true);
-		setRefreshError(null);
-		try {
-			await onRefreshNow(provider.id);
-		} catch (e) {
-			setRefreshError(String(e));
-		} finally {
-			setRefreshing(false);
-		}
-	};
-
-	const handleDetectEpgUrl = async () => {
-		setDetecting(true);
-		setDetectMessage(null);
-		try {
+	const handleDetectEpgUrl = () =>
+		detect.run(async () => {
 			const detected = await detectEpgUrl(provider.id);
 			if (detected) {
 				setEpgUrlState(detected);
 			} else {
-				setDetectMessage("No EPG URL detected");
+				detect.setMessage("No EPG URL detected");
 			}
-		} catch (e) {
-			setDetectMessage(String(e));
-		} finally {
-			setDetecting(false);
-		}
+		});
+
+	const handleEpgRefreshNow = () => {
+		setEpgRefreshEmpty(false);
+		return epgRefresh.run(async () => {
+			const saved = await refreshEpg(provider.id);
+			setEpgRefreshEmpty(saved === 0);
+		});
 	};
 
-	const handleEpgRefreshNow = async () => {
-		setEpgRefreshing(true);
-		setEpgRefreshError(null);
-		try {
-			await refreshEpg(provider.id);
-		} catch (e) {
-			setEpgRefreshError(String(e));
-		} finally {
-			setEpgRefreshing(false);
-		}
-	};
-
-	const handleSave = async () => {
-		setSaving(true);
-		setSaveError(null);
-		try {
+	const handleSave = () =>
+		save.run(async () => {
 			// Update credentials if anything changed
-			const storedUrl = isFile ? `file://${url}` : url;
+			const storedUrl = isFile ? fileUrlFromPath(url) : url;
 			const credentialsChanged =
 				name !== provider.name ||
 				storedUrl !== provider.url ||
@@ -167,349 +195,258 @@ export const ProviderSettingsModal = ({
 				epgRefreshIntervalHours: epgIntervalHours,
 			});
 			onClose();
-		} catch (e) {
-			setSaveError(String(e));
-		} finally {
-			setSaving(false);
-		}
-	};
+		});
 
 	return (
-		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-			onClick={onClose}
+		<Dialog
+			// Closing mid-save would drop a save error, so the modal stays until it's done.
+			onClose={save.busy ? () => {} : onClose}
+			labelledBy={titleId}
+			overlayClassName="backdrop-blur-sm"
+			className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[90vh]"
 		>
-			<div
-				className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[90vh]"
-				onClick={(e) => e.stopPropagation()}
-			>
-				{/* Header */}
-				<div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-					<div className="flex items-center gap-2 min-w-0">
-						<h2 className="text-sm font-semibold truncate">Playlist Settings</h2>
-						<span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-medium uppercase shrink-0">
-							{provider.type}
-						</span>
-					</div>
-					<button
-						onClick={onClose}
-						className="ml-3 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-					>
-						<X className="h-4 w-4" />
-					</button>
+			{/* Header */}
+			<div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+				<div className="flex items-center gap-2 min-w-0">
+					<h2 id={titleId} className="text-sm font-semibold truncate">
+						Playlist Settings
+					</h2>
+					<span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground font-medium uppercase shrink-0">
+						{provider.type}
+					</span>
 				</div>
+				<button
+					type="button"
+					onClick={onClose}
+					disabled={save.busy}
+					className="ml-3 shrink-0 text-muted-foreground hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
+					aria-label="Close"
+				>
+					<X className="h-4 w-4" />
+				</button>
+			</div>
 
-				{/* Body — scrollable */}
-				<div className="px-5 py-4 space-y-5 overflow-y-auto">
-					{/* Details section */}
-					<div>
-						<SectionLabel>Details</SectionLabel>
-						<div className="space-y-2">
-							<div>
-								<label className="text-xs text-muted-foreground mb-1 block">
-									Name
-								</label>
+			{/* Scrollable body */}
+			<div className="px-5 py-4 space-y-5 overflow-y-auto">
+				{/* Details section */}
+				<div>
+					<SectionLabel>Details</SectionLabel>
+					<div className="space-y-2">
+						<Field label="Name">
+							{(id) => (
 								<Input
+									id={id}
 									value={name}
 									onChange={(e) => setName(e.target.value)}
 									placeholder="Provider name"
 									className="h-8 text-sm"
 								/>
-							</div>
+							)}
+						</Field>
 
-							{isFile ? (
-								<div>
-									<label className="text-xs text-muted-foreground mb-1 block">
-										File path
-									</label>
-									<p className="text-xs text-muted-foreground bg-secondary rounded-lg px-3 py-2 truncate">
-										{url}
-									</p>
-								</div>
-							) : isXtream ? (
-								<>
-									<div>
-										<label className="text-xs text-muted-foreground mb-1 block">
-											Server URL
-										</label>
-										<Input
-											value={url}
-											onChange={(e) => setUrl(e.target.value)}
-											placeholder="http://example.com:8080"
-											className="h-8 text-sm"
-										/>
-									</div>
-									<div>
-										<label className="text-xs text-muted-foreground mb-1 block">
-											Username
-										</label>
-										<Input
-											value={username}
-											onChange={(e) => setUsername(e.target.value)}
-											placeholder="Username"
-											className="h-8 text-sm"
-										/>
-									</div>
-									<div>
-										<label className="text-xs text-muted-foreground mb-1 block">
-											Password
-										</label>
-										<Input
-											value={password}
-											onChange={(e) => setPassword(e.target.value)}
-											placeholder="Password"
-											type="password"
-											className="h-8 text-sm"
-										/>
-									</div>
-								</>
-							) : (
-								<div>
-									<label className="text-xs text-muted-foreground mb-1 block">
-										Playlist URL
-									</label>
+						{isFile ? (
+							<div>
+								{/* Not a label, since the path can't be edited here. */}
+								<p className="text-xs text-muted-foreground mb-1">File path</p>
+								<p className="text-xs text-muted-foreground bg-secondary rounded-lg px-3 py-2 truncate">
+									{url}
+								</p>
+							</div>
+						) : isXtream ? (
+							<XtreamFields
+								variant="edit"
+								url={url}
+								username={username}
+								password={password}
+								onUrlChange={setUrl}
+								onUsernameChange={setUsername}
+								onPasswordChange={setPassword}
+							/>
+						) : (
+							<Field label="Playlist URL">
+								{(id) => (
 									<Input
+										id={id}
 										value={url}
 										onChange={(e) => setUrl(e.target.value)}
 										placeholder="https://example.com/playlist.m3u"
 										className="h-8 text-sm"
 									/>
+								)}
+							</Field>
+						)}
+					</div>
+				</div>
+
+				{/* Auto-refresh section */}
+				{!isFile && (
+					<div>
+						<SectionLabel>Auto-refresh</SectionLabel>
+						<div className="space-y-3">
+							<div className="flex items-center justify-between">
+								<div>
+									<p className="text-sm font-medium">Auto-refresh</p>
+									<p className="text-xs text-muted-foreground">
+										Refresh on launch if overdue, then repeat on schedule
+									</p>
 								</div>
+								<SegmentedControl
+									aria-label="Auto-refresh"
+									value={autoRefresh}
+									onChange={setAutoRefresh}
+									options={OFF_ON}
+									className="ml-3 shrink-0"
+								/>
+							</div>
+
+							{autoRefresh && (
+								<Field label="Refresh interval">
+									{(id) => (
+										<IntervalSelect
+											id={id}
+											value={intervalHours}
+											onChange={setIntervalHours}
+											options={INTERVAL_OPTIONS}
+										/>
+									)}
+								</Field>
 							)}
 						</div>
 					</div>
+				)}
 
-					{/* Auto-refresh section */}
-					{!isFile && (
-						<div>
-							<SectionLabel>Auto-refresh</SectionLabel>
-							<div className="space-y-3">
-								<div className="flex items-center justify-between">
-									<div>
-										<p className="text-sm font-medium">Auto-refresh</p>
-										<p className="text-xs text-muted-foreground">
-											Refresh on launch if overdue, then repeat on schedule
-										</p>
-									</div>
-									<div className="flex gap-0.5 p-0.5 bg-secondary rounded-lg ml-3 shrink-0">
-										<button
-											onClick={() => setAutoRefresh(false)}
-											className={cn(
-												"px-3 py-1 rounded-md text-xs font-medium transition-colors",
-												!autoRefresh
-													? "bg-background text-foreground shadow-sm"
-													: "text-muted-foreground hover:text-foreground"
-											)}
-										>
-											Off
-										</button>
-										<button
-											onClick={() => setAutoRefresh(true)}
-											className={cn(
-												"px-3 py-1 rounded-md text-xs font-medium transition-colors",
-												autoRefresh
-													? "bg-background text-foreground shadow-sm"
-													: "text-muted-foreground hover:text-foreground"
-											)}
-										>
-											On
-										</button>
-									</div>
-								</div>
-
-								{autoRefresh && (
-									<div>
-										<label className="text-xs text-muted-foreground mb-1 block">
-											Refresh interval
-										</label>
-										<select
-											value={intervalHours}
-											onChange={(e) =>
-												setIntervalHours(Number(e.target.value))
-											}
-											className="w-full bg-secondary text-sm rounded-lg px-3 py-2 border border-transparent focus:outline-none focus:border-primary appearance-none cursor-pointer"
-										>
-											{INTERVAL_OPTIONS.map((opt) => (
-												<option key={opt.hours} value={opt.hours}>
-													{opt.label}
-												</option>
-											))}
-										</select>
-									</div>
-								)}
-							</div>
+				{/* Manual refresh section */}
+				{!isFile && (
+					<div>
+						<SectionLabel>Manual refresh</SectionLabel>
+						<div className="flex items-center justify-between">
+							<p className="text-xs text-muted-foreground">
+								{provider.lastUpdated
+									? `Last updated ${new Date(provider.lastUpdated).toLocaleString()}`
+									: "Never refreshed"}
+							</p>
+							<BusyButton
+								busy={refresh.busy}
+								busyLabel="Refreshing…"
+								onClick={handleRefreshNow}
+								disabled={save.busy}
+								className="shrink-0 ml-3"
+							>
+								Refresh now
+							</BusyButton>
 						</div>
-					)}
+						{refresh.message && (
+							<p className="text-xs text-destructive mt-1">{refresh.message}</p>
+						)}
+					</div>
+				)}
 
-					{/* Manual refresh section */}
-					{!isFile && (
-						<div>
-							<SectionLabel>Manual refresh</SectionLabel>
+				{/* EPG Schedule section */}
+				{!isFile && (
+					<div>
+						<SectionLabel>EPG Schedule</SectionLabel>
+						<div className="space-y-3">
+							{/* EPG URL */}
+							<Field label="EPG URL">
+								{(id) => (
+									<>
+										<div className="flex gap-2">
+											<Input
+												id={id}
+												value={epgUrl}
+												onChange={(e) => setEpgUrlState(e.target.value)}
+												placeholder="https://example.com/epg.xml"
+												className="h-8 text-sm"
+											/>
+											<BusyButton
+												busy={detect.busy}
+												busyLabel="Detecting…"
+												onClick={handleDetectEpgUrl}
+												disabled={save.busy}
+												className="shrink-0"
+											>
+												Auto-detect
+											</BusyButton>
+										</div>
+										{detect.message && (
+											<p className="text-xs text-muted-foreground mt-1">
+												{detect.message}
+											</p>
+										)}
+									</>
+								)}
+							</Field>
+
+							{/* EPG Auto-refresh toggle */}
+							<div className="flex items-center justify-between">
+								<div>
+									<p className="text-sm font-medium">Auto-refresh EPG</p>
+									<p className="text-xs text-muted-foreground">
+										Automatically refresh the EPG schedule on a schedule
+									</p>
+								</div>
+								<SegmentedControl
+									aria-label="Auto-refresh EPG"
+									value={epgAutoRefresh}
+									onChange={setEpgAutoRefresh}
+									options={OFF_ON}
+									className="ml-3 shrink-0"
+								/>
+							</div>
+
+							{/* EPG Refresh interval */}
+							{epgAutoRefresh && (
+								<Field label="EPG refresh interval">
+									{(id) => (
+										<IntervalSelect
+											id={id}
+											value={epgIntervalHours}
+											onChange={setEpgIntervalHours}
+											options={EPG_INTERVAL_OPTIONS}
+										/>
+									)}
+								</Field>
+							)}
+
+							{/* EPG Refresh now */}
 							<div className="flex items-center justify-between">
 								<p className="text-xs text-muted-foreground">
-									{provider.lastUpdated
-										? `Last updated ${new Date(provider.lastUpdated).toLocaleString()}`
-										: "Never refreshed"}
+									Fetch latest EPG data for this provider
 								</p>
-								<Button
-									variant="secondary"
-									size="sm"
-									onClick={handleRefreshNow}
-									disabled={refreshing || saving}
+								<BusyButton
+									busy={epgRefresh.busy}
+									busyLabel="Refreshing…"
+									onClick={handleEpgRefreshNow}
+									disabled={save.busy}
 									className="shrink-0 ml-3"
 								>
-									<RefreshCw
-										className={cn(
-											"h-3.5 w-3.5 mr-1.5",
-											refreshing && "animate-spin"
-										)}
-									/>
-									{refreshing ? "Refreshing…" : "Refresh now"}
-								</Button>
+									Refresh EPG
+								</BusyButton>
 							</div>
-							{refreshError && (
-								<p className="text-xs text-destructive mt-1">{refreshError}</p>
+							{epgRefresh.message && (
+								<p className="text-xs text-destructive">{epgRefresh.message}</p>
+							)}
+							{epgRefreshEmpty && (
+								<p className="text-xs text-muted-foreground">
+									{EMPTY_GUIDE_MESSAGE}
+								</p>
 							)}
 						</div>
-					)}
+					</div>
+				)}
 
-					{/* EPG Schedule section */}
-					{!isFile && (
-						<div>
-							<SectionLabel>EPG Schedule</SectionLabel>
-							<div className="space-y-3">
-								{/* EPG URL */}
-								<div>
-									<label className="text-xs text-muted-foreground mb-1 block">
-										EPG URL
-									</label>
-									<div className="flex gap-2">
-										<Input
-											value={epgUrl}
-											onChange={(e) => setEpgUrlState(e.target.value)}
-											placeholder="https://example.com/epg.xml"
-											className="h-8 text-sm"
-										/>
-										<Button
-											variant="secondary"
-											size="sm"
-											onClick={handleDetectEpgUrl}
-											disabled={detecting || saving}
-											className="shrink-0"
-										>
-											<RefreshCw
-												className={cn(
-													"h-3.5 w-3.5 mr-1.5",
-													detecting && "animate-spin"
-												)}
-											/>
-											{detecting ? "Detecting…" : "Auto-detect"}
-										</Button>
-									</div>
-									{detectMessage && (
-										<p className="text-xs text-muted-foreground mt-1">
-											{detectMessage}
-										</p>
-									)}
-								</div>
-
-								{/* EPG Auto-refresh toggle */}
-								<div className="flex items-center justify-between">
-									<div>
-										<p className="text-sm font-medium">Auto-refresh EPG</p>
-										<p className="text-xs text-muted-foreground">
-											Automatically refresh the EPG schedule on a schedule
-										</p>
-									</div>
-									<div className="flex gap-0.5 p-0.5 bg-secondary rounded-lg ml-3 shrink-0">
-										<button
-											onClick={() => setEpgAutoRefresh(false)}
-											className={cn(
-												"px-3 py-1 rounded-md text-xs font-medium transition-colors",
-												!epgAutoRefresh
-													? "bg-background text-foreground shadow-sm"
-													: "text-muted-foreground hover:text-foreground"
-											)}
-										>
-											Off
-										</button>
-										<button
-											onClick={() => setEpgAutoRefresh(true)}
-											className={cn(
-												"px-3 py-1 rounded-md text-xs font-medium transition-colors",
-												epgAutoRefresh
-													? "bg-background text-foreground shadow-sm"
-													: "text-muted-foreground hover:text-foreground"
-											)}
-										>
-											On
-										</button>
-									</div>
-								</div>
-
-								{/* EPG Refresh interval */}
-								{epgAutoRefresh && (
-									<div>
-										<label className="text-xs text-muted-foreground mb-1 block">
-											EPG refresh interval
-										</label>
-										<select
-											value={epgIntervalHours}
-											onChange={(e) =>
-												setEpgIntervalHours(Number(e.target.value))
-											}
-											className="w-full bg-secondary text-sm rounded-lg px-3 py-2 border border-transparent focus:outline-none focus:border-primary appearance-none cursor-pointer"
-										>
-											{EPG_INTERVAL_OPTIONS.map((opt) => (
-												<option key={opt.hours} value={opt.hours}>
-													{opt.label}
-												</option>
-											))}
-										</select>
-									</div>
-								)}
-
-								{/* EPG Refresh now */}
-								<div className="flex items-center justify-between">
-									<p className="text-xs text-muted-foreground">
-										Fetch latest EPG data for this provider
-									</p>
-									<Button
-										variant="secondary"
-										size="sm"
-										onClick={handleEpgRefreshNow}
-										disabled={epgRefreshing || saving}
-										className="shrink-0 ml-3"
-									>
-										<RefreshCw
-											className={cn(
-												"h-3.5 w-3.5 mr-1.5",
-												epgRefreshing && "animate-spin"
-											)}
-										/>
-										{epgRefreshing ? "Refreshing…" : "Refresh EPG"}
-									</Button>
-								</div>
-								{epgRefreshError && (
-									<p className="text-xs text-destructive">{epgRefreshError}</p>
-								)}
-							</div>
-						</div>
-					)}
-
-					{saveError && <p className="text-xs text-destructive">{saveError}</p>}
-				</div>
-
-				{/* Footer */}
-				<div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border shrink-0">
-					<Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
-						Cancel
-					</Button>
-					<Button size="sm" onClick={handleSave} disabled={saving}>
-						{saving ? "Saving…" : "Save"}
-					</Button>
-				</div>
+				{save.message && <p className="text-xs text-destructive">{save.message}</p>}
 			</div>
-		</div>
+
+			{/* Footer */}
+			<div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border shrink-0">
+				<Button variant="ghost" size="sm" onClick={onClose} disabled={save.busy}>
+					Cancel
+				</Button>
+				<Button size="sm" onClick={handleSave} disabled={save.busy}>
+					{save.busy ? "Saving…" : "Save"}
+				</Button>
+			</div>
+		</Dialog>
 	);
 };

@@ -111,8 +111,12 @@ with OpenGL enabled (`scripts/build-libmpv.sh`).
 ### Linux
 
 `LinuxGlRenderer` creates a Wayland subsurface below the webview's surface and an EGL
-context on it, and passes the Wayland display to libmpv. All EGL and GL calls run on
-the GLib main thread. X11 sessions use the separate-window fallback.
+context on it. All EGL and GL calls run on the GLib main thread. X11 sessions use the
+separate-window fallback.
+
+On Wayland, mpv decodes with `hwdec=auto-copy-safe`, which copies each decoded frame
+back to memory before upload. Zero-copy decoding opens a VA-API display through the
+compositor, and libva crashes there on some desktops. X11 keeps zero-copy `auto`.
 
 ### iOS
 
@@ -156,10 +160,12 @@ the video view changed size so it redraws at the new size.
 | Separate player window | iOS has one window | If the Metal view fails, the player shows an error |
 
 Rust gates these with `#[cfg(desktop)]` and target-specific dependencies.
-Permissions for the desktop-only plugins and the sidecar are in
-`capabilities/desktop.json`, which applies only on macOS, Linux and Windows. The
-`shell` plugin stays in the iOS build so the downloads code compiles unchanged, and
-nothing calls it there. React checks `isMobilePlatform()` from `lib/platform.ts`.
+Permissions for the desktop-only plugins are in `capabilities/desktop.json`,
+which applies only on macOS, Linux and Windows. The downloads code starts the
+ffmpeg sidecar from Rust, which capabilities don't govern, so no capability lets
+the web view run it. The `shell` plugin stays in the iOS build so the downloads
+code compiles unchanged, and nothing calls it there. React checks
+`isMobilePlatform()` from `lib/platform.ts`.
 
 #### Layouts
 

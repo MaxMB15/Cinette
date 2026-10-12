@@ -51,12 +51,15 @@ pub fn stream_copy_args(
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
-        // Transparent recovery from transient network drops.
+        // Pick a file up where the connection broke off. That needs a server
+        // that takes byte ranges, and ffmpeg doesn't retry a broken HLS
+        // segment at all. There's no `-reconnect_streamed`: from a server
+        // without ranges it starts again at the first byte, which writes the
+        // start of the file twice, or loops for good when the server gave no
+        // size. There's no `-reconnect_at_eof` either. It takes the normal end
+        // of every file and HLS playlist for a drop and keeps retrying for
+        // close to a minute.
         "-reconnect".into(),
-        "1".into(),
-        "-reconnect_streamed".into(),
-        "1".into(),
-        "-reconnect_at_eof".into(),
         "1".into(),
         "-reconnect_delay_max".into(),
         "30".into(),
@@ -148,6 +151,19 @@ mod tests {
     }
 
     #[test]
+    fn does_not_reconnect_when_a_file_ends() {
+        let args = build_ffmpeg_args("http://h/movie/u/p/1.m3u8", "/tmp/1.mkv.part", "mkv");
+        assert!(!args.iter().any(|a| a == "-reconnect_at_eof"));
+        assert!(args.windows(2).any(|w| w[0] == "-reconnect" && w[1] == "1"));
+    }
+
+    #[test]
+    fn does_not_start_a_file_again_from_the_first_byte() {
+        let args = build_ffmpeg_args("http://h/movie/u/p/1.ts", "/tmp/1.ts.part", "ts");
+        assert!(!args.iter().any(|a| a == "-reconnect_streamed"));
+    }
+
+    #[test]
     fn mp4_container_gets_faststart_and_mp4_muxer() {
         let args = build_ffmpeg_args("http://h/movie/u/p/1.mp4", "/tmp/1.mp4.part", "mp4");
         let joined = args.join(" ");
@@ -191,5 +207,22 @@ mod tests {
         let mut acc = ProgressUpdate::default();
         assert!(fold_progress_line(&mut acc, "progress=end"));
         assert!(acc.done);
+    }
+
+    #[test]
+    fn other_progress_lines_change_nothing() {
+        // ffmpeg reports more than size and time, such as the frame count and
+        // speed, and can print a line that is not a key and value.
+        let mut acc = ProgressUpdate::default();
+        for line in [
+            "frame=120",
+            "speed=1.5x",
+            "bitrate=N/A",
+            "",
+            "Press [q] to stop",
+        ] {
+            assert!(!fold_progress_line(&mut acc, line), "{line:?}");
+        }
+        assert_eq!(acc, ProgressUpdate::default());
     }
 }
