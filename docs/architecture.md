@@ -50,7 +50,7 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 | `iptv/omdb.rs`, `whatson.rs`, `opensubtitles.rs`, `mdblist.rs` | Metadata and subtitle services |
 | `ai/gemini.rs` | Optional category sorting with Google Gemini |
 | `cache/store.rs` | SQLite storage (bundled `rusqlite`): providers, channels, EPG, watch history, playback positions, downloads and metadata caches |
-| `downloads/` | Download model, file paths and ffmpeg invocation |
+| `downloads/` | Download model, file paths, ffmpeg invocation, retention, and `recording.rs`, which names recording files and plans when each recording starts, merges, stops or is missed |
 | `models/` | `Channel`, `Playlist` and related types |
 
 ### `apps/desktop/src-tauri`
@@ -58,6 +58,25 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 The app itself. `lib.rs` opens the database in the app data folder and registers the
 plugins, and `commands.rs` exposes the core features to the frontend as Tauri commands.
 `downloads/` queues downloads and runs the bundled ffmpeg sidecar.
+
+Recordings of live channels share the downloads table, with the kind `recording`.
+Besides `completed` and `failed`, they have three states of their own, `scheduled`,
+`recording` and `missed`. Each has its own `channel_id`, and `source_channel_id` names
+the live channel. `downloads/recordings.rs` checks when a recording is due to start or
+stop, and at least every 30 seconds, and acts on the plan from `mvp-core`. It records
+to MPEG-TS with stream copy and stops ffmpeg by writing `q` to its stdin, so the file
+is closed cleanly. ffmpeg also gets a length limit a few minutes past the end, so it
+stops by itself if the app crashes. Recordings don't use download slots. When one
+starts, the running downloads from its provider go back in the queue, and the scheduler
+holds them until no recording of that provider runs. When two recordings from one
+provider overlap only by their margins, the first stops a few seconds before the second
+starts. A recording whose stream fails tries again up to 3 times, after 30 seconds, a
+minute and two minutes. Errors keep the provider's address but never the stream's,
+which holds the login. At launch, a recording cut off by a quit or crash keeps its file
+and is marked finished, and a new recording takes the rest when at least a minute of it
+is still ahead. `downloads/keep_awake.rs` keeps the computer awake while ffmpeg
+records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
+`schedule_recording` and `stop_recording`, and both refuse on iOS and Android.
 
 ### `crates/tauri-plugin-mpv`
 
@@ -175,8 +194,9 @@ React component
       → mvp-core or MpvState
 ```
 
-Going the other way, Rust sends Tauri events: `download://progress` for downloads,
-and `mpv://first-frame`, `mpv://buffering` and `mpv://render-fallback` from the player.
+Going the other way, Rust sends Tauri events: `download://progress` and
+`download://removed` for downloads and recordings, and `mpv://first-frame`,
+`mpv://buffering` and `mpv://render-fallback` from the player.
 
 ## Storage
 
@@ -187,12 +207,13 @@ Everything lives in the app data folder (`com.maxvideoplayer.app` under
 - `settings.json`: the OMDb, MDBList and OpenSubtitles keys, the download folder and
   the number of downloads that run at once, via the Tauri store plugin
 - `gemini.json`: the Gemini key
-- `downloads/`: downloaded movies and series
+- `downloads/`: downloaded movies and series, with recordings in `downloads/recordings/`
 
 The webview's local storage keeps some per-provider preferences, such as refresh
 intervals, and the player preferences in `lib/player-prefs.ts`: `mvp_default_volume`
-and `mvp_hwdec`. The volume picked in the player lasts until the app quits, in session
-storage (`mvp_volume`).
+and `mvp_hwdec`. The recording margins are `mvp_recording_start_early` and
+`mvp_recording_end_late`, in minutes, in `lib/recordings.ts`. The volume picked in the
+player lasts until the app quits, in session storage (`mvp_volume`).
 
 ## Updates
 

@@ -8,6 +8,7 @@
 
 use crate::commands::AppState;
 use crate::downloads::manager::DownloadManager;
+use crate::downloads::recordings::Recorder;
 use mvp_core::cache::store::CacheStore;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -36,6 +37,7 @@ pub(crate) struct TestApp {
 impl Drop for TestApp {
     fn drop(&mut self) {
         crate::downloads::manager::stop_all_for_exit(self.app.handle());
+        crate::downloads::recordings::stop_all_for_exit(self.app.handle());
     }
 }
 
@@ -61,6 +63,7 @@ impl TestApp {
             cache: Mutex::new(cache),
         });
         app.manage(DownloadManager::new(dir.path().join("downloads")));
+        app.manage(Recorder::default());
         app.manage(MpvState::new());
         Self { app, dir }
     }

@@ -39,6 +39,7 @@ import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/brows
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
 import { nowSeconds } from "@/lib/date";
+import { recordingChannel } from "@/lib/recordings";
 import { formatCount } from "@/lib/format";
 import type {
 	Channel,
@@ -483,6 +484,12 @@ export const ChannelList = () => {
 			} else if (entry.contentType === "movie") {
 				const movie = byType.movie.find((ch) => ch.name === entry.channelName);
 				if (movie) setSelectedMovie(movie);
+			} else if (entry.contentType === "recording") {
+				// A recording plays from its file for as long as the app keeps it.
+				const rec = byChannel.get(entry.channelId);
+				if (rec?.kind !== "recording" || rec.status !== "completed") return;
+				const ch = recordingChannel(rec);
+				navigate("/player", { state: { url: ch.url, channelName: ch.name, channel: ch } });
 			} else {
 				const ch = byType.live.find((c) => c.id === entry.channelId);
 				if (!ch) return;
@@ -491,7 +498,7 @@ export const ChannelList = () => {
 				});
 			}
 		},
-		[byType, navigate, fetchXtreamShowEpisodes]
+		[byType, byChannel, navigate, fetchXtreamShowEpisodes]
 	);
 
 	const favoritesByType = useMemo(() => {
@@ -503,11 +510,17 @@ export const ChannelList = () => {
 		};
 	}, [filtered]);
 
-	// Count of cards shown on the Downloads tab: channels/series with any record.
-	// Number of downloaded items (movies + episodes). `byChannel` is keyed per
-	// download channel, so a series' episodes count individually; the series
-	// container itself has no download record and must not be added.
-	const downloadCount = useMemo(() => byChannel.size, [byChannel]);
+	// Number of downloaded items (movies + episodes + finished recordings).
+	// `byChannel` is keyed per download channel, so a series' episodes count
+	// individually; the series container itself has no download record and
+	// must not be added. A recording counts once it has a file.
+	const downloadCount = useMemo(
+		() =>
+			[...byChannel.values()].filter(
+				(d) => d.kind !== "recording" || d.status === "completed"
+			).length,
+		[byChannel]
+	);
 
 	const isGrid = activeTab !== "live";
 	// Dynamic grid columns: fit as many ~180 px-wide cards as possible, stretch via 1fr.

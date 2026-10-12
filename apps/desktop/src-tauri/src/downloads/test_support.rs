@@ -76,6 +76,12 @@ pub(crate) fn record(id: &str, status: DownloadStatus, dest_path: &str) -> Downl
         finished_at: None,
         keep: false,
         last_played_at: None,
+        source_channel_id: None,
+        start_at: None,
+        end_at: None,
+        program_title: None,
+        program_start: None,
+        program_end: None,
     }
 }
 

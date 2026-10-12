@@ -15,15 +15,17 @@ interface HistoryTabProps {
 	onPlay: (entry: WatchHistoryEntry) => void;
 }
 
+const BADGE_COLOR: Record<string, string> = {
+	live: "bg-red-500/20 text-red-400",
+	movie: "bg-blue-500/20 text-blue-400",
+	recording: "bg-amber-500/20 text-amber-500",
+};
+
 const ContentTypeBadge = ({ type }: { type: string }) => {
 	const normalized = type.toLowerCase();
-	const color =
-		normalized === "live"
-			? "bg-red-500/20 text-red-400"
-			: normalized === "movie"
-				? "bg-blue-500/20 text-blue-400"
-				: "bg-purple-500/20 text-purple-400";
-	const label = normalized === "live" ? "LIVE" : normalized === "movie" ? "MOVIE" : "SERIES";
+	const known = normalized in BADGE_COLOR;
+	const color = known ? BADGE_COLOR[normalized] : "bg-purple-500/20 text-purple-400";
+	const label = known ? normalized.toUpperCase() : "SERIES";
 	return (
 		<span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${color}`}>{label}</span>
 	);

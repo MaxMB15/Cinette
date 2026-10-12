@@ -10,7 +10,8 @@ export interface Channel {
 	tvgId?: string;
 	tvgName?: string;
 	isFavorite: boolean;
-	contentType: "live" | "movie" | "series";
+	/** A "recording" is a finished recording of a live channel, played from its file. */
+	contentType: "live" | "movie" | "series" | "recording";
 	sources: string[];
 	/**
 	 * Frontend-only: the full ordered source list, captured when a non-default
@@ -240,13 +241,27 @@ export interface PlaybackPosition {
 	updatedAt: number;
 }
 
-export type DownloadStatus = "queued" | "downloading" | "completed" | "failed" | "cancelled";
+/**
+ * A recording waits as "scheduled", runs as "recording" and ends as
+ * "completed". One whose whole window passed while the app was closed is
+ * "missed".
+ */
+export type DownloadStatus =
+	| "queued"
+	| "downloading"
+	| "completed"
+	| "failed"
+	| "cancelled"
+	| "scheduled"
+	| "recording"
+	| "missed";
 
 export interface DownloadRecord {
 	id: string;
 	channelId: string;
 	title: string;
-	kind: "movie" | "episode";
+	/** A recording's `channelId` is its own id. `sourceChannelId` is the live channel. */
+	kind: "movie" | "episode" | "recording";
 	seriesChannelId: string | null;
 	status: DownloadStatus;
 	destPath: string;
@@ -260,6 +275,25 @@ export interface DownloadRecord {
 	keep: boolean;
 	/** When the downloaded file last started playing, in Unix seconds. */
 	lastPlayedAt: number | null;
+	/** For a recording, the live channel it records. */
+	sourceChannelId?: string | null;
+	/** For a recording, when it starts, in Unix seconds. */
+	startAt?: number | null;
+	/** For a recording, when it ends, in Unix seconds. */
+	endAt?: number | null;
+	/** For a recording, the program or programs it records. */
+	programTitle?: string | null;
+	/** For a recording of a program, when the program itself starts, in Unix seconds. */
+	programStart?: number | null;
+	/** For a recording of a program, when the program itself ends, in Unix seconds. */
+	programEnd?: number | null;
+}
+
+/** A program from the guide that a recording is for, with its times in Unix seconds. */
+export interface GuideProgram {
+	title: string;
+	start: number;
+	end: number;
 }
 
 /** Aggregate download state for a series card (computed in the hook). */

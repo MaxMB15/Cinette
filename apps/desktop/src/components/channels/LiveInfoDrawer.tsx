@@ -2,19 +2,26 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Tv2, Loader2 } from "lucide-react";
-import type { Channel, EpgProgram } from "@/lib/types";
+import { X, Tv2, Loader2, Circle, Square, CalendarClock } from "lucide-react";
+import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 import { getEpgProgrammes } from "@/lib/tauri";
+import { formatHHMM } from "@/lib/epg-window";
+import { isMobilePlatform } from "@/lib/platform";
+import { isRecordingOf, recordingOfProgram } from "@/lib/recordings";
+import { useProviderIds } from "@/hooks/useChannels";
+import { useDownloads } from "@/hooks/useDownloads";
+import { useNow } from "@/hooks/useNow";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
+import { RecordDialog, type RecordRequest } from "@/components/downloads/RecordDialog";
 import { EpgTimelineBar, WINDOW_PAST, WINDOW_FUTURE } from "./EpgTimelineBar";
+
+// Recording runs ffmpeg on the computer, so phones and tablets don't offer it.
+const RECORDING_SUPPORTED = !isMobilePlatform();
 
 interface LiveInfoDrawerProps {
 	channel: Channel;
 	onClose: () => void;
 }
-
-const formatTime = (unix: number): string =>
-	new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 const formatDuration = (startTime: number, endTime: number): string => {
 	const mins = Math.floor((endTime - startTime) / 60);
@@ -28,9 +35,18 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	const [visible, setVisible] = useState(false);
 	const [programmes, setProgrammes] = useState<EpgProgram[]>([]);
 	const [loading, setLoading] = useState(true);
-	const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+	const now = useNow();
 	const [selectedProg, setSelectedProg] = useState<EpgProgram | null>(null);
 	const currentRowRef = useRef<HTMLLIElement | null>(null);
+	const { downloads } = useDownloads();
+	const providerIds = useProviderIds();
+	const [recordRequest, setRecordRequest] = useState<RecordRequest | null>(null);
+	// The channel's recordings, found by its name too, since a refresh can change its id.
+	const recordings = RECORDING_SUPPORTED
+		? downloads.filter((r) => isRecordingOf(r, channel, providerIds))
+		: [];
+	const running = recordings.find((r) => r.status === "recording");
+	const onAir = programmes.find((p) => p.startTime <= now && p.endTime > now) ?? null;
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
@@ -66,14 +82,6 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 			cancelled = true;
 		};
 	}, [channel.tvgId, channel.id]);
-
-	// Update `now` every 30 seconds
-	useEffect(() => {
-		const id = setInterval(() => {
-			setNow(Math.floor(Date.now() / 1000));
-		}, 30_000);
-		return () => clearInterval(id);
-	}, []);
 
 	// Auto-scroll to current programme after programmes load
 	useEffect(() => {
@@ -142,6 +150,39 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 							{channel.name}
 						</p>
 					</div>
+
+					{RECORDING_SUPPORTED &&
+						(running ? (
+							<button
+								onClick={() =>
+									setRecordRequest({ type: "stop", recording: running })
+								}
+								className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
+							>
+								<Square className="h-3 w-3 fill-current" />
+								Stop recording
+							</button>
+						) : (
+							<button
+								onClick={() => setRecordRequest({ type: "now", onAir })}
+								// Until the guide loads, it can't tell when the program on air ends.
+								disabled={loading}
+								className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium hover:bg-secondary/60 transition-colors shrink-0 disabled:opacity-50 disabled:pointer-events-none"
+							>
+								<Circle className="h-3 w-3 fill-red-500 text-red-500" />
+								Record
+							</button>
+						))}
+					{RECORDING_SUPPORTED && (
+						<button
+							onClick={() => setRecordRequest({ type: "range" })}
+							aria-label="Record a time range"
+							title="Record a time range"
+							className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+						>
+							<CalendarClock className="h-4 w-4" />
+						</button>
+					)}
 
 					<button
 						onClick={handleClose}
@@ -216,10 +257,11 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 									<li
 										key={`${prog.channelId}-${prog.startTime}-${idx}`}
 										ref={isCurrent ? currentRowRef : null}
+										className="flex items-center gap-1"
 									>
 										<button
 											onClick={() => setSelectedProg(prog)}
-											className={`w-full flex items-center gap-3 py-2.5 px-3 rounded-lg mb-0.5 transition-colors text-left ${
+											className={`flex-1 min-w-0 flex items-center gap-3 py-2.5 px-3 rounded-lg mb-0.5 transition-colors text-left ${
 												isSelected
 													? "bg-primary/15"
 													: isCurrent
@@ -248,7 +290,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 														: "text-muted-foreground"
 												}`}
 											>
-												{formatTime(prog.startTime)}
+												{formatHHMM(prog.startTime)}
 											</span>
 
 											{/* Duration */}
@@ -280,6 +322,24 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 												</span>
 											) : null}
 										</button>
+										{RECORDING_SUPPORTED && isPast && (
+											<span className="w-8 shrink-0" aria-hidden />
+										)}
+										{RECORDING_SUPPORTED && !isPast && (
+											<ProgramRecordButton
+												program={prog}
+												covering={recordingOfProgram(recordings, prog, now)}
+												onRecord={() =>
+													setRecordRequest({
+														type: "program",
+														program: prog,
+													})
+												}
+												onStop={(recording) =>
+													setRecordRequest({ type: "stop", recording })
+												}
+											/>
+										)}
 									</li>
 								);
 							})}
@@ -289,6 +349,69 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 
 				<div className="shrink-0 pb-2" />
 			</div>
+
+			{RECORDING_SUPPORTED && (
+				<RecordDialog
+					channel={channel}
+					request={recordRequest}
+					onClose={() => setRecordRequest(null)}
+				/>
+			)}
 		</div>
+	);
+};
+
+/**
+ * The record button on a program in the schedule. It records the program, or
+ * asks before it cancels or stops the recording that covers it, which can
+ * cover more than this program.
+ */
+const ProgramRecordButton = ({
+	program,
+	covering,
+	onRecord,
+	onStop,
+}: {
+	program: EpgProgram;
+	covering: DownloadRecord | undefined;
+	onRecord: () => void;
+	onStop: (recording: DownloadRecord) => void;
+}) => {
+	const base =
+		"shrink-0 h-8 w-8 mb-0.5 flex items-center justify-center rounded-lg transition-colors";
+
+	if (covering?.status === "recording") {
+		return (
+			<button
+				onClick={() => onStop(covering)}
+				aria-label={`Stop recording ${program.title}`}
+				title="Recording"
+				className={`${base} hover:bg-red-500/10`}
+			>
+				<span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-pulse" />
+			</button>
+		);
+	}
+	if (covering) {
+		return (
+			<button
+				onClick={() => onStop(covering)}
+				aria-label={`Cancel the recording of ${program.title}`}
+				title="Scheduled. Click to cancel."
+				className={`${base} hover:bg-red-500/10`}
+			>
+				<Circle className="h-3 w-3 fill-red-500 text-red-500" />
+			</button>
+		);
+	}
+	return (
+		<button
+			onClick={onRecord}
+			aria-label={`Record ${program.title}`}
+			title="Record"
+			className={`${base} text-muted-foreground/50 hover:text-red-400 hover:bg-secondary/40`}
+		>
+			<Circle className="h-3 w-3" />
+		</button>
 	);
 };

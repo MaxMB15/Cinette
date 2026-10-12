@@ -23,6 +23,7 @@ vi.mock("@/hooks/useDownloads", async (importOriginal) => {
 	return {
 		...actual,
 		useDownloads: () => ({
+			downloads: state.downloads,
 			...actual.groupDownloads(state.downloads),
 			retentionDays: state.retentionDays,
 		}),

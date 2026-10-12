@@ -24,6 +24,37 @@ fn episode(id: &str, name: &str, url: &str) -> Channel {
     }
 }
 
+/// A live news channel. Its stream is never fetched, since the recordings
+/// in these tests never start.
+fn news() -> Channel {
+    Channel {
+        group_title: "News".into(),
+        content_type: "live".into(),
+        ..movie("n1", "City News", "http://news.example.test/live/1.ts")
+    }
+}
+
+/// Schedules half an hour of the news channel's "Evening News" from
+/// `start`.
+async fn schedule_news(app: &TestApp, start: i64) -> DownloadRecord {
+    add_channel(app, &news());
+    let program = GuideProgram {
+        title: "Evening News".into(),
+        start,
+        end: start + 1_800,
+    };
+    schedule_recording(
+        app.handle(),
+        app.state(),
+        "n1".into(),
+        start,
+        start + 1_800,
+        Some(program),
+    )
+    .await
+    .unwrap()
+}
+
 fn status(app: &TestApp, id: &str) -> DownloadStatus {
     download(app, id).unwrap().status
 }
@@ -518,12 +549,108 @@ async fn a_channel_without_a_finished_file_plays_from_the_playlist() {
 }
 
 #[tokio::test]
+async fn a_scheduled_recording_is_saved_and_sent_to_the_frontend() {
+    let app = TestApp::new();
+    let events = Events::watch(&app);
+    // An hour ahead, so it only waits.
+    let start = manager::now_secs() + 3_600;
+
+    let rec = schedule_news(&app, start).await;
+
+    assert_eq!(
+        (rec.kind, rec.status),
+        (DownloadKind::Recording, DownloadStatus::Scheduled)
+    );
+    assert_eq!(rec.source_channel_id.as_deref(), Some("n1"));
+    assert_eq!(
+        (rec.start_at, rec.end_at),
+        (Some(start), Some(start + 1_800))
+    );
+    assert_eq!(rec.program_title.as_deref(), Some("Evening News"));
+    assert_eq!(download(&app, &rec.id), Some(rec.clone()));
+    assert_eq!(events.sent(), vec![DownloadEvent::Progress(rec)]);
+}
+
+#[tokio::test]
+async fn a_movie_cant_be_recorded() {
+    let app = TestApp::new();
+    add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
+    let events = Events::watch(&app);
+    let start = manager::now_secs() + 3_600;
+
+    let err = schedule_recording(
+        app.handle(),
+        app.state(),
+        "c1".into(),
+        start,
+        start + 60,
+        None,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(err, "Only live channels can be recorded.");
+    assert!(list_downloads(app.state()).await.unwrap().is_empty());
+    assert!(events.sent().is_empty());
+}
+
+#[tokio::test]
+async fn stopping_a_recording_that_hasnt_started_cancels_it() {
+    let app = TestApp::new();
+    let rec = schedule_news(&app, manager::now_secs() + 3_600).await;
+    let events = Events::watch(&app);
+
+    stop_recording(app.handle(), rec.id.clone()).await.unwrap();
+
+    assert_eq!(download(&app, &rec.id), None);
+    assert_eq!(events.sent(), vec![DownloadEvent::Removed(rec.id)]);
+}
+
+#[tokio::test]
+async fn stopping_a_running_recording_from_the_downloads_list_ends_it_now() {
+    let app = TestApp::new();
+    let start = manager::now_secs() - 600;
+    let scheduled = schedule_news(&app, start).await;
+    // It records as if it had started, though no ffmpeg runs. Its file is
+    // kept, so the plain download stop must not handle it.
+    let dir = app.downloads_dir().join("recordings");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("City News.ts");
+    std::fs::write(&file, b"news").unwrap();
+    add_download(
+        &app,
+        &DownloadRecord {
+            status: DownloadStatus::Recording,
+            dest_path: file.to_string_lossy().into(),
+            ..scheduled.clone()
+        },
+    );
+    let events = Events::watch(&app);
+    let before = manager::now_secs();
+
+    stop_download(app.handle(), scheduled.id.clone())
+        .await
+        .unwrap();
+
+    let ending = download(&app, &scheduled.id).unwrap();
+    // The recording itself marks the record done once ffmpeg has closed
+    // the file.
+    assert_eq!(ending.status, DownloadStatus::Recording);
+    let end = ending.end_at.unwrap();
+    assert!((before..=manager::now_secs()).contains(&end));
+    assert!(file.exists());
+    assert_eq!(events.progress(&scheduled.id), vec![ending]);
+}
+
+#[tokio::test]
 async fn a_poisoned_cache_fails_the_commands_that_need_it() {
     let app = TestApp::new();
     add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
+    add_channel(&app, &news());
     let state = app.state();
     poison(&state.cache);
     let ep = || episode("e1", "Good News About Hell", stalls());
+    let start = manager::now_secs() + 3_600;
 
     assert!(
         enqueue_movie_download(app.handle(), app.state(), "c1".into())
@@ -556,6 +683,17 @@ async fn a_poisoned_cache_fails_the_commands_that_need_it() {
             .await
             .is_err()
     );
+    assert!(schedule_recording(
+        app.handle(),
+        app.state(),
+        "n1".into(),
+        start,
+        start + 60,
+        None
+    )
+    .await
+    .is_err());
+    assert!(stop_recording(app.handle(), "r1".into()).await.is_err());
 
     state.cache.clear_poison();
     assert!(list_downloads(app.state()).await.unwrap().is_empty());

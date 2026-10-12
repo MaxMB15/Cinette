@@ -2,11 +2,13 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::downloads::manager::{self, DownloadManager};
+use crate::downloads::recordings;
 use crate::downloads::retention;
 use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
+use mvp_core::downloads::recording::GuideProgram;
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
 use mvp_core::iptv::omdb::{fetch_omdb, OmdbData, OmdbError};
@@ -1887,6 +1889,43 @@ pub async fn set_download_retention<R: Runtime>(
 #[command]
 pub async fn count_downloads_due<R: Runtime>(app: AppHandle<R>, days: Option<u32>) -> Result<usize, String> {
     retention::count_due(&app, days.filter(|&d| d > 0))
+}
+
+/// Record the live channel `channel_id` from `start_at` to `end_at`, in Unix
+/// seconds, for the guide's `program` when there is one. A start that has
+/// passed records from now.
+#[command]
+pub async fn schedule_recording<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    channel_id: String,
+    start_at: i64,
+    end_at: i64,
+    program: Option<GuideProgram>,
+) -> Result<DownloadRecord, String> {
+    ensure_downloads_supported()?;
+    let rec = {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        recordings::schedule(
+            &cache,
+            &channel_id,
+            start_at,
+            end_at,
+            program,
+            manager::now_secs(),
+        )?
+    };
+    manager::emit_progress(&app, &rec.id);
+    recordings::check_soon(&app);
+    Ok(rec)
+}
+
+/// Stop a recording and keep what it recorded, or cancel one that hasn't
+/// started.
+#[command]
+pub async fn stop_recording<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    ensure_downloads_supported()?;
+    recordings::stop(&app, &id)
 }
 
 /// Given a channel id, return the local file path if a completed download

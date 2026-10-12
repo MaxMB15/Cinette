@@ -534,6 +534,23 @@ describe("backend commands", () => {
 			"count_downloads_due",
 			{ days: null },
 		],
+		[
+			"scheduleRecording",
+			() =>
+				tauri.scheduleRecording("ch1", 1_000, 4_900, {
+					title: "Evening News",
+					start: 1_120,
+					end: 4_600,
+				}),
+			"schedule_recording",
+			{
+				channelId: "ch1",
+				startAt: 1_000,
+				endAt: 4_900,
+				program: { title: "Evening News", start: 1_120, end: 4_600 },
+			},
+		],
+		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));

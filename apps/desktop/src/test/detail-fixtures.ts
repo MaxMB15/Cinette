@@ -14,6 +14,15 @@ export const makeNewsChannel = (overrides: Partial<Channel> = {}): Channel =>
 		...overrides,
 	});
 
+/** City News, a live channel of the Xtream provider "xt-1", which `makeRecording` records. */
+export const makeCityNews = (overrides: Partial<Channel> = {}): Channel =>
+	makeNewsChannel({
+		id: "xt-1-xt-0",
+		name: "City News",
+		url: "http://live.example.test/city-news.ts",
+		...overrides,
+	});
+
 /** Sintel, a movie. */
 export const makeMovie = (overrides: Partial<Channel> = {}): Channel =>
 	makeChannel({
@@ -85,5 +94,27 @@ export const makeMovieDownload = (overrides: Partial<DownloadRecord> = {}): Down
 		title: "Sintel",
 		destPath: "/downloads/sintel.mkv",
 		finishedAt: Math.floor(Date.now() / 1000),
+		...overrides,
+	});
+
+/**
+ * A recording of `makeCityNews` from 1 000 to 2 000 that hasn't started. A recording's
+ * `channelId` is its own id, and `sourceChannelId` is the live channel's.
+ */
+export const makeRecording = (overrides: Partial<DownloadRecord> = {}): DownloadRecord =>
+	makeDownload({
+		id: "rec-1",
+		channelId: "rec-1",
+		title: "City News",
+		kind: "recording",
+		status: "scheduled",
+		destPath: "",
+		totalBytes: null,
+		downloadedBytes: 0,
+		finishedAt: null,
+		sourceChannelId: "xt-1-xt-0",
+		startAt: 1_000,
+		endAt: 2_000,
+		programTitle: null,
 		...overrides,
 	});

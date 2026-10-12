@@ -534,7 +534,11 @@ export const PlayerView = () => {
 		setSubtitleDelay(0);
 		setSubtitlePos(DEFAULT_SUBTITLE_POSITION);
 
-		if (!activeChannel || activeChannel.contentType === "live") {
+		// Only movies and series have details to look up. A recording is live TV.
+		if (
+			!activeChannel ||
+			(activeChannel.contentType !== "movie" && activeChannel.contentType !== "series")
+		) {
 			setEnrichedMeta(null);
 			return;
 		}
@@ -573,6 +577,8 @@ export const PlayerView = () => {
 	}, [activeChannel?.id]);
 
 	const activeImdbId = enrichedMeta?.omdbData?.imdbId ?? null;
+	// A recording has no info drawer.
+	const hasInfo = !!activeChannel && activeChannel.contentType !== "recording";
 	const canShowSubtitles =
 		activeImdbId !== null &&
 		(activeChannel?.contentType === "movie" || activeChannel?.contentType === "series");
@@ -993,7 +999,7 @@ export const PlayerView = () => {
 					if (canShowSubtitles) setShowSubtitlePicker((v) => !v);
 					break;
 				case "toggleInfo":
-					if (activeChannel) setShowInfoDrawer((v) => !v);
+					if (hasInfo) setShowInfoDrawer((v) => !v);
 					break;
 				case "toggleShortcuts":
 					setShowShortcuts((v) => !v);
@@ -1036,7 +1042,7 @@ export const PlayerView = () => {
 			prevEpisode,
 			playEpisode,
 			canShowSubtitles,
-			activeChannel,
+			hasInfo,
 			flushProgress,
 			skip,
 			skipBy,
@@ -1239,7 +1245,7 @@ export const PlayerView = () => {
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
-					onInfo={activeChannel ? () => setShowInfoDrawer(true) : undefined}
+					onInfo={hasInfo ? () => setShowInfoDrawer(true) : undefined}
 					onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
 					onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
 					autoplay={autoplay}
