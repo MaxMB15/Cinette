@@ -390,10 +390,117 @@ impl CacheStore {
         }
     }
 
+    /// Delete a provider and everything stored for it in one transaction: its
+    /// channels and login, guide data, category layout and pins, and the watch
+    /// history, metadata and episode lists of its channels. Saved positions go
+    /// too, unless another provider has the same title. Download records stay,
+    /// along with the files they point to.
     pub fn remove_provider(&self, id: &str) -> Result<(), CacheError> {
-        self.conn.execute("DELETE FROM channels WHERE provider_id = ?1", params![id])?;
+        self.conn.execute_batch("BEGIN")?;
+        match self.remove_provider_inner(id) {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    fn remove_provider_inner(&self, id: &str) -> Result<(), CacheError> {
+        // The load commands give every channel and episode an id that starts
+        // with the provider's id and a dash, so rows keyed by channel id match
+        // on that. Episodes have no row in `channels`, so this also catches
+        // their history.
+        let prefix = format!("{id}-");
+
+        // Positions are keyed by title, so another provider can share one.
+        let mut keys = self.position_keys(id, &prefix, true)?;
+        for key in self.position_keys(id, &prefix, false)? {
+            keys.remove(&key);
+        }
+        {
+            let mut stmt = self
+                .conn
+                .prepare("DELETE FROM playback_positions WHERE content_key = ?1")?;
+            for key in &keys {
+                stmt.execute(params![key])?;
+            }
+        }
+
+        for (table, column) in [
+            ("watch_history", "channel_id"),
+            ("omdb_cache", "channel_id"),
+            ("epg_cache", "channel_id"),
+            ("series_episode_cache", "series_channel_id"),
+        ] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE substr({column}, 1, length(?1)) = ?1"),
+                params![prefix],
+            )?;
+        }
+        for table in [
+            "epg_programmes",
+            "group_hierarchy",
+            "pinned_groups",
+            "channels",
+        ] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE provider_id = ?1"),
+                params![id],
+            )?;
+        }
         self.conn.execute("DELETE FROM providers WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    /// The position keys of the provider's movies and episodes, or with `own`
+    /// false, of every other provider's. Episodes come from the watch history,
+    /// since only the episodes of a playlist are in `channels`.
+    fn position_keys(
+        &self,
+        provider_id: &str,
+        prefix: &str,
+        own: bool,
+    ) -> Result<std::collections::HashSet<String>, CacheError> {
+        let mut keys = std::collections::HashSet::new();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT name, content_type, series_title, season, episode FROM channels
+             WHERE content_type != 'live' AND (provider_id = ?1) = ?2",
+        )?;
+        let rows = stmt.query_map(params![provider_id, own], |row| {
+            Ok(playback_key(
+                &row.get::<_, String>(0)?,
+                &row.get::<_, String>(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?;
+        for key in rows {
+            keys.extend(key?);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT channel_name, content_type FROM watch_history
+             WHERE (substr(channel_id, 1, length(?1)) = ?1) = ?2",
+        )?;
+        let rows = stmt.query_map(params![prefix, own], |row| {
+            Ok(playback_key(
+                &row.get::<_, String>(0)?,
+                &row.get::<_, String>(1)?,
+                None,
+                None,
+                None,
+            ))
+        })?;
+        for key in rows {
+            keys.extend(key?);
+        }
+        Ok(keys)
     }
 
     // --- Channels ---
@@ -1113,12 +1220,16 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Clear downloaded metadata, guide data and episode lists. Providers,
+    /// channels, favorites, history and positions stay.
     pub fn clear_all_caches(&self) -> Result<(), CacheError> {
         self.conn.execute("DELETE FROM omdb_cache", [])?;
         self.conn.execute("DELETE FROM mdblist_cache", [])?;
         self.conn.execute("DELETE FROM opensubtitles_search_cache", [])?;
         self.conn.execute("DELETE FROM whatson_cache", [])?;
         self.conn.execute("DELETE FROM epg_programmes", [])?;
+        self.conn.execute("DELETE FROM epg_cache", [])?;
+        self.conn.execute("DELETE FROM series_episode_cache", [])?;
         Ok(())
     }
 
@@ -1487,6 +1598,45 @@ impl CacheStore {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+/// The key that `playbackKey` in the frontend's `lib/playback.ts` saves a
+/// position under. Keep the two in step. Series without a season and episode
+/// are parsed from the name, as `enrich_stale_series` does before the frontend
+/// sees them. None for live channels, which have no position.
+fn playback_key(
+    name: &str,
+    content_type: &str,
+    series_title: Option<String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+) -> Option<String> {
+    if content_type == "live" {
+        return None;
+    }
+    if content_type == "series" {
+        let parsed = match (series_title, season, episode) {
+            (Some(title), Some(season), Some(episode)) => Some((title, season, episode)),
+            _ => parse_series_name(name),
+        };
+        if let Some((title, season, episode)) = parsed {
+            return Some(format!(
+                "series:{}:s{season}e{episode}",
+                normalize_title(&title)
+            ));
+        }
+    }
+    Some(format!("{content_type}:{}", normalize_title(name)))
+}
+
+/// Trim, lowercase and collapse runs of whitespace, like `normalize` in
+/// `lib/playback.ts`.
+fn normalize_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// For series channels loaded from an older cache that has NULL series_title/season/episode,
@@ -2525,5 +2675,202 @@ mod tests {
         // Overwrite replaces the previous list.
         store.save_series_episodes("series-1", &[make_ep("e1", 1)]).unwrap();
         assert_eq!(store.get_series_episodes("series-1").unwrap().len(), 1);
+    }
+
+    // --- Removing a provider and clearing caches ---
+
+    fn count(store: &CacheStore, sql: &str) -> i64 {
+        store.conn.query_row(sql, [], |row| row.get(0)).unwrap()
+    }
+
+    fn vod(id: &str, name: &str, content_type: &str) -> Channel {
+        let mut ch = make_channel(id, name, "VOD");
+        ch.content_type = content_type.into();
+        ch
+    }
+
+    fn programme(channel_id: &str, provider_id: &str) -> StoredEpgProgram {
+        StoredEpgProgram {
+            channel_id: channel_id.into(),
+            title: "News at six".into(),
+            description: None,
+            start_time: 0,
+            end_time: 3600,
+            category: None,
+            provider_id: provider_id.into(),
+            fetched_at: 0,
+        }
+    }
+
+    /// Store a provider with a live channel, a movie, a series and one of its
+    /// episodes, with something saved in every table that belongs to it.
+    fn fill_provider(store: &CacheStore, id: &str, movie: &str) {
+        store.upsert_provider(&make_provider(id, id)).unwrap();
+        let live = format!("{id}-ch-0");
+        let film = format!("{id}-ch-1");
+        let series = format!("{id}-ch-2");
+        let episode = format!("{id}-ep-9");
+        store
+            .save_channels(
+                id,
+                &[
+                    make_channel(&live, "News", "News"),
+                    vod(&film, movie, "movie"),
+                    vod(&series, "Homeland", "series"),
+                ],
+            )
+            .unwrap();
+        store
+            .record_play_start(&live, "News", None, "live")
+            .unwrap();
+        store
+            .record_play_start(&film, movie, None, "movie")
+            .unwrap();
+        store
+            .record_play_start(&episode, "Homeland S01E02", None, "series")
+            .unwrap();
+        store
+            .save_omdb_cache(&film, &make_omdb_data(movie))
+            .unwrap();
+        store.save_epg_data(&live, "[]").unwrap();
+        store
+            .save_epg_programmes(id, &[programme(&live, id)])
+            .unwrap();
+        store
+            .save_group_hierarchy(id, "live", "News", Some("Info"), 0, true)
+            .unwrap();
+        store.pin_group(id, "live", "News", 0).unwrap();
+        store.save_series_episodes(&series, &[]).unwrap();
+        store
+            .save_playback_position(
+                &playback_key(movie, "movie", None, None, None).unwrap(),
+                600.0,
+                7200.0,
+            )
+            .unwrap();
+        store
+            .save_playback_position("series:homeland:s1e2", 300.0, 3000.0)
+            .unwrap();
+    }
+
+    #[test]
+    fn remove_provider_deletes_everything_saved_for_it() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        fill_provider(&store, "m3u-ab", "Ronin");
+
+        store.remove_provider("m3u-a").unwrap();
+
+        assert!(store.get_provider("m3u-a").unwrap().is_none());
+        for (sql, left) in [
+            ("SELECT COUNT(*) FROM channels", 3),
+            ("SELECT COUNT(*) FROM watch_history", 3),
+            ("SELECT COUNT(*) FROM omdb_cache", 1),
+            ("SELECT COUNT(*) FROM epg_cache", 1),
+            ("SELECT COUNT(*) FROM epg_programmes", 1),
+            ("SELECT COUNT(*) FROM group_hierarchy", 1),
+            ("SELECT COUNT(*) FROM pinned_groups", 1),
+            ("SELECT COUNT(*) FROM series_episode_cache", 1),
+        ] {
+            assert_eq!(count(&store, sql), left, "{sql}");
+        }
+        // Every row left belongs to the other provider, whose id starts the same way.
+        assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM watch_history WHERE channel_id LIKE 'm3u-ab-%'"
+            ),
+            3
+        );
+        assert!(store.get_playback_position("movie:heat").unwrap().is_none());
+        assert!(store
+            .get_playback_position("movie:ronin")
+            .unwrap()
+            .is_some());
+        // Both providers had this episode, so its position stays.
+        assert!(store
+            .get_playback_position("series:homeland:s1e2")
+            .unwrap()
+            .is_some());
+
+        store.remove_provider("m3u-ab").unwrap();
+        assert!(store
+            .get_playback_position("series:homeland:s1e2")
+            .unwrap()
+            .is_none());
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM playback_positions"), 0);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM watch_history"), 0);
+    }
+
+    #[test]
+    fn remove_provider_keeps_downloads() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        store
+            .conn
+            .execute(
+                "INSERT INTO downloads (id, channel_id, title, kind, status, dest_path, created_at)
+                 VALUES ('d1', 'm3u-a-ch-1', 'Heat', 'movie', 'completed', '/tmp/Heat.mp4', 0)",
+                [],
+            )
+            .unwrap();
+
+        store.remove_provider("m3u-a").unwrap();
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM downloads"), 1);
+    }
+
+    #[test]
+    fn clear_all_caches_keeps_providers_history_and_positions() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+
+        store.clear_all_caches().unwrap();
+
+        for table in [
+            "omdb_cache",
+            "epg_cache",
+            "epg_programmes",
+            "series_episode_cache",
+        ] {
+            assert_eq!(
+                count(&store, &format!("SELECT COUNT(*) FROM {table}")),
+                0,
+                "{table}"
+            );
+        }
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM channels"), 3);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM watch_history"), 3);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM playback_positions"), 2);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM pinned_groups"), 1);
+    }
+
+    #[test]
+    fn playback_key_matches_the_frontend() {
+        assert_eq!(playback_key("News", "live", None, None, None), None);
+        assert_eq!(
+            playback_key("  The   Dark Knight ", "movie", None, None, None).as_deref(),
+            Some("movie:the dark knight")
+        );
+        assert_eq!(
+            playback_key(
+                "Homeland S01E02",
+                "series",
+                Some("Homeland".into()),
+                Some(1),
+                Some(2)
+            )
+            .as_deref(),
+            Some("series:homeland:s1e2")
+        );
+        // History rows only keep the name, which is parsed as on load.
+        assert_eq!(
+            playback_key("Homeland S01E02", "series", None, None, None).as_deref(),
+            Some("series:homeland:s1e2")
+        );
+        // A series row with no episode in its name is keyed by name.
+        assert_eq!(
+            playback_key("Homeland", "series", None, None, None).as_deref(),
+            Some("series:homeland")
+        );
     }
 }

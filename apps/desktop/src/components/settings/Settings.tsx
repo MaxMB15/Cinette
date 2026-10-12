@@ -299,7 +299,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 	const handleClearCaches = async () => {
 		const confirmed = await ask(
-			"Clear all cached data (OMDB, MDBList, OpenSubtitles, EPG)? This cannot be undone.",
+			"Clear cached movie and series details, guide data, episode lists and downloaded subtitles? This cannot be undone.",
 			{ title: "Clear Caches", kind: "warning" }
 		);
 		if (!confirmed) return;
@@ -837,8 +837,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent>
 						<div className="space-y-2">
 							<p className="text-xs text-muted-foreground">
-								Clears all cached metadata (OMDB, MDBList, OpenSubtitles, WhatsonTV,
-								EPG). Channel data and settings are not affected.
+								Clears cached movie and series details, guide data, episode lists
+								and downloaded subtitles. Playlists, favorites, history and settings
+								are not affected.
 							</p>
 							<div className="flex items-center gap-4">
 								<Button variant="destructive" size="sm" onClick={handleClearCaches}>

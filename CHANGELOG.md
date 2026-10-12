@@ -19,6 +19,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Fixed
 
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- Removing a playlist or provider left its watch history, saved positions, episode lists, guide data and category layout behind. Cached Xtream episode lists hold the provider's login, so the login stayed too (#92).
+- Clear All Caches left cached episode lists, guide data and downloaded subtitles behind (#92).
 
 ## [0.5.3] - 2026-10-09
 

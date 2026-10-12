@@ -814,6 +814,15 @@ pub async fn search_subtitles<R: Runtime>(
     Ok(Some(result))
 }
 
+/// Where downloaded subtitle files go.
+fn subtitles_dir<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .join("subtitles"))
+}
+
 /// Download a subtitle file by file_id. Returns the local file path.
 #[command]
 pub async fn download_subtitle<R: Runtime>(
@@ -827,12 +836,7 @@ pub async fn download_subtitle<R: Runtime>(
         _ => return Err("No OpenSubtitles API key configured".into()),
     };
 
-    // Get subtitle download directory
-    let subtitles_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e: tauri::Error| e.to_string())?
-        .join("subtitles");
+    let subtitles_dir = subtitles_dir(&app)?;
 
     tracing::info!("[OpenSubtitles] downloading subtitle file_id={}", file_id);
     let path = mvp_core::iptv::opensubtitles::download_subtitle(file_id, &api_key, &subtitles_dir)
@@ -964,10 +968,21 @@ pub async fn delete_playback_position(
         .map_err(|e| e.to_string())
 }
 
+/// Clear cached metadata, guide data and episode lists, and delete
+/// downloaded subtitle files.
 #[command]
-pub async fn clear_all_caches(state: State<'_, AppState>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.clear_all_caches().map_err(|e| e.to_string())
+pub async fn clear_all_caches<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        cache.clear_all_caches().map_err(|e| e.to_string())?;
+    }
+    match std::fs::remove_dir_all(subtitles_dir(&app)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
 }
 
 #[command]
