@@ -13,11 +13,12 @@ import {
 	removeDownload,
 } from "@/lib/tauri";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
+import { downloadIconState } from "@/lib/download-status";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
-import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
 import { OmdbKeyHint } from "./OmdbKeyHint";
 
@@ -84,14 +85,7 @@ export const MovieInfoDrawer = ({
 
 	const { byChannel } = useDownloads();
 	const dl = byChannel.get(movie.id);
-	const downloadState: DownloadIconState =
-		dl?.status === "completed"
-			? "complete"
-			: dl?.status === "downloading" || dl?.status === "queued"
-				? "downloading"
-				: dl?.status === "failed"
-					? "failed"
-					: "idle";
+	const downloadState = downloadIconState(dl);
 
 	const handleClose = () => {
 		setVisible(false);
