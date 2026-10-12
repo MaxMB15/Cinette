@@ -18,6 +18,7 @@ import { useDownloads } from "@/hooks/useDownloads";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { RetentionNote } from "@/components/downloads/RetentionNote";
 import { OmdbKeyHint } from "./OmdbKeyHint";
 
 interface MovieInfoDrawerProps {
@@ -268,10 +269,11 @@ export const MovieInfoDrawer = ({
 								state={downloadState}
 								onStart={() => void enqueueMovieDownload(movie.id)}
 								onStop={() => dl && void stopDownload(dl.id)}
-								onRemove={() => dl && void removeDownload(dl.id)}
+								onRemove={() => dl && removeDownload(dl.id)}
 								className="w-full justify-center rounded-xl border border-border py-2.5 text-sm font-semibold hover:bg-accent"
 							/>
 						)}
+						{dl && <RetentionNote records={[dl]} className="px-1" />}
 					</div>
 				</div>
 

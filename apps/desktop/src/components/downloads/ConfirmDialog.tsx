@@ -9,7 +9,8 @@ interface ConfirmDialogProps {
 	message: string;
 	confirmLabel: string;
 	onConfirm: () => void;
-	onCancel: () => void;
+	/** Leave out for a notice. It then has one button, and clicking outside it confirms. */
+	onCancel?: () => void;
 }
 
 export const ConfirmDialog = ({
@@ -28,7 +29,7 @@ export const ConfirmDialog = ({
 			aria-modal="true"
 			aria-labelledby={titleId}
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-			onClick={onCancel}
+			onClick={onCancel ?? onConfirm}
 		>
 			<div
 				className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl"
@@ -37,16 +38,24 @@ export const ConfirmDialog = ({
 				<h3 id={titleId} className="text-sm font-semibold mb-1.5">
 					{title}
 				</h3>
-				<p className="text-xs text-muted-foreground mb-4">{message}</p>
+				<p className="text-xs text-muted-foreground mb-4 max-h-[50vh] overflow-y-auto whitespace-pre-line break-words">
+					{message}
+				</p>
 				<div className="flex justify-end gap-2">
+					{onCancel && (
+						<button
+							className="px-3 py-1.5 text-xs rounded-md hover:bg-accent"
+							onClick={onCancel}
+						>
+							Cancel
+						</button>
+					)}
 					<button
-						className="px-3 py-1.5 text-xs rounded-md hover:bg-accent"
-						onClick={onCancel}
-					>
-						Cancel
-					</button>
-					<button
-						className="px-3 py-1.5 text-xs rounded-md bg-red-600 text-white hover:bg-red-500"
+						className={`px-3 py-1.5 text-xs rounded-md ${
+							onCancel
+								? "bg-red-600 text-white hover:bg-red-500"
+								: "bg-primary text-primary-foreground hover:bg-primary/90"
+						}`}
 						onClick={onConfirm}
 					>
 						{confirmLabel}

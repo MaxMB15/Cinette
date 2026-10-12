@@ -129,6 +129,17 @@ to change them.
 A build with `--build-number` or a `bundle.iOS.bundleVersion` override writes that
 number into `Info.plist`. Don't commit it.
 
+### App icon
+
+The icons in `src-tauri/icons/ios` and in `Assets.xcassets/AppIcon.appiconset` are
+made from the 1024 px image in `src-tauri/icons/icon.icns`, so the iOS app has the
+same icon as the macOS app. They have no alpha channel, because App Store Connect
+rejects a 1024 px icon that has one.
+
+`npx tauri icon` writes both of those folders as well as the desktop icons, so
+running it replaces these files. Restore them with git afterward unless you meant to
+change the iOS icon.
+
 ### Privacy manifest
 
 `max-video-player_iOS/PrivacyInfo.xcprivacy` says the app doesn't track anyone or
@@ -157,6 +168,43 @@ on purpose. The Tauri CLI merges this file over the macOS `Info.plist`, which al
 all loads, so leaving the key out would turn App Transport Security off on iOS too,
 and App Review asks for a reason when an app does that. HTTP logos load in the
 simulator but haven't been checked on a device yet.
+
+## Logs
+
+On iOS the Rust logs go to the system log under the subsystem
+`com.maxvideoplayer.app`, category `rust`. Debug builds also send Tauri's own
+messages there, under the category `app`. The Swift plugin uses `NSLog`, which has
+no subsystem, so its messages only carry the app's process name. To watch them all
+live, open Console on the Mac, select the device and click Start. Then type
+`Max Video Player` in the search field and pick Process from the menu that appears.
+Searching for `subsystem:com.maxvideoplayer.app category:rust` shows only the Rust
+lines. Console hides Rust's DEBUG lines until you turn on Include Info Messages in
+the Action menu, and TRACE lines until you turn on Include Debug Messages. Xcode's
+debug console shows everything when Xcode started the app.
+
+Before a line reaches either log, the Rust side takes out logins, passwords, API keys
+and tokens, and shortens every address. An address keeps its server, and keeps the
+end of its path only when that's a stream ID or a well-known name such as
+`index.m3u8` or `get.php`. So a stream address looks like
+`http://host:8080/…/12345.ts`. Any other file name is cut down to its extension, as
+in `https://cdn.example.com/….m3u8`, and queries become `?…`. A Rust panic goes
+through the same steps and reaches both logs too. The Swift plugin only logs audio
+session errors, which carry no addresses.
+
+The app also writes the Rust logs to `Library/Caches/Logs/app.log` in its container.
+When the file reaches 5 MB it becomes `app.log.1` and a new `app.log` starts, so the
+newest lines are always kept. At launch the last run's `app.log` becomes
+`app.previous.log`. To copy a file to the Mac:
+
+```bash
+xcrun devicectl device copy from --device <identifier> \
+  --domain-type appDataContainer --domain-identifier com.maxvideoplayer.app \
+  --source Library/Caches/Logs/app.log --destination app.log
+```
+
+This only works for a build signed for development, such as one that Xcode or
+`tauri ios dev` installed. iOS doesn't let `devicectl` into the container of a
+TestFlight or App Store build, so use Console for those.
 
 ## Continuous integration
 
