@@ -4,6 +4,8 @@
 pub mod manager;
 pub mod retention;
 pub mod scheduler;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 /// The name Tauri knows the bundled ffmpeg by. The Linux packages install it in
 /// `/usr/bin`, so it can't be plain `ffmpeg`, which the distribution's own
