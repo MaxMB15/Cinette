@@ -423,6 +423,9 @@ fn open_status(started: bool, seeking: Option<bool>, idle_active: Option<bool>) 
 }
 
 #[cfg(test)]
+mod playback_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{open_status, PlayerState};
 

@@ -171,3 +171,6 @@ pub async fn mpv_get_state<R: Runtime>(
     tracing::trace!("[MPV cmd] get_state -> {s:?}");
     Ok(s)
 }
+
+#[cfg(test)]
+mod tests;

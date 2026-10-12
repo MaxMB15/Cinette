@@ -64,6 +64,13 @@ impl IdleInhibitor {
         tracing::debug!("[idle-inhibit] display sleep uninhibited");
     }
 
+    /// Whether an inhibit is held, so tests can check who takes and releases
+    /// it.
+    #[cfg(test)]
+    pub(crate) fn is_active(&self) -> bool {
+        lock_or_recover(&self.inner).active
+    }
+
     #[cfg(target_os = "macos")]
     fn platform_inhibit(&self, state: &mut InhibitState) -> bool {
         use std::ffi::c_void;
@@ -181,6 +188,9 @@ impl Drop for IdleInhibitor {
         self.uninhibit();
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreFoundation", kind = "framework")]

@@ -4685,6 +4685,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "wayland-client",
