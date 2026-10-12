@@ -3,6 +3,7 @@
 
 import { Controls } from "./Controls";
 import { ConnectionStatusOverlay } from "./ConnectionStatusOverlay";
+import { OpeningIndicator } from "./OpeningIndicator";
 import { SubtitlePicker } from "./SubtitlePicker";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
@@ -1046,6 +1047,11 @@ export const PlayerView = () => {
 		/>
 	) : undefined;
 
+	// Resumes where the stream broke, not from the start of the movie or episode.
+	const retryStream = () => {
+		mpv.reload().catch(() => {});
+	};
+
 	return (
 		<div
 			ref={containerRef}
@@ -1073,22 +1079,14 @@ export const PlayerView = () => {
 			<ConnectionStatusOverlay
 				reconnecting={mpv.reconnecting}
 				reconnectAttempt={mpv.reconnectAttempt}
-				buffering={mpv.buffering}
+				// Buffering before the first frame is part of opening, which has
+				// its own spinner. Failures and reconnects still outrank it.
+				buffering={mpv.buffering && !mpv.opening}
 				loadFailed={mpv.loadFailed}
+				openFailed={mpv.openFailed}
 				recentlyRecovered={mpv.recentlyRecovered}
-				onRetry={() => {
-					const url = mpv.state.currentUrl;
-					if (!url) return;
-					// Preserve playback position across the hard restart so
-					// the user resumes where they were when the stream broke,
-					// not from the beginning of the movie/episode. We use the
-					// sticky `getLastKnownPosition()` (rather than the polled
-					// `state.position`) so the retry is symmetric with the
-					// `online`-triggered auto-recovery and robust to the
-					// transient position=0 window during the `loadfile`.
-					const resumeAt = mpv.getLastKnownPosition();
-					mpv.load(url, resumeAt > 1.0 ? resumeAt : undefined).catch(() => {});
-				}}
+				onRetry={retryStream}
+				belowTopBar={showBack}
 			/>
 
 			<div
@@ -1106,6 +1104,7 @@ export const PlayerView = () => {
 					</div>
 				)}
 				{!mpv.error &&
+					!mpv.opening &&
 					!mpv.state.currentUrl &&
 					!mpv.state.isPlaying &&
 					!mpv.state.isPaused && (
@@ -1113,6 +1112,7 @@ export const PlayerView = () => {
 							Select a channel to start watching
 						</p>
 					)}
+				{mpv.opening && <OpeningIndicator key={mpv.loadId} onRetry={retryStream} />}
 			</div>
 
 			{touchDevice && (
@@ -1178,6 +1178,10 @@ export const PlayerView = () => {
 					skip={seekable ? skip : undefined}
 					onSkip={(seconds) => flashOsd(formatSkip(skipBy(seconds)))}
 					touchLayout={touchDevice}
+					// Play, pause and skip do nothing useful while the stream opens
+					// or after it fails, and the spinner or the error has the middle
+					// to itself.
+					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}

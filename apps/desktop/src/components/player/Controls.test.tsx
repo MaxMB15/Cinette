@@ -17,7 +17,7 @@ const playing: PlayerState = {
 	duration: 1800,
 };
 
-const renderControls = (touchLayout: boolean) =>
+const renderControls = (touchLayout: boolean, hideCenterControls = false) =>
 	render(
 		<Controls
 			state={playing}
@@ -32,6 +32,7 @@ const renderControls = (touchLayout: boolean) =>
 			onPrevEpisode={noop}
 			onNextEpisode={noop}
 			touchLayout={touchLayout}
+			hideCenterControls={hideCenterControls}
 		/>
 	);
 
@@ -54,6 +55,17 @@ describe("Controls", () => {
 		for (const name of ["Previous episode", "Next episode"]) {
 			const button = screen.getByRole("button", { name });
 			expect(middleRow).not.toContainElement(button);
+		}
+	});
+
+	it("leaves out play, pause and skip while the stream can't play", () => {
+		for (const touchLayout of [true, false]) {
+			renderControls(touchLayout, true);
+			expect(screen.queryByRole("button", { name: /^(Play|Pause)$/ })).toBeNull();
+			expect(screen.queryByRole("button", { name: /^Skip/ })).toBeNull();
+			// Stop still works, to give up on a stream that won't open.
+			expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+			cleanup();
 		}
 	});
 
