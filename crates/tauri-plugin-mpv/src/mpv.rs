@@ -352,6 +352,7 @@ impl MpvState {
         Ok(())
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn launch_fallback<R: tauri::Runtime>(
         &self,
         url: &str,
@@ -364,7 +365,7 @@ impl MpvState {
             "[MPV] embedded renderer failed ({}), launching fallback window",
             reason
         );
-        let client = self.launch_fallback_impl(url, start_pos, reason)?;
+        let client = self.launch_fallback_impl(url, start_pos)?;
         // Only tell the frontend once the window is up. If it fails, load()
         // tears everything down and the player shows the error instead.
         self.fallback_active.store(true, Ordering::Release);
@@ -378,7 +379,6 @@ impl MpvState {
         &self,
         url: &str,
         start_pos: Option<f64>,
-        _reason: &str,
     ) -> Result<Option<libmpv2::Mpv>, String> {
         let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
         engine.create(&self.options(fallback_options()))?;
@@ -392,35 +392,10 @@ impl MpvState {
         &self,
         url: &str,
         start_pos: Option<f64>,
-        _reason: &str,
     ) -> Result<Option<libmpv2::Mpv>, String> {
         let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
         engine.create(&self.options(linux_fallback_options()))?;
         engine.configure_audio()?;
-        engine.loadfile(url, start_pos)?;
-        engine.set_current_url(url);
-        Ok(engine.create_event_client("reconnect-watcher").ok())
-    }
-
-    #[cfg(target_os = "ios")]
-    fn launch_fallback_impl(
-        &self,
-        _url: &str,
-        _start_pos: Option<f64>,
-        reason: &str,
-    ) -> Result<Option<libmpv2::Mpv>, String> {
-        Err(format!("video output failed: {reason}"))
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
-    fn launch_fallback_impl(
-        &self,
-        url: &str,
-        start_pos: Option<f64>,
-        _reason: &str,
-    ) -> Result<Option<libmpv2::Mpv>, String> {
-        let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
-        engine.create(&[])?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
         Ok(engine.create_event_client("reconnect-watcher").ok())
