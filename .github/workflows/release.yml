@@ -182,8 +182,10 @@ jobs:
 
   release-linux:
     needs: [prepare-release]
-    # The packages need at least the glibc they were built against, so a newer
-    # Ubuntu here would stop them installing on older systems. Raise it on purpose.
+    # A binary can need the glibc of the Ubuntu that built it, and the .deb and
+    # .rpm declare no minimum glibc. Built on a newer Ubuntu, they'd install on
+    # older systems and then fail to start. build-linux in build.yml uses the same
+    # Ubuntu and shares this job's Rust cache, so change both together.
     runs-on: ubuntu-24.04
     env:
       CARGO_HOME: /home/runner/.cargo
