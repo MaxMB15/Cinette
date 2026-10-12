@@ -7,6 +7,7 @@
 use crate::json::number_or_string;
 use crate::models::channel::Channel;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
@@ -19,7 +20,8 @@ pub enum XtreamError {
     /// active.
     #[error("authentication failed")]
     AuthFailed,
-    /// The request failed or the reply was not the JSON the panel should send.
+    /// The request failed, a list came back with an error status, or the
+    /// reply was not the JSON the panel should send.
     #[error("network error: {0}")]
     Network(#[source] reqwest::Error),
     /// The JSON was valid but not in the expected shape.
@@ -225,23 +227,28 @@ impl XtreamClient {
         self.client.get(url).timeout(crate::http::API_TIMEOUT)
     }
 
-    async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
+    /// Fetches one of the panel's lists. A reply with an error status fails
+    /// even when its body parses, since a panel can send an empty list with
+    /// an error, and the refresh would then drop every saved channel of that
+    /// list.
+    async fn get_list<T: DeserializeOwned>(&self, action: &str) -> Result<Vec<T>, XtreamError> {
         let url = self.credentials.api_url(action, &[]);
-        let cats: Vec<XtreamCategory> = self.client.get(&url).send().await?.json().await?;
+        Ok(self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
+        let cats: Vec<XtreamCategory> = self.get_list(action).await?;
         Ok(cats
             .into_iter()
             .map(|c| (c.category_id, c.category_name))
             .collect())
-    }
-
-    async fn fetch_streams_raw(&self, action: &str) -> Result<Vec<XtreamStream>, XtreamError> {
-        let url = self.credentials.api_url(action, &[]);
-        Ok(self.client.get(&url).send().await?.json().await?)
-    }
-
-    async fn fetch_series_raw(&self) -> Result<Vec<XtreamSeries>, XtreamError> {
-        let url = self.credentials.api_url("get_series", &[]);
-        Ok(self.client.get(&url).send().await?.json().await?)
     }
 
     /// Fetch all episodes for a specific series from the Xtream `get_series_info` endpoint.
@@ -364,11 +371,11 @@ async fn fetch_all_channels(client: &XtreamClient) -> Result<XtreamChannels, Xtr
     client.authenticate().await?;
 
     let (live_streams_r, live_cats_r, vod_streams_r, vod_cats_r, series_r, series_cats_r) = tokio::join!(
-        client.fetch_streams_raw("get_live_streams"),
+        client.get_list::<XtreamStream>("get_live_streams"),
         client.get_categories("get_live_categories"),
-        client.fetch_streams_raw("get_vod_streams"),
+        client.get_list::<XtreamStream>("get_vod_streams"),
         client.get_categories("get_vod_categories"),
-        client.fetch_series_raw(),
+        client.get_list::<XtreamSeries>("get_series"),
         client.get_categories("get_series_categories"),
     );
 
@@ -1330,6 +1337,54 @@ mod tests {
         let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
         assert_eq!(ids(&fetched.channels), ["movie-9", "series-4"]);
         assert_eq!(fetched.failed_content_types, ["live"]);
+    }
+
+    #[tokio::test]
+    async fn a_list_sent_with_an_error_status_counts_as_failed() {
+        // Both bodies parse as empty lists, which would read as lists the
+        // panel emptied.
+        let server = serve_panel(vec![
+            route("action=get_vod_streams ", "500 Internal Server Error", "[]"),
+            route("action=get_series ", "404 Not Found", "[]"),
+        ]);
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
+        assert_eq!(ids(&fetched.channels), ["live-7"]);
+        assert_eq!(fetched.failed_content_types, ["movie", "series"]);
+    }
+
+    #[tokio::test]
+    async fn a_category_list_sent_with_an_error_status_is_not_used() {
+        let server = serve_panel(vec![route(
+            "action=get_live_categories ",
+            "500 Internal Server Error",
+            r#"[{"category_id":"3","category_name":"Stale"}]"#,
+        )]);
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
+        let groups: Vec<(&str, &str)> = fetched
+            .channels
+            .iter()
+            .map(|c| (c.id.as_str(), c.group_title.as_str()))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                ("live-7", "Uncategorized"),
+                ("movie-9", "Movies"),
+                ("series-4", "Drama"),
+            ]
+        );
+        assert!(fetched.failed_content_types.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_error_status_does_not_show_the_login() {
+        let server = serve_once("500 Internal Server Error", "[]");
+        let err = panel(&server)
+            .get_list::<XtreamStream>("get_vod_streams")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
+        assert_hides(&err, &test_server::password());
     }
 
     #[tokio::test]
