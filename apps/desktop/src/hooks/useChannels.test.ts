@@ -148,6 +148,25 @@ describe("getEpgLastRefresh / setEpgLastRefresh", () => {
 		expect(getEpgLastRefresh("a")).toBeGreaterThan(0);
 		expect(getEpgLastRefresh("b")).toBe(0);
 	});
+
+	it("keeps the time for the session when storage is blocked", () => {
+		const blocked = () => {
+			throw new DOMException("blocked", "SecurityError");
+		};
+		const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			expect(getEpgLastRefresh("blocked")).toBe(0);
+			const before = Date.now();
+			setEpgLastRefresh("blocked");
+			expect(getEpgLastRefresh("blocked")).toBeGreaterThanOrEqual(before);
+		} finally {
+			getItem.mockRestore();
+			setItem.mockRestore();
+			vi.mocked(console.warn).mockRestore();
+		}
+	});
 });
 
 // ── useChannelsProvider hook tests ────────────────────────────────────
@@ -172,6 +191,7 @@ import {
 	toggleFavorite as toggleFavoriteApi,
 	loadM3uPlaylist,
 	refreshProvider as refreshProviderApi,
+	refreshEpg as refreshEpgApi,
 } from "@/lib/tauri";
 import { useChannelsProvider } from "./useChannels";
 
@@ -180,6 +200,7 @@ const mockGetAllChannels = vi.mocked(getAllChannels);
 const mockToggleFavorite = vi.mocked(toggleFavoriteApi);
 const mockLoadM3u = vi.mocked(loadM3uPlaylist);
 const mockRefreshProvider = vi.mocked(refreshProviderApi);
+const mockRefreshEpg = vi.mocked(refreshEpgApi);
 
 describe("useChannelsProvider", () => {
 	beforeEach(() => {
@@ -304,5 +325,38 @@ describe("useChannelsProvider", () => {
 		expect(mockRefreshProvider).toHaveBeenCalledWith("p1");
 		expect(mockGetProviders).toHaveBeenCalled();
 		expect(mockGetAllChannels).toHaveBeenCalled();
+	});
+
+	it("waits before retrying a guide refresh that failed instead of trying every poll", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		mockGetProviders.mockResolvedValue([
+			{
+				id: "guide-down",
+				name: "Down",
+				type: "xtream",
+				url: "http://example.test",
+				channelCount: 0,
+				epgUrl: "http://example.test/xmltv.php",
+			},
+		]);
+		mockRefreshEpg.mockRejectedValue(new Error("login failed"));
+		try {
+			renderHook(() => useChannelsProvider());
+			// The poll on mount runs before the providers load, so the first try is a minute in.
+			await act(() => vi.advanceTimersByTimeAsync(0));
+			expect(mockRefreshEpg).not.toHaveBeenCalled();
+			await act(() => vi.advanceTimersByTimeAsync(60_000));
+			expect(mockRefreshEpg).toHaveBeenCalledTimes(1);
+
+			await act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
+			expect(mockRefreshEpg).toHaveBeenCalledTimes(1);
+
+			await act(() => vi.advanceTimersByTimeAsync(60_000));
+			expect(mockRefreshEpg).toHaveBeenCalledTimes(2);
+		} finally {
+			mockRefreshEpg.mockResolvedValue(undefined);
+			vi.useRealTimers();
+		}
 	});
 });

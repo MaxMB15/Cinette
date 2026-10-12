@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
 	isKeyboardFocusedControl,
+	isSliderOwnKey,
+	leaveSliderKeysToPlayer,
 	playerShortcuts,
 	resolvePlayerHotkey,
 	SEEK_LONG,
@@ -137,5 +139,79 @@ describe("isKeyboardFocusedControl", () => {
 		document.body.appendChild(button);
 		vi.spyOn(button, "matches").mockReturnValue(false);
 		expect(isKeyboardFocusedControl(button)).toBe(false);
+	});
+});
+
+describe("slider keys", () => {
+	afterEach(() => {
+		document.body.innerHTML = "";
+	});
+
+	/** A slider thumb, focused by a press or by the keyboard, as `Slider` marks it. */
+	const thumb = (focusSource?: "pointer" | "keyboard") => {
+		const el = document.createElement("span");
+		el.setAttribute("role", "slider");
+		if (focusSource) el.setAttribute("data-focus-source", focusSource);
+		document.body.appendChild(el);
+		return el;
+	};
+
+	const keyDown = (target: EventTarget, k: string) => {
+		const e = { key: k, target, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+		leaveSliderKeysToPlayer(e);
+		return e;
+	};
+
+	const SLIDER_KEYS = [
+		"ArrowLeft",
+		"ArrowRight",
+		"ArrowUp",
+		"ArrowDown",
+		"Home",
+		"End",
+		"PageUp",
+		"PageDown",
+	];
+
+	it("lets a slider reached with the keyboard move with its keys and keep them", () => {
+		const el = thumb("keyboard");
+		for (const k of SLIDER_KEYS) {
+			expect(isSliderOwnKey(el, k)).toBe(true);
+			const e = keyDown(el, k);
+			expect(e.preventDefault).not.toHaveBeenCalled();
+			expect(e.stopPropagation).toHaveBeenCalled();
+		}
+	});
+
+	it("keeps a pressed slider still and passes its keys on to the player", () => {
+		const el = thumb("pointer");
+		for (const k of SLIDER_KEYS) {
+			expect(isSliderOwnKey(el, k)).toBe(false);
+			const e = keyDown(el, k);
+			expect(e.preventDefault).toHaveBeenCalled();
+			expect(e.stopPropagation).not.toHaveBeenCalled();
+		}
+	});
+
+	it("treats a slider with no recorded focus source as reached with the keyboard", () => {
+		expect(isSliderOwnKey(thumb(), "ArrowLeft")).toBe(true);
+	});
+
+	it("never touches other keys", () => {
+		for (const el of [thumb("keyboard"), thumb("pointer")]) {
+			for (const k of [" ", "f", "m", "Escape", "Tab"]) {
+				expect(isSliderOwnKey(el, k)).toBe(false);
+				const e = keyDown(el, k);
+				expect(e.preventDefault).not.toHaveBeenCalled();
+				expect(e.stopPropagation).not.toHaveBeenCalled();
+			}
+		}
+	});
+
+	it("only applies to sliders", () => {
+		const button = document.createElement("button");
+		document.body.appendChild(button);
+		expect(isSliderOwnKey(button, "ArrowLeft")).toBe(false);
+		expect(isSliderOwnKey(null, "ArrowLeft")).toBe(false);
 	});
 });

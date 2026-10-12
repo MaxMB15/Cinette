@@ -65,6 +65,13 @@ pub struct DownloadRecord {
     pub error: Option<String>,
     pub created_at: i64,
     pub finished_at: Option<i64>,
+    /// The user chose Keep, so the retention setting never deletes it.
+    #[serde(default)]
+    pub keep: bool,
+    /// When the downloaded file last started playing. Retention counts from
+    /// this or `finished_at`, whichever is later.
+    #[serde(default)]
+    pub last_played_at: Option<i64>,
 }
 
 impl DownloadRecord {
@@ -131,6 +138,8 @@ mod tests {
             error: None,
             created_at: 0,
             finished_at: None,
+            keep: false,
+            last_played_at: None,
         }
     }
 }
