@@ -18,12 +18,20 @@ const Confirm = () => {
 	);
 };
 
-const Player = ({ url, confirm = false }: { url: string | null; confirm?: boolean }) => {
+const Player = ({
+	url,
+	confirm = false,
+	sidebar = true,
+}: {
+	url: string | null;
+	confirm?: boolean;
+	sidebar?: boolean;
+}) => {
 	const ref = useRef<HTMLDivElement>(null);
 	usePlayerFocus(ref, url);
 	return (
 		<>
-			<button>Sidebar</button>
+			{sidebar && <button>Sidebar</button>}
 			<div ref={ref} tabIndex={-1} data-testid="player">
 				<button>Resume</button>
 			</div>
@@ -68,5 +76,22 @@ describe("usePlayerFocus", () => {
 		expect(button("Remove")).toHaveFocus();
 		rerender(<Player url="http://example.test/2" confirm />);
 		expect(button("Remove")).toHaveFocus();
+	});
+
+	it("takes focus back when a confirm closes and its opener is gone", () => {
+		const { rerender } = render(<Player url="http://example.test/1" />);
+		button("Sidebar").focus();
+		rerender(<Player url="http://example.test/1" confirm />);
+		rerender(<Player url="http://example.test/1" confirm sidebar={false} />);
+		rerender(<Player url="http://example.test/1" sidebar={false} />);
+		expect(player()).toHaveFocus();
+	});
+
+	it("leaves focus with the opener when a confirm closes", () => {
+		const { rerender } = render(<Player url="http://example.test/1" />);
+		button("Sidebar").focus();
+		rerender(<Player url="http://example.test/1" confirm />);
+		rerender(<Player url="http://example.test/1" />);
+		expect(button("Sidebar")).toHaveFocus();
 	});
 });

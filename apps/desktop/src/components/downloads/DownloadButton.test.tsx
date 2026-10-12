@@ -106,7 +106,16 @@ describe("DownloadButton for a changing item", () => {
 		expect(screen.getByRole("dialog", { name: "Stop download?" })).toBeInTheDocument();
 	});
 
-	it("lets go of focus when the item changes", () => {
+	it("lets go of focus when the item changes while the button has it", () => {
+		const { rerender } = render(<PlayerButton itemId="e1" state="idle" />);
+		screen.getByRole("button", { name: "Download" }).focus();
+
+		rerender(<PlayerButton itemId="e2" state="idle" />);
+		expect(screen.getByRole("button", { name: "Download" })).not.toHaveFocus();
+		expect(document.body).toHaveFocus();
+	});
+
+	it("lets go of focus when the item changes with a confirm open", () => {
 		const { rerender } = render(<PlayerButton itemId="e1" state="downloading" />);
 		const button = screen.getByRole("button", { name: "Downloading" });
 		button.focus();

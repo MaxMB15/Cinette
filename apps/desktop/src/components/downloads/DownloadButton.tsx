@@ -70,9 +70,10 @@ export const DownloadButton = ({
 	return (
 		<>
 			{/* Keyed by item, so each item gets a new button and the old one
-			    takes focus with it. A dialog that closes later hands focus back
-			    only to an element still on the page, so it can't focus the new
-			    button, where Space would start the new item's download. */}
+			    takes focus with it. A dialog hands focus back on close only to
+			    an element still on the page, so neither a confirm nor the
+			    failure notice can put focus on the new button, where Space
+			    would press it for the new item. */}
 			<button
 				key={itemId}
 				onClick={handleClick}

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { useRef } from "react";
 import { render, fireEvent, cleanup } from "@testing-library/react";
-import { hasOpenFocusTrap, useFocusTrap } from "./useFocusTrap";
+import { hasOpenFocusTrap, onFocusLostOnClose, useFocusTrap } from "./useFocusTrap";
 
 const Dialog = () => {
 	const ref = useRef<HTMLDivElement>(null);
@@ -106,6 +106,82 @@ describe("useFocusTrap", () => {
 		expect(document.activeElement).toBe(getByText("First"));
 		rerender(<Harness open={false} />);
 		expect(document.activeElement).toBe(getByText("Behind"));
+	});
+
+	it("says when the last modal closes with nowhere to hand focus back", () => {
+		const listener = vi.fn();
+		const stop = onFocusLostOnClose(listener);
+		const Opener = ({ opener, open }: { opener: boolean; open: boolean }) => (
+			<div>
+				{opener && <button>Opener</button>}
+				{open && <Dialog />}
+			</div>
+		);
+		const { getByText, rerender } = render(<Opener opener open={false} />);
+		getByText("Opener").focus();
+		rerender(<Opener opener open />);
+		rerender(<Opener opener={false} open />);
+		rerender(<Opener opener={false} open={false} />);
+		expect(listener).toHaveBeenCalledTimes(1);
+
+		stop();
+		rerender(<Opener opener open={false} />);
+		getByText("Opener").focus();
+		rerender(<Opener opener open />);
+		rerender(<Opener opener={false} open />);
+		rerender(<Opener opener={false} open={false} />);
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("stays quiet when focus goes back or another modal is still open", () => {
+		const listener = vi.fn();
+		const stop = onFocusLostOnClose(listener);
+		const { getByText, rerender } = render(<Harness open={false} />);
+		getByText("Behind").focus();
+		rerender(<Harness open />);
+		rerender(<Harness open={false} />);
+
+		const Stack = ({ opener, top }: { opener: boolean; top: boolean }) => (
+			<div>
+				{opener && <button>Opener</button>}
+				<NamedTrap name="Bottom" />
+				{top && <NamedTrap name="Top" />}
+			</div>
+		);
+		rerender(<Stack opener top={false} />);
+		getByText("Opener").focus();
+		rerender(<Stack opener top />);
+		rerender(<Stack opener={false} top />);
+		rerender(<Stack opener={false} top={false} />);
+		expect(listener).not.toHaveBeenCalled();
+		stop();
+	});
+
+	it("leaves focus that moved outside while the modal was open", () => {
+		const listener = vi.fn();
+		const stop = onFocusLostOnClose(listener);
+		const Page = ({ opener, open }: { opener: boolean; open: boolean }) => (
+			<div>
+				{opener && <button>Opener</button>}
+				<button>Elsewhere</button>
+				{open && <Dialog />}
+			</div>
+		);
+		const { getByText, rerender } = render(<Page opener open={false} />);
+		getByText("Opener").focus();
+		rerender(<Page opener open />);
+		getByText("Elsewhere").focus();
+		rerender(<Page opener open={false} />);
+		expect(document.activeElement).toBe(getByText("Elsewhere"));
+
+		getByText("Opener").focus();
+		rerender(<Page opener open />);
+		getByText("Elsewhere").focus();
+		rerender(<Page opener={false} open />);
+		rerender(<Page opener={false} open={false} />);
+		expect(document.activeElement).toBe(getByText("Elsewhere"));
+		expect(listener).not.toHaveBeenCalled();
+		stop();
 	});
 
 	it("keeps focus on a dialog that has no controls", () => {

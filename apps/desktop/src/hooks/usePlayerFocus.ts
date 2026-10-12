@@ -2,13 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useEffect, type RefObject } from "react";
-import { hasOpenFocusTrap } from "./useFocusTrap";
+import { hasOpenFocusTrap, onFocusLostOnClose } from "./useFocusTrap";
 
 /**
  * Gives the player keyboard focus when it opens and again each time a stream
  * loads, so its keys work without a click first. Focus already inside the
  * player, such as on the resume prompt, stays put. So does focus on a confirm
- * opened from the controls, which renders outside the player.
+ * opened from the controls, which renders outside the player. When the last
+ * dialog closes and the control that opened it is gone, as when the next
+ * episode replaced it, the player takes focus too.
  */
 export const usePlayerFocus = (
 	containerRef: RefObject<HTMLElement | null>,
@@ -24,4 +26,12 @@ export const usePlayerFocus = (
 		if (container.contains(document.activeElement) || hasOpenFocusTrap()) return;
 		container.focus();
 	}, [containerRef, currentUrl]);
+
+	useEffect(
+		() =>
+			onFocusLostOnClose(() => {
+				containerRef.current?.focus();
+			}),
+		[containerRef]
+	);
 };

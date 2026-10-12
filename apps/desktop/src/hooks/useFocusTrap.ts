@@ -15,6 +15,21 @@ const FOCUSABLE = [
 /** Mounted traps, newest last. Only the newest one, the modal on top, handles keys. */
 const traps: HTMLElement[] = [];
 
+/** Called when the last modal closes and focus has nowhere to go back to. */
+const focusLostListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` each time the last open modal closes and can't hand focus
+ * back, because the control that had it before has left the page. Returns a
+ * function that stops the calls.
+ */
+export const onFocusLostOnClose = (listener: () => void): (() => void) => {
+	focusLostListeners.add(listener);
+	return () => {
+		focusLostListeners.delete(listener);
+	};
+};
+
 /** Whether a modal with a focus trap is open. */
 export const hasOpenFocusTrap = (): boolean => traps.length > 0;
 
@@ -26,7 +41,9 @@ export const isTopFocusTrap = (node: HTMLElement | null): boolean =>
  * Keeps keyboard focus inside a modal while it is mounted: focus moves to its
  * first control on open, Tab / Shift+Tab wrap around its controls, and focus
  * returns to where it was on close unless something else has taken it. With
- * one modal open over another, only the top one moves focus.
+ * one modal open over another, only the top one moves focus. When the last
+ * modal closes and that control is gone, focus is lost, and the listeners of
+ * `onFocusLostOnClose` hear about it.
  */
 export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 	useEffect(() => {
@@ -65,7 +82,9 @@ export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 			// Focus falls back to <body> when the focused control unmounts with the modal.
 			const active = document.activeElement;
 			const lost = !active || active === document.body || node.contains(active);
-			if (lost && previous instanceof HTMLElement && previous.isConnected) previous.focus();
+			if (!lost) return;
+			if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+			else if (traps.length === 0) focusLostListeners.forEach((listener) => listener());
 		};
 	}, [ref]);
 };
