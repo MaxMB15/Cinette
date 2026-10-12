@@ -1036,7 +1036,7 @@ export const PlayerView = () => {
 				}
 			}}
 			onStop={() => playerDl && void stopDownload(playerDl.id)}
-			onRemove={() => playerDl && void removeDownload(playerDl.id)}
+			onRemove={() => playerDl && removeDownload(playerDl.id)}
 		/>
 	) : undefined;
 

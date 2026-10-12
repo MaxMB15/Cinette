@@ -221,6 +221,10 @@ export interface DownloadRecord {
 	error: string | null;
 	createdAt: number;
 	finishedAt: number | null;
+	/** The user chose Keep, so the retention setting never deletes it. */
+	keep: boolean;
+	/** When the downloaded file last started playing, in Unix seconds. */
+	lastPlayedAt: number | null;
 }
 
 /** Aggregate download state for a series card (computed in the hook). */

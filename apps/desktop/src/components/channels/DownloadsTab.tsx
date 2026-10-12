@@ -4,6 +4,7 @@
 import { useChannels } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { ChannelCard } from "./ChannelCard";
+import { RetentionNote } from "@/components/downloads/RetentionNote";
 import type { Channel } from "@/lib/types";
 
 interface DownloadsTabProps {
@@ -35,15 +36,21 @@ export const DownloadsTab = ({ onPlay, onToggleFavorite }: DownloadsTabProps) =>
 
 	return (
 		<div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 p-4">
-			{items.map((c) => (
-				<ChannelCard
-					key={c.id}
-					channel={c}
-					variant="poster"
-					onPlay={onPlay}
-					onToggleFavorite={onToggleFavorite}
-				/>
-			))}
+			{items.map((c) => {
+				const movie = byChannel.get(c.id);
+				const records = bySeries.get(c.id) ?? (movie ? [movie] : []);
+				return (
+					<div key={c.id} className="flex flex-col gap-1.5">
+						<ChannelCard
+							channel={c}
+							variant="poster"
+							onPlay={onPlay}
+							onToggleFavorite={onToggleFavorite}
+						/>
+						<RetentionNote records={records} />
+					</div>
+				);
+			})}
 		</div>
 	);
 };

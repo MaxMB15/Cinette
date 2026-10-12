@@ -19,11 +19,14 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Skip back and skip forward buttons beside play and pause. Settings > Playback sets how far each one jumps, from 5 to 60 seconds, and the arrow keys, J and L and the lock screen on iPhone and iPad use the same lengths (#90).
 - On phones and tablets, play and pause and the skip buttons sit in the middle of the video. A double-tap on the left or right side skips back or forward, and each further tap there skips again (#90).
 - The player shows a spinner while a stream opens, so a slow server no longer looks like a black screen. If the stream never starts, the player says so and offers Retry (#97).
+- Settings > Downloads > Delete downloads after. It deletes finished downloads 7, 14, 30 or 90 days after they were downloaded or last played. Keep on a download holds on to it. The Downloads tab, the movie and series pages and the download history show when each download goes. Downloads that came due while the app was closed go an hour after it opens, which leaves time to keep or play them (#100).
 
 ### Fixed
 
 - Closing the player in full screen left the window in full screen, and the player came back in full screen the next time it opened. Closing the player now always leaves full screen (#96).
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- A removed download stayed on the Downloads tab until the app restarted (#100).
+- Removing a download whose file can't be deleted now keeps it in the list and says which file and why. Removing a season or series carries on with the other episodes. Before, the download left the list but its file stayed on disk (#100).
 - Holding a subtitle delay button keeps stepping the delay again (#104).
 - Settings says when the update check fails, instead of showing the app as up to date (#104).
 - Clear all in recently played clears that row's whole history, and dismissing a show removes every episode you watched, including ones older than the row lists. Each row now loads its own type, so a run of live channels no longer pushes movies and series out of their rows (#104).

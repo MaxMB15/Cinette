@@ -3,7 +3,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { listDownloads } from "@/lib/tauri";
+import { getDownloadRetention, listDownloads, setDownloadRetention } from "@/lib/tauri";
 import type { DownloadRecord, AggregateDownloadState } from "@/lib/types";
 
 /** Pure: compute a series card's aggregate state from its episode downloads. */
@@ -68,35 +68,56 @@ interface DownloadsContextValue {
 	byChannel: Map<string, DownloadRecord>;
 	bySeries: Map<string, DownloadRecord[]>;
 	refresh: () => Promise<void>;
+	/** Days finished downloads are kept, or null to keep them until removed. */
+	retentionDays: number | null;
+	/** Saves the setting. Resolves to how many downloads it deleted right away. */
+	setRetentionDays: (days: number | null) => Promise<number>;
 }
 
 const DownloadsContext = createContext<DownloadsContextValue | null>(null);
 
 export const DownloadsProvider = ({ children }: { children: ReactNode }) => {
 	const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
+	const [retentionDays, setRetentionState] = useState<number | null>(null);
 
 	const refresh = useCallback(async () => {
 		setDownloads(await listDownloads());
 	}, []);
 
+	const setRetentionDays = useCallback(async (days: number | null) => {
+		const deleted = await setDownloadRetention(days);
+		setRetentionState(days);
+		return deleted;
+	}, []);
+
 	useEffect(() => {
 		refresh();
-		const unlisten = listen<DownloadRecord>("download://progress", (e) => {
+		getDownloadRetention()
+			.then(setRetentionState)
+			.catch(() => {});
+		const unlistenProgress = listen<DownloadRecord>("download://progress", (e) => {
 			setDownloads((prev) => {
 				const next = prev.filter((d) => d.id !== e.payload.id);
 				next.push(e.payload);
 				return next;
 			});
 		});
+		// Sent when a download is removed, by the user or the retention setting.
+		const unlistenRemoved = listen<string>("download://removed", (e) => {
+			setDownloads((prev) => prev.filter((d) => d.id !== e.payload));
+		});
 		return () => {
-			unlisten.then((f) => f());
+			unlistenProgress.then((f) => f());
+			unlistenRemoved.then((f) => f());
 		};
 	}, [refresh]);
 
 	const { byChannel, bySeries } = groupDownloads(downloads);
 
 	return (
-		<DownloadsContext.Provider value={{ downloads, byChannel, bySeries, refresh }}>
+		<DownloadsContext.Provider
+			value={{ downloads, byChannel, bySeries, refresh, retentionDays, setRetentionDays }}
+		>
 			{children}
 		</DownloadsContext.Provider>
 	);

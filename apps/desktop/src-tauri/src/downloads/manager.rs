@@ -21,11 +21,12 @@ use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_store::StoreExt;
 
-/// The download folder and concurrency live in the same store file as the
-/// other settings so they survive a restart.
+/// The download settings live in the same store file as the other settings
+/// so they survive a restart.
 const SETTINGS_STORE_FILE: &str = "settings.json";
 const FOLDER_KEY: &str = "download_folder";
 const CONCURRENCY_KEY: &str = "download_concurrency";
+const RETENTION_KEY: &str = "download_retention_days";
 /// Matches the range the Settings page allows.
 const MAX_CONCURRENCY: usize = 10;
 
@@ -41,12 +42,17 @@ pub struct DownloadManager {
     pub concurrency: Mutex<usize>,
     pub root: Mutex<PathBuf>,
     running: Mutex<HashMap<String, RunningChildHandle>>,
+    /// Days to keep a finished download before deleting it, or `None` to keep
+    /// downloads until the user removes them.
+    pub retention_days: Mutex<Option<u32>>,
     /// Set as the app quits, so a download that ends because the app killed
     /// its ffmpeg isn't marked failed.
     pub exiting: AtomicBool,
     /// Held for a whole `pump`. Two pumps reading the queue at once would
     /// both pick its first download and start it twice.
     pump_lock: Mutex<()>,
+    /// The downloads being deleted right now.
+    pub(crate) deleting: Deleting,
 }
 
 impl DownloadManager {
@@ -55,8 +61,10 @@ impl DownloadManager {
             concurrency: Mutex::new(3),
             root: Mutex::new(default_root),
             running: Mutex::new(HashMap::new()),
+            retention_days: Mutex::new(None),
             exiting: AtomicBool::new(false),
             pump_lock: Mutex::new(()),
+            deleting: Deleting::default(),
         }
     }
 
@@ -76,6 +84,14 @@ impl DownloadManager {
         *self.concurrency.lock().unwrap() = n.max(1);
     }
 
+    pub fn retention_days(&self) -> Option<u32> {
+        *self.retention_days.lock().unwrap()
+    }
+
+    pub fn set_retention_days(&self, days: Option<u32>) {
+        *self.retention_days.lock().unwrap() = days;
+    }
+
     /// The running children. Nothing panics while holding this lock, but a
     /// poisoned one still holds valid handles, and quitting mustn't panic.
     fn running(&self) -> MutexGuard<'_, HashMap<String, RunningChildHandle>> {
@@ -91,7 +107,7 @@ impl DownloadManager {
     }
 }
 
-/// Apply the download folder and concurrency saved in an earlier session.
+/// Apply the download settings saved in an earlier session.
 /// Call once after `DownloadManager` is managed. A missing or unreadable
 /// store leaves the defaults in place.
 pub fn restore_settings<R: Runtime>(app: &AppHandle<R>) {
@@ -113,6 +129,10 @@ pub fn restore_settings<R: Runtime>(app: &AppHandle<R>) {
     if let Some(n) = store.get(CONCURRENCY_KEY).and_then(|v| v.as_u64()) {
         manager.set_concurrency((n as usize).min(MAX_CONCURRENCY));
     }
+    if let Some(days) = store.get(RETENTION_KEY).and_then(|v| v.as_u64()) {
+        // 0 is "never" in the app, so a hand-edited 0 mustn't mean "delete now".
+        manager.set_retention_days(u32::try_from(days).ok().filter(|&d| d > 0));
+    }
 }
 
 /// Save the download folder so the next launch uses it.
@@ -123,6 +143,11 @@ pub fn save_folder<R: Runtime>(app: &AppHandle<R>, folder: &str) -> Result<(), S
 /// Save the download concurrency so the next launch uses it.
 pub fn save_concurrency<R: Runtime>(app: &AppHandle<R>, n: usize) -> Result<(), String> {
     save_setting(app, CONCURRENCY_KEY, serde_json::Value::from(n))
+}
+
+/// Save the retention setting so the next launch uses it. `None` saves null.
+pub fn save_retention<R: Runtime>(app: &AppHandle<R>, days: Option<u32>) -> Result<(), String> {
+    save_setting(app, RETENTION_KEY, serde_json::Value::from(days))
 }
 
 fn save_setting<R: Runtime>(
@@ -167,6 +192,8 @@ pub fn enqueue_record<R: Runtime>(
         error: None,
         created_at: now,
         finished_at: None,
+        keep: false,
+        last_played_at: None,
     };
     {
         // One lock for choosing the path and saving the record, so two
@@ -537,7 +564,253 @@ fn current_status<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<DownloadSt
     status
 }
 
-fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
+/// What deleting a download does when its file is already gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MissingFile {
+    /// Remove the record anyway. The user asked for the download to go.
+    Forget,
+    /// Keep the record when the file's folder is gone too, as it is while the
+    /// drive the downloads are on isn't connected. A deletion the user didn't
+    /// ask for mustn't lose track of files that come back with the drive.
+    KeepWithoutFolder,
+}
+
+/// What `delete_downloads` did.
+#[derive(Debug, Default)]
+pub(crate) struct Deleted {
+    /// The downloads deleted, with their files.
+    pub removed: Vec<String>,
+    /// Why each of the others couldn't be. Their records stay.
+    pub errors: Vec<String>,
+    /// The downloads whose files stayed, back in the cache.
+    pub put_back: Vec<String>,
+}
+
+/// Delete downloads and their files at the user's request, carrying on past
+/// any that fail. The error lists the ones that couldn't be deleted.
+pub fn remove<R: Runtime>(app: &AppHandle<R>, ids: &[String]) -> Result<(), String> {
+    let deleted = delete_downloads(app, MissingFile::Forget, |cache| {
+        let mut seen = HashSet::new();
+        let mut records = Vec::new();
+        for id in ids.iter().filter(|id| seen.insert(*id)) {
+            if let Some(rec) = cache.get_download(id).map_err(|e| e.to_string())? {
+                records.push(rec);
+            }
+        }
+        Ok(records)
+    })?;
+    removal_error(&deleted).map_or(Ok(()), Err)
+}
+
+/// The message for the downloads `remove` couldn't delete, or `None` when it
+/// deleted them all.
+fn removal_error(deleted: &Deleted) -> Option<String> {
+    match deleted.errors.as_slice() {
+        [] => None,
+        [only] if deleted.removed.is_empty() => Some(only.clone()),
+        errors => Some(format!(
+            "Deleted {} of {}.\n{}",
+            deleted.removed.len(),
+            deleted.removed.len() + errors.len(),
+            errors.join("\n")
+        )),
+    }
+}
+
+/// Delete the downloads `select` picks and their files, carrying on past any
+/// that fail, then tell the frontend which ones went. `select` runs under the
+/// cache lock, and the records leave the cache under that same lock, so a
+/// Keep or a play that lands meanwhile is either seen by `select` or finds
+/// the download gone. The files are deleted after the lock is let go, so a
+/// slow drive doesn't hold up the rest of the app. A download whose file
+/// can't be deleted goes back in the cache, so the app keeps showing the
+/// space it takes, with any Keep the user set while it was out.
+pub(crate) fn delete_downloads<R: Runtime>(
+    app: &AppHandle<R>,
+    missing: MissingFile,
+    select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
+) -> Result<Deleted, String> {
+    let deleting = &app.state::<DownloadManager>().deleting;
+    let deleted = delete_selected(&app.state::<AppState>().cache, deleting, missing, select)?;
+    for id in &deleted.removed {
+        emit_removed(app, id);
+    }
+    for id in &deleted.put_back {
+        emit_progress(app, id);
+    }
+    Ok(deleted)
+}
+
+/// `delete_downloads` without the events.
+fn delete_selected(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    missing: MissingFile,
+    select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
+) -> Result<Deleted, String> {
+    let taken = take_selected(cache, deleting, select)?;
+    let (mut deleted, failed) = delete_files(taken, missing);
+    deleted.put_back = put_back(cache, deleting, &deleted.removed, failed)?;
+    Ok(deleted)
+}
+
+/// The downloads `delete_selected` has taken out of the cache while it
+/// deletes their files, each with the Keep the user set on it meanwhile, if
+/// any. Only used while the cache lock is held, so it always agrees with the
+/// cache about which downloads are out.
+#[derive(Default)]
+pub(crate) struct Deleting(Mutex<HashMap<String, Option<bool>>>);
+
+impl Deleting {
+    fn ids(&self) -> MutexGuard<'_, HashMap<String, Option<bool>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Keep a download even when the retention setting would delete it, or stop
+/// keeping it. A download that's out of the cache while its file is deleted
+/// gets the Keep when it comes back because the file stayed.
+pub(crate) fn set_keep(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    id: &str,
+    keep: bool,
+) -> Result<(), String> {
+    let cache = cache.lock().map_err(|e| e.to_string())?;
+    let found = cache
+        .set_download_keep(id, keep)
+        .map_err(|e| e.to_string())?;
+    if !found {
+        if let Some(pending) = deleting.ids().get_mut(id) {
+            *pending = Some(keep);
+        }
+    }
+    Ok(())
+}
+
+/// Take the downloads `select` picks out of the cache, each paired with
+/// whether its file goes too, and note them in `deleting`.
+fn take_selected(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
+) -> Result<Vec<(DownloadRecord, bool)>, String> {
+    let cache = cache.lock().map_err(|e| e.to_string())?;
+    let records = select(&cache)?;
+    let taken = take_records(&cache, records)?;
+    let mut ids = deleting.ids();
+    for (rec, _) in &taken {
+        ids.insert(rec.id.clone(), None);
+    }
+    Ok(taken)
+}
+
+/// Delete the files of the downloads `take_selected` took. Returns what was
+/// deleted and the downloads whose files couldn't be.
+fn delete_files(
+    taken: Vec<(DownloadRecord, bool)>,
+    missing: MissingFile,
+) -> (Deleted, Vec<DownloadRecord>) {
+    let mut deleted = Deleted::default();
+    let mut failed = Vec::new();
+    for (rec, file_unused) in taken {
+        let result = if file_unused {
+            delete_file(&rec.dest_path, missing)
+        } else {
+            Ok(())
+        };
+        match result {
+            Ok(()) => deleted.removed.push(rec.id),
+            Err(e) => {
+                deleted.errors.push(e);
+                failed.push(rec);
+            }
+        }
+    }
+    (deleted, failed)
+}
+
+/// Put the downloads whose files stayed back in the cache, with any Keep set
+/// on them while they were out, and drop everything `take_selected` noted
+/// from `deleting`. Returns the ids put back.
+fn put_back(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    removed: &[String],
+    failed: Vec<DownloadRecord>,
+) -> Result<Vec<String>, String> {
+    let cache = cache.lock().map_err(|e| e.to_string())?;
+    let mut ids = deleting.ids();
+    for id in removed {
+        ids.remove(id);
+    }
+    let mut put_back = Vec::new();
+    for mut rec in failed {
+        if let Some(Some(keep)) = ids.remove(&rec.id) {
+            rec.keep = keep;
+        }
+        match cache.upsert_download(&rec) {
+            Ok(()) => put_back.push(rec.id),
+            Err(e) => tracing::warn!("Could not put back a download whose file stayed: {e}"),
+        }
+    }
+    Ok(put_back)
+}
+
+/// Take `records` out of the cache, each paired with whether its file goes
+/// too. Downloads added by older versions can share a file with another of
+/// the same title, so a file stays while a download not in `records` uses
+/// it, or is writing it now, compared the way `path_key` does.
+fn take_records(
+    cache: &CacheStore,
+    records: Vec<DownloadRecord>,
+) -> Result<Vec<(DownloadRecord, bool)>, String> {
+    let mut users: HashMap<String, usize> = HashMap::new();
+    for path in cache.list_download_paths().map_err(|e| e.to_string())? {
+        *users.entry(path_key(&path)).or_default() += 1;
+    }
+    for rec in &records {
+        if let Some(n) = users.get_mut(&path_key(&rec.dest_path)) {
+            *n = n.saturating_sub(1);
+        }
+    }
+    let ids: Vec<String> = records.iter().map(|r| r.id.clone()).collect();
+    cache.delete_downloads(&ids).map_err(|e| e.to_string())?;
+    Ok(records
+        .into_iter()
+        .map(|rec| {
+            let unused = users.get(&path_key(&rec.dest_path)).is_none_or(|&n| n == 0);
+            (rec, unused)
+        })
+        .collect())
+}
+
+/// Delete a download's file. One that's already gone counts as deleted,
+/// unless `missing` keeps it while its folder is gone too.
+fn delete_file(path: &str, missing: MissingFile) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let folder_there = Path::new(path).parent().is_some_and(Path::is_dir);
+            if folder_there || missing == MissingFile::Forget {
+                Ok(())
+            } else {
+                Err(format!(
+                    "The folder of {path} is missing. Its drive may not be connected."
+                ))
+            }
+        }
+        Err(e) => Err(format!("Could not delete {path}: {e}")),
+    }
+}
+
+/// Tell the frontend a download is gone so it drops it from its list.
+pub(crate) fn emit_removed<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    let _ = app.emit("download://removed", id);
+}
+
+/// Send the download's current record to the frontend.
+pub(crate) fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let app_state = app.state::<AppState>();
     let rec = {
         let Ok(cache) = app_state.cache.lock() else {
@@ -555,14 +828,14 @@ mod tests {
     use super::*;
     use mvp_core::models::channel::Channel;
 
-    fn queued(id: &str, dest_path: &str) -> DownloadRecord {
+    fn record(id: &str, status: DownloadStatus, dest_path: &str) -> DownloadRecord {
         DownloadRecord {
             id: id.into(),
             channel_id: format!("c-{id}"),
             title: "Dune (2021)".into(),
             kind: DownloadKind::Movie,
             series_channel_id: None,
-            status: DownloadStatus::Queued,
+            status,
             dest_path: dest_path.into(),
             total_bytes: None,
             downloaded_bytes: 0,
@@ -570,6 +843,19 @@ mod tests {
             error: None,
             created_at: 0,
             finished_at: None,
+            keep: false,
+            last_played_at: None,
+        }
+    }
+
+    fn queued(id: &str, dest_path: &str) -> DownloadRecord {
+        record(id, DownloadStatus::Queued, dest_path)
+    }
+
+    fn completed(id: &str, dest_path: &Path) -> DownloadRecord {
+        DownloadRecord {
+            finished_at: Some(0),
+            ..record(id, DownloadStatus::Completed, &dest_path.to_string_lossy())
         }
     }
 
@@ -589,6 +875,211 @@ mod tests {
             season: None,
             episode: None,
         }
+    }
+
+    /// Delete the downloads `ids` the way `delete_downloads` does.
+    fn delete(cache: &Mutex<CacheStore>, ids: &[&str], missing: MissingFile) -> Deleted {
+        delete_selected(cache, &Deleting::default(), missing, |c| select(c, ids)).unwrap()
+    }
+
+    fn select(cache: &CacheStore, ids: &[&str]) -> Result<Vec<DownloadRecord>, String> {
+        Ok(ids
+            .iter()
+            .filter_map(|id| cache.get_download(id).unwrap())
+            .collect())
+    }
+
+    fn exists(cache: &Mutex<CacheStore>, id: &str) -> bool {
+        cache.lock().unwrap().get_download(id).unwrap().is_some()
+    }
+
+    #[test]
+    fn a_file_two_records_share_stays_until_the_last_one_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Dune (2021).mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&completed("a", &file)).unwrap();
+            // Name the file in another case where the file system ignores
+            // case, as the default macOS one does. Elsewhere that would be
+            // another file, so use the same name.
+            let upper = dir.path().join("DUNE (2021).MKV");
+            let shared = if upper.exists() { upper } else { file.clone() };
+            c.upsert_download(&completed("b", &shared)).unwrap();
+        }
+
+        let deleted = delete(&cache, &["a"], MissingFile::Forget);
+        assert_eq!(deleted.removed, vec!["a"]);
+        assert!(!exists(&cache, "a"));
+        assert!(file.exists(), "b still points at the file");
+
+        delete(&cache, &["b"], MissingFile::Forget);
+        assert!(!exists(&cache, "b"));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_file_another_download_is_writing_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Dune (2021).mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&completed("a", &file)).unwrap();
+            c.upsert_download(&queued("b", &part_path(&file).to_string_lossy()))
+                .unwrap();
+        }
+        delete(&cache, &["a"], MissingFile::Forget);
+        assert!(!exists(&cache, "a"));
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn deleting_every_record_of_a_shared_file_deletes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Dune (2021).mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&completed("a", &file)).unwrap();
+            c.upsert_download(&completed("b", &file)).unwrap();
+        }
+        let deleted = delete(&cache, &["a", "b"], MissingFile::KeepWithoutFolder);
+        assert_eq!(deleted.removed, vec!["a", "b"]);
+        assert!(deleted.errors.is_empty());
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_missing_file_still_removes_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&completed("a", &dir.path().join("gone.mkv")))
+                .unwrap();
+            c.upsert_download(&completed("b", &dir.path().join("gone too.mkv")))
+                .unwrap();
+        }
+        delete(&cache, &["a"], MissingFile::Forget);
+        assert!(!exists(&cache, "a"));
+        // Its folder is there, so the file was deleted rather than unplugged.
+        delete(&cache, &["b"], MissingFile::KeepWithoutFolder);
+        assert!(!exists(&cache, "b"));
+    }
+
+    #[test]
+    fn a_missing_folder_keeps_the_record_unless_the_user_removes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // As if the drive with this folder were unplugged.
+        let file = dir.path().join("Unplugged").join("Dune (2021).mkv");
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        cache
+            .lock()
+            .unwrap()
+            .upsert_download(&completed("a", &file))
+            .unwrap();
+
+        let deleted = delete(&cache, &["a"], MissingFile::KeepWithoutFolder);
+        assert!(deleted.removed.is_empty());
+        assert_eq!(deleted.errors.len(), 1);
+        assert!(exists(&cache, "a"));
+
+        delete(&cache, &["a"], MissingFile::Forget);
+        assert!(!exists(&cache, "a"));
+    }
+
+    #[test]
+    fn a_file_that_cant_be_deleted_keeps_its_record_and_the_rest_go() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory where the file should be makes remove_file fail with
+        // something other than NotFound.
+        let blocked = dir.path().join("blocked.mkv");
+        std::fs::create_dir(&blocked).unwrap();
+        let file = dir.path().join("fine.mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        let mut played = completed("a", &blocked);
+        played.last_played_at = Some(42);
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&played).unwrap();
+            c.upsert_download(&completed("b", &file)).unwrap();
+        }
+
+        let deleted = delete(&cache, &["a", "b"], MissingFile::Forget);
+        assert_eq!(deleted.removed, vec!["b"]);
+        assert_eq!(deleted.errors.len(), 1);
+        assert!(!file.exists());
+        let back = cache.lock().unwrap().get_download("a").unwrap().unwrap();
+        assert_eq!(back.last_played_at, Some(42));
+    }
+
+    #[test]
+    fn a_keep_set_while_the_files_are_deleted_comes_back_with_a_file_that_stayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked.mkv");
+        std::fs::create_dir(&blocked).unwrap();
+        let file = dir.path().join("fine.mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&completed("a", &blocked)).unwrap();
+            c.upsert_download(&completed("b", &file)).unwrap();
+        }
+        let deleting = Deleting::default();
+
+        // The steps of `delete_selected`, with the user pressing Keep on both
+        // downloads while their files are being deleted.
+        let taken = take_selected(&cache, &deleting, |c| select(c, &["a", "b"])).unwrap();
+        set_keep(&cache, &deleting, "a", true).unwrap();
+        set_keep(&cache, &deleting, "b", true).unwrap();
+        let (deleted, failed) = delete_files(taken, MissingFile::Forget);
+        let put = put_back(&cache, &deleting, &deleted.removed, failed).unwrap();
+
+        assert_eq!(deleted.removed, vec!["b"]);
+        assert_eq!(put, vec!["a"]);
+        let back = cache.lock().unwrap().get_download("a").unwrap().unwrap();
+        assert!(back.keep);
+        assert!(!exists(&cache, "b"));
+        assert!(deleting.ids().is_empty());
+    }
+
+    #[test]
+    fn a_keep_for_a_download_that_isnt_there_does_nothing() {
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        let deleting = Deleting::default();
+        set_keep(&cache, &deleting, "gone", true).unwrap();
+        assert!(!exists(&cache, "gone"));
+        assert!(deleting.ids().is_empty());
+    }
+
+    #[test]
+    fn says_which_downloads_were_not_deleted() {
+        let mut deleted = Deleted::default();
+        assert_eq!(removal_error(&deleted), None);
+
+        deleted
+            .errors
+            .push("Could not delete /a.mkv: denied".into());
+        assert_eq!(
+            removal_error(&deleted).unwrap(),
+            "Could not delete /a.mkv: denied"
+        );
+
+        deleted.removed.push("b".into());
+        deleted
+            .errors
+            .push("Could not delete /c.mkv: denied".into());
+        assert_eq!(
+            removal_error(&deleted).unwrap(),
+            "Deleted 1 of 3.\nCould not delete /a.mkv: denied\nCould not delete /c.mkv: denied"
+        );
     }
 
     #[test]

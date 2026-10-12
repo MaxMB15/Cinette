@@ -209,6 +209,10 @@ pub fn run() {
             commands::set_download_folder,
             commands::get_download_folder,
             commands::resolve_local_download,
+            commands::set_download_keep,
+            commands::get_download_retention,
+            commands::set_download_retention,
+            commands::count_downloads_due,
         ])
         .setup(|app| {
             let app_dir = app
@@ -251,6 +255,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_shell::ShellExt;
+                crate::downloads::retention::start(app.handle());
                 match app.shell().sidecar("ffmpeg") {
                     Ok(_) => {
                         tracing::info!("ffmpeg sidecar resolved");

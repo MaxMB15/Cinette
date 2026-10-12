@@ -19,8 +19,8 @@ interface DownloadButtonProps {
 	/** Stop in-progress (downloading). */
 	onStop: () => void;
 	stopCount?: number;
-	/** Remove completed download(s). */
-	onRemove: () => void;
+	/** Remove the finished downloads. If it rejects, the user sees the error. */
+	onRemove: () => Promise<unknown> | undefined;
 	removeSummary?: string;
 	/** Render a text label beside the icon (info page only). */
 	showLabel?: boolean;
@@ -38,6 +38,7 @@ export const DownloadButton = ({
 	className = "",
 }: DownloadButtonProps) => {
 	const [confirm, setConfirm] = useState<null | "stop" | "remove">(null);
+	const [removeError, setRemoveError] = useState<string | null>(null);
 
 	if (!DOWNLOADS_SUPPORTED) return null;
 
@@ -90,9 +91,20 @@ export const DownloadButton = ({
 				confirmLabel="Remove"
 				onConfirm={() => {
 					setConfirm(null);
-					onRemove();
+					onRemove()?.catch((err: unknown) => setRemoveError(String(err)));
 				}}
 				onCancel={() => setConfirm(null)}
+			/>
+			<ConfirmDialog
+				open={removeError !== null}
+				title={
+					removeSummary
+						? "Couldn't remove every download"
+						: "Couldn't remove the download"
+				}
+				message={removeError ?? ""}
+				confirmLabel="OK"
+				onConfirm={() => setRemoveError(null)}
 			/>
 		</>
 	);

@@ -341,9 +341,7 @@ const PosterCard = ({
 				onStop={() => {
 					if (!isSeries && dl) stopDownload(dl.id);
 				}}
-				onRemove={() => {
-					if (!isSeries && dl) removeDownload(dl.id);
-				}}
+				onRemove={() => (!isSeries && dl ? removeDownload(dl.id) : undefined)}
 				className="absolute top-1 left-9 z-10 h-7 w-7 justify-center rounded-full bg-black/50 hover:bg-black/70"
 			/>
 		</div>
