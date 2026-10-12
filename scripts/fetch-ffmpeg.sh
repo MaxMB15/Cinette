@@ -8,6 +8,10 @@ set -euo pipefail
 # triple so Tauri can bundle it as a sidecar.
 # Usage: ./scripts/fetch-ffmpeg.sh [macos|linux|windows]
 
+# The sidecar's name, the same as FFMPEG_SIDECAR in the app. The Linux packages
+# install it in /usr/bin, so it can't be plain ffmpeg.
+SIDECAR=max-video-player-ffmpeg
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$ROOT/apps/desktop/src-tauri/binaries"
 mkdir -p "$OUT_DIR"
@@ -52,7 +56,7 @@ esac
 FOUND="$(find "$TMP" -type f -name "ffmpeg${EXT}" | head -n1)"
 if [[ -z "$FOUND" ]]; then echo "ffmpeg binary not found in archive" >&2; exit 1; fi
 
-DEST="$OUT_DIR/ffmpeg-${TARGET_TRIPLE}${EXT}"
+DEST="$OUT_DIR/${SIDECAR}-${TARGET_TRIPLE}${EXT}"
 cp "$FOUND" "$DEST"
 chmod +x "$DEST"
 echo "Installed sidecar: $DEST"

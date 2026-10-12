@@ -52,7 +52,7 @@
 			"../../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
 			"../../../TRADEMARKS.md": "TRADEMARKS.md"
 		},
-		"externalBin": ["binaries/ffmpeg"],
+		"externalBin": ["binaries/max-video-player-ffmpeg"],
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",

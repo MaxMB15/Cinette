@@ -259,7 +259,7 @@ pub fn run() {
             {
                 use tauri_plugin_shell::ShellExt;
                 crate::downloads::retention::start(app.handle());
-                match app.shell().sidecar("ffmpeg") {
+                match app.shell().sidecar(crate::downloads::FFMPEG_SIDECAR) {
                     Ok(_) => {
                         tracing::info!("ffmpeg sidecar resolved");
                         // Start whatever is still queued from the last run.

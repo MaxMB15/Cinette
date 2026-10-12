@@ -8,7 +8,7 @@
 		"process:default",
 		{
 			"identifier": "shell:allow-execute",
-			"allow": [{ "name": "binaries/ffmpeg", "sidecar": true, "args": true }]
+			"allow": [{ "name": "binaries/max-video-player-ffmpeg", "sidecar": true, "args": true }]
 		}
 	]
 }
