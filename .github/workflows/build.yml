@@ -199,7 +199,7 @@ jobs:
           path: coverage/rust
 
       - name: Generate frontend coverage badge
-        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
+        uses: jaywcjlove/coverage-badges-cli@998665f7962b1a3935ba8c3e786171a99436e5d1 # v2.3.0
         with:
           source: coverage/coverage-summary.json
           output: coverage/badge.svg
@@ -207,7 +207,7 @@ jobs:
 
       - name: Generate Rust coverage badge
         if: steps.rust.outcome == 'success'
-        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
+        uses: jaywcjlove/coverage-badges-cli@998665f7962b1a3935ba8c3e786171a99436e5d1 # v2.3.0
         with:
           source: coverage/rust/coverage-summary.json
           output: coverage/rust/badge.svg
