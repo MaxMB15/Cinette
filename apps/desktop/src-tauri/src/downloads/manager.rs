@@ -902,9 +902,12 @@ mod tests {
         {
             let c = cache.lock().unwrap();
             c.upsert_download(&completed("a", &file)).unwrap();
-            // The same file, as the default macOS file system sees it.
+            // Name the file in another case where the file system ignores
+            // case, as the default macOS one does. Elsewhere that would be
+            // another file, so use the same name.
             let upper = dir.path().join("DUNE (2021).MKV");
-            c.upsert_download(&completed("b", &upper)).unwrap();
+            let shared = if upper.exists() { upper } else { file.clone() };
+            c.upsert_download(&completed("b", &shared)).unwrap();
         }
 
         let deleted = delete(&cache, &["a"], MissingFile::Forget);
