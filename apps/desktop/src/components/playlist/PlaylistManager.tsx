@@ -10,6 +10,7 @@ import { AddProvider } from "./AddProvider";
 import { ProviderSettingsModal } from "./ProviderSettingsModal";
 import { useChannels } from "@/hooks/useChannels";
 import type { Provider } from "@/lib/types";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const displayUrl = (url: string): string => {
@@ -80,7 +81,7 @@ export const PlaylistManager = () => {
 						const isRefreshing = refreshingIds.has(p.id);
 						const isFile = p.url.startsWith("file://");
 						return (
-							<Card key={p.id}>
+							<Card key={p.id} role="group" aria-label={p.name}>
 								<CardHeader className="py-4">
 									<div className="flex items-center justify-between">
 										<div className="flex items-center gap-2 min-w-0">
@@ -138,7 +139,7 @@ export const PlaylistManager = () => {
 										{displayUrl(p.url)}
 									</p>
 									<p className="text-xs text-muted-foreground mt-1">
-										{p.channelCount.toLocaleString()} channels
+										{formatCount(p.channelCount, "channel")}
 										{p.lastUpdated &&
 											` \u00b7 Updated ${new Date(p.lastUpdated).toLocaleString()}`}
 									</p>

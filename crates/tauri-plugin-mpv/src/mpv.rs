@@ -18,7 +18,10 @@ use std::sync::{
 use crate::macos::{embedded_options, fallback_options, MacosGlRenderer};
 
 #[cfg(target_os = "linux")]
-use crate::linux::{embedded_options as linux_embedded_options, fallback_options as linux_fallback_options, LinuxGlRenderer};
+use crate::linux::{
+    embedded_options as linux_embedded_options, fallback_options as linux_fallback_options,
+    mpv_uses_wayland, LinuxGlRenderer,
+};
 
 #[cfg(target_os = "ios")]
 use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
@@ -26,6 +29,12 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 pub struct MpvState {
     inner: Mutex<MpvEngine>,
     renderer: Mutex<Option<Box<dyn PlatformRenderer>>>,
+    /// Where the frontend last put the video, in CSS pixels, as x, y, width
+    /// and height. Each load makes a new renderer, but the frontend reports
+    /// the player area only when the player mounts, when the stream URL
+    /// changes and when the player changes size, so a new renderer starts
+    /// here. Locked only while `renderer` is held.
+    bounds: Mutex<Option<[f64; 4]>>,
     fallback_active: AtomicBool,
     /// Whether the next mpv instance may use hardware decoding. Set from the
     /// Settings toggle on every `load()`; mpv is recreated per load, so a
@@ -58,6 +67,7 @@ impl MpvState {
         Self {
             inner: Mutex::new(MpvEngine::new()),
             renderer: Mutex::new(None),
+            bounds: Mutex::new(None),
             fallback_active: AtomicBool::new(false),
             hwdec_enabled: AtomicBool::new(true),
             idle_inhibitor: IdleInhibitor::new(),
@@ -132,6 +142,31 @@ impl MpvState {
         with_hwdec(base, self.hwdec_enabled.load(Ordering::Acquire))
     }
 
+    /// Makes `renderer` the active one and moves its surface to where the
+    /// frontend last put the video. Without this, reloading the same stream
+    /// leaves the new surface at its starting frame. That's the whole window
+    /// on macOS, and a single pixel on Linux, where the video doesn't show.
+    ///
+    /// The bounds are read with the renderer locked, so a `set_bounds` that
+    /// runs after the old renderer is taken out and before this one is
+    /// installed still reaches it.
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    fn install_renderer(&self, mut renderer: Box<dyn PlatformRenderer>) {
+        let replaced = {
+            let mut active = lock_or_recover(&self.renderer);
+            let bounds = *lock_or_recover(&self.bounds);
+            if let Some([x, y, w, h]) = bounds {
+                renderer.set_frame(x, y, w, h);
+            }
+            active.replace(renderer)
+        };
+        // `load()` takes the old renderer out first, so this is only a
+        // safeguard. Its detach waits on the main thread, which can be
+        // waiting on the renderer lock in `resize()`, so it's dropped after
+        // the lock is released.
+        drop(replaced);
+    }
+
     /// Helper: spawn the auto-reconnect monitor for the currently loaded URL.
     /// `client` may be `None` if the engine failed to create one — we just log
     /// and continue without auto-recovery in that case rather than failing the
@@ -199,10 +234,7 @@ impl MpvState {
             return self.launch_fallback(url, start_pos, app, &e);
         }
 
-        {
-            let mut renderer = lock_or_recover(&self.renderer);
-            *renderer = Some(Box::new(gl_renderer));
-        }
+        self.install_renderer(Box::new(gl_renderer));
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
@@ -236,7 +268,8 @@ impl MpvState {
 
         let attach_result = {
             let mut engine = lock_or_recover(&self.inner);
-            match engine.create(&self.options(linux_embedded_options())) {
+            let options = linux_embedded_options(gl_renderer.software_gl());
+            match engine.create(&self.options(options)) {
                 Ok(mpv) => gl_renderer.attach(mpv),
                 Err(e) => Err(e),
             }
@@ -247,10 +280,7 @@ impl MpvState {
             return self.launch_fallback(url, start_pos, app, &e);
         }
 
-        {
-            let mut renderer = lock_or_recover(&self.renderer);
-            *renderer = Some(Box::new(gl_renderer));
-        }
+        self.install_renderer(Box::new(gl_renderer));
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
@@ -307,10 +337,7 @@ impl MpvState {
             return Err(e);
         }
 
-        {
-            let mut renderer = lock_or_recover(&self.renderer);
-            *renderer = Some(Box::new(metal_renderer));
-        }
+        self.install_renderer(Box::new(metal_renderer));
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
@@ -382,22 +409,28 @@ impl MpvState {
         start_pos: Option<f64>,
     ) -> Result<Option<libmpv2::Mpv>, String> {
         let mut engine = lock_or_recover(&self.inner);
-        engine.create(&self.options(linux_fallback_options()))?;
+        engine.create(&self.options(linux_fallback_options(mpv_uses_wayland())))?;
         engine.configure_audio()?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
         Ok(engine.create_event_client("reconnect-watcher").ok())
     }
 
-    /// Reposition the video surface to a CSS-pixel rect reported by the frontend.
+    /// Shows or hides the video surface without stopping playback.
     pub fn set_visible(&self, visible: bool) {
         if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
             r.set_visible(visible);
         }
     }
 
+    /// Moves the video surface to a rect in CSS pixels reported by the
+    /// frontend, and keeps it for the renderer the next load makes.
     pub fn set_bounds(&self, x: f64, y: f64, w: f64, h: f64) {
-        if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
+        // Stored and applied under one renderer lock, so two reports can't
+        // leave the stored bounds different from where the renderer is.
+        let mut active = lock_or_recover(&self.renderer);
+        *lock_or_recover(&self.bounds) = Some([x, y, w, h]);
+        if let Some(r) = active.as_mut() {
             r.set_frame(x, y, w, h);
         }
     }
@@ -544,5 +577,77 @@ mod tests {
     fn leaves_options_without_hwdec_alone() {
         let opts = vec![("vo", "gpu")];
         assert_eq!(with_hwdec(opts.clone(), false), opts);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    mod bounds {
+        use crate::mpv::MpvState;
+        use crate::renderer::PlatformRenderer;
+        use libmpv2::Mpv;
+        use std::sync::{Arc, Mutex};
+
+        type Frames = Arc<Mutex<Vec<[f64; 4]>>>;
+
+        /// A renderer that only records where it was put.
+        struct FakeRenderer(Frames);
+
+        impl PlatformRenderer for FakeRenderer {
+            fn attach(&mut self, _mpv: &mut Mpv) -> Result<(), String> {
+                Ok(())
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64) {
+                self.0.lock().unwrap().push([x, y, w, h]);
+            }
+            fn set_visible(&mut self, _visible: bool) {}
+            fn set_first_frame_callback(&mut self, _cb: Box<dyn FnOnce() + Send>) {}
+            fn detach(&mut self) {}
+        }
+
+        /// Installs a fake renderer and returns the frames it gets.
+        fn install(state: &MpvState) -> Frames {
+            let frames = Frames::default();
+            state.install_renderer(Box::new(FakeRenderer(frames.clone())));
+            frames
+        }
+
+        #[test]
+        fn starts_a_new_renderer_at_the_last_bounds() {
+            let state = MpvState::new();
+            state.set_bounds(0.0, 0.0, 800.0, 600.0);
+            state.set_bounds(240.0, 52.0, 960.0, 540.0);
+            let frames = install(&state);
+            assert_eq!(*frames.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+        }
+
+        #[test]
+        fn keeps_the_bounds_for_the_renderer_after_this_one() {
+            let state = MpvState::new();
+            let first = install(&state);
+            state.set_bounds(240.0, 52.0, 960.0, 540.0);
+            assert_eq!(*first.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+
+            // Retry stops the stream and loads it again, with no new report.
+            state.stop();
+            let second = install(&state);
+            assert_eq!(*second.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+        }
+
+        #[test]
+        fn keeps_bounds_reported_while_no_renderer_is_active() {
+            let state = MpvState::new();
+            install(&state);
+            state.stop();
+            state.set_bounds(0.0, 0.0, 1280.0, 720.0);
+            let frames = install(&state);
+            assert_eq!(*frames.lock().unwrap(), [[0.0, 0.0, 1280.0, 720.0]]);
+        }
+
+        #[test]
+        fn leaves_a_new_renderer_alone_before_any_bounds() {
+            let state = MpvState::new();
+            let frames = install(&state);
+            assert!(frames.lock().unwrap().is_empty());
+        }
     }
 }
