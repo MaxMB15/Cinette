@@ -5,13 +5,16 @@ import { useRef } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
-import { PLAYER_SHORTCUTS } from "@/lib/hotkeys";
+import { playerShortcuts } from "@/lib/hotkeys";
+import type { SkipIntervals } from "@/lib/player-prefs";
 
 interface ShortcutsOverlayProps {
+	/** How far the arrow and J/L keys skip. */
+	skip: SkipIntervals;
 	onClose: () => void;
 }
 
-export const ShortcutsOverlay = ({ onClose }: ShortcutsOverlayProps) => {
+export const ShortcutsOverlay = ({ skip, onClose }: ShortcutsOverlayProps) => {
 	const dialogRef = useRef<HTMLDivElement>(null);
 	useFocusTrap(dialogRef);
 
@@ -43,7 +46,7 @@ export const ShortcutsOverlay = ({ onClose }: ShortcutsOverlayProps) => {
 					</Button>
 				</div>
 				<ul className="space-y-1.5">
-					{PLAYER_SHORTCUTS.map(({ keys, label }) => (
+					{playerShortcuts(skip).map(({ keys, label }) => (
 						<li
 							key={label + keys.join()}
 							className="flex items-center justify-between gap-4 text-sm"

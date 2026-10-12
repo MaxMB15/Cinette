@@ -101,6 +101,17 @@ pub async fn mpv_set_visible<R: Runtime>(
 }
 
 #[command]
+pub async fn mpv_set_skip_intervals<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, MpvState>,
+    back: f64,
+    forward: f64,
+) -> Result<(), String> {
+    state.set_skip_intervals(back, forward);
+    Ok(())
+}
+
+#[command]
 pub async fn mpv_set_media_info<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, MpvState>,
