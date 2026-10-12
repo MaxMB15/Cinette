@@ -171,8 +171,10 @@ jobs:
 
   # ── Coverage badge deploy (push to main only, needs write) ─────────────
   # The frontend report goes to coverage/ and the Rust report to coverage/rust/.
+  # The Rust report comes from build-linux. If that job fails, the frontend
+  # report still goes up and the last Rust report stays.
   deploy-coverage:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success' }}
     needs: [test, build-linux]
     runs-on: ubuntu-latest
     permissions:
@@ -183,7 +185,10 @@ jobs:
           name: coverage-report
           path: coverage
 
-      - uses: actions/download-artifact@v7
+      - name: Download the Rust coverage report
+        id: rust
+        continue-on-error: true
+        uses: actions/download-artifact@v7
         with:
           name: rust-coverage-report
           path: coverage/rust
@@ -196,6 +201,7 @@ jobs:
           label: frontend coverage
 
       - name: Generate Rust coverage badge
+        if: steps.rust.outcome == 'success'
         uses: jaywcjlove/coverage-badges-cli@v2.1.0
         with:
           source: coverage/rust/coverage-summary.json
@@ -309,7 +315,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           # cargo-llvm-cov reads the coverage data with LLVM's tools.
-          components: llvm-tools-preview
+          components: llvm-tools
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2

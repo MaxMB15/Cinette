@@ -100,17 +100,24 @@ For a frontend coverage report, run `npm run test:coverage --workspace=apps/desk
 and open `apps/desktop/coverage/index.html`.
 
 Rust coverage needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and
-LLVM's tools, installed once:
+LLVM's tools. Install them once:
 
 ```bash
-rustup component add llvm-tools-preview
+rustup component add llvm-tools
 cargo install cargo-llvm-cov --locked
+```
+
+Then run the tests and open the report:
+
+```bash
 cargo llvm-cov --workspace --open
 ```
 
 The plugin and app tests load libmpv, so set the library path from the setup steps
-above first. The Rust figure depends on the platform, because `macos.rs` and
-`linux.rs` in the mpv plugin each build only on their own system.
+above first. The app's tests also need the [ffmpeg sidecar](#the-ffmpeg-sidecar)
+and a built frontend in `apps/desktop/dist`, which `npm run build:desktop` makes.
+The Rust figure depends on the platform, because `macos.rs` and `linux.rs` in the
+mpv plugin each build only on their own system.
 
 CI publishes the [frontend report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
 and the [Rust report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/) for
