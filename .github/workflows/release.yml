@@ -155,7 +155,7 @@ jobs:
           python3 scripts/sign-updater.py "$UPDATER"
 
       - name: Upload macOS updater signature
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-updater-sig
           path: target/release/bundle/macos/MaxVideoPlayer.app.tar.gz.sig
@@ -278,7 +278,7 @@ jobs:
           fi
 
       - name: Upload Linux updater signature
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-updater-sig
           path: target/release/bundle/MaxVideoPlayer_linux.tar.gz.sig
