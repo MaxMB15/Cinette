@@ -3291,4 +3291,644 @@ mod tests {
             Some("series:homeland")
         );
     }
+
+    // --- Opening the database ---
+
+    #[test]
+    fn open_creates_the_folder_and_keeps_data_between_launches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app data").join("cache.db");
+        CacheStore::open(&path)
+            .unwrap()
+            .upsert_provider(&make_provider("p1", "Home"))
+            .unwrap();
+
+        let reopened = CacheStore::open(&path).unwrap();
+        assert_eq!(reopened.get_provider("p1").unwrap().unwrap().name, "Home");
+    }
+
+    #[test]
+    fn open_fails_on_a_file_that_is_not_a_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        std::fs::write(&path, "not a database\n".repeat(100)).unwrap();
+        assert!(matches!(CacheStore::open(&path), Err(CacheError::Db(_))));
+    }
+
+    #[test]
+    fn open_fails_when_the_folder_cannot_be_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("taken");
+        std::fs::write(&file, "").unwrap();
+        assert!(matches!(
+            CacheStore::open(&file.join("cache.db")),
+            Err(CacheError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn opening_fails_when_any_table_cannot_be_created() {
+        // An index that already has a table's name blocks that one table, so
+        // each step of the setup gets its turn to fail.
+        for table in [
+            "providers",
+            "epg_programmes",
+            "watch_history",
+            "omdb_cache",
+            "group_hierarchy",
+            "playback_positions",
+            "pinned_groups",
+            "downloads",
+            "series_episode_cache",
+        ] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE clash (x); CREATE INDEX {table} ON clash (x);"
+            ))
+            .unwrap();
+            let err = CacheStore { conn }.init_tables().unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("already an index named {table}")),
+                "{table}: {err}"
+            );
+        }
+    }
+
+    // --- Providers, channels and the guide ---
+
+    /// Every field of a provider. `Provider` has no `PartialEq`, and its
+    /// `Debug` hides the login.
+    fn as_json(provider: &Provider) -> serde_json::Value {
+        serde_json::to_value(provider).unwrap()
+    }
+
+    fn xtream_provider(id: &str) -> Provider {
+        Provider {
+            provider_type: ProviderType::Xtream,
+            username: Some("user".into()),
+            password: Some("pass".into()),
+            last_updated: Some("2026-01-01T00:00:00Z".into()),
+            channel_count: 12,
+            epg_url: Some("http://epg.example.test/guide.xml".into()),
+            ..make_provider(id, "Xtream")
+        }
+    }
+
+    #[test]
+    fn get_provider_reads_back_every_field() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let provider = xtream_provider("x1");
+        store.upsert_provider(&provider).unwrap();
+        store
+            .upsert_provider(&make_provider("m1", "Playlist"))
+            .unwrap();
+
+        assert_eq!(
+            as_json(&store.get_provider("x1").unwrap().unwrap()),
+            as_json(&provider)
+        );
+        assert_eq!(
+            as_json(&store.get_provider("m1").unwrap().unwrap()),
+            as_json(&make_provider("m1", "Playlist"))
+        );
+        assert!(store.get_provider("missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn update_provider_credentials_changes_the_login_and_keeps_the_rest() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let provider = xtream_provider("x1");
+        store.upsert_provider(&provider).unwrap();
+        store
+            .save_channels("x1", &[make_channel("x1-ch-0", "News", "News")])
+            .unwrap();
+        store
+            .upsert_provider(&make_provider("other", "Other"))
+            .unwrap();
+
+        store
+            .update_provider_credentials(
+                "x1",
+                "Renamed",
+                "http://new.example.test",
+                Some("new user"),
+                None,
+            )
+            .unwrap();
+
+        let expected = Provider {
+            name: "Renamed".into(),
+            url: "http://new.example.test".into(),
+            username: Some("new user".into()),
+            password: None,
+            ..provider
+        };
+        assert_eq!(
+            as_json(&store.get_provider("x1").unwrap().unwrap()),
+            as_json(&expected)
+        );
+        assert_eq!(store.get_channels("x1").unwrap().len(), 1);
+        assert_eq!(store.get_provider("other").unwrap().unwrap().name, "Other");
+    }
+
+    #[test]
+    fn set_provider_epg_url_sets_and_clears_the_guide_address() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
+        let guide = Some("http://epg.example.test/guide.xml");
+
+        store.set_provider_epg_url("p1", guide).unwrap();
+        assert_eq!(
+            store
+                .get_provider("p1")
+                .unwrap()
+                .unwrap()
+                .epg_url
+                .as_deref(),
+            guide
+        );
+
+        store.set_provider_epg_url("p1", None).unwrap();
+        assert_eq!(store.get_provider("p1").unwrap().unwrap().epg_url, None);
+    }
+
+    #[test]
+    fn a_channel_leads_to_the_provider_that_owns_it() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for id in ["p1", "p2"] {
+            store.upsert_provider(&make_provider(id, id)).unwrap();
+            store
+                .save_channels(id, &[make_channel(&format!("{id}-ch-0"), "News", "News")])
+                .unwrap();
+        }
+
+        let owner = store.get_provider_for_channel("p2-ch-0").unwrap().unwrap();
+        assert_eq!(as_json(&owner), as_json(&make_provider("p2", "p2")));
+        assert!(store.get_provider_for_channel("p3-ch-0").unwrap().is_none());
+        assert_eq!(
+            store.get_channel_by_id("p2-ch-0").unwrap(),
+            Some(make_channel("p2-ch-0", "News", "News"))
+        );
+        assert_eq!(store.get_channel_by_id("p3-ch-0").unwrap(), None);
+    }
+
+    #[test]
+    fn toggling_a_channel_that_is_gone_is_an_error() {
+        let store = CacheStore::open_in_memory().unwrap();
+        assert!(matches!(
+            store.toggle_favorite("missing"),
+            Err(CacheError::Db(rusqlite::Error::QueryReturnedNoRows))
+        ));
+    }
+
+    #[test]
+    fn saved_series_fields_are_kept_and_never_guessed() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "P")).unwrap();
+        // The name says one episode and the fields another. The fields win.
+        let numbered = Channel {
+            series_title: Some("Homeland".into()),
+            season: Some(2),
+            episode: Some(3),
+            ..vod("p1-ch-0", "Homeland S01E01", "series")
+        };
+        // No episode in the name, so there is nothing to fill in.
+        let unnumbered = vod("p1-ch-1", "Homeland", "series");
+        store
+            .save_channels("p1", &[numbered.clone(), unnumbered.clone()])
+            .unwrap();
+
+        assert_eq!(store.get_channels("p1").unwrap(), [unnumbered, numbered]);
+    }
+
+    fn timed(channel_id: &str, title: &str, start_time: i64, end_time: i64) -> StoredEpgProgram {
+        StoredEpgProgram {
+            title: title.into(),
+            start_time,
+            end_time,
+            ..programme(channel_id, "p1")
+        }
+    }
+
+    #[test]
+    fn the_guide_window_covers_every_channel_in_order() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .save_epg_programmes(
+                "p1",
+                &[
+                    timed("cnn.us", "Late", 300, 400),
+                    timed("bbc.uk", "Evening", 100, 200),
+                    timed("cnn.us", "Early", 0, 150),
+                    timed("bbc.uk", "Ended", 0, 100),
+                    timed("bbc.uk", "Later", 400, 500),
+                ],
+            )
+            .unwrap();
+
+        let window: Vec<(String, String)> = store
+            .get_epg_all_channels(100, 400)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.channel_id, p.title))
+            .collect();
+        assert_eq!(
+            window,
+            [
+                ("bbc.uk".to_string(), "Evening".to_string()),
+                ("cnn.us".to_string(), "Early".to_string()),
+                ("cnn.us".to_string(), "Late".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn guide_search_finds_the_next_match_on_each_channel() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "P")).unwrap();
+        let mut bbc = make_channel("p1-ch-0", "BBC One", "UK");
+        bbc.tvg_id = Some("bbc.uk".into());
+        bbc.logo_url = Some("http://img.example.test/bbc.png".into());
+        store.save_channels("p1", &[bbc]).unwrap();
+        let mut world = timed("cnn.us", "World Report", 250, 300);
+        world.description = Some("All the NEWS from abroad".into());
+        store
+            .save_epg_programmes(
+                "p1",
+                &[
+                    timed("bbc.uk", "Old News", 0, 100),
+                    timed("bbc.uk", "Late News", 300, 400),
+                    timed("bbc.uk", "Evening News", 100, 200),
+                    world,
+                    timed("cnn.us", "Cooking", 120, 180),
+                    timed("sky.uk", "News at Ten", 0, 120),
+                ],
+            )
+            .unwrap();
+
+        let found = store.search_epg_programmes("news", 150).unwrap();
+        let summary: Vec<(&str, &str, &str, Option<&str>)> = found
+            .iter()
+            .map(|p| {
+                (
+                    p.channel_id.as_str(),
+                    p.title.as_str(),
+                    p.channel_name.as_str(),
+                    p.channel_logo.as_deref(),
+                )
+            })
+            .collect();
+        // A channel with no match in the list is named by its guide id.
+        assert_eq!(
+            summary,
+            [
+                (
+                    "bbc.uk",
+                    "Evening News",
+                    "BBC One",
+                    Some("http://img.example.test/bbc.png")
+                ),
+                ("cnn.us", "World Report", "cnn.us", None),
+            ]
+        );
+    }
+
+    // --- Group layout and downloads ---
+
+    fn layout(
+        store: &CacheStore,
+        provider_id: &str,
+        content_type: &str,
+    ) -> Vec<(String, Option<String>, i64)> {
+        store
+            .get_group_hierarchy(provider_id, content_type)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.group_name, e.super_category, e.sort_order))
+            .collect()
+    }
+
+    fn group(
+        name: &str,
+        super_category: Option<&str>,
+        sort_order: i64,
+    ) -> (String, Option<String>, i64) {
+        (name.into(), super_category.map(Into::into), sort_order)
+    }
+
+    #[test]
+    fn group_changes_only_touch_the_named_provider_and_type() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for (provider, content_type) in [("p1", "live"), ("p1", "movie"), ("p2", "live")] {
+            store
+                .save_group_hierarchy(provider, content_type, "Sports", Some("US"), 0, false)
+                .unwrap();
+            store
+                .save_group_hierarchy(provider, content_type, "News", Some("US"), 100, false)
+                .unwrap();
+        }
+        store
+            .save_group_hierarchy("p1", "movie", "Kids", Some("Family"), 200, false)
+            .unwrap();
+
+        store
+            .update_group_sort_order("p1", "live", "News", -1)
+            .unwrap();
+        store
+            .rename_super_category("p1", "live", "US", "America")
+            .unwrap();
+        store.delete_super_category("p1", "movie", "US").unwrap();
+
+        assert_eq!(
+            layout(&store, "p1", "live"),
+            [
+                group("News", Some("America"), -1),
+                group("Sports", Some("America"), 0)
+            ]
+        );
+        assert_eq!(
+            layout(&store, "p1", "movie"),
+            [
+                group("Sports", None, 0),
+                group("News", None, 100),
+                group("Kids", Some("Family"), 200)
+            ]
+        );
+        assert_eq!(
+            layout(&store, "p2", "live"),
+            [
+                group("Sports", Some("US"), 0),
+                group("News", Some("US"), 100)
+            ]
+        );
+    }
+
+    #[test]
+    fn replacing_the_layout_drops_overrides_for_groups_that_are_gone() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .save_group_hierarchy("p1", "live", "Old", Some("Mine"), 0, true)
+            .unwrap();
+        store
+            .replace_group_hierarchy("p1", "live", &[("Sports", Some("US"), 0)])
+            .unwrap();
+        assert_eq!(
+            layout(&store, "p1", "live"),
+            [group("Sports", Some("US"), 0)]
+        );
+    }
+
+    #[test]
+    fn deleting_a_download_leaves_the_others() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_download(&movie_record("d1", "c1")).unwrap();
+        store.upsert_download(&movie_record("d2", "c2")).unwrap();
+
+        store.delete_download("d1").unwrap();
+        store.delete_download("missing").unwrap();
+
+        let ids: Vec<String> = store
+            .list_downloads()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(ids, ["d2"]);
+    }
+
+    #[test]
+    fn finds_the_completed_download_of_a_channel() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let done = DownloadRecord {
+            status: DownloadStatus::Completed,
+            finished_at: Some(200),
+            ..movie_record("d1", "c1")
+        };
+        store.upsert_download(&movie_record("d0", "c1")).unwrap();
+        store.upsert_download(&done).unwrap();
+        store.upsert_download(&movie_record("d2", "c2")).unwrap();
+
+        assert_eq!(
+            store.completed_download_for_channel("c1").unwrap(),
+            Some(done)
+        );
+        assert_eq!(store.completed_download_for_channel("c2").unwrap(), None);
+    }
+
+    // --- Failures ---
+
+    /// The names of the store's own tables.
+    fn table_names(store: &CacheStore) -> Vec<String> {
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap();
+        let names = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<SqlResult<_>>()
+            .unwrap();
+        names
+    }
+
+    /// Every row of every table, to check that a failed write changed nothing.
+    fn snapshot(store: &CacheStore) -> Vec<String> {
+        let mut rows = Vec::new();
+        for table in table_names(store) {
+            let mut stmt = store
+                .conn
+                .prepare(&format!("SELECT * FROM {table}"))
+                .unwrap();
+            let columns = stmt.column_count();
+            let mut query = stmt.query([]).unwrap();
+            while let Some(row) = query.next().unwrap() {
+                let values: Vec<String> = (0..columns)
+                    .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                    .collect();
+                rows.push(format!("{table}: {}", values.join(", ")));
+            }
+        }
+        rows.sort();
+        rows
+    }
+
+    /// Makes every `event` (INSERT or DELETE) on `table` fail, the way a full
+    /// disk fails a write partway through.
+    fn fail_on(store: &CacheStore, event: &str, table: &str) {
+        store
+            .conn
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_{event}_{table} BEFORE {event} ON {table}
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+            ))
+            .unwrap();
+    }
+
+    /// Asserts that each call failed with a database error, naming the call
+    /// that didn't.
+    macro_rules! assert_db_errors {
+        ($($call:expr),+ $(,)?) => {$(
+            let result = $call.map(drop);
+            assert!(
+                matches!(result, Err(CacheError::Db(_))),
+                "{}: {result:?}",
+                stringify!($call)
+            );
+        )+};
+    }
+
+    #[test]
+    fn a_refresh_that_fails_partway_keeps_the_old_channels() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "p1", "Heat");
+        store.toggle_favorite("p1-ch-0").unwrap();
+        let before = snapshot(&store);
+        fail_on(&store, "INSERT", "channels");
+        let new = make_channel("p1-ch-5", "New", "News");
+
+        assert_db_errors!(
+            store.save_channels("p1", std::slice::from_ref(&new)),
+            store.upsert_channel("p1", &new),
+        );
+        assert_eq!(snapshot(&store), before);
+
+        // The failed refresh ended its transaction, so the next one can run.
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_INSERT_channels")
+            .unwrap();
+        store.save_channels("p1", &[new]).unwrap();
+        assert_eq!(store.get_channels("p1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_guide_refresh_that_fails_partway_keeps_the_old_guide() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "p1", "Heat");
+        let before = snapshot(&store);
+        fail_on(&store, "INSERT", "epg_programmes");
+
+        assert_db_errors!(store.save_epg_programmes("p1", &[timed("bbc.uk", "New", 0, 100)]));
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn removing_a_provider_that_fails_partway_removes_nothing() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        let before = snapshot(&store);
+        // Positions, history and metadata are deleted before the guide.
+        fail_on(&store, "DELETE", "epg_programmes");
+
+        assert_db_errors!(store.remove_provider("m3u-a"));
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn writes_to_a_read_only_database_fail_and_change_nothing() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "p1", "Heat");
+        store
+            .upsert_provider(&make_provider("empty", "Empty"))
+            .unwrap();
+        store.upsert_download(&movie_record("d1", "c1")).unwrap();
+        // An older attempt at the same channel, for pruning to remove.
+        let older = DownloadRecord {
+            created_at: 50,
+            ..movie_record("d0", "c1")
+        };
+        store.upsert_download(&older).unwrap();
+        let before = snapshot(&store);
+        store.conn.execute_batch("PRAGMA query_only = 1").unwrap();
+
+        assert_db_errors!(
+            store.upsert_provider(&make_provider("p2", "Other")),
+            store.update_provider_credentials("p1", "New", "http://new.example.test", None, None),
+            store.set_provider_epg_url("p1", None),
+            store.remove_provider("p1"),
+            // A provider with nothing saved fails on its own row.
+            store.remove_provider("empty"),
+            store.save_channels("p1", &[]),
+            store.toggle_favorite("p1-ch-0"),
+            store.upsert_channel("p1", &make_channel("p1-ch-9", "New", "News")),
+            store.save_epg_data("p1-ch-0", "[]"),
+            store.save_epg_programmes("p1", &[]),
+            store.save_omdb_cache("p1-ch-1", &make_omdb_data("Heat")),
+            store.record_play_start("p1-ch-0", "News", None, "live"),
+            store.record_play_end("p1-ch-0", 60),
+            store.delete_history_entry("p1-ch-0"),
+            store.delete_history_series("Homeland"),
+            store.clear_watch_history_of_type("live"),
+            store.clear_watch_history(),
+            store.save_playback_position("movie:heat", 1.0, 2.0),
+            store.delete_playback_position("movie:heat"),
+            store.clear_all_caches(),
+            store.update_group_sort_order("p1", "live", "News", 5),
+            store.save_group_hierarchy("p1", "live", "News", None, 5, false),
+            store.replace_group_hierarchy("p1", "live", &[]),
+            store.rename_super_category("p1", "live", "Info", "News"),
+            store.delete_super_category("p1", "live", "Info"),
+            store.pin_group("p1", "live", "Sports", 1),
+            store.unpin_group("p1", "live", "News"),
+            store.upsert_download(&movie_record("d2", "c2")),
+            store.set_download_keep("d1", true),
+            store.mark_download_played("d1", 500),
+            store.delete_download("d1"),
+            store.delete_downloads(&["d1".to_string()]),
+            store.delete_terminal_downloads_for_channel("c1"),
+            store.prune_redundant_downloads(),
+            store.requeue_interrupted_downloads(),
+            store.save_series_episodes("p1-ch-2", &[]),
+        );
+
+        store.conn.execute_batch("PRAGMA query_only = 0").unwrap();
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn reads_from_a_damaged_database_are_errors_not_empty_results() {
+        // An empty answer here would look as if the user's data were gone.
+        let store = CacheStore::open_in_memory().unwrap();
+        for table in table_names(&store) {
+            store
+                .conn
+                .execute_batch(&format!("DROP TABLE {table}"))
+                .unwrap();
+        }
+
+        assert_db_errors!(
+            store.get_providers(),
+            store.get_provider("p1"),
+            store.get_provider_for_channel("p1-ch-0"),
+            store.remove_provider("p1"),
+            store.save_channels("p1", &[]),
+            store.get_channels("p1"),
+            store.get_all_channels(),
+            store.get_channel_by_id("p1-ch-0"),
+            store.toggle_favorite("p1-ch-0"),
+            store.get_epg_data("p1-ch-0"),
+            store.get_epg_programmes("bbc.uk", 0, 100),
+            store.get_epg_all_channels(0, 100),
+            store.search_epg_programmes("news", 0),
+            store.get_omdb_cache("p1-ch-1", 3600),
+            store.get_watch_history(10),
+            store.delete_history_series("Homeland"),
+            store.get_playback_position("movie:heat"),
+            store.get_group_hierarchy("p1", "live"),
+            store.replace_group_hierarchy("p1", "live", &[]),
+            store.get_pinned_groups("p1", "live"),
+            store.get_download("d1"),
+            store.list_downloads(),
+            store.list_download_paths(),
+            store.delete_downloads(&["d1".to_string()]),
+            store.prune_redundant_downloads(),
+            store.list_downloads_for_series("s1"),
+            store.list_active_downloads(),
+            store.completed_download_for_channel("c1"),
+            store.get_series_episodes("p1-ch-2"),
+        );
+    }
 }
