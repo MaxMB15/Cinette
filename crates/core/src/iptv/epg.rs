@@ -196,9 +196,9 @@ fn parse_epg_time(raw: &str) -> i64 {
     // A byte count can land inside a character in a broken guide, so the
     // slices here go through `get`, which returns None there instead of
     // panicking.
-    let Some(Ok(naive)) = dt_str
+    let Some(naive) = dt_str
         .get(..14)
-        .map(|digits| NaiveDateTime::parse_from_str(digits, "%Y%m%d%H%M%S"))
+        .and_then(|digits| NaiveDateTime::parse_from_str(digits, "%Y%m%d%H%M%S").ok())
     else {
         return 0;
     };

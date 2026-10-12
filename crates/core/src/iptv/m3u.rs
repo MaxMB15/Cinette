@@ -51,10 +51,16 @@ pub fn parse_m3u_file(path: &Path) -> Result<Vec<Channel>, M3uError> {
 /// Parse M3U from a byte slice, such as a memory-mapped file.
 fn parse_m3u_bytes(bytes: &[u8]) -> Result<Vec<Channel>, M3uError> {
     let content = std::str::from_utf8(bytes).map_err(|e| M3uError::Parse {
-        line: 0,
+        // Line numbers in errors count from 1, as the reader's do.
+        line: line_number_at(bytes, e.valid_up_to()),
         message: format!("UTF-8 decode error: {e}"),
     })?;
     parse_m3u(content)
+}
+
+/// The line, counting from 1, that holds the byte at `offset`.
+fn line_number_at(bytes: &[u8], offset: usize) -> usize {
+    bytes[..offset].iter().filter(|&&b| b == b'\n').count() + 1
 }
 
 /// Stream-parse M3U from any `BufRead` source. Collects EXTINF+URL pairs
@@ -176,8 +182,8 @@ fn strip_bom(s: &str) -> &str {
 /// Pairs each `#EXTINF` line with the link that follows it. Lines such as
 /// `#EXTVLCOPT`, `#EXTGRP` and `#KODIPROP` can sit between the two, so an
 /// `#EXTINF` waits for the next line that isn't blank or a `#` line. A second
-/// `#EXTINF` before any link replaces the first, so an entry with no link is
-/// dropped rather than taking the next entry's link. A link with no `#EXTINF`
+/// `#EXTINF:` before any link replaces the first, so an entry with no link is
+/// dropped rather than taking the next entry's link. A link with no `#EXTINF:`
 /// before it is skipped. The lines come back as given, untrimmed.
 fn pair_blocks<T: AsRef<str>>(lines: impl IntoIterator<Item = T>) -> Vec<(T, T)> {
     let mut blocks = Vec::new();
@@ -196,7 +202,7 @@ fn pair_blocks<T: AsRef<str>>(lines: impl IntoIterator<Item = T>) -> Vec<(T, T)>
 }
 
 /// Parses the `#EXTINF` and link pairs into channels in parallel. Then it
-/// drops repeats and groups the links of each film and episode.
+/// drops repeats and groups the links of each movie and episode.
 fn channels_from_blocks<T: AsRef<str> + Sync>(blocks: &[(T, T)]) -> Vec<Channel> {
     let channels: Vec<Channel> = blocks
         .par_iter()
@@ -206,17 +212,19 @@ fn channels_from_blocks<T: AsRef<str> + Sync>(blocks: &[(T, T)]) -> Vec<Channel>
         })
         .collect();
 
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
+    // Playlists often list the same stream in more than one group, such as a
+    // country's movie group and a server group. Only the first listing of each
+    // name and link stays.
     let mut seen = std::collections::HashSet::<(String, String)>::new();
     let channels: Vec<Channel> = channels
         .into_iter()
         .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
         .collect();
 
-    // Group movies with the same title under a single entry; extra URLs go into sources.
+    // Movies with the same title become one entry, and the other links become
+    // its sources.
     let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
+    // Episodes with the same show, season and episode are grouped the same way.
     group_series_episodes(channels)
 }
 
@@ -807,14 +815,15 @@ http://stream.example.com/ch2
     }
 
     #[test]
-    fn a_stream_that_is_not_utf8_is_a_parse_error_on_that_line() {
+    fn a_playlist_that_is_not_utf8_is_a_parse_error_on_that_line() {
         let header: &[u8] = b"#EXTM3U \xff\n#EXTINF:-1,One\nhttp://a.test/1\n";
         for (bytes, bad_line) in [(header, 1), (LATIN1_PLAYLIST, 2)] {
-            let result = parse_m3u_reader(bytes);
-            assert!(
-                matches!(result, Err(M3uError::Parse { line, .. }) if line == bad_line),
-                "{result:?}"
-            );
+            for result in [parse_m3u_reader(bytes), parse_file(bytes)] {
+                assert!(
+                    matches!(result, Err(M3uError::Parse { line, .. }) if line == bad_line),
+                    "{result:?}"
+                );
+            }
         }
     }
 
@@ -827,19 +836,25 @@ http://stream.example.com/ch2
         ]
     }
 
+    /// Each channel's name and link, in order.
+    fn names_and_links(channels: &[Channel]) -> Vec<(&str, &str)> {
+        channels
+            .iter()
+            .map(|ch| (ch.name.as_str(), ch.url.as_str()))
+            .collect()
+    }
+
     #[test]
     fn an_entry_without_a_link_is_dropped_by_every_parser() {
-        // A broken entry must not take the next entry's link.
+        // A broken entry must not take the next entry's link, even across
+        // option lines.
         let content = "#EXTM3U\n\
             #EXTINF:-1,No Link\n\
+            #EXTVLCOPT:http-user-agent=Player\n\
             #EXTINF:-1,One\nhttp://a.test/1\n\
             #EXTINF:-1,Last";
         for channels in parse_every_way(content) {
-            let entries: Vec<_> = channels
-                .iter()
-                .map(|ch| (ch.name.as_str(), ch.url.as_str()))
-                .collect();
-            assert_eq!(entries, [("One", "http://a.test/1")]);
+            assert_eq!(names_and_links(&channels), [("One", "http://a.test/1")]);
         }
     }
 
@@ -879,11 +894,7 @@ http://stream.example.com/ch2
             #EXTINF:-1,One\nhttp://a.test/1\n\
             http://a.test/second-link\n";
         for channels in parse_every_way(content) {
-            let entries: Vec<_> = channels
-                .iter()
-                .map(|ch| (ch.name.as_str(), ch.url.as_str()))
-                .collect();
-            assert_eq!(entries, [("One", "http://a.test/1")]);
+            assert_eq!(names_and_links(&channels), [("One", "http://a.test/1")]);
         }
     }
 
