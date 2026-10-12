@@ -752,10 +752,22 @@ export const PlayerView = () => {
 	// reachedEnd false. With keep-open=yes, mpv then holds the last frame,
 	// paused, so with autoplay off, on a movie or on the last episode the
 	// controls stay up and nothing else needs doing.
+	//
 	// Only an end this player saw coming counts. The ref holds the stream it
 	// last saw short of its end, so coming back from another page to an
 	// episode that ended there leaves it on the last frame.
 	const seenShortOfEndRef = useRef<string | null>(null);
+	// iOS stops this page's timers in the background while mpv plays on, so
+	// the first poll after the app comes back can report an end from hours
+	// ago. Hiding the page forgets what it saw. Where polls go on while the
+	// window is hidden, the next one sees the episode short of its end again.
+	useEffect(() => {
+		const onVisibilityChange = () => {
+			if (document.visibilityState === "hidden") seenShortOfEndRef.current = null;
+		};
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+	}, []);
 	useEffect(() => {
 		// A poll can still describe the previous stream after the app loads
 		// another one, such as from the Next episode button near the end.

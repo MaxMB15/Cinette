@@ -1120,6 +1120,42 @@ describe("episodes", () => {
 		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
+
+	it("doesn't go on to the next episode for an end reached while the app was in the background", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		// iOS sends no polls while the app is in the background, so the first
+		// one after it comes back reports the end.
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("goes on to the next episode for an end reached in a hidden window that still polls", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		await setVisibility("hidden");
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("asks about the next episode once when its resume prompt is cancelled", async () => {
+		remember(saved("series:show:s1e2", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(resumePrompt()).toBeInTheDocument();
+		await press("Escape");
+		// Episode one still sits at its end, and each poll says so.
+		await setMpv({ state: ended(ep1.url, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(
+			tauri.getPlaybackPosition.mock.calls.filter(([key]) => key === "series:show:s1e2")
+		).toHaveLength(1);
+	});
 });
 
 describe("switching sources", () => {
