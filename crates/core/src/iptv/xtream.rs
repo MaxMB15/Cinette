@@ -45,12 +45,16 @@ pub struct XtreamCredentials {
 
 /// What a login can't hold as is in a stream URL's path: what the URL
 /// standard escapes in a path, plus `/`, `\` and `%`, which would split the
-/// path or start an escape.
+/// path or start an escape. `&` and `+` are escaped too, because Xtream
+/// servers commonly rewrite the path into a query string, where a raw `&`
+/// would end the login.
 const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
     .add(b'#')
     .add(b'%')
+    .add(b'&')
+    .add(b'+')
     .add(b'/')
     .add(b'<')
     .add(b'>')
@@ -96,10 +100,8 @@ impl XtreamCredentials {
         format!("{}/player_api.php?{query}", self.server)
     }
 
-    /// A stream's address, with the login in the path. Characters that would
-    /// end or split the path, such as `#`, `?` and `/`, are escaped. Ones a
-    /// path allows, such as `&` and `+`, are left as they are, so logins that
-    /// already worked give the same address.
+    /// A stream's address, with the login in the path, escaped as
+    /// `PATH_SEGMENT` says.
     fn stream_url(&self, kind: &str, file: &str) -> String {
         let username = utf8_percent_encode(&self.username, PATH_SEGMENT);
         let password = utf8_percent_encode(&self.password, PATH_SEGMENT);
@@ -632,7 +634,7 @@ mod tests {
         let url = creds.live_stream_url(7, "ts");
         assert_eq!(
             url,
-            "http://srv:8080/live/me&you%20%231/a+b%2Fc%20d&action=x%23e/7.ts"
+            "http://srv:8080/live/me%26you%20%231/a%2Bb%2Fc%20d%26action=x%23e/7.ts"
         );
         let parsed = reqwest::Url::parse(&url).unwrap();
         assert_eq!(parsed.fragment(), None);

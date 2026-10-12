@@ -103,7 +103,12 @@ export const updateProvider = (
 export const getXtreamSeriesEpisodes = (channelId: string): Promise<Channel[]> =>
 	invoke("get_xtream_series_episodes", { channelId });
 
-export const refreshEpg = (providerId: string): Promise<void> =>
+/**
+ * Downloads a provider's guide and saves it. Resolves to the number of
+ * programs saved, which is 0 when the guide came back empty and the saved one
+ * was kept.
+ */
+export const refreshEpg = (providerId: string): Promise<number> =>
 	invoke("refresh_epg", { providerId });
 
 export const getEpgProgrammes = (

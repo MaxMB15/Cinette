@@ -355,13 +355,15 @@ pub struct EpgProgramDto {
     pub category: Option<String>,
 }
 
-/// Fetch and store EPG programs for a provider from its configured EPG URL.
+/// Fetch and store EPG programs for a provider from its configured EPG URL,
+/// and return how many were saved.
 ///
 /// A guide that comes back without any programs leaves the saved guide alone
-/// and still counts as a refresh. Asking again a minute later rarely helps,
-/// and the next scheduled refresh tries again.
+/// and returns 0. It still counts as a refresh, because many Xtream servers
+/// have no guide and asking again soon wouldn't help. A refresh by hand tells
+/// the user.
 #[command]
-pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> Result<(), String> {
+pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> Result<usize, String> {
     use mvp_core::iptv::epg::{epg_data_to_stored, fetch_and_parse_epg, EpgError};
 
     let epg_url = {
@@ -381,11 +383,9 @@ pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> 
     tracing::info!("[EPG] fetching EPG from {}", mvp_core::http::origin_for_log(&url));
     let epg_data = match fetch_and_parse_epg(&url).await {
         Ok(data) => data,
-        // An error rather than Ok, so a refresh by hand says nothing was
-        // saved and the scheduled one tries again later.
         Err(EpgError::Empty) => {
             tracing::warn!("[EPG] the guide for {provider_id} has no programs, keeping the saved one");
-            return Err("The guide came back with no programs, so the saved one was kept".into());
+            return Ok(0);
         }
         Err(e) => return Err(format!("Failed to fetch EPG: {e}")),
     };
@@ -399,6 +399,7 @@ pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> 
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
         cache
             .save_epg_programmes(&provider_id, &stored)
+            .map(|()| stored.len())
             .map_err(|e| e.to_string())
     })
     .await

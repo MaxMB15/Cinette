@@ -34,7 +34,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - A failed guide download, or one that comes back empty or as an error page, no longer wipes the TV guide you already had. Refreshing the guide by hand says when it came back empty (#105).
 - Error messages and logs no longer show your API keys, Xtream login or the login in a playlist link (#105).
 - Testing a wrong OpenSubtitles key says the key is invalid instead of showing a request error (#105).
-- Xtream logins that contain &, +, #, ? or other symbols now load and play (#105).
+- Xtream logins that contain &, +, # or ? now load and play. Channels loaded before keep their old links until you refresh the playlist (#105).
 - The Gemini key is sent in a request header instead of the request URL (#105).
 - Spaces or a line break pasted around an API key no longer make the key fail (#105).
 - Online lookups and Xtream logins give up after a timeout instead of waiting forever on a server that stopped responding (#105).
