@@ -581,6 +581,9 @@ describe("backend commands", () => {
 	 * The backend's tests check each command against the arguments listed in
 	 * `arguments.json`. Holding the wrappers to the same list means a name
 	 * changed on only one side fails a test instead of a call in the app.
+	 * Every wrapper sends its optional arguments too, even when they're
+	 * undefined, so the keys must match the row exactly. That also catches a
+	 * row that still lists an argument the frontend stopped sending.
 	 */
 	const backendArguments: Record<string, { required?: string[]; optional?: string[] }> =
 		commandArguments;
