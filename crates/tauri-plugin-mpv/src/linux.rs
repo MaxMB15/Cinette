@@ -154,7 +154,9 @@ unsafe impl Sync for WaylandSession {}
 /// through `Inner::state`.
 struct SessionState {
     egl_display: egl::Display,
-    egl_surface: egl::Surface,
+    /// `None` after a resize failed to make a new surface. The next resize
+    /// tries again.
+    egl_surface: Option<egl::Surface>,
     wl_egl_surface: Option<WlEglSurface>,
     pending_resize: Option<(i32, i32)>,
     current_size: (i32, i32),
@@ -164,8 +166,8 @@ struct SessionState {
 
 impl Drop for SessionState {
     fn drop(&mut self) {
-        if let Ok(egl) = egl() {
-            let _ = egl.destroy_surface(self.egl_display, self.egl_surface);
+        if let (Some(surface), Ok(egl)) = (self.egl_surface, egl()) {
+            let _ = egl.destroy_surface(self.egl_display, surface);
         }
     }
 }
@@ -181,6 +183,8 @@ struct Inner {
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     video_active: AtomicBool,
     valid: AtomicBool,
+    /// Set once mpv has drawn a decoded frame. Only `render_frame` uses it.
+    drew_frame: AtomicBool,
     // Keep this order, since fields drop top to bottom. The render context
     // frees mpv's GL resources, `state` destroys the EGL surface and
     // WlEglSurface, `egl` destroys the GL context and `wayland` tears down
@@ -346,10 +350,11 @@ impl PlatformRenderer for LinuxGlRenderer {
                     first_frame_cb: Mutex::new(first_frame_cb),
                     video_active: AtomicBool::new(true),
                     valid: AtomicBool::new(true),
+                    drew_frame: AtomicBool::new(false),
                     render_ctx,
                     state: Mutex::new(SessionState {
                         egl_display: display,
-                        egl_surface: surface,
+                        egl_surface: Some(surface),
                         wl_egl_surface: Some(wl_egl),
                         pending_resize: None,
                         current_size: (1, 1),
@@ -483,7 +488,9 @@ fn render_frame(inner: &Inner) {
     // on VM GL drivers (virgl/llvmpipe).
     let resized = if let Some((nw, nh)) = state.pending_resize.take() {
         let _ = egl.make_current(display, None, None, None);
-        let _ = egl.destroy_surface(display, state.egl_surface);
+        if let Some(old) = state.egl_surface.take() {
+            let _ = egl.destroy_surface(display, old);
+        }
         let old_wl = state.wl_egl_surface.take();
         drop(old_wl);
 
@@ -491,17 +498,15 @@ fn render_frame(inner: &Inner) {
         match recreate_egl_surface(egl, display, inner.egl.config, child_id, nw, nh) {
             Some((new_wl, new_egl)) => {
                 state.wl_egl_surface = Some(new_wl);
-                state.egl_surface = new_egl;
+                state.egl_surface = Some(new_egl);
                 state.current_size = (nw, nh);
                 true
             }
             None => {
                 tracing::warn!("[MPV] EGL surface recreation failed on resize");
-                // The old surface is gone. A zero size makes this function
-                // return before it touches the surface, and makes the next
+                // The old surface is gone. A zero size makes the next
                 // `set_frame` queue another attempt.
                 state.current_size = (0, 0);
-                drop(state);
                 return;
             }
         }
@@ -509,7 +514,9 @@ fn render_frame(inner: &Inner) {
         false
     };
 
-    let surface = state.egl_surface;
+    let Some(surface) = state.egl_surface else {
+        return;
+    };
     let (w, h) = state.current_size;
     drop(state);
 
@@ -541,7 +548,11 @@ fn render_frame(inner: &Inner) {
         Err(_) => false,
     };
 
-    if !has_frame && !resized {
+    // A resize redraws the last frame, so a paused video doesn't go black.
+    // Before the first frame there is nothing to redraw, and a render would
+    // fire the first frame callback too early, as the macOS renderer never
+    // does.
+    if !has_frame && !(resized && inner.drew_frame.load(Ordering::Relaxed)) {
         return;
     }
 
@@ -560,6 +571,7 @@ fn render_frame(inner: &Inner) {
     let _ = inner.wayland.conn.flush();
 
     inner.render_ctx.report_swap();
+    inner.drew_frame.store(true, Ordering::Relaxed);
 
     // Take the callback out first, so it doesn't run with the lock held.
     let first_frame_cb = lock_or_recover(&inner.first_frame_cb).take();
@@ -889,23 +901,35 @@ pub fn fallback_options(wayland: bool) -> Vec<(&'static str, &'static str)> {
 }
 
 /// Whether mpv's own window will connect to a Wayland compositor. mpv tries
-/// Wayland first whenever one is reachable, even when the app itself runs
-/// through XWayland with `GDK_BACKEND=x11`, so any sign of a Wayland session
-/// counts.
+/// Wayland before X11, even when the app itself runs through XWayland with
+/// `GDK_BACKEND=x11`. mpv 0.38 and later only try it when `WAYLAND_DISPLAY`
+/// is set, and 0.40 also takes `WAYLAND_SOCKET`. Up to 0.37, mpv always tries,
+/// and libwayland then falls back to `$XDG_RUNTIME_DIR/wayland-0`. Any sign of
+/// a Wayland session counts, because guessing Wayland on X11 only costs
+/// zero-copy decoding.
 pub fn mpv_uses_wayland() -> bool {
-    wayland_in_env(|key| std::env::var_os(key))
+    wayland_in_env(|key| std::env::var_os(key), |path| path.exists())
 }
 
-fn wayland_in_env(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
-    var("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+fn wayland_in_env(
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> bool {
+    let display = var("WAYLAND_DISPLAY");
+    display.as_ref().is_some_and(|v| !v.is_empty())
         || var("WAYLAND_SOCKET").is_some()
         || var("XDG_SESSION_TYPE").is_some_and(|v| v == "wayland")
+        || (display.is_none()
+            && var("XDG_RUNTIME_DIR")
+                .filter(|dir| !dir.is_empty())
+                .is_some_and(|dir| exists(&std::path::Path::new(&dir).join("wayland-0"))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::wayland_in_env;
     use std::ffi::OsString;
+    use std::path::Path;
 
     fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
         move |key| {
@@ -915,30 +939,74 @@ mod tests {
         }
     }
 
+    /// A file system with no sockets in it.
+    fn no_files(_: &Path) -> bool {
+        false
+    }
+
+    /// A file system where only `/run/user/1000/wayland-0` exists.
+    fn default_socket(path: &Path) -> bool {
+        path == Path::new("/run/user/1000/wayland-0")
+    }
+
     #[test]
     fn wayland_display_means_wayland() {
-        assert!(wayland_in_env(env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(wayland_in_env(
+            env(&[("WAYLAND_DISPLAY", "wayland-0")]),
+            no_files
+        ));
         // GDK_BACKEND=x11 doesn't stop mpv from using Wayland.
-        assert!(wayland_in_env(env(&[
-            ("WAYLAND_DISPLAY", "wayland-1"),
-            ("GDK_BACKEND", "x11"),
-            ("DISPLAY", ":0"),
-        ])));
+        assert!(wayland_in_env(
+            env(&[
+                ("WAYLAND_DISPLAY", "wayland-1"),
+                ("GDK_BACKEND", "x11"),
+                ("DISPLAY", ":0"),
+            ]),
+            no_files
+        ));
     }
 
     #[test]
     fn socket_or_session_type_means_wayland() {
-        assert!(wayland_in_env(env(&[("WAYLAND_SOCKET", "5")])));
-        assert!(wayland_in_env(env(&[("XDG_SESSION_TYPE", "wayland")])));
+        assert!(wayland_in_env(env(&[("WAYLAND_SOCKET", "5")]), no_files));
+        assert!(wayland_in_env(
+            env(&[("XDG_SESSION_TYPE", "wayland")]),
+            no_files
+        ));
+    }
+
+    #[test]
+    fn default_socket_means_wayland_when_display_is_unset() {
+        // libwayland connects to wayland-0 when WAYLAND_DISPLAY is unset.
+        assert!(wayland_in_env(
+            env(&[("XDG_RUNTIME_DIR", "/run/user/1000"), ("DISPLAY", ":0")]),
+            default_socket
+        ));
+        // An empty WAYLAND_DISPLAY names no socket, so libwayland fails.
+        assert!(!wayland_in_env(
+            env(&[
+                ("XDG_RUNTIME_DIR", "/run/user/1000"),
+                ("WAYLAND_DISPLAY", ""),
+            ]),
+            default_socket
+        ));
+        assert!(!wayland_in_env(
+            env(&[("XDG_RUNTIME_DIR", "/run/user/1000")]),
+            no_files
+        ));
+        assert!(!wayland_in_env(
+            env(&[("XDG_RUNTIME_DIR", "")]),
+            |_: &Path| true
+        ));
     }
 
     #[test]
     fn x11_session_is_not_wayland() {
-        assert!(!wayland_in_env(env(&[
-            ("DISPLAY", ":0"),
-            ("XDG_SESSION_TYPE", "x11")
-        ])));
-        assert!(!wayland_in_env(env(&[("WAYLAND_DISPLAY", "")])));
-        assert!(!wayland_in_env(env(&[])));
+        assert!(!wayland_in_env(
+            env(&[("DISPLAY", ":0"), ("XDG_SESSION_TYPE", "x11")]),
+            no_files
+        ));
+        assert!(!wayland_in_env(env(&[("WAYLAND_DISPLAY", "")]), no_files));
+        assert!(!wayland_in_env(env(&[]), no_files));
     }
 }
