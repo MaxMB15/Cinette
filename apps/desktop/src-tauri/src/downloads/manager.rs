@@ -321,19 +321,22 @@ fn claim_queued(cache: &CacheStore, id: &str) -> Result<Option<DownloadRecord>, 
     Ok(Some(rec))
 }
 
+/// Why a download can't start again once its channel changed or went away.
+const PLAYLIST_CHANGED: &str =
+    "The playlist changed after this download was added. Download it again.";
+
 /// The stream URL for `rec`, from its channel. M3U channel ids are positions
 /// in the playlist, so after a refresh that reorders it the same id can name
-/// another title. A download whose channel has a different title from when
-/// it was added fails rather than saving another film under its name.
+/// another title. A download whose channel is gone, or has a different title
+/// from when it was added, fails rather than saving another film under its
+/// name.
 fn source_url(cache: &CacheStore, rec: &DownloadRecord) -> Result<String, String> {
     let channel = cache
         .get_channel_by_id(&rec.channel_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("channel not found: {}", rec.channel_id))?;
+        .ok_or_else(|| PLAYLIST_CHANGED.to_string())?;
     if channel.name != rec.title {
-        return Err(
-            "The playlist changed after this download was added. Download it again.".to_string(),
-        );
+        return Err(PLAYLIST_CHANGED.to_string());
     }
     Ok(channel.url)
 }

@@ -352,10 +352,10 @@ fn starts_only_while_the_channel_keeps_its_title() {
     cache
         .upsert_channel("p1", &channel(&rec.channel_id, "Arrival (2016)"))
         .unwrap();
-    assert!(source_url(&cache, &rec).is_err());
+    assert_eq!(source_url(&cache, &rec), Err(PLAYLIST_CHANGED.to_string()));
 
     let gone = queued("b", "/dl/b.mkv.part");
-    assert!(source_url(&cache, &gone).is_err());
+    assert_eq!(source_url(&cache, &gone), Err(PLAYLIST_CHANGED.to_string()));
 }
 
 /// Queue a download of a new channel that plays `url`, as adding one in the
