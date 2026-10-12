@@ -737,7 +737,9 @@ mod tests {
             fetch_from(&test_server::client(), &url, &query(), source)
                 .await
                 .unwrap();
-            let request = request.recv().expect("the server read a request");
+            let request = request
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the server read a request");
             request.lines().next().unwrap_or_default().to_string()
         }
 

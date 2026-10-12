@@ -5,8 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SkipSegmentModes } from "@/lib/player-prefs";
 import {
 	extendRun,
+	heldInAutoSkip,
 	MAX_PLAY_STEP,
 	MIN_AUTO_SKIP,
+	MIN_SKIP_AFTER_HOLD,
 	NOTICE_MS,
 	OFFER_SECONDS,
 	reachedAutoSkip,
@@ -222,12 +224,8 @@ export const useSegmentSkipping = ({
 		const action = skipActionFor(current, duration, hasNext);
 		if (action?.type === "seek") {
 			const to = current.autoTo ?? action.to;
-			const left = to - position;
-			// More than a step into the segment, playback was held there, such
-			// as behind an open overlay. Held until just before or past where
-			// the skip lands, there's too little left to skip.
-			const held = position - (current.autoFrom ?? current.start) > MAX_PLAY_STEP;
-			if (left <= 0 || (held && left < MIN_AUTO_SKIP)) return;
+			const least = heldInAutoSkip(current, last, run) ? MIN_SKIP_AFTER_HOLD : MIN_AUTO_SKIP;
+			if (to - position < least) return;
 			doneRef.current.add(key);
 			landingRef.current = to;
 			latest.current.seek(to);

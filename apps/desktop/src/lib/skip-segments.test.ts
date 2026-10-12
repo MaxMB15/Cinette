@@ -6,6 +6,7 @@ import {
 	extendRun,
 	MAX_PLAY_JITTER,
 	MAX_PLAY_STEP,
+	heldInAutoSkip,
 	reachedAutoSkip,
 	runsToEnd,
 	segmentAt,
@@ -119,6 +120,30 @@ describe("extendRun", () => {
 			start: 11 + MAX_PLAY_STEP + 0.1,
 			last: 11 + MAX_PLAY_STEP + 0.1,
 		});
+	});
+});
+
+describe("heldInAutoSkip", () => {
+	const intro = makeSegment({ start: 60, end: 120, autoFrom: 62 });
+
+	it("is true when the poll before was already past the point it may skip from", () => {
+		expect(heldInAutoSkip(intro, { start: 0, last: 62 }, { start: 0, last: 63 })).toBe(true);
+	});
+
+	it("is false when the poll before came earlier", () => {
+		expect(heldInAutoSkip(intro, { start: 0, last: 61.9 }, { start: 0, last: 62.9 })).toBe(
+			false
+		);
+		expect(heldInAutoSkip(intro, null, { start: 63, last: 63 })).toBe(false);
+	});
+
+	it("is false when the poll before was in a stretch that a seek ended", () => {
+		expect(heldInAutoSkip(intro, { start: 0, last: 90 }, { start: 1, last: 63 })).toBe(false);
+	});
+
+	it("is false for a segment the player never skips on its own", () => {
+		const unsure = makeSegment({ start: 60, end: 120, autoFrom: null });
+		expect(heldInAutoSkip(unsure, { start: 0, last: 80 }, { start: 0, last: 81 })).toBe(false);
 	});
 });
 

@@ -36,6 +36,9 @@ const introAfterRecap = makeSegment({
 	autoTo: 90,
 });
 
+/** An intro whose times fit exactly, so the player may skip only 3 seconds of it. */
+const shortIntro = makeSegment({ start: 60, end: 67, autoFrom: 62, autoTo: 65 });
+
 const BUTTONS: SkipSegmentModes = { opening: "button", ending: "button" };
 const AUTO: SkipSegmentModes = { opening: "auto", ending: "auto" };
 
@@ -467,12 +470,33 @@ describe("useSegmentSkipping", () => {
 		});
 
 		it("skips a short segment that the polls first reach near its end", () => {
-			const short = makeSegment({ start: 61, end: 66, autoFrom: 62, autoTo: 65 });
-			const { at, play, seek } = setup({ modes: AUTO, segments: [short] });
+			const { at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
 			play(55, 61);
 			at(61.995);
 			at(63.005);
 			expect(seek).toHaveBeenCalledExactlyOnceWith(65);
+		});
+
+		it("plays the rest of a short segment when held in it until near its end", () => {
+			const { result, update, at, play, seek } = setup({
+				modes: AUTO,
+				segments: [shortIntro],
+			});
+			play(55, 61);
+			at(61.9);
+			update({ position: 62.9, playing: false });
+			update({ position: 63.5, playing: true });
+			expect(seek).not.toHaveBeenCalled();
+			expect(result.current.notice).toBeNull();
+		});
+
+		it("doesn't jump a fraction of a second", () => {
+			const { result, at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
+			play(55, 61);
+			at(61.9);
+			at(64.85);
+			expect(seek).not.toHaveBeenCalled();
+			expect(result.current.notice).toBeNull();
 		});
 
 		it("still skips on its own after being held past the segment once", () => {
@@ -566,7 +590,10 @@ describe("useSegmentSkipping", () => {
 		});
 
 		it("counts the last poll from a reconnect again once playback moved off it", () => {
-			const { result, update, play, at } = setup({ segments: [firstRecap, credits] });
+			const { result, update, play, at } = setup({
+				modes: AUTO,
+				segments: [firstRecap, credits],
+			});
 			play(2698, 2702);
 			update({ reconnecting: true });
 			update({ position: 0 });

@@ -27,13 +27,19 @@ export const MAX_PLAY_STEP = 3;
 export const MAX_PLAY_JITTER = 0.1;
 
 /**
- * The shortest jump the player makes on its own, in seconds, when playback
- * was held inside a segment, such as while paused. Held until near the end,
- * it plays the rest of the segment instead. Polls that just reached the
- * segment skip whatever is left, since in a short one the first poll inside
- * can come with less than this to go.
+ * The shortest jump the player makes on its own, in seconds. With less than
+ * this left of a segment, the rest plays, since so short a jump saves no time
+ * and still empties the stream's buffer.
  */
-export const MIN_AUTO_SKIP = 2;
+export const MIN_AUTO_SKIP = 1;
+
+/**
+ * The shortest jump the player makes on its own, in seconds, after playback
+ * was held inside a segment, such as while paused. Held until near the end,
+ * the rest plays. Polls that just reached a segment need only `MIN_AUTO_SKIP`,
+ * since in a short one the first poll inside can come with less than this to go.
+ */
+export const MIN_SKIP_AFTER_HOLD = 2;
 
 /** How long the Skip button stays up after a segment starts, in seconds of video. */
 export const OFFER_SECONDS = 10;
@@ -124,3 +130,11 @@ export const extendRun = (run: PlayRun | null, position: number): PlayRun =>
  */
 export const reachedAutoSkip = (s: SkipSegment, run: PlayRun, position: number): boolean =>
 	s.autoFrom !== null && run.start < Math.max(s.start, MAX_PLAY_STEP) && s.autoFrom <= position;
+
+/**
+ * Whether playback was held at or past the point the player may skip `s` from,
+ * such as behind an open overlay. It was if the poll before, `last`, had
+ * already reached that point in the same stretch as `run`.
+ */
+export const heldInAutoSkip = (s: SkipSegment, last: PlayRun | null, run: PlayRun): boolean =>
+	s.autoFrom !== null && last !== null && last.start === run.start && last.last >= s.autoFrom;
