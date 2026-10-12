@@ -55,7 +55,7 @@ export const mpvGetState = (): Promise<PlayerState> => invoke("plugin:mpv|mpv_ge
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
 
-/** The lock screen's title and live flag. Only iOS uses them. */
+/** The lock screen's title, live flag and logo address. Only iOS uses them. */
 export const mpvSetMediaInfo = (
 	title: string | null,
 	live: boolean,

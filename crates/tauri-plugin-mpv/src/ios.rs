@@ -14,6 +14,7 @@
 //! calls back through the C callbacks registered in [`install`].
 
 use crate::mpv::MpvState;
+use crate::recent::RecentArtwork;
 use crate::renderer::PlatformRenderer;
 use libmpv2::{
     events::{Event, PropertyData},
@@ -25,7 +26,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc, Arc, Mutex, OnceLock,
 };
-use tauri::{AppHandle, Manager, Runtime};
+use std::time::Duration;
+use tauri::{async_runtime::JoinHandle, AppHandle, Manager, Runtime};
 
 extern "C" {
     fn mvp_ios_register_callbacks(
@@ -84,6 +86,7 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 /// Called once from plugin setup. Hands Swift the callbacks for the app
 /// lifecycle and the lock screen controls, which need the app's `MpvState`.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
+    let _ = USER_AGENT.set(format!("MaxVideoPlayer/{}", app.package_info().version));
     let (tx, rx) = mpsc::channel::<Job>();
     if JOBS.set(tx).is_err() {
         return;
@@ -232,55 +235,93 @@ pub fn set_media_info(title: Option<String>, live: bool, artwork: Option<String>
     set_artwork(artwork.filter(|url| url.starts_with("http://") || url.starts_with("https://")));
 }
 
-/// The address of the artwork Swift has or is about to get.
-static ARTWORK_URL: Mutex<Option<String>> = Mutex::new(None);
+/// The artwork Swift has or is about to get, and the download for it.
+struct Artwork {
+    url: Option<String>,
+    fetch: Option<JoinHandle<()>>,
+    recent: RecentArtwork,
+}
+
+static ARTWORK: Mutex<Artwork> = Mutex::new(Artwork {
+    url: None,
+    fetch: None,
+    recent: RecentArtwork::new(RECENT_ARTWORK, RECENT_ARTWORK_BYTES),
+});
 
 /// Artwork larger than this is left out.
 const MAX_ARTWORK_BYTES: usize = 5 * 1024 * 1024;
+
+/// How many logos to keep for channels the user switches back to, and how
+/// many bytes they may take in all. Most logos are well under 100 KB.
+const RECENT_ARTWORK: usize = 8;
+const RECENT_ARTWORK_BYTES: usize = 2 * 1024 * 1024;
+
+const ARTWORK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `MaxVideoPlayer/<app version>`, set in [`install`]. Some image hosts,
+/// Wikimedia among them, refuse requests that don't name the app.
+static USER_AGENT: OnceLock<String> = OnceLock::new();
 
 /// Downloads the channel logo and hands it to Swift. Rust fetches it
 /// because App Transport Security blocks plain `http` requests from native
 /// code, and most IPTV logos are on `http` servers.
 fn set_artwork(url: Option<String>) {
-    let mut current = ARTWORK_URL.lock().unwrap_or_else(|p| p.into_inner());
-    if *current == url {
+    let mut artwork = ARTWORK.lock().unwrap_or_else(|p| p.into_inner());
+    if artwork.url == url {
         return;
     }
-    current.clone_from(&url);
+    artwork.url.clone_from(&url);
+    // A slow download for the last channel would only be thrown away.
+    if let Some(fetch) = artwork.fetch.take() {
+        fetch.abort();
+    }
+    if let Some(bytes) = url.as_deref().and_then(|url| artwork.recent.get(url)) {
+        unsafe { mvp_ios_now_playing_artwork(bytes.as_ptr(), bytes.len()) };
+        return;
+    }
     // Swift queues this before the image below, so the old logo never
     // shows with the new title for longer than the download takes.
     unsafe { mvp_ios_now_playing_artwork(std::ptr::null(), 0) };
-    drop(current);
     let Some(url) = url else { return };
-    tauri::async_runtime::spawn(async move {
-        let bytes = match fetch_artwork(&url).await {
-            Ok(bytes) => bytes,
+    artwork.fetch = Some(tauri::async_runtime::spawn(async move {
+        let result = fetch_artwork(&url).await;
+        // Holding the lock keeps a newer call from clearing the artwork
+        // before this one sends an old logo.
+        let mut artwork = ARTWORK.lock().unwrap_or_else(|p| p.into_inner());
+        if artwork.url.as_deref() != Some(url.as_str()) {
+            return;
+        }
+        match result {
+            Ok(bytes) => {
+                unsafe { mvp_ios_now_playing_artwork(bytes.as_ptr(), bytes.len()) };
+                artwork.recent.insert(url, bytes);
+            }
             Err(e) => {
                 tracing::debug!("[MPV iOS] no lock screen artwork from {url}: {e}");
                 // Forget the address, so the next play of this channel
                 // tries again.
-                let mut current = ARTWORK_URL.lock().unwrap_or_else(|p| p.into_inner());
-                if current.as_deref() == Some(url.as_str()) {
-                    *current = None;
-                }
-                return;
+                artwork.url = None;
             }
-        };
-        // Holding the lock keeps a newer call from clearing the artwork
-        // before this one sends an old logo.
-        let current = ARTWORK_URL.lock().unwrap_or_else(|p| p.into_inner());
-        if current.as_deref() == Some(url.as_str()) {
-            unsafe { mvp_ios_now_playing_artwork(bytes.as_ptr(), bytes.len()) };
         }
-    });
+    }));
+}
+
+/// One client for every logo, so they share its connection pool.
+fn artwork_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(ARTWORK_TIMEOUT)
+        .user_agent(USER_AGENT.get().map_or("MaxVideoPlayer", String::as_str))
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(CLIENT.get_or_init(|| client))
 }
 
 async fn fetch_artwork(url: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let mut response = client
+    let mut response = artwork_client()?
         .get(url)
         .send()
         .await

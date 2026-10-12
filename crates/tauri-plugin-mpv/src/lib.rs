@@ -11,6 +11,8 @@ mod commands;
 mod engine;
 mod idle_inhibit;
 pub mod mpv;
+#[cfg(any(target_os = "ios", test))]
+mod recent;
 mod reconnect;
 mod renderer;
 
