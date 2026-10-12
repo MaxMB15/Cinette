@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useEffect, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFullscreen } from "@/lib/fullscreen-context";
 
 /**
@@ -18,13 +17,7 @@ export const useLeaveFullscreenOnUnmount = () => {
 
 	useEffect(
 		() => () => {
-			if (!isFullscreenRef.current) return;
-			setFullscreen(false);
-			getCurrentWindow()
-				.setFullscreen(false)
-				.catch((e) => {
-					console.error("[PlayerView] setFullscreen(false) failed:", e);
-				});
+			if (isFullscreenRef.current) setFullscreen(false);
 		},
 		[setFullscreen]
 	);

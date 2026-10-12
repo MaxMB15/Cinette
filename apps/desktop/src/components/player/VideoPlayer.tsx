@@ -51,7 +51,7 @@ import { formatTime } from "@/lib/format";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
-import { hasFullscreenButton, setWindowFullscreen } from "@/lib/fullscreen";
+import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
 /** How often (ms) watch progress is persisted while playing. */
@@ -790,13 +790,10 @@ export const PlayerView = () => {
 	}, [location.key, navigate]);
 
 	// --- Fullscreen ---
-	const toggleFullscreen = useCallback(() => {
-		const next = !isFullscreen;
-		setFullscreen(next);
-		setWindowFullscreen(next).catch((e) => {
-			console.error("[PlayerView] setFullscreen failed:", e);
-		});
-	}, [isFullscreen, setFullscreen]);
+	const toggleFullscreen = useCallback(
+		() => setFullscreen(!isFullscreen),
+		[isFullscreen, setFullscreen]
+	);
 
 	// An iPad Split View pane narrow enough for the phone layout has no full
 	// screen button, so it leaves full screen instead of keeping the sidebar
@@ -898,9 +895,6 @@ export const PlayerView = () => {
 						setShowShortcuts(false);
 					} else if (isFullscreen) {
 						setFullscreen(false);
-						setWindowFullscreen(false).catch((e) => {
-							console.error("[PlayerView] setFullscreen(false) failed:", e);
-						});
 					} else if (showInfoDrawer) {
 						setShowInfoDrawer(false);
 					} else if (showSubtitlePicker) {

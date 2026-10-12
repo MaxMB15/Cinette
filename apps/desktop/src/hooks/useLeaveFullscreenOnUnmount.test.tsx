@@ -53,8 +53,7 @@ describe("useLeaveFullscreenOnUnmount", () => {
 
 		fireEvent.click(screen.getByText("close player"));
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
-		expect(win.setFullscreen).toHaveBeenCalledTimes(1);
-		expect(win.setFullscreen).toHaveBeenCalledWith(false);
+		expect(win.setFullscreen.mock.calls).toEqual([[true], [false]]);
 	});
 
 	it("leaves the window alone when the player closes outside fullscreen", () => {
