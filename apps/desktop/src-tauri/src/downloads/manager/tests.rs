@@ -180,7 +180,7 @@ fn a_keep_set_while_the_files_are_deleted_comes_back_with_a_file_that_stayed() {
 
     // The steps of `delete_selected`, with the user pressing Keep on both
     // downloads while their files are being deleted.
-    let taken = take_selected(&cache, &deleting, |c| select(c, &["a", "b"])).unwrap();
+    let (taken, _) = take_selected(&cache, &deleting, |c| select(c, &["a", "b"])).unwrap();
     set_keep(&cache, &deleting, "a", true).unwrap();
     set_keep(&cache, &deleting, "b", true).unwrap();
     let (deleted, failed) = delete_files(taken, MissingFile::Forget);
@@ -192,6 +192,45 @@ fn a_keep_set_while_the_files_are_deleted_comes_back_with_a_file_that_stayed() {
     assert!(back.keep);
     assert!(!exists(&cache, "b"));
     assert!(deleting.ids().is_empty());
+}
+
+#[test]
+fn a_running_recording_cant_be_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("City News 2026-10-12 20.00.ts");
+    std::fs::write(&file, b"video").unwrap();
+    let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+    let rec = DownloadRecord {
+        kind: DownloadKind::Recording,
+        title: "City News".into(),
+        ..record("r", DownloadStatus::Recording, &file.to_string_lossy())
+    };
+    cache.lock().unwrap().upsert_download(&rec).unwrap();
+    let deleted = delete(&cache, &["r"], MissingFile::Forget);
+    assert!(deleted.removed.is_empty());
+    assert_eq!(
+        deleted.errors,
+        ["Stop the recording of City News before deleting it."]
+    );
+    assert!(file.exists());
+    assert!(exists(&cache, "r"));
+}
+
+#[test]
+fn a_scheduled_recording_has_no_file_to_delete() {
+    let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+    for id in ["a", "b"] {
+        let rec = DownloadRecord {
+            kind: DownloadKind::Recording,
+            ..record(id, DownloadStatus::Scheduled, "")
+        };
+        cache.lock().unwrap().upsert_download(&rec).unwrap();
+    }
+    let deleted = delete(&cache, &["a"], MissingFile::KeepWithoutFolder);
+    assert_eq!(deleted.removed, ["a"]);
+    assert!(deleted.errors.is_empty());
+    assert!(!exists(&cache, "a"));
+    assert!(exists(&cache, "b"));
 }
 
 #[test]

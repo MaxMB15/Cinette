@@ -386,7 +386,13 @@ impl CacheStore {
                 created_at         INTEGER NOT NULL,
                 finished_at        INTEGER,
                 keep               INTEGER NOT NULL DEFAULT 0,
-                last_played_at     INTEGER
+                last_played_at     INTEGER,
+                source_channel_id  TEXT,
+                start_at           INTEGER,
+                end_at             INTEGER,
+                program_title      TEXT,
+                program_start      INTEGER,
+                program_end        INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_downloads_channel ON downloads(channel_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_series ON downloads(series_channel_id);
@@ -395,6 +401,18 @@ impl CacheStore {
         // Columns added after the table first shipped.
         self.add_column("downloads", "keep INTEGER NOT NULL DEFAULT 0")?;
         self.add_column("downloads", "last_played_at INTEGER")?;
+        // Recordings. Added in the order of the CREATE TABLE above, so
+        // `row_to_download` reads them at the same place in either table.
+        for column in [
+            "source_channel_id TEXT",
+            "start_at INTEGER",
+            "end_at INTEGER",
+            "program_title TEXT",
+            "program_start INTEGER",
+            "program_end INTEGER",
+        ] {
+            self.add_column("downloads", column)?;
+        }
         // Full episode list per series, cached so the season/episode selector
         // works offline once any episode of the series has been downloaded.
         self.conn.execute_batch(
@@ -1815,17 +1833,21 @@ impl CacheStore {
     /// leaves `keep` and `last_played_at` alone, since a download task holding
     /// an older copy of the record would otherwise undo a change the user made
     /// meanwhile. `set_download_keep` and `mark_download_played` change those.
+    /// A recording's times, source channel and program title do update, since
+    /// a recording that starts late or takes in the next program changes them.
     pub fn upsert_download(&self, rec: &DownloadRecord) -> Result<(), CacheError> {
         let kind = match rec.kind {
             DownloadKind::Movie => "movie",
             DownloadKind::Episode => "episode",
+            DownloadKind::Recording => "recording",
         };
         self.conn.execute(
             "INSERT INTO downloads
                 (id, channel_id, title, kind, series_channel_id, status, dest_path,
                  total_bytes, downloaded_bytes, avg_rate_bps, error, created_at, finished_at,
-                 keep, last_played_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                 keep, last_played_at, source_channel_id, start_at, end_at, program_title,
+                 program_start, program_end)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
              ON CONFLICT(id) DO UPDATE SET
                 status=excluded.status,
                 dest_path=excluded.dest_path,
@@ -1833,12 +1855,19 @@ impl CacheStore {
                 downloaded_bytes=excluded.downloaded_bytes,
                 avg_rate_bps=excluded.avg_rate_bps,
                 error=excluded.error,
-                finished_at=excluded.finished_at",
+                finished_at=excluded.finished_at,
+                source_channel_id=excluded.source_channel_id,
+                start_at=excluded.start_at,
+                end_at=excluded.end_at,
+                program_title=excluded.program_title,
+                program_start=excluded.program_start,
+                program_end=excluded.program_end",
             params![
                 rec.id, rec.channel_id, rec.title, kind, rec.series_channel_id,
                 rec.status.as_str(), rec.dest_path, rec.total_bytes, rec.downloaded_bytes,
                 rec.avg_rate_bps, rec.error, rec.created_at, rec.finished_at,
-                rec.keep, rec.last_played_at,
+                rec.keep, rec.last_played_at, rec.source_channel_id, rec.start_at,
+                rec.end_at, rec.program_title, rec.program_start, rec.program_end,
             ],
         )?;
         Ok(())
@@ -1866,7 +1895,9 @@ impl CacheStore {
     // Column order in SELECT * matches CREATE TABLE:
     // 0=id, 1=channel_id, 2=title, 3=kind, 4=series_channel_id, 5=status,
     // 6=dest_path, 7=total_bytes, 8=downloaded_bytes, 9=avg_rate_bps,
-    // 10=error, 11=created_at, 12=finished_at, 13=keep, 14=last_played_at
+    // 10=error, 11=created_at, 12=finished_at, 13=keep, 14=last_played_at,
+    // 15=source_channel_id, 16=start_at, 17=end_at, 18=program_title,
+    // 19=program_start, 20=program_end
     fn row_to_download(row: &rusqlite::Row) -> SqlResult<DownloadRecord> {
         let kind_str: String = row.get(3)?;
         let status_str: String = row.get(5)?;
@@ -1874,10 +1905,10 @@ impl CacheStore {
             id: row.get(0)?,
             channel_id: row.get(1)?,
             title: row.get(2)?,
-            kind: if kind_str == "episode" {
-                DownloadKind::Episode
-            } else {
-                DownloadKind::Movie
+            kind: match kind_str.as_str() {
+                "episode" => DownloadKind::Episode,
+                "recording" => DownloadKind::Recording,
+                _ => DownloadKind::Movie,
             },
             series_channel_id: row.get(4)?,
             status: DownloadStatus::from_str(&status_str).unwrap_or(DownloadStatus::Failed),
@@ -1890,6 +1921,12 @@ impl CacheStore {
             finished_at: row.get(12)?,
             keep: row.get(13)?,
             last_played_at: row.get(14)?,
+            source_channel_id: row.get(15)?,
+            start_at: row.get(16)?,
+            end_at: row.get(17)?,
+            program_title: row.get(18)?,
+            program_start: row.get(19)?,
+            program_end: row.get(20)?,
         })
     }
 
@@ -2011,6 +2048,15 @@ impl CacheStore {
             [],
         )?;
         Ok(n)
+    }
+
+    /// Every recording, whatever its status, oldest start first.
+    pub fn list_recordings(&self) -> Result<Vec<DownloadRecord>, CacheError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM downloads WHERE kind = 'recording' ORDER BY start_at ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map([], Self::row_to_download)?;
+        Ok(rows.collect::<SqlResult<Vec<_>>>()?)
     }
 
     /// Whether a completed download already exists for a given channel id.
@@ -3134,7 +3180,29 @@ mod tests {
             finished_at: None,
             keep: false,
             last_played_at: None,
+            source_channel_id: None,
+            start_at: None,
+            end_at: None,
+            program_title: None,
+            program_start: None,
+            program_end: None,
         }
+    }
+
+    /// A recording of the live channel `source`. Its own id is its channel id.
+    fn recording_record(id: &str, source: &str, status: DownloadStatus) -> DownloadRecord {
+        let mut r = movie_record(id, id);
+        r.title = "City News".into();
+        r.kind = DownloadKind::Recording;
+        r.status = status;
+        r.dest_path = format!("/tmp/{id}.ts");
+        r.source_channel_id = Some(source.into());
+        r.start_at = Some(1_000);
+        r.end_at = Some(4_600);
+        r.program_title = Some("Evening news".into());
+        r.program_start = Some(1_120);
+        r.program_end = Some(4_300);
+        r
     }
 
     #[test]
@@ -3201,6 +3269,80 @@ mod tests {
         let column = "keep INTEGER NOT NULL DEFAULT 0";
         store.add_column("downloads", column).unwrap();
         assert!(store.add_column("no_such_table", "x INTEGER").is_err());
+    }
+
+    #[test]
+    fn adds_recording_columns_to_an_existing_downloads_table() {
+        // The table as it was with the retention columns.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE downloads (
+                id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, title TEXT NOT NULL,
+                kind TEXT NOT NULL, series_channel_id TEXT, status TEXT NOT NULL,
+                dest_path TEXT NOT NULL, total_bytes INTEGER,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0, avg_rate_bps INTEGER,
+                error TEXT, created_at INTEGER NOT NULL, finished_at INTEGER,
+                keep INTEGER NOT NULL DEFAULT 0, last_played_at INTEGER
+            );
+            INSERT INTO downloads (id, channel_id, title, kind, status, dest_path, created_at)
+            VALUES ('d1', 'c1', 'A Movie', 'movie', 'completed', '/tmp/d1.mkv', 100);",
+        )
+        .unwrap();
+        let store = CacheStore { conn };
+        store.init_tables().unwrap();
+        let got = store.get_download("d1").unwrap().unwrap();
+        assert_eq!(got.source_channel_id, None);
+        assert_eq!(got.end_at, None);
+
+        let rec = recording_record("r1", "c1", DownloadStatus::Scheduled);
+        store.upsert_download(&rec).unwrap();
+        assert_eq!(store.get_download("r1").unwrap().unwrap(), rec);
+    }
+
+    #[test]
+    fn adding_a_column_twice_is_fine_but_other_errors_come_back() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.add_column("downloads", "end_at INTEGER").unwrap();
+        assert!(store.add_column("no_such_table", "x INTEGER").is_err());
+    }
+
+    #[test]
+    fn a_recording_round_trips_and_its_window_updates() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let mut rec = recording_record("r1", "c1", DownloadStatus::Scheduled);
+        store.upsert_download(&rec).unwrap();
+        assert_eq!(store.get_download("r1").unwrap().unwrap(), rec);
+
+        // Starting late and taking in the next program change the window.
+        rec.status = DownloadStatus::Recording;
+        rec.start_at = Some(1_200);
+        rec.end_at = Some(8_200);
+        rec.program_title = Some("Evening news, Late news".into());
+        store.upsert_download(&rec).unwrap();
+        assert_eq!(store.get_download("r1").unwrap().unwrap(), rec);
+        assert_eq!(store.list_recordings().unwrap(), vec![rec]);
+    }
+
+    #[test]
+    fn recordings_are_never_found_through_their_live_channel() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .upsert_download(&recording_record("r1", "c1", DownloadStatus::Completed))
+            .unwrap();
+        store
+            .upsert_download(&recording_record("r2", "c1", DownloadStatus::Failed))
+            .unwrap();
+        store
+            .upsert_download(&recording_record("r3", "c1", DownloadStatus::Completed))
+            .unwrap();
+
+        // Playing the live channel still plays live TV.
+        assert!(store.completed_download_for_channel("c1").unwrap().is_none());
+        // Downloading something on the channel leaves the failed recording.
+        store.delete_terminal_downloads_for_channel("c1").unwrap();
+        // Two recordings of one channel aren't duplicates.
+        assert!(store.prune_redundant_downloads().unwrap().is_empty());
+        assert_eq!(store.list_recordings().unwrap().len(), 3);
     }
 
     #[test]

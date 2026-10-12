@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::commands::AppState;
-use crate::downloads::scheduler::start_queued;
+use crate::downloads::recordings;
+use crate::downloads::scheduler::{start_queued, waits_for_recording};
 use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::downloads::ffmpeg::{
     build_ffmpeg_args, container_from_part_path, fold_progress_line, ProgressUpdate,
@@ -211,6 +212,12 @@ pub fn enqueue_record<R: Runtime>(
         finished_at: None,
         keep: false,
         last_played_at: None,
+        source_channel_id: None,
+        start_at: None,
+        end_at: None,
+        program_title: None,
+        program_start: None,
+        program_end: None,
     };
     {
         // One lock for choosing the path and saving the record, so two
@@ -260,7 +267,7 @@ fn finished_download(cache: &CacheStore, channel_id: &str) -> Result<Finished, C
 /// another download or a file on disk already uses it. Downloads with the
 /// same title would otherwise write one file, and stopping one would delete
 /// the partial file the other is writing.
-fn unused_dest_path(cache: &CacheStore, dest: &Path) -> Result<PathBuf, String> {
+pub(crate) fn unused_dest_path(cache: &CacheStore, dest: &Path) -> Result<PathBuf, String> {
     let in_use: HashSet<String> = cache
         .list_download_paths()
         .map_err(|e| e.to_string())?
@@ -290,7 +297,21 @@ pub fn pump<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         || {
             let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
             let active = cache.list_active_downloads().map_err(|e| e.to_string())?;
-            Ok(active.into_iter().map(|r| (r.id, r.status)).collect())
+            let recording = recordings::recording_channels(&cache)?;
+            let providers = if recording.is_empty() {
+                Vec::new()
+            } else {
+                recordings::provider_ids(&cache)?
+            };
+            Ok(active
+                .into_iter()
+                // A download that waits for a recording doesn't take a slot.
+                .filter(|r| {
+                    r.status != DownloadStatus::Queued
+                        || !waits_for_recording(&r.channel_id, &recording, &providers)
+                })
+                .map(|r| (r.id, r.status))
+                .collect())
         },
         |id| {
             let claimed = {
@@ -362,6 +383,21 @@ fn fail_to_start<R: Runtime>(app: &AppHandle<R>, rec: &DownloadRecord, err: &str
     emit_progress(app, &rec.id);
 }
 
+/// Put a running download back in the queue and stop its ffmpeg, without
+/// marking it failed. A recording that needs the provider's connection does
+/// this. The download starts over once no recording of its provider runs.
+pub fn requeue<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    update_record(app, id, |r| {
+        if r.status == DownloadStatus::Downloading {
+            r.status = DownloadStatus::Queued;
+            r.downloaded_bytes = 0;
+            r.avg_rate_bps = None;
+        }
+    });
+    app.state::<DownloadManager>().kill(id);
+    emit_progress(app, id);
+}
+
 /// Stop every running ffmpeg as the app quits. The shell plugin only stops
 /// processes started from JavaScript, so these would keep downloading after
 /// the app is gone. Their records stay `Downloading`, and the next launch
@@ -386,7 +422,7 @@ pub(crate) fn now_secs() -> i64 {
 }
 
 /// Lightweight unique id without adding a uuid dependency.
-fn uuid_like() -> String {
+pub(crate) fn uuid_like() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -446,6 +482,7 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
     let (mut rx, child) = sidecar
         .spawn()
         .map_err(|e| redact_credentials(&e.to_string()))?;
+    let pid = child.pid();
 
     // Track the child so it can be killed on stop.
     let manager = app.state::<DownloadManager>();
@@ -460,9 +497,13 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
             running.insert(rec.id.clone(), RunningChildHandle { child });
         }
     }
-    // A stop between the claim and the insert above found no child to kill.
-    // The task below cleans up after it as after any other stop.
-    if current_status(app, &rec.id) == Some(DownloadStatus::Cancelled) {
+    // A stop, or a recording putting the download back in the queue, between
+    // the claim and the insert above found no child to kill. The task below
+    // cleans up after it as after any other stop.
+    if matches!(
+        current_status(app, &rec.id),
+        Some(DownloadStatus::Cancelled | DownloadStatus::Queued)
+    ) {
         manager.kill(&rec.id);
     }
 
@@ -524,8 +565,31 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
             return;
         }
 
-        // Remove from running map.
-        app.state::<DownloadManager>().running().remove(&id);
+        // Take this run out of the running map. A download that was stopped,
+        // or put back in the queue for a recording, has left the map already.
+        // It may be running again under a new ffmpeg, which then owns the
+        // record and the file.
+        let ours = {
+            let manager = app.state::<DownloadManager>();
+            let mut running = manager.running();
+            let ours = running.get(&id).is_some_and(|h| h.child.pid() == pid);
+            if ours {
+                running.remove(&id);
+            }
+            ours
+        };
+        if !ours && !exiting {
+            // A stopped download never runs again, so its partial file goes.
+            // The stop deleted it already unless ffmpeg made it afterwards.
+            if current_status(&app, &id) == Some(DownloadStatus::Cancelled) {
+                let _ = std::fs::remove_file(format!("{final_path}{PART_SUFFIX}"));
+            }
+            // The record stays as the stop or the new run left it. Sending it
+            // tells the page this ffmpeg is gone.
+            emit_progress(&app, &id);
+            let _ = pump(&app);
+            return;
+        }
 
         if exit_ok {
             // Rename .part -> final.
@@ -536,10 +600,13 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
                 r.finished_at = Some(now_secs());
             });
         } else {
-            // If it was cancelled (child killed), status was already set to
-            // Cancelled by stop_download; don't overwrite that.
-            let was_cancelled = current_status(&app, &id) == Some(DownloadStatus::Cancelled);
-            if !was_cancelled {
+            // A download the user stopped is already Cancelled, and one put
+            // back in the queue is Queued. Neither failed.
+            let was_stopped = matches!(
+                current_status(&app, &id),
+                Some(DownloadStatus::Cancelled | DownloadStatus::Queued)
+            );
+            if !was_stopped {
                 update_record(&app, &id, |r| {
                     r.status = DownloadStatus::Failed;
                     r.error = err_text.clone().or(Some("ffmpeg exited non-zero".into()));
@@ -560,6 +627,22 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
 /// Stop a single in-progress or queued download: mark Cancelled, kill the child
 /// if running, and delete any partial file. Safe to call on any state.
 pub fn stop_one<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
+    // A stopped recording keeps its file, so it has its own stop. When the
+    // cache can't be read, a running recording is still asked to stop, and
+    // the plain stop below kills a running download.
+    let kind = {
+        let app_state = app.state::<AppState>();
+        let cache = app_state.cache.lock();
+        cache.ok().and_then(|c| c.get_download(id).ok().flatten()).map(|r| r.kind)
+    };
+    match kind {
+        Some(DownloadKind::Recording) => return recordings::stop(app, id),
+        None => {
+            recordings::ask_to_stop(app, id);
+        }
+        Some(_) => {}
+    }
+
     // Mark cancelled first so the spawn task's exit handler won't flip it to Failed.
     update_record(app, id, |r| {
         if r.status == DownloadStatus::Queued || r.status == DownloadStatus::Downloading {
@@ -588,7 +671,7 @@ pub fn stop_one<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn update_record<R: Runtime>(
+pub(crate) fn update_record<R: Runtime>(
     app: &AppHandle<R>,
     id: &str,
     f: impl FnOnce(&mut DownloadRecord),
@@ -696,8 +779,9 @@ fn delete_selected(
     missing: MissingFile,
     select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
 ) -> Result<Deleted, String> {
-    let taken = take_selected(cache, deleting, select)?;
+    let (taken, refused) = take_selected(cache, deleting, select)?;
     let (mut deleted, failed) = delete_files(taken, missing);
+    deleted.errors.extend(refused);
     deleted.put_back = put_back(cache, deleting, &deleted.removed, failed)?;
     Ok(deleted)
 }
@@ -736,33 +820,42 @@ pub(crate) fn set_keep(
     Ok(())
 }
 
-/// Take the downloads `select` picks out of the cache, each paired with
-/// whether its file goes too, and note them in `deleting`.
+/// Downloads taken out of the cache to delete, each paired with whether its
+/// file goes too.
+type Taken = Vec<(DownloadRecord, bool)>;
+
+/// Take the downloads `select` picks out of the cache and note them in
+/// `deleting`. A recording that's running stays, and the second list says
+/// why.
 fn take_selected(
     cache: &Mutex<CacheStore>,
     deleting: &Deleting,
     select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
-) -> Result<Vec<(DownloadRecord, bool)>, String> {
+) -> Result<(Taken, Vec<String>), String> {
     let cache = cache.lock().map_err(|e| e.to_string())?;
-    let records = select(&cache)?;
+    let (running, records): (Vec<_>, Vec<_>) = select(&cache)?
+        .into_iter()
+        .partition(|r| r.status == DownloadStatus::Recording);
+    let refused = running
+        .iter()
+        .map(|r| format!("Stop the recording of {} before deleting it.", r.title))
+        .collect();
     let taken = take_records(&cache, records)?;
     let mut ids = deleting.ids();
     for (rec, _) in &taken {
         ids.insert(rec.id.clone(), None);
     }
-    Ok(taken)
+    Ok((taken, refused))
 }
 
 /// Delete the files of the downloads `take_selected` took. Returns what was
 /// deleted and the downloads whose files couldn't be.
-fn delete_files(
-    taken: Vec<(DownloadRecord, bool)>,
-    missing: MissingFile,
-) -> (Deleted, Vec<DownloadRecord>) {
+fn delete_files(taken: Taken, missing: MissingFile) -> (Deleted, Vec<DownloadRecord>) {
     let mut deleted = Deleted::default();
     let mut failed = Vec::new();
     for (rec, file_unused) in taken {
-        let result = if file_unused {
+        // A recording that hasn't started has no file yet.
+        let result = if file_unused && !rec.dest_path.is_empty() {
             delete_file(&rec.dest_path, missing)
         } else {
             Ok(())
@@ -809,10 +902,7 @@ fn put_back(
 /// too. Downloads added by older versions can share a file with another of
 /// the same title, so a file stays while a download not in `records` uses
 /// it, or is writing it now, compared the way `path_key` does.
-fn take_records(
-    cache: &CacheStore,
-    records: Vec<DownloadRecord>,
-) -> Result<Vec<(DownloadRecord, bool)>, String> {
+fn take_records(cache: &CacheStore, records: Vec<DownloadRecord>) -> Result<Taken, String> {
     let mut users: HashMap<String, usize> = HashMap::new();
     for path in cache.list_download_paths().map_err(|e| e.to_string())? {
         *users.entry(path_key(&path)).or_default() += 1;

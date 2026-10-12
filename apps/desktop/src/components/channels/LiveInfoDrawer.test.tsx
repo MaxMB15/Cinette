@@ -1,18 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EpgProgram } from "@/lib/types";
+import type { DownloadRecord, EpgProgram } from "@/lib/types";
 import { formatHHMM } from "@/lib/epg-window";
-import { makeNewsChannel, makeProgramme } from "@/test/detail-fixtures";
+import {
+	makeCityNews,
+	makeNewsChannel,
+	makeProgramme,
+	makeRecording,
+} from "@/test/detail-fixtures";
 import { deferred } from "@/test/deferred";
 
 const tauri = vi.hoisted(() => ({
 	getEpgProgrammes: vi.fn<(id: string, start: number, end: number) => Promise<EpgProgram[]>>(),
+	scheduleRecording: vi.fn(() => Promise.resolve({})),
+	stopRecording: vi.fn<(id: string) => Promise<void>>(() => Promise.resolve()),
 }));
+const state = vi.hoisted(() => ({ downloads: [] as DownloadRecord[] }));
 
-vi.mock("@/lib/tauri", () => ({ getEpgProgrammes: tauri.getEpgProgrammes }));
+vi.mock("@/lib/tauri", () => ({
+	getEpgProgrammes: tauri.getEpgProgrammes,
+	scheduleRecording: tauri.scheduleRecording,
+	stopRecording: tauri.stopRecording,
+}));
+vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ downloads: state.downloads }) }));
+vi.mock("@/hooks/useChannels", () => ({ useProviderIds: () => ["xt-1"] }));
 
 import { LiveInfoDrawer } from "./LiveInfoDrawer";
 
@@ -258,5 +272,114 @@ describe("LiveInfoDrawer", () => {
 		fireEvent.click(backdrop);
 		advance(300);
 		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("LiveInfoDrawer recording", () => {
+	const MIN = 60;
+	const now = Math.floor(Date.now() / 1000);
+
+	const channel = makeCityNews();
+
+	const schedule = [
+		makeProgramme("Morning Show", now - 90 * MIN, now - 30 * MIN),
+		makeProgramme("Evening News", now - 30 * MIN, now + 30 * MIN),
+		makeProgramme("Late Show", now + 30 * MIN, now + 90 * MIN),
+	];
+
+	const rec = (overrides: Partial<DownloadRecord> = {}) =>
+		makeRecording({
+			startAt: now + 28 * MIN,
+			endAt: now + 95 * MIN,
+			programTitle: "Late Show",
+			...overrides,
+		});
+
+	const renderDrawer = async () => {
+		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+		await screen.findAllByText("Late Show");
+	};
+
+	beforeEach(() => {
+		state.downloads = [];
+		localStorage.clear();
+		Element.prototype.scrollIntoView = vi.fn();
+		tauri.getEpgProgrammes.mockResolvedValue(schedule);
+		tauri.stopRecording.mockClear();
+	});
+	afterEach(cleanup);
+
+	it("offers to record now, until the program on air ends", async () => {
+		await renderDrawer();
+		fireEvent.click(screen.getByText("Record"));
+		const dialog = within(screen.getByRole("dialog"));
+		expect(dialog.getByText(/until Evening News ends/)).toBeDefined();
+	});
+
+	it("records a program from the schedule, but not one that's over", async () => {
+		await renderDrawer();
+		expect(screen.queryByLabelText("Record Morning Show")).toBeNull();
+		fireEvent.click(screen.getByLabelText("Record Late Show"));
+		expect(screen.getByRole("dialog", { name: "Record this program" })).toBeDefined();
+	});
+
+	it("waits for the guide before it offers to record now", () => {
+		tauri.getEpgProgrammes.mockReturnValue(new Promise(() => {}));
+		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+		expect((screen.getByText("Record") as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("asks before it cancels the recording that covers a program, which may cover more", async () => {
+		state.downloads = [rec({ endAt: now + 150 * MIN, programTitle: "Late Show" })];
+		await renderDrawer();
+		fireEvent.click(screen.getByLabelText("Cancel the recording of Late Show"));
+		expect(tauri.stopRecording).not.toHaveBeenCalled();
+		const dialog = within(screen.getByRole("dialog", { name: "Cancel this recording?" }));
+		expect(
+			dialog.getByText(/^This cancels the whole recording of Late Show on City News, /)
+		).toBeDefined();
+		fireEvent.click(dialog.getByText("Cancel recording"));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(tauri.stopRecording).toHaveBeenCalledWith("rec-1");
+	});
+
+	it("keeps the recording when the user changes their mind", async () => {
+		state.downloads = [rec()];
+		await renderDrawer();
+		fireEvent.click(screen.getByLabelText("Cancel the recording of Late Show"));
+		fireEvent.click(within(screen.getByRole("dialog")).getByText("Keep"));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(tauri.stopRecording).not.toHaveBeenCalled();
+	});
+
+	it("finds the channel's recording after a refresh gave the channel another id", async () => {
+		state.downloads = [
+			rec({ sourceChannelId: "xt-1-xt-4", status: "recording", startAt: now - MIN }),
+		];
+		await renderDrawer();
+		expect(screen.getByText("Stop recording")).toBeDefined();
+	});
+
+	it("leaves out another channel's recording that took over this channel's id", async () => {
+		state.downloads = [rec({ title: "Sports One", status: "recording", startAt: now - MIN })];
+		await renderDrawer();
+		expect(screen.queryByText("Stop recording")).toBeNull();
+		expect(screen.getByLabelText("Record Late Show")).toBeDefined();
+	});
+
+	it("offers to stop the channel's running recording", async () => {
+		state.downloads = [rec({ status: "recording", startAt: now - MIN, endAt: now + 35 * MIN })];
+		await renderDrawer();
+		expect(screen.queryByText("Record")).toBeNull();
+		fireEvent.click(screen.getByText("Stop recording"));
+		expect(screen.getByRole("dialog", { name: "Stop recording?" })).toBeDefined();
+	});
+
+	it("records a time range", async () => {
+		await renderDrawer();
+		fireEvent.click(screen.getByLabelText("Record a time range"));
+		expect(
+			within(screen.getByRole("dialog")).getByLabelText("Length in minutes")
+		).toBeDefined();
 	});
 });

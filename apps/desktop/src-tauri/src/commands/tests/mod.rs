@@ -254,6 +254,8 @@ const REQUIRED_ARGUMENTS: &[(&str, &[&str])] = &[
     ("set_download_concurrency", &["n"]),
     ("set_download_folder", &["path"]),
     ("resolve_local_download", &["channelId"]),
+    ("schedule_recording", &["channelId", "startAt", "endAt"]),
+    ("stop_recording", &["id"]),
 ];
 
 /// The arguments a call may leave out, which the frontend sends as `null` or
@@ -268,6 +270,7 @@ const OPTIONAL_ARGUMENTS: &[(&str, &[&str])] = &[
     ("update_group_hierarchy_entry", &["newSuperCategory"]),
     ("set_download_retention", &["days"]),
     ("count_downloads_due", &["days"]),
+    ("schedule_recording", &["program"]),
     ("hand_off_progress", &["item"]),
 ];
 
@@ -278,7 +281,7 @@ fn sample(argument: &str) -> Value {
         "groupsWithSamples" | "uncategorizedGroups" | "existingCategories" => json!([]),
         "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
-        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" => json!(1),
+        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt" => json!(1),
         "keep" => json!(true),
         "episode" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),

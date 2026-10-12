@@ -7,26 +7,46 @@ use std::path::{Path, PathBuf};
 /// Added to a download's path while ffmpeg is still writing it.
 pub const PART_SUFFIX: &str = ".part";
 
+/// The folder under the download folder that holds recordings.
+pub const RECORDINGS_DIR: &str = "recordings";
+
+/// The longest name `sanitize_filename` returns, in bytes. File systems
+/// allow 255 bytes in a name, which leaves room for a date, a number and an
+/// extension.
+const MAX_NAME_BYTES: usize = 150;
+
 /// Make a filesystem-safe filename component. Replaces path separators and
 /// reserved/control characters with `_`, trims dots and spaces from both ends,
-/// and caps length to keep within filesystem limits. A leading dot would hide
-/// the file on macOS and Linux, and a name made only of dots would turn into
-/// `.` or `..`, which as a folder name points outside the download folder.
+/// and caps the length in bytes to keep within filesystem limits. A leading
+/// dot would hide the file on macOS and Linux, and a name made only of dots
+/// would turn into `.` or `..`, which as a folder name points outside the
+/// download folder.
 pub fn sanitize_filename(name: &str) -> String {
-    let s: String = name
+    let mut s: String = name
         .chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
             c if c.is_control() => '_',
             c => c,
         })
-        .take(150)
         .collect();
+    truncate_on_char(&mut s, MAX_NAME_BYTES);
     let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
     if s.is_empty() {
         "untitled".to_string()
     } else {
         s.to_string()
+    }
+}
+
+/// Cut `s` to at most `max` bytes without splitting a character.
+fn truncate_on_char(s: &mut String, max: usize) {
+    if s.len() > max {
+        let end = (0..=max)
+            .rev()
+            .find(|&i| s.is_char_boundary(i))
+            .unwrap_or(0);
+        s.truncate(end);
     }
 }
 
@@ -49,6 +69,8 @@ pub fn extension_from_url(url: &str) -> String {
 /// Derive the final destination path under `root`.
 /// Movies:   `<root>/movies/<title>.<ext>`
 /// Episodes: `<root>/series/<series_title>/<title>.<ext>`
+/// Recordings: `<root>/recordings/<title>.<ext>`. The recording module names
+/// recordings itself, with the start time in the name.
 pub fn derive_dest_path(
     root: &Path,
     kind: DownloadKind,
@@ -64,6 +86,7 @@ pub fn derive_dest_path(
             let show = sanitize_filename(series_title.unwrap_or("Unknown Series"));
             root.join("series").join(show).join(file)
         }
+        DownloadKind::Recording => root.join(RECORDINGS_DIR).join(file),
     }
 }
 
@@ -117,6 +140,17 @@ mod tests {
         assert_eq!(sanitize_filename("a/b:c*?"), "a_b_c__");
         assert_eq!(sanitize_filename("  trailing.  "), "trailing");
         assert_eq!(sanitize_filename(""), "untitled");
+    }
+
+    #[test]
+    fn caps_the_name_in_bytes_without_splitting_a_character() {
+        let accented = sanitize_filename(&"é".repeat(100));
+        assert_eq!(accented, "é".repeat(75));
+        let wide = sanitize_filename(&"字".repeat(100));
+        assert_eq!(wide, "字".repeat(50));
+        // A cut that lands just before a trailing space or dot is trimmed.
+        let spaced = sanitize_filename(&format!("{} x", "a".repeat(149)));
+        assert_eq!(spaced, "a".repeat(149));
     }
 
     #[test]

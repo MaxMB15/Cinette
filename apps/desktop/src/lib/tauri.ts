@@ -18,6 +18,7 @@ import type {
 	PinnedGroup,
 	PlaybackPosition,
 	DownloadRecord,
+	GuideProgram,
 } from "./types";
 
 // --- MPV Player Commands ---
@@ -464,3 +465,18 @@ export const setDownloadRetention = (days: number | null): Promise<number> =>
 
 export const countDownloadsDue = (days: number | null): Promise<number> =>
 	invoke("count_downloads_due", { days });
+
+/**
+ * Record the live channel `channelId` from `startAt` to `endAt`, in Unix
+ * seconds, for the guide's `program` when there is one. A start that has
+ * passed records from now.
+ */
+export const scheduleRecording = (
+	channelId: string,
+	startAt: number,
+	endAt: number,
+	program: GuideProgram | null
+): Promise<DownloadRecord> => invoke("schedule_recording", { channelId, startAt, endAt, program });
+
+/** Stop a recording and keep what it recorded, or cancel one that hasn't started. */
+export const stopRecording = (id: string): Promise<void> => invoke("stop_recording", { id });

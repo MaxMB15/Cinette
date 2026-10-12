@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { makeDownload } from "@/test/channel-fixtures";
+import { makeRecording } from "@/test/detail-fixtures";
 import type { DownloadRecord } from "@/lib/types";
 
 const state = vi.hoisted(() => ({ downloads: [] as DownloadRecord[] }));
@@ -21,6 +22,21 @@ const renderRow = (overrides: Partial<DownloadRecord>) => {
 	const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
 	return { size: cells[2], status: cells[6] };
 };
+
+const now = Math.floor(Date.now() / 1000);
+
+/** A recording of a live channel that ended an hour ago. */
+const recording = (overrides: Partial<DownloadRecord> = {}) =>
+	makeRecording({
+		status: "completed",
+		destPath: "/downloads/recordings/City News.ts",
+		downloadedBytes: 1_250_000_000,
+		createdAt: now - 3 * 86_400,
+		finishedAt: now - 3_600,
+		startAt: now - 7_200,
+		endAt: now - 3_600,
+		...overrides,
+	});
 
 describe("DownloadHistoryDialog", () => {
 	afterEach(() => {
@@ -114,5 +130,20 @@ describe("DownloadHistory", () => {
 			totalBytes: 100_000_000,
 		});
 		expect(size).toHaveTextContent(/^0 MB \/ 100 MB$/);
+	});
+
+	it("shows when a recording started, not when it was set up, and its size", () => {
+		state.downloads = [recording()];
+		render(<DownloadHistory />);
+		expect(screen.getByText(new Date((now - 7_200) * 1000).toLocaleString())).toBeDefined();
+		expect(screen.getByText("1.3 GB")).toBeDefined();
+	});
+
+	it("gives a recording's status in plain words, with what ffmpeg said in a tooltip", () => {
+		const error = "The stream stopped before the end.\nConnection reset by peer";
+		state.downloads = [recording({ error })];
+		render(<DownloadHistory />);
+		const status = screen.getByText("Ended early. The stream stopped before the end.");
+		expect(status.getAttribute("title")).toBe(error);
 	});
 });
