@@ -428,6 +428,9 @@ pub(crate) struct RendererLog {
     pub(crate) attached: bool,
     pub(crate) dropped: bool,
     pub(crate) first_frame: Option<Box<dyn FnOnce() + Send>>,
+    /// Runs when the renderer is dropped, after `dropped` is set and with
+    /// the log unlocked.
+    pub(crate) on_drop: Option<Box<dyn FnOnce() + Send>>,
 }
 
 pub(crate) type SharedLog = Arc<Mutex<RendererLog>>;
@@ -490,7 +493,14 @@ impl PlatformRenderer for FakeRenderer {
 
 impl Drop for FakeRenderer {
     fn drop(&mut self) {
-        self.log.lock().unwrap().dropped = true;
+        let on_drop = {
+            let mut log = self.log.lock().unwrap();
+            log.dropped = true;
+            log.on_drop.take()
+        };
+        if let Some(on_drop) = on_drop {
+            on_drop();
+        }
     }
 }
 

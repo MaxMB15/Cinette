@@ -21,7 +21,8 @@ use crate::test_support::{
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 const RENDER_FALLBACK: &str = "mpv://render-fallback";
 const FIRST_FRAME: &str = "mpv://first-frame";
@@ -134,6 +135,39 @@ fn falls_back_when_the_renderer_cannot_attach() {
     assert!(state.renderer.lock().unwrap().is_none());
     assert!(state.fallback_active.load(Ordering::Acquire));
     wait_until("playback to start", || state.get_state().playback_started);
+}
+
+/// A renderer whose `attach` fails has to go while the core it was made for
+/// is still alive, and before the fallback creates the next core. The
+/// fallback asks for its options in between, so the test checks both there.
+#[test]
+fn drops_a_renderer_that_cannot_attach_before_the_fallback_starts() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let state = app.state();
+    let (renderer, log) = FakeRenderer::failing("no GL context");
+    let core_alive_at_drop = Arc::new(Mutex::new(None));
+    let handle = app.handle();
+    let seen = core_alive_at_drop.clone();
+    log.lock().unwrap().on_drop = Some(Box::new(move || {
+        let state = handle.state::<MpvState>();
+        let alive = state.inner.lock().unwrap().create_event_client().is_ok();
+        *seen.lock().unwrap() = Some(alive);
+    }));
+    let mut dropped_before_fallback = None;
+
+    state
+        .load_with(true, || {
+            let embedded = (renderer, headless_options().to_vec());
+            state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
+                dropped_before_fallback = Some(log.lock().unwrap().dropped);
+                headless_options().to_vec()
+            })
+        })
+        .unwrap();
+    assert_eq!(dropped_before_fallback, Some(true));
+    assert_eq!(*core_alive_at_drop.lock().unwrap(), Some(true));
 }
 
 #[test]

@@ -17,16 +17,14 @@
 // The cocoa crate's NSOpenGL bindings are deprecated in favor of objc2.
 #![allow(deprecated)]
 
+use crate::gl_render::GlRenderContext;
 use crate::options::shared_options;
 use crate::renderer::PlatformRenderer;
 use cocoa::appkit::{NSOpenGLPixelFormat, NSOpenGLView, NSView};
 use cocoa::base::nil;
 use cocoa::foundation::{NSAutoreleasePool, NSRect};
 use dispatch::Queue;
-use libmpv2::{
-    render::{mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType},
-    Mpv,
-};
+use libmpv2::{render::mpv_render_update, Mpv};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::ffi::{c_char, c_void, CString};
 use std::sync::{
@@ -66,7 +64,7 @@ fn gl_get_proc_address(name: *const c_char) -> *mut c_void {
 /// It lives in a `Box` so its address doesn't move, and only the main thread
 /// touches it.
 struct RenderInner {
-    ctx: RenderContext,
+    ctx: GlRenderContext,
     gl_view: *mut c_void,
     gl_context: *mut c_void,
     /// Called once when the first frame is rendered, then cleared.
@@ -217,21 +215,21 @@ impl PlatformRenderer for MacosGlRenderer {
         let gl_view = self.gl_view;
         let gl_context = self.gl_context;
 
-        // OpenGL setup has to run on the main thread. RenderContext isn't Send,
-        // so it comes back wrapped in UnsafeSend.
+        // OpenGL setup has to run on the main thread. The render context isn't
+        // Send, so it comes back wrapped in UnsafeSend.
         let gl_view_ptr = gl_view as usize;
         let gl_context_ptr = gl_context as usize;
-        // SAFETY: exec_sync blocks until the closure finishes and `mpv` stays
-        // borrowed for the whole call, so the pointer is valid inside it.
-        let mpv_ctx_addr = mpv.ctx.as_ptr() as usize;
+        // The closure has to be 'static, so `mpv` crosses to the main thread
+        // as an address.
+        let mpv_addr = &*mpv as *const Mpv as usize;
 
-        let result: UnsafeSend<Result<RenderContext, String>> =
-            Queue::main().exec_sync(move || -> UnsafeSend<Result<RenderContext, String>> {
+        let result: UnsafeSend<Result<GlRenderContext, String>> =
+            Queue::main().exec_sync(move || -> UnsafeSend<Result<GlRenderContext, String>> {
                 let view = gl_view_ptr as *mut objc::runtime::Object;
                 let ctx = gl_context_ptr as *mut objc::runtime::Object;
-                // RenderContext::new fixes the pointer type, which saves naming
-                // libmpv2_sys.
-                let mpv_ctx = mpv_ctx_addr as *mut _;
+                // SAFETY: exec_sync blocks until the closure finishes and
+                // `mpv` stays borrowed for the whole call.
+                let mpv = unsafe { &*(mpv_addr as *const Mpv) };
 
                 unsafe {
                     // Without the CGL drawable that prepareOpenGL sets up,
@@ -250,21 +248,12 @@ impl PlatformRenderer for MacosGlRenderer {
                     }
                 }
 
-                UnsafeSend(
-                    RenderContext::new(
-                        unsafe { &mut *mpv_ctx },
-                        vec![
-                            RenderParam::ApiType(RenderParamApiType::OpenGl),
-                            RenderParam::InitParams(OpenGLInitParams {
-                                get_proc_address,
-                                ctx: std::ptr::null_mut(),
-                            }),
-                        ],
-                    )
-                    .map_err(|e| format!("mpv_render_context_create: {}", e)),
-                )
+                // SAFETY: `detach` drops the render state on the main thread
+                // before it returns, and `MpvState` detaches the renderer
+                // before it stops the engine, so the context goes before mpv.
+                UnsafeSend(unsafe { GlRenderContext::new(mpv, get_proc_address) })
             });
-        let render_ctx: RenderContext = result.0?;
+        let render_ctx = result.0?;
 
         // Boxed so the address the update callback holds doesn't move.
         let mut inner = Box::new(RenderInner {
@@ -424,7 +413,7 @@ unsafe fn render_frame(inner_ptr: usize) {
     let view = inner.gl_view as *mut objc::runtime::Object;
     let ctx = inner.gl_context as *mut objc::runtime::Object;
     // A raw pointer, so `inner` can still be borrowed mutably for first_frame_cb.
-    let rc = &inner.ctx as *const RenderContext;
+    let rc = &inner.ctx as *const GlRenderContext;
 
     cocoa::appkit::NSOpenGLContext::setView_(ctx, view);
     cocoa::appkit::NSOpenGLContext::makeCurrentContext(ctx);
@@ -442,7 +431,7 @@ unsafe fn render_frame(inner_ptr: usize) {
         return;
     }
 
-    let rc: &RenderContext = &*rc;
+    let rc: &GlRenderContext = &*rc;
     match rc.update() {
         Ok(flags) => {
             if flags & mpv_render_update::Frame != 0 {

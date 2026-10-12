@@ -31,8 +31,10 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
 
 pub struct MpvState {
-    inner: Mutex<MpvEngine>,
+    /// Declared before `inner` so it drops first. A renderer's render
+    /// context has to be freed before the engine destroys the mpv core.
     renderer: Mutex<Option<Box<dyn PlatformRenderer>>>,
+    inner: Mutex<MpvEngine>,
     /// Where the frontend last put the video, in CSS pixels, as x, y, width
     /// and height. Each load makes a new renderer, but the frontend reports
     /// the player area only when the player mounts, when the stream URL
@@ -181,8 +183,11 @@ impl MpvState {
             }
             active.replace(renderer)
         };
-        // `load()` takes the old renderer out first, so this is only a
-        // safeguard. Its detach waits on the main thread, which can be
+        // `load()` takes the old renderer out before it creates the new mpv,
+        // so nothing is replaced here. A replaced renderer would be dropped
+        // after the core it rendered for, which libmpv doesn't allow.
+        debug_assert!(replaced.is_none(), "install_renderer replaced a renderer");
+        // A replaced renderer's detach waits on the main thread, which can be
         // waiting on the renderer lock in `resize()`, so it's dropped after
         // the lock is released.
         drop(replaced);
@@ -285,6 +290,9 @@ impl MpvState {
         };
 
         if let Err(e) = attach_result {
+            // Same order as stop(), so nothing the renderer set up outlives
+            // the core it was made for.
+            drop(renderer);
             lock_or_recover(&self.inner).stop();
             return self.launch_fallback(url, start_pos, app, &e, fallback);
         }

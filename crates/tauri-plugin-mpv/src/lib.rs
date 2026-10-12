@@ -17,6 +17,8 @@ mod reconnect;
 mod renderer;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
+mod gl_render;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod options;
 
 #[cfg(test)]
