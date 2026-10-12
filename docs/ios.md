@@ -146,6 +146,18 @@ mpv:
 If App Store Connect emails an `ITMS-91053` warning about a missing reason after an
 upload, add the category it names.
 
+### App Transport Security
+
+App Transport Security only covers URLSession and the web view. mpv and `reqwest`
+open their own connections, so streams and API calls over plain HTTP aren't affected.
+`apps/desktop/src-tauri/Info.ios.plist` turns on `NSAllowsArbitraryLoadsInWebContent`,
+so channel logos served over HTTP still load, and `NSAllowsLocalNetworking`, which
+lets the web view reach local addresses. It sets `NSAllowsArbitraryLoads` to `false`
+on purpose. The Tauri CLI merges this file over the macOS `Info.plist`, which allows
+all loads, so leaving the key out would turn App Transport Security off on iOS too,
+and App Review asks for a reason when an app does that. HTTP logos load in the
+simulator but haven't been checked on a device yet.
+
 ## Continuous integration
 
 | Workflow | Runs on | What it does |

@@ -9,13 +9,13 @@ video plays through libmpv, drawn into the same window underneath the webview.
 ```
 MaxVideoPlayer/
 ├── apps/
-│   ├── desktop/
-│   │   ├── src/                  React frontend
-│   │   │   ├── components/       UI by area: channels, player, playlist, settings, downloads, ui
-│   │   │   ├── hooks/            useChannels, useMpv, useDownloads, useUpdateChecker, ...
-│   │   │   └── lib/tauri.ts      every invoke() call to the backend
-│   │   └── src-tauri/            Tauri app: commands, download manager, bundle config
-│   │       └── gen/apple/        Xcode project for iPhone and iPad
+│   └── desktop/
+│       ├── src/                  React frontend
+│       │   ├── components/       UI by area: channels, player, playlist, settings, downloads, ui
+│       │   ├── hooks/            useChannels, useMpv, useDownloads, useUpdateChecker, ...
+│       │   └── lib/tauri.ts      every invoke() call to the backend
+│       └── src-tauri/            Tauri app: commands, download manager, bundle config
+│           └── gen/apple/        Xcode project for iPhone and iPad
 ├── crates/
 │   ├── core/                     mvp-core: platform-independent logic
 │   └── tauri-plugin-mpv/         Tauri plugin that embeds libmpv
@@ -106,11 +106,12 @@ comes from MPVKit through Swift Package Manager. Building and signing are in
 
 `engine.rs`, `reconnect.rs` and the `plugin:mpv|*` commands are the same as on
 desktop, so `lib/tauri.ts`, `useMpv` and the React player controls work unchanged.
-`ios.rs` adds what only iOS needs:
+`ios.rs` handles what only iOS needs:
 
-- A relative seek for the lock screen's skip buttons.
+- The lock screen's skip buttons, through the engine's relative seek.
 - `vid=no` while the app is in the background, because iOS ends apps that use Metal
-  there, and `vid=auto` when it comes back.
+  there, and `vid=auto` when it comes back. Both are engine calls that only `ios.rs`
+  makes.
 - A small change to `video-aspect-override` after each resize. MPVKit's MoltenVK
   context reads the layer's size only when mpv reconfigures its output, and this
   makes it reconfigure.

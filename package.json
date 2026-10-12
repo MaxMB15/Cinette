@@ -2,7 +2,6 @@
 	"name": "max-video-player",
 	"private": true,
 	"license": "GPL-3.0-only",
-	"version": "0.1.0",
 	"description": "IPTV player for desktop and iOS, built with Tauri and mpv",
 	"scripts": {
 		"prepare": "husky",
