@@ -5,6 +5,8 @@
 #[macro_use]
 extern crate objc;
 
+#[cfg(any(target_os = "ios", test))]
+mod artwork;
 mod commands;
 mod engine;
 mod idle_inhibit;

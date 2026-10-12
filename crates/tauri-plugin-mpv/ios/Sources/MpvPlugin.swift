@@ -8,6 +8,7 @@
 // the C callbacks it registers with `mvp_ios_register_callbacks`.
 
 import AVFoundation
+import ImageIO
 import MediaPlayer
 import Tauri
 import UIKit
@@ -117,6 +118,8 @@ final class MpvHost: NSObject {
   private var playing = false
   /// Set when an interruption paused a stream that was playing.
   private var resumeAfterInterruption = false
+  /// The channel logo for the lock screen, once Rust has downloaded it.
+  private var artwork: MPMediaItemArtwork?
   /// How far the lock screen's skip buttons jump, in seconds.
   private var skipBack = 10.0
   private var skipForward = 10.0
@@ -258,6 +261,9 @@ final class MpvHost: NSObject {
     if let title, !title.isEmpty {
       info[MPMediaItemPropertyTitle] = title
     }
+    if let artwork {
+      info[MPMediaItemPropertyArtwork] = artwork
+    }
     if duration > 0 {
       info[MPMediaItemPropertyPlaybackDuration] = duration
       info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, position)
@@ -269,6 +275,18 @@ final class MpvHost: NSObject {
     center.nowPlayingInfo = info
     center.playbackState = playing ? .playing : .paused
     self.playing = playing
+  }
+
+  /// Replaces the logo, or removes it when `image` is nil. Shows it right
+  /// away if Now Playing is up.
+  func setArtwork(_ image: UIImage?) {
+    artwork = image.map { image in
+      MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+    }
+    let center = MPNowPlayingInfoCenter.default()
+    guard var info = center.nowPlayingInfo else { return }
+    info[MPMediaItemPropertyArtwork] = artwork
+    center.nowPlayingInfo = info
   }
 
   func clearNowPlaying() {
@@ -382,6 +400,34 @@ private func onMain<T>(_ work: () -> T) -> T {
   return DispatchQueue.main.sync(execute: work)
 }
 
+/// Decodes lock screen artwork off the main thread. It's serial, so a clear
+/// and the logo after it reach the main thread in the order Rust sent them.
+private let artworkQueue = DispatchQueue(label: "com.maxvideoplayer.mpv.artwork", qos: .utility)
+
+/// The lock screen never shows artwork much bigger than this, so a larger
+/// logo is scaled down while it's decoded rather than kept at full size.
+private let maxArtworkPixels = 600
+
+/// Decodes `data` to at most `maxArtworkPixels` on its longer side. Smaller
+/// images keep their size.
+private func artworkImage(_ data: Data) -> UIImage? {
+  let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+  guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+    return nil
+  }
+  let options =
+    [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true,
+      kCGImageSourceThumbnailMaxPixelSize: maxArtworkPixels,
+    ] as CFDictionary
+  guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+    return nil
+  }
+  return UIImage(cgImage: image)
+}
+
 // MARK: C entry points called from ios.rs
 
 @_cdecl("mvp_ios_register_callbacks")
@@ -434,6 +480,16 @@ func mvpIosNowPlaying(
   DispatchQueue.main.async {
     MpvHost.shared.updateNowPlaying(
       title: name, duration: duration, position: position, playing: playing)
+  }
+}
+
+@_cdecl("mvp_ios_now_playing_artwork")
+func mvpIosNowPlayingArtwork(_ bytes: UnsafePointer<UInt8>?, _ length: Int) {
+  // Copy the bytes now. Rust frees them when this function returns.
+  let data = bytes.map { Data(bytes: $0, count: length) }
+  artworkQueue.async {
+    let image = data.flatMap(artworkImage)
+    DispatchQueue.main.async { MpvHost.shared.setArtwork(image) }
   }
 }
 

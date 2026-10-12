@@ -20,7 +20,7 @@ How the iOS pieces fit together is in [architecture.md](architecture.md#ios).
   allow them.
 - An iPhone always gets the phone layout. An iPad picks the phone, tablet or desktop
   layout by window width, so Split View and rotation switch between them.
-- Audio keeps playing on the lock screen, which shows the channel name.
+- Audio keeps playing on the lock screen, which shows the channel name and logo.
 
 ## Building
 

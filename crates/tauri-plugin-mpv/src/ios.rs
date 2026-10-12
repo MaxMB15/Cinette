@@ -13,7 +13,9 @@
 //! screen controls. Rust calls it through the `mvp_ios_*` functions, and it
 //! calls back through the C callbacks registered in [`install`].
 
+use crate::artwork::{web_address, LockScreenArtwork, Select};
 use crate::lock::lock_or_recover;
+use crate::log_url::origin_for_log;
 use crate::mpv::MpvState;
 use crate::renderer::PlatformRenderer;
 use libmpv2::{
@@ -26,7 +28,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc, Arc, Mutex, OnceLock,
 };
-use tauri::{AppHandle, Manager, Runtime};
+use std::time::Duration;
+use tauri::{async_runtime::JoinHandle, AppHandle, Manager, Runtime};
 
 extern "C" {
     fn mvp_ios_register_callbacks(
@@ -42,6 +45,7 @@ extern "C" {
     fn mvp_ios_set_audio_active(active: bool);
     fn mvp_ios_now_playing(title: *const c_char, duration: f64, position: f64, playing: bool);
     fn mvp_ios_now_playing_clear();
+    fn mvp_ios_now_playing_artwork(data: *const u8, len: usize);
     fn mvp_ios_set_skip_intervals(back: f64, forward: f64);
     // From libmpv itself. libmpv2 doesn't re-export its sys crate.
     fn mpv_wakeup(ctx: *mut c_void);
@@ -90,6 +94,7 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 /// Called once from plugin setup. Hands Swift the callbacks for the app
 /// lifecycle and the lock screen controls, which need the app's `MpvState`.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
+    let _ = USER_AGENT.set(format!("MaxVideoPlayer/{}", app.package_info().version));
     let (tx, rx) = mpsc::channel::<Job>();
     if JOBS.set(tx).is_err() {
         return;
@@ -226,14 +231,121 @@ static MEDIA_INFO: Mutex<MediaInfo> = Mutex::new(MediaInfo {
 /// Bumped on every `set_media_info` so the watcher knows to resend.
 static MEDIA_INFO_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Sets the title and live flag shown on the lock screen. They stay until
-/// the next call, so they cover the next load too.
-pub fn set_media_info(title: Option<String>, live: bool) {
+/// Sets the title, live flag and artwork shown on the lock screen. They stay
+/// until the next call, so they cover the next load too.
+pub fn set_media_info(title: Option<String>, live: bool, artwork: Option<String>) {
     let title = title.filter(|t| !t.is_empty()).and_then(|t| CString::new(t).ok());
     let mut info = lock_or_recover(&MEDIA_INFO);
     info.title = title;
     info.live = live;
     MEDIA_INFO_GEN.fetch_add(1, Ordering::AcqRel);
+    drop(info);
+    set_artwork(artwork.and_then(web_address));
+}
+
+/// The logo the lock screen has or is about to get, and the download for it.
+struct Artwork {
+    state: LockScreenArtwork,
+    fetch: Option<JoinHandle<()>>,
+}
+
+static ARTWORK: Mutex<Artwork> = Mutex::new(Artwork {
+    state: LockScreenArtwork::new(RECENT_ARTWORK, RECENT_ARTWORK_BYTES),
+    fetch: None,
+});
+
+/// Artwork larger than this is left out.
+const MAX_ARTWORK_BYTES: usize = 5 * 1024 * 1024;
+
+/// How many logos to keep for channels the user switches back to, and how
+/// many bytes they may take in all. Most logos are well under 100 KB.
+const RECENT_ARTWORK: usize = 8;
+const RECENT_ARTWORK_BYTES: usize = 2 * 1024 * 1024;
+
+const ARTWORK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `MaxVideoPlayer/<app version>`, set in [`install`]. Some image hosts,
+/// Wikimedia among them, refuse requests that don't name the app.
+static USER_AGENT: OnceLock<String> = OnceLock::new();
+
+/// Hands a logo to Swift, or clears it on None. Swift copies the bytes
+/// before this returns.
+fn show_artwork(bytes: Option<&[u8]>) {
+    let (ptr, len) = bytes.map_or((std::ptr::null(), 0), |bytes| (bytes.as_ptr(), bytes.len()));
+    unsafe { mvp_ios_now_playing_artwork(ptr, len) };
+}
+
+/// Shows the channel logo, downloading it if it isn't kept from earlier.
+/// Rust downloads it because App Transport Security blocks plain `http`
+/// requests made through URLSession, and most IPTV logos are on `http`
+/// servers.
+fn set_artwork(url: Option<String>) {
+    let mut artwork = lock_or_recover(&ARTWORK);
+    let next = artwork.state.select(url, show_artwork);
+    if next == Select::Same {
+        return;
+    }
+    // A slow download for the last channel would only be thrown away.
+    if let Some(fetch) = artwork.fetch.take() {
+        fetch.abort();
+    }
+    let Select::Download(url) = next else { return };
+    artwork.fetch = Some(tauri::async_runtime::spawn(async move {
+        let result = fetch_artwork(&url).await;
+        if let Err(e) = &result {
+            tracing::debug!(
+                "[MPV ios] no lock screen artwork from {}: {e}",
+                origin_for_log(&url)
+            );
+        }
+        // Holding the lock keeps a newer call from clearing the artwork
+        // before this one sends an old logo.
+        lock_or_recover(&ARTWORK)
+            .state
+            .finish(url, result.ok(), show_artwork);
+    }));
+}
+
+/// One client for every logo, so they share its connection pool.
+fn artwork_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(ARTWORK_TIMEOUT)
+        .user_agent(USER_AGENT.get().map_or("MaxVideoPlayer", String::as_str))
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(CLIENT.get_or_init(|| client))
+}
+
+/// Downloads a logo of at most [`MAX_ARTWORK_BYTES`]. Errors leave out the
+/// address, since a logo on the IPTV panel may have the login in it.
+async fn fetch_artwork(url: &str) -> Result<Vec<u8>, String> {
+    let error = |e: reqwest::Error| e.without_url().to_string();
+    let mut response = artwork_client()?
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(error)?;
+    // A server that says how big the logo is lets a large one fail before
+    // it downloads.
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_ARTWORK_BYTES as u64)
+    {
+        return Err("too large".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(error)? {
+        if bytes.len() + chunk.len() > MAX_ARTWORK_BYTES {
+            return Err("too large".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Sets how far the lock screen's skip buttons jump, in seconds.

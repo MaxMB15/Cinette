@@ -503,13 +503,14 @@ export const PlayerView = () => {
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on URL only; re-running on mpv/channel refs would cause loops
 	}, [navState?.url]);
 
-	// mpv only knows the stream URL, so tell the lock screen the channel name
-	// and whether it's live.
+	// mpv only knows the stream URL, so tell the lock screen the channel name,
+	// whether it's live, and the logo to show.
 	const activeIsLive = activeChannel?.contentType === "live";
+	const activeLogo = activeChannel?.logoUrl ?? null;
 	useEffect(() => {
 		if (!isMobilePlatform()) return;
-		mpvSetMediaInfo(activeChannelName, activeIsLive).catch(() => {});
-	}, [activeChannelName, activeIsLive]);
+		mpvSetMediaInfo(activeChannelName, activeIsLive, activeLogo).catch(() => {});
+	}, [activeChannelName, activeIsLive, activeLogo]);
 
 	// Persist last active channel and series episode list so they can be restored when navigating back
 	useEffect(() => {

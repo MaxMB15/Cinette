@@ -102,9 +102,9 @@ describe("backend commands", () => {
 		],
 		[
 			"mpvSetMediaInfo",
-			() => tauri.mpvSetMediaInfo("News at Ten", true),
+			() => tauri.mpvSetMediaInfo("News at Ten", true, "http://logos.example.test/news.png"),
 			"plugin:mpv|mpv_set_media_info",
-			{ title: "News at Ten", live: true },
+			{ title: "News at Ten", live: true, artwork: "http://logos.example.test/news.png" },
 		],
 		[
 			"mpvSetSkipIntervals",

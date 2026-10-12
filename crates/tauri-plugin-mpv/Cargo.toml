@@ -36,6 +36,10 @@ wayland-client = "0.31"
 wayland-egl = "0.32"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# Fetches the channel logo for the lock screen. See `set_artwork` in ios.rs.
+reqwest = "0.12"
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"

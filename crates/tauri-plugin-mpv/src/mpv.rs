@@ -484,13 +484,13 @@ impl MpvState {
         }
     }
 
-    /// The channel name and live flag for the lock screen. Only iOS shows
-    /// them.
-    pub fn set_media_info(&self, title: Option<String>, live: bool) {
+    /// The channel name, live flag and logo address for the lock screen.
+    /// Only iOS shows them.
+    pub fn set_media_info(&self, title: Option<String>, live: bool, artwork: Option<String>) {
         #[cfg(target_os = "ios")]
-        crate::ios::set_media_info(title, live);
+        crate::ios::set_media_info(title, live, artwork);
         #[cfg(not(target_os = "ios"))]
-        let _ = (title, live);
+        let _ = (title, live, artwork);
     }
 
     /// How many seconds the lock screen's skip buttons jump back and

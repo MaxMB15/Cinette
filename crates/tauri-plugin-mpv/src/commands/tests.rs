@@ -50,7 +50,13 @@ fn playback_commands_fail_with_nothing_loaded() {
 #[test]
 fn lock_screen_details_are_accepted_on_the_desktop() {
     let app = TestApp::new();
-    let info = mpv_set_media_info(app.handle(), app.state(), Some("News".into()), true);
+    let info = mpv_set_media_info(
+        app.handle(),
+        app.state(),
+        Some("News".into()),
+        true,
+        Some("http://logos.example.test/news.png".into()),
+    );
     assert_eq!(block_on(info), Ok(()));
     let skips = mpv_set_skip_intervals(app.handle(), app.state(), 10.0, 30.0);
     assert_eq!(block_on(skips), Ok(()));

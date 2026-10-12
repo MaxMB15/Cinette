@@ -57,9 +57,12 @@ export const mpvGetState = (): Promise<MpvPlayerState> => invoke("plugin:mpv|mpv
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
 
-/** The lock screen's title and live flag. Only iOS uses them. */
-export const mpvSetMediaInfo = (title: string | null, live: boolean): Promise<void> =>
-	invoke("plugin:mpv|mpv_set_media_info", { title, live });
+/** The lock screen's title, live flag and logo address. Only iOS uses them. */
+export const mpvSetMediaInfo = (
+	title: string | null,
+	live: boolean,
+	artwork: string | null
+): Promise<void> => invoke("plugin:mpv|mpv_set_media_info", { title, live, artwork });
 
 /** How many seconds the lock screen's skip buttons jump. Only iOS has them. */
 export const mpvSetSkipIntervals = (back: number, forward: number): Promise<void> =>
