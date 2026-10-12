@@ -1,24 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, cleanup, screen } from "@testing-library/react";
+import { installPointerEvent } from "@/test/pointer-event";
 import { VideoTapLayer, DOUBLE_TAP_MS, SKIP_CHAIN_MS } from "./VideoTapLayer";
 
-// jsdom has no PointerEvent, and without one the events lose their coordinates.
-beforeAll(() => {
-	if (typeof window.PointerEvent === "function") return;
-	class TestPointerEvent extends MouseEvent {
-		isPrimary: boolean;
-		pointerType: string;
-		constructor(type: string, init: PointerEventInit = {}) {
-			super(type, init);
-			this.isPrimary = init.isPrimary ?? true;
-			this.pointerType = init.pointerType ?? "touch";
-		}
-	}
-	window.PointerEvent = TestPointerEvent as typeof PointerEvent;
-});
+installPointerEvent();
 
 const WIDTH = 1000;
 const LEFT = 100;

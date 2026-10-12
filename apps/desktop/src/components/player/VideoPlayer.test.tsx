@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	useCallback,
 	useEffect,
@@ -33,6 +33,7 @@ import { writeSkipInterval, writeSkipSegmentMode } from "@/lib/player-prefs";
 import { makeChannel, makeDownload } from "@/test/channel-fixtures";
 import { makeEpisode, makeMovie, makeNewsChannel, makeOmdb } from "@/test/detail-fixtures";
 import { deferred } from "@/test/deferred";
+import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
 import { PlayerView } from "./VideoPlayer";
 
@@ -142,7 +143,18 @@ const fakeMpv = vi.hoisted(() => {
 	};
 });
 
-vi.mock("@/lib/tauri", () => tauri);
+// A mock function handles the promises it returns, so a rejection the player
+// doesn't catch would go unnoticed. Each call goes through a promise of its
+// own, and Vitest fails the run on one that's left unhandled.
+vi.mock("@/lib/tauri", () =>
+	Object.fromEntries(
+		Object.entries(tauri).map(([name, fn]) => [
+			name,
+			(...args: unknown[]) =>
+				(fn as (...a: unknown[]) => Promise<unknown>)(...args).then((v) => v),
+		])
+	)
+);
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => env.os }));
 
@@ -504,27 +516,22 @@ const tap = (clientX = 0) => {
 /** The resume prompt, if it shows. */
 const resumePrompt = () => screen.queryByRole("dialog", { name: "Resume watching?" });
 
-// jsdom has no PointerEvent, so a mouse event with the pointer fields stands in.
-const savedPointerEvent = window.PointerEvent;
-beforeAll(() => {
-	if (savedPointerEvent) return;
-	class TestPointerEvent extends MouseEvent {
-		readonly pointerId: number;
-		readonly pointerType: string;
-		readonly isPrimary: boolean;
-		constructor(type: string, init: PointerEventInit = {}) {
-			super(type, init);
-			this.pointerId = init.pointerId ?? 1;
-			this.pointerType = init.pointerType ?? "mouse";
-			this.isPrimary = init.isPrimary ?? true;
-		}
-	}
-	window.PointerEvent = TestPointerEvent as typeof PointerEvent;
-});
+/** The keyboard shortcut list, if it shows. */
+const shortcutList = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
 
-afterAll(() => {
-	window.PointerEvent = savedPointerEvent;
-});
+/** Opens the source menu and plays source `n`, counting from 1. */
+const pickSource = (n: number) => {
+	fireEvent.click(screen.getByRole("button", { name: "Source" }));
+	fireEvent.click(screen.getByRole("menuitemradio", { name: new RegExp(`^Source ${n}`) }));
+};
+
+/** Opens the subtitle picker and picks the English subtitles it offers. */
+const pickEnglishSubtitles = () => {
+	fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+	fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+};
+
+installPointerEvent();
 
 beforeEach(() => {
 	vi.resetAllMocks();
@@ -789,7 +796,7 @@ describe("resuming", () => {
 		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
 	});
 
-	it("cancels on Escape even when focus is on the player behind the prompt", async () => {
+	it("cancels on Escape wherever focus is", async () => {
 		remember(saved(MOVIE_KEY, 1800, 3600));
 		await openItem(lanternKeeper(), { from: "/playlists" });
 		act(() => playerArea().focus());
@@ -1054,8 +1061,7 @@ describe("switching sources", () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 880, 3600) });
 		fakeMpv.actions.getLastKnownPosition.mockReturnValue(900);
-		fireEvent.click(screen.getByRole("button", { name: "Source" }));
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
+		pickSource(2);
 		await flush();
 		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900);
 		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 880, 3600);
@@ -1074,8 +1080,7 @@ describe("switching sources", () => {
 	it("does nothing when the source already playing is picked", async () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 880, 3600) });
-		fireEvent.click(screen.getByRole("button", { name: "Source" }));
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 1/ }));
+		pickSource(1);
 		await flush();
 		expect(loadedUrls()).toEqual([MOVIE_URL]);
 		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
@@ -1084,8 +1089,7 @@ describe("switching sources", () => {
 	it("starts a live channel's backup stream from now", async () => {
 		const backup = "http://backup.example.test/news24.ts";
 		await openItem(makeNewsChannel({ sources: [backup] }));
-		fireEvent.click(screen.getByRole("button", { name: "Source" }));
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
+		pickSource(2);
 		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(backup, undefined);
 		expect(fakeMpv.actions.getLastKnownPosition).not.toHaveBeenCalled();
 	});
@@ -1094,8 +1098,7 @@ describe("switching sources", () => {
 		const lookup = deferred<string | null>();
 		tauri.resolveLocalDownload.mockReturnValue(lookup.promise);
 		await openItem(lanternKeeper());
-		fireEvent.click(screen.getByRole("button", { name: "Source" }));
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
+		pickSource(2);
 		await act(async () => lookup.resolve(DOWNLOADED_MOVIE));
 		await flush();
 		expect(fakeMpv.actions.load.mock.calls).toEqual([[MIRROR_URL, undefined]]);
@@ -1359,18 +1362,14 @@ describe("keyboard shortcuts", () => {
 	it("opens and closes the shortcut list with the question mark and Escape", async () => {
 		await openItem(lanternKeeper());
 		await press("?");
-		expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+		expect(shortcutList()).toBeInTheDocument();
 		await press("k");
 		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
 		await press("?");
-		expect(
-			screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
-		).not.toBeInTheDocument();
+		expect(shortcutList()).not.toBeInTheDocument();
 		await press("?");
 		await press("Escape");
-		expect(
-			screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
-		).not.toBeInTheDocument();
+		expect(shortcutList()).not.toBeInTheDocument();
 		expect(screen.queryByText("Channel list")).not.toBeInTheDocument();
 	});
 
@@ -1379,16 +1378,12 @@ describe("keyboard shortcuts", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
 		const list = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
 		fireEvent.click(within(list).getByRole("button", { name: "Close" }));
-		expect(
-			screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
-		).not.toBeInTheDocument();
+		expect(shortcutList()).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
 		fireEvent.click(
 			screen.getByRole("dialog", { name: "Keyboard shortcuts" }).parentElement as HTMLElement
 		);
-		expect(
-			screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
-		).not.toBeInTheDocument();
+		expect(shortcutList()).not.toBeInTheDocument();
 	});
 
 	it("closes one thing at a time with Escape, then leaves the player", async () => {
@@ -1399,9 +1394,7 @@ describe("keyboard shortcuts", () => {
 		await press("s");
 		await press("?");
 		await press("Escape");
-		expect(
-			screen.queryByRole("dialog", { name: "Keyboard shortcuts" })
-		).not.toBeInTheDocument();
+		expect(shortcutList()).not.toBeInTheDocument();
 		expect(fullscreenSpy).toHaveBeenLastCalledWith(true);
 		await press("Escape");
 		expect(fullscreenSpy).toHaveBeenLastCalledWith(false);
@@ -1599,8 +1592,7 @@ describe("subtitles", () => {
 		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 0.2, 3600) });
-		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
-		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		pickEnglishSubtitles();
 		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
 		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
@@ -1622,8 +1614,7 @@ describe("subtitles", () => {
 			"1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n"
 		);
 		await openItem(ep1, { episodes: [ep1, ep2] });
-		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
-		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		pickEnglishSubtitles();
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
 		await flush();
@@ -1651,8 +1642,7 @@ describe("subtitles", () => {
 		const file = deferred<string>();
 		tauri.readSubtitleFile.mockReturnValue(file.promise);
 		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
-		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
-		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		pickEnglishSubtitles();
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
 		expect(tauri.readSubtitleFile).toHaveBeenCalledTimes(1);
@@ -1685,8 +1675,7 @@ describe("subtitles", () => {
 	it("loads none for the next episode after the viewer turned them off", async () => {
 		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
 		await openItem(ep1, { episodes: [ep1, ep2] });
-		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
-		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		pickEnglishSubtitles();
 		fireEvent.click(screen.getByRole("button", { name: "Pick none" }));
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
@@ -1712,8 +1701,7 @@ describe("subtitles", () => {
 	it("clears the subtitles when something else is opened", async () => {
 		tauri.fetchOmdbData.mockImplementation(async (id) => (id === "mv1" ? lanternOmdb() : null));
 		await openItem(lanternKeeper());
-		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
-		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		pickEnglishSubtitles();
 		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
 		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
 		await goTo({ url: harborLights().url, channel: harborLights() });
@@ -1722,11 +1710,13 @@ describe("subtitles", () => {
 		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
 	});
 
-	it("has none for a live channel", async () => {
+	it("has none for a live channel, so S opens nothing for Escape to close", async () => {
 		await openItem(makeNewsChannel());
 		await press("s");
 		expect(screen.queryByRole("dialog", { name: "Subtitle picker" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
+		await press("Escape");
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
 	});
 });
 
@@ -1807,7 +1797,7 @@ describe("info drawers", () => {
 		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
 	});
 
-	it("has no info or download for a recording", async () => {
+	it("has no info or download for a recording, so I opens nothing for Escape to close", async () => {
 		const recording = makeChannel({
 			id: "rec-1",
 			name: "City News",
@@ -1820,6 +1810,8 @@ describe("info drawers", () => {
 		expect(screen.queryByRole("button", { name: "Channel info" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
 		expect(tauri.fetchOmdbData).not.toHaveBeenCalled();
+		await press("Escape");
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
 	});
 });
 
@@ -1938,15 +1930,23 @@ describe("when the app's backend fails", () => {
 		await setMpv({ state: paused(MOVIE_URL, 20, 3600) });
 		await setVisibility("hidden");
 		await setVisibility("visible");
-		fireEvent.click(screen.getByRole("button", { name: "Source" }));
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
+		pickSource(2);
 		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
 		await goTo({ url: radio, channelName: "Harbor Radio" });
 		expect(screen.getByText("Harbor Radio")).toBeInTheDocument();
-		expect(loadedUrls()).toEqual([MOVIE_URL, MIRROR_URL, harborLights().url, radio]);
+		// Leaving with a channel open records the end of it on the way out.
+		await goTo({ url: harborLights().url, channel: harborLights() });
 		await goToPage("/playlists");
 		expect(screen.getByText("Playlists")).toBeInTheDocument();
-		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+		expect(loadedUrls()).toEqual([
+			MOVIE_URL,
+			MIRROR_URL,
+			harborLights().url,
+			radio,
+			harborLights().url,
+		]);
+		expect(tauri.recordPlayEnd).toHaveBeenLastCalledWith("mv2", expect.any(Number));
 	});
 });
 
