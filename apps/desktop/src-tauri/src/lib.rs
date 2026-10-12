@@ -3,6 +3,7 @@
 
 mod commands;
 mod downloads;
+mod logging;
 mod progress;
 
 use commands::AppState;
@@ -87,14 +88,7 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("max_video_player=debug".parse().unwrap())
-                .add_directive("tauri_plugin_mpv=debug".parse().unwrap())
-                .add_directive("mvp_core=debug".parse().unwrap()),
-        )
-        .init();
+    logging::init();
 
     #[cfg(target_os = "linux")]
     apply_linux_workarounds();
