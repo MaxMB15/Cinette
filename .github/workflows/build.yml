@@ -309,7 +309,9 @@ jobs:
   build-linux:
     if: needs.detect-changes.outputs.linux == 'true' && !startsWith(github.head_ref, 'chore-bump-v')
     needs: [test, detect-changes]
-    runs-on: ubuntu-latest
+    # Same Ubuntu as release-linux in release.yml, so this builds what ships, and
+    # the Rust cache the two jobs share comes from one system.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
