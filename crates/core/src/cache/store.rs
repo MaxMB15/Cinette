@@ -6,7 +6,7 @@ use crate::iptv::m3u::parse_series_name;
 use crate::iptv::mdblist::MdbListData;
 use crate::iptv::omdb::OmdbData;
 use crate::iptv::opensubtitles::SubtitleSearchResult;
-use crate::iptv::skip_segments::SkipSegment;
+use crate::iptv::skip_segments::SourceTimes;
 use crate::iptv::whatson::WhatsonData;
 use crate::models::channel::Channel;
 use crate::models::playlist::{Provider, ProviderType};
@@ -1038,19 +1038,15 @@ impl CacheStore {
         self.get_json(OPENSUBTITLES_CACHE, &Self::opensubtitles_cache_key(imdb_id, season, episode), ttl_seconds)
     }
 
-    /// Store the skip times found for a video under its `SkipQuery::cache_key`.
-    /// An empty list is cached too, so a video with none isn't looked up again
-    /// until it expires.
-    pub fn save_skip_segments_cache(&self, key: &str, segments: &[SkipSegment]) -> Result<(), CacheError> {
-        self.save_json(SKIP_SEGMENTS_CACHE, key, segments)
+    /// Store what one database had for a video under `SkipQuery::cache_key`.
+    /// An empty answer is cached too, so a video with none isn't looked up
+    /// again until it expires.
+    pub fn save_skip_segments_cache(&self, key: &str, times: &SourceTimes) -> Result<(), CacheError> {
+        self.save_json(SKIP_SEGMENTS_CACHE, key, times)
     }
 
-    /// Retrieve the cached skip times for a video. Returns `None` if not cached or stale.
-    pub fn get_skip_segments_cache(
-        &self,
-        key: &str,
-        ttl_seconds: i64,
-    ) -> Result<Option<Vec<SkipSegment>>, CacheError> {
+    /// Retrieve what one database had for a video. Returns `None` if not cached or stale.
+    pub fn get_skip_segments_cache(&self, key: &str, ttl_seconds: i64) -> Result<Option<SourceTimes>, CacheError> {
         self.get_json(SKIP_SEGMENTS_CACHE, key, ttl_seconds)
     }
 
@@ -2625,36 +2621,41 @@ mod tests {
         assert_eq!(store.get_whatson_cache("tt9999999", 3600).unwrap(), None);
     }
 
-    fn make_skip_segment() -> SkipSegment {
-        use crate::iptv::skip_segments::{Fit, SegmentKind, SegmentSource};
-        SkipSegment {
-            kind: SegmentKind::Intro,
-            start: 229.5,
-            end: 246.5,
-            source: SegmentSource::SkipDb,
-            fit: Fit::Exact,
-            confidence: Some(0.9),
-            offset: Some(0.0),
-            auto_from: None,
+    fn make_skip_times() -> SourceTimes {
+        use crate::iptv::skip_segments::{Fit, SegmentKind, SegmentSource, SkipSegment};
+        SourceTimes {
+            segments: vec![SkipSegment {
+                kind: SegmentKind::Intro,
+                start: 229.0,
+                end: 246.0,
+                source: SegmentSource::IntroDb,
+                fit: Fit::Unchecked,
+                confidence: Some(1.0),
+                offset: None,
+                auto_from: None,
+            }],
+            post_credits: Some(3480.0),
         }
     }
 
     #[test]
     fn test_save_and_retrieve_skip_segments_cache() {
         let store = CacheStore::open_in_memory().unwrap();
-        let segments = vec![make_skip_segment()];
-        store.save_skip_segments_cache("tt0903747:1:1:3500", &segments).unwrap();
-        assert_eq!(store.get_skip_segments_cache("tt0903747:1:1:3500", 3600).unwrap(), Some(segments));
-        // Another length is another key, since SkipDB's times depend on it.
-        assert_eq!(store.get_skip_segments_cache("tt0903747:1:1:3501", 3600).unwrap(), None);
-        assert_eq!(store.get_skip_segments_cache("tt0903747:1:1:3500", -1).unwrap(), None);
+        let times = make_skip_times();
+        store.save_skip_segments_cache("introdb:tt0903747:1:1", &times).unwrap();
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:1", 3600).unwrap(), Some(times));
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:2", 3600).unwrap(), None);
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:1", -1).unwrap(), None);
     }
 
     #[test]
     fn test_skip_segments_cache_keeps_an_empty_answer() {
         let store = CacheStore::open_in_memory().unwrap();
-        store.save_skip_segments_cache("tt0111161:movie:8520", &[]).unwrap();
-        assert_eq!(store.get_skip_segments_cache("tt0111161:movie:8520", 3600).unwrap(), Some(Vec::new()));
+        store.save_skip_segments_cache("skipdb:tt0111161:movie:8520", &SourceTimes::default()).unwrap();
+        assert_eq!(
+            store.get_skip_segments_cache("skipdb:tt0111161:movie:8520", 3600).unwrap(),
+            Some(SourceTimes::default())
+        );
     }
 
     #[test]
@@ -3234,7 +3235,7 @@ mod tests {
         let store = CacheStore::open_in_memory().unwrap();
         fill_provider(&store, "m3u-a", "Heat");
         store.save_whatson_cache("tt0111161", &WhatsonData::default()).unwrap();
-        store.save_skip_segments_cache("tt0111161:movie:8520", &[make_skip_segment()]).unwrap();
+        store.save_skip_segments_cache("introdb:tt0111161:movie", &make_skip_times()).unwrap();
 
         store.clear_all_caches().unwrap();
 

@@ -10,7 +10,9 @@ use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
 use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
-use mvp_core::iptv::skip_segments::{check_segments, fetch_skip_segments, SkipQuery, SkipSegment};
+use mvp_core::iptv::skip_segments::{
+    fetch_source, resolve, SegmentSource, SkipQuery, SkipSegment, SourceTimes,
+};
 use mvp_core::iptv::whatson::WhatsonData;
 use mvp_core::iptv::xtream::{fetch_xtream_channels, fetch_xtream_series_episodes, get_xtream_epg_url};
 use mvp_core::models::channel::Channel;
@@ -755,6 +757,8 @@ const SKIP_SEGMENTS_CACHE_TTL: i64 = 24 * 60 * 60;
 ///
 /// The IMDb ID comes from OMDb, so this only goes online once the user has
 /// added an OMDb key, and nothing leaves the device for metadata until then.
+/// Both databases are asked at once. One that fails leaves the other's times,
+/// and is asked again the next time the video plays.
 #[command]
 pub async fn get_skip_segments<R: Runtime>(
     app: AppHandle<R>,
@@ -764,39 +768,55 @@ pub async fn get_skip_segments<R: Runtime>(
     episode: Option<u32>,
     duration: f64,
 ) -> Result<Vec<SkipSegment>, String> {
-    let query = SkipQuery { imdb_id, episode: season.zip(episode), duration };
-    let key = query.cache_key();
+    let query = SkipQuery::new(imdb_id, season, episode, duration).map_err(|e| e.to_string())?;
+    let online = omdb_api_key(&app)?.is_some();
+    if !online {
+        tracing::debug!("[Skip] no OMDb API key configured, using cached times only");
+    }
+    let (skipdb, introdb) = tokio::join!(
+        skip_times(&state, &query, SegmentSource::SkipDb, online),
+        skip_times(&state, &query, SegmentSource::IntroDb, online),
+    );
+    if let (Err(e), Err(_)) = (&skipdb, &introdb) {
+        return Err(e.clone());
+    }
+    Ok(resolve(skipdb.ok().flatten().as_ref(), introdb.ok().flatten().as_ref(), query.duration()))
+}
+
+/// One database's times for a video, from the cache, or else looked up and
+/// cached when `online`. `None` means it wasn't cached and wasn't asked.
+async fn skip_times(
+    state: &AppState,
+    query: &SkipQuery,
+    source: SegmentSource,
+    online: bool,
+) -> Result<Option<SourceTimes>, String> {
+    let key = query.cache_key(source);
 
     // 1. Check cache. A bad entry is only logged, and looked up again.
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
         match cache.get_skip_segments_cache(&key, SKIP_SEGMENTS_CACHE_TTL) {
-            Ok(Some(segments)) => return Ok(check_segments(&segments, duration)),
+            Ok(Some(times)) => return Ok(Some(times)),
             Ok(None) => {}
             Err(e) => tracing::warn!("[Skip] unreadable cache entry for {}: {}", key, e),
         }
     }
-
-    // 2. Fetch, if the user has turned on metadata lookups.
-    if omdb_api_key(&app)?.is_none() {
-        tracing::debug!("[Skip] no OMDb API key configured, skipping fetch");
-        return Ok(Vec::new());
+    if !online {
+        return Ok(None);
     }
+
+    // 2. Fetch, and cache what came back, even nothing.
     tracing::info!("[Skip] fetching skip times for {}", key);
-    let fetched = fetch_skip_segments(&query).await.map_err(|e| {
+    let times = fetch_source(query, source).await.map_err(|e| {
         tracing::warn!("[Skip] fetch failed for {}: {}", key, e);
         e.to_string()
     })?;
-
-    // 3. Cache, unless a source failed and should be asked again next time.
-    if fetched.complete {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_skip_segments_cache(&key, &fetched.segments) {
-            tracing::warn!("[Skip] failed to save cache for {}: {}", key, e);
-        }
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    if let Err(e) = cache.save_skip_segments_cache(&key, &times) {
+        tracing::warn!("[Skip] failed to save cache for {}: {}", key, e);
     }
-
-    Ok(check_segments(&fetched.segments, duration))
+    Ok(Some(times))
 }
 
 // --- OpenSubtitles Commands ---
