@@ -22,6 +22,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
 - The player's logs no longer show the login in a stream's link when a channel starts, buffers or reconnects (#106).
+- On Linux with Wayland, starting a video could crash the app on some desktops, and on computers without hardware video decoding the picture could stay black. Linux playback now uses mpv's copy-back hardware decoding, which avoids both (#110).
 
 ## [0.5.3] - 2026-10-09
 
