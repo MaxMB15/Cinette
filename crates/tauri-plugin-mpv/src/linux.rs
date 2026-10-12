@@ -6,9 +6,11 @@
 //!
 //! The renderer puts a `wl_subsurface` and `wl_egl_window` under the Tauri
 //! `wl_surface` and builds an OpenGL Core 3.2 EGL context on that window.
-//! libmpv gets an OpenGL render context plus the native `wl_display` through
-//! `MPV_RENDER_PARAM_WL_DISPLAY`. It needs the display for dmabuf and color
-//! space interop with the compositor, and for presentation timing.
+//! libmpv gets an OpenGL render context and nothing else. We don't pass the
+//! `wl_display` through `MPV_RENDER_PARAM_WL_DISPLAY`, because mpv only uses
+//! it to open a VA-API display for zero-copy decoding, and that call has
+//! crashed inside libva on some Wayland compositors (#36). Decoding uses
+//! copy mode instead, see [`LINUX_HWDEC`].
 //!
 //! Every EGL, GL and `wl_egl_window` call runs on the GLib main thread, which
 //! owns the EGL context for the renderer's whole life. It is the Wayland
@@ -132,7 +134,6 @@ struct WaylandSession {
     child_surface: WlSurface,
     queue: Mutex<EventQueue<WlGlobals>>,
     conn: Connection,
-    wl_display_ptr: *mut c_void,
 }
 
 impl Drop for WaylandSession {
@@ -301,7 +302,6 @@ impl PlatformRenderer for LinuxGlRenderer {
             let context = egl_res.context;
             let surface = egl_res.surface.take().expect("surface already taken");
             let wl_egl = wayland.wl_egl_surface.take().expect("wl_egl already taken");
-            let wl_display_ptr = wayland.wl_display_ptr;
 
             egl.make_current(display, Some(surface), Some(surface), Some(context))
                 .map_err(|e| format!("eglMakeCurrent (init): {e:?}"))?;
@@ -320,7 +320,6 @@ impl PlatformRenderer for LinuxGlRenderer {
                         get_proc_address,
                         ctx: std::ptr::null_mut::<c_void>(),
                     }),
-                    RenderParam::WaylandDisplay(wl_display_ptr as *const c_void),
                 ],
             )
             .map_err(|e| format!("mpv_render_context_create: {e}"))?;
@@ -384,7 +383,13 @@ impl PlatformRenderer for LinuxGlRenderer {
             let ax = x as i32 + state.csd_offset.0;
             let ay = y as i32 + state.csd_offset.1;
             state.last_frame = (ax, ay, wi, hi);
-            state.pending_resize = Some((wi, hi));
+            // Only a new size needs a new EGL surface. The frontend also
+            // calls this when the video moves without resizing, and
+            // recreating the surface then would flash a black frame.
+            let target = state.pending_resize.unwrap_or(state.current_size);
+            if target != (wi, hi) {
+                state.pending_resize = Some((wi, hi));
+            }
 
             inner.wayland.subsurface.set_position(ax, ay);
             inner.wayland.child_surface.commit();
@@ -720,7 +725,6 @@ fn build_wayland(
         child_surface,
         queue: Mutex::new(queue),
         conn,
-        wl_display_ptr,
     };
     Ok((egl_res, wayland))
 }
@@ -824,15 +828,30 @@ fn drain_wayland_queue(inner: &Inner) {
     let _ = queue.dispatch_pending(&mut dummy);
 }
 
+/// The hardware decoding mode for both Linux option sets.
+///
+/// Copy mode decodes on the GPU and copies each frame back for upload, so
+/// mpv never maps decoder surfaces into the renderer. Zero-copy `auto` and
+/// `auto-safe` open a VA-API display through the compositor, which segfaults
+/// inside libva on some Wayland setups, and the mapped surfaces have shown
+/// wrong colors on drivers that can't convert NV12.
+///
+/// The `-safe` list leaves out Vulkan. On a machine without Vulkan video
+/// decoding, such as Mesa's software driver, a failed Vulkan attempt leaves
+/// the embedded picture black even after mpv falls back to software
+/// decoding.
+const LINUX_HWDEC: &str = "auto-copy-safe";
+
 /// Options for embedded playback through the OpenGL render context.
 pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
         ("vo", "libmpv"),
-        // `auto-copy` decodes on the GPU but copies frames to CPU for GL
-        // upload. Plain `auto` can map VAAPI surfaces directly as GL
-        // textures, which produces colour corruption on drivers that
-        // cannot handle the NV12 to RGB interop.
-        ("hwdec", "auto-copy"),
+        ("hwdec", LINUX_HWDEC),
+        // Copy mode doesn't use GPU interop, so don't load any. The render
+        // API otherwise loads every interop (VA-API, VDPAU, CUDA, DRM PRIME)
+        // when the context is created, which costs startup time and runs
+        // the libva code that crashes.
+        ("gpu-hwdec-interop", "no"),
         ("ao", "pulse,pipewire,alsa,"),
         // Ignore config files, so neither /etc/mpv/mpv.conf nor a user
         // config can turn audio off with audio=no or aid=no.
@@ -848,7 +867,7 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 /// shows its own controls.
 pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
-        ("hwdec", "auto"),
+        ("hwdec", LINUX_HWDEC),
         ("ao", "pulse,pipewire,alsa,"),
         ("config", "no"),
         ("video-sync", "display-resample"),

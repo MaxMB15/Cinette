@@ -92,7 +92,8 @@ mod tests {
             crate::linux::embedded_options(),
             vec![
                 ("vo", "libmpv"),
-                ("hwdec", "auto-copy"),
+                ("hwdec", "auto-copy-safe"),
+                ("gpu-hwdec-interop", "no"),
                 ("ao", "pulse,pipewire,alsa,"),
                 ("config", "no"),
                 ("video-sync", "audio"),
@@ -110,7 +111,7 @@ mod tests {
         assert_eq!(
             crate::linux::fallback_options(),
             vec![
-                ("hwdec", "auto"),
+                ("hwdec", "auto-copy-safe"),
                 ("ao", "pulse,pipewire,alsa,"),
                 ("config", "no"),
                 ("video-sync", "display-resample"),
