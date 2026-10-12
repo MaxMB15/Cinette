@@ -324,7 +324,12 @@ pub async fn fetch_xtream_channels(
     password: &str,
 ) -> Result<Vec<Channel>, XtreamError> {
     let creds = XtreamCredentials::new(server, username, password);
-    let client = XtreamClient::new(creds);
+    fetch_all_channels(&XtreamClient::new(creds)).await
+}
+
+/// The work of [`fetch_xtream_channels`], taking the client so tests can point
+/// it at a local server.
+async fn fetch_all_channels(client: &XtreamClient) -> Result<Vec<Channel>, XtreamError> {
     client.authenticate().await?;
 
     let (live_streams_r, live_cats_r, vod_streams_r, vod_cats_r, series_r, series_cats_r) = tokio::join!(
@@ -955,5 +960,290 @@ mod tests {
         assert_eq!(vod_channel(&creds, &categories(), 0, stream()), None);
         let series: XtreamSeries = serde_json::from_value(json!({ "name": "x" })).unwrap();
         assert_eq!(series_channel(&categories(), 0, series), None);
+    }
+
+    // ── Talking to a panel ─────────────────────────────────────────────
+
+    use crate::http::test_server::{
+        route, serve_in_order, serve_once, serve_once_recording, serve_routes, Route,
+    };
+    use std::sync::OnceLock;
+
+    const AUTH_OK: &str = r#"{"user_info":{"auth":1,"status":"Active"}}"#;
+
+    /// A client for a local test server, shared across tests like the real one.
+    fn panel(server: &str) -> XtreamClient {
+        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+        XtreamClient {
+            credentials: XtreamCredentials::new(server, "u", "p"),
+            client: CLIENT.get_or_init(crate::http::test_server::client),
+        }
+    }
+
+    /// A panel that accepts the login and lists one live channel, one movie
+    /// and one series. Routes in `overrides` win over these. The trailing
+    /// space ends the action, so `get_series` doesn't match the other series
+    /// actions.
+    fn serve_panel(overrides: Vec<Route>) -> String {
+        let defaults = vec![
+            route("action= ", "200 OK", AUTH_OK),
+            route(
+                "action=get_live_streams ",
+                "200 OK",
+                r#"[{"stream_id":7,"name":"CNN","category_id":"3"},{"name":"no id"}]"#,
+            ),
+            route(
+                "action=get_live_categories ",
+                "200 OK",
+                r#"[{"category_id":"3","category_name":"News"}]"#,
+            ),
+            route(
+                "action=get_vod_streams ",
+                "200 OK",
+                r#"[{"stream_id":9,"name":"Heat","category_id":"5","container_extension":"mkv"}]"#,
+            ),
+            route(
+                "action=get_vod_categories ",
+                "200 OK",
+                r#"[{"category_id":"5","category_name":"Movies"}]"#,
+            ),
+            route(
+                "action=get_series ",
+                "200 OK",
+                r#"[{"series_id":4,"name":"The Wire","category_id":"8"}]"#,
+            ),
+            route(
+                "action=get_series_categories ",
+                "200 OK",
+                r#"[{"category_id":"8","category_name":"Drama"}]"#,
+            ),
+        ];
+        serve_routes(overrides.into_iter().chain(defaults).collect()).0
+    }
+
+    fn id_group_url(channels: &[Channel]) -> Vec<(&str, &str, &str)> {
+        channels
+            .iter()
+            .map(|c| (c.id.as_str(), c.group_title.as_str(), c.url.as_str()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn either_auth_1_or_an_active_status_counts_as_logged_in() {
+        for (body, accepted) in [
+            (r#"{"user_info":{"auth":1,"status":"Expired"}}"#, true),
+            (r#"{"user_info":{"auth":0,"status":"Active"}}"#, true),
+            (r#"{"user_info":{"auth":0,"status":"Banned"}}"#, false),
+            (r#"{"user_info":{}}"#, false),
+            ("{}", false),
+        ] {
+            let result = panel(&serve_once("200 OK", body)).authenticate().await;
+            if accepted {
+                assert!(result.is_ok(), "{body}: {result:?}");
+            } else {
+                assert!(matches!(result, Err(XtreamError::AuthFailed)), "{body}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn replies_that_are_not_json_are_network_errors() {
+        let (server, _) = serve_in_order(vec![
+            (
+                "503 Service Unavailable".into(),
+                "<html>Maintenance</html>".into(),
+            ),
+            ("200 OK".into(), "<html>Maintenance</html>".into()),
+        ]);
+        let client = panel(&server);
+        let login = client.authenticate().await.unwrap_err();
+        let episodes = client
+            .fetch_series_episodes(1, "Show", None, "Drama")
+            .await
+            .unwrap_err();
+        for err in [login, episodes] {
+            assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_lists_live_channels_then_movies_then_series() {
+        let server = serve_panel(vec![]);
+        let channels = fetch_all_channels(&panel(&server)).await.unwrap();
+        assert_eq!(
+            id_group_url(&channels),
+            [
+                ("xt-0", "News", format!("{server}/live/u/p/7.ts").as_str()),
+                (
+                    "vod-0",
+                    "Movies",
+                    format!("{server}/movie/u/p/9.mkv").as_str()
+                ),
+                ("ser-0", "Drama", "xtream://series/4"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_endpoint_leaves_out_only_what_it_would_have_listed() {
+        let server = serve_panel(vec![
+            route(
+                "action=get_vod_streams ",
+                "500 Internal Server Error",
+                "<html>oops</html>",
+            ),
+            route("action=get_series_categories ", "200 OK", "not json"),
+        ]);
+        let channels = fetch_all_channels(&panel(&server)).await.unwrap();
+        assert_eq!(
+            id_group_url(&channels),
+            [
+                ("xt-0", "News", format!("{server}/live/u/p/7.ts").as_str()),
+                ("ser-0", "Uncategorized", "xtream://series/4"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_panel_with_nothing_to_list_is_an_invalid_response() {
+        let server = serve_panel(vec![
+            route("action=get_live_streams ", "200 OK", "[]"),
+            route("action=get_vod_streams ", "200 OK", "[]"),
+            route("action=get_series ", "404 Not Found", ""),
+        ]);
+        let err = fetch_all_channels(&panel(&server)).await.unwrap_err();
+        assert!(
+            matches!(&err, XtreamError::InvalidResponse(m) if m == "No streams returned from any endpoint"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_login_stops_before_any_list_is_fetched() {
+        let (server, requests) = serve_routes(vec![route(
+            "action= ",
+            "200 OK",
+            r#"{"user_info":{"auth":0,"status":"Expired"}}"#,
+        )]);
+        let err = fetch_all_channels(&panel(&server)).await.unwrap_err();
+        assert!(matches!(err, XtreamError::AuthFailed), "{err:?}");
+        assert_eq!(requests.try_iter().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn series_episodes_are_named_and_sorted_by_season_and_episode() {
+        let body = json!({
+            "info": { "name": "The Wire", "cover": "http://img.example.test/wire.jpg" },
+            "episodes": {
+                "2": [
+                    { "id": "201", "episode_num": 1, "title": "Ebb Tide", "container_extension": "mp4" }
+                ],
+                "1": [
+                    { "id": 102, "episode_num": "2", "title": "" },
+                    { "id": "101", "episode_num": 1, "title": "The Target" },
+                    { "episode_num": 3, "title": "No id" }
+                ],
+                "specials": [
+                    { "id": 900, "title": "Making Of" },
+                    { "id": 901 }
+                ]
+            }
+        });
+        let (server, requests) = serve_once_recording("200 OK", body.to_string());
+        let episodes = panel(&server)
+            .fetch_series_episodes(42, "Wire", Some("http://img.example.test/old.jpg"), "Drama")
+            .await
+            .unwrap();
+        let names: Vec<(&str, &str)> = episodes
+            .iter()
+            .map(|e| (e.id.as_str(), e.name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("xt-ep-42-s0-0", "The Wire S00 Making Of"),
+                ("xt-ep-42-s0-1", "The Wire S00 Ep1"),
+                ("xt-ep-42-s1-1", "The Wire S01E01 The Target"),
+                ("xt-ep-42-s1-0", "The Wire S01E02"),
+                ("xt-ep-42-s2-0", "The Wire S02E01 Ebb Tide"),
+            ]
+        );
+        assert_eq!(
+            episodes[4],
+            Channel {
+                id: "xt-ep-42-s2-0".into(),
+                name: "The Wire S02E01 Ebb Tide".into(),
+                url: format!("{server}/series/u/p/201.mp4"),
+                logo_url: Some("http://img.example.test/wire.jpg".into()),
+                group_title: "Drama".into(),
+                content_type: "series".into(),
+                series_title: Some("The Wire".into()),
+                season: Some(2),
+                episode: Some(1),
+                ..Default::default()
+            }
+        );
+        assert_eq!(episodes[1].url, format!("{server}/series/u/p/901.mkv"));
+        let request = requests.recv().unwrap();
+        assert!(
+            request.starts_with(
+                "GET /player_api.php?username=u&password=p&action=get_series_info&series_id=42 "
+            ),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn series_info_without_a_name_or_cover_keeps_the_list_entry() {
+        let (server, _) = serve_in_order(vec![
+            (
+                "200 OK".into(),
+                json!({
+                    "info": { "name": "", "cover": "" },
+                    "episodes": { "1": [{ "id": 5, "episode_num": 1 }] }
+                })
+                .to_string(),
+            ),
+            ("200 OK".into(), json!({ "info": null }).to_string()),
+        ]);
+        let client = panel(&server);
+        let logo = Some("http://img.example.test/wire.jpg");
+        let episodes = client
+            .fetch_series_episodes(42, "Wire", logo, "Drama")
+            .await
+            .unwrap();
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].name, "Wire S01E01");
+        assert_eq!(episodes[0].series_title.as_deref(), Some("Wire"));
+        assert_eq!(episodes[0].logo_url.as_deref(), logo);
+        let none = client
+            .fetch_series_episodes(42, "Wire", logo, "Drama")
+            .await
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn clients_use_the_shared_download_client() {
+        let client = XtreamClient::new(XtreamCredentials::new("http://srv", "u", "p"));
+        assert!(std::ptr::eq(client.client, crate::http::download_client()));
+    }
+
+    #[tokio::test]
+    async fn the_public_fetches_fail_without_showing_the_login() {
+        // A URL without a host fails before anything is sent, with the request
+        // URL and so the login in its error.
+        let channels = fetch_xtream_channels("unix:/panel", "u", "SECRET")
+            .await
+            .unwrap_err();
+        let episodes =
+            fetch_xtream_series_episodes("unix:/panel", "u", "SECRET", 1, "Show", None, "Drama")
+                .await
+                .unwrap_err();
+        for err in [channels, episodes] {
+            assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
+            assert!(!err.to_string().contains("SECRET"), "{err}");
+            assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        }
     }
 }
