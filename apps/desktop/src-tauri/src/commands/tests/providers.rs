@@ -402,9 +402,12 @@ async fn loading_a_provider_logs_where_it_is_without_its_login() {
     let list = test_server::serve_once("200 OK", playlist(None, &["Alpha"]));
     let (panel, _requests) = xtream_panel();
     let password = test_server::password();
+    // A playlist link from a panel carries the login in its query string. It
+    // gets a value of its own so the playlist and the panel are checked separately.
+    let list_login = format!("list-{}", std::process::id());
 
-    let login = format!("?username=user&password={password}");
-    load_m3u_playlist(app.state(), "Home".into(), format!("{list}/get.php{login}"))
+    let link = format!("{list}/get.php?username=user&password={list_login}");
+    load_m3u_playlist(app.state(), "Home".into(), link)
         .await
         .unwrap();
     let channels = load_panel(&app, &panel, &password).await.unwrap();
@@ -416,6 +419,7 @@ async fn loading_a_provider_logs_where_it_is_without_its_login() {
     assert!(log.contains(&format!("from {list}\n")), "{log}");
     assert!(log.contains(&format!("from {panel}\n")), "{log}");
     assert!(log.contains("fetched 2 episodes for series_id=7"), "{log}");
+    assert!(!log.contains(&list_login), "{log}");
     assert!(!log.contains(&password), "{log}");
 }
 
