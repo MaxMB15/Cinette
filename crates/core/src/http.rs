@@ -75,10 +75,21 @@ pub fn download_client() -> &'static reqwest::Client {
 ///
 /// IPTV panels put the login in the path, the query or before the host,
 /// depending on the panel, so logs get only the part that can't hold one.
+/// The mpv plugin has its own copy in `log_url.rs`, since it doesn't depend
+/// on this crate.
 pub fn origin_for_log(url: &str) -> String {
-    match reqwest::Url::parse(url) {
-        Ok(parsed) => parsed.origin().ascii_serialization(),
-        Err(_) => "<unreadable URL>".to_string(),
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "<unreadable URL>".to_string();
+    };
+    let scheme = parsed.scheme();
+    // Not `Url::origin`, which gives "null" for schemes such as rtmp.
+    match (
+        parsed.host_str().filter(|host| !host.is_empty()),
+        parsed.port(),
+    ) {
+        (Some(host), Some(port)) => format!("{scheme}://{host}:{port}"),
+        (Some(host), None) => format!("{scheme}://{host}"),
+        (None, _) => format!("{scheme}:"),
     }
 }
 
@@ -167,6 +178,27 @@ mod tests {
             assert_eq!(origin_for_log(url), "http://host.test:8080", "{url}");
         }
         assert_eq!(origin_for_log("not a url SECRET"), "<unreadable URL>");
+    }
+
+    #[test]
+    fn log_lines_name_the_server_for_any_scheme() {
+        assert_eq!(
+            origin_for_log("rtmp://U:SECRET@host.test:1935/live/SECRET"),
+            "rtmp://host.test:1935"
+        );
+        assert_eq!(
+            origin_for_log("rtsp://host.test/stream?token=SECRET"),
+            "rtsp://host.test"
+        );
+        assert_eq!(
+            origin_for_log("https://host.test:443/SECRET.xml"),
+            "https://host.test"
+        );
+        assert_eq!(
+            origin_for_log("http://[2001:db8::1]:8080/U/SECRET"),
+            "http://[2001:db8::1]:8080"
+        );
+        assert_eq!(origin_for_log("file:///Users/U/SECRET.xml"), "file:");
     }
 
     #[test]

@@ -381,9 +381,11 @@ pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> 
     tracing::info!("[EPG] fetching EPG from {}", mvp_core::http::origin_for_log(&url));
     let epg_data = match fetch_and_parse_epg(&url).await {
         Ok(data) => data,
+        // An error rather than Ok, so a refresh by hand says nothing was
+        // saved and the scheduled one tries again later.
         Err(EpgError::Empty) => {
             tracing::warn!("[EPG] the guide for {provider_id} has no programs, keeping the saved one");
-            return Ok(());
+            return Err("The guide came back with no programs, so the saved one was kept".into());
         }
         Err(e) => return Err(format!("Failed to fetch EPG: {e}")),
     };
@@ -564,13 +566,23 @@ fn non_empty_key(value: Option<serde_json::Value>) -> Option<String> {
         .filter(|k| !k.is_empty())
 }
 
+/// Saves an API key under `name` in the store file `file`, without the
+/// spaces or line break a paste can bring along.
+fn save_key<R: Runtime>(
+    app: &AppHandle<R>,
+    file: &str,
+    name: &str,
+    key: &str,
+) -> Result<(), String> {
+    let store = app.store(file).map_err(|e| e.to_string())?;
+    store.set(name, serde_json::Value::String(key.trim().to_string()));
+    store.save().map_err(|e| e.to_string())
+}
+
 /// Persist the OMDB API key in the Tauri Store.
 #[command]
 pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(OMDB_API_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
+    save_key(&app, OMDB_STORE_FILE, OMDB_API_KEY, &key)
 }
 
 /// Fetch OMDB data for a channel. Checks the DB cache first; fetches from
@@ -640,10 +652,7 @@ pub async fn get_mdblist_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option
 
 #[command]
 pub async fn set_mdblist_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(MDBLIST_API_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
+    save_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY, &key)
 }
 
 /// Test an MDBList API key directly (does not use/update cache or stored key).
@@ -781,10 +790,7 @@ pub async fn get_opensubtitles_api_key<R: Runtime>(app: AppHandle<R>) -> Result<
 
 #[command]
 pub async fn set_opensubtitles_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(OPENSUBTITLES_API_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
+    save_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY, &key)
 }
 
 /// Test an OpenSubtitles API key directly (does not use/update cache or stored key).
@@ -1175,9 +1181,7 @@ pub async fn get_gemini_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<
 
 #[command]
 pub async fn set_gemini_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(GEMINI_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(GEMINI_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())
+    save_key(&app, GEMINI_STORE_FILE, GEMINI_KEY, &key)
 }
 
 #[command]

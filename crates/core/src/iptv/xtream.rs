@@ -6,6 +6,7 @@
 
 use crate::json::number_or_string;
 use crate::models::channel::Channel;
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde::Deserialize;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -41,6 +42,23 @@ pub struct XtreamCredentials {
     pub username: String,
     pub password: String,
 }
+
+/// What a login can't hold as is in a stream URL's path: what the URL
+/// standard escapes in a path, plus `/`, `\` and `%`, which would split the
+/// path or start an escape.
+const PATH_SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'/')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'\\')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
 
 /// Leaves the login out, so a `{:?}` in a log line or an error can't print it.
 impl std::fmt::Debug for XtreamCredentials {
@@ -78,25 +96,26 @@ impl XtreamCredentials {
         format!("{}/player_api.php?{query}", self.server)
     }
 
+    /// A stream's address, with the login in the path. Characters that would
+    /// end or split the path, such as `#`, `?` and `/`, are escaped. Ones a
+    /// path allows, such as `&` and `+`, are left as they are, so logins that
+    /// already worked give the same address.
+    fn stream_url(&self, kind: &str, file: &str) -> String {
+        let username = utf8_percent_encode(&self.username, PATH_SEGMENT);
+        let password = utf8_percent_encode(&self.password, PATH_SEGMENT);
+        format!("{}/{kind}/{username}/{password}/{file}", self.server)
+    }
+
     fn live_stream_url(&self, stream_id: u64, extension: &str) -> String {
-        format!(
-            "{}/live/{}/{}/{stream_id}.{extension}",
-            self.server, self.username, self.password
-        )
+        self.stream_url("live", &format!("{stream_id}.{extension}"))
     }
 
     fn vod_stream_url(&self, stream_id: u64, extension: &str) -> String {
-        format!(
-            "{}/movie/{}/{}/{stream_id}.{extension}",
-            self.server, self.username, self.password
-        )
+        self.stream_url("movie", &format!("{stream_id}.{extension}"))
     }
 
     fn series_stream_url(&self, episode_id: &str, extension: &str) -> String {
-        format!(
-            "{}/series/{}/{}/{episode_id}.{extension}",
-            self.server, self.username, self.password
-        )
+        self.stream_url("series", &format!("{episode_id}.{extension}"))
     }
 }
 
@@ -604,6 +623,39 @@ mod tests {
         assert_eq!(
             creds.series_stream_url("555", "mkv"),
             "http://srv:8080/series/u/p/555.mkv"
+        );
+    }
+
+    #[test]
+    fn stream_urls_escape_what_would_break_the_path() {
+        let creds = XtreamCredentials::new("http://srv:8080", AWKWARD_USER, AWKWARD_PASS);
+        let url = creds.live_stream_url(7, "ts");
+        assert_eq!(
+            url,
+            "http://srv:8080/live/me&you%20%231/a+b%2Fc%20d&action=x%23e/7.ts"
+        );
+        let parsed = reqwest::Url::parse(&url).unwrap();
+        assert_eq!(parsed.fragment(), None);
+        assert_eq!(parsed.query(), None);
+        let segments: Vec<String> = parsed
+            .path_segments()
+            .unwrap()
+            .map(|s| {
+                percent_encoding::percent_decode_str(s)
+                    .decode_utf8()
+                    .unwrap()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(segments, ["live", AWKWARD_USER, AWKWARD_PASS, "7.ts"]);
+    }
+
+    #[test]
+    fn stream_urls_escape_question_marks_and_percent_signs() {
+        let creds = XtreamCredentials::new("http://srv:8080", "u?1", "50%off");
+        assert_eq!(
+            creds.vod_stream_url(9, "mp4"),
+            "http://srv:8080/movie/u%3F1/50%25off/9.mp4"
         );
     }
 
