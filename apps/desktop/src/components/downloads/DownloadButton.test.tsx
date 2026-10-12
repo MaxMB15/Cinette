@@ -106,6 +106,43 @@ describe("DownloadButton for a changing item", () => {
 		expect(screen.getByRole("dialog", { name: "Stop download?" })).toBeInTheDocument();
 	});
 
+	it("lets go of focus when the item changes", () => {
+		const { rerender } = render(<PlayerButton itemId="e1" state="downloading" />);
+		const button = screen.getByRole("button", { name: "Downloading" });
+		button.focus();
+		fireEvent.click(button);
+		expect(button).not.toHaveFocus();
+
+		rerender(<PlayerButton itemId="e2" state="idle" />);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(screen.getByRole("button", { name: "Download" })).not.toHaveFocus();
+		expect(document.body).toHaveFocus();
+	});
+
+	it("keeps focus while the item stays the same", () => {
+		const { rerender } = render(<PlayerButton itemId="e1" state="idle" />);
+		const button = screen.getByRole("button", { name: "Download" });
+		button.focus();
+		rerender(<PlayerButton itemId="e1" state="downloading" />);
+		expect(button).toHaveFocus();
+	});
+
+	it("keeps a failed removal on screen after the next item starts", async () => {
+		const { rerender } = render(
+			<PlayerButton
+				itemId="e1"
+				state="complete"
+				onRemove={() => Promise.reject("Could not delete /a.mkv: denied")}
+			/>
+		);
+		confirmRemove();
+		await screen.findByRole("dialog", { name: "Couldn't remove the download" });
+
+		rerender(<PlayerButton itemId="e2" state="idle" />);
+		const dialog = screen.getByRole("dialog", { name: "Couldn't remove the download" });
+		expect(dialog.textContent).toContain("Could not delete /a.mkv: denied");
+	});
+
 	it("still says a removal failed after the next item starts", async () => {
 		let fail: (reason: string) => void = () => {};
 		const onRemove = () =>

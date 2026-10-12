@@ -13,15 +13,15 @@ export const DEFAULT_SUBTITLE_POSITION: SubtitlePosition = { x: 50, y: 88 };
 /** How far one arrow key press moves the subtitles, in percent. */
 export const SUBTITLE_NUDGE_STEP = 2;
 
-/** How far each arrow key moves the subtitles. */
-const ARROW_STEPS = new Map<string, SubtitlePosition>([
-	["ArrowLeft", { x: -SUBTITLE_NUDGE_STEP, y: 0 }],
-	["ArrowRight", { x: SUBTITLE_NUDGE_STEP, y: 0 }],
-	["ArrowUp", { x: 0, y: -SUBTITLE_NUDGE_STEP }],
-	["ArrowDown", { x: 0, y: SUBTITLE_NUDGE_STEP }],
+/** Which way each arrow key moves the subtitles. */
+const ARROW_STEPS = new Map<string, { dx: number; dy: number }>([
+	["ArrowLeft", { dx: -SUBTITLE_NUDGE_STEP, dy: 0 }],
+	["ArrowRight", { dx: SUBTITLE_NUDGE_STEP, dy: 0 }],
+	["ArrowUp", { dx: 0, dy: -SUBTITLE_NUDGE_STEP }],
+	["ArrowDown", { dx: 0, dy: SUBTITLE_NUDGE_STEP }],
 ]);
 
-/** `pos` kept far enough from the player's edges that the text stays inside it. */
+/** A position kept far enough from the player's edges that the text stays inside it. */
 export const clampSubtitlePosition = ({ x, y }: SubtitlePosition): SubtitlePosition => ({
 	x: Math.min(95, Math.max(5, x)),
 	y: Math.min(97, Math.max(3, y)),
@@ -33,5 +33,5 @@ export const isSubtitleNudgeKey = (key: string): boolean => ARROW_STEPS.has(key)
 /** `pos` moved one step the way the arrow `key` points. Other keys leave it where it is. */
 export const nudgeSubtitle = (pos: SubtitlePosition, key: string): SubtitlePosition => {
 	const step = ARROW_STEPS.get(key);
-	return step ? clampSubtitlePosition({ x: pos.x + step.x, y: pos.y + step.y }) : pos;
+	return step ? clampSubtitlePosition({ x: pos.x + step.dx, y: pos.y + step.dy }) : pos;
 };

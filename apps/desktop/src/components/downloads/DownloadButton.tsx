@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, DownloadCloud, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isMobilePlatform } from "@/lib/platform";
@@ -13,8 +13,9 @@ export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" 
 
 interface DownloadButtonProps {
 	/**
-	 * The item the button is for. A confirm left open closes when this changes,
-	 * so it can't stop or remove the next item's download.
+	 * The item the button is for. When this changes, a confirm left open closes,
+	 * so it can't stop or remove the next item's download, and the button gives
+	 * up focus, so Space can't start one.
 	 */
 	itemId?: string;
 	state: DownloadIconState;
@@ -45,13 +46,21 @@ export const DownloadButton = ({
 }: DownloadButtonProps) => {
 	const [confirm, setConfirm] = useState<null | "stop" | "remove">(null);
 	const [removeError, setRemoveError] = useState<string | null>(null);
-	// Closed while rendering rather than in an effect, so the confirm never
-	// shows for the new item. A failed removal is still reported.
+	const buttonRef = useRef<HTMLButtonElement>(null);
+	// A confirm left open for the last item closes during render, not in an
+	// effect, so it never shows for the new one. A removal still running can
+	// still report a failure.
 	const [confirmItemId, setConfirmItemId] = useState(itemId);
 	if (confirmItemId !== itemId) {
 		setConfirmItemId(itemId);
 		setConfirm(null);
 	}
+	// The closing confirm hands focus back to the button. In the player, Space
+	// on a focused button presses it, so it would start the new item's download.
+	// Without focus here, the player takes it back when the next stream loads.
+	useEffect(() => {
+		if (buttonRef.current === document.activeElement) buttonRef.current?.blur();
+	}, [itemId]);
 
 	if (!DOWNLOADS_SUPPORTED) return null;
 
@@ -68,6 +77,7 @@ export const DownloadButton = ({
 	return (
 		<>
 			<button
+				ref={buttonRef}
 				onClick={handleClick}
 				aria-label={label}
 				className={`flex items-center gap-1.5 ${className}`}
