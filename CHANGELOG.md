@@ -27,6 +27,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Large playlists on a slow connection no longer fail after 10 minutes while they are still downloading (#105).
 - Refreshing two M3U playlists at the same time no longer mixes up their downloads (#105).
 - Favorites, watch history, downloads and movie details stay with the right Xtream channel when the provider adds or reorders channels. Before, they could move to a different channel, and a downloaded movie could play in place of the one you picked (#107).
+- Refreshing an Xtream provider while its live, movie or series list fails to load keeps the channels you had from that list instead of removing them (#107).
 
 ## [0.5.3] - 2026-10-09
 

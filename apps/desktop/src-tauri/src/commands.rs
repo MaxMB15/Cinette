@@ -145,7 +145,8 @@ pub async fn load_xtream_provider(
         .map_err(|e| {
             tracing::error!("[IPTV] Xtream connect failed: {e}");
             format!("Failed to connect: {e}")
-        })?;
+        })?
+        .channels;
     tracing::info!("[IPTV] fetched {} channels from Xtream", channels.len());
 
     let provider_id = format!("xt-{}", uuid_simple());
@@ -220,7 +221,9 @@ pub async fn refresh_provider(
             .ok_or_else(|| format!("Provider not found: {id}"))?
     };
 
-    let (mut channels, refreshed_epg_url) = match provider.provider_type {
+    // `kept` names the content types whose list didn't load, so the channels
+    // saved for them stay until a later refresh loads the list again.
+    let (mut channels, refreshed_epg_url, kept) = match provider.provider_type {
         ProviderType::M3u => {
             if provider.url.starts_with("file://") {
                 let path = provider.url.trim_start_matches("file://").to_string();
@@ -229,38 +232,51 @@ pub async fn refresh_provider(
                     .await
                     .map_err(|e| format!("task error: {e}"))?
                     .map_err(|e| format!("Failed to parse file: {e}"))?;
-                (ch, None)
+                (ch, None, Vec::new())
             } else {
                 let playlist = fetch_and_parse_m3u_with_epg(&provider.url)
                     .await
                     .map_err(|e| format!("Failed to fetch: {e}"))?;
-                (playlist.channels, playlist.epg_url)
+                (playlist.channels, playlist.epg_url, Vec::new())
             }
         }
         ProviderType::Xtream => {
             let username = provider.username.clone().unwrap_or_default();
             let password = provider.password.clone().unwrap_or_default();
-            let ch = fetch_xtream_channels(&provider.url, &username, &password)
+            let fetched = fetch_xtream_channels(&provider.url, &username, &password)
                 .await
                 .map_err(|e| format!("Failed to connect: {e}"))?;
             let epg = Some(get_xtream_epg_url(&provider.url, &username, &password));
-            (ch, epg)
+            (fetched.channels, epg, fetched.failed_content_types)
         }
     };
 
     prefix_channel_ids(&id, &mut channels);
 
-    let mut updated = provider;
-    updated.last_updated = Some(now_rfc3339());
-    updated.channel_count = channels.len();
-    if refreshed_epg_url.is_some() {
-        updated.epg_url = refreshed_epg_url.clone();
+    if !kept.is_empty() {
+        tracing::warn!(
+            "[IPTV] provider={} keeps its saved {} channels because those lists didn't load",
+            id,
+            kept.join(", ")
+        );
     }
 
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.save_channels(&id, &channels).map_err(|e| e.to_string())?;
+    let channel_count = cache
+        .save_channels_keeping(&id, &channels, &kept)
+        .map_err(|e| e.to_string())?;
+    let mut updated = provider;
+    updated.last_updated = Some(now_rfc3339());
+    updated.channel_count = channel_count;
+    if refreshed_epg_url.is_some() {
+        updated.epg_url = refreshed_epg_url;
+    }
     cache.upsert_provider(&updated).map_err(|e| e.to_string())?;
-    tracing::info!("[IPTV] refreshed provider={} with {} channels", id, channels.len());
+    tracing::info!(
+        "[IPTV] refreshed provider={} with {} channels",
+        id,
+        channel_count
+    );
 
     Ok(())
 }

@@ -7,9 +7,11 @@ use crate::iptv::mdblist::MdbListData;
 use crate::iptv::omdb::OmdbData;
 use crate::iptv::opensubtitles::SubtitleSearchResult;
 use crate::iptv::whatson::WhatsonData;
+use crate::iptv::xtream;
 use crate::models::channel::Channel;
 use crate::models::playlist::{Provider, ProviderType};
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::{params, params_from_iter, Connection, Result as SqlResult};
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -95,6 +97,23 @@ pub struct CacheStore {
     conn: Connection,
 }
 
+/// A step that rewrites saved rows after a change in what they mean.
+type Migration = fn(&CacheStore) -> Result<(), CacheError>;
+
+/// Every [`Migration`], in the order they were added. A new step goes at the
+/// end, since the database stores how many have run.
+const MIGRATIONS: &[Migration] = &[CacheStore::move_xtream_position_ids];
+
+/// The columns that hold a channel id, as table and column, so saved rows can
+/// follow a channel to a new id.
+const CHANNEL_ID_COLUMNS: [(&str, &str); 5] = [
+    ("watch_history", "channel_id"),
+    ("omdb_cache", "channel_id"),
+    ("downloads", "channel_id"),
+    ("downloads", "series_channel_id"),
+    ("series_episode_cache", "series_channel_id"),
+];
+
 impl CacheStore {
     pub fn open(db_path: &Path) -> Result<Self, CacheError> {
         if let Some(parent) = db_path.parent() {
@@ -103,6 +122,7 @@ impl CacheStore {
         let conn = Connection::open(db_path)?;
         let store = Self { conn };
         store.init_tables()?;
+        store.migrate()?;
         Ok(store)
     }
 
@@ -110,6 +130,7 @@ impl CacheStore {
         let conn = Connection::open_in_memory()?;
         let store = Self { conn };
         store.init_tables()?;
+        store.migrate()?;
         Ok(store)
     }
 
@@ -287,6 +308,98 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Runs each step in [`MIGRATIONS`] that hasn't run on this database yet.
+    /// SQLite's `user_version` holds how many have run. Each step commits
+    /// together with the new count, so a step that fails runs again on the
+    /// next open.
+    fn migrate(&self) -> Result<(), CacheError> {
+        let done: usize = self
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        for (step, migration) in MIGRATIONS.iter().enumerate().skip(done) {
+            let tx = self.conn.unchecked_transaction()?;
+            migration(self)?;
+            tx.pragma_update(None, "user_version", step + 1)?;
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    /// Moves Xtream channels saved under the old list position ids, such as
+    /// `vod-3`, to ids made from the panel's own ids, such as `movie-812`, and
+    /// takes their favorites, history, downloads and cached details along. The
+    /// panel's id comes from each saved URL, so every saved channel moves at
+    /// once, without waiting for a refresh that might miss one of the lists.
+    fn move_xtream_position_ids(&self) -> Result<(), CacheError> {
+        let saved: Vec<(String, String, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT c.id, c.provider_id, c.url FROM channels c
+                 JOIN providers p ON p.id = c.provider_id
+                 WHERE p.provider_type = 'xtream'
+                 ORDER BY c.rowid",
+            )?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            rows.collect::<SqlResult<_>>()?
+        };
+
+        self.conn.execute_batch(
+            "CREATE TEMP TABLE channel_id_moves (
+                old_id    TEXT PRIMARY KEY,
+                new_id    TEXT NOT NULL,
+                keeps_row INTEGER NOT NULL
+            );",
+        )?;
+        {
+            let mut insert = self.conn.prepare(
+                "INSERT INTO channel_id_moves (old_id, new_id, keeps_row) VALUES (?1, ?2, ?3)",
+            )?;
+            let mut taken: HashSet<String> = saved.iter().map(|(id, _, _)| id.clone()).collect();
+            for (old_id, provider_id, url) in &saved {
+                // Saved ids are the provider id, a dash, then the channel's own id.
+                let Some(new_id) = old_id
+                    .strip_prefix(provider_id.as_str())
+                    .and_then(|rest| rest.strip_prefix('-'))
+                    .and_then(|position_id| xtream::id_for_position_id(position_id, url))
+                    .map(|id| format!("{provider_id}-{id}"))
+                else {
+                    continue;
+                };
+                // A panel that listed a stream twice gave it two position ids
+                // but it has one stream id. The first listing's row takes the
+                // new id and the others join it.
+                let keeps_row = taken.insert(new_id.clone());
+                insert.execute(params![old_id, new_id, keeps_row])?;
+            }
+        }
+
+        self.conn.execute_batch(
+            "UPDATE OR IGNORE channels
+                SET id = (SELECT new_id FROM channel_id_moves WHERE old_id = channels.id)
+              WHERE id IN (SELECT old_id FROM channel_id_moves WHERE keeps_row = 1);
+             UPDATE channels SET is_favorite = 1
+              WHERE id IN (SELECT m.new_id FROM channel_id_moves m
+                           JOIN channels c ON c.id = m.old_id
+                           WHERE m.keeps_row = 0 AND c.is_favorite = 1);
+             DELETE FROM channels
+              WHERE id IN (SELECT old_id FROM channel_id_moves WHERE keeps_row = 0);",
+        )?;
+        // A unique column keeps a row already saved for the new id, and the
+        // moved row stays behind under the old one.
+        for (table, column) in CHANNEL_ID_COLUMNS {
+            self.conn.execute(
+                &format!(
+                    "UPDATE OR IGNORE {table}
+                        SET {column} = (SELECT new_id FROM channel_id_moves WHERE old_id = {column})
+                      WHERE {column} IN (SELECT old_id FROM channel_id_moves)"
+                ),
+                [],
+            )?;
+        }
+        self.conn
+            .execute_batch("DROP TABLE temp.channel_id_moves;")?;
+        Ok(())
+    }
+
     // --- Providers ---
 
     pub fn upsert_provider(&self, provider: &Provider) -> Result<(), CacheError> {
@@ -399,41 +512,50 @@ impl CacheStore {
     // --- Channels ---
 
     pub fn save_channels(&self, provider_id: &str, channels: &[Channel]) -> Result<(), CacheError> {
-        self.conn.execute_batch("BEGIN")?;
-
-        if let Err(e) = self.save_channels_inner(provider_id, channels) {
-            let _ = self.conn.execute_batch("ROLLBACK");
-            return Err(e);
-        }
-
-        self.conn.execute_batch("COMMIT")?;
-        Ok(())
+        self.save_channels_keeping(provider_id, channels, &[])
+            .map(|_| ())
     }
 
-    fn save_channels_inner(&self, provider_id: &str, channels: &[Channel]) -> Result<(), CacheError> {
-        // Read what is saved now, before the wipe, so favorites survive the refresh.
-        let mut old_stmt = self.conn.prepare(
-            "SELECT id, url, is_favorite FROM channels WHERE provider_id = ?1 ORDER BY rowid",
-        )?;
-        let old: Vec<(String, String, bool)> = old_stmt
-            .query_map(params![provider_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get::<_, i32>(2)? != 0))
-            })?
-            .collect::<SqlResult<_>>()?;
+    /// Replaces a provider's saved channels with `channels`, but leaves the
+    /// saved channels of each content type in `kept` as they are. A refresh
+    /// passes the content types whose list didn't load, so a panel that fails
+    /// to answer for its movies doesn't empty them. Returns how many channels
+    /// the provider has saved now.
+    pub fn save_channels_keeping(
+        &self,
+        provider_id: &str,
+        channels: &[Channel],
+        kept: &[&str],
+    ) -> Result<usize, CacheError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let count = self.save_channels_inner(provider_id, channels, kept)?;
+        tx.commit()?;
+        Ok(count)
+    }
 
-        let renamed = renamed_channels(&old, channels);
-        let mut favorites: std::collections::HashSet<String> = old
-            .iter()
-            .filter(|(_, _, is_fav)| *is_fav)
-            .map(|(id, _, _)| id.clone())
+    fn save_channels_inner(
+        &self,
+        provider_id: &str,
+        channels: &[Channel],
+        kept: &[&str],
+    ) -> Result<usize, CacheError> {
+        // Preserve favorites: collect IDs that were favorited before the wipe.
+        let mut fav_stmt = self
+            .conn
+            .prepare("SELECT id FROM channels WHERE provider_id = ?1 AND is_favorite = 1")?;
+        let favorites: HashSet<String> = fav_stmt
+            .query_map(params![provider_id], |row| row.get(0))?
+            .filter_map(|r| r.ok())
             .collect();
-        for (old_id, new_id) in &renamed {
-            if favorites.contains(old_id) {
-                favorites.insert(new_id.clone());
-            }
-        }
 
-        self.conn.execute("DELETE FROM channels WHERE provider_id = ?1", params![provider_id])?;
+        // SQLite takes an empty list here, which keeps nothing.
+        let placeholders = vec!["?"; kept.len()].join(", ");
+        self.conn.execute(
+            &format!(
+                "DELETE FROM channels WHERE provider_id = ? AND content_type NOT IN ({placeholders})"
+            ),
+            params_from_iter(std::iter::once(provider_id).chain(kept.iter().copied())),
+        )?;
 
         let mut stmt = self.conn.prepare(
             "INSERT INTO channels (id, provider_id, name, url, logo_url, group_title, tvg_id, tvg_name, is_favorite, content_type, sources, series_title, season, episode)
@@ -463,26 +585,12 @@ impl CacheStore {
             ])?;
         }
 
-        for (old_id, new_id) in &renamed {
-            self.move_channel_data(old_id, new_id)?;
-        }
-        Ok(())
-    }
-
-    /// Points history, downloads and cached details saved under `old_id` at
-    /// `new_id`. Rows that would clash with ones already saved for `new_id` are
-    /// left where they are.
-    fn move_channel_data(&self, old_id: &str, new_id: &str) -> Result<(), CacheError> {
-        for sql in [
-            "UPDATE OR IGNORE watch_history SET channel_id = ?2 WHERE channel_id = ?1",
-            "UPDATE OR IGNORE omdb_cache SET channel_id = ?2 WHERE channel_id = ?1",
-            "UPDATE downloads SET channel_id = ?2 WHERE channel_id = ?1",
-            "UPDATE downloads SET series_channel_id = ?2 WHERE series_channel_id = ?1",
-            "UPDATE OR IGNORE series_episode_cache SET series_channel_id = ?2 WHERE series_channel_id = ?1",
-        ] {
-            self.conn.execute(sql, params![old_id, new_id])?;
-        }
-        Ok(())
+        let count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM channels WHERE provider_id = ?1",
+            params![provider_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 
     pub fn get_channels(&self, provider_id: &str) -> Result<Vec<Channel>, CacheError> {
@@ -1540,37 +1648,6 @@ fn enrich_stale_series(channels: &mut Vec<Channel>) {
     }
 }
 
-/// Pairs each saved channel whose id is gone with the new channel that has the
-/// same URL, as `(old id, new id)`. This is how a refresh carries saved data
-/// across a change in how ids are made, such as Xtream's move from list
-/// positions to the panel's stream ids. Ids that are in both lists are left
-/// alone, so nothing is moved onto an id that still means another channel.
-/// Repeated URLs are paired in list order.
-fn renamed_channels(old: &[(String, String, bool)], new: &[Channel]) -> Vec<(String, String)> {
-    use std::collections::{HashMap, HashSet, VecDeque};
-
-    let new_ids: HashSet<&str> = new.iter().map(|ch| ch.id.as_str()).collect();
-    let old_ids: HashSet<&str> = old.iter().map(|(id, _, _)| id.as_str()).collect();
-
-    let mut gone_by_url: HashMap<&str, VecDeque<&str>> = HashMap::new();
-    for (id, url, _) in old {
-        if !new_ids.contains(id.as_str()) {
-            gone_by_url
-                .entry(url.as_str())
-                .or_default()
-                .push_back(id.as_str());
-        }
-    }
-
-    new.iter()
-        .filter(|ch| !old_ids.contains(ch.id.as_str()))
-        .filter_map(|ch| {
-            let old_id = gone_by_url.get_mut(ch.url.as_str())?.pop_front()?;
-            Some((old_id.to_string(), ch.id.clone()))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2603,15 +2680,60 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_refresh_that_changes_ids_keeps_each_channels_data() {
+    fn xtream_provider(id: &str) -> Provider {
+        Provider {
+            provider_type: ProviderType::Xtream,
+            ..make_provider(id, "Panel")
+        }
+    }
+
+    /// A store as an older version left it, with migrations still to run.
+    fn store_before_migrations() -> CacheStore {
         let store = CacheStore::open_in_memory().unwrap();
-        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
-        // Position-based ids, as Xtream channels had before.
+        store.conn.pragma_update(None, "user_version", 0).unwrap();
+        store
+    }
+
+    fn user_version(store: &CacheStore) -> usize {
+        store
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
+    }
+
+    fn ids_and_favorites(store: &CacheStore, provider_id: &str) -> Vec<(String, bool)> {
+        let mut channels: Vec<(String, bool)> = store
+            .get_channels(provider_id)
+            .unwrap()
+            .into_iter()
+            .map(|ch| (ch.id, ch.is_favorite))
+            .collect();
+        channels.sort();
+        channels
+    }
+
+    fn owned(pairs: &[(&str, bool)]) -> Vec<(String, bool)> {
+        pairs
+            .iter()
+            .map(|(id, fav)| (id.to_string(), *fav))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_database_has_run_every_migration() {
+        let store = CacheStore::open_in_memory().unwrap();
+        assert_eq!(user_version(&store), MIGRATIONS.len());
+    }
+
+    #[test]
+    fn old_xtream_ids_move_to_the_panels_ids_with_their_data() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
         store
             .save_channels(
                 "p1",
                 &[
+                    channel_at("p1-xt-0", "http://srv/live/u/p/7.ts", "live"),
                     channel_at("p1-vod-0", "http://srv/movie/u/p/10.mkv", "movie"),
                     channel_at("p1-vod-1", "http://srv/movie/u/p/11.mkv", "movie"),
                     channel_at("p1-ser-0", "xtream://series/5", "series"),
@@ -2619,6 +2741,7 @@ mod tests {
             )
             .unwrap();
         store.toggle_favorite("p1-vod-0").unwrap();
+        store.toggle_favorite("p1-xt-0").unwrap();
         store
             .record_play_start("p1-vod-0", "Ten", None, "movie")
             .unwrap();
@@ -2638,29 +2761,24 @@ mod tests {
         )];
         store.save_series_episodes("p1-ser-0", &episodes).unwrap();
 
-        // The panel's ids, with a new film at the top that pushes the others down.
-        store
-            .save_channels(
-                "p1",
-                &[
-                    channel_at("p1-movie-12", "http://srv/movie/u/p/12.mkv", "movie"),
-                    channel_at("p1-movie-10", "http://srv/movie/u/p/10.mkv", "movie"),
-                    channel_at("p1-movie-11", "http://srv/movie/u/p/11.mkv", "movie"),
-                    channel_at("p1-series-5", "xtream://series/5", "series"),
-                ],
-            )
-            .unwrap();
+        store.migrate().unwrap();
 
-        let favorites: Vec<String> = store
-            .get_channels("p1")
-            .unwrap()
-            .into_iter()
-            .filter(|ch| ch.is_favorite)
-            .map(|ch| ch.id)
-            .collect();
-        assert_eq!(favorites, ["p1-movie-10"]);
-        let history = store.get_watch_history(10).unwrap();
-        assert_eq!(history[0].channel_id, "p1-movie-10");
+        assert_eq!(
+            ids_and_favorites(&store, "p1"),
+            owned(&[
+                ("p1-live-7", true),
+                ("p1-movie-10", true),
+                ("p1-movie-11", false),
+                ("p1-series-5", false),
+            ])
+        );
+        let movie = store.get_channel_by_id("p1-movie-10").unwrap().unwrap();
+        assert_eq!(movie.url, "http://srv/movie/u/p/10.mkv");
+        assert_eq!(movie.content_type, "movie");
+        assert_eq!(
+            store.get_watch_history(10).unwrap()[0].channel_id,
+            "p1-movie-10"
+        );
         assert!(store
             .get_omdb_cache("p1-movie-10", i64::MAX)
             .unwrap()
@@ -2673,42 +2791,178 @@ mod tests {
         assert_eq!(episode.channel_id, "p1-xt-ep-5-s1-0");
         assert_eq!(episode.series_channel_id.as_deref(), Some("p1-series-5"));
         assert_eq!(store.get_series_episodes("p1-series-5").unwrap().len(), 1);
+        assert_eq!(user_version(&store), MIGRATIONS.len());
+
+        // The panel adds a movie at the top. The ids no longer depend on the
+        // order, so the favorite stays with its movie.
+        store
+            .save_channels(
+                "p1",
+                &[
+                    channel_at("p1-movie-12", "http://srv/movie/u/p/12.mkv", "movie"),
+                    channel_at("p1-movie-10", "http://srv/movie/u/p/10.mkv", "movie"),
+                    channel_at("p1-movie-11", "http://srv/movie/u/p/11.mkv", "movie"),
+                ],
+            )
+            .unwrap();
+        let favorites: Vec<String> = ids_and_favorites(&store, "p1")
+            .into_iter()
+            .filter(|(_, fav)| *fav)
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(favorites, ["p1-movie-10"]);
     }
 
     #[test]
-    fn ids_still_in_the_list_are_not_paired() {
-        // An M3U list where a channel moved down a place. The old id now names
-        // another channel, so nothing moves.
-        let old = [
-            ("p1-ch-0".to_string(), "http://a".to_string(), true),
-            ("p1-ch-1".to_string(), "http://b".to_string(), false),
-        ];
-        let new = [
-            channel_at("p1-ch-0", "http://c", "live"),
-            channel_at("p1-ch-1", "http://a", "live"),
-            channel_at("p1-ch-2", "http://b", "live"),
-        ];
-        assert!(renamed_channels(&old, &new).is_empty());
-    }
+    fn the_move_leaves_other_channels_alone() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .upsert_provider(&make_provider("m1", "Playlist"))
+            .unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[
+                    channel_at("p1-xt-0", "http://srv/live/u/p/stream", "live"),
+                    channel_at("p1-movie-9", "http://srv/movie/u/p/9.mp4", "movie"),
+                ],
+            )
+            .unwrap();
+        store
+            .save_channels(
+                "m1",
+                &[channel_at("m1-xt-0", "http://srv/live/u/p/7.ts", "live")],
+            )
+            .unwrap();
+        store
+            .record_play_start("p1-xt-0", "No id in the URL", None, "live")
+            .unwrap();
 
-    #[test]
-    fn repeated_urls_are_paired_in_order() {
-        let old = [
-            ("p1-xt-0".to_string(), "http://a".to_string(), false),
-            ("p1-xt-1".to_string(), "http://a".to_string(), false),
-            ("p1-xt-2".to_string(), "http://gone".to_string(), false),
-        ];
-        let new = [
-            channel_at("p1-live-7", "http://a", "live"),
-            channel_at("p1-live-7-2", "http://a", "live"),
-            channel_at("p1-live-9", "http://new", "live"),
-        ];
+        store.migrate().unwrap();
+
         assert_eq!(
-            renamed_channels(&old, &new),
-            [
-                ("p1-xt-0".to_string(), "p1-live-7".to_string()),
-                ("p1-xt-1".to_string(), "p1-live-7-2".to_string()),
-            ]
+            ids_and_favorites(&store, "p1"),
+            owned(&[("p1-movie-9", false), ("p1-xt-0", false)])
+        );
+        assert_eq!(
+            ids_and_favorites(&store, "m1"),
+            owned(&[("m1-xt-0", false)])
+        );
+        assert_eq!(
+            store.get_watch_history(10).unwrap()[0].channel_id,
+            "p1-xt-0"
+        );
+    }
+
+    #[test]
+    fn a_stream_saved_twice_joins_its_first_listing() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[
+                    channel_at("p1-xt-0", "http://srv/live/u/p/7.ts", "live"),
+                    channel_at("p1-xt-1", "http://srv/live/u/p/8.ts", "live"),
+                    channel_at("p1-xt-2", "http://srv/live/u/p/7.ts", "live"),
+                ],
+            )
+            .unwrap();
+        store.toggle_favorite("p1-xt-2").unwrap();
+        store
+            .record_play_start("p1-xt-2", "Seven", None, "live")
+            .unwrap();
+
+        store.migrate().unwrap();
+
+        assert_eq!(
+            ids_and_favorites(&store, "p1"),
+            owned(&[("p1-live-7", true), ("p1-live-8", false)])
+        );
+        assert_eq!(
+            store.get_watch_history(10).unwrap()[0].channel_id,
+            "p1-live-7"
+        );
+    }
+
+    #[test]
+    fn the_move_runs_once() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store.migrate().unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[channel_at("p1-xt-0", "http://srv/live/u/p/7.ts", "live")],
+            )
+            .unwrap();
+
+        store.migrate().unwrap();
+
+        assert_eq!(
+            ids_and_favorites(&store, "p1"),
+            owned(&[("p1-xt-0", false)])
+        );
+        assert_eq!(user_version(&store), MIGRATIONS.len());
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_saved_channels_of_a_list_that_failed() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[
+                    channel_at("p1-live-7", "http://srv/live/u/p/7.ts", "live"),
+                    channel_at("p1-movie-9", "http://srv/movie/u/p/9.mp4", "movie"),
+                    channel_at("p1-series-5", "xtream://series/5", "series"),
+                ],
+            )
+            .unwrap();
+        store.toggle_favorite("p1-movie-9").unwrap();
+        store.toggle_favorite("p1-live-7").unwrap();
+
+        // The movie and series lists didn't load, and the live list changed.
+        let count = store
+            .save_channels_keeping(
+                "p1",
+                &[
+                    channel_at("p1-live-7", "http://srv/live/u/p/7.ts", "live"),
+                    channel_at("p1-live-8", "http://srv/live/u/p/8.ts", "live"),
+                ],
+                &["movie", "series"],
+            )
+            .unwrap();
+
+        assert_eq!(count, 4);
+        assert_eq!(
+            ids_and_favorites(&store, "p1"),
+            owned(&[
+                ("p1-live-7", true),
+                ("p1-live-8", false),
+                ("p1-movie-9", true),
+                ("p1-series-5", false),
+            ])
+        );
+
+        // Once the lists load again, the refresh replaces everything.
+        let count = store
+            .save_channels_keeping(
+                "p1",
+                &[channel_at(
+                    "p1-movie-9",
+                    "http://srv/movie/u/p/9.mp4",
+                    "movie",
+                )],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(
+            ids_and_favorites(&store, "p1"),
+            owned(&[("p1-movie-9", true)])
         );
     }
 }
