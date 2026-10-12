@@ -1,26 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, type RefObject } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-
-/** Route state that makes Settings scroll to the OMDb key field. */
-export const OMDB_KEY_FOCUS = { focus: "omdb" } as const;
-
-/**
- * Scrolls Settings to the OMDb key field when the hint opened it, then clears
- * the route state so going back to that entry doesn't scroll again.
- */
-export const useScrollToOmdbKey = (ref: RefObject<HTMLElement | null>) => {
-	const location = useLocation();
-	const navigate = useNavigate();
-	useEffect(() => {
-		const state = location.state as { focus?: string } | null;
-		if (state?.focus !== OMDB_KEY_FOCUS.focus) return;
-		ref.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-		navigate(location.pathname, { replace: true, state: null });
-	}, [location.state, location.pathname, navigate, ref]);
-};
+import { Link } from "react-router-dom";
+import { OMDB_KEY_FOCUS } from "@/hooks/useScrollToOmdbKey";
 
 interface OmdbKeyHintProps {
 	/** Closes the sheet the hint sits in before Settings opens. */

@@ -81,7 +81,9 @@ export const SeriesDetailModal = ({
 	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
 		prefetchedWhatsonData ?? null
 	);
-	const hasOmdbKey = useHasOmdbKey();
+	// The key only matters when OMDb came back with nothing, so skip the check
+	// while it loads or once it has details.
+	const hasOmdbKey = useHasOmdbKey(!omdbLoading && !omdbData);
 	// Without OMDb data, wait for the key check too, so the hint doesn't flash.
 	const infoLoading = omdbLoading || (!omdbData && hasOmdbKey === null);
 

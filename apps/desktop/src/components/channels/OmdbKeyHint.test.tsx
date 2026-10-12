@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import type { Channel, OmdbData } from "@/lib/types";
 
@@ -33,7 +33,6 @@ vi.mock("@/hooks/useDownloads", async (importOriginal) => ({
 
 import { MovieInfoDrawer } from "./MovieInfoDrawer";
 import { SeriesDetailModal } from "./SeriesDetailModal";
-import { OMDB_KEY_FOCUS, useScrollToOmdbKey } from "./OmdbKeyHint";
 import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
 
 const HINT = /Add an OMDb API key in Settings/;
@@ -129,6 +128,16 @@ describe("OMDb key hint", () => {
 
 		expect(await screen.findByText("Animation")).toBeTruthy();
 		expect(screen.queryByRole("link", { name: HINT })).toBeNull();
+		expect(tauri.getOmdbApiKey).not.toHaveBeenCalled();
+	});
+
+	it("doesn't check the key when the player passes OMDb details", async () => {
+		renderMovie(vi.fn(), { genre: "Animation" } as OmdbData);
+
+		expect(screen.getByText("Animation")).toBeTruthy();
+		await act(async () => {});
+		expect(tauri.getOmdbApiKey).not.toHaveBeenCalled();
+		expect(tauri.fetchOmdbData).not.toHaveBeenCalled();
 	});
 
 	it("keeps loading until the key check answers", async () => {
@@ -198,43 +207,5 @@ describe("OMDb key hint", () => {
 		renderMovie(vi.fn(), null);
 		expect(screen.getByText("— · —")).toBeTruthy();
 		expect(screen.queryByRole("link", { name: HINT })).toBeNull();
-	});
-});
-
-describe("useScrollToOmdbKey", () => {
-	afterEach(() => cleanup());
-
-	const KeyField = () => {
-		const ref = useRef<HTMLDivElement>(null);
-		useScrollToOmdbKey(ref);
-		const location = useLocation();
-		const state = location.state as { focus?: string } | null;
-		return <div ref={ref}>focus={state?.focus ?? "none"}</div>;
-	};
-
-	const renderSettings = (state: unknown) => {
-		const scrollIntoView = vi.fn();
-		Element.prototype.scrollIntoView = scrollIntoView;
-		const view = render(
-			<MemoryRouter initialEntries={[{ pathname: "/settings", state }]}>
-				<Routes>
-					<Route path="/settings" element={<KeyField />} />
-				</Routes>
-			</MemoryRouter>
-		);
-		return { scrollIntoView, ...view };
-	};
-
-	it("scrolls to the key field once and clears the route state", async () => {
-		const { scrollIntoView } = renderSettings(OMDB_KEY_FOCUS);
-		expect(await screen.findByText("focus=none")).toBeTruthy();
-		expect(scrollIntoView).toHaveBeenCalledTimes(1);
-		expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
-	});
-
-	it("doesn't scroll when Settings opens normally", () => {
-		const { scrollIntoView } = renderSettings(null);
-		expect(screen.getByText("focus=none")).toBeTruthy();
-		expect(scrollIntoView).not.toHaveBeenCalled();
 	});
 });

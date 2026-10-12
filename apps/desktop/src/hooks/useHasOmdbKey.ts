@@ -15,12 +15,14 @@ export const rememberHasOmdbKey = (hasKey: boolean | null) => {
 /**
  * Whether an OMDb API key is saved, or null until the first check answers.
  * Only the yes or no leaves this hook, never the key. It starts from the last
- * answer and checks again on mount, so a sheet that mounts when it opens sees
- * a key added since it last opened.
+ * answer and checks again once `needed` is true, so a sheet that mounts when
+ * it opens sees a key added since it last opened. A sheet that already has
+ * OMDb details passes false and skips the check.
  */
-export const useHasOmdbKey = (): boolean | null => {
+export const useHasOmdbKey = (needed: boolean): boolean | null => {
 	const [hasKey, setHasKey] = useState<boolean | null>(lastKnown);
 	useEffect(() => {
+		if (!needed) return;
 		let cancelled = false;
 		getOmdbApiKey()
 			.then((key) => {
@@ -34,6 +36,6 @@ export const useHasOmdbKey = (): boolean | null => {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [needed]);
 	return hasKey;
 };
