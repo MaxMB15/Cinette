@@ -27,6 +27,7 @@
 //! `RECOVERY_CONFIRM_ADVANCE_SECS` past where playback restarted. After
 //! `MAX_ATTEMPTS` the watcher sends `mpv://load-failed` and exits.
 
+use crate::log_url::origin_for_log;
 use libmpv2::{
     events::{Event, PropertyData},
     mpv_end_file_reason, EndFileReason, Format, Mpv,
@@ -117,6 +118,7 @@ struct UrlPayload<'a> {
 pub fn spawn<R: Runtime>(client: Mpv, url: String, app: AppHandle<R>, kill: Arc<AtomicBool>) {
     let watcher = Watcher {
         client,
+        log_origin: origin_for_log(&url),
         url,
         app,
         kill,
@@ -174,6 +176,9 @@ fn signal(event: Option<libmpv2::Result<Event<'_>>>) -> Signal {
 struct Watcher<R: Runtime> {
     client: Mpv,
     url: String,
+    /// `url` cut down to its origin for log lines, since the full URL can
+    /// hold the login.
+    log_origin: String,
     app: AppHandle<R>,
     kill: Arc<AtomicBool>,
     /// Retries armed since playback last recovered. Zero while healthy.
@@ -205,7 +210,7 @@ impl<R: Runtime> Watcher<R> {
                 tracing::warn!("[MPV reconnect] observe {name} failed: {e}");
             }
         }
-        tracing::info!("[MPV reconnect] watcher started for url={}", self.url);
+        tracing::info!("[MPV reconnect] watcher started for {}", self.log_origin);
 
         loop {
             // MpvState sets this before it destroys the parent mpv. Returning
@@ -235,7 +240,7 @@ impl<R: Runtime> Watcher<R> {
                 {
                     tracing::warn!(
                         "[MPV reconnect] eof-reached=true (premature), likely a swallowed EndFile; arming retry ({})",
-                        self.url
+                        self.log_origin
                     );
                     if self.arm_retry("eof-reached (premature)").is_break() {
                         return;
@@ -246,7 +251,7 @@ impl<R: Runtime> Watcher<R> {
                 Signal::IdleActive(true) if self.next_retry_at.is_none() && self.had_playback() => {
                     tracing::warn!(
                         "[MPV reconnect] idle-active=true after playback, mpv unloaded the file; arming retry ({})",
-                        self.url
+                        self.log_origin
                     );
                     if self.arm_retry("idle-active").is_break() {
                         return;
@@ -283,7 +288,7 @@ impl<R: Runtime> Watcher<R> {
         if paused && !self.buffering_emitted {
             tracing::warn!(
                 "[MPV reconnect] paused-for-cache=true, cache drained; likely a network stall ({})",
-                self.url
+                self.log_origin
             );
             let _ = self
                 .app
@@ -292,7 +297,7 @@ impl<R: Runtime> Watcher<R> {
         } else if !paused && self.buffering_emitted {
             tracing::info!(
                 "[MPV reconnect] paused-for-cache=false, cache refilled ({})",
-                self.url
+                self.log_origin
             );
             let _ = self.app.emit(EVENT_BUFFERED, UrlPayload { url: &self.url });
             self.buffering_emitted = false;
@@ -337,11 +342,11 @@ impl<R: Runtime> Watcher<R> {
         let duration = self.client.get_property::<f64>("duration").ok();
         let premature = ended_early(pos, duration);
         tracing::debug!(
-            "[MPV reconnect] EndFile(Eof) premature-check: pos={:?} duration={:?} premature={} url={}",
+            "[MPV reconnect] EndFile(Eof) premature-check: pos={:?} duration={:?} premature={} origin={}",
             pos,
             duration,
             premature,
-            self.url
+            self.log_origin
         );
         premature
     }
@@ -413,13 +418,13 @@ impl<R: Runtime> Watcher<R> {
             label,
             self.attempt,
             MAX_ATTEMPTS,
-            self.url
+            self.log_origin
         );
         if self.attempt > MAX_ATTEMPTS {
             tracing::error!(
                 "[MPV reconnect] giving up after {} attempts for {}",
                 MAX_ATTEMPTS,
-                self.url
+                self.log_origin
             );
             let _ = self
                 .app
@@ -446,7 +451,7 @@ impl<R: Runtime> Watcher<R> {
             "[MPV reconnect] re-issuing loadfile (attempt #{}, resume={:?}) for {}",
             self.attempt,
             resume_arg,
-            self.url
+            self.log_origin
         );
         // A client shares the player core, so this replaces the main
         // player's file and the renderer stays attached.

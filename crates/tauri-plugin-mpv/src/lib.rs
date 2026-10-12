@@ -9,6 +9,7 @@ mod commands;
 mod engine;
 mod idle_inhibit;
 mod lock;
+mod log_url;
 pub mod mpv;
 mod reconnect;
 mod renderer;
