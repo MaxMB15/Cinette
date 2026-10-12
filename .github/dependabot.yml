@@ -2,6 +2,9 @@
 # merges from dev. Minor and patch updates come grouped into one pull request
 # per ecosystem, and each major update comes on its own. A release has to be a
 # week old before Dependabot offers it, so a bad one has time to be pulled.
+#
+# Dependabot reads this file from main, the default branch, so a change here
+# takes effect once it reaches main.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -16,8 +19,9 @@ updates:
       include: scope
     groups:
       # Tauri's CLI refuses to build when @tauri-apps/api and the tauri crate
-      # differ by a minor version, so its packages come on their own. Merge
-      # them together with the Cargo tauri group.
+      # differ by a minor version, so Tauri's packages come in a pull request
+      # of their own, majors included. Each one fails the build alone, so
+      # combine it with the Cargo tauri pull request before merging.
       tauri:
         patterns: ["@tauri-apps/*"]
       npm:
@@ -46,9 +50,7 @@ updates:
   - package-ecosystem: github-actions
     directories:
       - /
-      - /.github/actions/install-frontend-deps
-      - /.github/actions/install-linux-deps
-      - /.github/actions/macos-signing
+      - /.github/actions/*
     schedule:
       interval: weekly
     target-branch: dev
