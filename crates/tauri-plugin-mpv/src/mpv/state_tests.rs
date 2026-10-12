@@ -136,6 +136,30 @@ fn falls_back_when_the_renderer_cannot_attach() {
     wait_until("playback to start", || state.get_state().playback_started);
 }
 
+/// The fallback asks for its options after the first mpv core is destroyed
+/// and before it creates the next one. A renderer still alive then would
+/// outlive the core it was attached to.
+#[test]
+fn drops_a_renderer_that_cannot_attach_before_the_fallback_starts() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let state = app.state();
+    let (renderer, log) = FakeRenderer::failing("no GL context");
+    let mut dropped_before_fallback = None;
+
+    state
+        .load_with(true, || {
+            let embedded = (renderer, headless_options().to_vec());
+            state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
+                dropped_before_fallback = Some(log.lock().unwrap().dropped);
+                headless_options().to_vec()
+            })
+        })
+        .unwrap();
+    assert_eq!(dropped_before_fallback, Some(true));
+}
+
 #[test]
 fn falls_back_when_mpv_rejects_an_embedded_option() {
     let app = TestApp::new();

@@ -219,14 +219,16 @@ impl PlatformRenderer for MacosGlRenderer {
         // Send, so it comes back wrapped in UnsafeSend.
         let gl_view_ptr = gl_view as usize;
         let gl_context_ptr = gl_context as usize;
-        // SAFETY: exec_sync blocks until the closure finishes and `mpv` stays
-        // borrowed for the whole call, so the pointer is valid inside it.
+        // The closure has to be 'static, so `mpv` crosses to the main thread
+        // as an address.
         let mpv_addr = &*mpv as *const Mpv as usize;
 
         let result: UnsafeSend<Result<GlRenderContext, String>> =
             Queue::main().exec_sync(move || -> UnsafeSend<Result<GlRenderContext, String>> {
                 let view = gl_view_ptr as *mut objc::runtime::Object;
                 let ctx = gl_context_ptr as *mut objc::runtime::Object;
+                // SAFETY: exec_sync blocks until the closure finishes and
+                // `mpv` stays borrowed for the whole call.
                 let mpv = unsafe { &*(mpv_addr as *const Mpv) };
 
                 unsafe {

@@ -256,7 +256,7 @@ struct Inner {
     wayland: WaylandSession,
 }
 
-// SAFETY: `RenderContext` and `OwnedEgl` are only used on the GLib main
+// SAFETY: the render context and `OwnedEgl` are only used on the GLib main
 // thread, by `render_frame` and by `detach`, which drops the session there.
 // `DecorationWatch` holds GTK objects and is only started and stopped on that
 // thread too. `WaylandSession` is Send and Sync on its own, so `set_frame`,
@@ -362,15 +362,18 @@ impl PlatformRenderer for LinuxGlRenderer {
         let first_frame_cb = lock_or_recover(&self.first_frame_cb).take();
 
         // The closure has to be 'static, so `mpv` crosses to the GLib main
-        // thread as an address. The caller holds the `MpvEngine` lock for
-        // the whole call and `run_on_glib_main` waits for the closure, so the
-        // address stays valid while the main thread uses it.
+        // thread as an address.
         let mpv_addr = &*mpv as *const Mpv as usize;
 
         // The render context and its update callback have to be set up on
         // the GLib main thread as well. `Inner` is Send, so the Arc comes back
         // over the channel without a wrapper.
         let inner = run_on_glib_main(move || -> Result<Arc<Inner>, String> {
+            // SAFETY: the caller holds the `MpvEngine` lock for the whole
+            // call and `run_on_glib_main` waits for this closure, so `mpv` is
+            // alive while it runs. If the main thread stalls past the 5
+            // second timeout, `run_on_glib_main` panics and leaves this
+            // closure queued, which is outside this guarantee.
             let mpv = unsafe { &*(mpv_addr as *const Mpv) };
             let egl = egl()?;
             let mut egl_res = egl_res;
@@ -389,10 +392,12 @@ impl PlatformRenderer for LinuxGlRenderer {
                 gl_proc_address(name)
             }
 
-            // SAFETY: `detach` drops the session on this thread before it
-            // returns, and `MpvState` detaches the renderer before it stops
+            // SAFETY: `detach` drops the session on this thread and waits
+            // for it, and `MpvState` detaches the renderer before it stops
             // the engine, so the context goes before mpv. Idle tasks hold
             // only a `Weak`, so none of them keeps the session alive longer.
+            // The one gap is the main thread stalling past the timeout in
+            // `run_on_glib_main`.
             let mut render_ctx = unsafe { GlRenderContext::new(mpv, get_proc_address) }?;
 
             unsafe {

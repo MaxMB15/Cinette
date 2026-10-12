@@ -183,10 +183,13 @@ impl MpvState {
             }
             active.replace(renderer)
         };
-        // `load()` takes the old renderer out first, so this is only a
-        // safeguard. Its detach waits on the main thread, which can be
-        // waiting on the renderer lock in `resize()`, so it's dropped after
-        // the lock is released.
+        // `load()` takes the old renderer out before it creates the new mpv,
+        // so nothing is replaced here. A replaced renderer would be dropped
+        // after the core it rendered for, which libmpv doesn't allow.
+        debug_assert!(replaced.is_none(), "install_renderer replaced a renderer");
+        // Its detach waits on the main thread, which can be waiting on the
+        // renderer lock in `resize()`, so it's dropped after the lock is
+        // released.
         drop(replaced);
     }
 

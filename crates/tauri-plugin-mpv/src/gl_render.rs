@@ -8,7 +8,7 @@ use libmpv2::{
     Mpv,
 };
 use std::ffi::c_void;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 /// Looks up an OpenGL function by name for libmpv. The first argument is the
 /// `ctx` of `OpenGLInitParams`, which is always null here.
@@ -20,6 +20,9 @@ pub(crate) type GetProcAddress = fn(&*mut c_void, &str) -> *mut c_void;
 /// `MpvEngine` owns that `Mpv` and the renderer lives in its own mutex in
 /// `MpvState`, so the borrow can't be written down and this type holds the
 /// context as `'static`. `new` documents the rule that makes that sound.
+///
+/// It derefs to the context for rendering but never hands out `&mut`, so the
+/// context can't be moved out and dropped without the callback swap below.
 pub(crate) struct GlRenderContext(RenderContext<'static>);
 
 impl GlRenderContext {
@@ -48,6 +51,12 @@ impl GlRenderContext {
             std::mem::transmute::<RenderContext<'_>, RenderContext<'static>>(ctx)
         }))
     }
+
+    /// Sets the function libmpv calls when there is a new frame to render.
+    /// It runs on one of mpv's threads, so it should only schedule the work.
+    pub(crate) fn set_update_callback<F: Fn() + Send + 'static>(&mut self, callback: F) {
+        self.0.set_update_callback(callback);
+    }
 }
 
 impl Deref for GlRenderContext {
@@ -55,12 +64,6 @@ impl Deref for GlRenderContext {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl DerefMut for GlRenderContext {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
