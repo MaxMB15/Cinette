@@ -232,8 +232,9 @@ pub mod test_server {
     /// A base URL on a loopback port that nothing listens on, so a request
     /// to it fails to connect and the error carries the full URL.
     pub fn refused_url() -> String {
-        // The port is free once the listener drops, and nothing else in the
-        // tests binds to a port it didn't get from the system.
+        // The port is free once the listener drops. Another test could be
+        // handed the same port before the request goes out, but the system
+        // rarely gives a freed port back that soon.
         bind().1
     }
 
