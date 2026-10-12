@@ -97,9 +97,9 @@ pub struct PinnedGroup {
     pub sort_order: i64,
 }
 
-/// Last known playback position for a piece of VOD content (movie or episode),
-/// keyed by a frontend-derived content key so it survives provider refreshes
-/// (channel IDs are index-based) and source switches.
+/// Last known playback position for a movie or episode, keyed by a content key
+/// the frontend builds, so it survives refreshes that change channel ids and
+/// switches between sources.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackPosition {
@@ -156,9 +156,10 @@ struct MovedChannel {
 #[derive(Default)]
 struct ChannelMoves {
     by_old_id: HashMap<String, MovedChannel>,
-    /// The new id of the first saved channel, by rowid, of each provider,
-    /// kind and name.
-    by_name: HashMap<(String, String, String), String>,
+    /// The new id of the saved channel of each provider, kind and name, or
+    /// None when channels with different ids share the name, since a row's
+    /// name can't tell them apart.
+    by_name: HashMap<(String, String, String), Option<String>>,
 }
 
 impl ChannelMoves {
@@ -166,7 +167,12 @@ impl ChannelMoves {
         let name = name_key(name);
         self.by_name
             .entry((provider_id.to_string(), kind.to_string(), name.clone()))
-            .or_insert_with(|| new_id.clone());
+            .and_modify(|id| {
+                if id.as_deref() != Some(new_id.as_str()) {
+                    *id = None;
+                }
+            })
+            .or_insert_with(|| Some(new_id.clone()));
         let moved = MovedChannel {
             new_id,
             provider_id: provider_id.to_string(),
@@ -180,8 +186,9 @@ impl ChannelMoves {
     /// A position id passed to whichever channel took that place, so the
     /// channel saved under `old_id` now may not be the one the row was saved
     /// for. The row follows it only when the names agree, and otherwise goes
-    /// to the first channel of the same provider and kind with the row's
-    /// name. Returns None when no such channel is saved.
+    /// to the channel of the same provider and kind with the row's name.
+    /// Returns None when no such channel is saved, or when two are, since
+    /// the row can't say which one it was saved for.
     fn for_name(&self, old_id: &str, name: &str) -> Option<&str> {
         let moved = self.by_old_id.get(old_id)?;
         let name = name_key(name);
@@ -190,7 +197,7 @@ impl ChannelMoves {
         }
         self.by_name
             .get(&(moved.provider_id.clone(), moved.kind.clone(), name))
-            .map(String::as_str)
+            .and_then(Option::as_deref)
     }
 
     /// The new id of the series `episode_id` belongs to, for a row saved
@@ -514,7 +521,8 @@ impl CacheStore {
     fn move_watch_history(&self, moves: &ChannelMoves) -> Result<(), CacheError> {
         let rows: Vec<(i64, String, String)> = self.rows_of(
             "SELECT id, channel_id, channel_name FROM watch_history
-             WHERE channel_id IN (SELECT old_id FROM channel_id_moves)",
+             WHERE channel_id IN (SELECT old_id FROM channel_id_moves)
+             ORDER BY id",
         )?;
         for (id, old_id, name) in rows {
             let Some(new_id) = moves.for_name(&old_id, &name) else {
@@ -529,7 +537,8 @@ impl CacheStore {
                     channel_name     = CASE WHEN s.last_watched_at > t.last_watched_at
                                             THEN s.channel_name ELSE t.channel_name END,
                     channel_logo     = CASE WHEN s.last_watched_at > t.last_watched_at
-                                            THEN s.channel_logo ELSE t.channel_logo END
+                                            THEN coalesce(s.channel_logo, t.channel_logo)
+                                            ELSE coalesce(t.channel_logo, s.channel_logo) END
                  FROM watch_history AS s
                  WHERE s.id = ?1 AND t.channel_id = ?2",
                 params![id, new_id],
@@ -595,7 +604,8 @@ impl CacheStore {
 
         let lists: Vec<(String, String)> = self.rows_of(
             "SELECT series_channel_id, episodes_json FROM series_episode_cache
-             WHERE series_channel_id IN (SELECT old_id FROM channel_id_moves)",
+             WHERE series_channel_id IN (SELECT old_id FROM channel_id_moves)
+             ORDER BY updated_at DESC",
         )?;
         for (old_id, json) in lists {
             let first_episode = serde_json::from_str::<Vec<Channel>>(&json)
@@ -609,8 +619,9 @@ impl CacheStore {
                 .and_then(|episode| moves.for_episode(&old_id, &episode.id))
                 .or_else(|| moves.by_position(&old_id).map(str::to_string));
             if let Some(new_id) = new_id {
-                // A series has one saved list, so one already saved for the
-                // new id is kept, and this one stays under the old id.
+                // A series has one saved list, and newer lists move first,
+                // so a series keeps the newest list that names it. The others
+                // stay under their old ids.
                 self.conn.execute(
                     "UPDATE OR IGNORE series_episode_cache SET series_channel_id = ?2
                       WHERE series_channel_id = ?1",
@@ -3717,8 +3728,10 @@ mod tests {
                 &[
                     named("Alien", channel_at("p1-xt-0", "http://srv/live/u/p/3.ts", "live")),
                     named("Heat", channel_at("p1-vod-0", "http://srv/movie/u/p/10.mkv", "movie")),
-                    named("Alien", channel_at("p1-vod-1", "http://srv/movie/u/p/11.mkv", "movie")),
-                    named("Alien", channel_at("p1-vod-2", "http://srv/movie/u/p/12.mkv", "movie")),
+                    named("Aliens", channel_at("p1-vod-1", "http://srv/movie/u/p/12.mkv", "movie")),
+                    named("Alien", channel_at("p1-vod-2", "http://srv/movie/u/p/11.mkv", "movie")),
+                    // One stream listed twice is still one movie of that name.
+                    named("Alien", channel_at("p1-vod-3", "http://srv/movie/u/p/11.mkv", "movie")),
                 ],
             )
             .unwrap();
@@ -3740,13 +3753,44 @@ mod tests {
 
         store.migrate().unwrap();
 
-        // The first movie of that name takes Alien's rows, not the live
-        // channel or a later movie.
+        // The movie of that name takes Alien's rows, not the live channel or
+        // a movie with a longer name.
         assert_eq!(download_channels(&store), ["d1 p1-movie-11", "d2 p1-movie-10"]);
         assert_eq!(
             store.get_watch_history(10).unwrap()[0].channel_id,
             "p1-movie-11"
         );
+    }
+
+    #[test]
+    fn rows_stay_put_when_two_movies_have_their_title() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[
+                    named("Heat", channel_at("p1-vod-0", "http://srv/movie/u/p/10.mkv", "movie")),
+                    named("Alien", channel_at("p1-vod-1", "http://srv/movie/u/p/11.mkv", "movie")),
+                    named("Alien", channel_at("p1-vod-2", "http://srv/movie/u/p/12.mkv", "movie")),
+                ],
+            )
+            .unwrap();
+        // Saved while Alien was the first movie. The panel now lists two
+        // movies of that name, and nothing saved says which one it was.
+        let alien = DownloadRecord {
+            title: "Alien".into(),
+            ..movie_record("d1", "p1-vod-0")
+        };
+        store.upsert_download(&alien).unwrap();
+        store
+            .record_play_start("p1-vod-0", "Alien", None, "movie")
+            .unwrap();
+
+        store.migrate().unwrap();
+
+        assert_eq!(download_channels(&store), ["d1 p1-vod-0"]);
+        assert_eq!(texts(&store, "SELECT channel_id FROM watch_history"), ["p1-vod-0"]);
     }
 
     #[test]
@@ -3804,13 +3848,21 @@ mod tests {
         watched(&store, "p1-xt-1", "SEVEN", 50, 300, 30, 1);
         watched(&store, "p1-xt-2", "Eight", 100, 500, 60, 2);
         watched(&store, "p1-xt-3", "eight", 50, 400, 30, 1);
+        // A row with no logo doesn't take the other row's away.
+        store
+            .conn
+            .execute(
+                "UPDATE watch_history SET channel_logo = NULL WHERE channel_id = 'p1-xt-1'",
+                [],
+            )
+            .unwrap();
 
         store.migrate().unwrap();
 
         assert_eq!(
             history(&store),
             [
-                "p1-live-7 SEVEN SEVEN.png 50-300 90s 3x",
+                "p1-live-7 SEVEN Seven.png 50-300 90s 3x",
                 "p1-live-8 Eight Eight.png 50-500 90s 3x",
             ]
         );
@@ -3930,6 +3982,36 @@ mod tests {
         assert_eq!(
             store.get_series_episodes("p1-series-5").unwrap()[0].id,
             "p1-xt-ep-5-s1-0"
+        );
+    }
+
+    #[test]
+    fn a_series_keeps_the_newest_episode_list_that_names_it() {
+        let store = store_before_migrations();
+        save_series_that_moved_places(&store);
+        // Both lists name The Wire, under its old place and its later one.
+        let old = [channel_at("p1-xt-ep-5-s1-0", "http://srv/series/u/p/100.mkv", "series")];
+        store.save_series_episodes("p1-ser-0", &old).unwrap();
+        let new = [
+            channel_at("p1-xt-ep-5-s1-0", "http://srv/series/u/p/100.mkv", "series"),
+            channel_at("p1-xt-ep-5-s1-1", "http://srv/series/u/p/101.mkv", "series"),
+        ];
+        store.save_series_episodes("p1-ser-1", &new).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE series_episode_cache SET updated_at = CASE series_channel_id
+                    WHEN 'p1-ser-0' THEN 100 ELSE 200 END",
+                [],
+            )
+            .unwrap();
+
+        store.migrate().unwrap();
+
+        assert_eq!(store.get_series_episodes("p1-series-5").unwrap().len(), 2);
+        assert_eq!(
+            texts(&store, "SELECT series_channel_id FROM series_episode_cache ORDER BY 1"),
+            ["p1-ser-0", "p1-series-5"]
         );
     }
 
