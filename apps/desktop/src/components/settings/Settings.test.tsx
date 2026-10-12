@@ -274,7 +274,7 @@ describe("Settings OMDb key", () => {
 		expect(block("OMDB API").getByRole("button", { name: "Saved" })).toBeInTheDocument();
 	});
 
-	it("checks the OMDb key by looking up a well known movie", async () => {
+	it("calls the OMDb key valid when the lookup finds a movie", async () => {
 		vi.mocked(fetchOmdbData).mockResolvedValue(makeOmdb());
 		await renderSettings();
 		typeInto(keyInput("OMDB API"), "test-key");
@@ -328,24 +328,28 @@ describe("Settings OMDb key", () => {
 });
 
 describe("Settings key fields", () => {
-	it.each(["Gemini API Key", "OMDB API", "OpenSubtitles API"])(
-		"turns off Save and Test while the %s key is blank",
-		async (title) => {
-			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
-			await renderSettings();
-			typeInto(keyInput(title), "   ");
-			expect(block(title).getByRole("button", { name: "Save" })).toBeDisabled();
-			expect(block(title).getByRole("button", { name: "Test" })).toBeDisabled();
+	// Each field's name in the test names, and the title its block shows.
+	const fields = [
+		["Gemini", "Gemini API Key"],
+		["OMDb", "OMDB API"],
+		["OpenSubtitles", "OpenSubtitles API"],
+	] as const;
 
-			typeInto(keyInput(title), "test-key");
-			expect(block(title).getByRole("button", { name: "Save" })).toBeEnabled();
-			expect(block(title).getByRole("button", { name: "Test" })).toBeEnabled();
-		}
-	);
+	it.each(fields)("turns off Save and Test while the %s key is blank", async (_name, title) => {
+		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
+		await renderSettings();
+		typeInto(keyInput(title), "   ");
+		expect(block(title).getByRole("button", { name: "Save" })).toBeDisabled();
+		expect(block(title).getByRole("button", { name: "Test" })).toBeDisabled();
 
-	it.each(["Gemini API Key", "OMDB API", "OpenSubtitles API"])(
+		typeInto(keyInput(title), "test-key");
+		expect(block(title).getByRole("button", { name: "Save" })).toBeEnabled();
+		expect(block(title).getByRole("button", { name: "Test" })).toBeEnabled();
+	});
+
+	it.each(fields)(
 		"goes back to Save as soon as the saved %s key is edited",
-		async (title) => {
+		async (_name, title) => {
 			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 			await renderSettings();
 			typeInto(keyInput(title), "test-key");
@@ -357,14 +361,12 @@ describe("Settings key fields", () => {
 		}
 	);
 
-	it.each(["Gemini API Key", "OMDB API", "OpenSubtitles API"])(
+	it.each(fields)(
 		"shows and hides the %s key without touching the others",
-		async (title) => {
+		async (_name, title) => {
 			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 			await renderSettings();
-			const others = ["Gemini API Key", "OMDB API", "OpenSubtitles API"].filter(
-				(t) => t !== title
-			);
+			const others = fields.map(([, t]) => t).filter((t) => t !== title);
 
 			expect(keyInput(title)).toHaveAttribute("type", "password");
 			fireEvent.click(block(title).getByRole("button", { name: "Show key" }));
@@ -378,9 +380,9 @@ describe("Settings key fields", () => {
 		}
 	);
 
-	it.each(["Gemini API Key", "OMDB API", "OpenSubtitles API"])(
+	it.each(fields)(
 		"keeps Saved up for two full seconds after the %s key is saved again",
-		async (title) => {
+		async (_name, title) => {
 			vi.useFakeTimers();
 			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 			await renderSettings();
@@ -864,9 +866,9 @@ describe("Settings download options", () => {
 	});
 
 	it.each([
-		{ days: null, label: "Never" },
-		{ days: 14, label: "14 days" },
-	])("shows a retention of $days days as $label", async ({ days, label }) => {
+		["no limit", "Never", null],
+		["a 14 day limit", "14 days", 14],
+	])("shows %s as %s", async (_name, label, days) => {
 		downloads.retentionDays = days;
 		await renderSettings();
 		expect(screen.getByRole("button", { name: "Delete downloads after" })).toHaveTextContent(
@@ -1181,6 +1183,8 @@ describe("Settings updates", () => {
 		});
 		const installing = screen.getByRole("button", { name: "Installing…" });
 		expect(installing).toBeDisabled();
+		// The bar has no role or text, and jsdom drops a "null%" width, so the
+		// test checks that the button comes straight after the notes instead.
 		expect(screen.getByText("Release notes").nextElementSibling).toBe(installing);
 	});
 
