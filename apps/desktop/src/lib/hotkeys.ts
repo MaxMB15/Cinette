@@ -137,15 +137,6 @@ const BUTTON_ROLES = new Set([
 	"menuitemradio",
 ]);
 
-/** True when the element matches :focus-visible, or when the browser can't tell. */
-const matchesFocusVisible = (el: HTMLElement): boolean => {
-	try {
-		return el.matches(":focus-visible");
-	} catch {
-		return true;
-	}
-};
-
 /**
  * True when the target is a button-like control reached with the keyboard, so
  * Space should activate it rather than play/pause. Clicking a button also
@@ -158,7 +149,12 @@ export const isKeyboardFocusedControl = (target: EventTarget | null): boolean =>
 		target.tagName === "BUTTON" ||
 		target.tagName === "A" ||
 		BUTTON_ROLES.has(target.getAttribute("role") ?? "");
-	return isControl && matchesFocusVisible(target);
+	if (!isControl) return false;
+	try {
+		return target.matches(":focus-visible");
+	} catch {
+		return true;
+	}
 };
 
 /** Keys a focused slider moves its value with. */
@@ -176,24 +172,33 @@ const SLIDER_KEYS = new Set([
 /**
  * True when a slider reached with the keyboard should move its own value for
  * this key, such as an arrow on the seek or volume bar after Tab. A slider
- * focused by a click leaves these keys to the player, so the arrows keep
+ * focused by a press leaves these keys to the player, so the arrows keep
  * seeking by the skip length instead of nudging the bar one step.
+ *
+ * The `Slider` component records how its thumb got focus in
+ * `data-focus-source`. `:focus-visible` can't be used here, because WebKit
+ * starts matching it on a pressed element as soon as a key goes down.
  */
 export const isSliderOwnKey = (target: EventTarget | null, key: string): boolean =>
 	target instanceof HTMLElement &&
 	target.getAttribute("role") === "slider" &&
 	SLIDER_KEYS.has(key) &&
-	matchesFocusVisible(target);
+	target.getAttribute("data-focus-source") !== "pointer";
 
 /**
- * keydown handler for a slider inside the player. For a player hotkey the
- * slider doesn't own (see `isSliderOwnKey`), it stops the slider from moving
- * so only the hotkey acts. Other keys, such as End, still move the slider.
+ * keydown handler for a slider inside the player. A slider that owns the key
+ * (see `isSliderOwnKey`) moves and keeps the key from the player's own
+ * handlers, such as the subtitle position arrows. Otherwise the slider stays
+ * put and the key goes on to the player, where the arrows and Home seek and
+ * End does nothing.
  */
-export const leaveSliderKeysToPlayer = (
-	e: KeyLike & { target: EventTarget | null; preventDefault: () => void }
-): void => {
-	if (SLIDER_KEYS.has(e.key) && !isSliderOwnKey(e.target, e.key) && resolvePlayerHotkey(e)) {
-		e.preventDefault();
-	}
+export const leaveSliderKeysToPlayer = (e: {
+	key: string;
+	target: EventTarget | null;
+	preventDefault: () => void;
+	stopPropagation: () => void;
+}): void => {
+	if (!SLIDER_KEYS.has(e.key)) return;
+	if (isSliderOwnKey(e.target, e.key)) e.stopPropagation();
+	else e.preventDefault();
 };

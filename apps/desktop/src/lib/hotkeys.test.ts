@@ -144,68 +144,73 @@ describe("isKeyboardFocusedControl", () => {
 
 describe("slider keys", () => {
 	afterEach(() => {
-		vi.restoreAllMocks();
 		document.body.innerHTML = "";
 	});
 
-	/** A slider thumb that matches :focus-visible when reached with the keyboard. */
-	const thumb = (byKeyboard: boolean) => {
+	/** A slider thumb, focused by a press or by the keyboard, as `Slider` marks it. */
+	const thumb = (focusSource?: "pointer" | "keyboard") => {
 		const el = document.createElement("span");
 		el.setAttribute("role", "slider");
+		if (focusSource) el.setAttribute("data-focus-source", focusSource);
 		document.body.appendChild(el);
-		vi.spyOn(el, "matches").mockReturnValue(byKeyboard);
 		return el;
 	};
 
 	const keyDown = (target: EventTarget, k: string) => {
-		const preventDefault = vi.fn();
-		leaveSliderKeysToPlayer({ ...key(k), target, preventDefault });
-		return preventDefault;
+		const e = { key: k, target, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+		leaveSliderKeysToPlayer(e);
+		return e;
 	};
 
-	it("lets a slider reached with Tab keep its keys", () => {
-		const el = thumb(true);
-		for (const k of ["ArrowLeft", "ArrowUp", "Home", "End", "PageUp", "PageDown"]) {
+	const SLIDER_KEYS = [
+		"ArrowLeft",
+		"ArrowRight",
+		"ArrowUp",
+		"ArrowDown",
+		"Home",
+		"End",
+		"PageUp",
+		"PageDown",
+	];
+
+	it("lets a slider reached with the keyboard move with its keys and keep them", () => {
+		const el = thumb("keyboard");
+		for (const k of SLIDER_KEYS) {
 			expect(isSliderOwnKey(el, k)).toBe(true);
-			expect(keyDown(el, k)).not.toHaveBeenCalled();
+			const e = keyDown(el, k);
+			expect(e.preventDefault).not.toHaveBeenCalled();
+			expect(e.stopPropagation).toHaveBeenCalled();
 		}
 	});
 
-	it("hands the player's keys to the player after a click", () => {
-		const el = thumb(false);
-		for (const k of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home"]) {
+	it("keeps a pressed slider still and passes its keys on to the player", () => {
+		const el = thumb("pointer");
+		for (const k of SLIDER_KEYS) {
 			expect(isSliderOwnKey(el, k)).toBe(false);
-			expect(keyDown(el, k)).toHaveBeenCalled();
+			const e = keyDown(el, k);
+			expect(e.preventDefault).toHaveBeenCalled();
+			expect(e.stopPropagation).not.toHaveBeenCalled();
 		}
 	});
 
-	it("lets a clicked slider keep keys the player has no use for", () => {
-		const el = thumb(false);
-		for (const k of ["End", "PageUp", "PageDown"]) {
-			expect(keyDown(el, k)).not.toHaveBeenCalled();
-		}
-		// Ctrl+arrow isn't a player hotkey either.
-		const preventDefault = vi.fn();
-		leaveSliderKeysToPlayer({
-			...key("ArrowRight", { ctrlKey: true }),
-			target: el,
-			preventDefault,
-		});
-		expect(preventDefault).not.toHaveBeenCalled();
+	it("treats a slider with no recorded focus source as reached with the keyboard", () => {
+		expect(isSliderOwnKey(thumb(), "ArrowLeft")).toBe(true);
 	});
 
-	it("never takes other keys from the player", () => {
-		const el = thumb(true);
-		for (const k of [" ", "f", "m", "Escape", "Tab"]) {
-			expect(isSliderOwnKey(el, k)).toBe(false);
-			expect(keyDown(el, k)).not.toHaveBeenCalled();
+	it("never touches other keys", () => {
+		for (const el of [thumb("keyboard"), thumb("pointer")]) {
+			for (const k of [" ", "f", "m", "Escape", "Tab"]) {
+				expect(isSliderOwnKey(el, k)).toBe(false);
+				const e = keyDown(el, k);
+				expect(e.preventDefault).not.toHaveBeenCalled();
+				expect(e.stopPropagation).not.toHaveBeenCalled();
+			}
 		}
 	});
 
 	it("only applies to sliders", () => {
 		const button = document.createElement("button");
 		document.body.appendChild(button);
-		vi.spyOn(button, "matches").mockReturnValue(true);
 		expect(isSliderOwnKey(button, "ArrowLeft")).toBe(false);
 		expect(isSliderOwnKey(null, "ArrowLeft")).toBe(false);
 	});

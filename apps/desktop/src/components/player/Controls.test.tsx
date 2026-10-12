@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import { Controls } from "./Controls";
 import type { PlayerState } from "@/lib/types";
 
@@ -91,35 +91,87 @@ describe("Controls seek bar", () => {
 			/>
 		);
 		const view = render(controls({ ...playing, ...overrides }));
-		const thumb = screen.getByRole("slider", { name: "Seek" });
+		const thumb = () => screen.getByRole("slider", { name: "Seek" });
 		// Radix puts the thumb in a positioned wrapper, after the track and its fill.
-		const root = thumb.parentElement!.parentElement!;
-		const fill = root.firstElementChild!.firstElementChild as HTMLElement;
+		const root = () => thumb().parentElement!.parentElement!;
+		const track = () => root().firstElementChild!;
 		return {
 			onSeek,
 			thumb,
 			root,
+			track,
+			valueNow: () => Number(thumb().getAttribute("aria-valuenow")),
 			percent: (style: string) => Number(/(-?[\d.]+)%/.exec(style)?.[1]),
-			thumbLeft: () => thumb.parentElement!.style.left,
-			fillRight: () => fill.style.right,
+			thumbLeft: () => thumb().parentElement!.style.left,
+			fillRight: () => (track().firstElementChild as HTMLElement).style.right,
 			rerender: (next: Partial<PlayerState>) =>
 				view.rerender(controls({ ...playing, ...overrides, ...next })),
 		};
 	};
 
-	/** Makes the thumb match :focus-visible or not, as a Tab or a click would. */
-	const focusThumb = (thumb: HTMLElement, byKeyboard: boolean) => {
-		vi.spyOn(thumb, "matches").mockImplementation((selector) =>
-			selector === ":focus-visible" ? byKeyboard : false
-		);
-		thumb.focus();
+	// jsdom has no pointer events or pointer capture.
+	const saved = {
+		PointerEvent: window.PointerEvent,
+		setPointerCapture: Element.prototype.setPointerCapture,
+		hasPointerCapture: Element.prototype.hasPointerCapture,
+		releasePointerCapture: Element.prototype.releasePointerCapture,
 	};
+	beforeAll(() => {
+		class TestPointerEvent extends MouseEvent {
+			readonly pointerId: number;
+			constructor(type: string, init: PointerEventInit = {}) {
+				super(type, init);
+				this.pointerId = init.pointerId ?? 1;
+			}
+		}
+		window.PointerEvent = TestPointerEvent as typeof PointerEvent;
+		Element.prototype.setPointerCapture = () => {};
+		Element.prototype.hasPointerCapture = () => true;
+		Element.prototype.releasePointerCapture = () => {};
+	});
+	afterAll(() => {
+		Object.assign(window, { PointerEvent: saved.PointerEvent });
+		Object.assign(Element.prototype, {
+			setPointerCapture: saved.setPointerCapture,
+			hasPointerCapture: saved.hasPointerCapture,
+			releasePointerCapture: saved.releasePointerCapture,
+		});
+	});
 
 	afterEach(() => {
 		cleanup();
 		vi.restoreAllMocks();
 	});
 
+	/** Gives the bar a width of 1000px, so clientX 500 is the middle. */
+	const withWidth = (root: HTMLElement) =>
+		vi.spyOn(root, "getBoundingClientRect").mockReturnValue({
+			left: 0,
+			right: 1000,
+			width: 1000,
+			top: 0,
+			bottom: 16,
+			height: 16,
+			x: 0,
+			y: 0,
+			toJSON: () => ({}),
+		});
+
+	const press = (target: Element, init: PointerEventInit = {}) =>
+		fireEvent.pointerDown(target, { pointerId: 1, button: 0, ...init });
+	const release = (target: Element, init: PointerEventInit = {}) =>
+		fireEvent.pointerUp(target, { pointerId: 1, ...init });
+
+	/** Focuses the thumb the way Tab does, without a press. */
+	const tabTo = (thumb: HTMLElement) => act(() => thumb.focus());
+	/** Presses and releases the thumb, which focuses it without moving the bar. */
+	const clickThumb = (thumb: HTMLElement) => {
+		press(thumb);
+		release(thumb);
+	};
+
+	// jsdom gives every element a size of 0, so Radix adds no edge offset to
+	// the thumb here. These tests check that both are drawn from one value.
 	it("draws the thumb where the fill ends, between whole seconds too", () => {
 		const bar = renderSeekBar({ position: 450.6 });
 		// jsdom keeps four decimals of a percentage.
@@ -141,125 +193,160 @@ describe("Controls seek bar", () => {
 		expect(bar.percent(bar.fillRight())).toBe(75);
 	});
 
-	it("names the position for screen readers", () => {
-		const { thumb } = renderSeekBar();
-		expect(thumb).toHaveAttribute("aria-valuetext", "2:00 of 30:00");
+	it("names the position and volume for screen readers", () => {
+		const bar = renderSeekBar();
+		expect(bar.thumb()).toHaveAttribute("aria-valuetext", "2:00 of 30:00");
+		expect(screen.getByRole("slider", { name: "Volume" })).toHaveAttribute(
+			"aria-valuetext",
+			"100%"
+		);
 	});
 
 	describe("with the keyboard", () => {
 		it("seeks one second per arrow on a bar reached with Tab", () => {
 			const bar = renderSeekBar();
-			focusThumb(bar.thumb, true);
-			fireEvent.keyDown(bar.thumb, { key: "ArrowRight" });
+			tabTo(bar.thumb());
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "keyboard");
+			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
 			expect(bar.onSeek).toHaveBeenCalledWith(121);
 			// The key seeks at once and leaves no drag behind, so the bar
 			// carries on following playback.
 			bar.rerender({ position: 125 });
-			expect(bar.thumb).toHaveAttribute("aria-valuenow", "125");
+			expect(bar.valueNow()).toBe(125);
 		});
 
-		it("leaves the arrows to the player hotkeys after a click", () => {
+		it("keeps its keys from the player's other handlers when reached with Tab", () => {
 			const bar = renderSeekBar();
-			focusThumb(bar.thumb, false);
-			const notCancelled = fireEvent.keyDown(bar.thumb, { key: "ArrowRight" });
-			expect(notCancelled).toBe(false);
+			const onWindowKey = vi.fn();
+			window.addEventListener("keydown", onWindowKey);
+			try {
+				tabTo(bar.thumb());
+				fireEvent.keyDown(bar.thumb(), { key: "ArrowUp" });
+				expect(onWindowKey).not.toHaveBeenCalled();
+				// Keys the slider doesn't use still reach the player.
+				fireEvent.keyDown(bar.thumb(), { key: "f" });
+				expect(onWindowKey).toHaveBeenCalledTimes(1);
+			} finally {
+				window.removeEventListener("keydown", onWindowKey);
+			}
+		});
+
+		it("leaves the arrows to the player after a click", () => {
+			const bar = renderSeekBar();
+			const onWindowKey = vi.fn();
+			window.addEventListener("keydown", onWindowKey);
+			try {
+				clickThumb(bar.thumb());
+				expect(bar.thumb()).toHaveFocus();
+				expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
+				const notCancelled = fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
+				expect(notCancelled).toBe(false);
+				expect(onWindowKey).toHaveBeenCalledTimes(1);
+				expect(bar.onSeek).not.toHaveBeenCalled();
+			} finally {
+				window.removeEventListener("keydown", onWindowKey);
+			}
+		});
+
+		it("ignores End after a click, so it doesn't jump to the end", () => {
+			const bar = renderSeekBar();
+			clickThumb(bar.thumb());
+			fireEvent.keyDown(bar.thumb(), { key: "End" });
 			expect(bar.onSeek).not.toHaveBeenCalled();
+			expect(bar.valueNow()).toBe(120);
 		});
 
-		it("still takes keys the player doesn't use after a click", () => {
+		it("takes its keys back once Tab returns to it", () => {
 			const bar = renderSeekBar();
-			focusThumb(bar.thumb, false);
-			fireEvent.keyDown(bar.thumb, { key: "End" });
-			expect(bar.onSeek).toHaveBeenCalledWith(1800);
+			clickThumb(bar.thumb());
+			act(() => bar.thumb().blur());
+			expect(bar.thumb()).not.toHaveAttribute("data-focus-source");
+			tabTo(bar.thumb());
+			fireEvent.keyDown(bar.thumb(), { key: "ArrowLeft" });
+			expect(bar.onSeek).toHaveBeenCalledWith(119);
 		});
 	});
 
 	describe("with a pointer", () => {
-		// jsdom has no pointer events or pointer capture.
-		const saved = {
-			PointerEvent: window.PointerEvent,
-			setPointerCapture: Element.prototype.setPointerCapture,
-			hasPointerCapture: Element.prototype.hasPointerCapture,
-			releasePointerCapture: Element.prototype.releasePointerCapture,
-		};
-		beforeAll(() => {
-			class TestPointerEvent extends MouseEvent {
-				readonly pointerId: number;
-				constructor(type: string, init: PointerEventInit = {}) {
-					super(type, init);
-					this.pointerId = init.pointerId ?? 1;
-				}
-			}
-			window.PointerEvent = TestPointerEvent as typeof PointerEvent;
-			Element.prototype.setPointerCapture = () => {};
-			Element.prototype.hasPointerCapture = () => true;
-			Element.prototype.releasePointerCapture = () => {};
-		});
-		afterAll(() => {
-			Object.assign(window, { PointerEvent: saved.PointerEvent });
-			Object.assign(Element.prototype, {
-				setPointerCapture: saved.setPointerCapture,
-				hasPointerCapture: saved.hasPointerCapture,
-				releasePointerCapture: saved.releasePointerCapture,
-			});
-		});
-
-		/** Gives the bar a width of 1000px, so clientX 500 is the middle. */
-		const withWidth = (root: HTMLElement) =>
-			vi.spyOn(root, "getBoundingClientRect").mockReturnValue({
-				left: 0,
-				right: 1000,
-				width: 1000,
-				top: 0,
-				bottom: 16,
-				height: 16,
-				x: 0,
-				y: 0,
-				toJSON: () => ({}),
-			});
-
 		it("shows the drag while playback moves on, then seeks once on release", () => {
 			const bar = renderSeekBar();
-			withWidth(bar.root);
-			const track = bar.root.firstElementChild!;
+			withWidth(bar.root());
 
-			fireEvent.pointerDown(track, { pointerId: 1, clientX: 500, button: 0 });
-			fireEvent.pointerMove(track, { pointerId: 1, clientX: 750 });
-			expect(bar.thumb).toHaveAttribute("aria-valuenow", "1350");
+			press(bar.track(), { clientX: 500 });
+			fireEvent.pointerMove(bar.track(), { pointerId: 1, clientX: 750 });
+			expect(bar.valueNow()).toBe(1350);
 			bar.rerender({ position: 130 });
-			expect(bar.thumb).toHaveAttribute("aria-valuenow", "1350");
+			expect(bar.valueNow()).toBe(1350);
 			expect(bar.onSeek).not.toHaveBeenCalled();
 
-			fireEvent.pointerUp(track, { pointerId: 1, clientX: 750 });
+			release(bar.track(), { clientX: 750 });
 			expect(bar.onSeek).toHaveBeenCalledTimes(1);
 			expect(bar.onSeek).toHaveBeenCalledWith(1350);
-			expect(bar.thumb).toHaveAttribute("aria-valuenow", "130");
+			expect(bar.valueNow()).toBe(130);
+		});
+
+		it("seeks to a spot pressed on the track without a drag", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			press(bar.track(), { clientX: 500 });
+			release(bar.track(), { clientX: 500 });
+			expect(bar.onSeek).toHaveBeenCalledTimes(1);
+			expect(bar.onSeek).toHaveBeenCalledWith(900);
+		});
+
+		it("doesn't seek when the thumb is pressed and let go while playback moves on", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			press(bar.thumb(), { clientX: 67 });
+			bar.rerender({ position: 121 });
+			release(bar.thumb(), { clientX: 67 });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+			expect(bar.valueNow()).toBe(121);
 		});
 
 		it("drops the drag without seeking when the touch is cancelled", () => {
 			const bar = renderSeekBar();
-			withWidth(bar.root);
-			const track = bar.root.firstElementChild!;
-
-			fireEvent.pointerDown(track, { pointerId: 1, clientX: 500, button: 0 });
-			fireEvent.pointerCancel(track, { pointerId: 1 });
+			withWidth(bar.root());
+			press(bar.track(), { clientX: 500 });
+			fireEvent.pointerCancel(bar.track(), { pointerId: 1 });
 			expect(bar.onSeek).not.toHaveBeenCalled();
-			expect(bar.thumb).toHaveAttribute("aria-valuenow", "120");
+			expect(bar.valueNow()).toBe(120);
 		});
 
-		it("follows playback again after a drag that ends where it began", () => {
+		it("ignores buttons other than the primary one", () => {
 			const bar = renderSeekBar();
-			withWidth(bar.root);
-			const track = bar.root.firstElementChild!;
-
-			fireEvent.pointerDown(track, { pointerId: 1, clientX: 500, button: 0 });
-			// 120 s is 66.67px along a 1000px bar of 1800 s.
-			fireEvent.pointerMove(track, { pointerId: 1, clientX: 66.67 });
-			fireEvent.pointerUp(track, { pointerId: 1, clientX: 66.67 });
-			// Nothing to seek to, so no commit ends the drag.
+			withWidth(bar.root());
+			press(bar.track(), { clientX: 500, button: 2 });
+			release(bar.track(), { clientX: 500, button: 2 });
 			expect(bar.onSeek).not.toHaveBeenCalled();
-			bar.rerender({ position: 140 });
-			expect(bar.thumb).toHaveAttribute("aria-valuenow", "140");
+			expect(bar.valueNow()).toBe(120);
+		});
+
+		it("drops a drag when the stream changes under it", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			press(bar.track(), { clientX: 500 });
+			bar.rerender({ currentUrl: "http://example.com/next.mkv", position: 5 });
+			expect(bar.valueNow()).toBe(5);
+			fireEvent.pointerMove(bar.track(), { pointerId: 1, clientX: 750 });
+			expect(bar.valueNow()).toBe(5);
+			release(bar.track(), { clientX: 750 });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+		});
+
+		it("starts clean when the bar comes back after going away mid-drag", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			press(bar.track(), { clientX: 500 });
+			// A stream that loses its duration hides the bar, so no release arrives.
+			bar.rerender({ duration: 0 });
+			expect(screen.queryByRole("slider", { name: "Seek" })).toBeNull();
+			bar.rerender({ position: 200 });
+			expect(bar.valueNow()).toBe(200);
+			// No drag is left over, so the arrows seek straight away.
+			tabTo(bar.thumb());
+			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
+			expect(bar.onSeek).toHaveBeenCalledWith(201);
 		});
 	});
 });

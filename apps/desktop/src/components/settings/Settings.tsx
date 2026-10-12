@@ -456,6 +456,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								step={5}
 								onValueChange={handleDefaultVolumeChange}
 								aria-label="Default volume"
+								aria-valuetext={`${defaultVolume}%`}
 							/>
 							<p className="text-xs text-muted-foreground mt-2">
 								Playback starts at this volume. Changes you make in the player last

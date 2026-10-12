@@ -101,10 +101,12 @@ export const Controls = ({
 	touchLayout = false,
 	hideCenterControls = false,
 }: ControlsProps) => {
-	// Where the bar shows while a pointer drags it. Playback carries on
-	// underneath, and the seek happens when the pointer lets go.
+	// Set while a pointer presses the seek bar. `to` is where a drag has moved
+	// it, and the seek happens on release. A press that doesn't move the bar
+	// doesn't seek. `dropped` is set when the stream changes mid-drag.
+	const pressRef = useRef<{ to: number | null; dropped: boolean } | null>(null);
+	// Where the bar shows during a drag. Playback carries on underneath.
 	const [dragPos, setDragPos] = useState<number | null>(null);
-	const draggingRef = useRef(false);
 	const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
 	const sourceMenuRef = useRef<HTMLDivElement>(null);
 	const hasSourceChoice = !!onSelectSource && (sources?.length ?? 0) > 1;
@@ -123,21 +125,33 @@ export const Controls = ({
 		if (!visible) setSourceMenuOpen(false);
 	}, [visible]);
 
-	// A new stream starts from its own position.
+	const hasDuration = state.duration > 0;
+	// A new stream starts from its own position, and a drag that began on the
+	// last one doesn't seek it. When the bar goes away mid-drag, its release
+	// never arrives.
 	useEffect(() => {
+		const press = pressRef.current;
+		if (press) pressRef.current = hasDuration ? { to: null, dropped: true } : null;
 		setDragPos(null);
-	}, [state.currentUrl]);
+	}, [state.currentUrl, hasDuration]);
 
-	const startDrag = () => {
-		draggingRef.current = true;
+	const startPress = () => {
+		pressRef.current = { to: null, dropped: false };
 	};
-	const endDrag = () => {
-		draggingRef.current = false;
+	const endPress = (seek: boolean) => {
+		const press = pressRef.current;
+		pressRef.current = null;
 		setDragPos(null);
+		if (seek && press && !press.dropped && press.to !== null) onSeek(press.to);
 	};
-	// The arrow keys move the bar too, but they seek straight away.
-	const handleSeekDrag = (position: number) => {
-		if (draggingRef.current) setDragPos(position);
+	// The arrow keys move the bar too, and those seek straight away.
+	const handleSeekChange = (position: number) => {
+		const press = pressRef.current;
+		if (!press) onSeek(position);
+		else if (!press.dropped) {
+			press.to = position;
+			setDragPos(position);
+		}
 	};
 
 	const shownPos = dragPos ?? state.position;
@@ -167,21 +181,24 @@ export const Controls = ({
 			>
 				{state.duration > 0 && (
 					<div className="mb-3">
-						<Slider
-							value={shownPos}
-							min={0}
-							max={state.duration}
-							step={1}
-							onPointerDown={startDrag}
-							onPointerUp={endDrag}
+						{/* The release is handled here, after the slider's own handlers. */}
+						<div
+							onPointerUp={() => endPress(true)}
 							// A cancelled touch doesn't seek.
-							onPointerCancel={endDrag}
-							onValueChange={handleSeekDrag}
-							onValueCommit={onSeek}
-							onKeyDown={leaveSliderKeysToPlayer}
-							aria-label="Seek"
-							aria-valuetext={`${formatTime(shownPos)} of ${formatTime(state.duration)}`}
-						/>
+							onPointerCancel={() => endPress(false)}
+						>
+							<Slider
+								value={shownPos}
+								min={0}
+								max={state.duration}
+								step={1}
+								onPointerDown={startPress}
+								onValueChange={handleSeekChange}
+								onKeyDown={leaveSliderKeysToPlayer}
+								aria-label="Seek"
+								aria-valuetext={`${formatTime(shownPos)} of ${formatTime(state.duration)}`}
+							/>
+						</div>
 						<div className="flex justify-between text-xs text-white/60 mt-1">
 							<span>{formatTime(shownPos)}</span>
 							<span>{formatTime(state.duration)}</span>
@@ -303,6 +320,7 @@ export const Controls = ({
 									onValueChange={onVolumeChange}
 									onKeyDown={leaveSliderKeysToPlayer}
 									aria-label="Volume"
+									aria-valuetext={`${state.volume}%`}
 								/>
 							</div>
 						)}
