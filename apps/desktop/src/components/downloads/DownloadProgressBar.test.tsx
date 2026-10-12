@@ -8,8 +8,8 @@ import type { DownloadRecord } from "@/lib/types";
 import { DownloadProgressBar } from "./DownloadProgressBar";
 
 const renderBar = (overrides: Partial<DownloadRecord>) => {
-	render(<DownloadProgressBar download={makeDownload(overrides)} />);
-	const bar = screen.getByRole("progressbar", { name: "Download progress" });
+	render(<DownloadProgressBar download={makeDownload({ title: "Sintel", ...overrides })} />);
+	const bar = screen.getByRole("progressbar", { name: "Downloading Sintel" });
 	return { bar, fill: bar.firstElementChild as HTMLElement };
 };
 

@@ -38,14 +38,15 @@ pub fn build_ffmpeg_args(url: &str, dest_part: &str, container: &str) -> Vec<Str
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
-        // Reconnect after a dropped connection and carry on from where the
-        // reply broke off. ffmpeg can tell a reply broke off when the server
-        // gave its size. There's no `-reconnect_at_eof`: it takes the normal
-        // end of every file and HLS playlist for a drop and keeps trying to
-        // reconnect for close to a minute.
+        // Pick a file up where the connection broke off. That needs a server
+        // that takes byte ranges, and ffmpeg doesn't retry a broken HLS
+        // segment at all. There's no `-reconnect_streamed`: from a server
+        // without ranges it starts again at the first byte, which writes the
+        // start of the file twice, or loops for good when the server gave no
+        // size. There's no `-reconnect_at_eof` either. It takes the normal end
+        // of every file and HLS playlist for a drop and keeps retrying for
+        // close to a minute.
         "-reconnect".into(),
-        "1".into(),
-        "-reconnect_streamed".into(),
         "1".into(),
         "-reconnect_delay_max".into(),
         "30".into(),
@@ -126,6 +127,12 @@ mod tests {
         let args = build_ffmpeg_args("http://h/movie/u/p/1.m3u8", "/tmp/1.mkv.part", "mkv");
         assert!(!args.iter().any(|a| a == "-reconnect_at_eof"));
         assert!(args.windows(2).any(|w| w[0] == "-reconnect" && w[1] == "1"));
+    }
+
+    #[test]
+    fn does_not_start_a_file_again_from_the_first_byte() {
+        let args = build_ffmpeg_args("http://h/movie/u/p/1.ts", "/tmp/1.ts.part", "ts");
+        assert!(!args.iter().any(|a| a == "-reconnect_streamed"));
     }
 
     #[test]

@@ -16,7 +16,7 @@ export const DownloadProgressBar = ({ download }: { download: DownloadRecord }) 
 	return (
 		<div
 			role="progressbar"
-			aria-label="Download progress"
+			aria-label={`Downloading ${download.title}`}
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-valuenow={sizeUnknown ? undefined : (percent ?? 0)}

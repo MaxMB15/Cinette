@@ -11,13 +11,19 @@ use reqwest::StatusCode;
 /// parts, so the reply's length is the size of a short text file.
 const LIST_EXTENSIONS: [&str; 3] = [".m3u8", ".m3u", ".mpd"];
 
+/// The smallest length taken for a video. No movie or episode is this small,
+/// so a shorter reply is a playlist or a page the other checks missed, such as
+/// a playlist sent as `application/octet-stream` from a path with no list
+/// ending.
+const MIN_VIDEO_BYTES: i64 = 1_000_000;
+
 /// The size of the video at `url` in bytes, from the status and headers of
 /// the reply to a HEAD request. `url` is where the request ended up after
 /// any redirects.
 ///
 /// None when the reply gives no size, or when the size it gives isn't the
 /// video's: an error page, or a playlist or manifest that lists the video's
-/// parts.
+/// parts, or anything under a megabyte.
 pub fn media_size(url: &str, status: StatusCode, headers: &HeaderMap) -> Option<i64> {
     if !status.is_success() || is_list_url(url) {
         return None;
@@ -34,7 +40,7 @@ pub fn media_size(url: &str, status: StatusCode, headers: &HeaderMap) -> Option<
         .trim()
         .parse()
         .ok()?;
-    (length > 0).then_some(length)
+    (length >= MIN_VIDEO_BYTES).then_some(length)
 }
 
 /// Whether the path of `url` ends like a playlist or manifest. The query
@@ -68,6 +74,10 @@ mod tests {
     use reqwest::header::HeaderValue;
 
     const MOVIE: &str = "http://panel.example.test/movie/u/p/42.mp4";
+    /// A length big enough for a video, so only the check under test can
+    /// turn it down.
+    const LENGTH: &str = "734003200";
+    const BYTES: Option<i64> = Some(734_003_200);
 
     fn headers(content_type: Option<&'static str>, length: Option<&'static str>) -> HeaderMap {
         let mut map = HeaderMap::new();
@@ -90,22 +100,19 @@ mod tests {
             size(MOVIE, Some("video/mp4"), "1500000000"),
             Some(1_500_000_000)
         );
-        assert_eq!(size(MOVIE, Some("video/x-matroska"), "42"), Some(42));
-        assert_eq!(
-            size(MOVIE, Some("application/octet-stream"), "42"),
-            Some(42)
-        );
+        assert_eq!(size(MOVIE, Some("video/x-matroska"), LENGTH), BYTES);
+        assert_eq!(size(MOVIE, Some("application/octet-stream"), LENGTH), BYTES);
     }
 
     #[test]
     fn takes_the_length_when_the_type_is_missing_or_unreadable() {
-        assert_eq!(size(MOVIE, None, "42"), Some(42));
-        let mut map = headers(None, Some("42"));
+        assert_eq!(size(MOVIE, None, LENGTH), BYTES);
+        let mut map = headers(None, Some(LENGTH));
         map.insert(
             CONTENT_TYPE,
             HeaderValue::from_bytes(b"video/\xff").unwrap(),
         );
-        assert_eq!(media_size(MOVIE, StatusCode::OK, &map), Some(42));
+        assert_eq!(media_size(MOVIE, StatusCode::OK, &map), BYTES);
     }
 
     #[test]
@@ -117,7 +124,7 @@ mod tests {
             "Audio/X-MpegUrl; charset=utf-8",
         ] {
             assert_eq!(
-                size(MOVIE, Some(content_type), "460"),
+                size(MOVIE, Some(content_type), LENGTH),
                 None,
                 "{content_type}"
             );
@@ -133,7 +140,7 @@ mod tests {
             "http://cdn.example.test/dash/movie.mpd",
         ] {
             assert_eq!(
-                size(url, Some("application/octet-stream"), "460"),
+                size(url, Some("application/octet-stream"), LENGTH),
                 None,
                 "{url}"
             );
@@ -146,9 +153,9 @@ mod tests {
             size(
                 "http://cdn.example.test/old.m3u8/movie.mp4?list=a.m3u8",
                 None,
-                "42"
+                LENGTH
             ),
-            Some(42)
+            BYTES
         );
     }
 
@@ -157,13 +164,15 @@ mod tests {
         for content_type in [
             "application/dash+xml",
             "application/vnd.ms-sstr+xml",
+            "application/xml; charset=utf-8",
             "text/html; charset=utf-8",
             "text/plain",
             "application/json",
+            "application/json; charset=utf-8",
             "application/problem+json",
         ] {
             assert_eq!(
-                size(MOVIE, Some(content_type), "460"),
+                size(MOVIE, Some(content_type), LENGTH),
                 None,
                 "{content_type}"
             );
@@ -171,8 +180,20 @@ mod tests {
     }
 
     #[test]
+    fn ignores_a_length_too_small_for_a_video() {
+        // A playlist sent as plain bytes from a path that doesn't say so.
+        let url = "http://panel.example.test/play/abc";
+        assert_eq!(size(url, Some("application/octet-stream"), "460"), None);
+        assert_eq!(size(url, Some("application/octet-stream"), "999999"), None);
+        assert_eq!(
+            size(url, Some("application/octet-stream"), "1000000"),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
     fn ignores_a_reply_that_failed() {
-        let map = headers(Some("video/mp4"), Some("42"));
+        let map = headers(Some("video/mp4"), Some(LENGTH));
         for status in [
             StatusCode::NOT_FOUND,
             StatusCode::FORBIDDEN,

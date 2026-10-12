@@ -12,12 +12,12 @@ const fmtRate = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).to
 const fmtTime = (t: number | null) => (t == null ? "—" : new Date(t * 1000).toLocaleString());
 
 /**
- * How much has been saved, out of the video's size while the download is
- * unfinished. A finished one shows only its file's size, which stays right for
- * a download whose size an older version took from an HLS playlist.
+ * How much has been saved, and out of how much while the download runs or
+ * waits. Otherwise it's only the file's size, which stays right for a record
+ * whose size an older version took from an HLS playlist.
  */
 const sizeCell = (d: DownloadRecord) =>
-	d.totalBytes && d.status !== "completed"
+	d.totalBytes && (d.status === "downloading" || d.status === "queued")
 		? `${fmtBytes(d.downloadedBytes)} / ${fmtBytes(d.totalBytes)}`
 		: fmtBytes(d.downloadedBytes);
 

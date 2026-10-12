@@ -303,19 +303,21 @@ const PosterCard = ({
 							{channel.sources.length + 1}
 						</div>
 					)}
-					{!isSeries && dl && (dl.status === "downloading" || dl.status === "queued") && (
-						<div className="absolute left-0 right-0 bottom-0 px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
-							<DownloadProgressBar download={dl} />
-						</div>
-					)}
 				</div>
 				<p className="text-xs leading-snug line-clamp-2 text-foreground/85 group-hover:text-foreground transition-colors px-0.5">
 					{channel.name}
 				</p>
 			</button>
-			{/* A sibling of the play button, since a control nested inside a button
-			    is not reachable on its own by screen readers. The extra pixel keeps
-			    it where it sat inside the poster's border. */}
+			{/* Siblings of the play button, since screen readers can't reach a
+			    control or a progress bar nested inside a button on its own. The
+			    extra pixel keeps each one inside the poster's border. */}
+			{!isSeries && dl && (dl.status === "downloading" || dl.status === "queued") && (
+				<div className="pointer-events-none absolute inset-x-0 top-0 aspect-[2/1] flex items-end p-px rounded-lg overflow-hidden">
+					<div className="w-full px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
+						<DownloadProgressBar download={dl} />
+					</div>
+				</div>
+			)}
 			{onToggleFavorite && (
 				<FavoriteButton
 					isFavorite={channel.isFavorite}

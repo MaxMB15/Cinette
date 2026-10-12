@@ -159,8 +159,10 @@ describe("ChannelCard poster variant", () => {
 	};
 
 	/** The bar along the poster's bottom edge that fills as a download runs. */
-	const progressBar = (container: HTMLElement) =>
-		container.querySelector<HTMLElement>('[class~="bg-blue-400"]');
+	/** The fill of the poster's download bar, or null when there's no bar. */
+	const progressBar = () =>
+		(screen.queryByRole("progressbar", { name: "Downloading Sintel" })?.firstElementChild ??
+			null) as HTMLElement | null;
 
 	const confirmIn = (label: string) =>
 		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: label }));
@@ -175,34 +177,37 @@ describe("ChannelCard poster variant", () => {
 
 	it("shows how far a download has got and stops it after asking", () => {
 		withDownload({ status: "downloading", totalBytes: 1000, downloadedBytes: 250 });
-		const { container } = render(
-			<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />
-		);
-		expect(progressBar(container)).toHaveStyle({ width: "25%" });
+		render(<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />);
+		expect(progressBar()).toHaveStyle({ width: "25%" });
 
 		fireEvent.click(screen.getByRole("button", { name: "Downloading" }));
 		confirmIn("Stop");
 		expect(tauri.stopDownload).toHaveBeenCalledExactlyOnceWith("dl1");
 	});
 
-	it("keeps the progress bar empty until the size is known and full past it", () => {
+	it("keeps the progress bar empty while queued and full past the size", () => {
 		withDownload({ status: "queued", totalBytes: null, downloadedBytes: 0 });
-		const { container, rerender } = render(
+		const { rerender } = render(
 			<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />
 		);
-		expect(progressBar(container)).toHaveStyle({ width: "0%" });
+		expect(progressBar()).toHaveStyle({ width: "0%" });
 
 		withDownload({ status: "downloading", totalBytes: 1000, downloadedBytes: 1500 });
 		rerender(<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />);
-		expect(progressBar(container)).toHaveStyle({ width: "100%" });
+		expect(progressBar()).toHaveStyle({ width: "100%" });
+	});
+
+	it("keeps the progress bar outside the play button for screen readers", () => {
+		withDownload({ status: "downloading", totalBytes: 1000, downloadedBytes: 250 });
+		render(<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />);
+		const bar = screen.getByRole("progressbar", { name: "Downloading Sintel" });
+		expect(bar.closest("button")).toBeNull();
 	});
 
 	it("removes a finished download after asking", () => {
 		withDownload({ status: "completed" });
-		const { container } = render(
-			<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />
-		);
-		expect(progressBar(container)).toBeNull();
+		render(<ChannelCard channel={makeMovie()} onPlay={vi.fn()} variant="poster" />);
+		expect(progressBar()).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Downloaded" }));
 		confirmIn("Remove");
 		expect(tauri.removeDownload).toHaveBeenCalledExactlyOnceWith("dl1");
@@ -218,7 +223,7 @@ describe("ChannelCard poster variant", () => {
 	it("shows a series' episode downloads but leaves starting and stopping them to its page", () => {
 		const series = makeChannel({ id: "series-1", name: "Show", contentType: "series" });
 		const episode = makeEpisode(1, 1, "Pilot");
-		const { container, rerender } = render(
+		const { rerender } = render(
 			<ChannelCard channel={series} onPlay={vi.fn()} variant="poster" />
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Download" }));
@@ -242,7 +247,7 @@ describe("ChannelCard poster variant", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Downloading" }));
 		confirmIn("Stop");
 		expect(tauri.stopDownload).not.toHaveBeenCalled();
-		expect(progressBar(container)).toBeNull();
+		expect(screen.queryByRole("progressbar")).toBeNull();
 
 		// The card doesn't know how many episodes there are, so it never says all are done.
 		downloads.bySeries = new Map([
