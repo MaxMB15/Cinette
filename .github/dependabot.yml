@@ -1,0 +1,63 @@
+# Weekly dependency updates. Pull requests go to dev, since main only takes
+# merges from dev. Minor and patch updates come grouped into one pull request
+# per ecosystem, and each major update comes on its own. A release has to be a
+# week old before Dependabot offers it, so a bad one has time to be pulled.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Tauri's CLI refuses to build when @tauri-apps/api and the tauri crate
+      # differ by a minor version, so its packages come on their own. Merge
+      # them together with the Cargo tauri group.
+      tauri:
+        patterns: ["@tauri-apps/*"]
+      npm:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      tauri:
+        patterns: ["tauri", "tauri-*"]
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The actions are pinned to commits, with the version in a comment, and
+  # Dependabot moves both. The composite actions need their folders listed.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/install-frontend-deps
+      - /.github/actions/install-linux-deps
+      - /.github/actions/macos-signing
+    schedule:
+      interval: weekly
+    target-branch: dev
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

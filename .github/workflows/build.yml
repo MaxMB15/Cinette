@@ -65,7 +65,7 @@ jobs:
       linux: ${{ steps.push-all.outputs.linux || steps.filter.outputs.linux }}
       macos: ${{ steps.push-all.outputs.macos || steps.manual.outputs.macos || steps.filter.outputs.macos }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Push — always build both platforms
         id: push-all
@@ -81,7 +81,7 @@ jobs:
 
       - name: PR — detect changed paths
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           # The whole plugin crate counts, because a list of its files missed
@@ -115,13 +115,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # Only branch pushes save. A PR's caches can only be used by that PR, and
@@ -133,7 +133,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
@@ -163,7 +163,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coverage-report
           path: apps/desktop/coverage/
@@ -177,19 +177,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: coverage-report
           path: coverage
 
       - name: Generate coverage badge
-        uses: jaywcjlove/coverage-badges-cli@v2.1.0
+        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
         with:
           source: coverage/coverage-summary.json
           output: coverage/badge.svg
 
       - name: Deploy coverage to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./coverage
@@ -208,13 +208,13 @@ jobs:
     # secrets and wait for approval. Push and PR builds use no environment.
     environment: ${{ github.event_name == 'workflow_dispatch' && 'macos-signing' || '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # Shared with release.yml, which restores it from main.
@@ -222,7 +222,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
@@ -275,7 +275,7 @@ jobs:
           target/release/bundle/macos/*.app target/release/bundle/dmg/*.dmg
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: MaxVideoPlayer-macOS
           path: |
@@ -289,13 +289,13 @@ jobs:
     needs: [test, detect-changes]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # Shared with release.yml, which restores it from main.
@@ -303,7 +303,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
@@ -334,7 +334,7 @@ jobs:
         run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: MaxVideoPlayer-Linux
           path: |

@@ -150,3 +150,9 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |
 | [Release — one-click pipeline](../.github/workflows/release-pipeline.yml) | Manual | Merges `dev` into `main`, bumps the version and pushes the tag. |
 | [Release — bump version (PR)](../.github/workflows/release-bump.yml), [Release — push tag](../.github/workflows/release-tag.yml) | Manual | The same release in two steps, for when `main` requires pull requests. |
+
+The workflows pin each action to a commit, with its version in a comment. Dependabot
+opens pull requests against `dev` each week for npm packages, crates and actions,
+once a release is a week old. Minor and patch updates come grouped by ecosystem, each
+major update comes alone, and Tauri's npm packages and crates come in their own pull
+requests, which should be merged together.

@@ -84,7 +84,7 @@ jobs:
           fi
 
       - name: Checkout repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_AUTOMATION_PAT }}
@@ -185,7 +185,7 @@ jobs:
           fi
 
       - name: Install Rust (for Cargo.lock refresh)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
 
       - name: Bump version
         id: ver
