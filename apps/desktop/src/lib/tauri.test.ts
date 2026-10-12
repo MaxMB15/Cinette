@@ -246,6 +246,13 @@ describe("backend commands", () => {
 			"fetch_whatson_data",
 			{ imdbId: "tt0113277", mediaType: "show" },
 		],
+		// Skip segments
+		[
+			"getSkipSegments",
+			() => tauri.getSkipSegments("tt0903747", 1, 2, 2820),
+			"get_skip_segments",
+			{ imdbId: "tt0903747", season: 1, episode: 2, duration: 2820 },
+		],
 		// Subtitles
 		[
 			"getOpenSubtitlesApiKey",
