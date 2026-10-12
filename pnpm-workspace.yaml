@@ -12,3 +12,10 @@ catalog:
 # No dependency runs an install script. A new dependency that has one stops
 # the install until it's listed under allowBuilds.
 strictDepBuilds: true
+
+# eslint-plugin-react 7.37.5 still lists ESLint 9 as its newest peer. It runs
+# on ESLint 10 once settings.react.version is set, since detecting the version
+# calls a context method that ESLint 10 removed.
+peerDependencyRules:
+  allowedVersions:
+    eslint-plugin-react>eslint: "10"

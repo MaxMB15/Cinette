@@ -196,7 +196,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// still running, so only one actual check() call happens.
 			// Give up after 7s so the splash never gets stuck.
 			setStepStatus("updates", "active");
-			let foundUpdate: Update | null = null;
+			let foundUpdate: Update | null;
 			try {
 				foundUpdate = await Promise.race([
 					updateState.checkForUpdates(),
