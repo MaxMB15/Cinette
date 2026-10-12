@@ -87,6 +87,15 @@ impl TestApp {
     }
 }
 
+/// Poison `mutex` the way a thread that panics while holding it would.
+pub(crate) fn poison<T>(mutex: &Mutex<T>) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = mutex.lock();
+        panic!("poisoning a lock for a test");
+    }));
+    assert!(mutex.is_poisoned());
+}
+
 mod tests {
     use super::TestApp;
     use tauri::Manager;
