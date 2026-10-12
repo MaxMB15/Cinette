@@ -1,8 +1,8 @@
 name: Set up the frontend
 description: >-
   Install pnpm at the version package.json's packageManager names, then Node,
-  then the packages at their locked versions without running any install
-  scripts, so no package code runs before the build.
+  then the packages at their locked versions. pnpm runs a dependency's install
+  script only if pnpm-workspace.yaml allows it, and stops on one it doesn't list.
 
 runs:
   using: composite
@@ -17,6 +17,11 @@ runs:
         node-version: 24
         cache: pnpm
 
+    # Not --ignore-scripts: it also skips the check for dependencies with
+    # install scripts that pnpm-workspace.yaml doesn't list. The repo's own
+    # prepare script still runs, and HUSKY=0 makes it skip the Git hooks.
     - name: Install packages
       shell: bash
-      run: pnpm install --frozen-lockfile --ignore-scripts
+      env:
+        HUSKY: "0"
+      run: pnpm install --frozen-lockfile

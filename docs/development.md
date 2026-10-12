@@ -9,7 +9,7 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 - [Rust](https://rustup.rs) (stable)
 - [Node.js](https://nodejs.org) 24, or 22.12 or a later 22.x release
 - [pnpm](https://pnpm.io/installation). With Node 24, `corepack enable pnpm` sets it
-  up. pnpm 9.7 or later switches itself to the version that `package.json` names.
+  up. pnpm 10 or later switches itself to the version that `package.json` names.
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
@@ -90,6 +90,11 @@ the Rust backend won't work there, but it's quick for layout work.
 `pnpm install` doesn't run dependencies' install scripts. If a new dependency has one,
 the install stops until the package is listed under `allowBuilds` in
 `pnpm-workspace.yaml`, with `true` to run its script or `false` to skip it.
+
+If you installed the packages with npm before the switch to pnpm, delete
+`node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
+pnpm leaves the packages npm put at the top in place, and they can hide a missing
+dependency that CI then catches.
 
 ## Tests and checks
 
