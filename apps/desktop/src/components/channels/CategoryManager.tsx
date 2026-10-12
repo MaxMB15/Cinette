@@ -29,9 +29,53 @@ import {
 	deleteSuperCategory,
 } from "@/lib/tauri";
 import { ask } from "@tauri-apps/plugin-dialog";
-import type { GroupHierarchyEntry } from "@/lib/types";
-import type { Channel } from "@/lib/types";
+import { groupSamples, groupTitles, superCategoryNames } from "@/lib/group-hierarchy";
+import type { Channel, GroupHierarchyEntry } from "@/lib/types";
 import { formatCount } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+// Enough channel names for Gemini to tell what a group holds.
+const SAMPLES_PER_GROUP = 5;
+// Adding to one category sends every other group, so fewer names each keeps the request small.
+const SAMPLES_PER_CANDIDATE = 3;
+// Each category owns a block of sort orders, so its groups stay together in their own order.
+const CATEGORY_SORT_BLOCK = 1000;
+
+interface GroupChipProps {
+	name: string;
+	selected: boolean;
+	/** Groups placed by hand keep their place when Gemini sorts again, so they get a badge. */
+	userPlaced?: boolean;
+	/** Uncategorized groups are drawn a little fainter. */
+	muted?: boolean;
+	onToggle: () => void;
+}
+
+const GroupChip = ({
+	name,
+	selected,
+	userPlaced = false,
+	muted = false,
+	onToggle,
+}: GroupChipProps) => (
+	<button
+		onClick={onToggle}
+		aria-pressed={selected}
+		className={cn(
+			"px-2.5 py-1 rounded-md text-xs transition-all",
+			selected
+				? "bg-primary text-primary-foreground ring-2 ring-primary/50"
+				: muted
+					? "bg-secondary/70 hover:bg-accent"
+					: "bg-secondary hover:bg-accent"
+		)}
+	>
+		{name}
+		{userPlaced && (
+			<span className="ml-1 text-[9px] bg-primary/20 text-primary px-1 rounded">user</span>
+		)}
+	</button>
+);
 
 interface CategoryManagerProps {
 	providerId: string;
@@ -72,21 +116,12 @@ export const CategoryManager = ({
 			if (h.length > 0) {
 				setEntries(h);
 				// Remove empty categories that now have groups in DB
-				const dbCatNames = new Set(
-					h.filter((e) => e.superCategory).map((e) => e.superCategory!)
-				);
+				const dbCatNames = new Set(superCategoryNames(h));
 				setEmptyCategories((prev) => prev.filter((c) => !dbCatNames.has(c)));
 			} else {
 				// No hierarchy yet — show all provider groups as uncategorized
-				const groupNames = [
-					...new Set(
-						channels
-							.filter((c) => c.contentType === contentType)
-							.map((c) => c.groupTitle)
-					),
-				];
 				setEntries(
-					groupNames.map((g, i) => ({
+					groupTitles(channels, contentType).map((g, i) => ({
 						providerId,
 						contentType,
 						groupName: g,
@@ -105,33 +140,48 @@ export const CategoryManager = ({
 		load();
 	}, [load]);
 
-	const dbCats = [
-		...new Set(entries.filter((e) => e.superCategory).map((e) => e.superCategory!)),
-	];
+	const dbCats = superCategoryNames(entries);
 	const superCats = [...dbCats, ...emptyCategories.filter((c) => !dbCats.includes(c))];
 	const uncategorized = entries.filter((e) => !e.superCategory);
+
+	/** Shows the error and gives null when no key is set, so the caller can stop. */
+	const requireGeminiKey = async (): Promise<string | null> => {
+		const apiKey = await getGeminiApiKey();
+		if (!apiKey) setError("No Gemini API key configured. Add one in Settings → AI.");
+		return apiKey || null;
+	};
+
+	/**
+	 * Saves one change, then reloads so the list shows what was stored.
+	 * Gives false when it failed, after showing the error.
+	 */
+	const applyChange = async (change: () => Promise<unknown>): Promise<boolean> => {
+		try {
+			await change();
+			await load();
+			onHierarchyChanged();
+			return true;
+		} catch (e) {
+			setError(String(e));
+			return false;
+		}
+	};
+
+	const toggleMoving = (groupName: string) =>
+		setMovingGroup(movingGroup === groupName ? null : groupName);
 
 	const handleRecategorize = async () => {
 		setCategorizing(true);
 		setError(null);
 		try {
-			const apiKey = await getGeminiApiKey();
-			if (!apiKey) {
-				setError("No Gemini API key configured. Add one in Settings → AI.");
-				return;
-			}
-			const groupNames = [
-				...new Set(
-					channels.filter((c) => c.contentType === contentType).map((c) => c.groupTitle)
-				),
-			];
-			const groupsWithSamples: [string, string[]][] = groupNames.map((g) => [
-				g,
-				channels
-					.filter((c) => c.groupTitle === g)
-					.slice(0, 5)
-					.map((c) => c.name),
-			]);
+			const apiKey = await requireGeminiKey();
+			if (!apiKey) return;
+			const groupsWithSamples = groupSamples(
+				channels,
+				groupTitles(channels, contentType),
+				contentType,
+				SAMPLES_PER_GROUP
+			);
 			const result = await categorizeProvider(
 				providerId,
 				contentType,
@@ -152,18 +202,14 @@ export const CategoryManager = ({
 		setFixingUncategorized(true);
 		setError(null);
 		try {
-			const apiKey = await getGeminiApiKey();
-			if (!apiKey) {
-				setError("No Gemini API key configured. Add one in Settings → AI.");
-				return;
-			}
-			const uncatGroups: [string, string[]][] = uncategorized.map((e) => [
-				e.groupName,
-				channels
-					.filter((c) => c.groupTitle === e.groupName && c.contentType === contentType)
-					.slice(0, 5)
-					.map((c) => c.name),
-			]);
+			const apiKey = await requireGeminiKey();
+			if (!apiKey) return;
+			const uncatGroups = groupSamples(
+				channels,
+				uncategorized.map((e) => e.groupName),
+				contentType,
+				SAMPLES_PER_GROUP
+			);
 			const result = await fixUncategorizedGroups(
 				providerId,
 				contentType,
@@ -185,28 +231,15 @@ export const CategoryManager = ({
 		setAiPromptLoading(true);
 		setError(null);
 		try {
-			const apiKey = await getGeminiApiKey();
-			if (!apiKey) {
-				setError("No Gemini API key configured. Add one in Settings → AI.");
-				return;
-			}
+			const apiKey = await requireGeminiKey();
+			if (!apiKey) return;
 			// Send ALL groups not already in the target category
-			const candidateGroups: [string, string[]][] = entries
-				.filter((e) => e.superCategory !== aiPromptCategory)
-				.map(
-					(e) =>
-						[
-							e.groupName,
-							channels
-								.filter(
-									(c) =>
-										c.groupTitle === e.groupName &&
-										c.contentType === contentType
-								)
-								.slice(0, 3)
-								.map((c) => c.name),
-						] as [string, string[]]
-				);
+			const candidateGroups = groupSamples(
+				channels,
+				entries.filter((e) => e.superCategory !== aiPromptCategory).map((e) => e.groupName),
+				contentType,
+				SAMPLES_PER_CANDIDATE
+			);
 
 			if (candidateGroups.length === 0) {
 				setError("No other groups available to assign.");
@@ -232,25 +265,20 @@ export const CategoryManager = ({
 	};
 
 	const handleMoveGroup = async (groupName: string, targetCategory: string | null) => {
-		try {
-			const siblingSortOrders = entries
-				.filter((e) => e.superCategory === targetCategory && e.groupName !== groupName)
-				.map((e) => e.sortOrder);
-			const newSortOrder =
-				siblingSortOrders.length > 0 ? Math.max(...siblingSortOrders) + 1 : 0;
-			await updateGroupHierarchyEntry(
+		const siblingSortOrders = entries
+			.filter((e) => e.superCategory === targetCategory && e.groupName !== groupName)
+			.map((e) => e.sortOrder);
+		const newSortOrder = siblingSortOrders.length > 0 ? Math.max(...siblingSortOrders) + 1 : 0;
+		const moved = await applyChange(() =>
+			updateGroupHierarchyEntry(
 				providerId,
 				contentType,
 				groupName,
 				targetCategory,
 				newSortOrder
-			);
-			await load();
-			onHierarchyChanged();
-			setMovingGroup(null);
-		} catch (e) {
-			setError(String(e));
-		}
+			)
+		);
+		if (moved) setMovingGroup(null);
 	};
 
 	const handleRenameCategory = async (oldName: string) => {
@@ -258,14 +286,10 @@ export const CategoryManager = ({
 			setRenamingCategory(null);
 			return;
 		}
-		try {
-			await renameSuperCategory(providerId, contentType, oldName, renameValue.trim());
-			await load();
-			onHierarchyChanged();
-			setRenamingCategory(null);
-		} catch (e) {
-			setError(String(e));
-		}
+		const renamed = await applyChange(() =>
+			renameSuperCategory(providerId, contentType, oldName, renameValue.trim())
+		);
+		if (renamed) setRenamingCategory(null);
 	};
 
 	const handleDeleteCategory = async (catName: string) => {
@@ -274,13 +298,7 @@ export const CategoryManager = ({
 			kind: "warning",
 		});
 		if (!confirmed) return;
-		try {
-			await deleteSuperCategory(providerId, contentType, catName);
-			await load();
-			onHierarchyChanged();
-		} catch (e) {
-			setError(String(e));
-		}
+		await applyChange(() => deleteSuperCategory(providerId, contentType, catName));
 	};
 
 	const handleCreateCategory = () => {
@@ -300,8 +318,8 @@ export const CategoryManager = ({
 		const newOrder = [...superCats];
 		[newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]];
 
-		// Reassign sort_order for ALL groups: category at position i gets block i*1000
-		try {
+		// Reassign sort_order for ALL groups, so the category at position i gets block i
+		await applyChange(async () => {
 			for (let catIdx = 0; catIdx < newOrder.length; catIdx++) {
 				const groups = entries.filter((e) => e.superCategory === newOrder[catIdx]);
 				for (let gi = 0; gi < groups.length; gi++) {
@@ -309,7 +327,7 @@ export const CategoryManager = ({
 						providerId,
 						contentType,
 						groups[gi].groupName,
-						catIdx * 1000 + gi
+						catIdx * CATEGORY_SORT_BLOCK + gi
 					);
 				}
 			}
@@ -320,14 +338,10 @@ export const CategoryManager = ({
 					providerId,
 					contentType,
 					uncatEntries[i].groupName,
-					newOrder.length * 1000 + i
+					newOrder.length * CATEGORY_SORT_BLOCK + i
 				);
 			}
-			await load();
-			onHierarchyChanged();
-		} catch (e) {
-			setError(String(e));
-		}
+		});
 	};
 
 	const handleReset = async () => {
@@ -336,14 +350,10 @@ export const CategoryManager = ({
 			{ title: "Reset Categories", kind: "warning" }
 		);
 		if (!confirmed) return;
-		try {
+		await applyChange(async () => {
 			await deleteGroupHierarchy(providerId, contentType);
 			setEmptyCategories([]);
-			await load();
-			onHierarchyChanged();
-		} catch (e) {
-			setError(String(e));
-		}
+		});
 	};
 
 	return (
@@ -376,7 +386,7 @@ export const CategoryManager = ({
 						<RefreshCw
 							className={`h-3.5 w-3.5 mr-1.5 ${categorizing ? "animate-spin" : ""}`}
 						/>
-						{categorizing ? "Categorizing..." : "Re-categorize All"}
+						{categorizing ? "Categorizing…" : "Re-categorize All"}
 					</Button>
 					<Button size="sm" variant="ghost" onClick={onClose}>
 						Close
@@ -397,7 +407,7 @@ export const CategoryManager = ({
 			<div className="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-border/50">
 				<Plus className="h-4 w-4 text-muted-foreground shrink-0" />
 				<Input
-					placeholder="New category name..."
+					placeholder="New category name…"
 					value={newCategoryName}
 					onChange={(e) => setNewCategoryName(e.target.value)}
 					className="flex-1 h-8 text-xs"
@@ -512,26 +522,13 @@ export const CategoryManager = ({
 							{/* Groups */}
 							<div className="p-2.5 flex flex-wrap gap-1.5">
 								{groups.map((g) => (
-									<button
+									<GroupChip
 										key={g.groupName}
-										onClick={() =>
-											setMovingGroup(
-												movingGroup === g.groupName ? null : g.groupName
-											)
-										}
-										className={`px-2.5 py-1 rounded-md text-xs transition-all ${
-											movingGroup === g.groupName
-												? "bg-primary text-primary-foreground ring-2 ring-primary/50"
-												: "bg-secondary hover:bg-accent"
-										}`}
-									>
-										{g.groupName}
-										{g.isUserOverride && (
-											<span className="ml-1 text-[9px] bg-primary/20 text-primary px-1 rounded">
-												user
-											</span>
-										)}
-									</button>
+										name={g.groupName}
+										selected={movingGroup === g.groupName}
+										userPlaced={g.isUserOverride}
+										onToggle={() => toggleMoving(g.groupName)}
+									/>
 								))}
 							</div>
 						</div>
@@ -563,27 +560,19 @@ export const CategoryManager = ({
 									<Sparkles
 										className={`h-3 w-3 mr-1 ${fixingUncategorized ? "animate-pulse" : ""}`}
 									/>
-									{fixingUncategorized ? "Assigning..." : "Assign All with AI"}
+									{fixingUncategorized ? "Assigning…" : "Assign All with AI"}
 								</Button>
 							)}
 						</div>
 						<div className="p-2.5 flex flex-wrap gap-1.5">
 							{uncategorized.map((g) => (
-								<button
+								<GroupChip
 									key={g.groupName}
-									onClick={() =>
-										setMovingGroup(
-											movingGroup === g.groupName ? null : g.groupName
-										)
-									}
-									className={`px-2.5 py-1 rounded-md text-xs transition-all ${
-										movingGroup === g.groupName
-											? "bg-primary text-primary-foreground ring-2 ring-primary/50"
-											: "bg-secondary/70 hover:bg-accent"
-									}`}
-								>
-									{g.groupName}
-								</button>
+									name={g.groupName}
+									selected={movingGroup === g.groupName}
+									muted
+									onToggle={() => toggleMoving(g.groupName)}
+								/>
 							))}
 						</div>
 					</div>
@@ -664,7 +653,7 @@ export const CategoryManager = ({
 						>
 							{aiPromptLoading ? (
 								<>
-									<RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Working...
+									<RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Working…
 								</>
 							) : (
 								<>

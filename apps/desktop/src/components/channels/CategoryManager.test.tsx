@@ -45,6 +45,8 @@ const channels = [
 	movie("m4", "Coco", "Kids"),
 	movie("m5", "Free Solo", "Documentary"),
 	makeChannel({ id: "l1", name: "News 24", groupTitle: "News" }),
+	// A live group with a movie group's name, whose titles Gemini shouldn't see.
+	makeChannel({ id: "l2", name: "Action News", groupTitle: "Action" }),
 ];
 
 const entry = (
@@ -162,7 +164,7 @@ describe("CategoryManager counts", () => {
 describe("CategoryManager categories", () => {
 	it("creates an empty category once, from the button or Enter", async () => {
 		await renderManager();
-		const name = screen.getByPlaceholderText("New category name...");
+		const name = screen.getByPlaceholderText("New category name…");
 
 		fireEvent.change(name, { target: { value: "  Classics " } });
 		await click("Create");
@@ -228,6 +230,8 @@ describe("CategoryManager categories", () => {
 		await click("Save name");
 
 		expect(screen.getByText("name taken")).toBeInTheDocument();
+		expect(button("Save name")).toBeInTheDocument();
+		expect(onHierarchyChanged).not.toHaveBeenCalled();
 		await click("dismiss");
 		expect(screen.queryByText("name taken")).toBeNull();
 	});
@@ -308,6 +312,7 @@ describe("CategoryManager moving a group", () => {
 	it("puts a group at the end of the category it moves to", async () => {
 		await renderManager();
 		await click("Documentary");
+		expect(button("Documentary")).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText(/to:$/)).toHaveTextContent('Move "Documentary" to:');
 		// It isn't in a category yet, so there's no button to leave one.
 		expect(screen.queryByRole("button", { name: "Uncategorized" })).toBeNull();
@@ -342,7 +347,7 @@ describe("CategoryManager moving a group", () => {
 
 	it("starts an empty category at zero", async () => {
 		await renderManager();
-		fireEvent.change(screen.getByPlaceholderText("New category name..."), {
+		fireEvent.change(screen.getByPlaceholderText("New category name…"), {
 			target: { value: "Classics" },
 		});
 		await click("Create");
@@ -409,6 +414,13 @@ describe("CategoryManager with Gemini", () => {
 		expect(screen.queryByText("Films")).toBeNull();
 		expect(onHierarchyChanged).toHaveBeenCalledOnce();
 		expect(button("Re-categorize All")).toBeEnabled();
+	});
+
+	it("says it's working while Gemini sorts", async () => {
+		vi.mocked(categorizeProvider).mockReturnValue(new Promise(() => {}));
+		await renderManager();
+		await click("Re-categorize All");
+		expect(button("Categorizing…")).toBeDisabled();
 	});
 
 	it("shows why sorting failed", async () => {

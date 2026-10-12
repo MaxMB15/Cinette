@@ -52,10 +52,14 @@ import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
 import {
 	resolvePlayerHotkey,
+	isInside,
 	isTypingTarget,
 	isKeyboardFocusedControl,
 	repeatsWhenHeld,
 } from "@/lib/hotkeys";
+import { usePlayerFocus } from "@/hooks/usePlayerFocus";
+import { useSubtitleNudge } from "@/hooks/useSubtitleNudge";
+import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import { formatSkip, formatTime } from "@/lib/format";
 import {
 	readSkipIntervals,
@@ -183,7 +187,7 @@ export const PlayerView = () => {
 	const [selectedSubtitleEntry, setSelectedSubtitleEntry] = useState<SubtitleEntry | null>(null);
 	const [subtitleFontSize, setSubtitleFontSize] = useState(18);
 	const [subtitleFontFamily, setSubtitleFontFamily] = useState("system-ui, sans-serif");
-	const [subtitlePos, setSubtitlePos] = useState({ x: 50, y: 88 });
+	const [subtitlePos, setSubtitlePos] = useState(DEFAULT_SUBTITLE_POSITION);
 	const [subtitleDelay, setSubtitleDelay] = useState(0);
 	const [subtitleEditMode, setSubtitleEditMode] = useState(false);
 	const [autoplay, setAutoplay] = useState(true);
@@ -243,19 +247,7 @@ export const PlayerView = () => {
 		};
 	}, [mpv.firstFrameReady]);
 
-	// Auto-focus the player container so keyboard controls (space, arrows)
-	// work immediately without requiring a click first.
-	useEffect(() => {
-		containerRef.current?.focus();
-	}, []);
-
-	// Re-focus after channel load completes (currentUrl changes). Leave focus
-	// alone if it's already inside the player (e.g. on the resume prompt).
-	useEffect(() => {
-		if (mpv.state.currentUrl && !containerRef.current?.contains(document.activeElement)) {
-			containerRef.current?.focus();
-		}
-	}, [mpv.state.currentUrl]);
+	usePlayerFocus(containerRef, mpv.state.currentUrl);
 
 	// Report video container bounds to the Rust renderer. The CSD header bar
 	// offset is applied on the Rust side via LinuxGlRenderer::csd_offset (x, y),
@@ -274,29 +266,7 @@ export const PlayerView = () => {
 	}, [mpv.state.currentUrl]);
 
 	// Arrow keys reposition subtitle overlay when settings pane is open
-	useEffect(() => {
-		if (!subtitleEditMode) return;
-		const handleKey = (e: KeyboardEvent) => {
-			if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
-			e.preventDefault();
-			setSubtitlePos((p) => ({
-				x:
-					e.key === "ArrowLeft"
-						? Math.max(5, p.x - 2)
-						: e.key === "ArrowRight"
-							? Math.min(95, p.x + 2)
-							: p.x,
-				y:
-					e.key === "ArrowUp"
-						? Math.max(3, p.y - 2)
-						: e.key === "ArrowDown"
-							? Math.min(97, p.y + 2)
-							: p.y,
-			}));
-		};
-		window.addEventListener("keydown", handleKey);
-		return () => window.removeEventListener("keydown", handleKey);
-	}, [subtitleEditMode]);
+	useSubtitleNudge(subtitleEditMode, setSubtitlePos);
 
 	// --- Watch progress (resume support) ---
 
@@ -561,7 +531,7 @@ export const PlayerView = () => {
 		setSelectedSubtitleEntry(null);
 		setSubtitleEditMode(false);
 		setSubtitleDelay(0);
-		setSubtitlePos({ x: 50, y: 88 });
+		setSubtitlePos(DEFAULT_SUBTITLE_POSITION);
 
 		if (!activeChannel || activeChannel.contentType === "live") {
 			setEnrichedMeta(null);
@@ -947,6 +917,9 @@ export const PlayerView = () => {
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent) => {
+			// A confirm opened from the controls renders in a portal, and it keeps
+			// its keys while it's open.
+			if (!isInside(containerRef.current, e.target)) return;
 			// The resume prompt handles its own keys; Escape still cancels it if
 			// focus ended up elsewhere in the player.
 			if (pendingResume) {
@@ -1101,6 +1074,7 @@ export const PlayerView = () => {
 		(activeChannel.contentType === "movie" || activeChannel.contentType === "series");
 	const downloadSlot = showPlayerDownload ? (
 		<DownloadButton
+			itemId={activeChannel.id}
 			state={playerDownloadState}
 			onStart={() => {
 				if (!activeChannel) return;

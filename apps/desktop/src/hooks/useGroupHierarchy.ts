@@ -8,6 +8,7 @@ import {
 	pinGroup as pinGroupApi,
 	unpinGroup as unpinGroupApi,
 } from "@/lib/tauri";
+import { superCategoryNames } from "@/lib/group-hierarchy";
 import type { GroupHierarchyEntry, PinnedGroup } from "@/lib/types";
 
 export const useGroupHierarchy = (providerId: string | null, contentType: string) => {
@@ -35,10 +36,7 @@ export const useGroupHierarchy = (providerId: string | null, contentType: string
 		load();
 	}, [load]);
 
-	const superCategories = useMemo(
-		() => [...new Set(entries.filter((e) => e.superCategory).map((e) => e.superCategory!))],
-		[entries]
-	);
+	const superCategories = useMemo(() => superCategoryNames(entries), [entries]);
 
 	const topLevelGroups = useMemo(
 		() => entries.filter((e) => !e.superCategory).map((e) => e.groupName),

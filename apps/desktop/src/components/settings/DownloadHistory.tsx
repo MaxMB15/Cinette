@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { useId } from "react";
 import { X } from "lucide-react";
+import { Dialog } from "@/components/ui/dialog";
 import { useDownloads } from "@/hooks/useDownloads";
 import { downloadPercent } from "@/lib/download-progress";
 import { deleteAt, deleteLabel } from "@/lib/retention";
@@ -94,30 +96,30 @@ export const DownloadHistoryDialog = ({
 	open: boolean;
 	onClose: () => void;
 }) => {
+	const titleId = useId();
 	if (!open) return null;
 	return (
-		<div
-			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-			onClick={onClose}
+		<Dialog
+			onClose={onClose}
+			labelledBy={titleId}
+			overlayClassName="p-4"
+			className="bg-card border border-border rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col"
 		>
-			<div
-				className="bg-card border border-border rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col"
-				onClick={(e) => e.stopPropagation()}
-			>
-				<div className="flex items-center justify-between px-5 py-3 border-b border-border">
-					<h3 className="text-sm font-semibold">Download history</h3>
-					<button
-						aria-label="Close"
-						className="p-1 rounded-md hover:bg-accent"
-						onClick={onClose}
-					>
-						<X className="h-4 w-4" />
-					</button>
-				</div>
-				<div className="overflow-auto p-5">
-					<DownloadHistory />
-				</div>
+			<div className="flex items-center justify-between px-5 py-3 border-b border-border">
+				<h3 id={titleId} className="text-sm font-semibold">
+					Download history
+				</h3>
+				<button
+					aria-label="Close"
+					className="p-1 rounded-md hover:bg-accent"
+					onClick={onClose}
+				>
+					<X className="h-4 w-4" />
+				</button>
 			</div>
-		</div>
+			<div className="overflow-auto p-5">
+				<DownloadHistory />
+			</div>
+		</Dialog>
 	);
 };
