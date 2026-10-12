@@ -30,6 +30,7 @@ import {
 	getPlaybackPosition,
 	savePlaybackPosition,
 	deletePlaybackPosition,
+	handOffProgress,
 	resolveLocalDownload,
 	enqueueMovieDownload,
 	enqueueEpisodeDownload,
@@ -300,6 +301,32 @@ export const PlayerView = () => {
 	}, [mpv.state, flushProgress]);
 
 	useEffect(() => () => flushProgress(), [flushProgress]);
+
+	// This page can't save progress while it's hidden, because iOS stops its
+	// timers once the app is in the background though audio keeps playing, or
+	// after it closes with the item still playing. Rust saves it until the
+	// player is visible again.
+	useEffect(() => {
+		const handOff = () => {
+			const p = progressRef.current;
+			// Rust saves from here on. The position held here goes stale, and
+			// flushing it later, say on a stop right after the app comes back,
+			// would overwrite the newer one Rust saved.
+			p.dirty = false;
+			const { key, url, pendingStart } = p;
+			handOffProgress(key && url ? { key, url, pendingStart } : null).catch(() => {});
+		};
+		const onVisibilityChange = () => {
+			if (document.visibilityState === "hidden") handOff();
+			else handOffProgress(null).catch(() => {});
+		};
+		handOffProgress(null).catch(() => {});
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () => {
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+			handOff();
+		};
+	}, []);
 
 	// Watch time: the channel list keeps its search unless the user watched for
 	// a while (see lib/browse-state). Only forward playback counts, so time spent
