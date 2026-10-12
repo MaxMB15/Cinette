@@ -31,4 +31,20 @@ describe("ChannelLogo", () => {
 		expect(screen.queryByRole("img")).toBeNull();
 		expect(screen.getByText("N")).toBeInTheDocument();
 	});
+
+	it("tries a new URL after the old one failed", () => {
+		const { rerender } = render(
+			<ChannelLogo url="http://logo.test/old.png" alt="News" fallback={<span>N</span>} />
+		);
+		fireEvent.error(screen.getByRole("img", { name: "News" }));
+		expect(screen.queryByRole("img")).toBeNull();
+
+		rerender(
+			<ChannelLogo url="http://logo.test/new.png" alt="News" fallback={<span>N</span>} />
+		);
+		expect(screen.getByRole("img", { name: "News" })).toHaveAttribute(
+			"src",
+			"http://logo.test/new.png"
+		);
+	});
 });

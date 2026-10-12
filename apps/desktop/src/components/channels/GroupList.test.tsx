@@ -39,8 +39,35 @@ describe("GroupList pin buttons", () => {
 		const pin = screen.getByRole("button", { name: "Pin News" });
 
 		fireEvent.click(pin);
-		fireEvent.keyDown(pin, { key: "Enter" });
-		expect(onTogglePin).toHaveBeenCalledWith("News");
+		expect(onTogglePin).toHaveBeenCalledExactlyOnceWith("News");
 		expect(onSelectGroup).not.toHaveBeenCalled();
+	});
+
+	it("lets a pin click reach listeners further up", () => {
+		renderList([]);
+		const onDocumentClick = vi.fn();
+		document.addEventListener("click", onDocumentClick);
+		try {
+			fireEvent.click(screen.getByRole("button", { name: "Pin News" }));
+		} finally {
+			document.removeEventListener("click", onDocumentClick);
+		}
+		expect(onDocumentClick).toHaveBeenCalledOnce();
+	});
+
+	it("opens the group once from its button or from the rest of the row", () => {
+		const { onSelectGroup } = renderList([]);
+		fireEvent.click(screen.getByRole("button", { name: /^News/ }));
+		expect(onSelectGroup).toHaveBeenCalledExactlyOnceWith("News");
+
+		fireEvent.click(screen.getByRole("button", { name: /^News/ }).parentElement!);
+		expect(onSelectGroup).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps the pin out of the group's button", () => {
+		renderList([]);
+		const open = screen.getByRole("button", { name: /^News/ });
+		expect(open.tagName).toBe("BUTTON");
+		expect(open.contains(screen.getByRole("button", { name: "Pin News" }))).toBe(false);
 	});
 });

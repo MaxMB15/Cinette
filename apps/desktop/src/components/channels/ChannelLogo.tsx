@@ -10,12 +10,19 @@ import { cn } from "@/lib/utils";
  */
 const brokenImageUrls = new Set<string>();
 
-/** Whether the image at url has failed before, and a callback for its onError. */
+/**
+ * Whether the image at url has failed before, and a callback for its onError.
+ * The answer follows url, so a card that is given a new logo tries it rather
+ * than keeping the old one's failure.
+ */
 export const useImageFailed = (url?: string): [boolean, () => void] => {
-	const [failed, setFailed] = useState(() => (url ? brokenImageUrls.has(url) : false));
+	// Only re-renders after a failure. The set is the record of what failed.
+	const [, setFailedUrl] = useState<string>();
+	const failed = !!url && brokenImageUrls.has(url);
 	const markFailed = () => {
-		if (url) brokenImageUrls.add(url);
-		setFailed(true);
+		if (!url) return;
+		brokenImageUrls.add(url);
+		setFailedUrl(url);
 	};
 	return [failed, markFailed];
 };

@@ -9,7 +9,7 @@ import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
-import { cn } from "@/lib/utils";
+import { cn, isFromInnerButton } from "@/lib/utils";
 import { nowSeconds } from "@/lib/date";
 import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
@@ -25,8 +25,8 @@ const aggregateToIcon = (
 ): DownloadIconState => (agg === "none" ? "idle" : agg);
 
 /**
- * The heart toggle each card variant shows. It stops the click so the row or
- * poster around it does not start playback too.
+ * The heart toggle each card variant shows. It always sits beside the play
+ * control, never inside it, and a clickable row leaves its click alone.
  */
 const FavoriteButton = ({
 	isFavorite,
@@ -43,10 +43,7 @@ const FavoriteButton = ({
 }) => (
 	<button
 		type="button"
-		onClick={(e) => {
-			e.stopPropagation();
-			onToggle();
-		}}
+		onClick={onToggle}
 		className={cn(
 			"flex items-center justify-center shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 			className
@@ -95,25 +92,20 @@ const RowCardView = ({
 	const now = nowSeconds();
 
 	return (
-		/* Outer wrapper is a div (not button) so nested buttons and div[role=button] inside
-		   EpgTimelineBar are valid HTML and no nesting warnings occur. */
+		// The channel button on the left plays it, and sits beside the heart
+		// rather than around it, so each control is reached on its own. A click
+		// elsewhere on the row, such as on the timeline, plays the channel too.
 		<div
-			role="button"
-			tabIndex={0}
-			onClick={() => onPlay(channel)}
-			onKeyDown={(e) => {
-				// Keys pressed on the heart or a programme belong to that control, not the row.
-				if (e.target !== e.currentTarget) return;
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onPlay(channel);
-				}
+			onClick={(e) => {
+				if (!isFromInnerButton(e)) onPlay(channel);
 			}}
-			className="group flex items-center w-full rounded-lg hover:bg-accent/60 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+			className="group flex items-center w-full rounded-lg hover:bg-accent/60 transition-colors cursor-pointer"
 		>
-			{/* Left: channel info — fixed width (must match ROW_CARD_LEFT_WIDTH) */}
-			<div
-				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0"
+			{/* Left: channel info, fixed width (must match ROW_CARD_LEFT_WIDTH) */}
+			<button
+				type="button"
+				onClick={() => onPlay(channel)}
+				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0 text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 				style={{ width: `${ROW_CARD_LEFT_WIDTH}px` }}
 			>
 				<ChannelLogo
@@ -130,7 +122,7 @@ const RowCardView = ({
 						</p>
 					)}
 				</div>
-			</div>
+			</button>
 
 			{/* Middle: EPG timeline — flex-1, takes the bulk of row width */}
 			<div className="flex-1 min-w-0 py-1.5">

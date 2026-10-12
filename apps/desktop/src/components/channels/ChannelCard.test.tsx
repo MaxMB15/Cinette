@@ -131,18 +131,38 @@ describe("ChannelCard poster variant", () => {
 describe("ChannelCard row variant", () => {
 	afterEach(cleanup);
 
-	it("leaves Enter on the heart to the heart", () => {
+	it("toggles the favorite without starting playback", () => {
 		const onPlay = vi.fn();
-		render(<ChannelCard channel={channel} onPlay={onPlay} onToggleFavorite={vi.fn()} />);
-		fireEvent.keyDown(screen.getByLabelText("Add to favorites"), { key: "Enter" });
+		const onToggleFavorite = vi.fn();
+		render(
+			<ChannelCard channel={channel} onPlay={onPlay} onToggleFavorite={onToggleFavorite} />
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Add to favorites" }));
+		expect(onToggleFavorite).toHaveBeenCalledWith(channel);
 		expect(onPlay).not.toHaveBeenCalled();
 	});
 
-	it("plays the channel when Enter is pressed on the row", () => {
+	it("plays the channel once from its button", () => {
 		const onPlay = vi.fn();
 		render(<ChannelCard channel={channel} onPlay={onPlay} onToggleFavorite={vi.fn()} />);
-		const row = screen.getByText("News 24").closest('[role="button"]') as HTMLElement;
-		fireEvent.keyDown(row, { key: "Enter" });
+		fireEvent.click(screen.getByRole("button", { name: /News 24/ }));
+		expect(onPlay).toHaveBeenCalledExactlyOnceWith(channel);
+	});
+
+	it("plays the channel from a click on the timeline", () => {
+		const onPlay = vi.fn();
+		render(<ChannelCard channel={channel} onPlay={onPlay} onToggleFavorite={vi.fn()} />);
+		fireEvent.click(screen.getByText("no epg"));
 		expect(onPlay).toHaveBeenCalledWith(channel);
+	});
+
+	it("keeps the play and favorite buttons apart for screen readers", () => {
+		render(<ChannelCard channel={channel} onPlay={vi.fn()} onToggleFavorite={vi.fn()} />);
+		const play = screen.getByRole("button", { name: /News 24/ });
+		const favorite = screen.getByRole("button", { name: "Add to favorites" });
+		expect(play.tagName).toBe("BUTTON");
+		expect(play.contains(favorite)).toBe(false);
+		expect(favorite.contains(play)).toBe(false);
+		expect(screen.getAllByRole("button")).toHaveLength(2);
 	});
 });
