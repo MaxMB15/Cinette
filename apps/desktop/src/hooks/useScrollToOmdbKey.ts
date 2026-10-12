@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useEffect, type RefObject } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 
 /** Route state that opens Settings at the OMDb key field. */
 export const OMDB_KEY_FOCUS = { focus: "omdb" } as const;

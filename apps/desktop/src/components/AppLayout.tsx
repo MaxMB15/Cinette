@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { Outlet, NavLink, useLocation } from "react-router-dom";
+import { Outlet, NavLink, useLocation } from "react-router";
 import { usePlatform } from "@/hooks/usePlatform";
 import { cn } from "@/lib/utils";
 import { useEffect } from "react";
