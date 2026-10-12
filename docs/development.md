@@ -7,7 +7,7 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 ## Prerequisites
 
 - [Rust](https://rustup.rs) (stable)
-- [Node.js](https://nodejs.org) 24, or 22.12 or a later 22.x release
+- [Node.js](https://nodejs.org) 24, or 22.13 or a later 22.x release
 - [pnpm](https://pnpm.io/installation). With Node 24, `corepack enable pnpm` sets it
   up. pnpm 10 or later switches itself to the version that `package.json` names.
 - The platform dependencies below
