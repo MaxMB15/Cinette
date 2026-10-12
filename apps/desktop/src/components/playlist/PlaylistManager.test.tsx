@@ -59,7 +59,7 @@ describe("PlaylistManager", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 		expect(removeProvider).not.toHaveBeenCalled();
 
-		const prompt = screen.getByText(/Remove "My IPTV"\?/).parentElement!;
+		const prompt = screen.getByRole("dialog", { name: "Remove provider?" });
 		fireEvent.click(within(prompt).getByRole("button", { name: "Remove" }));
 		expect(removeProvider).toHaveBeenCalledWith("p1");
 		expect(screen.queryByText(/Remove "My IPTV"\?/)).toBeNull();
@@ -77,7 +77,7 @@ describe("PlaylistManager", () => {
 		refreshProvider.mockRejectedValue("Server returned 503");
 		renderManager();
 		fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-		expect(await screen.findByText("Server returned 503")).toBeTruthy();
+		expect((await screen.findByRole("alert")).textContent).toBe("Server returned 503");
 	});
 
 	it("hides a refresh error once a later refresh updates the provider", async () => {

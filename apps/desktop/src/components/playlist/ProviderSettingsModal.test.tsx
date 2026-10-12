@@ -113,6 +113,32 @@ describe("ProviderSettingsModal", () => {
 		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
 		expect(onClose).toHaveBeenCalledTimes(1);
 	});
+
+	it("stays open until a save finishes", async () => {
+		let finish: () => void = () => {};
+		const onUpdateProvider = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+		const onClose = vi.fn();
+		render(
+			<ProviderSettingsModal
+				provider={provider}
+				onClose={onClose}
+				onRefreshNow={vi.fn()}
+				onUpdateProvider={onUpdateProvider}
+			/>
+		);
+		fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+		expect(onUpdateProvider).toHaveBeenCalledOnce();
+
+		const close = screen.getByRole("button", { name: "Close" }) as HTMLButtonElement;
+		expect(close.disabled).toBe(true);
+		fireEvent.click(close);
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(onClose).not.toHaveBeenCalled();
+
+		finish();
+		await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+	});
 });
 
 /** Presses Refresh EPG and waits for the refresh to finish. */

@@ -143,7 +143,7 @@ export const PlaylistManager = () => {
 											` \u00b7 Updated ${new Date(p.lastUpdated).toLocaleString()}`}
 									</p>
 									{showRefreshError && (
-										<p className="text-xs text-destructive mt-1">
+										<p role="alert" className="text-xs text-destructive mt-1">
 											{refreshError.message}
 										</p>
 									)}

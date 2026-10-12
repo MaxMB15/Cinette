@@ -216,8 +216,10 @@ export const ProviderSettingsModal = ({
 					</span>
 				</div>
 				<button
+					type="button"
 					onClick={onClose}
-					className="ml-3 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+					disabled={save.busy}
+					className="ml-3 shrink-0 text-muted-foreground hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
 					aria-label="Close"
 				>
 					<X className="h-4 w-4" />

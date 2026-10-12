@@ -17,6 +17,17 @@ const Dialog = () => {
 	);
 };
 
+const NamedTrap = ({ name }: { name: string }) => {
+	const ref = useRef<HTMLDivElement>(null);
+	useFocusTrap(ref);
+	return (
+		<div ref={ref} role="dialog" aria-label={name}>
+			<button>{name} first</button>
+			<button>{name} last</button>
+		</div>
+	);
+};
+
 const Harness = ({ open }: { open: boolean }) => (
 	<div>
 		<button>Behind</button>
@@ -48,6 +59,24 @@ describe("useFocusTrap", () => {
 		getByText("Behind").focus();
 		fireEvent.keyDown(document.activeElement!, { key: "Tab" });
 		expect(document.activeElement).toBe(getByText("First"));
+	});
+
+	it("leaves Tab to the top modal when one is open over another", () => {
+		const Stack = ({ top }: { top: boolean }) => (
+			<>
+				<NamedTrap name="Bottom" />
+				{top && <NamedTrap name="Top" />}
+			</>
+		);
+		const { getByText, rerender } = render(<Stack top={false} />);
+		rerender(<Stack top />);
+		expect(document.activeElement).toBe(getByText("Top first"));
+		// Tab between the top modal's own controls is left to the browser.
+		expect(fireEvent.keyDown(document.activeElement!, { key: "Tab" })).toBe(true);
+		expect(document.activeElement).toBe(getByText("Top first"));
+		getByText("Top last").focus();
+		fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+		expect(document.activeElement).toBe(getByText("Top first"));
 	});
 
 	it("restores the previous focus on close", () => {

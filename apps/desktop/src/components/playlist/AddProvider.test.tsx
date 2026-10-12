@@ -51,6 +51,27 @@ describe("AddProvider", () => {
 		expect(url.getAttribute("aria-pressed")).toBe("false");
 	});
 
+	it("marks the chosen provider type", () => {
+		renderForm();
+		const group = screen.getByRole("group", { name: "Provider type" });
+		const m3u = within(group).getByRole("button", { name: "M3U Playlist" });
+		const xtream = within(group).getByRole("button", { name: "Xtream Codes" });
+		expect(m3u.getAttribute("aria-pressed")).toBe("true");
+		fireEvent.click(xtream);
+		expect(xtream.getAttribute("aria-pressed")).toBe("true");
+		expect(m3u.getAttribute("aria-pressed")).toBe("false");
+	});
+
+	it("names the provider name and playlist URL fields", () => {
+		renderForm();
+		expect(screen.getByLabelText("Provider name")).toBe(
+			screen.getByPlaceholderText("Provider name (optional)")
+		);
+		const url = screen.getByLabelText("Playlist URL") as HTMLInputElement;
+		expect(url).toBe(screen.getByPlaceholderText("M3U playlist URL"));
+		expect(url.required).toBe(true);
+	});
+
 	it("names the Xtream fields and requires all of them", () => {
 		renderForm();
 		fireEvent.click(screen.getByRole("button", { name: "Xtream Codes" }));

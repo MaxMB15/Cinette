@@ -12,21 +12,30 @@ const FOCUSABLE = [
 	'[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
+/** Mounted traps, newest last. Only the newest one, the modal on top, handles keys. */
+const traps: HTMLElement[] = [];
+
+/** Whether `node` is the newest mounted focus trap, the modal on top. */
+export const isTopFocusTrap = (node: HTMLElement | null): boolean =>
+	node !== null && traps[traps.length - 1] === node;
+
 /**
  * Keeps keyboard focus inside a modal while it is mounted: focus moves to its
  * first control on open, Tab / Shift+Tab wrap around its controls, and focus
- * returns to where it was on close unless something else has taken it.
+ * returns to where it was on close unless something else has taken it. With
+ * one modal open over another, only the top one moves focus.
  */
 export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 	useEffect(() => {
 		const node = ref.current;
 		if (!node) return;
+		traps.push(node);
 		const previous = document.activeElement;
 		const focusables = () => Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
 		(focusables()[0] ?? node).focus();
 
 		const handleKey = (e: KeyboardEvent) => {
-			if (e.key !== "Tab") return;
+			if (e.key !== "Tab" || !isTopFocusTrap(node)) return;
 			const items = focusables();
 			if (items.length === 0) {
 				e.preventDefault();
@@ -48,6 +57,8 @@ export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 		document.addEventListener("keydown", handleKey);
 		return () => {
 			document.removeEventListener("keydown", handleKey);
+			const index = traps.indexOf(node);
+			if (index !== -1) traps.splice(index, 1);
 			// Focus falls back to <body> when the focused control unmounts with the modal.
 			const active = document.activeElement;
 			const lost = !active || active === document.body || node.contains(active);

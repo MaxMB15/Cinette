@@ -63,6 +63,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - A failed provider refresh now shows its error on the provider card (#103).
 - Re-categorize All in the category manager now sends Gemini sample titles from the content type on screen only (#103).
 - Escape now closes the playlist settings and download history dialogs (#103).
+- Confirmation prompts, like removing a provider or a download, now take keyboard focus and close with Escape without the player behind acting on the key. They also no longer get cut off inside a sheet (#103).
 - Screen readers now name the provider form fields, the icon-only buttons in the category manager and the clear file button, and say which option of each toggle is on (#103).
 - The playlist file drop zone now opens with the keyboard (#103).
 

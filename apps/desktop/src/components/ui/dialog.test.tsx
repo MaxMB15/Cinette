@@ -58,11 +58,71 @@ describe("Dialog", () => {
 		expect(onOuterKeyDown).toHaveBeenCalled();
 	});
 
+	it("closes on Escape when focus has left the dialog", () => {
+		const { onClose, onOuterKeyDown } = renderDialog();
+		const onWindowKeyDown = vi.fn();
+		window.addEventListener("keydown", onWindowKeyDown);
+
+		screen.getByRole("button", { name: "Behind" }).focus();
+		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+		(document.activeElement as HTMLElement).blur();
+		fireEvent.keyDown(document.body, { key: "Escape" });
+
+		window.removeEventListener("keydown", onWindowKeyDown);
+		expect(onClose).toHaveBeenCalledTimes(2);
+		expect(onOuterKeyDown).not.toHaveBeenCalled();
+		expect(onWindowKeyDown).not.toHaveBeenCalled();
+	});
+
+	it("closes only the top dialog when one is open over another", () => {
+		const onCloseBottom = vi.fn();
+		const onCloseTop = vi.fn();
+		const Stack = ({ top }: { top: boolean }) => (
+			<>
+				<Dialog onClose={onCloseBottom} label="Bottom">
+					<button>Bottom button</button>
+				</Dialog>
+				{top && (
+					<Dialog onClose={onCloseTop} label="Top">
+						<button>Top button</button>
+					</Dialog>
+				)}
+			</>
+		);
+		const { rerender } = render(<Stack top={false} />);
+		rerender(<Stack top />);
+		expect(document.activeElement).toBe(screen.getByRole("button", { name: "Top button" }));
+
+		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+		(document.activeElement as HTMLElement).blur();
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(onCloseTop).toHaveBeenCalledTimes(2);
+		expect(onCloseBottom).not.toHaveBeenCalled();
+
+		rerender(<Stack top={false} />);
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		expect(onCloseBottom).toHaveBeenCalledTimes(1);
+	});
+
 	it("closes on a backdrop click but not on a click inside", () => {
 		const { onClose } = renderDialog();
 		fireEvent.click(screen.getByText("Body text"));
 		expect(onClose).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("dialog").parentElement!);
 		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps clicks inside from reaching the screen behind", () => {
+		const onOuterClick = vi.fn();
+		render(
+			<div onClick={onOuterClick}>
+				<Dialog onClose={vi.fn()} label="Remove download?">
+					<button>Remove</button>
+				</Dialog>
+			</div>
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+		fireEvent.click(screen.getByRole("dialog").parentElement!);
+		expect(onOuterClick).not.toHaveBeenCalled();
 	});
 });

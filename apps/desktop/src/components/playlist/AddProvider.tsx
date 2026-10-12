@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field } from "@/components/ui/field";
 import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
 import { Loader2, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
@@ -154,10 +155,11 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-lg">Add Provider</CardTitle>
-				<div className="flex gap-2 mt-2">
+				<div role="group" aria-label="Provider type" className="flex gap-2 mt-2">
 					<Button
 						variant={tab === "m3u" ? "default" : "secondary"}
 						size="sm"
+						aria-pressed={tab === "m3u"}
 						onClick={() => setTab("m3u")}
 					>
 						M3U Playlist
@@ -165,6 +167,7 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					<Button
 						variant={tab === "xtream" ? "default" : "secondary"}
 						size="sm"
+						aria-pressed={tab === "xtream"}
 						onClick={() => setTab("xtream")}
 					>
 						Xtream Codes
@@ -173,11 +176,16 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 			</CardHeader>
 			<CardContent>
 				<form onSubmit={handleSubmit} className="flex flex-col gap-3">
-					<Input
-						placeholder="Provider name (optional)"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-					/>
+					<Field label="Provider name" hideLabel>
+						{(id) => (
+							<Input
+								id={id}
+								placeholder="Provider name (optional)"
+								value={name}
+								onChange={(e) => setName(e.target.value)}
+							/>
+						)}
+					</Field>
 
 					{tab === "m3u" && (
 						<>
@@ -192,12 +200,17 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 							)}
 
 							{m3uMode === "url" && (
-								<Input
-									placeholder="M3U playlist URL"
-									value={url}
-									onChange={(e) => setUrl(e.target.value)}
-									required
-								/>
+								<Field label="Playlist URL" hideLabel>
+									{(id) => (
+										<Input
+											id={id}
+											placeholder="M3U playlist URL"
+											value={url}
+											onChange={(e) => setUrl(e.target.value)}
+											required
+										/>
+									)}
+								</Field>
 							)}
 
 							{m3uMode === "file" && (
@@ -283,7 +296,11 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 						/>
 					)}
 
-					{error && <p className="text-sm text-destructive">{error}</p>}
+					{error && (
+						<p role="alert" className="text-sm text-destructive">
+							{error}
+						</p>
+					)}
 
 					<Button type="submit" disabled={!canSubmit}>
 						{loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
