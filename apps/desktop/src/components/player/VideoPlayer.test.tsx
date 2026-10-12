@@ -1153,6 +1153,53 @@ describe("episodes", () => {
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
 
+	it.each([
+		["10 seconds", 1290, [ep1.url, ep2.url]],
+		["11 seconds", 1289, [ep1.url]],
+	])("counts an end as seen coming from a poll %s before it", async (_, position, urls) => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, position, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual(urls);
+	});
+
+	it("doesn't go on to the next episode for an end seen coming before a seek back", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		// It plays on to the end in the background, where iOS sends no polls.
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("doesn't go on to the next episode when the length isn't known", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 0, 0) });
+		await setMpv({ state: ended(ep1.url, 0) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it.each([
+		["goes on", 30_000, [ep1.url, ep2.url]],
+		["doesn't go on", 30_001, [ep1.url]],
+	])(
+		"%s to the next episode when the app was in the background for %i ms of its last seconds",
+		async (_, away, urls) => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const start = new Date("2026-03-01T20:00:00Z").getTime();
+			vi.setSystemTime(start);
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await setMpv({ state: playing(ep1.url, 1292, 1300) });
+			await setVisibility("hidden");
+			vi.setSystemTime(start + away);
+			await setVisibility("visible");
+			await setMpv({ state: ended(ep1.url, 1300) });
+			expect(loadedUrls()).toEqual(urls);
+		}
+	);
+
 	it("asks about the next episode once when its resume prompt is cancelled", async () => {
 		remember(saved("series:show:s1e2", 600, 1300));
 		await openItem(ep1, { episodes: [ep1, ep2] });
