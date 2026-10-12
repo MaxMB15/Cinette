@@ -104,7 +104,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [0.5.3] - 2026-10-09
 
-This version was tagged but never published. Its changes first reached users in 0.6.0.
+This version was not published. Its changes first shipped in 0.6.0.
 
 ### Added
 
