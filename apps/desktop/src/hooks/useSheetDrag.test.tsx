@@ -283,6 +283,51 @@ describe("useSheetDrag", () => {
 		expect(pull.defaultPrevented).toBe(true);
 	});
 
+	it("leaves small moves to the browser on content that doesn't scroll", () => {
+		const { getByTestId, getByText } = render(<Sheet onClose={() => {}} />);
+		const header = getByText("Header");
+		touch(header, "touchstart", 100);
+		const small = touch(header, "touchmove", 103, 2);
+		const pull = touch(header, "touchmove", 130, 2);
+		touch(header, "touchcancel");
+		expect(small.defaultPrevented).toBe(false);
+		expect(pull.defaultPrevented).toBe(true);
+		expect(getByTestId("sheet").style.transform).toBe("");
+	});
+
+	it("lets a row scroll sideways after a move that starts nearly straight down", () => {
+		const { getByTestId, getByText } = render(<Sheet onClose={() => {}} />);
+		const header = getByText("Header");
+		touch(header, "touchstart", 100);
+		const first = touch(header, "touchmove", 103, 2);
+		const sideways = touch(header, "touchmove", 104, 40);
+		const down = touch(header, "touchmove", 160, 40);
+		touch(header, "touchend");
+		expect(first.defaultPrevented).toBe(false);
+		expect(sideways.defaultPrevented).toBe(false);
+		expect(down.defaultPrevented).toBe(false);
+		expect(getByTestId("sheet").style.transform).toBe("");
+	});
+
+	it("holds the list still while the sheet follows a pull down", () => {
+		const { getByTestId } = render(<Sheet onClose={() => {}} />);
+		const list = getByTestId("list");
+		const sheet = getByTestId("sheet");
+		scrollable(list, 0);
+		touch(list, "touchstart", 100);
+		touch(list, "touchmove", 103);
+		touch(list, "touchmove", 140);
+		expect(list.style.overflowY).toBe("hidden");
+		// Back up towards where it started. The sheet follows and the list can't scroll.
+		touch(list, "touchmove", 110);
+		expect(sheet.style.transform).toBe("translateY(10px)");
+		expect(list.style.overflowY).toBe("hidden");
+		act(() => {
+			touch(list, "touchend");
+		});
+		expect(list.style.overflowY).toBe("auto");
+	});
+
 	it("closes after a mouse drag and drops the click that follows", () => {
 		const onClose = vi.fn();
 		const { getByText } = render(<Sheet onClose={onClose} />);

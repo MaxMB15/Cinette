@@ -85,6 +85,8 @@ interface Gesture {
 	scroller: Element | null;
 	// Whether a drag up can grow the sheet, decided when the drag starts.
 	canExpand: boolean;
+	// Lets the scroller scroll again after a drag that locked it.
+	unlockScroller: () => void;
 	height: number;
 	offset: number;
 	samples: DragSample[];
@@ -105,6 +107,16 @@ const findScroller = (target: EventTarget | null, sheet: Element): Element | nul
 		el = el.parentElement;
 	}
 	return null;
+};
+
+// Stops an element scrolling until the returned function runs.
+const lockScroll = (el: Element): (() => void) => {
+	if (!(el instanceof HTMLElement)) return () => {};
+	const previous = el.style.overflowY;
+	el.style.overflowY = "hidden";
+	return () => {
+		el.style.overflowY = previous;
+	};
 };
 
 // True when the sheet cuts off some of its content, either by clipping it or
@@ -148,7 +160,8 @@ const paint = (sheet: HTMLElement, offset: number, expanded: boolean) => {
  * Lets a bottom sheet be dragged like an iOS sheet. A drag down follows the
  * finger and closes the sheet when released far enough or with a flick, and
  * a drag up expands it to full height. In scrollable content only a pull down
- * from the top moves the sheet; anything else scrolls.
+ * from the top moves the sheet, and the content stays still until the finger
+ * lifts. Anything else scrolls.
  *
  * Put `sheetRef` on the sheet, which gets its max height from here, and
  * spread `handleProps` on the handle and header so a mouse can drag them too.
@@ -185,6 +198,7 @@ export const useSheetDrag = ({
 				mode: "pending",
 				scroller,
 				canExpand: false,
+				unlockScroller: () => {},
 				height: sheet.offsetHeight,
 				offset: 0,
 				samples: [],
@@ -206,19 +220,21 @@ export const useSheetDrag = ({
 				if (Math.abs(dx) >= DRAG_SLOP) g.mode = "ignore";
 				return false;
 			}
-			if (g.scroller) {
-				if (dy < 0 || g.scroller.scrollTop > 0) {
-					g.mode = "ignore";
-					return false;
-				}
-				// Not clearly a pull down yet. WebKit lets the first touchmove decide
-				// whether the content can scroll for the rest of the touch, so
-				// claiming a small wobble down would stop a scroll that follows it.
-				if (dy < DRAG_SLOP) return false;
+			if (g.scroller && (dy < 0 || g.scroller.scrollTop > 0)) {
+				g.mode = "ignore";
+				return false;
 			}
-			if (Math.abs(dy) < DRAG_SLOP) return true;
+			// Not clearly a drag yet, so the move stays with the browser. WebKit lets
+			// the first touchmove decide whether anything under the finger can scroll
+			// for the rest of the touch, so claiming a small wobble would stop a list
+			// or a row that scrolls sideways from scrolling after it.
+			if (Math.abs(dy) < DRAG_SLOP) return false;
 			g.mode = "drag";
 			g.canExpand = !g.scroller && !latest.current.expanded && hidesContent(sheet);
+			// The browser may already own this touch for scrolling, and then
+			// preventDefault can't stop the list. Locking it keeps the list still
+			// if the finger goes back up while the sheet follows.
+			if (g.scroller) g.unlockScroller = lockScroll(g.scroller);
 			sheet.style.transition = "none";
 		}
 		const { expanded } = latest.current;
@@ -237,7 +253,9 @@ export const useSheetDrag = ({
 		const g = gestureRef.current;
 		const sheet = sheetRef.current;
 		gestureRef.current = null;
-		if (!g || !sheet || g.mode !== "drag") return false;
+		if (!g || !sheet) return false;
+		g.unlockScroller();
+		if (g.mode !== "drag") return false;
 		const { expanded, onClose } = latest.current;
 		const action = cancelled
 			? "settle"
