@@ -170,9 +170,10 @@ jobs:
           retention-days: 1
 
   # ── Coverage badge deploy (push to main only, needs write) ─────────────
+  # The frontend report goes to coverage/ and the Rust report to coverage/rust/.
   deploy-coverage:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test]
+    needs: [test, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -182,11 +183,24 @@ jobs:
           name: coverage-report
           path: coverage
 
-      - name: Generate coverage badge
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-coverage-report
+          path: coverage/rust
+
+      - name: Generate frontend coverage badge
         uses: jaywcjlove/coverage-badges-cli@v2.1.0
         with:
           source: coverage/coverage-summary.json
           output: coverage/badge.svg
+          label: frontend coverage
+
+      - name: Generate Rust coverage badge
+        uses: jaywcjlove/coverage-badges-cli@v2.1.0
+        with:
+          source: coverage/rust/coverage-summary.json
+          output: coverage/rust/badge.svg
+          label: Rust coverage
 
       - name: Deploy coverage to gh-pages
         uses: peaceiris/actions-gh-pages@v4
@@ -293,6 +307,14 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # cargo-llvm-cov reads the coverage data with LLVM's tools.
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.8.7
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -326,9 +348,30 @@ jobs:
         run: npm run build:desktop
 
       # The test job covers only mvp-core. The plugin and the app need GTK and
-      # libmpv, which this job installs.
-      - name: Run plugin and app tests
-        run: cargo test --locked -p tauri-plugin-mpv -p max-video-player
+      # libmpv, which this job installs, so the whole workspace's tests run here
+      # and measure Rust coverage. The figure counts linux.rs and not macos.rs,
+      # since each builds only on its own platform.
+      - name: Run Rust tests with coverage
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --workspace --no-report
+          cargo llvm-cov report --summary-only
+          cargo llvm-cov report --html --output-dir target/rust-coverage
+          cargo llvm-cov report --json --summary-only --output-path target/rust-coverage/summary.json
+          mv target/rust-coverage/html rust-coverage
+          # The badge reads the summary format the frontend report writes,
+          # with the percentage rounded to two places as that one is.
+          jq '{total: {lines: {pct: (.data[0].totals.lines.percent * 100 | round / 100)}}}' \
+            target/rust-coverage/summary.json > rust-coverage/coverage-summary.json
+          echo "Rust line coverage: $(jq .total.lines.pct rust-coverage/coverage-summary.json)%" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Rust coverage artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@v6
+        with:
+          name: rust-coverage-report
+          path: rust-coverage/
+          retention-days: 1
 
       - name: Build Tauri app (Linux)
         run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
