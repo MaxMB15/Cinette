@@ -131,7 +131,9 @@ describe("getEpgLastRefresh / setEpgLastRefresh", () => {
 	beforeEach(() => localStorage.clear());
 
 	it("returns 0 when no timestamp is stored", () => {
-		expect(getEpgLastRefresh("p1")).toBe(0);
+		// The module keeps refresh times in memory too, and clearing storage
+		// doesn't clear them, so use an id no other test refreshes.
+		expect(getEpgLastRefresh("never-refreshed")).toBe(0);
 	});
 
 	it("stores and retrieves a timestamp", () => {
@@ -171,18 +173,19 @@ describe("getEpgLastRefresh / setEpgLastRefresh", () => {
 
 // ── useChannelsProvider hook tests ────────────────────────────────────
 
-// Mock all Tauri API calls
+// Mock all Tauri API calls. Defaults are the mocks' own implementations, so
+// `vi.resetAllMocks()` before each test puts them back after a test overrides one.
 vi.mock("@/lib/tauri", () => ({
-	loadM3uPlaylist: vi.fn().mockResolvedValue(undefined),
-	loadM3uFile: vi.fn().mockResolvedValue(undefined),
-	loadXtreamProvider: vi.fn().mockResolvedValue(undefined),
-	getProviders: vi.fn().mockResolvedValue([]),
-	removeProvider: vi.fn().mockResolvedValue(undefined),
-	getAllChannels: vi.fn().mockResolvedValue([]),
-	refreshProvider: vi.fn().mockResolvedValue(undefined),
-	refreshEpg: vi.fn().mockResolvedValue(120),
-	updateProvider: vi.fn().mockResolvedValue(undefined),
-	toggleFavorite: vi.fn().mockResolvedValue(true),
+	loadM3uPlaylist: vi.fn(async () => {}),
+	loadM3uFile: vi.fn(async () => {}),
+	loadXtreamProvider: vi.fn(async () => {}),
+	getProviders: vi.fn(async () => []),
+	removeProvider: vi.fn(async () => {}),
+	getAllChannels: vi.fn(async () => []),
+	refreshProvider: vi.fn(async () => {}),
+	refreshEpg: vi.fn(async () => 120),
+	updateProvider: vi.fn(async () => {}),
+	toggleFavorite: vi.fn(async () => true),
 }));
 
 import {
@@ -204,10 +207,8 @@ const mockRefreshEpg = vi.mocked(refreshEpgApi);
 
 describe("useChannelsProvider", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
+		vi.resetAllMocks();
 		localStorage.clear();
-		mockGetProviders.mockResolvedValue([]);
-		mockGetAllChannels.mockResolvedValue([]);
 	});
 
 	afterEach(() => {
@@ -396,10 +397,8 @@ const failureOf = async (action: () => Promise<void>) => {
 
 describe("useChannelsProvider provider changes", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
+		vi.resetAllMocks();
 		localStorage.clear();
-		mockGetProviders.mockResolvedValue([]);
-		mockGetAllChannels.mockResolvedValue([]);
 	});
 
 	it("saves an edited provider and reloads the provider list", async () => {

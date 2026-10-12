@@ -14,14 +14,16 @@ vi.mock("@tauri-apps/api/event", () => ({
 	}),
 }));
 
+// Defaults are the mocks' own implementations, so `vi.resetAllMocks()` before
+// each test puts them back after a test overrides one.
 vi.mock("@/lib/tauri", () => ({
-	mpvLoad: vi.fn().mockResolvedValue(undefined),
-	mpvPlay: vi.fn().mockResolvedValue(undefined),
-	mpvPause: vi.fn().mockResolvedValue(undefined),
-	mpvStop: vi.fn().mockResolvedValue(undefined),
-	mpvSeek: vi.fn().mockResolvedValue(undefined),
-	mpvSetVolume: vi.fn().mockResolvedValue(undefined),
-	mpvGetState: vi.fn().mockResolvedValue({
+	mpvLoad: vi.fn(async () => {}),
+	mpvPlay: vi.fn(async () => {}),
+	mpvPause: vi.fn(async () => {}),
+	mpvStop: vi.fn(async () => {}),
+	mpvSeek: vi.fn(async () => {}),
+	mpvSetVolume: vi.fn(async () => {}),
+	mpvGetState: vi.fn(async () => ({
 		isPlaying: false,
 		isPaused: false,
 		currentUrl: null,
@@ -30,7 +32,7 @@ vi.mock("@/lib/tauri", () => ({
 		duration: 0,
 		playbackStarted: false,
 		openFailed: false,
-	}),
+	})),
 }));
 
 import {
@@ -55,20 +57,10 @@ const mockMpvGetState = vi.mocked(mpvGetState);
 
 describe("useMpv", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
+		vi.resetAllMocks();
 		mockListenCallbacks.clear();
 		sessionStorage.clear();
 		localStorage.clear();
-		mockMpvGetState.mockResolvedValue({
-			isPlaying: false,
-			isPaused: false,
-			currentUrl: null,
-			volume: 100,
-			position: 0,
-			duration: 0,
-			playbackStarted: false,
-			openFailed: false,
-		} as never);
 	});
 
 	afterEach(() => {
