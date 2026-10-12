@@ -74,6 +74,7 @@ fn xtream_panel() -> (String, std::sync::mpsc::Receiver<String>) {
     ])
 }
 
+/// A provider with no login, named after its id.
 fn provider(id: &str, provider_type: ProviderType, url: &str) -> Provider {
     Provider {
         id: id.into(),
@@ -97,6 +98,7 @@ fn xtream_provider(id: &str, url: &str) -> Provider {
     }
 }
 
+/// A live channel in the News group.
 fn channel(id: &str, name: &str, url: &str) -> Channel {
     Channel {
         id: id.into(),
@@ -108,23 +110,27 @@ fn channel(id: &str, name: &str, url: &str) -> Channel {
     }
 }
 
+/// Saves `provider` and its channels straight to the cache.
 fn add_provider(app: &TestApp, provider: &Provider, channels: &[Channel]) {
     let cache = cache(app);
     cache.upsert_provider(provider).unwrap();
     cache.save_channels(&provider.id, channels).unwrap();
 }
 
+/// The one saved provider. Fails the test if there are more or none.
 async fn only_provider(app: &TestApp) -> Provider {
     let mut providers = get_providers(app.state()).await.unwrap();
     assert_eq!(providers.len(), 1, "{providers:?}");
     providers.remove(0)
 }
 
+/// The names of every saved channel, in the order the app lists them.
 async fn channel_names(app: &TestApp) -> Vec<String> {
     let channels = get_all_channels(app.state()).await.unwrap();
     channels.into_iter().map(|ch| ch.name).collect()
 }
 
+/// The ids of the channels marked as favorites.
 async fn favorite_ids(app: &TestApp) -> Vec<String> {
     let channels = get_all_channels(app.state()).await.unwrap();
     channels
@@ -358,6 +364,12 @@ impl Logged {
     /// Logs everything on this thread until the guard drops. A tokio test
     /// runs its awaits on its own thread, so their logs land here too.
     fn start(&self) -> tracing::subscriber::DefaultGuard {
+        // tracing caches whether a log line is wanted. While only one
+        // dispatcher has ever existed, a line first reached with none set
+        // stays off for good, even after this test sets its own. A second
+        // dispatcher alive for the whole run makes tracing ask again.
+        static SECOND: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+        SECOND.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
         let logged = self.clone();
         let subscriber = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)
@@ -367,6 +379,7 @@ impl Logged {
         tracing::subscriber::set_default(subscriber)
     }
 
+    /// Everything logged so far.
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
@@ -1000,6 +1013,7 @@ async fn a_playback_position_is_saved_replaced_and_deleted() {
     assert_eq!(get_playback_position(app.state(), key()).await, Ok(None));
 }
 
+/// Puts the live group `group` of provider `p` under `category` at `order`.
 async fn place_group(app: &TestApp, group: &str, category: Option<&str>, order: i64) {
     update_group_hierarchy_entry(
         app.state(),

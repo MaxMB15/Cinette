@@ -235,6 +235,25 @@ const REQUIRED_ARGUMENTS: &[(&str, &[&str])] = &[
         "delete_super_category",
         &["providerId", "contentType", "categoryName"],
     ),
+    ("enqueue_movie_download", &["channelId"]),
+    (
+        "enqueue_episode_download",
+        &["episode", "seriesChannelId", "seriesTitle"],
+    ),
+    (
+        "enqueue_episodes_batch",
+        &["episodes", "seriesChannelId", "seriesTitle"],
+    ),
+    ("cache_series_episodes", &["seriesChannelId", "episodes"]),
+    ("get_cached_series_episodes", &["seriesChannelId"]),
+    ("stop_download", &["id"]),
+    ("stop_downloads", &["ids"]),
+    ("remove_download", &["id"]),
+    ("remove_downloads", &["ids"]),
+    ("set_download_keep", &["id", "keep"]),
+    ("set_download_concurrency", &["n"]),
+    ("set_download_folder", &["path"]),
+    ("resolve_local_download", &["channelId"]),
 ];
 
 /// The arguments a call may leave out, which the frontend sends as `null` or
@@ -247,6 +266,9 @@ const OPTIONAL_ARGUMENTS: &[(&str, &[&str])] = &[
     ("record_play_start", &["channelLogo"]),
     ("get_watch_history", &["contentType"]),
     ("update_group_hierarchy_entry", &["newSuperCategory"]),
+    ("set_download_retention", &["days"]),
+    ("count_downloads_due", &["days"]),
+    ("hand_off_progress", &["item"]),
 ];
 
 /// A value of the right type for an argument, so a call is refused only for
@@ -254,8 +276,11 @@ const OPTIONAL_ARGUMENTS: &[(&str, &[&str])] = &[
 fn sample(argument: &str) -> Value {
     match argument {
         "groupsWithSamples" | "uncategorizedGroups" | "existingCategories" => json!([]),
+        "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
-        | "positionSeconds" | "newSortOrder" | "sortOrder" => json!(1),
+        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" => json!(1),
+        "keep" => json!(true),
+        "episode" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),
     }
 }
@@ -289,10 +314,10 @@ fn every_command_names_the_argument_a_call_left_out() {
 fn every_command_names_an_optional_argument_of_the_wrong_type() {
     let app = TestApp::new();
     for (command, optional) in OPTIONAL_ARGUMENTS {
-        let (_, required) = REQUIRED_ARGUMENTS
+        let required = REQUIRED_ARGUMENTS
             .iter()
             .find(|(name, _)| name == command)
-            .unwrap();
+            .map_or(&[][..], |(_, required)| *required);
         for wrong in *optional {
             let mut given: serde_json::Map<String, Value> = required
                 .iter()

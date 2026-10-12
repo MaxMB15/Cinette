@@ -49,6 +49,7 @@ fn the_matrix() -> OmdbData {
     .unwrap()
 }
 
+/// MDBList's ratings for [`MOVIE`].
 fn mdblist_ratings() -> MdbListData {
     MdbListData {
         imdb_id: Some(MOVIE.into()),
@@ -58,6 +59,7 @@ fn mdblist_ratings() -> MdbListData {
     }
 }
 
+/// What's On's ratings for [`MOVIE`].
 fn whatson_ratings() -> WhatsonData {
     WhatsonData {
         imdb_id: Some(MOVIE.into()),
@@ -95,6 +97,7 @@ fn segment(kind: SegmentKind, start: f64, end: f64, source: SegmentSource) -> Sk
     }
 }
 
+/// A source's times with no post-credits scene.
 fn times(segments: Vec<SkipSegment>) -> SourceTimes {
     SourceTimes {
         segments,
@@ -854,6 +857,7 @@ impl StandIn {
         Self { dir }
     }
 
+    /// Builds each run of the stand-in, as pkexec would be built.
     fn elevated(&self) -> impl Fn() -> tokio::process::Command + '_ {
         || {
             let mut sh = tokio::process::Command::new("/bin/sh");
@@ -940,6 +944,21 @@ async fn an_installer_that_cannot_be_started_is_an_error() {
         let err = installed.unwrap_err();
         assert!(err.starts_with("Failed to run installer: "), "{err}");
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_package_type_with_no_installer_runs_nothing() {
+    let pkexec = StandIn::new("exit 0");
+
+    let installed =
+        install_package(pkexec.elevated(), "appimage", &pkexec.package("AppImage")).await;
+
+    assert_eq!(
+        installed,
+        Err("Unsupported package type: appimage".to_string())
+    );
+    assert!(pkexec.runs().is_empty());
 }
 
 #[test]

@@ -975,7 +975,9 @@ pub async fn search_subtitles<R: Runtime>(
 
     // 3. Search
     tracing::info!("[OpenSubtitles] searching for imdb_id={} season={:?} episode={:?}", imdb_id, season, episode);
-    let fetched = mvp_core::iptv::opensubtitles::search_subtitles(&imdb_id, season, episode, &api_key).await;
+    let fetched =
+        mvp_core::iptv::opensubtitles::search_subtitles(&imdb_id, season, episode, &api_key)
+            .await;
     keep_subtitle_search(&state, &imdb_id, season, episode, fetched)
 }
 
@@ -1537,9 +1539,10 @@ async fn download_package<R: Runtime>(
     }
 
     let total_size = response.content_length().unwrap_or(0);
-    // keep() disables auto-delete and returns a TempPath (RAII: deletes on drop)
-    // plus the raw File handle for writing. The caller holds the TempPath while
-    // it installs, so dpkg/rpm can access the file, and cleanup happens on all paths.
+    // into_parts() splits the temp file into the open File, for writing, and a
+    // TempPath that deletes the file when it drops. The TempPath is held until
+    // the install finishes, so dpkg or rpm can read the file, and it is
+    // deleted on every path out.
     use tempfile::Builder;
     let temp_file = Builder::new()
         .prefix("maxvideoplayer_update.")
@@ -1635,7 +1638,7 @@ async fn install_package(
             .output()
             .await
             .map_err(|e| format!("Failed to run installer: {e}"))?,
-        _ => unreachable!(),
+        other => return Err(format!("Unsupported package type: {other}")),
     };
 
     if !output.status.success() {
