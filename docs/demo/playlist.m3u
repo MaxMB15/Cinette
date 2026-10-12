@@ -10,6 +10,6 @@ https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
 #EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Elephants_Dream_s5_both.jpg/500px-Elephants_Dream_s5_both.jpg" group-title="Blender open movies",Elephants Dream
 https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov
 #EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Sintel-screenshot-3.jpg/500px-Sintel-screenshot-3.jpg" group-title="Blender open movies",Sintel
-https://download.blender.org/durian/movies/Sintel.2010.1080p.mkv
+https://cdn.theoplayer.com/video/sintel/index.m3u8
 #EXTINF:-1 tvg-type="movie" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/c/cb/Tears_of_Steel_frame_03_1a.jpg/500px-Tears_of_Steel_frame_03_1a.jpg" group-title="Blender open movies",Tears of Steel
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8
