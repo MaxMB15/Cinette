@@ -92,8 +92,12 @@ with OpenGL enabled (`scripts/build-libmpv.sh`).
 ### Linux
 
 `LinuxGlRenderer` creates a Wayland subsurface below the webview's surface and an EGL
-context on it, and passes the Wayland display to libmpv. All EGL and GL calls run on
-the GLib main thread. X11 sessions use the separate-window fallback.
+context on it. All EGL and GL calls run on the GLib main thread. X11 sessions use the
+separate-window fallback.
+
+On Wayland, mpv decodes with `hwdec=auto-copy-safe`, which copies each decoded frame
+back to memory before upload. Zero-copy decoding opens a VA-API display through the
+compositor, and libva crashes there on some desktops. X11 keeps zero-copy `auto`.
 
 ### iOS
 

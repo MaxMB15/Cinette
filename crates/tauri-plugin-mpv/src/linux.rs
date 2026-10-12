@@ -6,9 +6,11 @@
 //!
 //! The renderer puts a `wl_subsurface` and `wl_egl_window` under the Tauri
 //! `wl_surface` and builds an OpenGL Core 3.2 EGL context on that window.
-//! libmpv gets an OpenGL render context plus the native `wl_display` through
-//! `MPV_RENDER_PARAM_WL_DISPLAY`. It needs the display for dmabuf and color
-//! space interop with the compositor, and for presentation timing.
+//! libmpv gets an OpenGL render context and nothing else. We don't pass the
+//! `wl_display` through `MPV_RENDER_PARAM_WL_DISPLAY`, because mpv only uses
+//! it to open a VA-API display for zero-copy decoding, and that call has
+//! crashed inside libva on some Wayland compositors (#36). Decoding uses
+//! copy mode instead, see [`LINUX_HWDEC`].
 //!
 //! Every EGL, GL and `wl_egl_window` call runs on the GLib main thread, which
 //! owns the EGL context for the renderer's whole life. It is the Wayland
@@ -63,8 +65,8 @@ fn egl() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, String> {
 /// Resolves a GL function pointer through the EGL loader.
 ///
 /// Both the `gl` crate's `load_with` and libmpv's `get_proc_address` callback
-/// use it. `attach` calls `gl::load_with` once, on the GLib main thread, while
-/// the EGL context is current.
+/// use it. `gl_renderer_name` and `attach` call `gl::load_with` on the GLib
+/// main thread, each while the EGL context is current.
 fn gl_proc_address(name: &str) -> *mut c_void {
     match egl() {
         Ok(egl) => egl
@@ -105,6 +107,8 @@ struct OwnedEgl {
     surface: Option<egl::Surface>,
     context: egl::Context,
     config: egl::Config,
+    /// Whether the context draws on the CPU. See [`is_software_gl`].
+    software_gl: bool,
 }
 
 impl Drop for OwnedEgl {
@@ -132,7 +136,6 @@ struct WaylandSession {
     child_surface: WlSurface,
     queue: Mutex<EventQueue<WlGlobals>>,
     conn: Connection,
-    wl_display_ptr: *mut c_void,
 }
 
 impl Drop for WaylandSession {
@@ -153,7 +156,9 @@ unsafe impl Sync for WaylandSession {}
 /// through `Inner::state`.
 struct SessionState {
     egl_display: egl::Display,
-    egl_surface: egl::Surface,
+    /// `None` after a resize failed to make a new surface. The next resize
+    /// tries again.
+    egl_surface: Option<egl::Surface>,
     wl_egl_surface: Option<WlEglSurface>,
     pending_resize: Option<(i32, i32)>,
     current_size: (i32, i32),
@@ -163,8 +168,8 @@ struct SessionState {
 
 impl Drop for SessionState {
     fn drop(&mut self) {
-        if let Ok(egl) = egl() {
-            let _ = egl.destroy_surface(self.egl_display, self.egl_surface);
+        if let (Some(surface), Ok(egl)) = (self.egl_surface, egl()) {
+            let _ = egl.destroy_surface(self.egl_display, surface);
         }
     }
 }
@@ -180,6 +185,8 @@ struct Inner {
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     video_active: AtomicBool,
     valid: AtomicBool,
+    /// Set once mpv has drawn a decoded frame. Only `render_frame` uses it.
+    drew_frame: AtomicBool,
     // Keep this order, since fields drop top to bottom. The render context
     // frees mpv's GL resources, `state` destroys the EGL surface and
     // WlEglSurface, `egl` destroys the GL context and `wayland` tears down
@@ -209,6 +216,8 @@ pub struct LinuxGlRenderer {
     /// mutex is only there for `Sync`. Nothing contends it, because the
     /// command thread sets and takes it before the renderer is shared.
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Whether OpenGL runs on the CPU, such as Mesa's llvmpipe.
+    software_gl: bool,
 }
 
 /// The EGL and Wayland resources `new` builds for `attach`.
@@ -256,6 +265,7 @@ impl LinuxGlRenderer {
         };
 
         let (egl_res, wayland) = build_wayland_on_main_thread(wl_surface_ptr, wl_display_ptr)?;
+        let software_gl = egl_res.software_gl;
 
         Ok(Self {
             pending: Some(Pending {
@@ -265,7 +275,13 @@ impl LinuxGlRenderer {
             }),
             active: None,
             first_frame_cb: Mutex::new(None),
+            software_gl,
         })
+    }
+
+    /// Whether OpenGL runs on the CPU. Pass it to [`embedded_options`].
+    pub fn software_gl(&self) -> bool {
+        self.software_gl
     }
 }
 
@@ -301,7 +317,6 @@ impl PlatformRenderer for LinuxGlRenderer {
             let context = egl_res.context;
             let surface = egl_res.surface.take().expect("surface already taken");
             let wl_egl = wayland.wl_egl_surface.take().expect("wl_egl already taken");
-            let wl_display_ptr = wayland.wl_display_ptr;
 
             egl.make_current(display, Some(surface), Some(surface), Some(context))
                 .map_err(|e| format!("eglMakeCurrent (init): {e:?}"))?;
@@ -320,7 +335,6 @@ impl PlatformRenderer for LinuxGlRenderer {
                         get_proc_address,
                         ctx: std::ptr::null_mut::<c_void>(),
                     }),
-                    RenderParam::WaylandDisplay(wl_display_ptr as *const c_void),
                 ],
             )
             .map_err(|e| format!("mpv_render_context_create: {e}"))?;
@@ -347,10 +361,11 @@ impl PlatformRenderer for LinuxGlRenderer {
                     first_frame_cb: Mutex::new(first_frame_cb),
                     video_active: AtomicBool::new(true),
                     valid: AtomicBool::new(true),
+                    drew_frame: AtomicBool::new(false),
                     render_ctx,
                     state: Mutex::new(SessionState {
                         egl_display: display,
-                        egl_surface: surface,
+                        egl_surface: Some(surface),
                         wl_egl_surface: Some(wl_egl),
                         pending_resize: None,
                         current_size: (1, 1),
@@ -384,7 +399,13 @@ impl PlatformRenderer for LinuxGlRenderer {
             let ax = x as i32 + state.csd_offset.0;
             let ay = y as i32 + state.csd_offset.1;
             state.last_frame = (ax, ay, wi, hi);
-            state.pending_resize = Some((wi, hi));
+            // Only a new size needs a new EGL surface. The frontend also
+            // calls this when the video moves without resizing, and
+            // recreating the surface then would flash a black frame.
+            let target = state.pending_resize.unwrap_or(state.current_size);
+            if target != (wi, hi) {
+                state.pending_resize = Some((wi, hi));
+            }
 
             inner.wayland.subsurface.set_position(ax, ay);
             inner.wayland.child_surface.commit();
@@ -478,7 +499,9 @@ fn render_frame(inner: &Inner) {
     // on VM GL drivers (virgl/llvmpipe).
     let resized = if let Some((nw, nh)) = state.pending_resize.take() {
         let _ = egl.make_current(display, None, None, None);
-        let _ = egl.destroy_surface(display, state.egl_surface);
+        if let Some(old) = state.egl_surface.take() {
+            let _ = egl.destroy_surface(display, old);
+        }
         let old_wl = state.wl_egl_surface.take();
         drop(old_wl);
 
@@ -486,13 +509,15 @@ fn render_frame(inner: &Inner) {
         match recreate_egl_surface(egl, display, inner.egl.config, child_id, nw, nh) {
             Some((new_wl, new_egl)) => {
                 state.wl_egl_surface = Some(new_wl);
-                state.egl_surface = new_egl;
+                state.egl_surface = Some(new_egl);
                 state.current_size = (nw, nh);
                 true
             }
             None => {
                 tracing::warn!("[MPV] EGL surface recreation failed on resize");
-                drop(state);
+                // The old surface is gone. A zero size makes the next
+                // `set_frame` queue another attempt.
+                state.current_size = (0, 0);
                 return;
             }
         }
@@ -500,7 +525,9 @@ fn render_frame(inner: &Inner) {
         false
     };
 
-    let surface = state.egl_surface;
+    let Some(surface) = state.egl_surface else {
+        return;
+    };
     let (w, h) = state.current_size;
     drop(state);
 
@@ -532,7 +559,13 @@ fn render_frame(inner: &Inner) {
         Err(_) => false,
     };
 
-    if !has_frame && !resized {
+    // A resize redraws the last frame, so a paused video doesn't go black.
+    // Before the first frame there is nothing to redraw, and a render would
+    // fire the first frame callback too early. The macOS renderer likewise
+    // only renders when mpv reports a new frame. If mpv drops the first frame
+    // because this callback ran late, the picture stays black until the next
+    // one arrives.
+    if !has_frame && !(resized && inner.drew_frame.load(Ordering::Relaxed)) {
         return;
     }
 
@@ -551,6 +584,7 @@ fn render_frame(inner: &Inner) {
     let _ = inner.wayland.conn.flush();
 
     inner.render_ctx.report_swap();
+    inner.drew_frame.store(true, Ordering::Relaxed);
 
     // A resize redraws the surface without a new frame, which doesn't count
     // as the first one. Take the callback out first, so it doesn't run with
@@ -644,8 +678,8 @@ fn build_wayland(
     child_surface.commit();
     conn.flush().map_err(|e| format!("wayland flush: {e}"))?;
 
-    // Prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)` so libmpv's
-    // Wayland integration recognizes the display as a Wayland one.
+    // Prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)`, which tells
+    // EGL the native display is a Wayland one instead of letting it guess.
     // `eglGetDisplay` covers older drivers.
     const EGL_PLATFORM_WAYLAND_EXT: u32 = 0x31D8;
     let egl_display = wayland_egl_display(egl, wl_display_ptr, EGL_PLATFORM_WAYLAND_EXT)?;
@@ -712,11 +746,18 @@ fn build_wayland(
         .create_context(egl_display, config, None, &context_attribs)
         .map_err(|e| format!("eglCreateContext: {e:?}"))?;
 
+    let renderer = gl_renderer_name(egl, egl_display, egl_surface, egl_context);
+    tracing::info!(
+        "[MPV] OpenGL renderer: {}",
+        renderer.as_deref().unwrap_or("unknown")
+    );
+
     let egl_res = OwnedEgl {
         display: egl_display,
         surface: Some(egl_surface),
         context: egl_context,
         config,
+        software_gl: renderer.as_deref().is_some_and(is_software_gl),
     };
     let wayland = WaylandSession {
         wl_egl_surface: Some(wl_egl_surface),
@@ -724,9 +765,41 @@ fn build_wayland(
         child_surface,
         queue: Mutex::new(queue),
         conn,
-        wl_display_ptr,
     };
     Ok((egl_res, wayland))
+}
+
+/// Reads `GL_RENDERER` with the new context, then releases the context.
+fn gl_renderer_name(
+    egl: &egl::DynamicInstance<egl::EGL1_4>,
+    display: egl::Display,
+    surface: egl::Surface,
+    context: egl::Context,
+) -> Option<String> {
+    egl.make_current(display, Some(surface), Some(surface), Some(context))
+        .ok()?;
+    gl::load_with(|name| gl_proc_address(name) as *const _);
+    // SAFETY: The context is current, and a non-null `glGetString` result
+    // is a NUL-terminated string that the driver keeps alive.
+    let name = unsafe {
+        let ptr = gl::GetString(gl::RENDERER);
+        (!ptr.is_null()).then(|| {
+            std::ffi::CStr::from_ptr(ptr.cast())
+                .to_string_lossy()
+                .into_owned()
+        })
+    };
+    let _ = egl.make_current(display, None, None, None);
+    name
+}
+
+/// Whether a `GL_RENDERER` string names a renderer that draws on the CPU.
+/// The names are the ones mpv itself checks for.
+fn is_software_gl(renderer: &str) -> bool {
+    renderer.contains("llvmpipe")
+        || renderer.contains("softpipe")
+        || renderer == "Software Rasterizer"
+        || renderer == "Mesa X11"
 }
 
 fn wayland_egl_display(
@@ -828,31 +901,77 @@ fn drain_wayland_queue(inner: &Inner) {
     let _ = queue.dispatch_pending(&mut dummy);
 }
 
+/// The hardware decoding mode for embedded playback, and for the fallback
+/// window when mpv opens it on Wayland.
+///
+/// Copy mode decodes on the GPU and copies each frame back for upload, so
+/// mpv never maps decoder surfaces into the renderer. Zero-copy `auto` opens
+/// a VA-API display through the Wayland compositor, which segfaults inside
+/// libva on some setups, and the mapped surfaces have shown wrong colors on
+/// drivers that can't convert NV12.
+///
+/// Plain `auto-copy` also tries Vulkan. With libmpv 0.37, a failed Vulkan
+/// attempt on a machine without Vulkan video decoding, such as Mesa's
+/// software driver, left the embedded picture black even after mpv fell
+/// back to software decoding. The `-safe` list in 0.37 leaves Vulkan out.
+/// Newer releases, including the 0.40 the AppImage bundles, put Vulkan on
+/// that list, and there a failed attempt falls back cleanly.
+const LINUX_HWDEC: &str = "auto-copy-safe";
+
+/// Cheaper scaling, no dithering and no HDR peak detection, the settings of
+/// mpv's `fast` profile apart from `allow-delayed-peak-detect`, which is
+/// newer than some distributions' libmpv. The profile itself is new in mpv
+/// 0.37, and an option libmpv doesn't know fails the whole load, so these are
+/// spelled out.
+///
+/// mpv 0.37 made its slower, sharper scalers the default. On a software
+/// renderer they cost a lot of CPU, and in testing with Mesa's llvmpipe and
+/// libmpv 0.37 the embedded picture stayed black in about half the runs.
+/// With these options it showed every time.
+const SOFTWARE_GL_OPTIONS: [(&str, &str); 7] = [
+    ("scale", "bilinear"),
+    ("dscale", "bilinear"),
+    ("dither", "no"),
+    ("correct-downscaling", "no"),
+    ("linear-downscaling", "no"),
+    ("sigmoid-upscaling", "no"),
+    ("hdr-compute-peak", "no"),
+];
+
 /// Options for embedded playback through the OpenGL render context.
-pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
+/// `software_gl` comes from [`LinuxGlRenderer::software_gl`].
+pub fn embedded_options(software_gl: bool) -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
         ("vo", "libmpv"),
-        // `auto-copy` decodes on the GPU but copies frames to CPU for GL
-        // upload. Plain `auto` can map VAAPI surfaces directly as GL
-        // textures, which produces color corruption on drivers that
-        // cannot handle the NV12 to RGB interop.
-        ("hwdec", "auto-copy"),
+        ("hwdec", LINUX_HWDEC),
+        // Copy mode doesn't use GPU interop, so don't load any. The render
+        // API otherwise loads every interop (VA-API, VDPAU, CUDA, DRM PRIME)
+        // when the context is created, which costs startup time and runs
+        // the libva code that crashes.
+        ("gpu-hwdec-interop", "no"),
         ("ao", "pulse,pipewire,alsa,"),
         // Ignore config files, so neither /etc/mpv/mpv.conf nor a user
         // config can turn audio off with audio=no or aid=no.
         ("config", "no"),
         ("video-sync", "audio"),
     ];
+    if software_gl {
+        options.extend(SOFTWARE_GL_OPTIONS);
+    }
     options.extend(shared_options());
     options.push(("msg-level", "all=info"));
     options
 }
 
 /// Options for the separate fallback window, where mpv picks `vo=gpu` and
-/// shows its own controls.
-pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
+/// shows its own controls. `wayland` says whether mpv will open that window
+/// on Wayland, see [`mpv_uses_wayland`].
+pub fn fallback_options(wayland: bool) -> Vec<(&'static str, &'static str)> {
+    // X11 never reaches libva's Wayland code, so keep zero-copy decoding
+    // there. X11 sessions always use this window.
+    let hwdec = if wayland { LINUX_HWDEC } else { "auto" };
     let mut options = vec![
-        ("hwdec", "auto"),
+        ("hwdec", hwdec),
         ("ao", "pulse,pipewire,alsa,"),
         ("config", "no"),
         ("video-sync", "display-resample"),
@@ -860,4 +979,130 @@ pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
     options.extend(shared_options());
     options.push(("msg-level", "all=info"));
     options
+}
+
+/// Whether mpv's own window will connect to a Wayland compositor. mpv tries
+/// Wayland before X11, even when the app itself runs through XWayland with
+/// `GDK_BACKEND=x11`. mpv 0.38 and later only try it when `WAYLAND_DISPLAY`
+/// is set, and 0.40 also takes `WAYLAND_SOCKET`. Up to 0.37, mpv always tries,
+/// and libwayland then falls back to `$XDG_RUNTIME_DIR/wayland-0`. Any sign of
+/// a Wayland session counts, because guessing Wayland on X11 only costs
+/// zero-copy decoding.
+pub fn mpv_uses_wayland() -> bool {
+    wayland_in_env(|key| std::env::var_os(key), |path| path.exists())
+}
+
+fn wayland_in_env(
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> bool {
+    let display = var("WAYLAND_DISPLAY");
+    display.as_ref().is_some_and(|v| !v.is_empty())
+        || var("WAYLAND_SOCKET").is_some()
+        || var("XDG_SESSION_TYPE").is_some_and(|v| v == "wayland")
+        || (display.is_none()
+            && var("XDG_RUNTIME_DIR")
+                .filter(|dir| !dir.is_empty())
+                .is_some_and(|dir| exists(&std::path::Path::new(&dir).join("wayland-0"))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_software_gl, wayland_in_env};
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |key| {
+            vars.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    /// A file system with no sockets in it.
+    fn no_files(_: &Path) -> bool {
+        false
+    }
+
+    /// A file system where only `/run/user/1000/wayland-0` exists.
+    fn default_socket(path: &Path) -> bool {
+        path == Path::new("/run/user/1000/wayland-0")
+    }
+
+    #[test]
+    fn wayland_display_means_wayland() {
+        assert!(wayland_in_env(
+            env(&[("WAYLAND_DISPLAY", "wayland-0")]),
+            no_files
+        ));
+        // GDK_BACKEND=x11 doesn't stop mpv from using Wayland.
+        assert!(wayland_in_env(
+            env(&[
+                ("WAYLAND_DISPLAY", "wayland-1"),
+                ("GDK_BACKEND", "x11"),
+                ("DISPLAY", ":0"),
+            ]),
+            no_files
+        ));
+    }
+
+    #[test]
+    fn socket_or_session_type_means_wayland() {
+        assert!(wayland_in_env(env(&[("WAYLAND_SOCKET", "5")]), no_files));
+        assert!(wayland_in_env(
+            env(&[("XDG_SESSION_TYPE", "wayland")]),
+            no_files
+        ));
+    }
+
+    #[test]
+    fn default_socket_means_wayland_when_display_is_unset() {
+        // libwayland connects to wayland-0 when WAYLAND_DISPLAY is unset.
+        assert!(wayland_in_env(
+            env(&[("XDG_RUNTIME_DIR", "/run/user/1000"), ("DISPLAY", ":0")]),
+            default_socket
+        ));
+        // An empty WAYLAND_DISPLAY names no socket, so libwayland fails.
+        assert!(!wayland_in_env(
+            env(&[
+                ("XDG_RUNTIME_DIR", "/run/user/1000"),
+                ("WAYLAND_DISPLAY", ""),
+            ]),
+            default_socket
+        ));
+        assert!(!wayland_in_env(
+            env(&[("XDG_RUNTIME_DIR", "/run/user/1000")]),
+            no_files
+        ));
+        assert!(!wayland_in_env(
+            env(&[("XDG_RUNTIME_DIR", "")]),
+            |_: &Path| true
+        ));
+    }
+
+    #[test]
+    fn x11_session_is_not_wayland() {
+        assert!(!wayland_in_env(
+            env(&[("DISPLAY", ":0"), ("XDG_SESSION_TYPE", "x11")]),
+            no_files
+        ));
+        assert!(!wayland_in_env(env(&[("WAYLAND_DISPLAY", "")]), no_files));
+        assert!(!wayland_in_env(env(&[]), no_files));
+    }
+
+    #[test]
+    fn software_renderers_are_recognized() {
+        assert!(is_software_gl("llvmpipe (LLVM 19.1.1, 256 bits)"));
+        assert!(is_software_gl("softpipe"));
+        assert!(is_software_gl("Software Rasterizer"));
+        assert!(is_software_gl("Mesa X11"));
+        assert!(!is_software_gl("Mesa Intel(R) UHD Graphics 620 (KBL GT2)"));
+        assert!(!is_software_gl(
+            "AMD Radeon RX 6600 (radeonsi, navi23, LLVM 19.1.1, DRM 3.57)"
+        ));
+        assert!(!is_software_gl("NVIDIA GeForce RTX 3060/PCIe/SSE2"));
+        // virgl draws on the host GPU.
+        assert!(!is_software_gl("virgl (NVIDIA GeForce RTX 3060)"));
+    }
 }

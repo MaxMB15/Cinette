@@ -221,12 +221,17 @@ impl MpvEngine {
         let current_ao = mpv
             .get_property::<String>("current-ao")
             .unwrap_or_default();
+        // mpv also ends up here when it has audio drivers but none of them
+        // could open a device, for example with no sound server running, so
+        // the message names both causes.
         if current_ao.is_empty() || current_ao == "<unset>" {
             tracing::error!(
-                "[MPV] NO AUDIO OUTPUT DRIVER — libmpv has no AO backends compiled in. \
-                 Rebuild libmpv with audio support: \
-                 sudo apt-get install libpulse-dev libasound2-dev libpipewire-0.3-dev && \
-                 ./scripts/build-libmpv.sh linux"
+                "[MPV] no audio output opened. Either no sound server or device \
+                 is available, or libmpv was built without audio drivers. On \
+                 Linux, check that PipeWire or PulseAudio is running. If you \
+                 built libmpv yourself, install libpulse-dev, libasound2-dev \
+                 and libpipewire-0.3-dev and run ./scripts/build-libmpv.sh linux \
+                 again."
             );
             return;
         }
