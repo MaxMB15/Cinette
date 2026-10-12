@@ -579,7 +579,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, parse_search_response(found).unwrap());
-        let request = requests.recv().unwrap();
+        let request = requests.try_recv().unwrap();
         assert!(
             request.starts_with("GET /subtitles?imdb_id=0113277&type=movie HTTP/1.1"),
             "{request}"
@@ -647,7 +647,7 @@ mod tests {
 
         assert_eq!(path, dest.join("7.vtt"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "WEBVTT\n");
-        let api_request = api_requests.recv().unwrap();
+        let api_request = api_requests.try_recv().unwrap();
         assert!(
             api_request.starts_with("POST /download HTTP/1.1"),
             "{api_request}"
@@ -656,8 +656,9 @@ mod tests {
             header_lines(&api_request).contains(&"api-key: key".into()),
             "{api_request}"
         );
+        assert!(api_request.ends_with(r#"{"file_id":7}"#), "{api_request}");
         // The link is on another host, which has no business seeing the key.
-        let file_request = file_requests.recv().unwrap();
+        let file_request = file_requests.try_recv().unwrap();
         assert!(
             file_request.starts_with("GET /temp/abc HTTP/1.1"),
             "{file_request}"

@@ -437,7 +437,7 @@ mod tests {
         let url = format!("{server}/api/");
         let client = test_server::client();
         let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
-        (result, requests.recv().unwrap())
+        (result, requests.try_recv().unwrap())
     }
 
     #[tokio::test]
