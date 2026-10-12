@@ -8,20 +8,21 @@ import type { AggregateDownloadState, DownloadIconState, DownloadRecord } from "
  * can still be stopped. A recording waits and runs under its own statuses,
  * which `isActiveRecording` checks.
  */
-export const isDownloadActive = ({ status }: Pick<DownloadRecord, "status">): boolean =>
+export const isActiveDownload = ({ status }: Pick<DownloadRecord, "status">): boolean =>
 	status === "downloading" || status === "queued";
 
 /**
- * The download button's state for a movie or episode, from its latest
- * download if it has one. A cancelled download shows as idle, so the button
- * starts it again.
+ * The download button's state for a movie or episode, from the download
+ * `groupDownloads` keeps for it, if it has one. A finished download wins over
+ * a newer try. A cancelled download shows as idle, so the button starts it
+ * again.
  */
 export const downloadIconState = (
 	download: Pick<DownloadRecord, "status"> | undefined
 ): DownloadIconState => {
 	if (!download) return "idle";
 	if (download.status === "completed") return "complete";
-	if (isDownloadActive(download)) return "downloading";
+	if (isActiveDownload(download)) return "downloading";
 	if (download.status === "failed") return "failed";
 	return "idle";
 };

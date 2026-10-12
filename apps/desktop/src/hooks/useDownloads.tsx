@@ -3,7 +3,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { isDownloadActive } from "@/lib/download-status";
+import { isActiveDownload } from "@/lib/download-status";
 import { getDownloadRetention, listDownloads, setDownloadRetention } from "@/lib/tauri";
 import type { DownloadRecord, AggregateDownloadState } from "@/lib/types";
 
@@ -13,7 +13,7 @@ export const aggregateForSeries = (
 	totalEpisodes: number
 ): AggregateDownloadState => {
 	if (episodeDownloads.length === 0) return "none";
-	if (episodeDownloads.some(isDownloadActive)) return "downloading";
+	if (episodeDownloads.some(isActiveDownload)) return "downloading";
 	const completed = episodeDownloads.filter((d) => d.status === "completed").length;
 	if (completed === 0) return "none";
 	if (totalEpisodes > 0 && completed >= totalEpisodes) return "complete";

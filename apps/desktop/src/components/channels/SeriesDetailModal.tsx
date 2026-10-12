@@ -19,7 +19,7 @@ import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
 import { formatCount } from "@/lib/format";
-import { aggregateIconState, downloadIconState, isDownloadActive } from "@/lib/download-status";
+import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
@@ -45,11 +45,12 @@ interface SeriesDetailDrawerProps {
 
 /** Whether an episode already has a download in flight or done (not re-enqueued). */
 const isCovered = (r: DownloadRecord | undefined): boolean =>
-	!!r && (r.status === "completed" || isDownloadActive(r));
+	!!r && (r.status === "completed" || isActiveDownload(r));
 
 /**
  * What the download button of a season or of the whole series shows and acts
- * on. `records` holds the latest download of each episode that has one.
+ * on. `records` holds the download `groupDownloads` keeps for each episode
+ * that has one.
  */
 const episodeGroupDownloads = (eps: Channel[], downloads: Map<string, DownloadRecord>) => {
 	const records = eps.map((e) => downloads.get(e.id)).filter((r): r is DownloadRecord => !!r);
@@ -57,7 +58,7 @@ const episodeGroupDownloads = (eps: Channel[], downloads: Map<string, DownloadRe
 		records,
 		state: aggregateIconState(aggregateForSeries(records, eps.length)),
 		missing: eps.filter((e) => !isCovered(downloads.get(e.id))),
-		activeIds: records.filter(isDownloadActive).map((r) => r.id),
+		activeIds: records.filter(isActiveDownload).map((r) => r.id),
 		completedIds: records.filter((r) => r.status === "completed").map((r) => r.id),
 	};
 };

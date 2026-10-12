@@ -12,7 +12,7 @@ import { DownloadProgressBar } from "@/components/downloads/DownloadProgressBar"
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { cn, isFromInnerButton } from "@/lib/utils";
 import { nowSeconds } from "@/lib/date";
-import { aggregateIconState, downloadIconState, isDownloadActive } from "@/lib/download-status";
+import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
 /** Width (px) of the left channel-info column in RowCard — must match spacer in ChannelList header. */
@@ -301,7 +301,7 @@ const PosterCard = ({
 			{/* Siblings of the play button, since screen readers can't reach a
 			    control or a progress bar nested inside a button on its own. The
 			    extra pixel keeps each one inside the poster's border. */}
-			{!isSeries && dl && isDownloadActive(dl) && (
+			{!isSeries && dl && isActiveDownload(dl) && (
 				<div className="pointer-events-none absolute inset-x-0 top-0 aspect-[2/1] flex items-end p-px rounded-lg overflow-hidden">
 					<div className="w-full px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
 						<DownloadProgressBar download={dl} />

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, expect, it } from "vitest";
-import { aggregateIconState, downloadIconState, isDownloadActive } from "./download-status";
+import { aggregateIconState, downloadIconState, isActiveDownload } from "./download-status";
 import type { DownloadIconState, DownloadStatus } from "./types";
 
 /**
@@ -35,13 +35,13 @@ const ICON: Record<DownloadStatus, DownloadIconState> = {
 const statuses = (active: boolean) =>
 	(Object.keys(ACTIVE) as DownloadStatus[]).filter((s) => ACTIVE[s] === active);
 
-describe("isDownloadActive", () => {
+describe("isActiveDownload", () => {
 	it.each(statuses(true))("counts a %s download as active", (status) => {
-		expect(isDownloadActive({ status })).toBe(true);
+		expect(isActiveDownload({ status })).toBe(true);
 	});
 
 	it.each(statuses(false))("doesn't count a %s download as active", (status) => {
-		expect(isDownloadActive({ status })).toBe(false);
+		expect(isActiveDownload({ status })).toBe(false);
 	});
 });
 

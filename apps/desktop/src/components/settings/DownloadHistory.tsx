@@ -7,7 +7,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
 import { downloadPercent } from "@/lib/download-progress";
-import { isDownloadActive } from "@/lib/download-status";
+import { isActiveDownload } from "@/lib/download-status";
 import { formatBytes } from "@/lib/format";
 import { errorSummary, recordingStatus, recordingStatusColor } from "@/lib/recordings";
 import { deleteAt, deleteLabel } from "@/lib/retention";
@@ -23,7 +23,7 @@ const fmtTime = (t: number | null) => (t == null ? "—" : new Date(t * 1000).to
  * whose size an older version took from an HLS playlist.
  */
 const sizeCell = (d: DownloadRecord) =>
-	d.totalBytes && isDownloadActive(d)
+	d.totalBytes && isActiveDownload(d)
 		? `${fmtBytes(d.downloadedBytes)} / ${fmtBytes(d.totalBytes)}`
 		: fmtBytes(d.downloadedBytes);
 
