@@ -20,7 +20,8 @@ const focusLostListeners = new Set<() => void>();
 
 /**
  * Calls `listener` each time the last open modal closes and can't hand focus
- * back, because the control that had it before has left the page. Returns a
+ * back. That happens when the element that had focus before the modal opened
+ * has left the page or can't take focus, or when nothing had focus. Returns a
  * function that stops the calls.
  */
 export const onFocusLostOnClose = (listener: () => void): (() => void) => {
@@ -42,8 +43,9 @@ export const isTopFocusTrap = (node: HTMLElement | null): boolean =>
  * first control on open, Tab / Shift+Tab wrap around its controls, and focus
  * returns to where it was on close unless something else has taken it. With
  * one modal open over another, only the top one moves focus. When the last
- * modal closes and that control is gone, focus is lost, and the listeners of
- * `onFocusLostOnClose` hear about it.
+ * modal closes and focus can't go back, the listeners of `onFocusLostOnClose`
+ * hear about it. When one modal closes and another opens in the same render,
+ * the listeners run first and the new modal then takes focus.
  */
 export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 	useEffect(() => {
@@ -80,11 +82,16 @@ export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 			const index = traps.indexOf(node);
 			if (index !== -1) traps.splice(index, 1);
 			// Focus falls back to <body> when the focused control unmounts with the modal.
-			const active = document.activeElement;
-			const lost = !active || active === document.body || node.contains(active);
-			if (!lost) return;
+			const isLost = () => {
+				const active = document.activeElement;
+				return !active || active === document.body || node.contains(active);
+			};
+			if (!isLost()) return;
 			if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
-			else if (traps.length === 0) focusLostListeners.forEach((listener) => listener());
+			// focus() does nothing on <body> or a control that is disabled or hidden.
+			if (isLost() && traps.length === 0) {
+				focusLostListeners.forEach((listener) => listener());
+			}
 		};
 	}, [ref]);
 };

@@ -46,9 +46,29 @@ const Harness = ({ open }: { open: boolean }) => (
 	</div>
 );
 
+/** A button that opens two modals, with the second one first on the page. */
+const Pair = ({ opener, bottom, top }: { opener: boolean; bottom: boolean; top: boolean }) => (
+	<div>
+		{opener && <button>Opener</button>}
+		{top && <NamedTrap name="Top" />}
+		{bottom && <NamedTrap name="Bottom" />}
+	</div>
+);
+
+/** Unsubscribes the listeners a test added. */
+const stops: (() => void)[] = [];
+
+/** A mock that `onFocusLostOnClose` calls until the test ends. */
+const listen = () => {
+	const listener = vi.fn();
+	stops.push(onFocusLostOnClose(listener));
+	return listener;
+};
+
 describe("useFocusTrap", () => {
 	afterEach(() => {
 		cleanup();
+		stops.splice(0).forEach((stop) => stop());
 	});
 
 	it("moves focus to the first control on open", () => {
@@ -111,6 +131,7 @@ describe("useFocusTrap", () => {
 	it("says when the last modal closes with nowhere to hand focus back", () => {
 		const listener = vi.fn();
 		const stop = onFocusLostOnClose(listener);
+		stops.push(stop);
 		const Opener = ({ opener, open }: { opener: boolean; open: boolean }) => (
 			<div>
 				{opener && <button>Opener</button>}
@@ -134,8 +155,7 @@ describe("useFocusTrap", () => {
 	});
 
 	it("stays quiet when focus goes back or another modal is still open", () => {
-		const listener = vi.fn();
-		const stop = onFocusLostOnClose(listener);
+		const listener = listen();
 		const { getByText, rerender } = render(<Harness open={false} />);
 		getByText("Behind").focus();
 		rerender(<Harness open />);
@@ -154,12 +174,72 @@ describe("useFocusTrap", () => {
 		rerender(<Stack opener={false} top />);
 		rerender(<Stack opener={false} top={false} />);
 		expect(listener).not.toHaveBeenCalled();
-		stop();
+	});
+
+	it("says when nothing had focus as the modal opened", () => {
+		const listener = listen();
+		const { rerender } = render(<Harness open={false} />);
+		(document.activeElement as HTMLElement | null)?.blur();
+		expect(document.body).toHaveFocus();
+		rerender(<Harness open />);
+		rerender(<Harness open={false} />);
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("says when the control that had focus can no longer take it", () => {
+		const listener = listen();
+		const Page = ({ disabled, open }: { disabled: boolean; open: boolean }) => (
+			<div>
+				<button disabled={disabled}>Opener</button>
+				{open && <Dialog />}
+			</div>
+		);
+		const { getByText, rerender } = render(<Page disabled={false} open={false} />);
+		getByText("Opener").focus();
+		rerender(<Page disabled={false} open />);
+		rerender(<Page disabled open />);
+		rerender(<Page disabled open={false} />);
+		expect(document.body).toHaveFocus();
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("says once when two modals close together with nowhere to hand focus back", () => {
+		const listener = listen();
+		const { getByText, rerender } = render(<Pair opener bottom={false} top={false} />);
+		getByText("Opener").focus();
+		rerender(<Pair opener bottom top={false} />);
+		rerender(<Pair opener bottom top />);
+		rerender(<Pair opener={false} bottom={false} top={false} />);
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("hands focus back to the opener when two modals close together", () => {
+		const listener = listen();
+		const { getByText, rerender } = render(<Pair opener bottom={false} top={false} />);
+		getByText("Opener").focus();
+		rerender(<Pair opener bottom top={false} />);
+		rerender(<Pair opener bottom top />);
+		rerender(<Pair opener bottom={false} top={false} />);
+		expect(getByText("Opener")).toHaveFocus();
+		expect(listener).not.toHaveBeenCalled();
+	});
+
+	it("says so when the bottom modal closes after the top one", () => {
+		const listener = listen();
+		const { getByText, rerender } = render(<Pair opener bottom={false} top={false} />);
+		getByText("Opener").focus();
+		rerender(<Pair opener bottom top={false} />);
+		rerender(<Pair opener bottom top />);
+		rerender(<Pair opener={false} bottom top />);
+		rerender(<Pair opener={false} bottom top={false} />);
+		expect(getByText("Bottom first")).toHaveFocus();
+		expect(listener).not.toHaveBeenCalled();
+		rerender(<Pair opener={false} bottom={false} top={false} />);
+		expect(listener).toHaveBeenCalledTimes(1);
 	});
 
 	it("leaves focus that moved outside while the modal was open", () => {
-		const listener = vi.fn();
-		const stop = onFocusLostOnClose(listener);
+		const listener = listen();
 		const Page = ({ opener, open }: { opener: boolean; open: boolean }) => (
 			<div>
 				{opener && <button>Opener</button>}
@@ -181,7 +261,6 @@ describe("useFocusTrap", () => {
 		rerender(<Page opener={false} open={false} />);
 		expect(document.activeElement).toBe(getByText("Elsewhere"));
 		expect(listener).not.toHaveBeenCalled();
-		stop();
 	});
 
 	it("keeps focus on a dialog that has no controls", () => {

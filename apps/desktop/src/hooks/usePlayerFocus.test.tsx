@@ -2,18 +2,19 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useRef } from "react";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { useFocusTrap } from "./useFocusTrap";
 import { usePlayerFocus } from "./usePlayerFocus";
 
-/** A confirm, which opens outside the player. */
-const Confirm = () => {
+/** A confirm or notice, which opens outside the player. */
+const Confirm = ({ action }: { action: string }) => {
 	const ref = useRef<HTMLDivElement>(null);
 	useFocusTrap(ref);
 	return (
 		<div ref={ref} role="dialog">
-			<button>Remove</button>
+			<button>{action}</button>
 		</div>
 	);
 };
@@ -21,10 +22,12 @@ const Confirm = () => {
 const Player = ({
 	url,
 	confirm = false,
+	notice = false,
 	sidebar = true,
 }: {
 	url: string | null;
 	confirm?: boolean;
+	notice?: boolean;
 	sidebar?: boolean;
 }) => {
 	const ref = useRef<HTMLDivElement>(null);
@@ -35,7 +38,8 @@ const Player = ({
 			<div ref={ref} tabIndex={-1} data-testid="player">
 				<button>Resume</button>
 			</div>
-			{confirm && <Confirm />}
+			{confirm && <Confirm action="Remove" />}
+			{notice && <Confirm action="OK" />}
 		</>
 	);
 };
@@ -84,6 +88,62 @@ describe("usePlayerFocus", () => {
 		rerender(<Player url="http://example.test/1" confirm />);
 		rerender(<Player url="http://example.test/1" confirm sidebar={false} />);
 		rerender(<Player url="http://example.test/1" sidebar={false} />);
+		expect(player()).toHaveFocus();
+	});
+
+	it("takes focus back when a confirm closes and nothing had focus before it", () => {
+		const { rerender } = render(<Player url="http://example.test/1" />);
+		player().blur();
+		expect(document.body).toHaveFocus();
+		rerender(<Player url="http://example.test/1" confirm />);
+		rerender(<Player url="http://example.test/1" />);
+		expect(player()).toHaveFocus();
+	});
+
+	it("leaves focus to a notice that opens as the confirm closes", () => {
+		const { rerender } = render(<Player url="http://example.test/1" />);
+		button("Sidebar").focus();
+		rerender(<Player url="http://example.test/1" confirm />);
+		rerender(<Player url="http://example.test/1" confirm sidebar={false} />);
+		rerender(<Player url="http://example.test/1" notice sidebar={false} />);
+		expect(button("OK")).toHaveFocus();
+		rerender(<Player url="http://example.test/1" sidebar={false} />);
+		expect(player()).toHaveFocus();
+	});
+
+	it("takes focus back after a failed removal on the episode before", async () => {
+		let fail: (reason: string) => void = () => {};
+		const onRemove = () =>
+			new Promise((_resolve, reject) => {
+				fail = reject;
+			});
+		const Episode = ({ id, url }: { id: string; url: string }) => {
+			const ref = useRef<HTMLDivElement>(null);
+			usePlayerFocus(ref, url);
+			return (
+				<div ref={ref} tabIndex={-1} data-testid="player">
+					<DownloadButton
+						itemId={id}
+						state={id === "e1" ? "complete" : "idle"}
+						onStart={vi.fn()}
+						onStop={vi.fn()}
+						onRemove={onRemove}
+					/>
+				</div>
+			);
+		};
+		const { rerender } = render(<Episode id="e1" url="http://example.test/1" />);
+		button("Downloaded").focus();
+		fireEvent.click(button("Downloaded"));
+		fireEvent.click(button("Remove"));
+		// The next episode replaces the button before its stream loads.
+		rerender(<Episode id="e2" url="http://example.test/1" />);
+		expect(document.body).toHaveFocus();
+		await act(async () => fail("denied"));
+		const notice = screen.getByRole("dialog", { name: "Couldn't remove the download" });
+		rerender(<Episode id="e2" url="http://example.test/2" />);
+		fireEvent.click(within(notice).getByRole("button", { name: "OK" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(player()).toHaveFocus();
 	});
 
