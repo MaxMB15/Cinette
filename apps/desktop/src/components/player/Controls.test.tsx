@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach, beforeAll, afterAll, onTestFinished } from "vitest";
+import type { ComponentProps } from "react";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import { Controls } from "./Controls";
@@ -20,8 +21,11 @@ const playing: PlayerState = {
 	duration: 1800,
 };
 
-const renderControls = (touchLayout: boolean, hideCenterControls = false) =>
-	render(
+type ControlsProps = ComponentProps<typeof Controls>;
+
+/** The desktop bar for an episode that's playing. Override what a test needs. */
+const renderControls = (overrides: Partial<ControlsProps> = {}) => {
+	const controls = (props: Partial<ControlsProps>) => (
 		<Controls
 			state={playing}
 			visible
@@ -34,16 +38,23 @@ const renderControls = (touchLayout: boolean, hideCenterControls = false) =>
 			onSkip={vi.fn()}
 			onPrevEpisode={noop}
 			onNextEpisode={noop}
-			touchLayout={touchLayout}
-			hideCenterControls={hideCenterControls}
+			{...props}
 		/>
 	);
+	const view = render(controls(overrides));
+	return {
+		...view,
+		/** Renders again with `next` on top of the first overrides. */
+		rerender: (next: Partial<ControlsProps>) =>
+			view.rerender(controls({ ...overrides, ...next })),
+	};
+};
 
 describe("Controls", () => {
 	afterEach(cleanup);
 
 	it("moves play and the skip buttons to the middle row on touch layouts", () => {
-		renderControls(true);
+		renderControls({ touchLayout: true });
 		const pause = screen.getByRole("button", { name: "Pause" });
 		const middleRow = pause.parentElement!;
 		expect(screen.getAllByRole("button", { name: "Pause" })).toHaveLength(1);
@@ -53,7 +64,7 @@ describe("Controls", () => {
 	});
 
 	it("keeps the episode buttons out of the middle row, where a double-tap skips", () => {
-		renderControls(true);
+		renderControls({ touchLayout: true });
 		const middleRow = screen.getByRole("button", { name: "Pause" }).parentElement!;
 		for (const name of ["Previous episode", "Next episode"]) {
 			const button = screen.getByRole("button", { name });
@@ -63,7 +74,7 @@ describe("Controls", () => {
 
 	it("leaves out play, pause and skip while the stream can't play", () => {
 		for (const touchLayout of [true, false]) {
-			renderControls(touchLayout, true);
+			renderControls({ touchLayout, hideCenterControls: true });
 			expect(screen.queryByRole("button", { name: /^(Play|Pause)$/ })).toBeNull();
 			expect(screen.queryByRole("button", { name: /^Skip/ })).toBeNull();
 			// Stop still works, to give up on a stream that won't open.
@@ -73,15 +84,293 @@ describe("Controls", () => {
 	});
 
 	it("shows the episode buttons in the bar on desktop", () => {
-		renderControls(false);
+		renderControls();
 		expect(screen.getByRole("button", { name: "Previous episode" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Next episode" })).toBeInTheDocument();
+	});
+
+	it("shows only skip, play, stop and mute by default", () => {
+		renderControls({ onPrevEpisode: undefined, onNextEpisode: undefined });
+		const names = screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+		expect(names).toEqual([
+			"Skip back 10 seconds",
+			"Pause",
+			"Skip forward 10 seconds",
+			"Stop",
+			"Mute",
+		]);
+	});
+
+	it("lets taps through to the video while the controls are hidden", () => {
+		const view = renderControls({ visible: false });
+		const bar = view.container.firstElementChild;
+		expect(bar).toHaveClass("pointer-events-none");
+		view.rerender({ visible: true });
+		expect(bar).not.toHaveClass("pointer-events-none");
+	});
+
+	it("shows play in the bar while paused or stopped, and plays when pressed", () => {
+		for (const state of [
+			{ ...playing, isPaused: true },
+			{ ...playing, isPlaying: false },
+		]) {
+			const onPlay = vi.fn();
+			const onPause = vi.fn();
+			renderControls({ state, onPlay, onPause });
+			expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+			fireEvent.click(screen.getByRole("button", { name: "Play" }));
+			expect(onPlay).toHaveBeenCalledTimes(1);
+			expect(onPause).not.toHaveBeenCalled();
+			cleanup();
+		}
+	});
+
+	it("pauses from the bar while playing", () => {
+		const onPlay = vi.fn();
+		const onPause = vi.fn();
+		renderControls({ onPlay, onPause });
+		fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+		expect(onPause).toHaveBeenCalledTimes(1);
+		expect(onPlay).not.toHaveBeenCalled();
+	});
+
+	it("skips back and forward by the set lengths from the bar", () => {
+		const onSkip = vi.fn();
+		renderControls({ skip: { back: 5, forward: 30 }, onSkip });
+		fireEvent.click(screen.getByRole("button", { name: "Skip back 5 seconds" }));
+		expect(onSkip).toHaveBeenLastCalledWith(-5);
+		fireEvent.click(screen.getByRole("button", { name: "Skip forward 30 seconds" }));
+		expect(onSkip).toHaveBeenLastCalledWith(30);
+		expect(onSkip).toHaveBeenCalledTimes(2);
+	});
+
+	it("leaves out the skip buttons when the stream can't seek", () => {
+		renderControls({ skip: undefined });
+		expect(screen.queryByRole("button", { name: /^Skip/ })).toBeNull();
+		expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+	});
+
+	it("stops playback", () => {
+		const onStop = vi.fn();
+		renderControls({ onStop });
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		expect(onStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("mutes and unmutes through the volume when there's no mute handler", () => {
+		const onVolumeChange = vi.fn();
+		const view = renderControls({ onVolumeChange });
+		fireEvent.click(screen.getByRole("button", { name: "Mute" }));
+		expect(onVolumeChange).toHaveBeenLastCalledWith(0);
+		view.rerender({ state: { ...playing, volume: 0 } });
+		fireEvent.click(screen.getByRole("button", { name: "Unmute" }));
+		expect(onVolumeChange).toHaveBeenLastCalledWith(100);
+	});
+
+	it("leaves muting to the mute handler when there is one", () => {
+		const onToggleMute = vi.fn();
+		const onVolumeChange = vi.fn();
+		renderControls({ onToggleMute, onVolumeChange });
+		fireEvent.click(screen.getByRole("button", { name: "Mute" }));
+		expect(onToggleMute).toHaveBeenCalledTimes(1);
+		expect(onVolumeChange).not.toHaveBeenCalled();
+	});
+
+	it("leaves out the volume slider on devices whose buttons set the volume", () => {
+		renderControls({ showVolumeSlider: false });
+		expect(screen.queryByRole("slider", { name: "Volume" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Mute" })).toBeInTheDocument();
+	});
+
+	it("opens the channel info from the first button in the bar", () => {
+		const onInfo = vi.fn();
+		renderControls({ onInfo });
+		const info = screen.getByRole("button", { name: "Channel info" });
+		expect(screen.getAllByRole("button")[0]).toBe(info);
+		fireEvent.click(info);
+		expect(onInfo).toHaveBeenCalledTimes(1);
+	});
+
+	it("moves to the previous and next episode", () => {
+		const onPrevEpisode = vi.fn();
+		const onNextEpisode = vi.fn();
+		renderControls({ onPrevEpisode, onNextEpisode });
+		fireEvent.click(screen.getByRole("button", { name: "Previous episode" }));
+		expect(onPrevEpisode).toHaveBeenCalledTimes(1);
+		expect(onNextEpisode).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		expect(onNextEpisode).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens the subtitles and marks the button while they're on", () => {
+		const onSubtitles = vi.fn();
+		const view = renderControls({ onSubtitles });
+		const subtitles = () => screen.getByRole("button", { name: "Subtitles" });
+		expect(subtitles()).not.toHaveClass("text-blue-400");
+		fireEvent.click(subtitles());
+		expect(onSubtitles).toHaveBeenCalledTimes(1);
+		view.rerender({ hasSubtitles: true });
+		expect(subtitles()).toHaveClass("text-blue-400");
+	});
+
+	it("shows the download control it's given", () => {
+		renderControls({ downloadSlot: <button type="button">Download</button> });
+		expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+	});
+
+	it("opens the keyboard shortcuts and names the key for them", () => {
+		const onShortcuts = vi.fn();
+		renderControls({ onShortcuts });
+		const shortcuts = screen.getByRole("button", { name: "Keyboard shortcuts" });
+		expect(shortcuts).toHaveAttribute("title", "Keyboard shortcuts (?)");
+		fireEvent.click(shortcuts);
+		expect(onShortcuts).toHaveBeenCalledTimes(1);
+	});
+
+	it("enters fullscreen and leaves it from the same button", () => {
+		const onFullscreen = vi.fn();
+		const view = renderControls({ onFullscreen });
+		fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+		expect(onFullscreen).toHaveBeenCalledTimes(1);
+		view.rerender({ isFullscreen: true });
+		expect(screen.queryByRole("button", { name: "Fullscreen" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Exit fullscreen" }));
+		expect(onFullscreen).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("Controls autoplay toggle", () => {
+	const autoplayToggle = () => screen.queryByRole("button", { name: /^Autoplay/ });
+
+	it("turns autoplay on and off", () => {
+		const onAutoplayChange = vi.fn();
+		const view = renderControls({ autoplay: false, onAutoplayChange });
+		fireEvent.click(screen.getByRole("button", { name: "Autoplay off" }));
+		expect(onAutoplayChange).toHaveBeenLastCalledWith(true);
+		view.rerender({ autoplay: true });
+		fireEvent.click(screen.getByRole("button", { name: "Autoplay on" }));
+		expect(onAutoplayChange).toHaveBeenLastCalledWith(false);
+	});
+
+	it("shows the toggle only for series, which have episode buttons", () => {
+		const view = renderControls({
+			onAutoplayChange: vi.fn(),
+			onPrevEpisode: undefined,
+			onNextEpisode: undefined,
+		});
+		expect(autoplayToggle()).toBeNull();
+		// The first episode has no previous one, and the last has no next one.
+		view.rerender({ onNextEpisode: noop });
+		expect(autoplayToggle()).toBeInTheDocument();
+		view.rerender({ onNextEpisode: undefined, onPrevEpisode: noop });
+		expect(autoplayToggle()).toBeInTheDocument();
+	});
+
+	it("leaves out the toggle when autoplay can't be changed", () => {
+		renderControls({ autoplay: true });
+		expect(autoplayToggle()).toBeNull();
+	});
+});
+
+describe("Controls source menu", () => {
+	const sources = [
+		"http://main.example.com/live/news.m3u8",
+		"http://backup.example.com/live/news.ts",
+	];
+	const sourceButton = () => screen.getByRole("button", { name: "Source" });
+	const openMenu = () => fireEvent.click(sourceButton());
+
+	it("offers a choice only with two or more sources and a way to switch", () => {
+		const view = renderControls({ onSelectSource: vi.fn() });
+		expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+		view.rerender({ sources: [sources[0]] });
+		expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+		view.rerender({ sources });
+		expect(sourceButton()).toBeInTheDocument();
+		view.rerender({ onSelectSource: undefined });
+		expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+	});
+
+	it("lists the sources in order, marking the default and the one playing", () => {
+		renderControls({ sources, currentSource: sources[1], onSelectSource: vi.fn() });
+		expect(sourceButton()).toHaveAttribute("aria-expanded", "false");
+		openMenu();
+		expect(sourceButton()).toHaveAttribute("aria-expanded", "true");
+		const [first, second] = screen.getAllByRole("menuitemradio");
+		expect(first).toHaveTextContent("Source 1 (default)");
+		expect(first).toHaveTextContent("main.example.com · M3U8");
+		expect(first).toHaveAttribute("aria-checked", "false");
+		expect(second).toHaveTextContent("Source 2");
+		expect(second).not.toHaveTextContent("(default)");
+		expect(second).toHaveTextContent("backup.example.com · TS");
+		expect(second).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("never shows the login an address carries", () => {
+		const xtream = "http://xtream.example.com:8080/live/alice/hunter2/1001.ts";
+		renderControls({ sources: [sources[0], xtream], onSelectSource: vi.fn() });
+		openMenu();
+		const menu = screen.getByRole("menu");
+		expect(menu).toHaveTextContent("xtream.example.com · TS");
+		expect(menu).not.toHaveTextContent("alice");
+		expect(menu).not.toHaveTextContent("hunter2");
+		// Nor in a tooltip or a label that screen readers read out.
+		expect(menu.outerHTML).not.toMatch(/alice|hunter2/);
+	});
+
+	it("switches to the chosen source and closes the menu", () => {
+		const onSelectSource = vi.fn();
+		renderControls({ sources, currentSource: sources[0], onSelectSource });
+		openMenu();
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
+		expect(onSelectSource).toHaveBeenCalledTimes(1);
+		expect(onSelectSource).toHaveBeenCalledWith(sources[1]);
+		expect(screen.queryByRole("menu")).toBeNull();
+		expect(sourceButton()).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it("closes the menu without reloading when the playing source is chosen", () => {
+		const onSelectSource = vi.fn();
+		renderControls({ sources, currentSource: sources[0], onSelectSource });
+		openMenu();
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 1/ }));
+		expect(onSelectSource).not.toHaveBeenCalled();
+		expect(screen.queryByRole("menu")).toBeNull();
+	});
+
+	it("closes the menu on a press outside it but not on one inside it", () => {
+		renderControls({ sources, onSelectSource: vi.fn() });
+		openMenu();
+		fireEvent.pointerDown(screen.getByRole("menu"));
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+		fireEvent.pointerDown(screen.getByRole("button", { name: "Stop" }));
+		expect(screen.queryByRole("menu")).toBeNull();
+		expect(sourceButton()).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it("closes the menu when the source button is pressed again", () => {
+		renderControls({ sources, onSelectSource: vi.fn() });
+		openMenu();
+		fireEvent.pointerDown(sourceButton());
+		fireEvent.click(sourceButton());
+		expect(screen.queryByRole("menu")).toBeNull();
+	});
+
+	it("closes the menu when the controls hide, and keeps it closed when they come back", () => {
+		const view = renderControls({ sources, onSelectSource: vi.fn() });
+		openMenu();
+		view.rerender({ visible: false });
+		expect(screen.queryByRole("menu")).toBeNull();
+		view.rerender({ visible: true });
+		expect(screen.queryByRole("menu")).toBeNull();
+		expect(sourceButton()).toHaveAttribute("aria-expanded", "false");
 	});
 });
 
 describe("Controls seek bar", () => {
 	const renderSeekBar = (overrides: Partial<PlayerState> = {}) => {
 		const onSeek = vi.fn();
+		const onVolumeChange = vi.fn();
 		const controls = (state: PlayerState) => (
 			<Controls
 				state={state}
@@ -90,7 +379,7 @@ describe("Controls seek bar", () => {
 				onPause={noop}
 				onStop={noop}
 				onSeek={onSeek}
-				onVolumeChange={noop}
+				onVolumeChange={onVolumeChange}
 			/>
 		);
 		const view = render(controls({ ...playing, ...overrides }));
@@ -100,7 +389,9 @@ describe("Controls seek bar", () => {
 		const track = () => root().firstElementChild!;
 		return {
 			onSeek,
+			onVolumeChange,
 			thumb,
+			volume: () => screen.getByRole("slider", { name: "Volume" }),
 			root,
 			track,
 			valueNow: () => Number(thumb().getAttribute("aria-valuenow")),
@@ -279,6 +570,36 @@ describe("Controls seek bar", () => {
 				expect(notCanceled).toBe(false);
 				expect(onWindowKey).toHaveBeenCalledTimes(1);
 				expect(bar.onSeek).not.toHaveBeenCalled();
+			} finally {
+				window.removeEventListener("keydown", onWindowKey);
+			}
+		});
+
+		it("turns the volume up one step per arrow when reached with Tab", () => {
+			const bar = renderSeekBar();
+			tabTo(bar.volume());
+			fireEvent.keyDown(bar.volume(), { key: "ArrowRight" });
+			expect(bar.onVolumeChange).toHaveBeenCalledExactlyOnceWith(101);
+		});
+
+		it("lets the volume go up to 150%", () => {
+			const bar = renderSeekBar();
+			expect(bar.volume()).toHaveAttribute("aria-valuemax", "150");
+			tabTo(bar.volume());
+			fireEvent.keyDown(bar.volume(), { key: "End" });
+			expect(bar.onVolumeChange).toHaveBeenLastCalledWith(150);
+		});
+
+		it("leaves the arrows to the player after a click on the volume", () => {
+			const bar = renderSeekBar();
+			const onWindowKey = vi.fn();
+			window.addEventListener("keydown", onWindowKey);
+			try {
+				clickThumb(bar.volume());
+				expect(bar.volume()).toHaveFocus();
+				fireEvent.keyDown(bar.volume(), { key: "ArrowRight" });
+				expect(onWindowKey).toHaveBeenCalledTimes(1);
+				expect(bar.onVolumeChange).not.toHaveBeenCalled();
 			} finally {
 				window.removeEventListener("keydown", onWindowKey);
 			}
