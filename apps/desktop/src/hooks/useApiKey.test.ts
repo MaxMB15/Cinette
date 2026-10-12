@@ -198,6 +198,24 @@ describe("useApiKey loading", () => {
 		expect(view.result.current).toMatchObject({ saved: "other-key", dirty: true });
 	});
 
+	it("takes the old service's key again when the field switches back to it", async () => {
+		const oldService = makeService();
+		const newService = makeService("other-key");
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: oldService as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "new-key");
+		await save(view);
+
+		view.rerender({ service: newService });
+		await act(async () => {});
+		oldService.load.mockResolvedValue("newer-key");
+		view.rerender({ service: oldService });
+		await act(async () => {});
+		expect(view.result.current.saved).toBe("newer-key");
+	});
+
 	it("doesn't count spaces around the saved key as a change", async () => {
 		const view = await renderKey(makeService("saved-key"));
 		type(view, " saved-key  ");
@@ -443,6 +461,57 @@ describe("useApiKey saving", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
+	it("keeps a save that lands after a switch to another service out of the new one", async () => {
+		vi.useFakeTimers();
+		const pending = deferred();
+		const oldService = makeService();
+		oldService.save.mockReturnValue(pending.promise);
+		const newService = makeService("other-key");
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: oldService as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "new-key");
+
+		let saving!: Promise<void>;
+		act(() => {
+			saving = view.result.current.save();
+		});
+		view.rerender({ service: newService });
+		await act(async () => {});
+		await act(async () => {
+			pending.resolve();
+			await saving;
+		});
+
+		expect(oldService.onSaved).toHaveBeenCalledExactlyOnceWith("new-key");
+		expect(view.result.current).toMatchObject({ saved: "other-key", saveStatus: "idle" });
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("clears Saving when a save fails after a switch to another service", async () => {
+		const pending = deferred();
+		const oldService = makeService();
+		oldService.save.mockReturnValue(pending.promise);
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: oldService as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "new-key");
+
+		let saving!: Promise<void>;
+		act(() => {
+			saving = view.result.current.save();
+		});
+		view.rerender({ service: makeService("other-key") });
+		await act(async () => {
+			pending.reject(new Error("store"));
+			await saving;
+		});
+
+		expect(view.result.current.saveStatus).toBe("idle");
+	});
+
 	it("shows Saved and logs the error when reporting the save throws", async () => {
 		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 		const service = makeService();
@@ -548,6 +617,29 @@ describe("useApiKey checking", () => {
 			answer.resolve(true);
 			await checking;
 		});
+		expect(view.result.current.testStatus).toBe("idle");
+	});
+
+	it("drops an answer that lands after a switch to another service", async () => {
+		const answer = deferred<boolean>();
+		const oldService = makeService();
+		oldService.test.mockReturnValue(answer.promise);
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: oldService as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "typed-key");
+
+		let checking!: Promise<void>;
+		act(() => {
+			checking = view.result.current.test();
+		});
+		view.rerender({ service: makeService("other-key") });
+		await act(async () => {
+			answer.resolve(false);
+			await checking;
+		});
+
 		expect(view.result.current.testStatus).toBe("idle");
 	});
 

@@ -114,8 +114,9 @@ const SaveLabel = ({ field, name }: { field: ApiKeyState; name: string }) => {
 /**
  * A labeled field for an API key, with Save, Test and a show or hide toggle.
  * Enter saves. Save turns into Remove when the field is cleared while a key
- * is saved, or while the saved key couldn't be read. The line under the field says how the last save or check went,
- * and screen readers hear it as it changes.
+ * is saved, or while the saved key couldn't be read. The line under the field
+ * says how the last save or check went, and screen readers hear it as it
+ * changes.
  */
 export const ApiKeyField = ({
 	name,

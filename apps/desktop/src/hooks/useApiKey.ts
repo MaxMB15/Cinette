@@ -65,10 +65,12 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 	const generation = useRef(0);
 	const edited = useRef(false);
 	const saving = useRef(false);
-	// The service a save last went through. Its key is out of date once it
-	// loads, but a new service's key isn't.
+	// The service a save last went through since the key began loading. A
+	// load that lands after it is out of date.
 	const savedFor = useRef<ApiKeyService | null>(null);
-	const alive = useRef(true);
+	// The service the field shows, or null once the field has gone. A save or
+	// check only shows its result while its service is still this one.
+	const shown = useRef<ApiKeyService | null>(null);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const clearTimer = () => {
@@ -77,7 +79,8 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 	};
 
 	useEffect(() => {
-		alive.current = true;
+		shown.current = service;
+		savedFor.current = null;
 		// Each run drops its own load when it ends, so a load from an earlier
 		// run, or from Strict Mode's first one, can't land after a newer one.
 		let current = true;
@@ -96,7 +99,7 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 			});
 		return () => {
 			current = false;
-			alive.current = false;
+			shown.current = null;
 			clearTimer();
 		};
 	}, [service]);
@@ -118,28 +121,32 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		const started = generation.current;
 		clearTimer();
 		setSaveStatus("saving");
+		// Whether the field still shows this service and the text that was saved.
+		// When it moved to another service, only Saving needs to go.
+		const forService = () => shown.current === service;
+		const forText = () => forService() && generation.current === started;
 		try {
 			await service.save(key);
 			savedFor.current = service;
 		} catch {
-			if (alive.current) setSaveStatus(generation.current === started ? "error" : "idle");
+			setSaveStatus(forText() ? "error" : "idle");
 			return;
 		} finally {
 			saving.current = false;
 		}
-		if (alive.current) {
+		if (forService()) {
 			setSaved(key);
 			setLoadFailed(false);
-			if (generation.current === started) {
-				setValueState(key);
-				// The status line says the key saved, which a check result would
-				// cover up. The saved key can be checked again.
-				setTestStatus("idle");
-				setSaveStatus(key ? "saved" : "removed");
-				timer.current = setTimeout(() => setSaveStatus("idle"), SAVED_MS);
-			} else {
-				setSaveStatus("idle");
-			}
+		}
+		if (forText()) {
+			setValueState(key);
+			// The status line says the key saved, which a check result would
+			// cover up. The saved key can be checked again.
+			setTestStatus("idle");
+			setSaveStatus(key ? "saved" : "removed");
+			timer.current = setTimeout(() => setSaveStatus("idle"), SAVED_MS);
+		} else {
+			setSaveStatus("idle");
 		}
 		// The key is saved either way, so a listener that throws doesn't make
 		// the save look failed.
@@ -161,7 +168,10 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		} catch {
 			result = "unreachable";
 		}
-		if (alive.current && generation.current === started) setTestStatus(result);
+		// An edit already cleared Testing, and the new text may have a check of
+		// its own on the way.
+		if (generation.current !== started) return;
+		setTestStatus(shown.current === service ? result : "idle");
 	}, [service, value, testStatus]);
 
 	return {
