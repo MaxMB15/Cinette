@@ -395,7 +395,7 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
     let args = build_ffmpeg_args(&url, &rec.dest_path, &container);
     let sidecar = app
         .shell()
-        .sidecar("ffmpeg")
+        .sidecar(super::FFMPEG_SIDECAR)
         .map_err(|e| redact_credentials(&e.to_string()))?
         .args(args);
 

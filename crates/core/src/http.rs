@@ -120,10 +120,21 @@ pub(crate) fn error_with_url(url: &str) -> reqwest::Error {
 pub(crate) mod test_server {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::mpsc;
 
     /// Answers a single request with `status` and `body`, and returns the
     /// server's base URL.
     pub(crate) fn serve_once(status: &'static str, body: &'static str) -> String {
+        serve_once_recording(status, body).0
+    }
+
+    /// Like [`serve_once`], and also hands back the request line and headers
+    /// the server read.
+    pub(crate) fn serve_once_recording(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, mpsc::Receiver<String>) {
+        let (sender, receiver) = mpsc::channel();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
         let addr = listener.local_addr().expect("read the bound address");
         std::thread::spawn(move || {
@@ -140,13 +151,14 @@ pub(crate) mod test_server {
                     Ok(n) => request.extend_from_slice(&buf[..n]),
                 }
             }
+            let _ = sender.send(String::from_utf8_lossy(&request).into_owned());
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             let _ = stream.write_all(response.as_bytes());
         });
-        format!("http://{addr}")
+        (format!("http://{addr}"), receiver)
     }
 
     /// A client that reaches the loopback server even when the machine has a

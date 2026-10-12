@@ -6,5 +6,6 @@ pub mod m3u;
 pub mod mdblist;
 pub mod omdb;
 pub mod opensubtitles;
+pub mod skip_segments;
 pub mod whatson;
 pub mod xtream;
