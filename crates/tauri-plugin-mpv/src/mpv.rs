@@ -519,6 +519,15 @@ impl MpvState {
         let _ = (title, live);
     }
 
+    /// How many seconds the lock screen's skip buttons jump back and
+    /// forward. Only iOS has them.
+    pub fn set_skip_intervals(&self, back: f64, forward: f64) {
+        #[cfg(target_os = "ios")]
+        crate::ios::set_skip_intervals(back, forward);
+        #[cfg(not(target_os = "ios"))]
+        let _ = (back, forward);
+    }
+
     pub fn set_volume(&self, volume: f64) -> Result<(), String> {
         self.inner.lock().map_err(|e| e.to_string())?.set_volume(volume)
     }
