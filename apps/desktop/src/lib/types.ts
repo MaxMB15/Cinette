@@ -64,6 +64,10 @@ export interface MpvPlayerState extends PlayerState {
 	playbackStarted: boolean;
 	/** The current load stopped before it ever started playing. */
 	openFailed: boolean;
+	/** Playback ran to the end of the file. mpv then pauses on the last frame.
+	 *  A pause near the end doesn't set it. A seek back or the next load
+	 *  clears it. */
+	reachedEnd: boolean;
 }
 
 export interface EpgProgram {

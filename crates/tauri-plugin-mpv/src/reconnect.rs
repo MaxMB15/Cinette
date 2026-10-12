@@ -490,7 +490,7 @@ fn retry_delay(attempt: u32) -> Duration {
 ///
 /// Without both a position and a positive duration, as on a live stream,
 /// any end of file counts as early.
-fn ended_early(pos: Option<f64>, duration: Option<f64>) -> bool {
+pub(crate) fn ended_early(pos: Option<f64>, duration: Option<f64>) -> bool {
     match (pos, duration) {
         (Some(p), Some(d)) if d > 0.0 => p < d - PREMATURE_EOF_SLACK_SECS,
         _ => true,

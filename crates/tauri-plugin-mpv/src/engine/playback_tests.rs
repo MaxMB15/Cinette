@@ -156,6 +156,32 @@ fn seeks_to_a_position_and_by_an_offset() {
 }
 
 #[test]
+fn reports_the_end_only_once_playback_reaches_it() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let mut engine = engine(&[]);
+    start(&mut engine, &path, Some(8.5));
+
+    // A pause in the last seconds isn't the end.
+    engine.pause().unwrap();
+    assert!(!engine.get_state().reached_end);
+
+    engine.play().unwrap();
+    wait_until("the end of the file", || engine.get_state().reached_end);
+    // keep-open pauses on the last frame once the audio drains, and the end
+    // stays reported while it holds there.
+    wait_until("a pause on the last frame", || {
+        let state = engine.get_state();
+        state.is_paused && !state.is_playing && state.reached_end
+    });
+
+    engine.seek(2.0).unwrap();
+    wait_until("a seek back to clear the end", || {
+        !engine.get_state().reached_end
+    });
+}
+
+#[test]
 fn keeps_the_volume_inside_the_player_range() {
     let mut engine = engine(&[]);
     for (asked, set) in [(42.0, 42.0), (200.0, 150.0), (-1.0, 0.0)] {

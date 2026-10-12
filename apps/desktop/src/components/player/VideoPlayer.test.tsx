@@ -49,6 +49,7 @@ const idleState = vi.hoisted(() => (): MpvPlayerState => ({
 	duration: 0,
 	playbackStarted: false,
 	openFailed: false,
+	reachedEnd: false,
 }));
 
 const env = vi.hoisted(() => ({
@@ -359,15 +360,23 @@ const playing = (currentUrl: string, position: number, duration: number) => ({
 	duration,
 	isPlaying: true,
 	isPaused: false,
+	reachedEnd: false,
 });
 
-/** What mpv reports once `url` is paused, or held on its last frame at the end. */
+/** What mpv reports once `url` is paused before its end. */
 const paused = (currentUrl: string, position: number, duration: number) => ({
 	currentUrl,
 	position,
 	duration,
 	isPlaying: false,
 	isPaused: true,
+	reachedEnd: false,
+});
+
+/** What mpv reports once `url` plays to its end and holds the last frame. */
+const ended = (currentUrl: string, duration: number) => ({
+	...paused(currentUrl, duration, duration),
+	reachedEnd: true,
 });
 
 /** The addresses mpv was asked to play, in order. */
@@ -846,6 +855,20 @@ describe("resuming", () => {
 		expect(loadedUrls()).toEqual([ep1.url]);
 	});
 
+	it("plays the episode again when the prompt for the next one is cancelled near its end", async () => {
+		remember(saved("series:show:s1e2", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await press("n");
+		// The prompt pauses episode one in its last seconds.
+		await setMpv({ state: paused(ep1.url, 1297, 1300) });
+		expect(screen.getAllByRole("dialog")).toHaveLength(1);
+		await press("Escape");
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
 	it("resumes the next episode where it was stopped", async () => {
 		remember(saved("series:show:s1e2", 600, 1300));
 		await openItem(ep1, { episodes: [ep1, ep2] });
@@ -1033,7 +1056,7 @@ describe("episodes", () => {
 	it("plays the next episode when one ends", async () => {
 		await openItem(ep1, { episodes: [ep1, ep2] });
 		await setMpv({ state: playing(ep1.url, 1296, 1300) });
-		await setMpv({ state: paused(ep1.url, 1300, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 		expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
 	});
@@ -1043,7 +1066,7 @@ describe("episodes", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Autoplay on" }));
 		expect(screen.getByRole("button", { name: "Autoplay off" })).toBeInTheDocument();
 		await setMpv({ state: playing(ep1.url, 1296, 1300) });
-		await setMpv({ state: paused(ep1.url, 1300, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url]);
 	});
 
@@ -1051,6 +1074,13 @@ describe("episodes", () => {
 		await openItem(ep1, { episodes: [ep1, ep2] });
 		await setMpv({ state: playing(ep1.url, 600, 1300) });
 		await setMpv({ state: paused(ep1.url, 600, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("doesn't go on to the next episode when the viewer pauses near the end", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await setMpv({ state: paused(ep1.url, 1297, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url]);
 	});
 

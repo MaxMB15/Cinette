@@ -90,6 +90,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Clearing the simultaneous downloads field to type a new number no longer sets it to 1 straight away. A number outside 1 to 10 is fixed once you leave the field or press Enter. Typing 10 could leave 1 saved, because the two saves raced. They now go one at a time (#120).
 - Settings now says when it can't read a saved API key, and keeps Save on so the key can still be replaced or removed. It no longer replaces a key you started typing before the saved one loaded (#120).
 - Enter in an API key field saves the key. Screen readers name each key field and its Save, Test and show buttons, and read out whether a save or check worked (#120).
+- With autoplay on, pausing an episode in its last 5 seconds started the next one. Pressing Next episode there and then cancelling its resume prompt left the episode paused. The player now goes on to the next episode only once one plays to its end (#218).
 
 ## [0.5.3] - 2026-10-09
 

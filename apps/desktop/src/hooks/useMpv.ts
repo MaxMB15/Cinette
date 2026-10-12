@@ -26,6 +26,7 @@ const DEFAULT_STATE: MpvPlayerState = {
 	duration: 0,
 	playbackStarted: false,
 	openFailed: false,
+	reachedEnd: false,
 };
 
 export const useMpv = () => {
@@ -299,6 +300,7 @@ export const useMpv = () => {
 			duration: 0,
 			playbackStarted: false,
 			openFailed: false,
+			reachedEnd: false,
 		}));
 		try {
 			await mpvLoad(url, startPos, readHwdecEnabled());
@@ -479,6 +481,7 @@ export const useMpv = () => {
 				duration: s.duration,
 				playbackStarted: s.playbackStarted,
 				openFailed: s.openFailed,
+				reachedEnd: s.reachedEnd,
 			}));
 		} catch (e) {
 			console.warn("[useMpv] poll failed:", e);
