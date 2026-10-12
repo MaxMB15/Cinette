@@ -33,8 +33,21 @@ pub fn container_from_part_path(dest_path: &str) -> &str {
 /// `container` is the final file extension (e.g. `mkv`, `mp4`) used to select
 /// the output muxer explicitly via `-f`.
 pub fn build_ffmpeg_args(url: &str, dest_part: &str, container: &str) -> Vec<String> {
+    stream_copy_args(url, dest_part, container, &[], &[])
+}
+
+/// The ffmpeg arguments for copying the streams of `url` into `dest` without
+/// re-encoding them. `input_opts` go before `-i`, so they apply to reading
+/// `url`, and `output_opts` go just before `dest`.
+pub fn stream_copy_args(
+    url: &str,
+    dest: &str,
+    container: &str,
+    input_opts: &[String],
+    output_opts: &[String],
+) -> Vec<String> {
     let muxer = muxer_for_container(container);
-    let mut args = vec![
+    let mut args: Vec<String> = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
@@ -50,11 +63,9 @@ pub fn build_ffmpeg_args(url: &str, dest_part: &str, container: &str) -> Vec<Str
         "1".into(),
         "-reconnect_delay_max".into(),
         "30".into(),
-        "-i".into(),
-        url.into(),
-        "-c".into(),
-        "copy".into(),
     ];
+    args.extend_from_slice(input_opts);
+    args.extend(["-i".into(), url.into(), "-c".into(), "copy".into()]);
     // `+faststart` is a private option of the mp4/mov muxers; applying it to
     // other containers (matroska, mpegts, …) makes ffmpeg error out.
     if muxer == "mp4" || muxer == "mov" {
@@ -68,8 +79,9 @@ pub fn build_ffmpeg_args(url: &str, dest_part: &str, container: &str) -> Vec<Str
     args.push("-progress".into());
     args.push("pipe:1".into());
     args.push("-nostats".into());
+    args.extend_from_slice(output_opts);
     args.push("-y".into());
-    args.push(dest_part.into());
+    args.push(dest.into());
     args
 }
 
@@ -120,6 +132,22 @@ mod tests {
         // URL is the argument right after -i.
         let i = args.iter().position(|a| a == "-i").unwrap();
         assert_eq!(args[i + 1], "http://h/movie/u/p/1.mkv");
+    }
+
+    #[test]
+    fn places_extra_options_around_the_input() {
+        let args = stream_copy_args(
+            "http://h/live/u/p/1.ts",
+            "/dl/a.ts",
+            "ts",
+            &["-rw_timeout".into(), "5".into()],
+            &["-t".into(), "60".into()],
+        );
+        let pos = |flag: &str| args.iter().position(|a| a == flag).unwrap();
+        assert_eq!(pos("-rw_timeout") + 2, pos("-i"));
+        assert!(pos("-t") > pos("-i"));
+        assert_eq!(args[pos("-t") + 1], "60");
+        assert_eq!(args.last().unwrap(), "/dl/a.ts");
     }
 
     #[test]

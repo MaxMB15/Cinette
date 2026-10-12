@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use mvp_core::downloads::model::DownloadStatus;
+use mvp_core::downloads::recording::provider_of;
 use std::collections::HashSet;
 
 /// Given the currently-active items (queued + downloading) ordered FIFO and a
@@ -56,6 +57,23 @@ pub fn start_queued(
         }
     }
     first_err.map_or(Ok(()), Err)
+}
+
+/// Whether a download of `channel_id` has to wait because a recording is
+/// using its provider's connection. `recording` holds the live channels being
+/// recorded, and `provider_ids` every provider. Many providers allow one
+/// stream at a time, so the download starts once those recordings end.
+pub fn waits_for_recording(
+    channel_id: &str,
+    recording: &[String],
+    provider_ids: &[String],
+) -> bool {
+    let Some(provider) = provider_of(channel_id, provider_ids) else {
+        return false;
+    };
+    recording
+        .iter()
+        .any(|c| provider_of(c, provider_ids) == Some(provider))
 }
 
 #[cfg(test)]
@@ -152,5 +170,21 @@ mod tests {
         let (result, attempts, _) = run(&["a", "b", "c"], 2, &[], true);
         assert_eq!(result, Ok(()));
         assert_eq!(attempts, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn a_download_waits_while_its_provider_records() {
+        let providers = vec!["xt-1".to_string(), "m3u-2".to_string()];
+        let recording = vec!["xt-1-xt-7".to_string()];
+        assert!(waits_for_recording("xt-1-vod-3", &recording, &providers));
+        assert!(waits_for_recording(
+            "xt-1-xt-ep-9-s1-0",
+            &recording,
+            &providers
+        ));
+        assert!(!waits_for_recording("m3u-2-ch-4", &recording, &providers));
+        assert!(!waits_for_recording("xt-1-vod-3", &[], &providers));
+        // A download whose provider is gone has nothing to wait for.
+        assert!(!waits_for_recording("xt-9-vod-3", &recording, &providers));
     }
 }

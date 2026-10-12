@@ -97,6 +97,7 @@ chmod +x MaxVideoPlayer_amd64.AppImage
 **More**
 
 - Download movies, episodes or whole seasons to watch offline
+- Record a live channel now, a program from the guide or any time range (macOS and Linux)
 - Plot, cast and ratings for movies and series from OMDb
 - Optional category sorting with Google Gemini
 - Automatic updates, checked at launch and every two hours

@@ -82,7 +82,11 @@ vi.mock("@/hooks/useDownloads", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@/hooks/useDownloads")>();
 	return {
 		...actual,
-		useDownloads: () => ({ ...actual.groupDownloads(state.downloads), retentionDays: null }),
+		useDownloads: () => ({
+			downloads: state.downloads,
+			...actual.groupDownloads(state.downloads),
+			retentionDays: null,
+		}),
 	};
 });
 

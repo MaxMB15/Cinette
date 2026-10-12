@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { formatCount, formatSkip, formatTime } from "./format";
+import { formatBytes, formatCount, formatSkip, formatTime } from "./format";
 
 describe("formatTime", () => {
 	// ── Under one hour (M:SS) ─────────────────────────────────────────
@@ -61,6 +61,15 @@ describe("formatTime", () => {
 
 	it("handles very large values", () => {
 		expect(formatTime(86400)).toBe("24:00:00");
+	});
+});
+
+describe("formatBytes", () => {
+	it("shows megabytes below a gigabyte and gigabytes from there", () => {
+		expect(formatBytes(0)).toBe("0 MB");
+		expect(formatBytes(349_600_000)).toBe("350 MB");
+		expect(formatBytes(1_000_000_000)).toBe("1.0 GB");
+		expect(formatBytes(1_250_000_000)).toBe("1.3 GB");
 	});
 });
 

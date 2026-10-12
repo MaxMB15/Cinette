@@ -16,6 +16,12 @@ export const formatTime = (seconds: number): string => {
 	return `${m}:${String(s).padStart(2, "0")}`;
 };
 
+/** A file size such as "350 MB" or "1.2 GB". */
+export const formatBytes = (bytes: number): string =>
+	bytes >= 1_000_000_000
+		? `${(bytes / 1_000_000_000).toFixed(1)} GB`
+		: `${Math.round(bytes / 1_000_000)} MB`;
+
 /** A count and its noun, like "1 episode" or "1,200 episodes". */
 export const formatCount = (count: number, noun: string, plural = `${noun}s`): string =>
 	`${count.toLocaleString()} ${count === 1 ? noun : plural}`;
