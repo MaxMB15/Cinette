@@ -4,8 +4,9 @@
 //! Downloading and reading XMLTV program guides.
 
 use chrono::NaiveDateTime;
-use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::events::{BytesRef, BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -38,7 +39,7 @@ impl From<reqwest::Error> for EpgError {
 }
 
 /// One program in the guide.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EpgProgram {
     pub channel_id: String,
     pub title: String,
@@ -69,11 +70,12 @@ pub struct EpgData {
 /// Parse XMLTV EPG data from a string.
 pub fn parse_epg(xml: &str) -> Result<EpgData, EpgError> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // Guides often carry a bare `&`, as in "Tom & Jerry". Read as text, it
+    // can't fail the whole guide.
+    reader.config_mut().allow_dangling_amp = true;
 
     let mut channels = Vec::new();
     let mut programs = Vec::new();
-    let mut buf = Vec::new();
 
     // Parsing state
     let mut in_channel = false;
@@ -81,110 +83,144 @@ pub fn parse_epg(xml: &str) -> Result<EpgData, EpgError> {
     let mut current_channel_id = String::new();
     let mut current_display_name = String::new();
     let mut current_icon_url: Option<String> = None;
-    let mut current_prog = EpgProgram {
-        channel_id: String::new(),
-        title: String::new(),
-        description: String::new(),
-        start_time: 0,
-        end_time: 0,
-        category: None,
-    };
-    let mut current_tag = String::new();
+    let mut current_prog = EpgProgram::default();
+    // The field being read and its text so far. The text arrives in pieces,
+    // with each entity such as `&amp;` in a piece of its own.
+    let mut field: Option<Field> = None;
+    let mut text = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match tag.as_str() {
-                    "channel" => {
-                        in_channel = true;
-                        current_channel_id = extract_xml_attr(&e, "id").unwrap_or_default();
-                        current_display_name.clear();
-                        current_icon_url = None;
-                    }
-                    "programme" => {
-                        in_programme = true;
-                        let ch = extract_xml_attr(&e, "channel").unwrap_or_default();
-                        let start = extract_xml_attr(&e, "start").unwrap_or_default();
-                        let stop = extract_xml_attr(&e, "stop").unwrap_or_default();
-                        current_prog = EpgProgram {
-                            channel_id: ch,
-                            title: String::new(),
-                            description: String::new(),
-                            start_time: parse_epg_time(&start),
-                            end_time: parse_epg_time(&stop),
-                            category: None,
-                        };
-                    }
-                    _ => {}
+        match reader.read_event()? {
+            Event::Start(e) => match e.name().as_ref() {
+                "channel" => {
+                    in_channel = true;
+                    current_channel_id = extract_xml_attr(&e, "id").unwrap_or_default();
+                    current_display_name.clear();
+                    current_icon_url = None;
                 }
-                current_tag = tag;
-            }
-            Ok(Event::Empty(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if in_channel && tag == "icon" {
+                "programme" => {
+                    in_programme = true;
+                    let start = extract_xml_attr(&e, "start").unwrap_or_default();
+                    let stop = extract_xml_attr(&e, "stop").unwrap_or_default();
+                    current_prog = EpgProgram {
+                        channel_id: extract_xml_attr(&e, "channel").unwrap_or_default(),
+                        start_time: parse_epg_time(&start),
+                        end_time: parse_epg_time(&stop),
+                        ..EpgProgram::default()
+                    };
+                }
+                // Markup inside a field, such as `<b>`, adds its text to it.
+                tag if field.is_none() => {
+                    field = Field::starting_at(tag, in_channel, in_programme);
+                    text.clear();
+                }
+                _ => {}
+            },
+            Event::Empty(e) => {
+                if in_channel && e.name().as_ref() == "icon" {
                     current_icon_url = extract_xml_attr(&e, "src");
                 }
             }
-            Ok(Event::Text(e)) => {
-                let text = e.unescape().unwrap_or_default().to_string();
-                if in_channel && current_tag == "display-name" {
-                    current_display_name = text;
-                } else if in_programme {
-                    match current_tag.as_str() {
-                        "title" => current_prog.title = text,
-                        "desc" => current_prog.description = text,
-                        "category" => current_prog.category = Some(text),
-                        _ => {}
+            Event::Text(e) if field.is_some() => text.push_str(&e.xml10_content()),
+            Event::CData(e) if field.is_some() => text.push_str(&e.xml10_content()),
+            Event::GeneralRef(e) if field.is_some() => push_reference(&mut text, &e),
+            Event::End(e) => match e.name().as_ref() {
+                "channel" => {
+                    in_channel = false;
+                    channels.push(EpgChannel {
+                        id: std::mem::take(&mut current_channel_id),
+                        display_name: std::mem::take(&mut current_display_name),
+                        icon_url: current_icon_url.take(),
+                    });
+                }
+                "programme" => {
+                    in_programme = false;
+                    programs.push(std::mem::take(&mut current_prog));
+                }
+                tag => {
+                    let Some(done) = field.filter(|f| f.tag() == tag) else {
+                        continue;
+                    };
+                    field = None;
+                    // An empty element leaves what an earlier one of its kind
+                    // set, and a later one with text replaces it.
+                    let value = text.trim();
+                    if !value.is_empty() {
+                        let value = value.to_owned();
+                        match done {
+                            Field::DisplayName => current_display_name = value,
+                            Field::Title => current_prog.title = value,
+                            Field::Description => current_prog.description = value,
+                            Field::Category => current_prog.category = Some(value),
+                        }
                     }
                 }
-            }
-            Ok(Event::End(e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match tag.as_str() {
-                    "channel" => {
-                        in_channel = false;
-                        channels.push(EpgChannel {
-                            id: std::mem::take(&mut current_channel_id),
-                            display_name: std::mem::take(&mut current_display_name),
-                            icon_url: current_icon_url.take(),
-                        });
-                    }
-                    "programme" => {
-                        in_programme = false;
-                        programs.push(std::mem::replace(
-                            &mut current_prog,
-                            EpgProgram {
-                                channel_id: String::new(),
-                                title: String::new(),
-                                description: String::new(),
-                                start_time: 0,
-                                end_time: 0,
-                                category: None,
-                            },
-                        ));
-                    }
-                    _ => {}
-                }
-                current_tag.clear();
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(EpgError::Xml(e)),
+            },
+            Event::Eof => break,
             _ => {}
         }
-        buf.clear();
     }
 
     Ok(EpgData { channels, programs })
 }
 
-fn extract_xml_attr(e: &quick_xml::events::BytesStart, key: &str) -> Option<String> {
-    for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == key.as_bytes() {
-            return Some(String::from_utf8_lossy(&attr.value).to_string());
+/// An element inside a channel or program whose text the guide keeps.
+#[derive(Clone, Copy)]
+enum Field {
+    DisplayName,
+    Title,
+    Description,
+    Category,
+}
+
+impl Field {
+    /// The field that element `tag` holds, if it is one inside the channel or
+    /// program being read.
+    fn starting_at(tag: &str, in_channel: bool, in_programme: bool) -> Option<Self> {
+        match tag {
+            "display-name" if in_channel => Some(Self::DisplayName),
+            "title" if in_programme => Some(Self::Title),
+            "desc" if in_programme => Some(Self::Description),
+            "category" if in_programme => Some(Self::Category),
+            _ => None,
         }
     }
-    None
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::DisplayName => "display-name",
+            Self::Title => "title",
+            Self::Description => "desc",
+            Self::Category => "category",
+        }
+    }
+}
+
+/// Adds the text that an entity such as `&amp;` or `&#233;` stands for. Names
+/// XML doesn't define, such as HTML's `&nbsp;`, stay as written.
+fn push_reference(text: &mut String, reference: &BytesRef) {
+    if let Ok(Some(c)) = reference.resolve_char_ref() {
+        text.push(c);
+    } else if let Some(resolved) = resolve_predefined_entity(reference) {
+        text.push_str(resolved);
+    } else {
+        text.push('&');
+        text.push_str(reference);
+        text.push(';');
+    }
+}
+
+/// The value of attribute `key`, with entities such as `&amp;` read.
+fn extract_xml_attr(e: &BytesStart, key: &str) -> Option<String> {
+    let attr = e
+        .attributes()
+        .flatten()
+        .find(|attr| attr.key.as_ref() == key)?;
+    // A value with a bare `&` or an entity XML doesn't define stays as written.
+    let value = attr
+        .normalized_value(XmlVersion::Implicit1_0)
+        .unwrap_or(attr.value);
+    Some(value.into_owned())
 }
 
 /// Parse XMLTV timestamp like "20260304120000 +0000" to Unix timestamp (UTC seconds).
@@ -547,6 +583,69 @@ mod tests {
         let stored = epg_data_to_stored(&data, "p1");
         assert_eq!(stored[0].title, "News");
         assert_eq!(stored[0].description, None);
+    }
+
+    #[test]
+    fn entities_are_read_in_text_and_attributes() {
+        let data = parse_epg(
+            r#"<tv>
+  <channel id="ch&amp;1">
+    <display-name>Tom &amp; Jerry TV</display-name>
+    <icon src="http://x/logo.png?a=1&amp;b=2"/>
+  </channel>
+  <programme start="20260304120000 +0000" stop="20260304130000 +0000" channel="ch&amp;1">
+    <title>Tom &amp; Jerry at the Caf&#233;</title>
+    <desc> Line one &lt;b&gt; and &quot;more&quot; </desc>
+    <category>Kids &#x26; Family</category>
+  </programme>
+</tv>"#,
+        )
+        .unwrap();
+        let channel = &data.channels[0];
+        assert_eq!(channel.id, "ch&1");
+        assert_eq!(channel.display_name, "Tom & Jerry TV");
+        assert_eq!(
+            channel.icon_url.as_deref(),
+            Some("http://x/logo.png?a=1&b=2")
+        );
+        let program = &data.programs[0];
+        assert_eq!(program.channel_id, "ch&1");
+        assert_eq!(program.title, "Tom & Jerry at the Café");
+        assert_eq!(program.description, r#"Line one <b> and "more""#);
+        assert_eq!(program.category.as_deref(), Some("Kids & Family"));
+    }
+
+    #[test]
+    fn bare_ampersands_and_html_entities_are_kept_as_written() {
+        let data = parse_epg(
+            r#"<tv><programme channel="c&1"><title>Tom & Jerry</title><desc>Fish &amp; chips&nbsp;tonight</desc></programme></tv>"#,
+        )
+        .unwrap();
+        let program = &data.programs[0];
+        assert_eq!(program.channel_id, "c&1");
+        assert_eq!(program.title, "Tom & Jerry");
+        assert_eq!(program.description, "Fish & chips&nbsp;tonight");
+    }
+
+    #[test]
+    fn cdata_and_markup_inside_a_field_are_read_as_text() {
+        let data = parse_epg(
+            r#"<tv><programme channel="c1"><title><![CDATA[Rock & <Roll>]]></title><desc>A <b>bold</b> move</desc></programme></tv>"#,
+        )
+        .unwrap();
+        let program = &data.programs[0];
+        assert_eq!(program.title, "Rock & <Roll>");
+        assert_eq!(program.description, "A bold move");
+    }
+
+    #[test]
+    fn the_last_field_with_text_wins() {
+        let data = parse_epg(
+            r#"<tv><channel id="c1"><display-name>One</display-name><display-name>101</display-name></channel><programme channel="c1"><title lang="en">News</title><title lang="fr"></title></programme></tv>"#,
+        )
+        .unwrap();
+        assert_eq!(data.channels[0].display_name, "101");
+        assert_eq!(data.programs[0].title, "News");
     }
 
     #[test]
