@@ -6,19 +6,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
+import { deferred } from "@/test/deferred";
 import { mpvLoad, mpvStop } from "./tauri";
 import * as tauri from "./tauri";
 import type { Channel } from "./types";
-
-const deferred = () => {
-	let resolve!: () => void;
-	let reject!: (e: Error) => void;
-	const promise = new Promise<void>((res, rej) => {
-		resolve = res;
-		reject = rej;
-	});
-	return { promise, resolve, reject };
-};
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -228,6 +219,7 @@ describe("backend commands", () => {
 			"set_mdblist_api_key",
 			{ key: "k2" },
 		],
+		["testOmdbApiKey", () => tauri.testOmdbApiKey("k1"), "test_omdb_api_key", { key: "k1" }],
 		[
 			"testMdbListApiKey",
 			() => tauri.testMdbListApiKey("k2"),
