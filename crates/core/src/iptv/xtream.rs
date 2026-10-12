@@ -47,7 +47,7 @@ pub struct XtreamCredentials {
 /// standard escapes in a path, plus `/`, `\` and `%`, which would split the
 /// path or start an escape. `&` and `+` are escaped too, because Xtream
 /// servers commonly rewrite the path into a query string, where a raw `&`
-/// would end the login.
+/// would end the login and PHP would decode a raw `+` as a space.
 const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')

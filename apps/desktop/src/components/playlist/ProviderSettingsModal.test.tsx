@@ -67,13 +67,17 @@ describe("ProviderSettingsModal guide refresh", () => {
 		expect(screen.queryByText(/no programs/)).toBeNull();
 	});
 
-	it("says when the guide came back empty", async () => {
-		mockRefreshEpg.mockResolvedValue(0);
+	it("says when the guide came back empty, as a note rather than an error", async () => {
+		mockRefreshEpg.mockResolvedValueOnce(0);
 		renderModal();
 		await refreshGuide();
-		expect(
-			screen.getByText("The guide came back with no programs, so nothing changed.")
-		).toBeInTheDocument();
+		const note = screen.getByText("The guide came back with no programs, so nothing changed.");
+		expect(note).toHaveClass("text-muted-foreground");
+		expect(note).not.toHaveClass("text-destructive");
+
+		mockRefreshEpg.mockResolvedValueOnce(120);
+		await refreshGuide();
+		expect(screen.queryByText(/no programs/)).toBeNull();
 	});
 
 	it("shows why a refresh failed, and clears it on the next try", async () => {

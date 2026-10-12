@@ -83,6 +83,7 @@ export const ProviderSettingsModal = ({
 	// EPG refresh-now state
 	const [epgRefreshing, setEpgRefreshing] = useState(false);
 	const [epgRefreshError, setEpgRefreshError] = useState<string | null>(null);
+	const [epgRefreshEmpty, setEpgRefreshEmpty] = useState(false);
 
 	// EPG auto-detect state
 	const [detecting, setDetecting] = useState(false);
@@ -128,9 +129,10 @@ export const ProviderSettingsModal = ({
 	const handleEpgRefreshNow = async () => {
 		setEpgRefreshing(true);
 		setEpgRefreshError(null);
+		setEpgRefreshEmpty(false);
 		try {
 			const saved = await refreshEpg(provider.id);
-			if (saved === 0) setEpgRefreshError(EMPTY_GUIDE_MESSAGE);
+			setEpgRefreshEmpty(saved === 0);
 		} catch (e) {
 			setEpgRefreshError(String(e));
 		} finally {
@@ -496,6 +498,11 @@ export const ProviderSettingsModal = ({
 								</div>
 								{epgRefreshError && (
 									<p className="text-xs text-destructive">{epgRefreshError}</p>
+								)}
+								{epgRefreshEmpty && (
+									<p className="text-xs text-muted-foreground">
+										{EMPTY_GUIDE_MESSAGE}
+									</p>
 								)}
 							</div>
 						</div>
