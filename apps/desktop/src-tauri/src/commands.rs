@@ -1552,8 +1552,8 @@ fn ensure_downloads_supported() -> Result<(), String> {
 
 /// Enqueue a single movie download.
 #[command]
-pub async fn enqueue_movie_download(
-    app: AppHandle,
+pub async fn enqueue_movie_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<String, String> {
@@ -1576,8 +1576,8 @@ pub async fn enqueue_movie_download(
 /// Enqueue a single already-resolved episode (the frontend passes the episode
 /// Channel from get_xtream_series_episodes, plus the parent series channel id).
 #[command]
-pub async fn enqueue_episode_download(
-    app: AppHandle,
+pub async fn enqueue_episode_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     episode: Channel,
     series_channel_id: String,
@@ -1604,8 +1604,8 @@ pub async fn enqueue_episode_download(
 /// Enqueue every episode in `episodes`. Used for whole-season, whole-series,
 /// and "download all missing". The frontend resolves/filters the list.
 #[command]
-pub async fn enqueue_episodes_batch(
-    app: AppHandle,
+pub async fn enqueue_episodes_batch<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     episodes: Vec<Channel>,
     series_channel_id: String,
@@ -1666,13 +1666,13 @@ pub async fn get_cached_series_episodes(
 }
 
 #[command]
-pub async fn stop_download(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn stop_download<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
     manager::stop_one(&app, &id)
 }
 
 /// Stop a set of active (queued + downloading) items (series or season scope).
 #[command]
-pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+pub async fn stop_downloads<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) -> Result<(), String> {
     for id in ids {
         manager::stop_one(&app, &id)?;
     }
@@ -1682,22 +1682,22 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 
 /// Remove a completed download: delete the file and the DB row.
 #[command]
-pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn remove_download<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
     manager::remove(&app, std::slice::from_ref(&id))
 }
 
 /// Remove several downloads, carrying on past any that can't be deleted. The
 /// error lists those.
 #[command]
-pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+pub async fn remove_downloads<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) -> Result<(), String> {
     manager::remove(&app, &ids)
 }
 
 /// Keep a download even when the retention setting would delete it, or stop
 /// keeping it.
 #[command]
-pub async fn set_download_keep(
-    app: AppHandle,
+pub async fn set_download_keep<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     manager: State<'_, DownloadManager>,
     id: String,
@@ -1709,9 +1709,9 @@ pub async fn set_download_keep(
 }
 
 #[command]
-pub async fn set_download_concurrency(
+pub async fn set_download_concurrency<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     n: usize,
 ) -> Result<(), String> {
     // Save first, so a failed write leaves the running limit unchanged.
@@ -1728,9 +1728,9 @@ pub async fn get_download_concurrency(manager: State<'_, DownloadManager>) -> Re
 }
 
 #[command]
-pub async fn set_download_folder(
+pub async fn set_download_folder<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     path: String,
 ) -> Result<(), String> {
     // Save first, so a failed write doesn't switch the folder for this session only.
@@ -1754,9 +1754,9 @@ pub async fn get_download_retention(
 /// Save how many days finished downloads are kept, or `None` for no limit,
 /// then delete what's already past it. Returns how many were deleted.
 #[command]
-pub async fn set_download_retention(
+pub async fn set_download_retention<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     days: Option<u32>,
 ) -> Result<usize, String> {
     // 0 is "never" in the app, so it mustn't reach the sweep as "delete now".
@@ -1778,7 +1778,7 @@ pub async fn set_download_retention(
 /// How many downloads a retention of `days` would delete right now, so
 /// Settings can ask before changing it.
 #[command]
-pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<usize, String> {
+pub async fn count_downloads_due<R: Runtime>(app: AppHandle<R>, days: Option<u32>) -> Result<usize, String> {
     retention::count_due(&app, days.filter(|&d| d > 0))
 }
 
@@ -1787,8 +1787,8 @@ pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<us
 /// before playback and passes the local path to mpvLoad when present, so this
 /// also records the play, which restarts the retention count.
 #[command]
-pub async fn resolve_local_download(
-    app: AppHandle,
+pub async fn resolve_local_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<String>, String> {
@@ -1812,62 +1812,4 @@ pub async fn resolve_local_download(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn non_empty_key_skips_missing_and_blank_keys() {
-        assert_eq!(non_empty_key(None), None);
-        assert_eq!(non_empty_key(Some(json!(""))), None);
-        assert_eq!(non_empty_key(Some(json!("   "))), None);
-        assert_eq!(non_empty_key(Some(json!(42))), None);
-        assert_eq!(
-            non_empty_key(Some(json!(" abc123 "))).as_deref(),
-            Some("abc123")
-        );
-    }
-
-    #[test]
-    fn trimmed_key_drops_spaces_and_blank_keys() {
-        assert_eq!(trimmed_key(" abc123\n"), Some("abc123"));
-        assert_eq!(trimmed_key("abc 123"), Some("abc 123"));
-        assert_eq!(trimmed_key(""), None);
-        assert_eq!(trimmed_key(" \t\n"), None);
-    }
-
-    #[test]
-    fn omdb_key_accepted_tells_a_bad_key_from_other_answers() {
-        let found = OmdbData {
-            title: "The Matrix".into(),
-            year: None,
-            rated: None,
-            runtime: None,
-            genre: None,
-            director: None,
-            actors: None,
-            plot: None,
-            poster_url: None,
-            imdb_rating: None,
-            rotten_tomatoes: None,
-            imdb_id: None,
-            imdb_votes: None,
-        };
-        assert_eq!(omdb_key_accepted(Ok(found)), Ok(true));
-        assert_eq!(
-            omdb_key_accepted(Err(OmdbError::Api("Invalid API key!".into()))),
-            Ok(false)
-        );
-        assert_eq!(
-            omdb_key_accepted(Err(OmdbError::Api("No API key provided.".into()))),
-            Ok(false)
-        );
-        // OMDb only says this to a key it knows.
-        assert_eq!(
-            omdb_key_accepted(Err(OmdbError::Api("Request limit reached!".into()))),
-            Ok(true)
-        );
-        // A reply that can't be read says nothing about the key.
-        assert!(omdb_key_accepted(Err(OmdbError::Parse("not JSON".into()))).is_err());
-    }
-}
+mod tests;

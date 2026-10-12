@@ -5,6 +5,10 @@ edition = "2021"
 license = "GPL-3.0-only"
 description = "Core business logic for Max Video Player"
 
+[features]
+# Makes `http::test_server` public, for other crates' tests.
+test-util = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
