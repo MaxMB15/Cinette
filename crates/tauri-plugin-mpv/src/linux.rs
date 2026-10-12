@@ -373,7 +373,8 @@ impl PlatformRenderer for LinuxGlRenderer {
             // call and `run_on_glib_main` waits for this closure, so `mpv` is
             // alive while it runs. If the main thread stalls past the 5
             // second timeout, `run_on_glib_main` panics and leaves this
-            // closure queued, which is outside this guarantee.
+            // closure queued, which is outside this guarantee. Issue #208
+            // tracks it.
             let mpv = unsafe { &*(mpv_addr as *const Mpv) };
             let egl = egl()?;
             let mut egl_res = egl_res;
@@ -397,7 +398,7 @@ impl PlatformRenderer for LinuxGlRenderer {
             // the engine, so the context goes before mpv. Idle tasks hold
             // only a `Weak`, so none of them keeps the session alive longer.
             // The one gap is the main thread stalling past the timeout in
-            // `run_on_glib_main`.
+            // `run_on_glib_main`, which issue #208 tracks.
             let mut render_ctx = unsafe { GlRenderContext::new(mpv, get_proc_address) }?;
 
             unsafe {
