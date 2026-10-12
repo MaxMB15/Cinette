@@ -9,6 +9,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
 import { ChannelLogo } from "./ChannelLogo";
 import { formatDuration, formatRelativeDate } from "@/lib/watch-history";
+import { formatCount } from "@/lib/format";
 
 interface HistoryTabProps {
 	onPlay: (entry: WatchHistoryEntry) => void;
@@ -159,8 +160,8 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 										</span>
 									</div>
 									<p className="text-xs text-muted-foreground">
-										{entry.playCount} {entry.playCount === 1 ? "play" : "plays"}{" "}
-										· {formatDuration(entry.totalDurationSeconds)} total
+										{formatCount(entry.playCount, "play")} ·{" "}
+										{formatDuration(entry.totalDurationSeconds)} total
 									</p>
 								</div>
 							</button>

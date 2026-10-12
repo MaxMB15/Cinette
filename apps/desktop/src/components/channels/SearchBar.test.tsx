@@ -32,7 +32,10 @@ describe("SearchBar", () => {
 		expect(screen.queryByRole("button")).toBeNull();
 
 		rerender(<SearchBar value="sport" onChange={onChange} />);
-		fireEvent.click(screen.getByRole("button"));
+		const clear = screen.getByRole("button", { name: "Clear search" });
+		// Not a submit button, so it can't submit a form the bar sits in.
+		expect(clear).toHaveAttribute("type", "button");
+		fireEvent.click(clear);
 		expect(onChange).toHaveBeenCalledExactlyOnceWith("");
 	});
 

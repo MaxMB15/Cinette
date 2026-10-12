@@ -31,6 +31,7 @@ import {
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { GroupHierarchyEntry } from "@/lib/types";
 import type { Channel } from "@/lib/types";
+import { formatCount } from "@/lib/format";
 
 interface CategoryManagerProps {
 	providerId: string;
@@ -352,8 +353,8 @@ export const CategoryManager = ({
 				<div>
 					<h2 className="text-base font-semibold">Manage Categories</h2>
 					<p className="text-xs text-muted-foreground mt-0.5">
-						{contentType} &middot; {entries.length} groups &middot; {superCats.length}{" "}
-						categories
+						{contentType} &middot; {formatCount(entries.length, "group")} &middot;{" "}
+						{formatCount(superCats.length, "category", "categories")}
 					</p>
 				</div>
 				<div className="flex gap-2">
@@ -454,7 +455,7 @@ export const CategoryManager = ({
 											{catName}
 										</span>
 										<span className="text-[10px] text-muted-foreground tabular-nums">
-											{groups.length} groups
+											{formatCount(groups.length, "group")}
 										</span>
 										<button
 											onClick={() => {
@@ -536,7 +537,7 @@ export const CategoryManager = ({
 								Uncategorized
 							</span>
 							<span className="text-[10px] text-muted-foreground tabular-nums">
-								{uncategorized.length} groups
+								{formatCount(uncategorized.length, "group")}
 							</span>
 							{superCats.length > 0 && (
 								<Button

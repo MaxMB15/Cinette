@@ -285,6 +285,7 @@ describe("SeriesDetailModal", () => {
 			).toEqual(["Unknown Season", "Season 1", "Season 2"]);
 			expect(within(rowOf("Unknown Season")).getByText("?")).toBeInTheDocument();
 			expect(within(rowOf("Season 1")).getByText("2 episodes")).toBeInTheDocument();
+			expect(within(rowOf("Season 2")).getByText("1 episode")).toBeInTheDocument();
 		});
 
 		it("lists a season's episodes in order and plays the one clicked", async () => {

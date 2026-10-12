@@ -35,6 +35,18 @@ describe("CategoryBrowser", () => {
 		expect(screen.getByText("10 channels")).toBeDefined();
 	});
 
+	it("doesn't make a count of one plural", () => {
+		render(
+			<CategoryBrowser
+				{...defaultProps}
+				superCategories={[{ name: "Kids", groupCount: 1, channelCount: 1 }]}
+				topLevelGroups={[{ name: "Misc", channelCount: 1 }]}
+			/>
+		);
+		expect(screen.getByText("1 group \u00b7 1 ch")).toBeDefined();
+		expect(screen.getByText("1 channel")).toBeDefined();
+	});
+
 	it("calls onSelectGroup when clicking a top-level group", () => {
 		render(<CategoryBrowser {...defaultProps} />);
 		fireEvent.click(screen.getByRole("button", { name: /Misc/ }));

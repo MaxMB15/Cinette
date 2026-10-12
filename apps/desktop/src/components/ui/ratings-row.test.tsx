@@ -59,6 +59,22 @@ describe("RatingsRow", () => {
 		expect(screen.getByText("🍿 70%")).toBeInTheDocument();
 	});
 
+	it("leaves out vote counts of zero", () => {
+		const { container } = render(
+			<RatingsRow
+				whatsonData={{
+					imdbRating: 6,
+					imdbVotes: 0,
+					rtCriticsRating: 40,
+					rtCriticsCount: 0,
+					rtAudienceRating: 70,
+					rtAudienceCount: 0,
+				}}
+			/>
+		);
+		expect(container.textContent).toBe("6.0🍅 40%🍿 70%");
+	});
+
 	it("shows a rating without counts when Whatson has none", () => {
 		const { container } = render(
 			<RatingsRow whatsonData={{ imdbRating: 6, rtCriticsRating: 40 }} />

@@ -415,7 +415,7 @@ describe("ChannelList tabs", () => {
 		await renderList();
 
 		expect(searchBox()).toHaveValue("dune");
-		expect(screen.getByText("1 movies")).toBeInTheDocument();
+		expect(screen.getByText("1 movie")).toBeInTheDocument();
 		expect(screen.queryByText("Arrival")).toBeNull();
 	});
 
@@ -423,6 +423,14 @@ describe("ChannelList tabs", () => {
 		saveBrowseTab("guide");
 		await renderList();
 		expect(screen.getByText("3 channels")).toBeInTheDocument();
+	});
+
+	it("opens on the downloads tab again after playing a download", async () => {
+		state.downloads = [makeDownload({ id: "d1", channelId: "arrival" })];
+		saveBrowseTab("downloads");
+		await renderList();
+		expect(screen.getByText("Arrival")).toBeInTheDocument();
+		expect(screen.queryByText("3 channels")).toBeNull();
 	});
 
 	it("turns the filters off when switching tabs but keeps the search", async () => {
@@ -579,6 +587,14 @@ describe("ChannelList live rows", () => {
 });
 
 describe("ChannelList search", () => {
+	it("ignores spaces around the search", async () => {
+		saveBrowseTab("movie");
+		saveBrowseSearch("  arr ");
+		await renderList();
+		expect(screen.getByText("1 movie")).toBeInTheDocument();
+		expect(screen.getByText("Arrival")).toBeInTheDocument();
+	});
+
 	it("filters a moment after typing rather than on every keystroke", async () => {
 		saveBrowseTab("movie");
 		await renderList();
@@ -586,7 +602,7 @@ describe("ChannelList search", () => {
 		typeSearch("arr");
 		expect(screen.getByText("2 movies")).toBeInTheDocument();
 
-		expect(await screen.findByText("1 movies")).toBeInTheDocument();
+		expect(await screen.findByText("1 movie")).toBeInTheDocument();
 		expect(screen.getByText("Arrival")).toBeInTheDocument();
 		expect(screen.queryByText("Dune")).toBeNull();
 		expect(consumeBrowseState().search).toBe("arr");
@@ -600,7 +616,7 @@ describe("ChannelList search", () => {
 		expect(screen.getByText("No movies matching “zzz”")).toBeInTheDocument();
 		expect(screen.getByText("Check the spelling or try a shorter search.")).toBeInTheDocument();
 
-		fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+		fireEvent.click(screen.getByText("Clear search"));
 		expect(searchBox()).toHaveValue("");
 		expect(await screen.findByText("2 movies")).toBeInTheDocument();
 	});
@@ -765,7 +781,7 @@ describe("ChannelList filters", () => {
 			"aria-pressed",
 			"true"
 		);
-		expect(screen.getByText("1 channels")).toBeInTheDocument();
+		expect(screen.getByText("1 channel")).toBeInTheDocument();
 		expect(screen.getByText("Weather Now")).toBeInTheDocument();
 		expect(screen.queryByText("News 24")).toBeNull();
 
@@ -802,12 +818,12 @@ describe("ChannelList filters", () => {
 			"aria-pressed",
 			"true"
 		);
-		expect(screen.getByText("1 movies")).toBeInTheDocument();
+		expect(screen.getByText("1 movie")).toBeInTheDocument();
 		expect(screen.getByText("Arrival")).toBeInTheDocument();
 
 		await openTab("Series");
 		fireEvent.click(screen.getByRole("button", { name: "Show downloaded only" }));
-		expect(screen.getByText("1 shows")).toBeInTheDocument();
+		expect(screen.getByText("1 show")).toBeInTheDocument();
 		expect(screen.getByText("Harbor Lights")).toBeInTheDocument();
 		expect(screen.queryByText("Dune Road")).toBeNull();
 	});
@@ -823,7 +839,7 @@ describe("ChannelList categories without a hierarchy", () => {
 		expect(chips).toEqual(["All", "News2", "Sports1"]);
 
 		fireEvent.click(screen.getByRole("button", { name: /^Sports\s?1$/ }));
-		expect(screen.getByText("1 channels")).toBeInTheDocument();
+		expect(screen.getByText("1 channel")).toBeInTheDocument();
 		expect(screen.getByText("Sport One")).toBeInTheDocument();
 		expect(screen.queryByText("News 24")).toBeNull();
 
@@ -885,7 +901,7 @@ describe("ChannelList category hierarchy", () => {
 		await renderList();
 		expect(tauri.getGroupHierarchy).toHaveBeenCalledWith("p1", "live");
 		expect(screen.getByText("2 groups · 3 ch")).toBeInTheDocument();
-		expect(screen.getByText("1 channels")).toBeInTheDocument();
+		expect(screen.getByText("1 channel")).toBeInTheDocument();
 		expect(screen.queryByText("Goal TV")).toBeNull();
 		expect(screen.queryByText("4 channels")).toBeNull();
 		expect(screen.queryByText("Channels not categorized yet.")).toBeNull();
@@ -918,7 +934,7 @@ describe("ChannelList category hierarchy", () => {
 		fireEvent.click(screen.getByText("Misc"));
 
 		expect(screen.getByText("Odd Box")).toBeInTheDocument();
-		expect(screen.getByText("1 channels")).toBeInTheDocument();
+		expect(screen.getByText("1 channel")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "All Categories" }));
 		expect(screen.queryByText("Odd Box")).toBeNull();
 	});
@@ -1081,7 +1097,7 @@ describe("ChannelList series", () => {
 		saveBrowseTab("series");
 		await renderList();
 
-		expect(screen.getByText("1 shows")).toBeInTheDocument();
+		expect(screen.getByText("1 show")).toBeInTheDocument();
 		fireEvent.click(screen.getByText("Harbor Lights"));
 		const dialog = await screen.findByRole("dialog", { name: "Episodes of Harbor Lights" });
 
@@ -1216,7 +1232,7 @@ describe("ChannelList favorites tab", () => {
 		saveBrowseSearch("zzz");
 		await renderList();
 		expect(screen.getByText("No favorites matching “zzz”")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+		fireEvent.click(screen.getByText("Clear search"));
 		expect(await screen.findByText("Weather Now")).toBeInTheDocument();
 	});
 });
