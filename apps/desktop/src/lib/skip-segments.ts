@@ -18,6 +18,20 @@ export const END_TOLERANCE = 5;
  */
 export const MAX_PLAY_STEP = 3;
 
+/**
+ * The furthest the position can go back between two polls, in seconds, and
+ * still count as playing on. mpv can land a seek a few milliseconds before
+ * its target, so the first poll after a skip can be just behind the position
+ * the player set when it asked for the seek.
+ */
+export const MAX_PLAY_JITTER = 0.1;
+
+/**
+ * The shortest jump the player makes on its own, in seconds. Playback held
+ * until near the end of a segment plays the rest of it instead.
+ */
+export const MIN_AUTO_SKIP = 2;
+
 /** How long the Skip button stays up after a segment starts, in seconds of video. */
 export const OFFER_SECONDS = 10;
 
@@ -89,11 +103,12 @@ export interface PlayRun {
 }
 
 /**
- * Adds a polled position to the stretch played so far. A step back, or
- * forward by more than `MAX_PLAY_STEP`, is a seek and starts a new stretch.
+ * Adds a polled position to the stretch played so far. A step back by more
+ * than `MAX_PLAY_JITTER`, or forward by more than `MAX_PLAY_STEP`, is a seek
+ * and starts a new stretch.
  */
 export const extendRun = (run: PlayRun | null, position: number): PlayRun =>
-	run && position >= run.last && position - run.last <= MAX_PLAY_STEP
+	run && position >= run.last - MAX_PLAY_JITTER && position - run.last <= MAX_PLAY_STEP
 		? { start: run.start, last: position }
 		: { start: position, last: position };
 

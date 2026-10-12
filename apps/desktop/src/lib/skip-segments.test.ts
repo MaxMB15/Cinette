@@ -4,6 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
 	extendRun,
+	MAX_PLAY_JITTER,
 	MAX_PLAY_STEP,
 	reachedAutoSkip,
 	runsToEnd,
@@ -102,9 +103,18 @@ describe("extendRun", () => {
 		expect(run).toEqual({ start: 10, last: 11 + MAX_PLAY_STEP });
 	});
 
+	it("keeps going when a seek lands a few milliseconds early", () => {
+		const run = extendRun(extendRun(null, 10), 11);
+		expect(extendRun(run, 11 - MAX_PLAY_JITTER)).toEqual({
+			start: 10,
+			last: 11 - MAX_PLAY_JITTER,
+		});
+	});
+
 	it("starts again after a seek either way", () => {
 		const run = extendRun(extendRun(null, 10), 11);
 		expect(extendRun(run, 5)).toEqual({ start: 5, last: 5 });
+		expect(extendRun(run, 10.8)).toEqual({ start: 10.8, last: 10.8 });
 		expect(extendRun(run, 11 + MAX_PLAY_STEP + 0.1)).toEqual({
 			start: 11 + MAX_PLAY_STEP + 0.1,
 			last: 11 + MAX_PLAY_STEP + 0.1,

@@ -6,6 +6,7 @@ import type { SkipSegmentModes } from "@/lib/player-prefs";
 import {
 	extendRun,
 	MAX_PLAY_STEP,
+	MIN_AUTO_SKIP,
 	NOTICE_MS,
 	OFFER_SECONDS,
 	reachedAutoSkip,
@@ -143,10 +144,19 @@ export const useSegmentSkipping = ({
 	} | null>(null);
 	const [countdown, setCountdown] = useState<{ key: string; kind: SkipSegmentKind } | null>(null);
 
+	// The position polled while the stream last reconnected. The reconnect can
+	// end before the next poll, so until a poll moves off it, it's still unknown.
+	const [reconnectPosition, setReconnectPosition] = useState<number | null>(null);
+	if (reconnecting) {
+		if (reconnectPosition !== position) setReconnectPosition(position);
+	} else if (reconnectPosition !== null && reconnectPosition !== position) {
+		setReconnectPosition(null);
+	}
+
 	// While a stream opens, mpv reports no length, and while it reconnects its
 	// position can be 0. Neither is where the viewer is, so those polls are
 	// left out.
-	const located = duration > 0 && !reconnecting;
+	const located = duration > 0 && !reconnecting && position !== reconnectPosition;
 	const current = located ? segmentAt(segments, position) : null;
 	const currentKey = current && segmentKey(current);
 	const mode = current ? modes[segmentGroup(current.kind)] : "off";
@@ -211,11 +221,11 @@ export const useSegmentSkipping = ({
 		if (doneRef.current.has(key) || !reachedAutoSkip(current, run, position)) return;
 		const action = skipActionFor(current, duration, hasNext);
 		if (action?.type === "seek") {
-			doneRef.current.add(key);
 			const to = current.autoTo ?? action.to;
-			// Held past where the skip lands, such as behind an open overlay,
-			// there's nothing left to skip.
-			if (to <= position) return;
+			// Held until just before or past where the skip lands, such as
+			// behind an open overlay, there's too little left to skip.
+			if (to - position < MIN_AUTO_SKIP) return;
+			doneRef.current.add(key);
 			landingRef.current = to;
 			latest.current.seek(to);
 			setSkipped({ key, at: Date.now() });
