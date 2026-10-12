@@ -14,6 +14,7 @@ import { ChannelsContext, useChannels, useChannelsProvider } from "./hooks/useCh
 import { useUpdateChecker } from "./hooks/useUpdateChecker";
 import { useSplashScreen } from "./hooks/useSplashScreen";
 import { useDonationPrompt } from "./hooks/useDonationPrompt";
+import { useLockScreenSkip } from "./hooks/useLockScreenSkip";
 import { FullscreenProvider } from "./lib/fullscreen-context";
 import { DownloadsProvider } from "@/hooks/useDownloads";
 import { isMobilePlatform } from "@/lib/platform";
@@ -52,6 +53,8 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 			}
 		},
 	});
+
+	useLockScreenSkip();
 
 	// No donation prompt on mobile, where App Store rules don't allow one.
 	const donation = useDonationPrompt({ enabled: splash.dismissed && !isMobilePlatform() });

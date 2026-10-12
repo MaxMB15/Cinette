@@ -4,10 +4,10 @@
 // Player preferences kept in web storage.
 //
 // The volume picked in the player lasts until the app quits (sessionStorage),
-// so leaving and reopening the player doesn't reset it. The default volume and
-// hardware decoding are Settings choices and persist across launches
-// (localStorage). Storage can throw (private mode, quota), so every access is
-// guarded and falls back to the built-in defaults.
+// so leaving and reopening the player doesn't reset it. The default volume,
+// hardware decoding and skip lengths are Settings choices and persist across
+// launches (localStorage). Storage can throw (private mode, quota), so every
+// access is guarded and falls back to the built-in defaults.
 
 const VOLUME_KEY = "mvp_volume";
 const DEFAULT_VOLUME_KEY = "mvp_default_volume";
@@ -85,5 +85,49 @@ export const readHwdecEnabled = (): boolean => {
 export const writeHwdecEnabled = (enabled: boolean): void => {
 	try {
 		localStorage.setItem(HWDEC_KEY, enabled ? "on" : "off");
+	} catch {}
+};
+
+const SKIP_BACK_KEY = "mvp_skip_back";
+const SKIP_FORWARD_KEY = "mvp_skip_forward";
+
+/** The skip lengths Settings offers, in seconds. */
+export const SKIP_OPTIONS: readonly number[] = [5, 10, 15, 30, 60];
+const BUILTIN_SKIP = 10;
+
+/** Window event fired after either skip length changes. */
+export const SKIP_INTERVALS_EVENT = "mvp-skip-intervals";
+
+export interface SkipIntervals {
+	/** Seconds the skip back button, double-tap and left arrow jump. */
+	back: number;
+	/** Seconds the skip forward button, double-tap and right arrow jump. */
+	forward: number;
+}
+
+const readSkip = (key: string): number => {
+	try {
+		const n = Number(localStorage.getItem(key));
+		return SKIP_OPTIONS.includes(n) ? n : BUILTIN_SKIP;
+	} catch {
+		return BUILTIN_SKIP;
+	}
+};
+
+/** How far the player skips back and forward. 10 seconds each unless changed in Settings. */
+export const readSkipIntervals = (): SkipIntervals => ({
+	back: readSkip(SKIP_BACK_KEY),
+	forward: readSkip(SKIP_FORWARD_KEY),
+});
+
+/** Save one skip length. Values that aren't in SKIP_OPTIONS are ignored. */
+export const writeSkipInterval = (direction: keyof SkipIntervals, seconds: number): void => {
+	if (!SKIP_OPTIONS.includes(seconds)) return;
+	try {
+		localStorage.setItem(
+			direction === "back" ? SKIP_BACK_KEY : SKIP_FORWARD_KEY,
+			String(seconds)
+		);
+		window.dispatchEvent(new Event(SKIP_INTERVALS_EVENT));
 	} catch {}
 };
