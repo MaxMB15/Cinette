@@ -62,13 +62,14 @@ import {
 	readSkipSegmentModes,
 	SKIP_INTERVALS_EVENT,
 	SKIP_SEGMENT_MODES_EVENT,
+	type SkipSegmentModes,
 } from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
-import { useSegmentSkipping } from "@/hooks/useSegmentSkipping";
+import { offerShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
 import { isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
@@ -146,6 +147,9 @@ interface EnrichedMeta {
 	omdbData: OmdbData | null;
 	whatsonData: WhatsonData | null;
 }
+
+/** Used in place of Settings while the skip prompt can't show. */
+const SKIPPING_OFF: SkipSegmentModes = { opening: "off", ending: "off" };
 
 export const PlayerView = () => {
 	const mpv = useMpv();
@@ -384,6 +388,9 @@ export const PlayerView = () => {
 
 			const progress = progressFor(ch, startPos);
 			progressRef.current = progress;
+			// Until the new stream loads, nothing may pair the old one's URL
+			// and length with the new channel, such as the skip time lookup.
+			setLoadedUrl(null);
 			// Prefer a completed download so playback works offline; fall back to
 			// the stream URL if there is none or the lookup fails.
 			const loadId = ++loadRequestRef.current;
@@ -867,7 +874,9 @@ export const PlayerView = () => {
 	);
 
 	// --- Intros, recaps, credits and previews ---
-	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
+	const savedSegmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
+	// mpv's own window has no prompt, so nothing is skipped there.
+	const segmentModes = mpv.fallbackActive ? SKIPPING_OFF : savedSegmentModes;
 	const { video, segments } = useSkipSegments({
 		imdbId: activeImdbId,
 		contentType: activeChannel?.contentType,
@@ -886,19 +895,24 @@ export const PlayerView = () => {
 	// Something open over the prompt holds it, so the player doesn't skip
 	// where the notice and its Undo can't be seen.
 	const skipHeld = showShortcuts || !!pendingResume || showSubtitlePicker || showInfoDrawer;
+	// A stream that's reconnecting holds the countdown, as a pause does.
+	const videoPlaying = mpv.state.isPlaying && !mpv.state.isPaused && !mpv.reconnecting;
 	const skipping = useSegmentSkipping({
 		video,
 		segments,
 		position: mpv.state.position,
 		duration: mpv.state.duration,
-		playing: mpv.state.isPlaying && !mpv.state.isPaused && !skipHeld,
+		playing: videoPlaying && !skipHeld,
 		modes: segmentModes,
 		autoplay,
 		hasNext: nextEpisode !== null,
 		seek: seekTo,
 		onNextEpisode: playNextEpisode,
 	});
-	const skipSegment = skipHeld ? null : skipping.skip;
+	// Enter presses the prompt's button, so only while one is on screen.
+	const skipButtonShows =
+		!skipHeld && (skipping.countdown !== null || offerShows(skipping.offer, showControls));
+	const skipSegment = skipButtonShows ? skipping.skip : null;
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
@@ -952,8 +966,8 @@ export const PlayerView = () => {
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
-			// Enter is only taken when there's something to skip, so it still
-			// presses a button that has focus. Held down, it skips once.
+			// Enter is only taken when the skip prompt shows a button, so it
+			// still presses a button that has focus. Held down, it skips once.
 			if (action.type === "skipSegment") {
 				if (!e.repeat && skipSegment?.()) e.preventDefault();
 				return;
@@ -1219,7 +1233,7 @@ export const PlayerView = () => {
 				<SkipSegmentPrompt
 					skipping={skipping}
 					controlsVisible={showControls}
-					playing={mpv.state.isPlaying && !mpv.state.isPaused}
+					playing={videoPlaying}
 					held={skipHeld}
 					onFocusLost={() => containerRef.current?.focus()}
 				/>

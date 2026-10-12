@@ -3,7 +3,10 @@
 
 import type { SkipSegment } from "@/lib/types";
 
-/** A skip segment for tests: an intro from 60 to 120 s that may be skipped on its own. */
+/**
+ * A skip segment for tests: an intro from 60 to 120 s that SkipDB matched
+ * exactly, which the player may skip on its own from 62 to 118 s.
+ */
 export const makeSegment = (overrides: Partial<SkipSegment> = {}): SkipSegment => ({
 	kind: "intro",
 	start: 60,
@@ -12,6 +15,7 @@ export const makeSegment = (overrides: Partial<SkipSegment> = {}): SkipSegment =
 	fit: "exact",
 	confidence: 0.9,
 	offset: 0,
-	autoFrom: 60,
+	autoFrom: 62,
+	autoTo: 118,
 	...overrides,
 });

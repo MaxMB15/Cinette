@@ -3,7 +3,7 @@
 
 import { useEffect, useId, useRef, type FocusEvent, type MouseEvent, type ReactNode } from "react";
 import { ChevronsRight, SkipForward, Undo2 } from "lucide-react";
-import type { SegmentSkipping } from "@/hooks/useSegmentSkipping";
+import { offerShows, type SegmentSkipping } from "@/hooks/useSegmentSkipping";
 import { COUNTDOWN_MS } from "@/lib/skip-segments";
 import { cn } from "@/lib/utils";
 
@@ -121,7 +121,7 @@ export const SkipSegmentPrompt = ({
 				</button>
 			</div>
 		);
-	} else if (offer && (offer.fresh || controlsVisible)) {
+	} else if (offer && offerShows(offer, controlsVisible)) {
 		const Icon = offer.next ? SkipForward : ChevronsRight;
 		content = (
 			<div className="flex flex-col items-end gap-1">

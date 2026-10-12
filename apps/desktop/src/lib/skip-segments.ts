@@ -98,9 +98,11 @@ export const extendRun = (run: PlayRun | null, position: number): PlayRun =>
 		: { start: position, last: position };
 
 /**
- * Whether the player may skip a segment on its own at `position`. It has to
- * have played into the point it may skip from, rather than seek past it, so
- * jumping into an intro to watch it doesn't skip it.
+ * Whether the player may skip a segment on its own at `position`. Playback
+ * has to have run into the segment from before it, rather than seek into it,
+ * so jumping into an intro to watch it doesn't skip it. Playback that began
+ * in the first few seconds of the video counts as coming from before a
+ * segment at its very start.
  */
 export const reachedAutoSkip = (s: SkipSegment, run: PlayRun, position: number): boolean =>
-	s.autoFrom !== null && run.start <= s.autoFrom && s.autoFrom <= position;
+	s.autoFrom !== null && run.start < Math.max(s.start, MAX_PLAY_STEP) && s.autoFrom <= position;

@@ -2633,6 +2633,7 @@ mod tests {
                 confidence: Some(1.0),
                 offset: None,
                 auto_from: None,
+                auto_to: None,
             }],
             post_credits: Some(3480.0),
         }

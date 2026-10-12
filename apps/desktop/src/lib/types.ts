@@ -162,7 +162,7 @@ export interface SkipSegment {
 	kind: SkipSegmentKind;
 	/** Where the segment starts, in seconds. */
 	start: number;
-	/** Where it ends, in seconds. Skipping jumps here. */
+	/** Where it ends, in seconds. The Skip button jumps here. */
 	end: number;
 	source: "skipdb" | "introdb";
 	fit: SkipSegmentFit;
@@ -175,6 +175,11 @@ export interface SkipSegment {
 	 * are only good enough for a button.
 	 */
 	autoFrom: number | null;
+	/**
+	 * Where skipping without asking jumps to, set along with `autoFrom`. It
+	 * can stop short of `end` when the times may run late.
+	 */
+	autoTo: number | null;
 }
 
 export interface WatchHistoryEntry {

@@ -117,19 +117,28 @@ describe("reachedAutoSkip", () => {
 
 	it("is true once playback has run into the point it may skip from", () => {
 		expect(reachedAutoSkip(intro, { start: 0, last: 62 }, 62)).toBe(true);
-		expect(reachedAutoSkip(intro, { start: 62, last: 63 }, 63)).toBe(true);
+		expect(reachedAutoSkip(intro, { start: 59, last: 63 }, 63)).toBe(true);
 	});
 
 	it("is false before that point", () => {
 		expect(reachedAutoSkip(intro, { start: 0, last: 61 }, 61)).toBe(false);
 	});
 
-	it("is false after a seek past that point", () => {
+	it("is false after a seek into the segment, even before that point", () => {
+		expect(reachedAutoSkip(intro, { start: 60, last: 63 }, 63)).toBe(false);
+		expect(reachedAutoSkip(intro, { start: 61, last: 63 }, 63)).toBe(false);
 		expect(reachedAutoSkip(intro, { start: 70, last: 71 }, 71)).toBe(false);
 	});
 
+	it("counts playback begun in the first seconds as before a segment at the start", () => {
+		const recap = makeSegment({ kind: "recap", start: 0, end: 30, autoFrom: 2, autoTo: 28 });
+		expect(reachedAutoSkip(recap, { start: 0, last: 2 }, 2)).toBe(true);
+		expect(reachedAutoSkip(recap, { start: MAX_PLAY_STEP - 1, last: 4 }, 4)).toBe(true);
+		expect(reachedAutoSkip(recap, { start: MAX_PLAY_STEP, last: 5 }, 5)).toBe(false);
+	});
+
 	it("is false for times only good enough for a button", () => {
-		const unchecked = makeSegment({ fit: "unchecked", autoFrom: null });
+		const unchecked = makeSegment({ fit: "unchecked", autoFrom: null, autoTo: null });
 		expect(reachedAutoSkip(unchecked, { start: 0, last: 65 }, 65)).toBe(false);
 	});
 });

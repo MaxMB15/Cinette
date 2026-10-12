@@ -54,6 +54,13 @@ export interface SkipOffer {
 	unsure: boolean;
 }
 
+/**
+ * Whether the Skip button is on screen. After its first few seconds it only
+ * shows with the controls.
+ */
+export const offerShows = (offer: SkipOffer | null, controlsVisible: boolean): boolean =>
+	offer !== null && (offer.fresh || controlsVisible);
+
 /** Shown for a moment after the player skips a segment on its own. */
 export interface SkipNotice {
 	label: string;
@@ -70,8 +77,9 @@ export interface SegmentSkipping {
 	notice: SkipNotice | null;
 	countdown: NextCountdown | null;
 	/**
-	 * Does what the countdown's or the offer's button says. Returns false when
-	 * neither is up, so there's nothing to skip.
+	 * Does what the countdown's or the offer's button says, even when the
+	 * offer's button is hidden. Returns false when neither is up, so there's
+	 * nothing to skip.
 	 */
 	skip: () => boolean;
 	/** Goes back to where the player skipped from. */
@@ -119,7 +127,10 @@ export const useSegmentSkipping = ({
 	} | null>(null);
 	const [countdown, setCountdown] = useState<{ key: string; kind: SkipSegmentKind } | null>(null);
 
-	const current = segmentAt(segments, position);
+	// While a stream opens or reconnects, mpv reports no length and a position
+	// of 0, which isn't where the viewer is, so those polls are left out.
+	const located = duration > 0;
+	const current = located ? segmentAt(segments, position) : null;
 	const currentKey = current && segmentKey(current);
 	const mode = current ? modes[segmentGroup(current.kind)] : "off";
 	const action = current && mode !== "off" ? skipActionFor(current, duration, hasNext) : null;
@@ -144,7 +155,7 @@ export const useSegmentSkipping = ({
 	latest.current = { currentKey, action, offer, countdown, notice, seek, onNextEpisode };
 
 	// A different video starts over. Losing the video for a moment, such as
-	// while its stream reconnects, doesn't.
+	// while the player reloads its stream, doesn't.
 	useEffect(() => {
 		if (video === null || video === videoRef.current) return;
 		videoRef.current = video;
@@ -157,6 +168,7 @@ export const useSegmentSkipping = ({
 	// Follow the stretch being played, and skip on its own when playback runs
 	// into a segment set to "auto".
 	useEffect(() => {
+		if (!located) return;
 		const last = runRef.current;
 		const run = extendRun(last, position);
 		runRef.current = run;
@@ -170,31 +182,31 @@ export const useSegmentSkipping = ({
 		const action = skipActionFor(current, duration, hasNext);
 		if (action?.type === "seek") {
 			doneRef.current.add(key);
-			latest.current.seek(action.to);
+			latest.current.seek(current.autoTo ?? action.to);
 			setSkipped({ key, at: Date.now() });
 			setNotice({ key, kind: current.kind, from: position });
 		} else if (action?.type === "next" && autoplay) {
 			doneRef.current.add(key);
 			setCountdown({ key, kind: current.kind });
 		}
-	}, [position, playing, current, mode, duration, hasNext, autoplay]);
+	}, [located, position, playing, current, mode, duration, hasNext, autoplay]);
 
 	// A skipped segment gets its button back once playback has left it, or
 	// once a seek after the skip went back into it.
 	useEffect(() => {
-		if (!skipped || Date.now() - skipped.at < SKIP_SETTLE_MS) return;
+		if (!located || !skipped || Date.now() - skipped.at < SKIP_SETTLE_MS) return;
 		if (currentKey !== skipped.key || runStartedAtRef.current > skipped.at) setSkipped(null);
-	}, [skipped, currentKey, position]);
+	}, [located, skipped, currentKey, position]);
 
 	// The countdown stops when playback leaves the credits, or when autoplay,
-	// the next episode or "auto" goes away.
+	// the next episode or "auto" goes away. A reconnect doesn't stop it.
 	const actionType = action?.type;
 	useEffect(() => {
-		if (!countdown) return;
+		if (!countdown || !located) return;
 		if (currentKey !== countdown.key || !autoplay || actionType !== "next" || mode !== "auto") {
 			setCountdown(null);
 		}
-	}, [countdown, currentKey, autoplay, actionType, mode]);
+	}, [countdown, located, currentKey, autoplay, actionType, mode]);
 
 	useEffect(() => {
 		if (!notice) return;

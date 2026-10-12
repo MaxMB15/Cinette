@@ -93,7 +93,7 @@ pub struct SkipSegment {
     pub kind: SegmentKind,
     /// Where the segment starts, in seconds.
     pub start: f64,
-    /// Where it ends, in seconds. Skipping jumps here.
+    /// Where it ends, in seconds. The Skip button jumps here.
     pub end: f64,
     pub source: SegmentSource,
     pub fit: Fit,
@@ -108,6 +108,10 @@ pub struct SkipSegment {
     /// are only good enough for a button. `resolve` sets it.
     #[serde(default)]
     pub auto_from: Option<f64>,
+    /// Where skipping without asking jumps to, set along with `auto_from`. It
+    /// can stop short of `end` when the times may run late.
+    #[serde(default)]
+    pub auto_to: Option<f64>,
 }
 
 /// What one database had for a video, before it's checked against the video.
@@ -293,6 +297,7 @@ impl RawSegment {
             confidence: self.confidence,
             offset: self.offset_ms.map(|ms| ms / 1000.0),
             auto_from: None,
+            auto_to: None,
         }
     }
 }
@@ -359,11 +364,12 @@ pub fn resolve(
     let post_credits = introdb.and_then(|t| t.post_credits);
     let skipdb = skipdb.map_or(&[][..], |t| &t.segments);
     let introdb = introdb.map_or(&[][..], |t| &t.segments);
-    // How far off SkipDB finds the video from its own copy, when that's too far
-    // to trust its times.
-    let mismatch = skipdb
+    // How far SkipDB finds the video from its own copy, when it's further than
+    // an exact match. IntroDB's times are taken to be off by as much, so they
+    // get a button that says the times may be off, or are dropped.
+    let off_by = skipdb
         .iter()
-        .find(|s| s.fit == Fit::Mismatch)
+        .find(|s| matches!(s.fit, Fit::Shifted | Fit::Mismatch))
         .and_then(|s| s.offset);
 
     let mut segments: Vec<SkipSegment> = skipdb
@@ -374,7 +380,7 @@ pub fn resolve(
         if segments.iter().any(|s| s.kind == segment.kind) {
             continue;
         }
-        let segment = match mismatch {
+        let segment = match off_by {
             Some(offset) => SkipSegment {
                 fit: Fit::Mismatch,
                 offset: Some(offset),
@@ -479,7 +485,9 @@ fn check_segment(
     if share < bounds.from || share > bounds.to || length > bounds.max_length {
         return None;
     }
-    s.auto_from = auto_from.filter(|from| s.end - from >= MIN_LENGTH);
+    let auto_to = auto_to(&s);
+    s.auto_from = auto_from.filter(|from| auto_to - from >= MIN_LENGTH);
+    s.auto_to = s.auto_from.map(|_| auto_to);
     Some(s)
 }
 
@@ -490,14 +498,25 @@ fn check_segment(
 /// video's extra or missing seconds can sit before the segment or after it,
 /// which moves the segment by up to `offset` or not at all. Waiting `offset`
 /// seconds past the start skips only what's inside the segment either way, so
-/// a skip never cuts into the show. An exact match can still be up to 2
-/// seconds off, so it waits that long.
+/// a skip never cuts into the show. SkipDB only moves times earlier, so their
+/// end is never early. An exact match can still be up to 2 seconds off either
+/// way, so it waits that long, and `auto_to` stops that far short of the end.
 fn auto_from(s: &SkipSegment) -> Option<f64> {
     let checked = matches!(s.fit, Fit::Exact | Fit::Shifted);
     if !checked || !s.confidence.is_some_and(|c| c >= AUTO_CONFIDENCE) {
         return None;
     }
     Some(s.start + s.offset.unwrap_or(0.0).abs().max(EXACT_SLACK))
+}
+
+/// Where a segment that may be skipped without asking is skipped to, once its
+/// end is fitted to the video. See `auto_from`.
+fn auto_to(s: &SkipSegment) -> f64 {
+    if s.fit == Fit::Exact {
+        s.end - EXACT_SLACK
+    } else {
+        s.end
+    }
 }
 
 fn client() -> reqwest::Client {
@@ -580,6 +599,7 @@ mod tests {
             confidence: Some(0.9),
             offset: Some(0.0),
             auto_from: None,
+            auto_to: None,
         }
     }
 
@@ -925,12 +945,36 @@ mod tests {
         }
 
         #[test]
-        fn leaves_introdb_unchecked_when_skipdb_fits() {
-            let skipdb = times(vec![shifted(SegmentKind::Credits, 3424.0, 3490.0, -10.0)]);
+        fn leaves_introdb_unchecked_when_skipdb_matches_exactly() {
+            let skipdb = times(vec![segment(SegmentKind::Credits, 3424.0, 3490.0)]);
             let introdb = times(vec![from_introdb(SegmentKind::Intro, 229.0, 246.0)]);
             let resolved = resolve(Some(&skipdb), Some(&introdb), 3490.0);
             assert_eq!(resolved[1].fit, Fit::Unchecked);
+            assert_eq!(resolved[1].offset, None);
             assert_eq!(resolved[1].auto_from, None);
+        }
+
+        #[test]
+        fn warns_about_introdb_when_skipdb_finds_the_video_shifted() {
+            // SkipDB fits its times to a video 14 seconds shorter. IntroDB's
+            // intro may be off by as much, which is less than it lasts.
+            let skipdb = times(vec![shifted(SegmentKind::Credits, 3410.0, 3476.0, -14.0)]);
+            let introdb = times(vec![from_introdb(SegmentKind::Intro, 60.0, 120.0)]);
+            let resolved = resolve(Some(&skipdb), Some(&introdb), 3476.0);
+            let intro = resolved
+                .iter()
+                .find(|s| s.kind == SegmentKind::Intro)
+                .unwrap();
+            assert_eq!(intro.source, SegmentSource::IntroDb);
+            assert_eq!(intro.fit, Fit::Mismatch);
+            assert_eq!(intro.offset, Some(-14.0));
+            assert_eq!((intro.start, intro.end), (60.0, 120.0));
+            assert_eq!(intro.auto_from, None);
+            // A short recap could be off by more than it lasts, so it's dropped.
+            let recap = times(vec![from_introdb(SegmentKind::Recap, 0.0, 10.0)]);
+            assert!(resolve(Some(&skipdb), Some(&recap), 3476.0)
+                .iter()
+                .all(|s| s.kind != SegmentKind::Recap));
         }
 
         #[test]
@@ -1128,6 +1172,38 @@ mod tests {
             assert_eq!(auto(1.0), Some(221.5));
             // Too little left to skip after waiting.
             assert_eq!(auto(14.5), None);
+        }
+
+        #[test]
+        fn stops_short_of_the_end_only_for_an_exact_match() {
+            let fitted = |s: SkipSegment, duration: f64| {
+                let s = check(vec![s], duration).remove(0);
+                (s.auto_from, s.auto_to, s.end)
+            };
+            // An exact match may be two seconds early, as well as late.
+            assert_eq!(
+                fitted(segment(SegmentKind::Intro, 60.0, 120.0), 3500.0),
+                (Some(62.0), Some(118.0), 120.0)
+            );
+            // SkipDB moved these earlier for a shorter video, so the end can't
+            // be early.
+            assert_eq!(
+                fitted(shifted(SegmentKind::Intro, 50.0, 110.0, -10.0), 3490.0),
+                (Some(60.0), Some(110.0), 110.0)
+            );
+            assert_eq!(
+                fitted(shifted(SegmentKind::Intro, 60.0, 120.0, 10.0), 3510.0),
+                (Some(70.0), Some(120.0), 120.0)
+            );
+            // A segment too short to skip both ways gets only a button.
+            assert_eq!(
+                fitted(segment(SegmentKind::Intro, 60.0, 66.5), 3500.0),
+                (None, None, 66.5)
+            );
+            assert_eq!(
+                fitted(segment(SegmentKind::Intro, 60.0, 67.0), 3500.0),
+                (Some(62.0), Some(65.0), 67.0)
+            );
         }
 
         #[test]
