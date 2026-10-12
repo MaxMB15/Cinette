@@ -584,14 +584,19 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
 /// if running, and delete any partial file. Safe to call on any state.
 pub fn stop_one<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     // A stopped recording keeps its file, so it has its own stop. When the
-    // cache can't be read, the plain stop below runs and does nothing.
+    // cache can't be read, a running recording is still asked to stop, and
+    // the plain stop below kills a running download.
     let kind = {
         let app_state = app.state::<AppState>();
         let cache = app_state.cache.lock();
         cache.ok().and_then(|c| c.get_download(id).ok().flatten()).map(|r| r.kind)
     };
-    if kind == Some(DownloadKind::Recording) {
-        return recordings::stop(app, id);
+    match kind {
+        Some(DownloadKind::Recording) => return recordings::stop(app, id),
+        None => {
+            recordings::ask_to_stop(app, id);
+        }
+        Some(_) => {}
     }
 
     // Mark cancelled first so the spawn task's exit handler won't flip it to Failed.

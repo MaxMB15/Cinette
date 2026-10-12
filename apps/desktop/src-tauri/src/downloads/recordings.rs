@@ -838,7 +838,7 @@ fn finish<R: Runtime>(app: &AppHandle<R>, id: &str) {
 /// Ask the ffmpeg recording `id` to close its file and exit. It's killed if
 /// it's still running after a while. Returns false when no ffmpeg runs for
 /// `id`.
-fn ask_to_stop<R: Runtime>(app: &AppHandle<R>, id: &str) -> bool {
+pub(crate) fn ask_to_stop<R: Runtime>(app: &AppHandle<R>, id: &str) -> bool {
     let pid = {
         let recorder = app.state::<Recorder>();
         let mut running = recorder.running();
@@ -973,6 +973,8 @@ fn modified_at(path: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::downloads::test_support::{self, add_channel, stalls};
+    use crate::test_support::{poison, TestApp};
     use chrono::NaiveDate;
     use mvp_core::models::playlist::{Provider, ProviderType};
 
@@ -1525,5 +1527,66 @@ mod tests {
         // The third has under a minute left, so there's no rest of it.
         assert_eq!(get(&cache, &nearly).status, DownloadStatus::Completed);
         assert_eq!(cache.list_recordings().unwrap().len(), 4);
+    }
+
+    /// An app recording the live channel "City News" since a minute ago, and
+    /// the recording's id. The stream never sends anything, so the real
+    /// ffmpeg runs until it's killed.
+    fn app_recording() -> (TestApp, String) {
+        let app = TestApp::new();
+        let live = Channel {
+            url: stalls().into(),
+            ..channel("n1", "City News", "live")
+        };
+        add_channel(&app, &live);
+        let now = manager::now_secs();
+        let rec = {
+            let state = app.state();
+            let cache = state.cache.lock().unwrap();
+            schedule(&cache, "n1", now - 60, now + 1_800, None, now).unwrap()
+        };
+        run_check(&app.handle());
+        assert_eq!(download_of(&app, &rec.id).status, DownloadStatus::Recording);
+        assert_eq!(stopping(&app, &rec.id), Some(false));
+        (app, rec.id)
+    }
+
+    fn download_of(app: &TestApp, id: &str) -> DownloadRecord {
+        test_support::download(app, id).unwrap()
+    }
+
+    /// Whether the app asked the ffmpeg of recording `id` to stop, or None
+    /// when none runs.
+    fn stopping(app: &TestApp, id: &str) -> Option<bool> {
+        let handle = app.handle();
+        let recorder = handle.state::<Recorder>();
+        let running = recorder.running();
+        running.get(id).map(|r| r.stopping)
+    }
+
+    #[test]
+    fn stopping_a_running_recording_asks_its_ffmpeg_to_stop() {
+        let (app, id) = app_recording();
+        let before = manager::now_secs();
+
+        manager::stop_one(&app.handle(), &id).unwrap();
+
+        assert_eq!(stopping(&app, &id), Some(true));
+        let ending = download_of(&app, &id);
+        assert_eq!(ending.status, DownloadStatus::Recording);
+        assert!((before..=manager::now_secs()).contains(&ending.end_at.unwrap()));
+    }
+
+    #[test]
+    fn a_recording_stops_when_its_record_cant_be_read() {
+        let (app, id) = app_recording();
+        let state = app.state();
+        poison(&state.cache);
+
+        assert_eq!(manager::stop_one(&app.handle(), &id), Ok(()));
+        assert_eq!(stopping(&app, &id), Some(true));
+
+        state.cache.clear_poison();
+        assert_eq!(download_of(&app, &id).status, DownloadStatus::Recording);
     }
 }
