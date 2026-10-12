@@ -15,6 +15,7 @@ import {
 } from "@/lib/tauri";
 import { readHwdecEnabled, readVolumePreference, writeVolumePreference } from "@/lib/player-prefs";
 import { isOpeningStream } from "@/lib/stream-opening";
+import { createChangeTracker } from "@/lib/change-tracker";
 
 const DEFAULT_STATE: MpvPlayerState = {
 	isPlaying: false,
@@ -90,6 +91,10 @@ export const useMpv = () => {
 	useEffect(() => {
 		volumeRef.current = state.volume;
 	}, [state.volume]);
+	// Seeks and volume changes show at once. A poll that started before one
+	// of them finished still has the old value, so it doesn't replace it.
+	const [seeks] = useState(createChangeTracker);
+	const [volumeChanges] = useState(createChangeTracker);
 
 	// Listen for fallback event emitted when embedded renderer fails.
 	useEffect(() => {
@@ -402,28 +407,41 @@ export const useMpv = () => {
 		}
 	}, []);
 
-	const seek = useCallback(async (position: number) => {
-		console.log("[useMpv] seek position=", position);
-		try {
-			await mpvSeek(position);
+	const seek = useCallback(
+		async (position: number) => {
+			console.log("[useMpv] seek position=", position);
+			// If the seek fails, the next poll puts the real position back.
 			setState((s) => ({ ...s, position }));
-		} catch (e) {
-			console.error("[useMpv] mpvSeek failed:", e);
-		}
-	}, []);
+			const done = seeks.begin();
+			try {
+				await mpvSeek(position);
+			} catch (e) {
+				console.error("[useMpv] mpvSeek failed:", e);
+			} finally {
+				done();
+			}
+		},
+		[seeks]
+	);
 
-	const setVolume = useCallback(async (volume: number) => {
-		console.log("[useMpv] setVolume volume=", volume);
-		userVolumeRef.current = volume;
-		volumeRef.current = volume;
-		writeVolumePreference({ volume, preMute: preMuteVolumeRef.current });
-		try {
-			await mpvSetVolume(volume);
+	const setVolume = useCallback(
+		async (volume: number) => {
+			console.log("[useMpv] setVolume volume=", volume);
+			userVolumeRef.current = volume;
+			volumeRef.current = volume;
+			writeVolumePreference({ volume, preMute: preMuteVolumeRef.current });
 			setState((s) => ({ ...s, volume }));
-		} catch (e) {
-			console.error("[useMpv] mpvSetVolume failed:", e);
-		}
-	}, []);
+			const done = volumeChanges.begin();
+			try {
+				await mpvSetVolume(volume);
+			} catch (e) {
+				console.error("[useMpv] mpvSetVolume failed:", e);
+			} finally {
+				done();
+			}
+		},
+		[volumeChanges]
+	);
 
 	// Mute is volume 0; unmuting restores the volume from before the mute.
 	const toggleMute = useCallback(async () => {
@@ -444,26 +462,28 @@ export const useMpv = () => {
 	const getLastKnownPosition = useCallback(() => lastKnownPositionRef.current, []);
 
 	const refresh = useCallback(async () => {
+		const seekMark = seeks.mark();
+		const volumeMark = volumeChanges.mark();
 		try {
 			const s = await mpvGetState();
 			console.debug("[useMpv] poll state:", JSON.stringify(s));
 			// A poll that lands mid-load may describe the previous stream (or
 			// none at all). Keep the reset state until the load returns.
 			if (loadingRef.current) return;
-			setState({
+			setState((prev) => ({
 				isPlaying: s.isPlaying,
 				isPaused: s.isPaused,
 				currentUrl: s.currentUrl,
-				volume: s.volume,
-				position: s.position,
+				volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
+				position: seeks.isStale(seekMark) ? prev.position : s.position,
 				duration: s.duration,
 				playbackStarted: s.playbackStarted,
 				openFailed: s.openFailed,
-			});
+			}));
 		} catch (e) {
 			console.warn("[useMpv] poll failed:", e);
 		}
-	}, []);
+	}, [seeks, volumeChanges]);
 
 	useEffect(() => {
 		console.log("[useMpv] starting poll interval");

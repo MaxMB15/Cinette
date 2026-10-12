@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
+import { leaveSliderKeysToPlayer } from "@/lib/hotkeys";
 import { describeSource } from "@/lib/sources";
 import type { PlayerState } from "@/lib/types";
 import type { SkipIntervals } from "@/lib/player-prefs";
@@ -100,8 +101,16 @@ export const Controls = ({
 	touchLayout = false,
 	hideCenterControls = false,
 }: ControlsProps) => {
-	const [localPos, setLocalPos] = useState(state.position);
-	const isSeeking = useRef(false);
+	// Set while a pointer presses the seek bar. `pointerId` is that pointer,
+	// so another finger's release doesn't end the press. `to` is where a drag
+	// has moved the bar, and the seek happens on release. A press that doesn't
+	// move the bar doesn't seek. `dropped` is set when the stream changes
+	// mid-drag.
+	const pressRef = useRef<{ pointerId: number; to: number | null; dropped: boolean } | null>(
+		null
+	);
+	// Where the bar shows during a drag. Playback carries on underneath.
+	const [dragPos, setDragPos] = useState<number | null>(null);
 	const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
 	const sourceMenuRef = useRef<HTMLDivElement>(null);
 	const hasSourceChoice = !!onSelectSource && (sources?.length ?? 0) > 1;
@@ -120,21 +129,38 @@ export const Controls = ({
 		if (!visible) setSourceMenuOpen(false);
 	}, [visible]);
 
+	const hasDuration = state.duration > 0;
+	// A new stream starts from its own position, and a drag that began on the
+	// last one doesn't seek it. When the bar goes away mid-drag, its release
+	// never arrives.
 	useEffect(() => {
-		if (!isSeeking.current) {
-			setLocalPos(state.position);
+		const press = pressRef.current;
+		if (press) pressRef.current = hasDuration ? { ...press, to: null, dropped: true } : null;
+		setDragPos(null);
+	}, [state.currentUrl, hasDuration]);
+
+	// The slider only passes on a press it follows.
+	const startPress = (e: React.PointerEvent) => {
+		pressRef.current = { pointerId: e.pointerId, to: null, dropped: false };
+	};
+	const endPress = (e: React.PointerEvent, seek: boolean) => {
+		const press = pressRef.current;
+		if (press?.pointerId !== e.pointerId) return;
+		pressRef.current = null;
+		setDragPos(null);
+		if (seek && press && !press.dropped && press.to !== null) onSeek(press.to);
+	};
+	// The arrow keys move the bar too, and those seek straight away.
+	const handleSeekChange = (position: number) => {
+		const press = pressRef.current;
+		if (!press) onSeek(position);
+		else if (!press.dropped) {
+			press.to = position;
+			setDragPos(position);
 		}
-	}, [state.position]);
-
-	const handleSeekChange = (v: number) => {
-		isSeeking.current = true;
-		setLocalPos(v);
 	};
 
-	const handleSeekCommit = () => {
-		isSeeking.current = false;
-		onSeek(localPos);
-	};
+	const shownPos = dragPos ?? state.position;
 
 	const paused = state.isPaused || !state.isPlaying;
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
@@ -161,17 +187,26 @@ export const Controls = ({
 			>
 				{state.duration > 0 && (
 					<div className="mb-3">
-						<div onPointerUp={handleSeekCommit}>
+						{/* The release is handled here, after the slider's own handlers. */}
+						<div
+							onPointerUp={(e) => endPress(e, true)}
+							// A canceled touch doesn't seek.
+							onPointerCancel={(e) => endPress(e, false)}
+						>
 							<Slider
-								value={localPos}
+								value={shownPos}
 								min={0}
 								max={state.duration}
 								step={1}
+								onPointerDown={startPress}
 								onValueChange={handleSeekChange}
+								onKeyDown={leaveSliderKeysToPlayer}
+								aria-label="Seek"
+								aria-valuetext={`${formatTime(shownPos)} of ${formatTime(state.duration)}`}
 							/>
 						</div>
 						<div className="flex justify-between text-xs text-white/60 mt-1">
-							<span>{formatTime(localPos)}</span>
+							<span>{formatTime(shownPos)}</span>
 							<span>{formatTime(state.duration)}</span>
 						</div>
 					</div>
@@ -289,6 +324,9 @@ export const Controls = ({
 									max={150}
 									step={1}
 									onValueChange={onVolumeChange}
+									onKeyDown={leaveSliderKeysToPlayer}
+									aria-label="Volume"
+									aria-valuetext={`${state.volume}%`}
 								/>
 							</div>
 						)}
