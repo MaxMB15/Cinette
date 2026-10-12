@@ -1365,6 +1365,14 @@ impl CacheStore {
         Ok(rows.collect::<SqlResult<Vec<_>>>()?)
     }
 
+    /// The file path of every download, for finding a path no other download
+    /// uses.
+    pub fn list_download_paths(&self) -> Result<Vec<String>, CacheError> {
+        let mut stmt = self.conn.prepare("SELECT dest_path FROM downloads")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<SqlResult<Vec<_>>>()?)
+    }
+
     pub fn delete_download(&self, id: &str) -> Result<(), CacheError> {
         self.conn
             .execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
@@ -2371,6 +2379,9 @@ mod tests {
         store.upsert_download(&movie_record("d2", "c2")).unwrap();
         let all = store.list_downloads().unwrap();
         assert_eq!(all.len(), 2);
+        let mut paths = store.list_download_paths().unwrap();
+        paths.sort();
+        assert_eq!(paths, vec!["/tmp/d1.mkv.part", "/tmp/d2.mkv.part"]);
     }
 
     fn episode_record(id: &str, series: &str, status: DownloadStatus) -> DownloadRecord {
