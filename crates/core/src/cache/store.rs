@@ -187,8 +187,9 @@ impl ChannelMoves {
     /// channel saved under `old_id` now may not be the one the row was saved
     /// for. The row follows it only when the names agree, and otherwise goes
     /// to the channel of the same provider and kind with the row's name.
-    /// Returns None when no such channel is saved, or when two are, since
-    /// the row can't say which one it was saved for.
+    /// Returns None when no channel of that name is saved, or when channels
+    /// with different ids have it, since the row can't say which one it was
+    /// saved for.
     fn for_name(&self, old_id: &str, name: &str) -> Option<&str> {
         let moved = self.by_old_id.get(old_id)?;
         let name = name_key(name);
@@ -537,6 +538,8 @@ impl CacheStore {
     /// Moves watch history to the channels it was saved for. A channel has
     /// one history row, so a row that lands on a channel that has one already,
     /// as when two listings of one stream were both watched, is added to it.
+    /// Rows move in the order they were saved, so when two were last watched
+    /// at the same time, the older row's name and logo stay.
     fn move_watch_history(&self, moves: &ChannelMoves) -> Result<(), CacheError> {
         let rows: Vec<(i64, String, String)> = self.rows_of(
             "SELECT id, channel_id, channel_name FROM watch_history
@@ -4065,6 +4068,29 @@ mod tests {
                 "p1-live-8 Eight Eight.png 50-500 90s 3x",
             ]
         );
+    }
+
+    #[test]
+    fn history_watched_at_the_same_time_keeps_the_older_rows_name() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[
+                    named("Seven", channel_at("p1-xt-0", "http://srv/live/u/p/7.ts", "live")),
+                    named("Seven", channel_at("p1-xt-1", "http://srv/live/u/p/7.ts", "live")),
+                ],
+            )
+            .unwrap();
+        // The second listing's row was saved first, and both were last
+        // watched at 300.
+        watched(&store, "p1-xt-1", "SEVEN", 50, 300, 30, 1);
+        watched(&store, "p1-xt-0", "Seven", 100, 300, 60, 2);
+
+        store.migrate().unwrap();
+
+        assert_eq!(history(&store), ["p1-live-7 SEVEN SEVEN.png 50-300 90s 3x"]);
     }
 
     #[test]

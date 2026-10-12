@@ -151,8 +151,8 @@ const sameProvider = (a: string, b: string, providerIds: string[]): boolean => {
 };
 
 /**
- * Whether `rec` records `channel`. Channel ids follow each channel's place in
- * the playlist, so a refresh can give an id to another channel. A
+ * Whether `rec` records `channel`. An M3U channel's id follows its place in
+ * the playlist, so a refresh can give the id to another channel. A
  * recording's title is its channel's name, and the name decides within one
  * provider, as in the app. Without a known provider the ids have to match.
  */
