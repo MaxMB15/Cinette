@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EpgProgram } from "@/lib/types";
 import { formatHHMM } from "@/lib/epg-window";
 import { makeNewsChannel, makeProgramme } from "@/test/detail-fixtures";
+import { deferred } from "@/test/deferred";
 
 const tauri = vi.hoisted(() => ({
 	getEpgProgrammes: vi.fn<(id: string, start: number, end: number) => Promise<EpgProgram[]>>(),
@@ -38,14 +39,6 @@ const advance = (ms: number) =>
 	act(() => {
 		vi.advanceTimersByTime(ms);
 	});
-
-const deferred = <T,>() => {
-	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((r) => {
-		resolve = r;
-	});
-	return { promise, resolve };
-};
 
 describe("LiveInfoDrawer", () => {
 	const scrollIntoView = vi.fn();
