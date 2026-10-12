@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll, onTestFinished } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
+import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import { Controls } from "./Controls";
 import type { PlayerState } from "@/lib/types";
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
 const noop = () => {};
 
@@ -110,8 +113,13 @@ describe("Controls seek bar", () => {
 	};
 
 	// jsdom has no pointer events or pointer capture. Captures are kept by
-	// pointer, so a finger Radix didn't capture doesn't move the bar.
+	// pointer. As in browsers, a touch or pen press captures its pointer
+	// before any handler runs, and the release lets it go after them.
 	const captured = new Set<number>();
+	const captureOnPress = (e: PointerEvent) => {
+		if (e.pointerType === "touch" || e.pointerType === "pen") captured.add(e.pointerId);
+	};
+	const releaseAfterRelease = (e: PointerEvent) => void captured.delete(e.pointerId);
 	const saved = {
 		PointerEvent: window.PointerEvent,
 		setPointerCapture: Element.prototype.setPointerCapture,
@@ -134,8 +142,14 @@ describe("Controls seek bar", () => {
 		Element.prototype.setPointerCapture = (id: number) => void captured.add(id);
 		Element.prototype.hasPointerCapture = (id: number) => captured.has(id);
 		Element.prototype.releasePointerCapture = (id: number) => void captured.delete(id);
+		window.addEventListener("pointerdown", captureOnPress, true);
+		window.addEventListener("pointerup", releaseAfterRelease);
+		window.addEventListener("pointercancel", releaseAfterRelease);
 	});
 	afterAll(() => {
+		window.removeEventListener("pointerdown", captureOnPress, true);
+		window.removeEventListener("pointerup", releaseAfterRelease);
+		window.removeEventListener("pointercancel", releaseAfterRelease);
 		Object.assign(window, { PointerEvent: saved.PointerEvent });
 		Object.assign(Element.prototype, {
 			setPointerCapture: saved.setPointerCapture,
@@ -260,8 +274,8 @@ describe("Controls seek bar", () => {
 				clickThumb(bar.thumb());
 				expect(bar.thumb()).toHaveFocus();
 				expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
-				const notCancelled = fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
-				expect(notCancelled).toBe(false);
+				const notCanceled = fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
+				expect(notCanceled).toBe(false);
 				expect(onWindowKey).toHaveBeenCalledTimes(1);
 				expect(bar.onSeek).not.toHaveBeenCalled();
 			} finally {
@@ -304,6 +318,41 @@ describe("Controls seek bar", () => {
 			expect(bar.thumb()).toHaveAttribute("data-focus-source", "keyboard");
 			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
 			expect(bar.onSeek).toHaveBeenCalledWith(121);
+		});
+
+		it("leaves its keys to the player when focus comes back after Tab was let go", () => {
+			const bar = renderSeekBar();
+			clickThumb(bar.thumb());
+			act(() => {
+				fireEvent.keyDown(bar.thumb(), { key: "Tab" });
+				screen.getByRole("button", { name: "Stop" }).focus();
+				fireEvent.keyUp(document.activeElement!, { key: "Tab" });
+			});
+			// Focus comes back with no key down, as a screen reader gives it.
+			act(() => bar.thumb().focus());
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
+		});
+
+		it("leaves its keys to the player when focus comes back after another key", () => {
+			const bar = renderSeekBar();
+			clickThumb(bar.thumb());
+			act(() => {
+				fireEvent.keyDown(bar.thumb(), { key: "Tab" });
+				screen.getByRole("button", { name: "Stop" }).focus();
+			});
+			giveFocusBack(bar.thumb());
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
+		});
+
+		it("counts focus after a click as the click's, even with Tab still down", () => {
+			const bar = renderSeekBar();
+			tabTo(bar.thumb());
+			clickThumb(bar.thumb());
+			act(() => {
+				screen.getByRole("button", { name: "Stop" }).focus();
+				bar.thumb().focus();
+			});
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
 		});
 
 		it("takes its keys back once Tab returns to it", () => {
@@ -381,6 +430,28 @@ describe("Controls seek bar", () => {
 			expect(bar.valueNow()).toBe(120);
 		});
 
+		it("takes a Control-click on Linux and Windows, where it opens no menu", () => {
+			for (const os of ["linux", "windows"] as const) {
+				vi.mocked(osPlatform).mockReturnValue(os);
+				onTestFinished(() => void vi.mocked(osPlatform).mockReset());
+				const bar = renderSeekBar();
+				withWidth(bar.root());
+				press(bar.track(), { clientX: 500, ctrlKey: true });
+				release(bar.track(), { clientX: 500, ctrlKey: true });
+				expect(bar.onSeek).toHaveBeenCalledWith(900);
+				cleanup();
+			}
+		});
+
+		it("takes a touch with Control held, as from a keyboard on an iPad", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			const touch = { pointerType: "touch", ctrlKey: true };
+			press(bar.track(), { ...touch, clientX: 500 });
+			release(bar.track(), { ...touch, clientX: 500 });
+			expect(bar.onSeek).toHaveBeenCalledWith(900);
+		});
+
 		it("follows only the first finger on the bar", () => {
 			const bar = renderSeekBar();
 			withWidth(bar.root());
@@ -397,6 +468,49 @@ describe("Controls seek bar", () => {
 			fireEvent.pointerMove(bar.track(), { ...touch, pointerId: 2, clientX: 250 });
 			release(bar.track(), { ...touch, pointerId: 2, clientX: 250 });
 			expect(bar.onSeek).toHaveBeenCalledTimes(1);
+		});
+
+		it("keeps the first finger's drag when a second finger taps the bar", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			const touch = { pointerType: "touch" };
+			press(bar.track(), { ...touch, clientX: 500 });
+			press(bar.track(), { ...touch, pointerId: 2, isPrimary: false, clientX: 100 });
+			release(bar.track(), { ...touch, pointerId: 2, clientX: 100 });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+			expect(bar.valueNow()).toBe(900);
+
+			fireEvent.pointerMove(bar.track(), { ...touch, pointerId: 1, clientX: 750 });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+			release(bar.track(), { ...touch, clientX: 750 });
+			expect(bar.onSeek).toHaveBeenCalledTimes(1);
+			expect(bar.onSeek).toHaveBeenCalledWith(1350);
+		});
+
+		it("ignores a pen while a finger is down, though both are primary", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			press(bar.track(), { pointerType: "touch", clientX: 500 });
+			const pen = { pointerType: "pen", pointerId: 2 };
+			press(bar.track(), { ...pen, clientX: 100 });
+			fireEvent.pointerMove(bar.track(), { ...pen, clientX: 200 });
+			release(bar.track(), { ...pen, clientX: 200 });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+			release(bar.track(), { pointerType: "touch", clientX: 500 });
+			expect(bar.onSeek).toHaveBeenCalledWith(900);
+		});
+
+		it("takes a new press when the last one's release never arrived", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			const touch = { pointerType: "touch" };
+			press(bar.track(), { ...touch, clientX: 500 });
+			// The capture went away with no release, as when its element is removed.
+			captured.delete(1);
+			press(bar.track(), { ...touch, pointerId: 3, clientX: 250 });
+			release(bar.track(), { ...touch, pointerId: 3, clientX: 250 });
+			expect(bar.onSeek).toHaveBeenCalledTimes(1);
+			expect(bar.onSeek).toHaveBeenCalledWith(450);
 		});
 
 		it("drops a drag when the stream changes under it", () => {

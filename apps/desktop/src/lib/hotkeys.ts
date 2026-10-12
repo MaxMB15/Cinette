@@ -190,7 +190,7 @@ export const isSliderOwnKey = (target: EventTarget | null, key: string): boolean
  * (see `isSliderOwnKey`) moves and keeps the key from the player's own
  * handlers, such as the subtitle position arrows. Otherwise the slider stays
  * put and the key goes on to the player. There Left, Right and Home seek, Up
- * and Down change the volume, and End does nothing.
+ * and Down change the volume, and End, Page Up and Page Down do nothing.
  */
 export const leaveSliderKeysToPlayer = (e: {
 	key: string;

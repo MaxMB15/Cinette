@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import * as SliderPrimitive from "@radix-ui/react-slider";
+import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 type RootProps = React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>;
@@ -26,35 +27,44 @@ interface SliderProps extends Omit<
 type FocusSource = "pointer" | "keyboard";
 
 /**
- * True while Tab or Shift+Tab is moving focus. Focus that arrives any other
- * way, such as an overlay giving it back when it closes, isn't from the
- * keyboard, even though no press is under way.
+ * Set by a Tab or Shift+Tab keydown and cleared when the key comes up or at
+ * the next keydown or press. Focus moves while the key is down, so focus that
+ * arrives while it's set came from Tab.
  */
 let tabbing = false;
 if (typeof document !== "undefined") {
-	document.addEventListener(
-		"keydown",
-		(e) => {
-			tabbing = e.key === "Tab";
-		},
-		true
-	);
-	document.addEventListener(
-		"pointerdown",
-		() => {
-			tabbing = false;
-		},
-		true
-	);
+	const startTab = (e: KeyboardEvent) => {
+		tabbing = e.key === "Tab";
+	};
+	const endTab = () => {
+		tabbing = false;
+	};
+	document.addEventListener("keydown", startTab, true);
+	document.addEventListener("keyup", endTab, true);
+	document.addEventListener("pointerdown", endTab, true);
+	// A hot update in development loads this module again.
+	import.meta.hot?.dispose(() => {
+		document.removeEventListener("keydown", startTab, true);
+		document.removeEventListener("keyup", endTab, true);
+		document.removeEventListener("pointerdown", endTab, true);
+	});
 }
 
 /**
- * Presses that shouldn't move the slider. Radix only checks for the primary
- * button, but a Control-click on a Mac opens the context menu, which takes the
- * release. A second finger would move the bar while the first is still down.
+ * Presses that shouldn't move the slider. Radix takes a press from any button,
+ * and a Control-click on a Mac opens the context menu, which takes the
+ * release. A finger that lands while another is down isn't the primary one.
  */
 const isIgnoredPress = (e: React.PointerEvent): boolean =>
-	e.button !== 0 || (e.pointerType === "mouse" && e.ctrlKey) || e.isPrimary === false;
+	e.button !== 0 ||
+	e.isPrimary === false ||
+	(e.ctrlKey && e.pointerType === "mouse" && getPlatform() === "macos");
+
+/** The pointer pressing the slider, and the element that holds its capture. */
+interface Press {
+	id: number;
+	target: Element;
+}
 
 /**
  * A horizontal slider for one value.
@@ -64,10 +74,16 @@ const isIgnoredPress = (e: React.PointerEvent): boolean =>
  * which has the same color. The root reaches 8px above and below the track
  * so the thin bar is easier to grab, without taking more room in the layout.
  *
- * Only a press with the primary button or the first finger moves it, so a
- * right-click or a Control-click doesn't. The focus ring only shows when the
- * thumb was reached with Tab. Focus that comes back to it later, such as from
- * a closed overlay, keeps the source it had.
+ * One pointer at a time moves it, and only with the primary button. A
+ * right-click, a Control-click on a Mac, a second finger, or a pen while a
+ * finger is down doesn't. Moves and releases of any other pointer never
+ * reach Radix or the `onPointerUp` and `onLostPointerCapture` handlers. A
+ * touch or pen press captures its pointer on its own, so Radix would follow
+ * an ignored one otherwise.
+ *
+ * The focus ring only shows when the thumb was reached with Tab. Focus that
+ * comes back to it later, such as from a closed overlay, keeps the source it
+ * had.
  */
 const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
 	(
@@ -78,6 +94,7 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 			max = 100,
 			onValueChange,
 			onPointerDown,
+			onPointerMove,
 			onPointerUp,
 			onLostPointerCapture,
 			"aria-label": ariaLabel,
@@ -87,15 +104,22 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 		ref
 	) => {
 		const [focusSource, setFocusSource] = React.useState<FocusSource | null>(null);
-		// True from a press until its release, so focus that arrives in
-		// between came from the press.
-		const pressingRef = React.useRef(false);
-		// How the thumb last got focus. It outlives a blur, so focus given
-		// back to the thumb gets the same source again.
+		const pressRef = React.useRef<Press | null>(null);
+		// How the thumb last got focus, or a press on it. It outlives a blur,
+		// so focus given back to the thumb gets the same source again.
 		const lastSourceRef = React.useRef<FocusSource>("pointer");
-		const endPress = () => {
-			pressingRef.current = false;
+		/**
+		 * Whether a press is under way. Radix holds the capture until the
+		 * release, so a press whose release never arrived, such as one on an
+		 * element that went away, doesn't count.
+		 */
+		const isPressing = (): boolean => {
+			const press = pressRef.current;
+			return !!press && press.target.hasPointerCapture(press.id);
 		};
+		/** Whether `e` comes from a pointer other than the one pressing the slider. */
+		const isOtherPointer = (e: React.PointerEvent): boolean =>
+			e.pointerId !== pressRef.current?.id;
 
 		return (
 			<SliderPrimitive.Root
@@ -106,23 +130,35 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 				onValueChange={onValueChange && (([v]) => onValueChange(v))}
 				onPointerDown={(e) => {
 					// Radix skips its own handler for a prevented event.
-					if (isIgnoredPress(e)) {
+					if (isIgnoredPress(e) || (isPressing() && isOtherPointer(e))) {
 						e.preventDefault();
 						return;
 					}
-					pressingRef.current = true;
+					pressRef.current = { id: e.pointerId, target: e.target as Element };
 					lastSourceRef.current = "pointer";
 					// A press on a thumb that already has focus doesn't focus it again.
 					setFocusSource((source) => source && "pointer");
 					onPointerDown?.(e);
 				}}
+				onPointerMove={(e) => {
+					if (isOtherPointer(e)) {
+						e.preventDefault();
+						return;
+					}
+					onPointerMove?.(e);
+				}}
 				onPointerUp={(e) => {
-					endPress();
+					if (isOtherPointer(e)) {
+						e.preventDefault();
+						return;
+					}
+					pressRef.current = null;
 					onPointerUp?.(e);
 				}}
 				// Also covers a canceled touch, which sends no pointerup.
 				onLostPointerCapture={(e) => {
-					endPress();
+					if (isOtherPointer(e)) return;
+					pressRef.current = null;
 					onLostPointerCapture?.(e);
 				}}
 				className={cn(
@@ -140,7 +176,7 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 					aria-valuetext={ariaValueText}
 					data-focus-source={focusSource ?? undefined}
 					onFocus={() => {
-						const source = pressingRef.current
+						const source = isPressing()
 							? "pointer"
 							: tabbing
 								? "keyboard"

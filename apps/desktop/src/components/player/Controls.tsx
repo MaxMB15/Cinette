@@ -101,10 +101,14 @@ export const Controls = ({
 	touchLayout = false,
 	hideCenterControls = false,
 }: ControlsProps) => {
-	// Set while a pointer presses the seek bar. `to` is where a drag has moved
-	// it, and the seek happens on release. A press that doesn't move the bar
-	// doesn't seek. `dropped` is set when the stream changes mid-drag.
-	const pressRef = useRef<{ to: number | null; dropped: boolean } | null>(null);
+	// Set while a pointer presses the seek bar. `pointerId` is that pointer,
+	// so another finger's release doesn't end the press. `to` is where a drag
+	// has moved the bar, and the seek happens on release. A press that doesn't
+	// move the bar doesn't seek. `dropped` is set when the stream changes
+	// mid-drag.
+	const pressRef = useRef<{ pointerId: number; to: number | null; dropped: boolean } | null>(
+		null
+	);
 	// Where the bar shows during a drag. Playback carries on underneath.
 	const [dragPos, setDragPos] = useState<number | null>(null);
 	const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
@@ -131,15 +135,17 @@ export const Controls = ({
 	// never arrives.
 	useEffect(() => {
 		const press = pressRef.current;
-		if (press) pressRef.current = hasDuration ? { to: null, dropped: true } : null;
+		if (press) pressRef.current = hasDuration ? { ...press, to: null, dropped: true } : null;
 		setDragPos(null);
 	}, [state.currentUrl, hasDuration]);
 
-	const startPress = () => {
-		pressRef.current = { to: null, dropped: false };
+	// The slider only passes on a press it follows.
+	const startPress = (e: React.PointerEvent) => {
+		pressRef.current = { pointerId: e.pointerId, to: null, dropped: false };
 	};
-	const endPress = (seek: boolean) => {
+	const endPress = (e: React.PointerEvent, seek: boolean) => {
 		const press = pressRef.current;
+		if (press?.pointerId !== e.pointerId) return;
 		pressRef.current = null;
 		setDragPos(null);
 		if (seek && press && !press.dropped && press.to !== null) onSeek(press.to);
@@ -183,9 +189,9 @@ export const Controls = ({
 					<div className="mb-3">
 						{/* The release is handled here, after the slider's own handlers. */}
 						<div
-							onPointerUp={() => endPress(true)}
+							onPointerUp={(e) => endPress(e, true)}
 							// A canceled touch doesn't seek.
-							onPointerCancel={() => endPress(false)}
+							onPointerCancel={(e) => endPress(e, false)}
 						>
 							<Slider
 								value={shownPos}
