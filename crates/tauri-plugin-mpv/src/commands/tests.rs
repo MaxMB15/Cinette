@@ -74,7 +74,7 @@ mod with_a_stream {
 
         // Bounds sent before the load reach the renderer the load makes.
         block_on(mpv_set_bounds(h(), s(), 0.0, 0.0, 640.0, 360.0)).unwrap();
-        let (renderer, log) = FakeRenderer::new();
+        let (renderer, log) = FakeRenderer::working();
         load_headless(&s(), &h(), &path, None, Ok(renderer)).unwrap();
         assert_eq!(log.lock().unwrap().frames, [[0.0, 0.0, 640.0, 360.0]]);
         wait_until("playback to start", || get_state(&app).playback_started);

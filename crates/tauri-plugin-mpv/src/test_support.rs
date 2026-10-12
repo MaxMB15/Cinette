@@ -293,7 +293,8 @@ fn serve(
         Reply::HoldAfter(n, release) => {
             stream.write_all(promise_whole(total).as_bytes())?;
             stream.write_all(&body[..n])?;
-            let _ = release.recv_timeout(PATIENCE);
+            // A test that fails drops its sender, which ends the wait too.
+            let _ = release.recv();
             stream.write_all(&body[n..])
         }
         Reply::Status(code) => {
@@ -438,11 +439,13 @@ pub(crate) struct FakeRenderer {
 }
 
 impl FakeRenderer {
-    pub(crate) fn new() -> (Box<dyn PlatformRenderer>, SharedLog) {
+    /// A renderer whose `attach` works.
+    pub(crate) fn working() -> (Box<dyn PlatformRenderer>, SharedLog) {
         Self::build(None)
     }
 
     /// A renderer whose `attach` fails with `error`.
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     pub(crate) fn failing(error: &str) -> (Box<dyn PlatformRenderer>, SharedLog) {
         Self::build(Some(error.to_string()))
     }

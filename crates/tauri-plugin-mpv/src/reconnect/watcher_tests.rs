@@ -137,10 +137,10 @@ fn gives_up_once_the_attempts_run_out() {
 
 #[test]
 fn reports_a_stall_until_the_cache_refills() {
-    // The server sends six seconds, then holds the connection open until
+    // The server sends twelve seconds, then holds the connection open until
     // the test lets the rest through.
     let (release, held) = mpsc::channel();
-    let server = Server::start(wav(10), vec![Reply::HoldAfter(after_seconds(6), held)]);
+    let server = Server::start(wav(20), vec![Reply::HoldAfter(after_seconds(12), held)]);
     let url = server.url();
     let app = TestApp::new();
     let events = app.record(&[EVENT_BUFFERING, EVENT_BUFFERED, EVENT_RECONNECTING]);
@@ -148,6 +148,12 @@ fn reports_a_stall_until_the_cache_refills() {
     let running = Running::start(watcher(&app, &player, &url));
 
     player.command("loadfile", &[&url, "replace"]).unwrap();
+    // mpv only pauses for the cache once playback has started.
+    wait_until("playback to start", || {
+        player
+            .get_property::<f64>("playback-time")
+            .is_ok_and(|time| time > 0.0)
+    });
     assert_eq!(events.wait_for(EVENT_BUFFERING), json!({ "url": url }));
     assert!(events.payloads(EVENT_BUFFERED).is_empty());
 

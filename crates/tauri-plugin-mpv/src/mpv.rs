@@ -583,7 +583,7 @@ mod tests {
 
         /// Installs a fake renderer and returns what it records.
         fn install(state: &MpvState) -> SharedLog {
-            let (renderer, log) = FakeRenderer::new();
+            let (renderer, log) = FakeRenderer::working();
             state.install_renderer(renderer);
             log
         }

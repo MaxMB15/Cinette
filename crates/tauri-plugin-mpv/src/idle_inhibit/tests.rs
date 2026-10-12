@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Only what is harmless to run. On macOS that is a power assertion held
-//! for a moment. On Linux the inhibit goes over the desktop's session bus,
-//! which CI doesn't have and a developer's machine would really act on, so
-//! only the reply parser is tested there.
+//! On macOS the tests hold a power assertion for a moment. On Linux the
+//! inhibit goes over the desktop's session bus, which CI doesn't have, so
+//! only the reply parser is tested here. The load tests in `mpv` reach the
+//! bus on a desktop, where the inhibit lasts only as long as the test.
 
 use super::*;
 

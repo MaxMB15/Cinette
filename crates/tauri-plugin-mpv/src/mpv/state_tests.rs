@@ -28,7 +28,7 @@ const FIRST_FRAME: &str = "mpv://first-frame";
 
 /// Loads `url` through a new fake renderer and returns what it records.
 fn load(app: &TestApp, url: &str) -> SharedLog {
-    let (renderer, log) = FakeRenderer::new();
+    let (renderer, log) = FakeRenderer::working();
     load_headless(&app.state(), &app.handle(), url, None, Ok(renderer)).expect("load");
     log
 }
@@ -132,6 +132,7 @@ fn falls_back_when_the_renderer_cannot_attach() {
     );
     assert!(log.lock().unwrap().dropped);
     assert!(state.renderer.lock().unwrap().is_none());
+    assert!(state.fallback_active.load(Ordering::Acquire));
     wait_until("playback to start", || state.get_state().playback_started);
 }
 
@@ -142,7 +143,7 @@ fn falls_back_when_mpv_rejects_an_embedded_option() {
     let media = MediaDir::new();
     let path = media.file("tone.wav", &wav(10));
     let state = app.state();
-    let (renderer, log) = FakeRenderer::new();
+    let (renderer, log) = FakeRenderer::working();
     let embedded = (renderer, headless(&[("no-such-option", "1")]));
 
     state
@@ -192,7 +193,7 @@ fn a_load_fails_when_the_fallback_cannot_start_either() {
 fn a_load_mpv_refuses_tears_down_the_renderer() {
     let app = TestApp::new();
     let state = app.state();
-    let (renderer, log) = FakeRenderer::new();
+    let (renderer, log) = FakeRenderer::working();
 
     // mpv can't take a URL with a NUL in it, so loadfile fails after the
     // renderer is attached.
@@ -259,7 +260,7 @@ fn hardware_decoding_follows_the_setting() {
     let path = media.file("tone.wav", &wav(10));
     let state = app.state();
     for (enabled, expected) in [(true, "auto"), (false, "no")] {
-        let (renderer, _log) = FakeRenderer::new();
+        let (renderer, _log) = FakeRenderer::working();
         let embedded = (renderer, headless(&[("hwdec", "auto")]));
         state
             .load_with(enabled, || {
@@ -296,7 +297,7 @@ fn turning_video_off_reaches_the_loaded_stream_only() {
 #[test]
 fn the_renderer_follows_visibility_and_window_size() {
     let state = MpvState::new();
-    let (renderer, log) = FakeRenderer::new();
+    let (renderer, log) = FakeRenderer::working();
     state.install_renderer(renderer);
 
     state.set_visible(false);
