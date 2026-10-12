@@ -128,7 +128,7 @@ pub async fn mpv_sub_add<R: Runtime>(
     state: State<'_, MpvState>,
     path: String,
 ) -> Result<(), String> {
-    tracing::info!("[MPV cmd] sub_add path={}", path);
+    tracing::info!("[MPV cmd] sub_add");
     state.sub_add(&path)?;
     Ok(())
 }
