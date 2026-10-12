@@ -8,8 +8,8 @@
 
 use super::*;
 use crate::downloads::test_support::{
-    add_channel, add_download, download, finished, missing_url, movie, record, video_url,
-    DownloadEvent, Events, STALLS,
+    add_channel, add_download, download, finished, missing_url, movie, record, stalls, video_url,
+    DownloadEvent, Events,
 };
 use crate::test_support::poison;
 use mvp_core::downloads::model::DownloadStatus;
@@ -47,7 +47,7 @@ fn finished_file(app: &TestApp, id: &str, name: &str) -> PathBuf {
 #[tokio::test]
 async fn a_movie_download_starts_in_the_movies_folder() {
     let app = TestApp::new();
-    add_channel(&app, &movie("c1", "Dune (2021)", STALLS));
+    add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
 
     let id = enqueue_movie_download(app.handle(), app.state(), "c1".into())
         .await
@@ -88,7 +88,7 @@ async fn retrying_a_failed_download_replaces_it() {
         .unwrap();
     events.wait_for(&failed, DownloadStatus::Failed);
 
-    add_channel(&app, &movie("c1", "Dune (2021)", STALLS));
+    add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
     let retry = enqueue_movie_download(app.handle(), app.state(), "c1".into())
         .await
         .unwrap();
@@ -136,8 +136,8 @@ async fn a_batch_of_episodes_queues_in_order_and_stops_together() {
     let app = TestApp::new();
     app.downloads().set_concurrency(1);
     let eps = vec![
-        episode("e1", "Good News About Hell", STALLS),
-        episode("e2", "Half Loop", STALLS),
+        episode("e1", "Good News About Hell", stalls()),
+        episode("e2", "Half Loop", stalls()),
     ];
 
     let ids = enqueue_episodes_batch(
@@ -318,8 +318,8 @@ async fn more_downloads_at_once_starts_the_queued_ones() {
     set_download_concurrency(app.downloads(), app.handle(), 1)
         .await
         .unwrap();
-    add_channel(&app, &movie("c1", "Dune (2021)", STALLS));
-    add_channel(&app, &movie("c2", "Arrival (2016)", STALLS));
+    add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
+    add_channel(&app, &movie("c2", "Arrival (2016)", stalls()));
     let mut ids = Vec::new();
     for channel in ["c1", "c2"] {
         let id = enqueue_movie_download(app.handle(), app.state(), channel.into())
@@ -361,7 +361,7 @@ async fn a_new_download_folder_is_saved_and_used() {
     assert_eq!(get_download_folder(app.downloads()).await, Ok(path.clone()));
     assert_eq!(saved_settings(&app)["download_folder"], path);
 
-    add_channel(&app, &movie("c1", "Dune (2021)", STALLS));
+    add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
     let id = enqueue_movie_download(app.handle(), app.state(), "c1".into())
         .await
         .unwrap();
@@ -520,10 +520,10 @@ async fn a_channel_without_a_finished_file_plays_from_the_playlist() {
 #[tokio::test]
 async fn a_poisoned_cache_fails_the_commands_that_need_it() {
     let app = TestApp::new();
-    add_channel(&app, &movie("c1", "Dune (2021)", STALLS));
+    add_channel(&app, &movie("c1", "Dune (2021)", stalls()));
     let state = app.state();
     poison(&state.cache);
-    let ep = || episode("e1", "Good News About Hell", STALLS);
+    let ep = || episode("e1", "Good News About Hell", stalls());
 
     assert!(
         enqueue_movie_download(app.handle(), app.state(), "c1".into())

@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_hand_over_ends_the_older_one_at_once() {
+    fn tracking_for_a_replaced_hand_over_stops_before_its_first_tick() {
         let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
         let app = TestApp::new();
         let before = GENERATION.load(Ordering::SeqCst);
@@ -316,8 +316,8 @@ mod tests {
         assert_eq!(handed, before + 1);
         hand_off_progress(app.handle(), None);
         assert_eq!(GENERATION.load(Ordering::SeqCst), before + 2);
-        // With an hour between ticks, only the newer hand-over can end it in
-        // time.
+        // With an hour between ticks, `track` only returns in time if it
+        // checks the generation before it ticks and sleeps.
         assert!(track_returns(&app, handed, Duration::from_secs(60 * 60)));
     }
 

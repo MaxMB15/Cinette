@@ -6,8 +6,8 @@
 
 use super::*;
 use crate::downloads::test_support::{
-    add_channel, add_download, download, finished, missing_url, movie, record, video_url,
-    DownloadEvent, Events, STALLS, VIDEO_BYTES,
+    add_channel, add_download, download, ffmpeg_writes_into, finished, missing_url, movie,
+    process_runs, record, stalls, video_url, wait_until, DownloadEvent, Events, VIDEO_BYTES,
 };
 use crate::test_support::{poison, TestApp};
 use mvp_core::models::channel::Channel;
@@ -391,8 +391,8 @@ fn stopping_a_running_download_deletes_its_partial_file_and_starts_the_next() {
     let app = TestApp::new();
     let handle = app.handle();
     app.downloads().set_concurrency(1);
-    let first = enqueue(&app, "c1", "Dune (2021)", STALLS);
-    let second = enqueue(&app, "c2", "Arrival (2016)", STALLS);
+    let first = enqueue(&app, "c1", "Dune (2021)", stalls());
+    let second = enqueue(&app, "c2", "Arrival (2016)", stalls());
     pump(&handle).unwrap();
     assert_eq!(status(&app, &first), DownloadStatus::Downloading);
     assert_eq!(status(&app, &second), DownloadStatus::Queued);
@@ -401,7 +401,6 @@ fn stopping_a_running_download_deletes_its_partial_file_and_starts_the_next() {
     let part = download(&app, &first).unwrap().dest_path;
     std::fs::write(&part, b"partial").unwrap();
 
-    let events = Events::watch(&app);
     stop_one(&handle, &first).unwrap();
     let stopped = download(&app, &first).unwrap();
     assert_eq!(stopped.status, DownloadStatus::Cancelled);
@@ -409,8 +408,9 @@ fn stopping_a_running_download_deletes_its_partial_file_and_starts_the_next() {
     assert!(!Path::new(&part).exists());
     assert!(!is_running(&app, &first));
 
-    // The next one starts once the first ffmpeg has ended.
-    events.wait_until("the next download starts", || {
+    // The next one starts once the first ffmpeg has ended, which it only
+    // does when it's killed.
+    wait_until("the next download starts", || {
         status(&app, &second) == DownloadStatus::Downloading && is_running(&app, &second)
     });
     assert_eq!(download(&app, &first), Some(stopped));
@@ -422,7 +422,7 @@ fn stopping_a_running_download_deletes_its_partial_file_and_starts_the_next() {
 fn a_download_stopped_while_it_starts_is_killed_at_once() {
     let app = TestApp::new();
     let handle = app.handle();
-    let id = enqueue(&app, "c1", "Dune (2021)", STALLS);
+    let id = enqueue(&app, "c1", "Dune (2021)", stalls());
     let claimed = claim(&app, &id);
     let events = Events::watch(&app);
     stop_one(&handle, &id).unwrap();
@@ -431,7 +431,7 @@ fn a_download_stopped_while_it_starts_is_killed_at_once() {
     assert!(!is_running(&app, &id));
     // The stop and the start each send the record, and so does the end of
     // ffmpeg, which never comes unless it was killed.
-    events.wait_until("ffmpeg ends", || events.progress(&id).len() == 3);
+    wait_until("ffmpeg ends", || events.progress(&id).len() == 3);
     let sent = events.progress(&id);
     assert!(sent.iter().all(|r| r.status == DownloadStatus::Cancelled));
     assert_eq!(sent[2].error, None);
@@ -442,15 +442,17 @@ fn quitting_kills_ffmpeg_and_leaves_its_download_for_the_next_launch() {
     let app = TestApp::new();
     let handle = app.handle();
     app.downloads().set_concurrency(1);
-    let running = enqueue(&app, "c1", "Dune (2021)", STALLS);
-    let waiting = enqueue(&app, "c2", "Arrival (2016)", STALLS);
+    let running = enqueue(&app, "c1", "Dune (2021)", stalls());
+    let waiting = enqueue(&app, "c2", "Arrival (2016)", stalls());
     pump(&handle).unwrap();
-    assert!(is_running(&app, &running));
+    let pid = app.downloads().running()[&running].child.pid();
+    assert!(process_runs(pid));
 
     stop_all_for_exit(&handle);
     let manager = app.downloads();
     assert!(manager.exiting.load(Ordering::SeqCst));
     assert!(manager.running().is_empty());
+    wait_until("the running ffmpeg ends", || !process_runs(pid));
     assert_eq!(status(&app, &running), DownloadStatus::Downloading);
 
     // Nothing new starts while the app quits, even with a slot free.
@@ -461,6 +463,9 @@ fn quitting_kills_ffmpeg_and_leaves_its_download_for_the_next_launch() {
     // One that was already starting is killed rather than tracked.
     start_process(&handle, claim(&app, &waiting)).unwrap();
     assert!(manager.running().is_empty());
+    wait_until("the starting ffmpeg ends", || {
+        !ffmpeg_writes_into(&app.downloads_dir())
+    });
     assert_eq!(status(&app, &waiting), DownloadStatus::Downloading);
 }
 
@@ -475,13 +480,13 @@ fn quitting_before_the_downloads_are_set_up_does_nothing() {
 fn a_download_whose_channel_changed_fails_and_the_next_one_starts() {
     let app = TestApp::new();
     app.downloads().set_concurrency(1);
-    let changed = enqueue(&app, "c1", "Dune (2021)", STALLS);
+    let changed = enqueue(&app, "c1", "Dune (2021)", stalls());
     // A refresh put another title at this position in the playlist.
-    add_channel(&app, &movie("c1", "Arrival (2016)", STALLS));
+    add_channel(&app, &movie("c1", "Arrival (2016)", stalls()));
     let part = download(&app, &changed).unwrap().dest_path;
     std::fs::create_dir_all(Path::new(&part).parent().unwrap()).unwrap();
     std::fs::write(&part, b"partial").unwrap();
-    let next = enqueue(&app, "c2", "Blade Runner (1982)", STALLS);
+    let next = enqueue(&app, "c2", "Blade Runner (1982)", stalls());
 
     let err = pump(&app.handle()).unwrap_err();
     assert!(err.contains("The playlist changed"), "{err}");
@@ -498,7 +503,7 @@ fn a_download_folder_that_cant_be_made_fails_the_download() {
     let app = TestApp::new();
     let blocker = app.downloads_dir();
     std::fs::write(&blocker, b"a file where the folder should be").unwrap();
-    let id = enqueue(&app, "c1", "Dune (2021)", STALLS);
+    let id = enqueue(&app, "c1", "Dune (2021)", stalls());
 
     let err = pump(&app.handle()).unwrap_err();
     let failed = download(&app, &id).unwrap();
@@ -661,7 +666,7 @@ fn a_setting_that_cant_be_written_says_why() {
 fn a_poisoned_cache_fails_without_a_panic() {
     let app = TestApp::new();
     let handle = app.handle();
-    let id = enqueue(&app, "c1", "Dune (2021)", STALLS);
+    let id = enqueue(&app, "c1", "Dune (2021)", stalls());
     let events = Events::watch(&app);
     let state = app.state();
     poison(&state.cache);
@@ -670,7 +675,7 @@ fn a_poisoned_cache_fails_without_a_panic() {
         &handle,
         "c2",
         "Arrival (2016)",
-        STALLS,
+        stalls(),
         DownloadKind::Movie,
         None,
         None,

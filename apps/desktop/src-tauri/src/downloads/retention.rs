@@ -18,14 +18,21 @@ const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 
 /// settings are restored. Only the desktop apps download.
 #[cfg(desktop)]
 pub fn start<R: Runtime>(app: &AppHandle<R>) {
+    // The first check waits an hour. Downloads that came due while the app
+    // was closed show "Deletes soon" until then, so there's time to keep one
+    // or play it, which starts its count over.
+    start_every(app, CHECK_INTERVAL);
+}
+
+/// Start a check every `interval` on its own thread, the first one
+/// `interval` from now. `start` passes an hour, and tests a shorter time.
+#[cfg(desktop)]
+fn start_every<R: Runtime>(app: &AppHandle<R>, interval: std::time::Duration) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("download-retention".into())
         .spawn(move || loop {
-            // The first check waits an hour. Downloads that came due while
-            // the app was closed show "Deletes soon" until then, so there's
-            // time to keep one or play it, which starts its count over.
-            std::thread::sleep(CHECK_INTERVAL);
+            std::thread::sleep(interval);
             check(&app);
         });
     if let Err(e) = spawned {
@@ -95,9 +102,10 @@ fn playing_file<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
 #[cfg(all(test, desktop))]
 mod tests {
     use super::*;
-    use crate::downloads::test_support::{add_download, download, finished};
+    use crate::downloads::test_support::{add_download, download, finished, wait_until};
     use crate::test_support::{poison, TestApp};
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     /// An app that deletes downloads after 30 days, with one finished long
     /// ago. Returns the app and the download's file.
@@ -158,7 +166,21 @@ mod tests {
     #[test]
     fn the_first_check_waits_so_a_due_download_can_still_be_kept() {
         let (app, file) = app_with_a_due_download();
-        start(&app.handle());
-        assert!(download(&app, "a").is_some() && file.exists());
+        let interval = Duration::from_millis(500);
+        let started = Instant::now();
+        start_every(&app.handle(), interval);
+
+        let kept = download(&app, "a").is_some() && file.exists();
+        // The download stays until the interval is up. Only on a machine too
+        // slow to look before then can it be gone already.
+        assert!(kept || started.elapsed() >= interval);
+        wait_until("the first check deletes the download", || {
+            download(&app, "a").is_none()
+        });
+        assert!(started.elapsed() >= interval);
+        assert!(!file.exists());
+        // The thread checks every interval until the tests end. With no
+        // retention set, each check returns at once.
+        app.downloads().set_retention_days(None);
     }
 }

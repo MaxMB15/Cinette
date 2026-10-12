@@ -361,7 +361,9 @@ mod tests {
             .with(Targets(seen.clone()));
 
         tracing::subscriber::with_default(subscriber, || {
-            tracing::debug!(target: "max_video_player::downloads", "queued");
+            // The target is this module's path, as for everything the app
+            // logs, so it starts with the library's name.
+            tracing::debug!("queued");
             tracing::debug!(target: "tauri_plugin_mpv::engine", "loaded");
             tracing::debug!(target: "mvp_core::iptv::xtream", "fetched");
         });
@@ -369,7 +371,7 @@ mod tests {
         assert_eq!(
             *seen.lock().unwrap(),
             [
-                "max_video_player::downloads",
+                module_path!(),
                 "tauri_plugin_mpv::engine",
                 "mvp_core::iptv::xtream",
             ]

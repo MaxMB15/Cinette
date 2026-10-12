@@ -4,32 +4,53 @@
 //! Records, channels, a loopback video server and event waiting for the
 //! download tests.
 //!
-//! The tests run the real bundled ffmpeg. The build copies it next to the
-//! test binaries, which is where the shell plugin looks for the sidecar, so
-//! they need `scripts/fetch-ffmpeg.sh` to have run, as every build does.
+//! The tests run the real bundled ffmpeg. The build copies it into the
+//! profile's folder, such as `target/debug`, and that's where the shell
+//! plugin looks for a sidecar when a test runs, one folder above the test
+//! binaries in `deps`. So the tests need `scripts/fetch-ffmpeg.sh` to have
+//! run, as every build does.
 
+use super::FFMPEG_SIDECAR;
 use crate::test_support::TestApp;
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord, DownloadStatus};
 use mvp_core::http::test_server::{route, serve_routes};
 use mvp_core::models::channel::Channel;
 use std::cell::RefCell;
+use std::net::TcpListener;
 use std::path::Path;
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::Listener;
 
-/// A source ffmpeg reads from its standard input. The shell plugin keeps that
-/// pipe open and never writes to it, so the download runs until it's
-/// stopped, at the latest when its `TestApp` drops, and the size probe turns
-/// the URL down at once.
-pub(crate) const STALLS: &str = "pipe:0";
+/// A source that never sends anything, so a download of it runs until the
+/// app kills its ffmpeg. ffmpeg connects to a loopback port that takes the
+/// connection and keeps it open without a word. Closing ffmpeg's standard
+/// input doesn't end it, so a test can tell an ffmpeg the app killed from
+/// one it only let go of. The size probe turns the URL down at once.
+pub(crate) fn stalls() -> &'static str {
+    static URL: OnceLock<String> = OnceLock::new();
+    URL.get_or_init(|| {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("read the bound address");
+        std::thread::spawn(move || {
+            // Every connection stays open until the test process ends.
+            let mut open = Vec::new();
+            for stream in listener.incoming().flatten() {
+                open.push(stream);
+            }
+        });
+        format!("tcp://{addr}")
+    })
+}
 
 /// Audio samples in the video `video_url` serves.
 const SAMPLES: usize = 1_000_000;
 
-/// The length of the video `video_url` serves. It's over a megabyte, so the
-/// size probe takes it for a video rather than a playlist.
+/// The length of the video `video_url` serves. The size probe takes a length
+/// for a video's only from a megabyte up, the private `MIN_VIDEO_BYTES` in
+/// `mvp_core::downloads::size`, so this has to stay above it by hand.
 pub(crate) const VIDEO_BYTES: i64 = 44 + SAMPLES as i64;
 
 /// The longest a test waits for a download to get somewhere. ffmpeg takes a
@@ -111,7 +132,8 @@ pub(crate) fn missing_url(name: &str) -> String {
     format!("{}/missing/{name}.mkv", server())
 }
 
-/// One server for every test, since each video is a megabyte.
+/// One server for every test, since each video is a megabyte. It answers
+/// one request at a time, so downloads that run at once take turns.
 fn server() -> &'static str {
     static URL: OnceLock<String> = OnceLock::new();
     URL.get_or_init(|| serve_routes(vec![route("/video/", "200 OK", wav())]).0)
@@ -138,7 +160,9 @@ fn wav() -> String {
     String::from_utf8(bytes).expect("every byte is ASCII")
 }
 
-/// An event the app sent the frontend about a download.
+/// An event the app sent the frontend about a download. Tests hold only a
+/// handful, so the record isn't boxed to shrink the enum.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DownloadEvent {
     Progress(DownloadRecord),
@@ -192,25 +216,51 @@ impl Events {
     /// Waits for a record of download `id` with `status` and returns it. A
     /// download's last record goes out once ffmpeg has stopped and its files
     /// are dealt with, so a test can check them right after.
+    #[track_caller]
     pub(crate) fn wait_for(&self, id: &str, status: DownloadStatus) -> DownloadRecord {
         let mut found = None;
-        self.wait_until(&format!("{id} is {status:?}"), || {
+        // The id stays out of the panic message, since CodeQL takes the ids
+        // `uuid_like` makes for secrets. The panic points at the test's
+        // call, which names the status.
+        wait_until("the download gets the status the test waits for", || {
             found = self.progress(id).into_iter().find(|r| r.status == status);
             found.is_some()
         });
         found.expect("checked by wait_until")
     }
+}
 
-    /// Waits until `done` holds. It's checked after each event and at least
-    /// every 50 ms, because an event sent while another thread sends one can
-    /// reach listeners late. Panics when it takes too long.
-    pub(crate) fn wait_until(&self, what: &str, mut done: impl FnMut() -> bool) {
-        let deadline = Instant::now() + WAIT_LIMIT;
-        while !done() {
-            assert!(Instant::now() < deadline, "timed out waiting until {what}");
-            if let Ok(event) = self.incoming.recv_timeout(Duration::from_millis(50)) {
-                self.seen.borrow_mut().push(event);
-            }
-        }
+/// Waits until `done` holds, checking it every few milliseconds. Panics when
+/// it takes too long, at the line of the test that waited, with `what` in
+/// the message.
+#[track_caller]
+pub(crate) fn wait_until(what: &'static str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting until {what}");
+        std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Whether process `pid` is still there.
+pub(crate) fn process_runs(pid: u32) -> bool {
+    let out = Command::new("ps")
+        .args(["-o", "pid=", "-p", &pid.to_string()])
+        .output()
+        .expect("run ps");
+    !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+}
+
+/// Whether an ffmpeg is writing into `dir`. This reads every process's
+/// arguments, since an ffmpeg the app killed rather than tracked leaves no
+/// handle behind to ask.
+pub(crate) fn ffmpeg_writes_into(dir: &Path) -> bool {
+    let out = Command::new("ps")
+        .args(["-A", "-ww", "-o", "args="])
+        .output()
+        .expect("run ps");
+    let dir = dir.to_string_lossy();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|line| line.contains(FFMPEG_SIDECAR) && line.contains(dir.as_ref()))
 }
