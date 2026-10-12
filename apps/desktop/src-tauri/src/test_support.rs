@@ -9,11 +9,16 @@
 use crate::commands::AppState;
 use crate::downloads::manager::DownloadManager;
 use mvp_core::cache::store::CacheStore;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+use tauri::ipc::{CallbackFn, InvokeBody};
+use tauri::test::{
+    get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY,
+};
 use tauri::utils::config::AppDirectoriesOverride;
-use tauri::{App, AppHandle, Manager, State};
+use tauri::webview::InvokeRequest;
+use tauri::{App, AppHandle, Manager, State, WebviewWindowBuilder};
 use tauri_plugin_mpv::MpvState;
 use tempfile::TempDir;
 
@@ -46,6 +51,7 @@ impl TestApp {
         context.config_mut().app.app_directories_override =
             Some(AppDirectoriesOverride::Root(dir.path().join("app")));
         let app = mock_builder()
+            .invoke_handler(crate::invoke_handler())
             .plugin(tauri_plugin_store::Builder::default().build())
             .plugin(tauri_plugin_shell::init())
             .build(context)
@@ -83,6 +89,30 @@ impl TestApp {
     /// its cache in `caches` and its logs in `logs`. `settings.json` goes here.
     pub(crate) fn app_dir(&self) -> PathBuf {
         self.dir.path().join("app")
+    }
+
+    /// Calls `command` the way the frontend does, with `args` named as
+    /// `src/lib/tauri.ts` names them, and returns the reply the frontend
+    /// would get. An error is the message the frontend would be shown. The
+    /// mock runtime's webview opens no real window.
+    pub(crate) fn invoke(&self, command: &str, args: Value) -> Result<Value, Value> {
+        let webview = match self.app.get_webview_window("main") {
+            Some(webview) => webview,
+            None => WebviewWindowBuilder::new(&self.app, "main", Default::default())
+                .build()
+                .expect("open a mock webview"),
+        };
+        let request = InvokeRequest {
+            cmd: command.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.into(),
+        };
+        get_ipc_response(&webview, request)
+            .map(|reply| reply.deserialize().expect("read the command's reply"))
     }
 }
 

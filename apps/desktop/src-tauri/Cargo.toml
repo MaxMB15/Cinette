@@ -31,6 +31,9 @@ tempfile = "3"
 tauri = { version = "2", features = ["test"] }
 # The local HTTP servers from mvp-core's own tests.
 mvp-core = { path = "../../../crates/core", features = ["test-util"] }
+# A second connection to a test's cache, so a test can break it in ways the
+# app never does. The same version and features as mvp-core's.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

@@ -236,6 +236,32 @@ async fn a_file_that_is_not_a_playlist_is_rejected() {
 }
 
 #[tokio::test]
+async fn a_playlist_that_cannot_be_saved_is_an_error() {
+    let app = TestApp::new();
+    let db = cache_on_disk(&app);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("list.m3u");
+    std::fs::write(&file, playlist(None, &["Alpha"])).unwrap();
+    let file = file.to_string_lossy().into_owned();
+    let load_both = || async {
+        let url = test_server::serve_once("200 OK", playlist(None, &["Alpha"]));
+        let from_url = load_m3u_playlist(app.state(), "Home".into(), url).await;
+        let from_file = load_m3u_file(app.state(), "Local".into(), file.clone()).await;
+        (from_url.map(|_| ()), from_file.map(|_| ()))
+    };
+    let refused = || Err(SAVE_REFUSED.to_string());
+
+    refuse_saves(&db, "providers");
+    assert_eq!(load_both().await, (refused(), refused()));
+    assert!(get_providers(app.state()).await.unwrap().is_empty());
+
+    db.execute_batch("DROP TRIGGER refuse_providers").unwrap();
+    refuse_saves(&db, "channels");
+    assert_eq!(load_both().await, (refused(), refused()));
+    assert!(channel_names(&app).await.is_empty());
+}
+
+#[tokio::test]
 async fn an_xtream_panel_is_saved_with_its_login_and_guide_address() {
     let app = TestApp::new();
     let (url, _requests) = xtream_panel();
@@ -322,6 +348,71 @@ async fn series_episodes_are_fetched_in_order_with_the_provider_prefix() {
         .try_iter()
         .any(|request| request.contains("action=get_series_info&series_id=7 "));
     assert!(asked_for_the_series);
+}
+
+/// What was logged while a test held [`Logged::start`]'s guard.
+#[derive(Clone, Default)]
+struct Logged(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Logged {
+    /// Logs everything on this thread until the guard drops. A tokio test
+    /// runs its awaits on its own thread, so their logs land here too.
+    fn start(&self) -> tracing::subscriber::DefaultGuard {
+        let logged = self.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || logged.clone())
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+impl std::io::Write for Logged {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn loading_a_provider_logs_where_it_is_without_its_login() {
+    let app = TestApp::new();
+    let logged = Logged::default();
+    let _logging = logged.start();
+    let list = test_server::serve_once("200 OK", playlist(None, &["Alpha"]));
+    let (panel, _requests) = xtream_panel();
+
+    let login = "?username=user&password=hunter2";
+    load_m3u_playlist(app.state(), "Home".into(), format!("{list}/get.php{login}"))
+        .await
+        .unwrap();
+    let channels = load_xtream_provider(
+        app.state(),
+        "Panel".into(),
+        panel.clone(),
+        "user".into(),
+        "hunter2".into(),
+    )
+    .await
+    .unwrap();
+    get_xtream_series_episodes(app.state(), channels[1].id.clone())
+        .await
+        .unwrap();
+
+    let log = logged.text();
+    assert!(log.contains(&format!("from {list}\n")), "{log}");
+    assert!(log.contains(&format!("from {panel}\n")), "{log}");
+    assert!(log.contains("fetched 2 episodes for series_id=7"), "{log}");
+    assert!(!log.contains("hunter2"), "{log}");
 }
 
 #[tokio::test]
@@ -909,17 +1000,6 @@ async fn a_playback_position_is_saved_replaced_and_deleted() {
     assert_eq!(get_playback_position(app.state(), key()).await, Ok(None));
 }
 
-/// The groups of provider `p` for one content type, as name, category and
-/// place.
-async fn groups(app: &TestApp, content_type: &str) -> Vec<(String, Option<String>, i64)> {
-    get_group_hierarchy(app.state(), "p".into(), content_type.into())
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|e| (e.group_name, e.super_category, e.sort_order))
-        .collect()
-}
-
 async fn place_group(app: &TestApp, group: &str, category: Option<&str>, order: i64) {
     update_group_hierarchy_entry(
         app.state(),
@@ -966,9 +1046,7 @@ async fn a_category_is_renamed_or_removed_in_all_its_groups() {
     place_group(&app, "News", Some("Info"), 10).await;
     place_group(&app, "Weather", Some("Info"), 20).await;
     place_group(&app, "Sport", Some("Games"), 30).await;
-    let categories = |groups: Vec<(String, Option<String>, i64)>| {
-        groups.into_iter().map(|g| g.1).collect::<Vec<_>>()
-    };
+    let categories = |groups: Vec<Placed>| groups.into_iter().map(|g| g.1).collect::<Vec<_>>();
     let facts = Some("Facts".to_string());
     let games = Some("Games".to_string());
 
@@ -1011,14 +1089,6 @@ async fn groups_are_pinned_in_order_and_unpinned() {
 
     assert_eq!(names(pinned("live").await.unwrap()), ["Sport"]);
     assert!(pinned("movie").await.unwrap().is_empty());
-}
-
-fn subtitles_folder(app: &TestApp) -> std::path::PathBuf {
-    app.handle()
-        .path()
-        .app_cache_dir()
-        .unwrap()
-        .join("subtitles")
 }
 
 #[tokio::test]
