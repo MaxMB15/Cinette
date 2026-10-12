@@ -279,8 +279,9 @@ impl PlatformRenderer for IosMetalRenderer {
     /// mpv already has the layer through `wid`. This only starts the thread
     /// that reports the first frame and keeps Now Playing up to date.
     fn attach(&mut self, mpv: &mut Mpv) -> Result<(), String> {
+        // No name, for the reason `MpvEngine::create_event_client` gives.
         let client = mpv
-            .create_client(Some("ios-watcher"))
+            .create_client(None)
             .map_err(|e| format!("mpv_create_client: {e}"))?;
         let kill = Arc::new(AtomicBool::new(false));
         self.watcher_kill = Some(kill.clone());

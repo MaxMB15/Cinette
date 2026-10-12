@@ -652,6 +652,16 @@ mod tests {
     }
 
     #[test]
+    fn scrub_hides_a_bracket_that_does_not_close() {
+        // A login that starts with `[` and holds a `/` looks like an IPv6
+        // host that never closes, and none of it may stay in the line.
+        assert_eq!(
+            scrub_urls("http://[john:pa/ss@host/12345.ts"),
+            "http://***/…/12345.ts"
+        );
+    }
+
+    #[test]
     fn scrub_keeps_only_ids_well_known_names_and_extensions() {
         assert_eq!(
             scrub_urls("https://cdn.example.com/hls/0123456789abcdef0123456789abcdef.m3u8"),

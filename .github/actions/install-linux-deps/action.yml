@@ -38,7 +38,7 @@ runs:
 
     - name: Restore cached .deb files
       id: restore
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/apt-archives
         key: ${{ steps.apt.outputs.key }}
@@ -66,7 +66,7 @@ runs:
 
     - name: Save .deb files to the cache
       if: steps.restore.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/apt-archives
         key: ${{ steps.apt.outputs.key }}

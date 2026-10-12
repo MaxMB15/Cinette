@@ -7,6 +7,8 @@ use crate::json::number_or_string;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const MDBLIST_URL: &str = "https://mdblist.com/api/";
+
 /// Enriched metadata returned by the MDBList API for a given IMDB ID.
 /// All fields are optional because the API may omit or null any of them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -186,7 +188,26 @@ pub async fn fetch_mdblist(
     media_type: &str,
     api_key: &str,
 ) -> Result<MdbListData, MdbListError> {
-    let response = lookup_request(imdb_id, media_type, api_key)
+    fetch_from(
+        crate::http::client(),
+        MDBLIST_URL,
+        imdb_id,
+        media_type,
+        api_key,
+    )
+    .await
+}
+
+/// The work of [`fetch_mdblist`], taking the client and address so tests can
+/// point it at a local server.
+async fn fetch_from(
+    client: &reqwest::Client,
+    url: &str,
+    imdb_id: &str,
+    media_type: &str,
+    api_key: &str,
+) -> Result<MdbListData, MdbListError> {
+    let response = lookup_request(client, url, imdb_id, media_type, api_key)
         .send()
         .await?
         .json::<serde_json::Value>()
@@ -195,26 +216,37 @@ pub async fn fetch_mdblist(
 }
 
 // Keys are pasted in, often with a trailing newline, which MDBList would reject.
-fn lookup_request(imdb_id: &str, media_type: &str, api_key: &str) -> reqwest::RequestBuilder {
-    crate::http::client()
-        .get("https://mdblist.com/api/")
-        .query(&[
-            ("apikey", api_key.trim()),
-            ("i", imdb_id),
-            ("m", media_type),
-        ])
+fn lookup_request(
+    client: &reqwest::Client,
+    url: &str,
+    imdb_id: &str,
+    media_type: &str,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    client.get(url).query(&[
+        ("apikey", api_key.trim()),
+        ("i", imdb_id),
+        ("m", media_type),
+    ])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
     use serde_json::json;
 
     #[test]
     fn spaces_around_the_key_are_ignored() {
-        let request = lookup_request("tt0468569", "movie", " KEY\n")
-            .build()
-            .unwrap();
+        let request = lookup_request(
+            crate::http::client(),
+            MDBLIST_URL,
+            "tt0468569",
+            "movie",
+            " KEY\n",
+        )
+        .build()
+        .unwrap();
         let key = request.url().query_pairs().find(|(k, _)| k == "apikey");
         assert_eq!(key.unwrap().1, "KEY");
     }
@@ -328,6 +360,23 @@ mod tests {
     }
 
     #[test]
+    fn an_error_field_of_false_or_empty_text_is_not_an_error() {
+        for error in [json!(false), json!("false"), json!("")] {
+            let response = json!({ "error": error, "imdbid": "tt0468569" });
+            let data = parse_mdblist_response(response).unwrap();
+            assert_eq!(data.imdb_id.as_deref(), Some("tt0468569"), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_error_field_with_any_other_value_is_an_error() {
+        for error in [json!("Invalid API key"), json!(1), json!({ "code": 401 })] {
+            let err = parse_mdblist_response(json!({ "error": error })).unwrap_err();
+            assert!(matches!(err, MdbListError::Api(_)), "{error}: {err:?}");
+        }
+    }
+
+    #[test]
     fn test_mdblist_data_serializes_to_camel_case() {
         let data = MdbListData {
             imdb_id: Some("tt0468569".into()),
@@ -372,10 +421,47 @@ mod tests {
         assert!(data.letterboxd_rating.is_none());
     }
 
-    #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = MdbListError::from(crate::http::error_with_url("unix:/api/?apikey=SECRET"));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    // --- Lookups against a local server ---
+
+    #[tokio::test]
+    async fn a_lookup_sends_the_id_type_and_key_and_reads_the_ratings() {
+        let (server, client, requests) =
+            test_server::serve_once_with_client("200 OK", full_response().to_string());
+        let url = format!("{server}/api/");
+        let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
+        assert_eq!(
+            result.unwrap(),
+            parse_mdblist_response(full_response()).unwrap()
+        );
+        let request = requests.try_recv().unwrap();
+        assert!(
+            request.starts_with("GET /api/?apikey=KEY&i=tt0468569&m=movie HTTP/1.1"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_is_not_json_is_an_http_error() {
+        let (server, client, _) =
+            test_server::serve_once_with_client("502 Bad Gateway", "<html>bad gateway</html>");
+        let url = format!("{server}/api/");
+        let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
+        assert!(
+            matches!(&result, Err(MdbListError::Http(e)) if e.is_decode()),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_that_cannot_connect_does_not_show_the_key() {
+        let url = format!("{}/api/", test_server::refused_url());
+        let err = fetch_from(&test_server::client(), &url, "tt0468569", "movie", "SECRET")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, MdbListError::Http(e) if e.is_connect()),
+            "{err:?}"
+        );
+        test_server::assert_hides(&err, "SECRET");
     }
 }

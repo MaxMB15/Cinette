@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const OMDB_URL: &str = "https://www.omdbapi.com/";
+
 /// Movie or series details from OMDb. Ratings stay as the text OMDb sends,
 /// because the UI shows them as they are.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -168,8 +170,14 @@ pub fn parse_omdb_response(json: serde_json::Value) -> Result<OmdbData, OmdbErro
 }
 
 /// Perform an OMDB API lookup for the given title.
-async fn do_fetch(title: &str, content_type: &str, api_key: &str) -> Result<OmdbData, OmdbError> {
-    let response = lookup_request(title, content_type, api_key)
+async fn do_fetch(
+    client: &reqwest::Client,
+    url: &str,
+    title: &str,
+    content_type: &str,
+    api_key: &str,
+) -> Result<OmdbData, OmdbError> {
+    let response = lookup_request(client, url, title, content_type, api_key)
         .send()
         .await?
         .json::<serde_json::Value>()
@@ -178,15 +186,19 @@ async fn do_fetch(title: &str, content_type: &str, api_key: &str) -> Result<Omdb
 }
 
 // Keys are pasted in, often with a trailing newline, which OMDb would reject.
-fn lookup_request(title: &str, content_type: &str, api_key: &str) -> reqwest::RequestBuilder {
-    crate::http::client()
-        .get("https://www.omdbapi.com/")
-        .query(&[
-            ("t", title),
-            ("type", content_type),
-            ("plot", "full"),
-            ("apikey", api_key.trim()),
-        ])
+fn lookup_request(
+    client: &reqwest::Client,
+    url: &str,
+    title: &str,
+    content_type: &str,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    client.get(url).query(&[
+        ("t", title),
+        ("type", content_type),
+        ("plot", "full"),
+        ("apikey", api_key.trim()),
+    ])
 }
 
 /// Fetch OMDB data for a title. `content_type` should be `"movie"` or `"series"`.
@@ -199,27 +211,53 @@ pub async fn fetch_omdb(
     content_type: &str,
     api_key: &str,
 ) -> Result<OmdbData, OmdbError> {
+    fetch_from(
+        crate::http::client(),
+        OMDB_URL,
+        title,
+        content_type,
+        api_key,
+    )
+    .await
+}
+
+/// The work of [`fetch_omdb`], taking the client and address so tests can
+/// point it at a local server.
+async fn fetch_from(
+    client: &reqwest::Client,
+    url: &str,
+    title: &str,
+    content_type: &str,
+    api_key: &str,
+) -> Result<OmdbData, OmdbError> {
     if let Some(stripped) = strip_trailing_year(title) {
-        match do_fetch(stripped, content_type, api_key).await {
+        match do_fetch(client, url, stripped, content_type, api_key).await {
             Ok(data) => return Ok(data),
             Err(OmdbError::Api(_)) => { /* fall through to full title */ }
             Err(e) => return Err(e),
         }
     }
 
-    do_fetch(title, content_type, api_key).await
+    do_fetch(client, url, title, content_type, api_key).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
     use serde_json::json;
 
     #[test]
     fn spaces_around_the_key_are_ignored() {
-        let request = lookup_request("Inception", "movie", " KEY\n")
-            .build()
-            .unwrap();
+        let request = lookup_request(
+            crate::http::client(),
+            OMDB_URL,
+            "Inception",
+            "movie",
+            " KEY\n",
+        )
+        .build()
+        .unwrap();
         let key = request.url().query_pairs().find(|(k, _)| k == "apikey");
         assert_eq!(key.unwrap().1, "KEY");
     }
@@ -261,6 +299,11 @@ mod tests {
         assert_eq!(strip_trailing_year("Plain Title"), None);
         assert_eq!(strip_trailing_year("Avatar"), None);
         assert_eq!(strip_trailing_year("Movie (I)"), None); // roman numeral, not year
+    }
+
+    #[test]
+    fn four_letters_in_brackets_are_not_a_year() {
+        assert_eq!(strip_trailing_year("Shogun (Live)"), None);
     }
 
     #[test]
@@ -424,10 +467,108 @@ mod tests {
         assert!(data.imdb_votes.is_none());
     }
 
-    #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = OmdbError::from(crate::http::error_with_url("unix:/?apikey=SECRET"));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    // --- Lookups against a local server ---
+
+    /// What OMDb sends for a title it doesn't know.
+    const NOT_FOUND: &str = r#"{"Response":"False","Error":"Movie not found!"}"#;
+
+    /// Looks `title` up on a local server that gives `replies` in turn, and
+    /// returns the result with the request line of each lookup sent.
+    async fn look_up(
+        title: &str,
+        replies: &[(&str, &str)],
+    ) -> (Result<OmdbData, OmdbError>, Vec<String>) {
+        let (server, requests) = test_server::serve_in_order(replies);
+        let client = test_server::client();
+        let result = fetch_from(&client, &format!("{server}/"), title, "movie", "KEY").await;
+        let lines = requests
+            .try_iter()
+            .map(|request| request.lines().next().unwrap_or_default().to_string())
+            .collect();
+        (result, lines)
+    }
+
+    #[tokio::test]
+    async fn a_title_with_a_year_is_looked_up_without_it_first() {
+        let (result, lines) = look_up(
+            "The Dark Knight (2008)",
+            &[("200 OK", &full_response().to_string())],
+        )
+        .await;
+        assert_eq!(
+            result.unwrap(),
+            parse_omdb_response(full_response()).unwrap()
+        );
+        assert_eq!(
+            lines,
+            ["GET /?t=The+Dark+Knight&type=movie&plot=full&apikey=KEY HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_full_title_is_tried_when_omdb_does_not_know_the_bare_one() {
+        let (result, lines) = look_up(
+            "Heat (1995)",
+            &[
+                ("200 OK", NOT_FOUND),
+                ("200 OK", &full_response().to_string()),
+            ],
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("GET /?t=Heat&"), "{}", lines[0]);
+        assert!(
+            lines[1].starts_with("GET /?t=Heat+%281995%29&"),
+            "{}",
+            lines[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_title_unknown_with_and_without_its_year_is_an_api_error() {
+        let (result, lines) = look_up(
+            "Heat (1995)",
+            &[("200 OK", NOT_FOUND), ("200 OK", NOT_FOUND)],
+        )
+        .await;
+        assert!(
+            matches!(&result, Err(OmdbError::Api(message)) if message == "Movie not found!"),
+            "{result:?}"
+        );
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_is_not_retried_with_the_full_title() {
+        let (result, lines) = look_up(
+            "Heat (1995)",
+            &[
+                ("503 Service Unavailable", "<html>down</html>"),
+                ("200 OK", &full_response().to_string()),
+            ],
+        )
+        .await;
+        assert!(matches!(result, Err(OmdbError::Http(_))), "{result:?}");
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_request_that_cannot_connect_does_not_show_the_key() {
+        let url = format!("{}/", test_server::refused_url());
+        let err = fetch_from(
+            &test_server::client(),
+            &url,
+            "Heat (1995)",
+            "movie",
+            "SECRET",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, OmdbError::Http(e) if e.is_connect()),
+            "{err:?}"
+        );
+        test_server::assert_hides(&err, "SECRET");
     }
 }
