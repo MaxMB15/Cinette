@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, type ComponentProps } from "react";
+import { useRef, useState, type ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import type { SubtitleEntry, SubtitleSearchResult } from "@/lib/types";
 import { SubtitlePicker } from "./SubtitlePicker";
 
@@ -41,6 +42,24 @@ const Harness = () => {
 		/>
 	);
 };
+
+/** A confirm, which opens outside the picker. */
+const Confirm = () => {
+	const ref = useRef<HTMLDivElement>(null);
+	useFocusTrap(ref);
+	return (
+		<div ref={ref} role="dialog">
+			<button>OK</button>
+		</div>
+	);
+};
+
+const WithConfirm = ({ confirm }: { confirm: boolean }) => (
+	<>
+		<Harness />
+		{confirm && <Confirm />}
+	</>
+);
 
 const openSettings = () => {
 	fireEvent.click(screen.getByRole("button", { name: "Subtitle settings" }));
@@ -479,5 +498,16 @@ describe("SubtitlePicker settings", () => {
 		fireEvent.mouseLeave(delaySection);
 		fireEvent.keyDown(document, { key: "ArrowRight" });
 		expect(screen.getByText("-0.1s")).toBeInTheDocument();
+	});
+
+	it("leaves the arrow keys to a confirm open over it", () => {
+		const { rerender } = render(<WithConfirm confirm={false} />);
+		openSettings();
+		fireEvent.mouseEnter(screen.getByText("Delay").parentElement as HTMLElement);
+		rerender(<WithConfirm confirm />);
+
+		const ok = screen.getByRole("button", { name: "OK" });
+		expect(fireEvent.keyDown(ok, { key: "ArrowRight" })).toBe(true);
+		expect(screen.getByText("0.0s")).toBeInTheDocument();
 	});
 });

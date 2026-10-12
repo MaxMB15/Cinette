@@ -6,20 +6,14 @@ import { Trash2, RefreshCw, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { AddProvider } from "./AddProvider";
 import { ProviderSettingsModal } from "./ProviderSettingsModal";
 import { useChannels } from "@/hooks/useChannels";
+import { displayUrl, isFileUrl } from "@/lib/file-url";
 import type { Provider } from "@/lib/types";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-const displayUrl = (url: string): string => {
-	if (url.startsWith("file://")) {
-		const path = url.slice(7);
-		return path.split("/").pop() || path;
-	}
-	return url;
-};
 
 export const PlaylistManager = () => {
 	const {
@@ -34,52 +28,58 @@ export const PlaylistManager = () => {
 
 	const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
 	const [settingsProvider, setSettingsProvider] = useState<Provider | null>(null);
+	const [pendingRemoval, setPendingRemoval] = useState<Provider | null>(null);
+	// Keeps the provider's update time from when the refresh failed, so the error
+	// hides once a later refresh succeeds, including an automatic one.
+	const [refreshErrors, setRefreshErrors] = useState<
+		Record<string, { message: string; lastUpdated?: string }>
+	>({});
 
-	const handleAddM3u = async (name: string, url: string) => {
-		await loadM3u(name, url);
-	};
-
-	const handleAddM3uFile = async (name: string, path: string) => {
-		await loadM3uFile(name, path);
-	};
-
-	const handleAddXtream = async (
-		name: string,
-		url: string,
-		username: string,
-		password: string
-	) => {
-		await loadXtream(name, url, username, password);
-	};
-
-	const handleRefresh = async (id: string) => {
+	const refreshNow = async (id: string) => {
 		setRefreshingIds((s) => new Set(s).add(id));
-		try {
-			await refreshProvider(id);
-		} catch {}
-		setRefreshingIds((s) => {
-			const next = new Set(s);
-			next.delete(id);
+		setRefreshErrors((errors) => {
+			const next = { ...errors };
+			delete next[id];
 			return next;
 		});
+		try {
+			await refreshProvider(id);
+		} catch (e) {
+			const lastUpdated = providers.find((p) => p.id === id)?.lastUpdated;
+			setRefreshErrors((errors) => ({
+				...errors,
+				[id]: { message: String(e), lastUpdated },
+			}));
+			// Rethrown so the settings modal can show the error next to its own button.
+			throw e;
+		} finally {
+			setRefreshingIds((s) => {
+				const next = new Set(s);
+				next.delete(id);
+				return next;
+			});
+		}
 	};
+
+	// The card already shows the error, so the click has nothing left to handle.
+	const handleRefresh = (id: string) => refreshNow(id).catch(() => {});
 
 	return (
 		<div className="flex flex-col gap-6 p-4 max-w-2xl mx-auto h-full overflow-y-auto">
 			<h1 className="text-2xl font-bold">Playlists</h1>
 
-			<AddProvider
-				onAddM3u={handleAddM3u}
-				onAddM3uFile={handleAddM3uFile}
-				onAddXtream={handleAddXtream}
-			/>
+			<AddProvider onAddM3u={loadM3u} onAddM3uFile={loadM3uFile} onAddXtream={loadXtream} />
 
 			{providers.length > 0 && (
 				<div className="flex flex-col gap-3">
 					<h2 className="text-lg font-semibold">Your Providers</h2>
 					{providers.map((p) => {
 						const isRefreshing = refreshingIds.has(p.id);
-						const isFile = p.url.startsWith("file://");
+						const isFile = isFileUrl(p.url);
+						const refreshError = refreshErrors[p.id];
+						const showRefreshError =
+							refreshError !== undefined &&
+							refreshError.lastUpdated === p.lastUpdated;
 						return (
 							<Card key={p.id} role="group" aria-label={p.name}>
 								<CardHeader className="py-4">
@@ -127,7 +127,7 @@ export const PlaylistManager = () => {
 												size="icon"
 												className="h-8 w-8 text-destructive hover:text-destructive"
 												title="Remove"
-												onClick={() => removeProvider(p.id)}
+												onClick={() => setPendingRemoval(p)}
 											>
 												<Trash2 className="h-3.5 w-3.5" />
 											</Button>
@@ -143,6 +143,11 @@ export const PlaylistManager = () => {
 										{p.lastUpdated &&
 											` \u00b7 Updated ${new Date(p.lastUpdated).toLocaleString()}`}
 									</p>
+									{showRefreshError && (
+										<p role="alert" className="text-xs text-destructive mt-1">
+											{refreshError.message}
+										</p>
+									)}
 								</CardContent>
 							</Card>
 						);
@@ -154,10 +159,22 @@ export const PlaylistManager = () => {
 				<ProviderSettingsModal
 					provider={settingsProvider}
 					onClose={() => setSettingsProvider(null)}
-					onRefreshNow={handleRefresh}
+					onRefreshNow={refreshNow}
 					onUpdateProvider={updateProvider}
 				/>
 			)}
+
+			<ConfirmDialog
+				open={pendingRemoval !== null}
+				title="Remove provider?"
+				message={`Remove "${pendingRemoval?.name ?? ""}"? Its channels and favorites are removed too.`}
+				confirmLabel="Remove"
+				onConfirm={() => {
+					if (pendingRemoval) removeProvider(pendingRemoval.id);
+					setPendingRemoval(null);
+				}}
+				onCancel={() => setPendingRemoval(null)}
+			/>
 		</div>
 	);
 };

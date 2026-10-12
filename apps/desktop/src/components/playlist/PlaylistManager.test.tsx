@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
 	removeProvider: vi.fn(),
 	refreshProvider: vi.fn(),
 	updateProvider: vi.fn(),
+	/** What PlaylistManager last gave the settings dialog. */
+	settings: null as { onRefreshNow: (id: string) => Promise<void> } | null,
 }));
 
 vi.mock("@/hooks/useChannels", () => ({
@@ -52,12 +54,15 @@ vi.mock("./ProviderSettingsModal", () => ({
 		provider: Provider;
 		onClose: () => void;
 		onRefreshNow: (id: string) => Promise<void>;
-	}) => (
-		<div role="dialog" aria-label={`${props.provider.name} settings`}>
-			<button onClick={() => props.onRefreshNow(props.provider.id)}>Refresh now</button>
-			<button onClick={props.onClose}>Done</button>
-		</div>
-	),
+	}) => {
+		state.settings = props;
+		return (
+			<div role="dialog" aria-label={`${props.provider.name} settings`}>
+				<button onClick={() => props.onRefreshNow(props.provider.id)}>Refresh now</button>
+				<button onClick={props.onClose}>Done</button>
+			</div>
+		);
+	},
 }));
 
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
@@ -71,6 +76,7 @@ const cardButton = (provider: string, title: string) =>
 beforeEach(() => {
 	vi.clearAllMocks();
 	state.providers = [];
+	state.settings = null;
 	for (const fn of [
 		state.loadM3u,
 		state.loadM3uFile,
@@ -171,21 +177,63 @@ describe("PlaylistManager actions", () => {
 		expect(cardButton("Home", "Refresh")).toBeEnabled();
 	});
 
-	it("turns the refresh button back on after a refresh fails", async () => {
-		state.refreshProvider.mockRejectedValue(new Error("offline"));
+	it("shows a failed refresh on the card and turns the button back on", async () => {
+		state.refreshProvider.mockRejectedValue("Server returned 503");
 		state.providers = [makeProvider()];
 		render(<PlaylistManager />);
 
 		fireEvent.click(cardButton("Home", "Refresh"));
 		await flush();
+		expect(within(card("Home")).getByRole("alert")).toHaveTextContent("Server returned 503");
 		expect(cardButton("Home", "Refresh")).toBeEnabled();
 	});
 
-	it("removes a provider", () => {
+	it("hides a refresh error once a later refresh updates the provider", async () => {
+		state.refreshProvider.mockRejectedValue("Server returned 503");
+		state.providers = [makeProvider()];
+		const { rerender } = render(<PlaylistManager />);
+		fireEvent.click(cardButton("Home", "Refresh"));
+		await flush();
+		expect(screen.getByRole("alert")).toBeInTheDocument();
+
+		// The automatic refresh succeeded and moved the update time.
+		state.providers = [makeProvider({ lastUpdated: "2026-10-12T08:00:00Z" })];
+		rerender(<PlaylistManager />);
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("passes a failed refresh on to the settings dialog as well", async () => {
+		state.refreshProvider.mockRejectedValue("Server returned 503");
+		state.providers = [makeProvider()];
+		render(<PlaylistManager />);
+		fireEvent.click(cardButton("Home", "Settings"));
+
+		let failure: unknown;
+		await act(() => state.settings!.onRefreshNow("p1").catch((e: unknown) => (failure = e)));
+		expect(failure).toBe("Server returned 503");
+		expect(within(card("Home")).getByRole("alert")).toHaveTextContent("Server returned 503");
+	});
+
+	it("asks before removing a provider", () => {
 		state.providers = [makeProvider()];
 		render(<PlaylistManager />);
 		fireEvent.click(cardButton("Home", "Remove"));
+		expect(state.removeProvider).not.toHaveBeenCalled();
+
+		const prompt = screen.getByRole("dialog", { name: "Remove provider?" });
+		expect(prompt).toHaveTextContent('Remove "Home"?');
+		fireEvent.click(within(prompt).getByRole("button", { name: "Remove" }));
 		expect(state.removeProvider).toHaveBeenCalledExactlyOnceWith("p1");
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("keeps the provider when removing is cancelled", () => {
+		state.providers = [makeProvider()];
+		render(<PlaylistManager />);
+		fireEvent.click(cardButton("Home", "Remove"));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(state.removeProvider).not.toHaveBeenCalled();
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
 	it("opens the settings of the provider that was picked", async () => {

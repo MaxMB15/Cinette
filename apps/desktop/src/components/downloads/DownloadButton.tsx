@@ -12,6 +12,12 @@ const DOWNLOADS_SUPPORTED = !isMobilePlatform();
 export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" | "failed";
 
 interface DownloadButtonProps {
+	/**
+	 * The item the button is for. When this changes, a confirm left open closes,
+	 * so it can't stop or remove the next item's download, and focus leaves the
+	 * button, so Space can't start one.
+	 */
+	itemId?: string;
 	state: DownloadIconState;
 	/** Start (idle/partial). For a series or season this downloads all missing episodes.
 	 *  Any large-batch confirm is handled by the parent. */
@@ -28,6 +34,7 @@ interface DownloadButtonProps {
 }
 
 export const DownloadButton = ({
+	itemId,
 	state,
 	onStart,
 	onStop,
@@ -39,6 +46,14 @@ export const DownloadButton = ({
 }: DownloadButtonProps) => {
 	const [confirm, setConfirm] = useState<null | "stop" | "remove">(null);
 	const [removeError, setRemoveError] = useState<string | null>(null);
+	// A confirm left open for the last item closes during render, not in an
+	// effect, so it never shows for the new one. A removal still running can
+	// still report a failure.
+	const [confirmItemId, setConfirmItemId] = useState(itemId);
+	if (confirmItemId !== itemId) {
+		setConfirmItemId(itemId);
+		setConfirm(null);
+	}
 
 	if (!DOWNLOADS_SUPPORTED) return null;
 
@@ -54,7 +69,13 @@ export const DownloadButton = ({
 
 	return (
 		<>
+			{/* Keyed by item, so each item gets a new button and the old one
+			    takes focus with it. A dialog hands focus back on close only to
+			    an element still on the page, so neither a confirm nor the
+			    failure notice can put focus on the new button, where Space
+			    would press it for the new item. */}
 			<button
+				key={itemId}
 				onClick={handleClick}
 				aria-label={label}
 				className={`flex items-center gap-1.5 ${className}`}
