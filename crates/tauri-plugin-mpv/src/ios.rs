@@ -44,6 +44,7 @@ extern "C" {
     fn mvp_ios_now_playing(title: *const c_char, duration: f64, position: f64, playing: bool);
     fn mvp_ios_now_playing_clear();
     fn mvp_ios_now_playing_artwork(data: *const u8, len: usize);
+    fn mvp_ios_set_skip_intervals(back: f64, forward: f64);
     // From libmpv itself. libmpv2 doesn't re-export its sys crate.
     fn mpv_wakeup(ctx: *mut c_void);
 }
@@ -75,6 +76,11 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
         // Keep the last frame at EOF so the frontend can show its controls,
         // same as desktop.
         ("keep-open", "yes"),
+        // Without this, mpv's audio output asks iOS to mix with other apps.
+        // iOS shows lock screen controls only for an app whose audio
+        // session doesn't mix, and other apps' music would keep playing
+        // over the stream.
+        ("audio-exclusive", "yes"),
         ("terminal", "no"),
         ("input-default-bindings", "no"),
         // No `ytdl` or `osc`: MPVKit builds mpv for iOS without Lua, and
@@ -335,6 +341,13 @@ async fn fetch_artwork(url: &str) -> Result<Vec<u8>, String> {
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+/// Sets how far the lock screen's skip buttons jump, in seconds.
+pub fn set_skip_intervals(back: f64, forward: f64) {
+    if back > 0.0 && forward > 0.0 {
+        unsafe { mvp_ios_set_skip_intervals(back, forward) };
+    }
 }
 
 /// The Metal view under the web view. The view outlives this value: Swift

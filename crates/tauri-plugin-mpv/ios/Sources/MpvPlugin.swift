@@ -120,6 +120,9 @@ final class MpvHost: NSObject {
   private var resumeAfterInterruption = false
   /// The channel logo for the lock screen, once Rust has downloaded it.
   private var artwork: MPMediaItemArtwork?
+  /// How far the lock screen's skip buttons jump, in seconds.
+  private var skipBack = 10.0
+  private var skipForward = 10.0
 
   func attach(webview: WKWebView) {
     self.webview = webview
@@ -307,13 +310,15 @@ final class MpvHost: NSObject {
     commands.togglePlayPauseCommand.addTarget { [weak self] _ in
       self?.sendRemote(.togglePlayPause) ?? .commandFailed
     }
-    commands.skipForwardCommand.preferredIntervals = [10]
+    commands.skipForwardCommand.preferredIntervals = [NSNumber(value: skipForward)]
     commands.skipForwardCommand.addTarget { [weak self] _ in
-      self?.sendRemote(.skip, 10) ?? .commandFailed
+      guard let self else { return .commandFailed }
+      return self.sendRemote(.skip, self.skipForward)
     }
-    commands.skipBackwardCommand.preferredIntervals = [10]
+    commands.skipBackwardCommand.preferredIntervals = [NSNumber(value: skipBack)]
     commands.skipBackwardCommand.addTarget { [weak self] _ in
-      self?.sendRemote(.skip, -10) ?? .commandFailed
+      guard let self else { return .commandFailed }
+      return self.sendRemote(.skip, -self.skipBack)
     }
     commands.changePlaybackPositionCommand.addTarget { [weak self] event in
       guard let event = event as? MPChangePlaybackPositionCommandEvent else {
@@ -321,6 +326,16 @@ final class MpvHost: NSObject {
       }
       return self?.sendRemote(.seekTo, event.positionTime) ?? .commandFailed
     }
+  }
+
+  /// Matches the skip buttons to the app's skip setting. The lock screen
+  /// shows the interval on each button.
+  func setSkipIntervals(back: Double, forward: Double) {
+    skipBack = back
+    skipForward = forward
+    let commands = MPRemoteCommandCenter.shared()
+    commands.skipBackwardCommand.preferredIntervals = [NSNumber(value: back)]
+    commands.skipForwardCommand.preferredIntervals = [NSNumber(value: forward)]
   }
 
   private func sendRemote(_ command: MvpRemoteCommand, _ value: Double = 0)
@@ -476,6 +491,11 @@ func mvpIosNowPlayingArtwork(_ bytes: UnsafePointer<UInt8>?, _ length: Int) {
     let image = data.flatMap(artworkImage)
     DispatchQueue.main.async { MpvHost.shared.setArtwork(image) }
   }
+}
+
+@_cdecl("mvp_ios_set_skip_intervals")
+func mvpIosSetSkipIntervals(_ back: Double, _ forward: Double) {
+  DispatchQueue.main.async { MpvHost.shared.setSkipIntervals(back: back, forward: forward) }
 }
 
 @_cdecl("mvp_ios_now_playing_clear")

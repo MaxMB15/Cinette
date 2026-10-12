@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-set-skip-intervals"
+description = "Enables the mpv_set_skip_intervals command without any pre-configured scope."
+commands.allow = ["mpv_set_skip_intervals"]
+
+[[permission]]
+identifier = "deny-mpv-set-skip-intervals"
+description = "Denies the mpv_set_skip_intervals command without any pre-configured scope."
+commands.deny = ["mpv_set_skip_intervals"]
