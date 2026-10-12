@@ -229,8 +229,15 @@ mod capped {
 
         /// Moves `app.log` to `app.log.1` and starts a new `app.log`. Returns
         /// false if the new file couldn't be created.
+        ///
+        /// iOS may clear Caches while the app runs. The open file keeps taking
+        /// lines until the next rotation, which then makes the directory again
+        /// so the log carries on.
         fn rotate(&self, state: &mut State) -> bool {
             let _ = fs::rename(&self.path, &self.older);
+            if let Some(dir) = self.path.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
             let Ok(mut file) = File::create(&self.path) else {
                 return false;
             };
@@ -293,16 +300,36 @@ mod capped {
         }
 
         #[test]
+        fn makes_the_directory_again_if_it_goes() {
+            let dir = tempfile::tempdir().unwrap();
+            let logs = dir.path().join("Logs");
+            let log = CappedLog::open(&logs, 60).unwrap();
+            log.append(&format!("{}\n", "x".repeat(50)));
+            fs::remove_dir_all(&logs).unwrap();
+
+            log.append("needs a new file\n");
+            log.append("and keeps going\n");
+
+            assert_eq!(
+                read(&logs, "app.log"),
+                format!("{CONTINUED}needs a new file\nand keeps going\n")
+            );
+        }
+
+        #[test]
         fn drops_lines_when_it_cannot_start_a_new_file() {
             let dir = tempfile::tempdir().unwrap();
             let logs = dir.path().join("Logs");
             let log = CappedLog::open(&logs, 16).unwrap();
             log.append("fits in the cap\n");
+            // A file where the directory was stops it making a new one.
             fs::remove_dir_all(&logs).unwrap();
+            fs::write(&logs, "").unwrap();
 
             log.append("needs a new file\n");
 
-            assert!(!logs.exists());
+            assert!(logs.is_file());
+            assert_eq!(fs::read_to_string(&logs).unwrap(), "");
         }
     }
 }
