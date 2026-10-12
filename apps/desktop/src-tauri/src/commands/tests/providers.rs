@@ -140,6 +140,19 @@ async fn favorite_ids(app: &TestApp) -> Vec<String> {
         .collect()
 }
 
+/// Loads the Xtream panel at `url` as "Panel", logging in as `user` with
+/// `password`.
+async fn load_panel(app: &TestApp, url: &str, password: &str) -> Result<Vec<Channel>, String> {
+    load_xtream_provider(
+        app.state(),
+        "Panel".into(),
+        url.into(),
+        "user".into(),
+        password.into(),
+    )
+    .await
+}
+
 /// Adds provider `p`, with a channel that [`GUIDE`] calls `news.test`, and
 /// downloads the guide for it.
 async fn add_provider_with_guide(app: &TestApp) {
@@ -271,31 +284,24 @@ async fn a_playlist_that_cannot_be_saved_is_an_error() {
 async fn an_xtream_panel_is_saved_with_its_login_and_guide_address() {
     let app = TestApp::new();
     let (url, _requests) = xtream_panel();
+    let password = test_server::password();
 
-    let channels = load_xtream_provider(
-        app.state(),
-        "Panel".into(),
-        url.clone(),
-        "user".into(),
-        "pass".into(),
-    )
-    .await
-    .unwrap();
+    let channels = load_panel(&app, &url, &password).await.unwrap();
 
     let saved = only_provider(&app).await;
     assert!(saved.id.starts_with("xt-"), "{}", saved.id);
     assert_eq!(saved.provider_type, ProviderType::Xtream);
     assert_eq!(saved.username.as_deref(), Some("user"));
-    assert_eq!(saved.password.as_deref(), Some("pass"));
+    assert_eq!(saved.password, Some(password.clone()));
     assert_eq!(
         saved.epg_url,
-        Some(format!("{url}/xmltv.php?username=user&password=pass"))
+        Some(format!("{url}/xmltv.php?username=user&password={password}"))
     );
     assert_eq!(saved.channel_count, 2);
 
     let live = &channels[0];
     assert_eq!(live.id, format!("{}-xt-0", saved.id));
-    assert_eq!(live.url, format!("{url}/live/user/pass/101.ts"));
+    assert_eq!(live.url, format!("{url}/live/user/{password}/101.ts"));
     assert_eq!(live.group_title, "News");
     let series = &channels[1];
     assert_eq!(series.id, format!("{}-ser-0", saved.id));
@@ -307,15 +313,10 @@ async fn a_panel_that_refuses_the_login_saves_nothing() {
     let app = TestApp::new();
     let url = test_server::serve_once("200 OK", LOGIN_REFUSED);
 
-    let err = load_xtream_provider(
-        app.state(),
-        "Panel".into(),
-        url,
-        "user".into(),
-        "wrong".into(),
-    )
-    .await
-    .unwrap_err();
+    // The panel turns every login away, so any password is wrong.
+    let err = load_panel(&app, &url, &test_server::password())
+        .await
+        .unwrap_err();
 
     assert!(err.starts_with("Failed to connect:"), "{err}");
     assert!(get_providers(app.state()).await.unwrap().is_empty());
@@ -325,15 +326,8 @@ async fn a_panel_that_refuses_the_login_saves_nothing() {
 async fn series_episodes_are_fetched_in_order_with_the_provider_prefix() {
     let app = TestApp::new();
     let (url, requests) = xtream_panel();
-    let channels = load_xtream_provider(
-        app.state(),
-        "Panel".into(),
-        url.clone(),
-        "user".into(),
-        "pass".into(),
-    )
-    .await
-    .unwrap();
+    let password = test_server::password();
+    let channels = load_panel(&app, &url, &password).await.unwrap();
     let provider_id = only_provider(&app).await.id;
     let series_id = channels[1].id.clone();
 
@@ -348,7 +342,10 @@ async fn series_episodes_are_fetched_in_order_with_the_provider_prefix() {
     ];
     assert_eq!(ids, expected);
     assert_eq!(episodes[0].name, "The Show S01E01 First");
-    assert_eq!(episodes[0].url, format!("{url}/series/user/pass/9001.mkv"));
+    assert_eq!(
+        episodes[0].url,
+        format!("{url}/series/user/{password}/9001.mkv")
+    );
     assert_eq!(episodes[0].group_title, "Drama");
     let asked_for_the_series = requests
         .try_iter()
@@ -404,19 +401,13 @@ async fn loading_a_provider_logs_where_it_is_without_its_login() {
     let list = test_server::serve_once("200 OK", playlist(None, &["Alpha"]));
     let (panel, _requests) = xtream_panel();
 
-    let login = "?username=user&password=hunter2";
+    let password = test_server::password();
+
+    let login = format!("?username=user&password={password}");
     load_m3u_playlist(app.state(), "Home".into(), format!("{list}/get.php{login}"))
         .await
         .unwrap();
-    let channels = load_xtream_provider(
-        app.state(),
-        "Panel".into(),
-        panel.clone(),
-        "user".into(),
-        "hunter2".into(),
-    )
-    .await
-    .unwrap();
+    let channels = load_panel(&app, &panel, &password).await.unwrap();
     get_xtream_series_episodes(app.state(), channels[1].id.clone())
         .await
         .unwrap();
@@ -425,7 +416,7 @@ async fn loading_a_provider_logs_where_it_is_without_its_login() {
     assert!(log.contains(&format!("from {list}\n")), "{log}");
     assert!(log.contains(&format!("from {panel}\n")), "{log}");
     assert!(log.contains("fetched 2 episodes for series_id=7"), "{log}");
-    assert!(!log.contains("hunter2"), "{log}");
+    assert!(!log.contains(&password), "{log}");
 }
 
 #[tokio::test]
@@ -487,17 +478,11 @@ async fn refreshing_a_file_provider_reads_the_file_again() {
 #[tokio::test]
 async fn refreshing_a_url_provider_keeps_its_guide_address_unless_the_playlist_has_a_new_one() {
     let app = TestApp::new();
-    let replies = [
-        playlist(Some("http://example.test/old.xml"), &["Alpha"]),
-        playlist(Some("http://example.test/new.xml"), &["Alpha", "Beta"]),
-        playlist(None, &["Alpha", "Beta", "Gamma"]),
-    ];
-    let (url, _requests) = test_server::serve_in_order(
-        replies
-            .into_iter()
-            .map(|body| ("200 OK".to_string(), body))
-            .collect(),
-    );
+    let first = playlist(Some("http://example.test/old.xml"), &["Alpha"]);
+    let second = playlist(Some("http://example.test/new.xml"), &["Alpha", "Beta"]);
+    let third = playlist(None, &["Alpha", "Beta", "Gamma"]);
+    let (url, _requests) =
+        test_server::serve_in_order(&[("200 OK", &first), ("200 OK", &second), ("200 OK", &third)]);
     load_m3u_playlist(app.state(), "Home".into(), url)
         .await
         .unwrap();
@@ -525,15 +510,9 @@ async fn refreshing_a_url_provider_keeps_its_guide_address_unless_the_playlist_h
 async fn refreshing_an_xtream_provider_restores_its_guide_address() {
     let app = TestApp::new();
     let (url, _requests) = xtream_panel();
-    load_xtream_provider(
-        app.state(),
-        "Panel".into(),
-        url,
-        "user".into(),
-        "pass".into(),
-    )
-    .await
-    .unwrap();
+    load_panel(&app, &url, &test_server::password())
+        .await
+        .unwrap();
     let saved = only_provider(&app).await;
     set_epg_url(app.state(), saved.id.clone(), None)
         .await
@@ -767,11 +746,8 @@ async fn a_guide_search_names_the_channel_and_skips_what_has_ended() {
 #[tokio::test]
 async fn a_guide_without_programs_keeps_the_saved_one() {
     let app = TestApp::new();
-    let replies = vec![
-        ("200 OK".to_string(), GUIDE.to_string()),
-        ("200 OK".to_string(), GUIDE_WITHOUT_PROGRAMS.to_string()),
-    ];
-    let (guide_url, _requests) = test_server::serve_in_order(replies);
+    let (guide_url, _requests) =
+        test_server::serve_in_order(&[("200 OK", GUIDE), ("200 OK", GUIDE_WITHOUT_PROGRAMS)]);
     let with_guide = Provider {
         epg_url: Some(guide_url),
         ..provider("p", ProviderType::M3u, "http://example.test/list.m3u")
