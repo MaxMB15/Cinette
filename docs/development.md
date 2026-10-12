@@ -63,8 +63,10 @@ it exists. Fetch it once:
 ./scripts/fetch-ffmpeg.sh
 ```
 
-It downloads a static ffmpeg to `apps/desktop/src-tauri/binaries/`, named for your
-Rust target.
+It downloads a static ffmpeg to `apps/desktop/src-tauri/binaries/` as
+`max-video-player-ffmpeg-<target>`, where the target is your Rust target triple. The
+Linux packages install it in `/usr/bin`, so it has its own name rather than `ffmpeg`.
+If your `binaries/` folder still has an older `ffmpeg-<target>`, run the script again.
 
 ## Running the app
 

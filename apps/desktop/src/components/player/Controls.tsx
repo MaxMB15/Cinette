@@ -411,7 +411,7 @@ export const Controls = ({
 							{sourceMenuOpen && (
 								<div
 									role="menu"
-									className="absolute bottom-full right-0 mb-2 w-60 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-black/90 p-1 shadow-xl backdrop-blur-sm"
+									className="absolute bottom-full right-0 z-20 mb-2 w-60 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-black/90 p-1 shadow-xl backdrop-blur-sm"
 								>
 									<p className="px-2.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-white/40">
 										Source

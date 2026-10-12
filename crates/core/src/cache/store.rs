@@ -6,10 +6,13 @@ use crate::iptv::m3u::parse_series_name;
 use crate::iptv::mdblist::MdbListData;
 use crate::iptv::omdb::OmdbData;
 use crate::iptv::opensubtitles::SubtitleSearchResult;
+use crate::iptv::skip_segments::SourceTimes;
 use crate::iptv::whatson::WhatsonData;
 use crate::models::channel::Channel;
 use crate::models::playlist::{Provider, ProviderType};
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::{params, Connection, OptionalExtension, Result as SqlResult};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -103,6 +106,22 @@ pub struct PlaybackPosition {
     pub duration_seconds: f64,
     pub updated_at: i64,
 }
+
+/// A cache table that keeps one JSON value per key, with the time it was saved.
+#[derive(Clone, Copy)]
+struct JsonCache {
+    table: &'static str,
+    /// The name of the key column.
+    key: &'static str,
+}
+
+const OMDB_CACHE: JsonCache = JsonCache { table: "omdb_cache", key: "channel_id" };
+const MDBLIST_CACHE: JsonCache = JsonCache { table: "mdblist_cache", key: "imdb_id" };
+const WHATSON_CACHE: JsonCache = JsonCache { table: "whatson_cache", key: "imdb_id" };
+const OPENSUBTITLES_CACHE: JsonCache = JsonCache { table: "opensubtitles_search_cache", key: "cache_key" };
+const SKIP_SEGMENTS_CACHE: JsonCache = JsonCache { table: "skip_segments_cache", key: "cache_key" };
+
+const JSON_CACHES: [JsonCache; 5] = [OMDB_CACHE, MDBLIST_CACHE, WHATSON_CACHE, OPENSUBTITLES_CACHE, SKIP_SEGMENTS_CACHE];
 
 pub struct CacheStore {
     conn: Connection,
@@ -198,20 +217,6 @@ impl CacheStore {
                 ON epg_programmes(channel_id, start_time);"
         )?;
         self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS omdb_cache (
-                channel_id  TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS mdblist_cache (
-                imdb_id     TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
-        self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS watch_history (
                 id                     INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id             TEXT NOT NULL UNIQUE,
@@ -226,20 +231,16 @@ impl CacheStore {
             CREATE INDEX IF NOT EXISTS idx_history_last_watched
                 ON watch_history(last_watched_at DESC);"
         )?;
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS opensubtitles_search_cache (
-                cache_key   TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS whatson_cache (
-                imdb_id     TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
+        for cache in JSON_CACHES {
+            self.conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {} (
+                    {}          TEXT PRIMARY KEY,
+                    data_json   TEXT NOT NULL,
+                    fetched_at  INTEGER NOT NULL
+                );",
+                cache.table, cache.key
+            ))?;
+        }
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS group_hierarchy (
                 provider_id TEXT NOT NULL,
@@ -937,122 +938,76 @@ impl CacheStore {
         Ok(())
     }
 
-    // --- OMDB Cache ---
+    // --- Metadata caches ---
 
-    /// Store OMDB data for a channel. Overwrites any existing cached entry.
-    pub fn save_omdb_cache(&self, channel_id: &str, data: &OmdbData) -> Result<(), CacheError> {
+    /// Saves `data` as the cached value for `key`, replacing any older one.
+    fn save_json<T: Serialize + ?Sized>(&self, cache: JsonCache, key: &str, data: &T) -> Result<(), CacheError> {
         let data_json = serde_json::to_string(data)?;
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
-            "INSERT OR REPLACE INTO omdb_cache (channel_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![channel_id, data_json, now],
+            &format!(
+                "INSERT OR REPLACE INTO {} ({}, data_json, fetched_at) VALUES (?1, ?2, ?3)",
+                cache.table, cache.key
+            ),
+            params![key, data_json, now],
         )?;
         Ok(())
+    }
+
+    /// The cached value for `key`, or `None` when there is none or it was saved
+    /// more than `ttl_seconds` ago.
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        cache: JsonCache,
+        key: &str,
+        ttl_seconds: i64,
+    ) -> Result<Option<T>, CacheError> {
+        let row = self
+            .conn
+            .query_row(
+                &format!("SELECT data_json, fetched_at FROM {} WHERE {} = ?1", cache.table, cache.key),
+                params![key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((data_json, fetched_at)) if chrono::Utc::now().timestamp() - fetched_at <= ttl_seconds => {
+                Ok(Some(serde_json::from_str(&data_json)?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Store OMDB data for a channel. Overwrites any existing cached entry.
+    pub fn save_omdb_cache(&self, channel_id: &str, data: &OmdbData) -> Result<(), CacheError> {
+        self.save_json(OMDB_CACHE, channel_id, data)
     }
 
     /// Retrieve cached OMDB data for a channel. Returns `None` if not cached or if the
     /// cached entry is older than `ttl_seconds`.
     pub fn get_omdb_cache(&self, channel_id: &str, ttl_seconds: i64) -> Result<Option<OmdbData>, CacheError> {
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM omdb_cache WHERE channel_id = ?1",
-            params![channel_id],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: OmdbData = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(OMDB_CACHE, channel_id, ttl_seconds)
     }
-
-    // --- MDBList Cache ---
 
     /// Store MDBList data for an IMDB ID. Overwrites any existing cached entry.
     pub fn save_mdblist_cache(&self, imdb_id: &str, data: &MdbListData) -> Result<(), CacheError> {
-        let data_json = serde_json::to_string(data)?;
-        let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO mdblist_cache (imdb_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![imdb_id, data_json, now],
-        )?;
-        Ok(())
+        self.save_json(MDBLIST_CACHE, imdb_id, data)
     }
 
     /// Retrieve cached MDBList data for an IMDB ID. Returns `None` if not cached or stale.
     pub fn get_mdblist_cache(&self, imdb_id: &str, ttl_seconds: i64) -> Result<Option<MdbListData>, CacheError> {
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM mdblist_cache WHERE imdb_id = ?1",
-            params![imdb_id],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: MdbListData = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(MDBLIST_CACHE, imdb_id, ttl_seconds)
     }
-
-    // --- Whatson Cache ---
 
     /// Store whatson-api data for an IMDB ID. Overwrites any existing cached entry.
     pub fn save_whatson_cache(&self, imdb_id: &str, data: &WhatsonData) -> Result<(), CacheError> {
-        let data_json = serde_json::to_string(data)?;
-        let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO whatson_cache (imdb_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![imdb_id, data_json, now],
-        )?;
-        Ok(())
+        self.save_json(WHATSON_CACHE, imdb_id, data)
     }
 
     /// Retrieve cached whatson-api data for an IMDB ID. Returns `None` if not cached or stale.
     pub fn get_whatson_cache(&self, imdb_id: &str, ttl_seconds: i64) -> Result<Option<WhatsonData>, CacheError> {
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM whatson_cache WHERE imdb_id = ?1",
-            params![imdb_id],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: WhatsonData = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(WHATSON_CACHE, imdb_id, ttl_seconds)
     }
-
-    // --- OpenSubtitles Search Cache ---
 
     fn opensubtitles_cache_key(imdb_id: &str, season: Option<u32>, episode: Option<u32>) -> String {
         match (season, episode) {
@@ -1069,14 +1024,7 @@ impl CacheStore {
         episode: Option<u32>,
         data: &SubtitleSearchResult,
     ) -> Result<(), CacheError> {
-        let key = Self::opensubtitles_cache_key(imdb_id, season, episode);
-        let data_json = serde_json::to_string(data)?;
-        let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO opensubtitles_search_cache (cache_key, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![key, data_json, now],
-        )?;
-        Ok(())
+        self.save_json(OPENSUBTITLES_CACHE, &Self::opensubtitles_cache_key(imdb_id, season, episode), data)
     }
 
     /// Retrieve cached OpenSubtitles search results. Returns `None` if not cached or stale.
@@ -1087,28 +1035,19 @@ impl CacheStore {
         episode: Option<u32>,
         ttl_seconds: i64,
     ) -> Result<Option<SubtitleSearchResult>, CacheError> {
-        let key = Self::opensubtitles_cache_key(imdb_id, season, episode);
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM opensubtitles_search_cache WHERE cache_key = ?1",
-            params![key],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: SubtitleSearchResult = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(OPENSUBTITLES_CACHE, &Self::opensubtitles_cache_key(imdb_id, season, episode), ttl_seconds)
+    }
+
+    /// Store what one database had for a video under `SkipQuery::cache_key`.
+    /// An empty answer is cached too, so a video with none isn't looked up
+    /// again until it expires.
+    pub fn save_skip_segments_cache(&self, key: &str, times: &SourceTimes) -> Result<(), CacheError> {
+        self.save_json(SKIP_SEGMENTS_CACHE, key, times)
+    }
+
+    /// Retrieve what one database had for a video. Returns `None` if not cached or stale.
+    pub fn get_skip_segments_cache(&self, key: &str, ttl_seconds: i64) -> Result<Option<SourceTimes>, CacheError> {
+        self.get_json(SKIP_SEGMENTS_CACHE, key, ttl_seconds)
     }
 
     // --- Watch History ---
@@ -1328,10 +1267,9 @@ impl CacheStore {
     /// Clear downloaded metadata, guide data and episode lists. Providers,
     /// channels, favorites, history and positions stay.
     pub fn clear_all_caches(&self) -> Result<(), CacheError> {
-        self.conn.execute("DELETE FROM omdb_cache", [])?;
-        self.conn.execute("DELETE FROM mdblist_cache", [])?;
-        self.conn.execute("DELETE FROM opensubtitles_search_cache", [])?;
-        self.conn.execute("DELETE FROM whatson_cache", [])?;
+        for cache in JSON_CACHES {
+            self.conn.execute(&format!("DELETE FROM {}", cache.table), [])?;
+        }
         self.conn.execute("DELETE FROM epg_programmes", [])?;
         self.conn.execute("DELETE FROM epg_cache", [])?;
         self.conn.execute("DELETE FROM series_episode_cache", [])?;
@@ -2674,6 +2612,69 @@ mod tests {
     }
 
     #[test]
+    fn test_save_and_retrieve_whatson_cache() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let data = WhatsonData { imdb_id: Some("tt0111161".into()), imdb_rating: Some(9.3), ..Default::default() };
+        store.save_whatson_cache("tt0111161", &data).unwrap();
+        assert_eq!(store.get_whatson_cache("tt0111161", 3600).unwrap(), Some(data));
+        assert_eq!(store.get_whatson_cache("tt0111161", -1).unwrap(), None);
+        assert_eq!(store.get_whatson_cache("tt9999999", 3600).unwrap(), None);
+    }
+
+    fn make_skip_times() -> SourceTimes {
+        use crate::iptv::skip_segments::{Fit, SegmentKind, SegmentSource, SkipSegment};
+        SourceTimes {
+            segments: vec![SkipSegment {
+                kind: SegmentKind::Intro,
+                start: 229.0,
+                end: 246.0,
+                source: SegmentSource::IntroDb,
+                fit: Fit::Unchecked,
+                confidence: Some(1.0),
+                offset: None,
+                auto_from: None,
+                auto_to: None,
+            }],
+            post_credits: Some(3480.0),
+        }
+    }
+
+    #[test]
+    fn test_save_and_retrieve_skip_segments_cache() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let times = make_skip_times();
+        store.save_skip_segments_cache("introdb:tt0903747:1:1", &times).unwrap();
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:1", 3600).unwrap(), Some(times));
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:2", 3600).unwrap(), None);
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:1", -1).unwrap(), None);
+    }
+
+    #[test]
+    fn test_skip_segments_cache_keeps_an_empty_answer() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.save_skip_segments_cache("skipdb:tt0111161:movie:8520", &SourceTimes::default()).unwrap();
+        assert_eq!(
+            store.get_skip_segments_cache("skipdb:tt0111161:movie:8520", 3600).unwrap(),
+            Some(SourceTimes::default())
+        );
+    }
+
+    #[test]
+    fn test_unreadable_cache_entry_is_an_error() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO skip_segments_cache (cache_key, data_json, fetched_at) VALUES ('k', 'not json', ?1)",
+                params![chrono::Utc::now().timestamp()],
+            )
+            .unwrap();
+        assert!(matches!(store.get_skip_segments_cache("k", 3600), Err(CacheError::Serde(_))));
+        // A stale one is just stale.
+        assert!(matches!(store.get_skip_segments_cache("k", -1), Ok(None)));
+    }
+
+    #[test]
     fn test_group_hierarchy_roundtrip() {
         let store = CacheStore::open_in_memory().unwrap();
         store.save_group_hierarchy("prov1", "live", "US: Sports", Some("United States"), 0, false).unwrap();
@@ -3234,11 +3235,17 @@ mod tests {
     fn clear_all_caches_keeps_providers_history_and_positions() {
         let store = CacheStore::open_in_memory().unwrap();
         fill_provider(&store, "m3u-a", "Heat");
+        store.save_whatson_cache("tt0111161", &WhatsonData::default()).unwrap();
+        store.save_skip_segments_cache("introdb:tt0111161:movie", &make_skip_times()).unwrap();
 
         store.clear_all_caches().unwrap();
 
         for table in [
             "omdb_cache",
+            "mdblist_cache",
+            "whatson_cache",
+            "opensubtitles_search_cache",
+            "skip_segments_cache",
             "epg_cache",
             "epg_programmes",
             "series_episode_cache",

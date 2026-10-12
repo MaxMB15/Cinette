@@ -32,6 +32,10 @@ describe("resolvePlayerHotkey", () => {
 		expect(resolvePlayerHotkey(key(" "))).toEqual({ type: "togglePlay" });
 		expect(resolvePlayerHotkey(key("k"))).toEqual({ type: "togglePlay" });
 	});
+	it("maps Enter to skipping an intro or credits", () => {
+		expect(resolvePlayerHotkey(key("Enter"))).toEqual({ type: "skipSegment" });
+		expect(resolvePlayerHotkey(key("Enter", { metaKey: true }))).toBeNull();
+	});
 	it("maps F and M regardless of case", () => {
 		expect(resolvePlayerHotkey(key("F"))).toEqual({ type: "toggleFullscreen" });
 		expect(resolvePlayerHotkey(key("m"))).toEqual({ type: "toggleMute" });
@@ -102,7 +106,21 @@ describe("repeatsWhenHeld", () => {
 	});
 
 	it("runs everything else once per press", () => {
-		for (const k of [" ", "k", "f", "m", "Escape", "n", "p", "s", "i", "?", "5", "Home"]) {
+		for (const k of [
+			" ",
+			"k",
+			"f",
+			"m",
+			"Escape",
+			"n",
+			"p",
+			"s",
+			"i",
+			"?",
+			"5",
+			"Home",
+			"Enter",
+		]) {
 			expect(repeatsWhenHeld(resolvePlayerHotkey(key(k))!)).toBe(false);
 		}
 	});
