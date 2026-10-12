@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { Loader2, RotateCw, WifiOff } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface ConnectionStatusOverlayProps {
 	/** True while the Rust reconnect monitor is actively re-issuing loadfile
@@ -17,12 +18,19 @@ interface ConnectionStatusOverlayProps {
 	 *  (URL genuinely unreachable). User must take action — show a retry
 	 *  button so they don't get stuck. */
 	loadFailed: boolean;
+	/** True when the stream stopped before it ever played, for example
+	 *  because the server answered with an error. Shown like `loadFailed`
+	 *  with wording that fits a first open. */
+	openFailed?: boolean;
 	/** Transient flag set by `useMpv` for ~2.5 s right after a successful
 	 *  reconnect (either via `mpv://reconnected` or the navigator.onLine
 	 *  auto-recovery path). Powers the green "Connection restored" banner. */
 	recentlyRecovered: boolean;
 	/** Invoked when the user clicks the retry button on the failed state. */
 	onRetry?: () => void;
+	/** Puts the banner below the player's top bar. On phones that bar holds
+	 *  the Back button, which the banner would otherwise cover. */
+	belowTopBar?: boolean;
 }
 
 type Status = "idle" | "buffering" | "reconnecting" | "failed" | "recovered";
@@ -51,18 +59,21 @@ export const ConnectionStatusOverlay = ({
 	reconnectAttempt,
 	buffering,
 	loadFailed,
+	openFailed = false,
 	recentlyRecovered,
 	onRetry,
+	belowTopBar = false,
 }: ConnectionStatusOverlayProps) => {
-	const status: Status = loadFailed
-		? "failed"
-		: reconnecting
-			? "reconnecting"
-			: recentlyRecovered
-				? "recovered"
-				: buffering
-					? "buffering"
-					: "idle";
+	const status: Status =
+		loadFailed || openFailed
+			? "failed"
+			: reconnecting
+				? "reconnecting"
+				: recentlyRecovered
+					? "recovered"
+					: buffering
+						? "buffering"
+						: "idle";
 
 	if (status === "idle") return null;
 
@@ -90,7 +101,9 @@ export const ConnectionStatusOverlay = ({
 			container: "border-red-400/60 bg-red-950/90 text-red-100 shadow-red-500/30",
 			iconWrap: "bg-red-500/25 text-red-200",
 			title: "Stream unavailable",
-			detail: "Couldn't connect after several attempts. Check your network.",
+			detail: loadFailed
+				? "Couldn't connect after several attempts. Check your network."
+				: "The stream didn't open. The server may be down or the link may have expired.",
 			Icon: <WifiOff className="h-5 w-5" />,
 			Trailing: onRetry ? (
 				<button
@@ -127,11 +140,20 @@ export const ConnectionStatusOverlay = ({
 		},
 	}[status];
 
+	// Inset from both sides and centered with auto margins, so a phone gets
+	// nearly its full width. With left-1/2 the banner could only use half. The
+	// top clears the notch or Dynamic Island, and the top bar when asked.
 	return (
 		<div
 			role="status"
 			aria-live="polite"
-			className={`absolute top-6 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-xl border ${config.container} px-4 py-3 shadow-lg backdrop-blur-md max-w-md`}
+			className={cn(
+				"absolute left-4 right-4 z-50 mx-auto w-fit max-w-md flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg backdrop-blur-md",
+				belowTopBar
+					? "top-[calc(4.5rem_+_env(safe-area-inset-top))]"
+					: "top-[calc(1.5rem_+_env(safe-area-inset-top))]",
+				config.container
+			)}
 		>
 			<div
 				className={`flex h-9 w-9 items-center justify-center rounded-full ${config.iconWrap}`}

@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-	PlayerState,
+	MpvPlayerState,
 	Channel,
 	Provider,
 	EpgProgram,
@@ -50,7 +50,7 @@ export const mpvSeek = (position: number): Promise<void> =>
 export const mpvSetVolume = (volume: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_volume", { volume });
 
-export const mpvGetState = (): Promise<PlayerState> => invoke("plugin:mpv|mpv_get_state");
+export const mpvGetState = (): Promise<MpvPlayerState> => invoke("plugin:mpv|mpv_get_state");
 
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
@@ -58,6 +58,10 @@ export const mpvSetVisible = (visible: boolean): Promise<void> =>
 /** The lock screen's title and live flag. Only iOS uses them. */
 export const mpvSetMediaInfo = (title: string | null, live: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_media_info", { title, live });
+
+/** How many seconds the lock screen's skip buttons jump. Only iOS has them. */
+export const mpvSetSkipIntervals = (back: number, forward: number): Promise<void> =>
+	invoke("plugin:mpv|mpv_set_skip_intervals", { back, forward });
 
 export const mpvSetBounds = (x: number, y: number, w: number, h: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_bounds", { x, y, w, h });
@@ -229,6 +233,14 @@ export const getPlaybackPosition = (contentKey: string): Promise<PlaybackPositio
 
 export const deletePlaybackPosition = (contentKey: string): Promise<void> =>
 	invoke<void>("delete_playback_position", { contentKey });
+
+/**
+ * Has Rust save `item`'s resume point every few seconds while the player page
+ * can't, or stops when `item` is null. See `src-tauri/src/progress.rs`.
+ */
+export const handOffProgress = (
+	item: { key: string; url: string; pendingStart: number | null } | null
+): Promise<void> => invoke<void>("hand_off_progress", { item });
 
 export const clearAllCaches = (): Promise<void> => invoke<void>("clear_all_caches");
 

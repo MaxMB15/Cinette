@@ -11,4 +11,5 @@ permissions = [
     "allow-mpv-set-visible",
     "allow-mpv-get-state",
     "allow-mpv-set-media-info",
+    "allow-mpv-set-skip-intervals",
 ]
