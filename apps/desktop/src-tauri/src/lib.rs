@@ -5,6 +5,8 @@ mod commands;
 mod downloads;
 mod logging;
 mod progress;
+#[cfg(test)]
+mod test_support;
 
 use commands::AppState;
 use mvp_core::cache::store::CacheStore;
