@@ -198,6 +198,49 @@ describe("useApiKey loading", () => {
 		expect(view.result.current).toMatchObject({ saved: "other-key", dirty: true });
 	});
 
+	it("drops the last service's check result when the field switches", async () => {
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: makeService() as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "typed-key");
+		await check(view);
+		expect(view.result.current.testStatus).toBe("valid");
+
+		view.rerender({ service: makeService("other-key") });
+		await act(async () => {});
+		expect(view.result.current.testStatus).toBe("idle");
+	});
+
+	it("drops the last service's Saved when the field switches, rather than keeping it", async () => {
+		vi.useFakeTimers();
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: makeService() as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "new-key");
+		await save(view);
+		expect(view.result.current.saveStatus).toBe("saved");
+
+		view.rerender({ service: makeService("other-key") });
+		await act(async () => {});
+		expect(view.result.current.saveStatus).toBe("idle");
+	});
+
+	it("clears a failed read once the new service's key loads", async () => {
+		const oldService = makeService();
+		oldService.load.mockRejectedValue(new Error("store"));
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: oldService as ApiKeyService },
+		});
+		await act(async () => {});
+		expect(view.result.current.loadFailed).toBe(true);
+
+		view.rerender({ service: makeService("other-key") });
+		await act(async () => {});
+		expect(view.result.current).toMatchObject({ saved: "other-key", loadFailed: false });
+	});
+
 	it("takes the old service's key again when the field switches back to it", async () => {
 		const oldService = makeService();
 		const newService = makeService("other-key");

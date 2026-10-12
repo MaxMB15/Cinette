@@ -81,6 +81,10 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 	useEffect(() => {
 		shown.current = service;
 		savedFor.current = null;
+		// Results for another service don't belong to this one. A save or check
+		// still on its way clears its own status when it lands.
+		setSaveStatus((status) => (status === "saving" ? status : "idle"));
+		setTestStatus((status) => (status === "testing" ? status : "idle"));
 		// Each run drops its own load when it ends, so a load from an earlier
 		// run, or from Strict Mode's first one, can't land after a newer one.
 		let current = true;
@@ -91,6 +95,7 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 				if (isStale()) return;
 				const stored = key?.trim() ?? "";
 				setSaved(stored);
+				setLoadFailed(false);
 				// Text typed while the key loaded stays.
 				if (!edited.current) setValueState(stored);
 			})
