@@ -24,6 +24,8 @@ When the secrets are set, the macOS release job:
    then on the hosted runners, so a failed build runs once more, and the app is
    signed and notarized again.
 4. Notarizes the DMG and staples it ([`scripts/notarize-macos.sh`](../scripts/notarize-macos.sh)).
+   Stapling downloads the ticket from Apple, so the script tries up to five times
+   if the connection drops.
 5. Checks that every binary in the app is signed by the same team with a timestamp,
    that executables use the hardened runtime, and that Gatekeeper accepts the app and
    the DMG ([`scripts/verify-macos-signing.sh`](../scripts/verify-macos-signing.sh)).
