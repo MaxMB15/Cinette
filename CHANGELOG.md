@@ -6,6 +6,17 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Changed
 
+- Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
+
+### Fixed
+
+- Some programs in the TV guide had no title or description. One with a bare `&` or an HTML entity such as `&nbsp;` came out blank, and so did one wrapped in CDATA. These now show, with an HTML entity left as written. A channel whose guide ID has an `&`, which the guide writes as `&amp;`, showed no programs at all (#220).
+- With autoplay on, pausing an episode in its last 5 seconds started the next one. Pressing Next episode there and then cancelling its resume prompt left the episode paused. The player now goes on to the next episode only when it sees one play to its end (#218).
+
+## [0.6.0] - 2026-10-12
+
+### Changed
+
 - Max Video Player is now licensed under the GNU General Public License version 3. Its additional terms require modified versions to credit the original on their About screen and to use their own name and icon. Releases up to 0.5.3 stay under the PolyForm Noncommercial License 1.0.0. See NOTICE and TRADEMARKS.md (#75).
 - Pull requests now need the contributor agreement in CLA.md (#75).
 - With no OMDb key set, the app no longer asks whatson-api for ratings, even for titles whose details it saved earlier (#92).
@@ -14,7 +25,6 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The start screen shows the app icon in place of the blue play badge (#95).
 - The OpenSubtitles key field shows up once an OMDb or OpenSubtitles key is saved, not as soon as an OMDb key is typed, and then stays until you leave Settings (#120).
 - Downloading a movie or episode that has already finished hands back the finished download instead of downloading it again. If its file was deleted, it downloads again (#107).
-- Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
 
 ### Added
 
@@ -31,7 +41,6 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Fixed
 
-- Some programs in the TV guide had no title or description. One with a bare `&` or an HTML entity such as `&nbsp;` came out blank, and so did one wrapped in CDATA. These now show, with an HTML entity left as written. A channel whose guide ID has an `&`, which the guide writes as `&amp;`, showed no programs at all (#220).
 - Channels went missing from M3U playlists that put lines such as `#EXTVLCOPT` or `#EXTGRP` between a channel and its link. They show up now. The app numbers channels by their place in the playlist, so in such a playlist the first refresh can move favorites, downloads, saved movie details and recently played channels to a different channel, once (#126).
 - A TV guide failed to load when a program's time had a letter such as é in the wrong place. Now the rest of the guide loads (#126).
 - On Linux with Wayland, on desktops where the app draws its own title bar, such as COSMIC on Pop!_OS, the video slid out of place when the window went full screen or was maximized. It sat lower and further right by the size of the title bar and the window's shadow, and its edges were cut off. The video now moves with the page (#119).
@@ -92,9 +101,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Clearing the simultaneous downloads field to type a new number no longer sets it to 1 straight away. A number outside 1 to 10 is fixed once you leave the field or press Enter. Typing 10 could leave 1 saved, because the two saves raced. They now go one at a time (#120).
 - Settings now says when it can't read a saved API key, and keeps Save on so the key can still be replaced or removed. It no longer replaces a key you started typing before the saved one loaded (#120).
 - Enter in an API key field saves the key. Screen readers name each key field and its Save, Test and show buttons, and read out whether a save or check worked (#120).
-- With autoplay on, pausing an episode in its last 5 seconds started the next one. Pressing Next episode there and then cancelling its resume prompt left the episode paused. The player now goes on to the next episode only when it sees one play to its end (#218).
 
 ## [0.5.3] - 2026-10-09
+
+This version was tagged but never published. Its changes first reached users in 0.6.0.
 
 ### Added
 
@@ -358,7 +368,9 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.3...v0.6.0
+[0.5.3]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.9...v0.5.0
