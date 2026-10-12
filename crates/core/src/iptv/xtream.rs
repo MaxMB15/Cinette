@@ -303,7 +303,7 @@ impl XtreamClient {
                 };
 
                 channels.push(Channel {
-                    id: format!("xt-ep-{series_id}-s{season}-{i}"),
+                    id: episode_id(series_id, season, i),
                     name,
                     url: self.credentials.series_stream_url(&ep_id.to_string(), ext),
                     logo_url: logo.map(|s| s.to_string()),
@@ -494,6 +494,19 @@ pub(crate) fn id_for_position_id(position_id: &str, url: &str) -> Option<String>
         _ => return None,
     };
     is_number(panel_id).then(|| channel_id(content_type, panel_id))
+}
+
+/// An episode's id, such as `xt-ep-42-s1-0`, from the panel's id for its
+/// series, the season and the episode's place in that season.
+fn episode_id(series_id: u64, season: u32, index: usize) -> String {
+    format!("xt-ep-{series_id}-s{season}-{index}")
+}
+
+/// The id of the series an episode id such as `xt-ep-42-s1-0` belongs to,
+/// such as `series-42`. Returns None for any other id.
+pub(crate) fn series_id_for_episode_id(episode_id: &str) -> Option<String> {
+    let (series_id, _) = episode_id.strip_prefix("xt-ep-")?.split_once('-')?;
+    is_number(series_id).then(|| channel_id("series", series_id))
 }
 
 /// The stream id in a live or movie URL, which ends in `/{id}.{extension}`.
@@ -1181,6 +1194,24 @@ mod tests {
             ("ser-0", "xtream://series/"),
         ] {
             assert_eq!(id_for_position_id(id, url), None, "{id} {url}");
+        }
+    }
+
+    #[test]
+    fn an_episode_id_names_its_series() {
+        assert_eq!(
+            series_id_for_episode_id(&episode_id(42, 1, 0)).as_deref(),
+            Some("series-42")
+        );
+        for id in [
+            "xt-ep-",
+            "xt-ep-42",
+            "xt-ep--s1-0",
+            "xt-ep-x-s1-0",
+            "ser-42",
+            "series-42",
+        ] {
+            assert_eq!(series_id_for_episode_id(id), None, "{id}");
         }
     }
 
