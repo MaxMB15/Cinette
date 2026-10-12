@@ -28,7 +28,7 @@ You need:
 
 - Xcode 26. App Store uploads need the iOS 26 SDK.
 - The Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`
-- Node.js 20 or later, and `npm install` at the repository root
+- Node.js 22.12 or later, and `npm install` at the repository root
 
 You don't need `scripts/build-libmpv.sh` or the ffmpeg sidecar. Swift Package Manager
 downloads MPVKit on the first build.
