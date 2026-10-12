@@ -3,6 +3,7 @@
 
 import type { ReactNode } from "react";
 import { ChevronRight, FolderOpen, Tv2 } from "lucide-react";
+import { formatCount } from "@/lib/format";
 
 interface SuperCategoryInfo {
 	name: string;
@@ -61,7 +62,7 @@ export const CategoryBrowser = ({
 					key={cat.name}
 					name={cat.name}
 					icon={<FolderOpen className="h-4 w-4 text-primary/70" />}
-					detail={`${cat.groupCount} groups \u00b7 ${cat.channelCount.toLocaleString()} ch`}
+					detail={`${formatCount(cat.groupCount, "group")} \u00b7 ${cat.channelCount.toLocaleString()} ch`}
 					onSelect={() => onSelectCategory(cat.name)}
 				/>
 			))}
@@ -70,7 +71,7 @@ export const CategoryBrowser = ({
 					key={group.name}
 					name={group.name}
 					icon={<Tv2 className="h-4 w-4 text-muted-foreground/70" />}
-					detail={`${group.channelCount.toLocaleString()} channels`}
+					detail={formatCount(group.channelCount, "channel")}
 					onSelect={() => onSelectGroup(group.name)}
 				/>
 			))}

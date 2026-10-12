@@ -255,3 +255,47 @@ describe("slider keys", () => {
 		expect(isSliderOwnKey(null, "ArrowLeft")).toBe(false);
 	});
 });
+
+import { isTypingTarget } from "./hotkeys";
+
+describe("isTypingTarget", () => {
+	/** jsdom doesn't compute isContentEditable, so set it the way a browser would. */
+	const block = (editable: boolean) => {
+		const div = document.createElement("div");
+		Object.defineProperty(div, "isContentEditable", { value: editable });
+		return div;
+	};
+
+	it.each([
+		{ name: "a text input", tag: "input" },
+		{ name: "a text area", tag: "textarea" },
+		{ name: "a dropdown", tag: "select" },
+	])("is true for $name", ({ tag }) => {
+		expect(isTypingTarget(document.createElement(tag))).toBe(true);
+	});
+
+	it("is true for editable text and false for plain content", () => {
+		expect(isTypingTarget(block(true))).toBe(true);
+		expect(isTypingTarget(block(false))).toBe(false);
+	});
+
+	it("is false for targets that aren't elements", () => {
+		expect(isTypingTarget(null)).toBe(false);
+		expect(isTypingTarget(window)).toBe(false);
+		expect(isTypingTarget(document)).toBe(false);
+	});
+});
+
+describe("isKeyboardFocusedControl without :focus-visible support", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("lets Space activate a button when the browser can't tell how it was focused", () => {
+		const button = document.createElement("button");
+		vi.spyOn(button, "matches").mockImplementation(() => {
+			throw new DOMException("':focus-visible' is not a valid selector", "SyntaxError");
+		});
+		expect(isKeyboardFocusedControl(button)).toBe(true);
+	});
+});

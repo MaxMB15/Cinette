@@ -31,6 +31,7 @@ import {
 import { ask } from "@tauri-apps/plugin-dialog";
 import { groupSamples, groupTitles, superCategoryNames } from "@/lib/group-hierarchy";
 import type { Channel, GroupHierarchyEntry } from "@/lib/types";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 // Enough channel names for Gemini to tell what a group holds.
@@ -362,8 +363,8 @@ export const CategoryManager = ({
 				<div>
 					<h2 className="text-base font-semibold">Manage Categories</h2>
 					<p className="text-xs text-muted-foreground mt-0.5">
-						{contentType} &middot; {entries.length} groups &middot; {superCats.length}{" "}
-						categories
+						{contentType} &middot; {formatCount(entries.length, "group")} &middot;{" "}
+						{formatCount(superCats.length, "category", "categories")}
 					</p>
 				</div>
 				<div className="flex gap-2">
@@ -429,7 +430,12 @@ export const CategoryManager = ({
 					const groups = entries.filter((e) => e.superCategory === catName);
 					const isRenaming = renamingCategory === catName;
 					return (
-						<div key={catName} className="rounded-xl border border-border bg-card">
+						<div
+							key={catName}
+							role="group"
+							aria-label={catName}
+							className="rounded-xl border border-border bg-card"
+						>
 							{/* Category header */}
 							<div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
 								{isRenaming ? (
@@ -448,14 +454,14 @@ export const CategoryManager = ({
 										<button
 											onClick={() => handleRenameCategory(catName)}
 											className="text-green-500 hover:text-green-400 p-1"
-											aria-label="Save name"
+											title="Save name"
 										>
 											<Check className="h-3.5 w-3.5" />
 										</button>
 										<button
 											onClick={() => setRenamingCategory(null)}
 											className="text-muted-foreground hover:text-foreground p-1"
-											aria-label="Cancel rename"
+											title="Cancel rename"
 										>
 											<X className="h-3.5 w-3.5" />
 										</button>
@@ -466,7 +472,7 @@ export const CategoryManager = ({
 											{catName}
 										</span>
 										<span className="text-[10px] text-muted-foreground tabular-nums">
-											{groups.length} groups
+											{formatCount(groups.length, "group")}
 										</span>
 										<button
 											onClick={() => {
@@ -491,7 +497,7 @@ export const CategoryManager = ({
 											onClick={() => handleReorderCategory(catName, "up")}
 											disabled={catIdx === 0}
 											className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-20 rounded hover:bg-accent"
-											aria-label="Move category up"
+											title="Move up"
 										>
 											<ChevronUp className="h-3.5 w-3.5" />
 										</button>
@@ -499,7 +505,7 @@ export const CategoryManager = ({
 											onClick={() => handleReorderCategory(catName, "down")}
 											disabled={catIdx === superCats.length - 1}
 											className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-20 rounded hover:bg-accent"
-											aria-label="Move category down"
+											title="Move down"
 										>
 											<ChevronDown className="h-3.5 w-3.5" />
 										</button>
@@ -531,13 +537,17 @@ export const CategoryManager = ({
 
 				{/* Uncategorized */}
 				{uncategorized.length > 0 && (
-					<div className="rounded-xl border-2 border-dashed border-border bg-card/50">
+					<div
+						role="group"
+						aria-label="Uncategorized"
+						className="rounded-xl border-2 border-dashed border-border bg-card/50"
+					>
 						<div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
 							<span className="text-sm font-semibold text-muted-foreground flex-1">
 								Uncategorized
 							</span>
 							<span className="text-[10px] text-muted-foreground tabular-nums">
-								{uncategorized.length} groups
+								{formatCount(uncategorized.length, "group")}
 							</span>
 							{superCats.length > 0 && (
 								<Button
@@ -581,7 +591,7 @@ export const CategoryManager = ({
 						<button
 							onClick={() => setMovingGroup(null)}
 							className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-							aria-label="Cancel move"
+							title="Cancel move"
 						>
 							<X className="h-4 w-4" />
 						</button>
@@ -626,7 +636,7 @@ export const CategoryManager = ({
 						<button
 							onClick={() => setAiPromptCategory(null)}
 							className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-							aria-label="Close AI prompt"
+							title="Close AI panel"
 						>
 							<X className="h-4 w-4" />
 						</button>

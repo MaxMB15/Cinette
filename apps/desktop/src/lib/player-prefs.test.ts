@@ -120,3 +120,39 @@ describe("player-prefs", () => {
 		});
 	});
 });
+
+describe("player-prefs when storage is unavailable", () => {
+	const blocked = () => {
+		throw new DOMException("The operation is insecure.", "SecurityError");
+	};
+
+	it("falls back to the built-in settings when storage can't be read", () => {
+		const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+		try {
+			expect(readDefaultVolume()).toBe(100);
+			expect(readVolumePreference()).toEqual({ volume: 100, preMute: 100 });
+			expect(readHwdecEnabled()).toBe(true);
+			expect(readSkipIntervals()).toEqual({ back: 10, forward: 10 });
+		} finally {
+			getItem.mockRestore();
+		}
+	});
+
+	it("drops changes quietly when storage can't be written", () => {
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+		const listener = vi.fn();
+		window.addEventListener(SKIP_INTERVALS_EVENT, listener);
+		try {
+			expect(() => {
+				writeDefaultVolume(40);
+				writeVolumePreference({ volume: 40, preMute: 40 });
+				writeHwdecEnabled(false);
+				writeSkipInterval("forward", 30);
+			}).not.toThrow();
+			expect(listener).not.toHaveBeenCalled();
+		} finally {
+			window.removeEventListener(SKIP_INTERVALS_EVENT, listener);
+			setItem.mockRestore();
+		}
+	});
+});

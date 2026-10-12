@@ -39,6 +39,7 @@ import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/brows
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
 import { nowSeconds } from "@/lib/date";
+import { formatCount } from "@/lib/format";
 import type {
 	Channel,
 	Category,
@@ -48,9 +49,6 @@ import type {
 } from "@/lib/types";
 
 type Tab = "live" | "movie" | "series" | "favorites" | "downloads" | "history";
-
-const isTab = (v: unknown): v is Tab =>
-	v === "live" || v === "movie" || v === "series" || v === "favorites" || v === "history";
 
 /** Grouping key for series titles — tolerant of case and spacing differences. */
 const seriesKey = (title: string): string => title.trim().toLowerCase().replace(/\s+/g, " ");
@@ -66,6 +64,9 @@ const ALL_TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 
 // The mobile apps have no downloads.
 const TABS = ALL_TABS.filter((t) => t.id !== "downloads" || !isMobilePlatform());
+
+/** Whether `v` names a tab this platform shows, such as one saved before playback. */
+const isTab = (v: unknown): v is Tab => TABS.some((t) => t.id === v);
 
 /** Pixels per hour for the dynamic window (higher = wider spacing between gridlines). */
 const PX_PER_HOUR = 150;
@@ -304,15 +305,16 @@ export const ChannelList = () => {
 
 	const effectiveCategory = navState.level === "group" ? navState.name : selectedCategory;
 
-	// Use debouncedSearch for filtering — prevents per-keystroke re-renders of virtualizer
+	// Filtering uses the debounced search, so typing doesn't re-render the
+	// list on every key. Spaces around the search don't count.
+	const searchQuery = debouncedSearch.trim().toLowerCase();
 	const filtered = useMemo(() => {
 		let result = activeChannels;
 		if (effectiveCategory && activeTab !== "series" && activeTab !== "favorites") {
 			result = result.filter((ch) => ch.groupTitle === effectiveCategory);
 		}
-		if (debouncedSearch.trim()) {
-			const lower = debouncedSearch.toLowerCase();
-			result = result.filter((ch) => ch.name.toLowerCase().includes(lower));
+		if (searchQuery) {
+			result = result.filter((ch) => ch.name.toLowerCase().includes(searchQuery));
 		}
 		if (showFavoritesOnly && activeTab !== "favorites") {
 			result = result.filter((ch) => ch.isFavorite === true);
@@ -324,7 +326,7 @@ export const ChannelList = () => {
 	}, [
 		activeChannels,
 		effectiveCategory,
-		debouncedSearch,
+		searchQuery,
 		activeTab,
 		showFavoritesOnly,
 		showDownloadsOnly,
@@ -541,7 +543,7 @@ export const ChannelList = () => {
 	}, [gridRowHeight, virtualizer]);
 
 	// Use debouncedSearch for isLiveSearch to avoid expensive view-switch on every keystroke
-	const hasSearch = debouncedSearch.trim().length > 0;
+	const hasSearch = searchQuery.length > 0;
 	const isLiveSearch = activeTab === "live" && hasSearch;
 	// Show channel list only when: no hierarchy (flat mode), or drilled into a group, or on favorites/history
 	const showChannelList =
@@ -579,16 +581,18 @@ export const ChannelList = () => {
 
 	const totalFavorites = channels.filter((ch) => ch.isFavorite).length;
 
-	const countLabel =
+	// What the list counts, such as "channel" in "3 channels".
+	const countNoun =
 		activeTab === "live"
-			? "channels"
+			? "channel"
 			: activeTab === "movie"
-				? "movies"
+				? "movie"
 				: activeTab === "series"
-					? "shows"
+					? "show"
 					: activeTab === "downloads"
-						? "downloads"
-						: "favorites";
+						? "download"
+						: "favorite";
+	const countLabel = `${countNoun}s`;
 
 	// Pixel offset of the timeline column left edge within the virtualizer div.
 	// The virtualizer div already lives inside the px-3 padding of parentRef, so no extra 12px.
@@ -788,10 +792,8 @@ export const ChannelList = () => {
 										.getGroupsForCategory(navState.name)
 										.filter(
 											(g) =>
-												!debouncedSearch ||
-												g
-													.toLowerCase()
-													.includes(debouncedSearch.toLowerCase())
+												!searchQuery ||
+												g.toLowerCase().includes(searchQuery)
 										)}
 									categories={categories}
 									onSelectGroup={(name) =>
@@ -848,7 +850,7 @@ export const ChannelList = () => {
 				showChannelList && (
 					<div className="shrink-0 px-3 pt-2 pb-1">
 						<span className="text-xs text-muted-foreground">
-							{filtered.length.toLocaleString()} {countLabel}
+							{formatCount(filtered.length, countNoun)}
 						</span>
 					</div>
 				)}

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import type { LayoutMode } from "@/lib/types";
@@ -19,6 +19,7 @@ vi.mock("@/lib/tauri", () => ({
 
 import { AppLayout } from "./AppLayout";
 import { FullscreenContext } from "@/lib/fullscreen-context";
+import { mpvSetVisible } from "@/lib/tauri";
 
 const mounts = vi.fn();
 
@@ -43,6 +44,7 @@ describe("AppLayout", () => {
 	afterEach(() => {
 		cleanup();
 		mounts.mockClear();
+		vi.mocked(mpvSetVisible).mockClear();
 		platform.layoutMode = "desktop";
 	});
 
@@ -82,5 +84,53 @@ describe("AppLayout", () => {
 		cleanup();
 		render(fullscreen("/"));
 		expect(screen.getByRole("complementary").className).not.toContain("hidden");
+	});
+
+	it("shows the native video view only while the player page is open", () => {
+		render(tree("/"));
+		expect(mpvSetVisible).toHaveBeenLastCalledWith(false);
+
+		fireEvent.click(screen.getByRole("link", { name: "Player" }));
+		expect(mpvSetVisible).toHaveBeenLastCalledWith(true);
+
+		fireEvent.click(screen.getByRole("link", { name: "Channels" }));
+		expect(mpvSetVisible).toHaveBeenLastCalledWith(false);
+		expect(mounts).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives a TV a side menu that marks the open page", () => {
+		platform.layoutMode = "tv";
+		render(tree("/playlists"));
+
+		expect(screen.getByText("page")).toBeInTheDocument();
+		const links = screen.getAllByRole("link");
+		expect(links.map((link) => link.textContent)).toEqual([
+			"Channels",
+			"Player",
+			"Playlists",
+			"Settings",
+		]);
+		// A remote moves focus from link to link.
+		for (const link of links) expect(link).toHaveAttribute("tabindex", "0");
+
+		const playlists = screen.getByRole("link", { name: "Playlists" });
+		expect(playlists).toHaveAttribute("aria-current", "page");
+		expect(playlists).toHaveClass("bg-primary/10", "text-primary");
+		expect(screen.getByRole("link", { name: "Channels" })).not.toHaveClass("bg-primary/10");
+		expect(screen.queryByRole("navigation")).toBeNull();
+	});
+
+	it("moves the TV menu's highlight to the page it opens", () => {
+		platform.layoutMode = "tv";
+		render(tree("/"));
+
+		fireEvent.click(screen.getByRole("link", { name: "Settings" }));
+
+		expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
+			"aria-current",
+			"page"
+		);
+		expect(screen.getByRole("link", { name: "Channels" })).not.toHaveAttribute("aria-current");
+		expect(mounts).toHaveBeenCalledTimes(1);
 	});
 });
