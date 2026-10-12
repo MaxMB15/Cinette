@@ -126,7 +126,9 @@ and the [Rust report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/) f
 
 CI runs Clippy with warnings as errors on macOS, on Linux and for the iOS simulator,
 so each platform's own code is checked. The Linux job also fails when Rust line
-coverage drops below 80%.
+coverage drops below 80%. CI uses the latest stable Rust, so a new release can add a
+lint that fails code nobody changed. Run `rustup update stable` to see the same lints
+locally.
 
 A Husky pre-commit hook runs Prettier and ESLint on the staged files through
 lint-staged, then runs the tests.

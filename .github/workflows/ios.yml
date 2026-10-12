@@ -86,7 +86,8 @@ jobs:
           test -d "$APP"
           plutil -p "$APP/Info.plist" | grep -E 'CFBundleIdentifier|MinimumOSVersion|CFBundleShortVersionString'
 
-      # The build above shows warnings without failing. This fails on any
-      # warning or lint in the code that only builds for iOS.
+      # The build above shows warnings without failing. This lints the
+      # workspace for the iOS target, including the code that only builds
+      # there, and fails on any warning.
       - name: Lint the workspace for iOS with Clippy
         run: cargo clippy --locked --workspace --target aarch64-apple-ios-sim --all-targets -- -D warnings
