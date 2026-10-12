@@ -16,6 +16,7 @@ export type PlayerAction =
 	| { type: "toggleSubtitles" }
 	| { type: "toggleInfo" }
 	| { type: "toggleShortcuts" }
+	| { type: "skipSegment" }
 	| { type: "escape" };
 
 /** How far the plain arrow and J/L keys jump when no skip lengths are passed in. */
@@ -88,6 +89,8 @@ export const resolvePlayerHotkey = (
 			return { type: "toggleInfo" };
 		case "?":
 			return { type: "toggleShortcuts" };
+		case "Enter":
+			return { type: "skipSegment" };
 		case "Escape":
 			return { type: "escape" };
 		default:
@@ -99,7 +102,7 @@ export const resolvePlayerHotkey = (
  * Whether the action runs again while its key is held down. Seeking and
  * volume keep going. The rest run once per press, since a held F, Space or M
  * would flip back and forth, a held Escape would leave fullscreen and then
- * the player, and a held N or P would skip several episodes.
+ * the player, and a held N, P or Enter would skip several episodes.
  */
 export const repeatsWhenHeld = (action: PlayerAction): boolean =>
 	action.type === "seekBy" || action.type === "volumeBy";
@@ -124,6 +127,7 @@ export const playerShortcuts = (
 	{ keys: ["N", "P"], label: "Next / previous episode" },
 	{ keys: ["S"], label: "Subtitles" },
 	{ keys: ["I"], label: "Info" },
+	{ keys: ["Enter"], label: "Skip intro or credits / next episode" },
 	{ keys: ["?"], label: "Show / hide this list" },
 	{ keys: ["Esc"], label: "Exit fullscreen / close panel / leave player" },
 ];

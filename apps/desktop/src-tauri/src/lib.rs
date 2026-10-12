@@ -163,6 +163,7 @@ pub fn run() {
             commands::test_mdblist_api_key,
             commands::fetch_mdblist_data,
             commands::fetch_whatson_data,
+            commands::get_skip_segments,
             commands::get_opensubtitles_api_key,
             commands::set_opensubtitles_api_key,
             commands::test_opensubtitles_api_key,

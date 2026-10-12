@@ -54,11 +54,16 @@ import {
 	readDefaultVolume,
 	readHwdecEnabled,
 	readSkipIntervals,
+	readSkipSegmentModes,
+	SKIP_INTERVALS_EVENT,
+	SKIP_SEGMENT_MODES_EVENT,
 	writeDefaultVolume,
 	writeHwdecEnabled,
 	writeSkipInterval,
-	type SkipIntervals,
+	writeSkipSegmentMode,
+	type SkipSegmentMode,
 } from "@/lib/player-prefs";
+import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { ask, open } from "@tauri-apps/plugin-dialog";
 import { useScrollToOmdbKey } from "@/hooks/useScrollToOmdbKey";
 import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
@@ -70,6 +75,15 @@ type SaveStatus = "idle" | "saved" | "error";
 type HistoryStatus = "idle" | "cleared";
 
 const SKIP_CHOICES = SKIP_OPTIONS.map((n) => ({ value: n, label: `${n} seconds` }));
+
+const SKIP_SEGMENT_CHOICES: { value: SkipSegmentMode; label: string }[] = [
+	{ value: "button", label: "Skip button" },
+	{ value: "auto", label: "Automatic" },
+	{ value: "off", label: "Off" },
+];
+
+const SKIPDB_URL = "https://skipdb.tv";
+const INTRODB_URL = "https://introdb.app";
 
 const DonationReset = () => {
 	const [reset, setReset] = useState(false);
@@ -119,11 +133,8 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		writeDefaultVolume(volume);
 	};
 
-	const [skipIntervals, setSkipIntervals] = useState(readSkipIntervals);
-	const handleSkipChange = (direction: keyof SkipIntervals, seconds: number) => {
-		setSkipIntervals((s) => ({ ...s, [direction]: seconds }));
-		writeSkipInterval(direction, seconds);
-	};
+	const skipIntervals = usePlayerPref(readSkipIntervals, SKIP_INTERVALS_EVENT);
+	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
 
 	// OMDB state
 	const [omdbKey, setOmdbKey] = useState("");
@@ -474,7 +485,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							</div>
 							<Select
 								value={skipIntervals.back}
-								onChange={(n) => handleSkipChange("back", n)}
+								onChange={(n) => writeSkipInterval("back", n)}
 								options={SKIP_CHOICES}
 								className="w-32 shrink-0"
 								aria-label="Skip back"
@@ -491,12 +502,68 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							</div>
 							<Select
 								value={skipIntervals.forward}
-								onChange={(n) => handleSkipChange("forward", n)}
+								onChange={(n) => writeSkipInterval("forward", n)}
 								options={SKIP_CHOICES}
 								className="w-32 shrink-0"
 								aria-label="Skip forward"
 							/>
 						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Intros and recaps</p>
+								<p className="text-xs text-muted-foreground">
+									Show a Skip button while one plays, or skip it automatically
+									with a way to undo.
+								</p>
+							</div>
+							<Select
+								value={segmentModes.opening}
+								onChange={(mode) => writeSkipSegmentMode("opening", mode)}
+								options={SKIP_SEGMENT_CHOICES}
+								className="w-36 shrink-0"
+								aria-label="Intros and recaps"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Credits and previews</p>
+								<p className="text-xs text-muted-foreground">
+									At end credits, Automatic counts down to the next episode while
+									Autoplay is on in the player's controls.
+								</p>
+							</div>
+							<Select
+								value={segmentModes.ending}
+								onChange={(mode) => writeSkipSegmentMode("ending", mode)}
+								options={SKIP_SEGMENT_CHOICES}
+								className="w-36 shrink-0"
+								aria-label="Credits and previews"
+							/>
+						</div>
+
+						<p className="text-xs text-muted-foreground">
+							Skip times need an OMDb key under Integrations, and only some movies and
+							series have them. They come from{" "}
+							<button
+								type="button"
+								onClick={() => openUrl(SKIPDB_URL)}
+								className="text-primary hover:underline"
+							>
+								SkipDB
+							</button>
+							, under the ODbL 1.0, and from{" "}
+							<button
+								type="button"
+								onClick={() => openUrl(INTRODB_URL)}
+								className="text-primary hover:underline"
+							>
+								IntroDB
+							</button>
+							. People add the times by hand, so a few may be off. When the player
+							can't be sure they fit the video, Automatic shows the button instead.
+						</p>
 					</CardContent>
 				</Card>
 
@@ -601,8 +668,8 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							<p className="text-sm font-medium mb-1">OMDB API</p>
 							<p className="mb-2 text-xs text-muted-foreground">
 								Adds details and ratings to movies and series. With a key set, the
-								app sends titles to OMDb and IMDb IDs to whatson-api for more
-								ratings.
+								app sends titles to OMDb, and IMDb IDs to whatson-api for more
+								ratings and to SkipDB and IntroDB for skip times.
 							</p>
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
