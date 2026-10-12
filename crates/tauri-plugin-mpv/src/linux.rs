@@ -258,11 +258,13 @@ struct Inner {
     wayland: WaylandSession,
 }
 
-// SAFETY: `RenderContext`, `OwnedEgl`, and `WaylandSession` are only
-// dereferenced from the GLib main thread (via `render_frame`). The libmpv
+// SAFETY: `RenderContext` and `OwnedEgl` are only used on the GLib main
+// thread, by `render_frame` and by `detach`, which drops the session there.
+// `DecorationWatch` holds GTK objects and is only started and stopped on that
+// thread too. `WaylandSession` is Send and Sync on its own, so `set_frame`,
+// `set_visible` and `detach` move the subsurface from any thread. The libmpv
 // update callback runs on an arbitrary thread but only schedules an idle
-// task; it does not touch any of these fields directly. The mutex and
-// atomic fields are thread safe on their own.
+// task. The mutex and atomic fields are thread safe on their own.
 unsafe impl Send for Inner {}
 unsafe impl Sync for Inner {}
 
@@ -540,14 +542,19 @@ impl PlatformRenderer for LinuxGlRenderer {
         let Some(inner) = self.active.take() else {
             return;
         };
-        inner.valid.store(false, Ordering::Release);
-        inner.video_active.store(false, Ordering::Release);
+        {
+            // The lock keeps `follow_decorations` from moving the video back
+            // on screen after it's hidden, as in `set_visible`.
+            let _state = lock_or_recover(&inner.state);
+            inner.valid.store(false, Ordering::Release);
+            inner.video_active.store(false, Ordering::Release);
 
-        // Hide subsurface before destroying to prevent a visible flash
-        // of the transparent WebView background.
-        inner.wayland.subsurface.set_position(-32000, -32000);
-        inner.wayland.child_surface.commit();
-        let _ = inner.wayland.conn.flush();
+            // Hide subsurface before destroying to prevent a visible flash
+            // of the transparent WebView background.
+            inner.wayland.subsurface.set_position(-32000, -32000);
+            inner.wayland.child_surface.commit();
+            let _ = inner.wayland.conn.flush();
+        }
 
         run_on_glib_main(move || {
             if let Some(watch) = lock_or_recover(&inner.decorations).take() {
@@ -582,13 +589,15 @@ fn request_render(inner: &Arc<Inner>) {
 
 /// Moves the video to `offset`, where GTK's decorations now put the page.
 /// GTK drops the window shadow when the window is maximized or tiled, and the
-/// shadow and title bar in fullscreen, which moves the page inside the window
+/// shadow and title bar in full screen, which moves the page inside the window
 /// surface.
 ///
 /// The window's `size-allocate` handler calls it on the GLib main thread. The
 /// compositor applies the move when GTK next commits the window surface,
 /// which GTK does as it paints the new layout, so the video and the page move
-/// in the same frame.
+/// in the same frame. While GTK holds back painting, such as when the
+/// compositor stops sending frame callbacks to a hidden window, the move
+/// waits with the page and nothing shows out of place.
 fn follow_decorations(inner: &Inner, offset: (i32, i32)) {
     // The lock stays held while the video moves, so a `set_frame` or a
     // `set_visible(false)` on another thread can't land in between.
@@ -958,17 +967,17 @@ fn wayland_egl_display(
 /// for GTK's client side shadow and title bar. Subsurface coordinates count
 /// from that corner, so adding the offset lines them up with the page.
 ///
-/// It's None while the window has no GDK window. Only call it on the GLib
-/// main thread.
+/// GTK lays the window's child out inside the shadow, so the position of
+/// `vbox` in the window already counts it. Adding the gap between the GDK
+/// window and the allocation as well counted the shadow twice while the two
+/// sizes differed during a layout.
+///
+/// It's None while `vbox` isn't laid out in the window. Only call it on the
+/// GLib main thread.
 fn csd_offset(window: &gtk::ApplicationWindow, vbox: &gtk::Box) -> Option<(i32, i32)> {
     use gtk::prelude::*;
 
-    let (vbox_x, vbox_y) = vbox.translate_coordinates(window, 0, 0)?;
-    let gdk_win = window.window()?;
-    let alloc = window.allocation();
-    let shadow_x = (gdk_win.width() - alloc.width()).max(0) / 2;
-    let shadow_y = (gdk_win.height() - alloc.height()).max(0) / 2;
-    Some((shadow_x + vbox_x, shadow_y + vbox_y))
+    vbox.translate_coordinates(window, 0, 0)
 }
 
 /// Runs `f` on the GLib main thread and blocks until it returns.
