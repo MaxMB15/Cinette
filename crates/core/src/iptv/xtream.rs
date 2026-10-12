@@ -1172,7 +1172,7 @@ mod tests {
             assert_eq!(
                 id_for_position_id(position_id, &url).as_deref(),
                 Some(expected),
-                "{position_id} {url}"
+                "{position_id}"
             );
         }
     }
