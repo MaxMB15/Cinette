@@ -21,7 +21,8 @@ use tauri::Listener;
 
 /// A source ffmpeg reads from its standard input. The shell plugin keeps that
 /// pipe open and never writes to it, so the download runs until it's
-/// stopped, and the size probe turns the URL down at once.
+/// stopped, at the latest when its `TestApp` drops, and the size probe turns
+/// the URL down at once.
 pub(crate) const STALLS: &str = "pipe:0";
 
 /// Audio samples in the video `video_url` serves.

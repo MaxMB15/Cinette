@@ -414,8 +414,6 @@ fn stopping_a_running_download_deletes_its_partial_file_and_starts_the_next() {
         status(&app, &second) == DownloadStatus::Downloading && is_running(&app, &second)
     });
     assert_eq!(download(&app, &first), Some(stopped));
-
-    stop_one(&handle, &second).unwrap();
 }
 
 /// A stop that lands between claiming a download and tracking its ffmpeg
@@ -493,8 +491,6 @@ fn a_download_whose_channel_changed_fails_and_the_next_one_starts() {
     assert!(failed.finished_at.is_some());
     assert!(!Path::new(&part).exists());
     assert_eq!(status(&app, &next), DownloadStatus::Downloading);
-
-    stop_one(&app.handle(), &next).unwrap();
 }
 
 #[test]

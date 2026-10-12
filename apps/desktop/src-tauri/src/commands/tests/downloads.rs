@@ -44,15 +44,6 @@ fn finished_file(app: &TestApp, id: &str, name: &str) -> PathBuf {
     file
 }
 
-/// Stops downloads that are still running, so their ffmpeg ends with the
-/// test.
-async fn stop_all(app: &TestApp, ids: &[String]) {
-    stop_downloads(app.handle(), ids.to_vec()).await.unwrap();
-    for id in ids {
-        assert_eq!(status(app, id), DownloadStatus::Cancelled);
-    }
-}
-
 #[tokio::test]
 async fn a_movie_download_starts_in_the_movies_folder() {
     let app = TestApp::new();
@@ -108,7 +99,6 @@ async fn retrying_a_failed_download_replaces_it() {
         .map(|r| r.id)
         .collect();
     assert_eq!(ids, vec![retry.clone()]);
-    stop_all(&app, &[retry]).await;
 }
 
 #[tokio::test]
@@ -178,7 +168,10 @@ async fn a_batch_of_episodes_queues_in_order_and_stops_together() {
         assert_eq!(cache.get_channels("__downloads__").unwrap(), eps);
     }
 
-    stop_all(&app, &ids).await;
+    stop_downloads(app.handle(), ids.clone()).await.unwrap();
+    for id in &ids {
+        assert_eq!(status(&app, id), DownloadStatus::Cancelled);
+    }
 }
 
 #[tokio::test]
@@ -342,8 +335,6 @@ async fn more_downloads_at_once_starts_the_queued_ones() {
     assert_eq!(status(&app, &ids[1]), DownloadStatus::Downloading);
     assert_eq!(get_download_concurrency(app.downloads()).await, Ok(2));
     assert_eq!(saved_settings(&app)["download_concurrency"], 2);
-
-    stop_all(&app, &ids).await;
 }
 
 #[tokio::test]
@@ -376,7 +367,6 @@ async fn a_new_download_folder_is_saved_and_used() {
         .unwrap();
     let rec = download(&app, &id).unwrap();
     assert!(Path::new(&rec.dest_path).starts_with(&folder));
-    stop_all(&app, &[id]).await;
 }
 
 #[tokio::test]

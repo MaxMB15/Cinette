@@ -333,3 +333,46 @@ mod capped {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::filter;
+    use std::sync::{Arc, Mutex};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+    /// Keeps the target of every event the filter lets through.
+    struct Targets(Arc<Mutex<Vec<String>>>);
+
+    impl<S: Subscriber> Layer<S> for Targets {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            let target = event.metadata().target().to_string();
+            self.0.lock().unwrap().push(target);
+        }
+    }
+
+    // This checks only what gets through, since `RUST_LOG` can let more
+    // through and a test can't safely change it.
+    #[test]
+    fn the_apps_own_crates_log_at_debug() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(filter())
+            .with(Targets(seen.clone()));
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "max_video_player::downloads", "queued");
+            tracing::debug!(target: "tauri_plugin_mpv::engine", "loaded");
+            tracing::debug!(target: "mvp_core::iptv::xtream", "fetched");
+        });
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "max_video_player::downloads",
+                "tauri_plugin_mpv::engine",
+                "mvp_core::iptv::xtream",
+            ]
+        );
+    }
+}

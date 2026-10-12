@@ -18,8 +18,6 @@ const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 
 /// settings are restored. Only the desktop apps download.
 #[cfg(desktop)]
 pub fn start<R: Runtime>(app: &AppHandle<R>) {
-    use std::panic::AssertUnwindSafe;
-
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("download-retention".into())
@@ -28,19 +26,27 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
             // the app was closed show "Deletes soon" until then, so there's
             // time to keep one or play it, which starts its count over.
             std::thread::sleep(CHECK_INTERVAL);
-            // A panic in one check, such as from a poisoned lock, must not
-            // end every check after it.
-            match std::panic::catch_unwind(AssertUnwindSafe(|| sweep(&app))) {
-                Ok(Ok(n)) if n > 0 => {
-                    tracing::info!("Deleted {n} download(s) past the retention setting")
-                }
-                Ok(Err(e)) => tracing::warn!("Retention check failed: {e}"),
-                Err(_) => tracing::error!("Retention check panicked"),
-                _ => {}
-            }
+            check(&app);
         });
     if let Err(e) = spawned {
         tracing::warn!("Could not start the retention check: {e}");
+    }
+}
+
+/// One of the hourly checks, which logs what it did rather than returning it.
+#[cfg(desktop)]
+fn check<R: Runtime>(app: &AppHandle<R>) {
+    use std::panic::AssertUnwindSafe;
+
+    // A panic in one check, such as from a poisoned lock, must not end every
+    // check after it.
+    match std::panic::catch_unwind(AssertUnwindSafe(|| sweep(app))) {
+        Ok(Ok(n)) if n > 0 => {
+            tracing::info!("Deleted {n} download(s) past the retention setting")
+        }
+        Ok(Err(e)) => tracing::warn!("Retention check failed: {e}"),
+        Err(_) => tracing::error!("Retention check panicked"),
+        _ => {}
     }
 }
 
@@ -84,4 +90,75 @@ pub fn count_due<R: Runtime>(app: &AppHandle<R>, days: Option<u32>) -> Result<us
 fn playing_file<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     app.try_state::<MpvState>()
         .and_then(|mpv| mpv.get_state().current_url)
+}
+
+#[cfg(all(test, desktop))]
+mod tests {
+    use super::*;
+    use crate::downloads::test_support::{add_download, download, finished};
+    use crate::test_support::{poison, TestApp};
+    use std::path::PathBuf;
+
+    /// An app that deletes downloads after 30 days, with one finished long
+    /// ago. Returns the app and the download's file.
+    fn app_with_a_due_download() -> (TestApp, PathBuf) {
+        let app = TestApp::new();
+        app.downloads().set_retention_days(Some(30));
+        let dir = app.downloads_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Dune (2021).mkv");
+        std::fs::write(&file, b"video").unwrap();
+        add_download(&app, &finished("a", &file));
+        (app, file)
+    }
+
+    #[test]
+    fn a_check_deletes_what_is_due() {
+        let (app, file) = app_with_a_due_download();
+        check(&app.handle());
+        assert!(download(&app, "a").is_none());
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_check_with_nothing_due_deletes_nothing() {
+        let (app, file) = app_with_a_due_download();
+        app.downloads().set_retention_days(None);
+        check(&app.handle());
+        assert_eq!(download(&app, "a"), Some(finished("a", &file)));
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn a_check_that_fails_leaves_the_downloads_for_the_next() {
+        let (app, file) = app_with_a_due_download();
+        let state = app.state();
+        poison(&state.cache);
+        check(&app.handle());
+        state.cache.clear_poison();
+        assert!(download(&app, "a").is_some() && file.exists());
+
+        check(&app.handle());
+        assert!(download(&app, "a").is_none());
+    }
+
+    #[test]
+    fn a_check_that_panics_doesnt_stop_the_next() {
+        let (app, file) = app_with_a_due_download();
+        let manager = app.downloads();
+        poison(&manager.retention_days);
+        check(&app.handle());
+        manager.retention_days.clear_poison();
+        assert!(download(&app, "a").is_some() && file.exists());
+
+        check(&app.handle());
+        assert!(download(&app, "a").is_none());
+    }
+
+    #[test]
+    fn the_first_check_waits_so_a_due_download_can_still_be_kept() {
+        let (app, file) = app_with_a_due_download();
+        start(&app.handle());
+        assert!(download(&app, "a").is_some() && file.exists());
+    }
 }

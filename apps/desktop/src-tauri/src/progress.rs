@@ -50,16 +50,20 @@ pub fn hand_off_progress<R: Runtime>(app: AppHandle<R>, item: Option<ProgressIte
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let Some(item) = item else { return };
     tracing::debug!("[Progress] saving {} from Rust", item.key);
-    std::thread::spawn(move || {
-        let mut tracker = Tracker {
-            item,
-            last: None,
-            misses: 0,
-        };
-        while GENERATION.load(Ordering::SeqCst) == generation && tracker.tick(&app) {
-            std::thread::sleep(SAVE_INTERVAL);
-        }
-    });
+    std::thread::spawn(move || track(&app, item, generation, SAVE_INTERVAL));
+}
+
+/// Saves `item`'s position every `interval` until mpv moves on or a newer
+/// hand-over replaces `generation`.
+fn track<R: Runtime>(app: &AppHandle<R>, item: ProgressItem, generation: u64, interval: Duration) {
+    let mut tracker = Tracker {
+        item,
+        last: None,
+        misses: 0,
+    };
+    while GENERATION.load(Ordering::SeqCst) == generation && tracker.tick(app) {
+        std::thread::sleep(interval);
+    }
 }
 
 struct Tracker {
@@ -71,12 +75,23 @@ struct Tracker {
 }
 
 impl Tracker {
-    /// Saves the position if it moved, like `flushProgress` in
-    /// `VideoPlayer.tsx`. Returns false once mpv has stopped playing the
-    /// item.
+    /// Checks what mpv is playing and handles it as `saw` does.
     fn tick<R: Runtime>(&mut self, app: &AppHandle<R>) -> bool {
         let s = app.state::<MpvState>().get_state();
-        if s.current_url.as_deref() != Some(self.item.url.as_str()) {
+        self.saw(app, s.current_url.as_deref(), s.position, s.duration)
+    }
+
+    /// Saves the position if it moved, like `flushProgress` in
+    /// `VideoPlayer.tsx`, given the URL mpv is playing and where it is in
+    /// it. Returns false once mpv has stopped playing the item.
+    fn saw<R: Runtime>(
+        &mut self,
+        app: &AppHandle<R>,
+        url: Option<&str>,
+        position: f64,
+        duration: f64,
+    ) -> bool {
+        if url != Some(self.item.url.as_str()) {
             if self.missed() {
                 return true;
             }
@@ -84,7 +99,6 @@ impl Tracker {
             return false;
         }
         self.misses = 0;
-        let (position, duration) = (s.position, s.duration);
         if duration <= 0.0 || position <= 1.0 {
             return true;
         }
@@ -126,6 +140,186 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{poison, TestApp};
+    use std::sync::{mpsc, Mutex, PoisonError};
+
+    const KEY: &str = "movie:dune";
+    const URL: &str = "http://example.test/dune.mkv";
+
+    /// Held by the tests that read or bump `GENERATION`, which every
+    /// hand-over in the process shares.
+    static HAND_OVERS: Mutex<()> = Mutex::new(());
+
+    fn item(pending_start: Option<f64>) -> ProgressItem {
+        ProgressItem {
+            key: KEY.into(),
+            url: URL.into(),
+            pending_start,
+        }
+    }
+
+    fn tracker(pending_start: Option<f64>) -> Tracker {
+        Tracker {
+            item: item(pending_start),
+            last: None,
+            misses: 0,
+        }
+    }
+
+    /// The position and length saved for the item.
+    fn saved(app: &TestApp) -> Option<(f64, f64)> {
+        let state = app.state();
+        let cache = state.cache.lock().unwrap();
+        let saved = cache.get_playback_position(KEY).unwrap();
+        saved.map(|p| (p.position_seconds, p.duration_seconds))
+    }
+
+    /// Runs `track` on a thread of its own and says whether it returned in
+    /// time, so a test that goes wrong fails rather than hangs.
+    fn track_returns(app: &TestApp, generation: u64, interval: Duration) -> bool {
+        let (done, returned) = mpsc::channel();
+        let handle = app.handle();
+        std::thread::spawn(move || {
+            track(&handle, item(None), generation, interval);
+            let _ = done.send(());
+        });
+        returned.recv_timeout(Duration::from_secs(10)).is_ok()
+    }
+
+    #[test]
+    fn saves_the_position_while_the_item_plays() {
+        let app = TestApp::new();
+        let mut tracker = tracker(None);
+        assert!(tracker.saw(&app.handle(), Some(URL), 600.0, 6000.0));
+        assert_eq!(saved(&app), Some((600.0, 6000.0)));
+        assert!(tracker.saw(&app.handle(), Some(URL), 605.0, 6000.0));
+        assert_eq!(saved(&app), Some((605.0, 6000.0)));
+    }
+
+    #[test]
+    fn saves_nothing_before_the_item_has_a_position_and_a_length() {
+        let app = TestApp::new();
+        let mut tracker = tracker(None);
+        assert!(tracker.saw(&app.handle(), Some(URL), 1.0, 6000.0));
+        assert!(tracker.saw(&app.handle(), Some(URL), 600.0, 0.0));
+        assert_eq!(saved(&app), None);
+    }
+
+    #[test]
+    fn waits_for_playback_to_reach_the_resume_point() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        let mut tracker = tracker(Some(3000.0));
+        // Until the seek to the resume point lands, mpv reports where the
+        // load began, and saving that would lose the resume point.
+        assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+        assert_eq!(saved(&app), None);
+        assert!(tracker.saw(&handle, Some(URL), 2996.0, 6000.0));
+        assert_eq!(saved(&app), Some((2996.0, 6000.0)));
+        // From there on, an earlier position is the viewer seeking back.
+        assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+        assert_eq!(saved(&app), Some((600.0, 6000.0)));
+    }
+
+    #[test]
+    fn an_unchanged_position_isnt_saved_again() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        let mut tracker = tracker(None);
+        assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+        {
+            let state = app.state();
+            let cache = state.cache.lock().unwrap();
+            cache.delete_playback_position(KEY).unwrap();
+        }
+        // A paused player reports the same place every tick.
+        assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+        assert_eq!(saved(&app), None);
+    }
+
+    #[test]
+    fn a_finished_or_barely_started_item_has_no_resume_point() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        let mut tracker = tracker(None);
+        for (position, duration) in [(5900.0, 6000.0), (20.0, 6000.0)] {
+            assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+            assert_eq!(saved(&app), Some((600.0, 6000.0)));
+            assert!(tracker.saw(&handle, Some(URL), position, duration));
+            assert_eq!(saved(&app), None, "{position} of {duration}");
+        }
+    }
+
+    #[test]
+    fn a_reading_of_the_item_starts_the_miss_count_over() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        let other = Some("http://example.test/arrival.mkv");
+        let mut tracker = tracker(None);
+        for _ in 1..MAX_MISSES {
+            assert!(tracker.saw(&handle, other, 600.0, 6000.0));
+        }
+        assert!(tracker.saw(&handle, Some(URL), 1.0, 6000.0));
+        for _ in 1..MAX_MISSES {
+            assert!(tracker.saw(&handle, None, 0.0, 0.0));
+        }
+        assert!(!tracker.saw(&handle, None, 0.0, 0.0));
+        assert_eq!(saved(&app), None);
+    }
+
+    #[test]
+    fn an_idle_player_counts_as_a_miss() {
+        let app = TestApp::new();
+        let mut tracker = tracker(None);
+        for _ in 1..MAX_MISSES {
+            assert!(tracker.tick(&app.handle()));
+        }
+        assert!(!tracker.tick(&app.handle()));
+    }
+
+    #[test]
+    fn a_poisoned_cache_skips_the_save_and_tracking_goes_on() {
+        let app = TestApp::new();
+        let state = app.state();
+        poison(&state.cache);
+        let mut tracker = tracker(None);
+        assert!(tracker.saw(&app.handle(), Some(URL), 600.0, 6000.0));
+        state.cache.clear_poison();
+        assert_eq!(saved(&app), None);
+    }
+
+    #[test]
+    fn a_save_that_fails_doesnt_stop_the_tracking() {
+        let app = TestApp::new();
+        let mut tracker = tracker(None);
+        // SQLite stores NaN as NULL, which the saved length can't be.
+        assert!(tracker.saw(&app.handle(), Some(URL), 600.0, f64::NAN));
+        assert_eq!(saved(&app), None);
+    }
+
+    #[test]
+    fn tracking_ends_once_mpv_has_moved_on() {
+        let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
+        let app = TestApp::new();
+        let current = GENERATION.load(Ordering::SeqCst);
+        assert!(track_returns(&app, current, Duration::ZERO));
+        assert_eq!(GENERATION.load(Ordering::SeqCst), current);
+    }
+
+    #[test]
+    fn a_newer_hand_over_ends_the_older_one_at_once() {
+        let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
+        let app = TestApp::new();
+        let before = GENERATION.load(Ordering::SeqCst);
+        hand_off_progress(app.handle(), Some(item(None)));
+        let handed = GENERATION.load(Ordering::SeqCst);
+        assert_eq!(handed, before + 1);
+        hand_off_progress(app.handle(), None);
+        assert_eq!(GENERATION.load(Ordering::SeqCst), before + 2);
+        // With an hour between ticks, only the newer hand-over can end it in
+        // time.
+        assert!(track_returns(&app, handed, Duration::from_secs(60 * 60)));
+    }
 
     #[test]
     fn waits_a_few_ticks_for_the_item_to_play() {
