@@ -49,7 +49,12 @@ import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
-import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
+import {
+	resolvePlayerHotkey,
+	isTypingTarget,
+	isKeyboardFocusedControl,
+	isSliderOwnKey,
+} from "@/lib/hotkeys";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
@@ -885,6 +890,8 @@ export const PlayerView = () => {
 			if (isTypingTarget(e.target)) return;
 			// Space on a button reached with Tab presses that button.
 			if (e.key === " " && isKeyboardFocusedControl(e.target)) return;
+			// The seek or volume bar reached with Tab moves itself with the arrows.
+			if (isSliderOwnKey(e.target, e.key)) return;
 			// While the subtitle settings pane is open, arrow keys belong to subtitle
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);

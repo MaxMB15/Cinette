@@ -2,51 +2,71 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import * as React from "react";
+import * as SliderPrimitive from "@radix-ui/react-slider";
 import { cn } from "@/lib/utils";
 
-interface SliderProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange"> {
+type RootProps = React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>;
+
+interface SliderProps extends Omit<
+	RootProps,
+	"value" | "defaultValue" | "onValueChange" | "onValueCommit"
+> {
 	value: number;
-	min?: number;
-	max?: number;
-	step?: number;
+	/** Called while the value moves, on every drag step or key press. */
 	onValueChange?: (value: number) => void;
+	/** Called once when a drag ends, and on each key press. */
+	onValueCommit?: (value: number) => void;
+	/** Read out by screen readers instead of the bare number, such as "1:05 of 42:10". */
+	"aria-valuetext"?: string;
 }
 
-// Half the thumb width in px (thumb is w-4 = 16px). The browser offsets the thumb
-// so its centre sits exactly at the theoretical percentage position, but it can't
-// move past the track edges. At 0 % the centre is 8 px in, at 100 % it is 8 px
-// from the right. We apply the same correction to the gradient stop so the filled
-// portion always ends exactly at the thumb centre.
-const THUMB_HALF = 8;
-
-const Slider = React.forwardRef<HTMLInputElement, SliderProps>(
-	({ className, value, min = 0, max = 100, step = 1, onValueChange, ...props }, ref) => {
-		const range = max - min;
-		const percent = range > 0 ? ((value - min) / range) * 100 : 0;
-		// offset shrinks from +THUMB_HALF at 0 % to −THUMB_HALF at 100 %
-		const offset = THUMB_HALF - (percent / 100) * (THUMB_HALF * 2);
-		const stop = `calc(${percent}% + ${offset}px)`;
-		return (
-			<input
-				ref={ref}
-				type="range"
-				min={min}
-				max={max}
-				step={step}
-				value={value}
-				onChange={(e) => onValueChange?.(Number(e.target.value))}
-				className={cn(
-					"w-full h-2 rounded-full appearance-none cursor-pointer bg-secondary",
-					"[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary",
-					className
-				)}
-				style={{
-					background: `linear-gradient(to right, hsl(var(--primary)) ${stop}, hsl(var(--secondary)) ${stop})`,
-				}}
-				{...props}
+/**
+ * A horizontal slider for one value.
+ *
+ * The thumb and the filled part of the track are both drawn from `value` in
+ * the same render, so they can't drift apart. The fill ends under the thumb,
+ * which has the same color. The root reaches 8px above and below the track
+ * so the thin bar is easier to grab, without taking more room in the layout.
+ */
+const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
+	(
+		{
+			className,
+			value,
+			min = 0,
+			max = 100,
+			onValueChange,
+			onValueCommit,
+			"aria-label": ariaLabel,
+			"aria-valuetext": ariaValueText,
+			...props
+		},
+		ref
+	) => (
+		<SliderPrimitive.Root
+			ref={ref}
+			min={min}
+			max={max}
+			value={[value]}
+			onValueChange={onValueChange && (([v]) => onValueChange(v))}
+			onValueCommit={onValueCommit && (([v]) => onValueCommit(v))}
+			className={cn(
+				"relative -my-2 flex w-full cursor-pointer touch-none select-none items-center py-2",
+				"data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				className
+			)}
+			{...props}
+		>
+			<SliderPrimitive.Track className="relative h-2 w-full grow overflow-hidden rounded-full bg-secondary">
+				<SliderPrimitive.Range className="absolute h-full bg-primary" />
+			</SliderPrimitive.Track>
+			<SliderPrimitive.Thumb
+				aria-label={ariaLabel}
+				aria-valuetext={ariaValueText}
+				className="block h-4 w-4 rounded-full bg-primary shadow ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 			/>
-		);
-	}
+		</SliderPrimitive.Root>
+	)
 );
 Slider.displayName = "Slider";
 

@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
 	isKeyboardFocusedControl,
+	isSliderOwnKey,
+	leaveSliderKeysToPlayer,
 	playerShortcuts,
 	resolvePlayerHotkey,
 	SEEK_LONG,
@@ -137,5 +139,74 @@ describe("isKeyboardFocusedControl", () => {
 		document.body.appendChild(button);
 		vi.spyOn(button, "matches").mockReturnValue(false);
 		expect(isKeyboardFocusedControl(button)).toBe(false);
+	});
+});
+
+describe("slider keys", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		document.body.innerHTML = "";
+	});
+
+	/** A slider thumb that matches :focus-visible when reached with the keyboard. */
+	const thumb = (byKeyboard: boolean) => {
+		const el = document.createElement("span");
+		el.setAttribute("role", "slider");
+		document.body.appendChild(el);
+		vi.spyOn(el, "matches").mockReturnValue(byKeyboard);
+		return el;
+	};
+
+	const keyDown = (target: EventTarget, k: string) => {
+		const preventDefault = vi.fn();
+		leaveSliderKeysToPlayer({ ...key(k), target, preventDefault });
+		return preventDefault;
+	};
+
+	it("lets a slider reached with Tab keep its keys", () => {
+		const el = thumb(true);
+		for (const k of ["ArrowLeft", "ArrowUp", "Home", "End", "PageUp", "PageDown"]) {
+			expect(isSliderOwnKey(el, k)).toBe(true);
+			expect(keyDown(el, k)).not.toHaveBeenCalled();
+		}
+	});
+
+	it("hands the player's keys to the player after a click", () => {
+		const el = thumb(false);
+		for (const k of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home"]) {
+			expect(isSliderOwnKey(el, k)).toBe(false);
+			expect(keyDown(el, k)).toHaveBeenCalled();
+		}
+	});
+
+	it("lets a clicked slider keep keys the player has no use for", () => {
+		const el = thumb(false);
+		for (const k of ["End", "PageUp", "PageDown"]) {
+			expect(keyDown(el, k)).not.toHaveBeenCalled();
+		}
+		// Ctrl+arrow isn't a player hotkey either.
+		const preventDefault = vi.fn();
+		leaveSliderKeysToPlayer({
+			...key("ArrowRight", { ctrlKey: true }),
+			target: el,
+			preventDefault,
+		});
+		expect(preventDefault).not.toHaveBeenCalled();
+	});
+
+	it("never takes other keys from the player", () => {
+		const el = thumb(true);
+		for (const k of [" ", "f", "m", "Escape", "Tab"]) {
+			expect(isSliderOwnKey(el, k)).toBe(false);
+			expect(keyDown(el, k)).not.toHaveBeenCalled();
+		}
+	});
+
+	it("only applies to sliders", () => {
+		const button = document.createElement("button");
+		document.body.appendChild(button);
+		vi.spyOn(button, "matches").mockReturnValue(true);
+		expect(isSliderOwnKey(button, "ArrowLeft")).toBe(false);
+		expect(isSliderOwnKey(null, "ArrowLeft")).toBe(false);
 	});
 });

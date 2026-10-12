@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
+import { leaveSliderKeysToPlayer } from "@/lib/hotkeys";
 import { describeSource } from "@/lib/sources";
 import type { PlayerState } from "@/lib/types";
 import type { SkipIntervals } from "@/lib/player-prefs";
@@ -100,8 +101,10 @@ export const Controls = ({
 	touchLayout = false,
 	hideCenterControls = false,
 }: ControlsProps) => {
-	const [localPos, setLocalPos] = useState(state.position);
-	const isSeeking = useRef(false);
+	// Where the bar shows while a pointer drags it. Playback carries on
+	// underneath, and the seek happens when the pointer lets go.
+	const [dragPos, setDragPos] = useState<number | null>(null);
+	const draggingRef = useRef(false);
 	const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
 	const sourceMenuRef = useRef<HTMLDivElement>(null);
 	const hasSourceChoice = !!onSelectSource && (sources?.length ?? 0) > 1;
@@ -120,21 +123,24 @@ export const Controls = ({
 		if (!visible) setSourceMenuOpen(false);
 	}, [visible]);
 
+	// A new stream starts from its own position.
 	useEffect(() => {
-		if (!isSeeking.current) {
-			setLocalPos(state.position);
-		}
-	}, [state.position]);
+		setDragPos(null);
+	}, [state.currentUrl]);
 
-	const handleSeekChange = (v: number) => {
-		isSeeking.current = true;
-		setLocalPos(v);
+	const startDrag = () => {
+		draggingRef.current = true;
+	};
+	const endDrag = () => {
+		draggingRef.current = false;
+		setDragPos(null);
+	};
+	// The arrow keys move the bar too, but they seek straight away.
+	const handleSeekDrag = (position: number) => {
+		if (draggingRef.current) setDragPos(position);
 	};
 
-	const handleSeekCommit = () => {
-		isSeeking.current = false;
-		onSeek(localPos);
-	};
+	const shownPos = dragPos ?? state.position;
 
 	const paused = state.isPaused || !state.isPlaying;
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
@@ -161,17 +167,23 @@ export const Controls = ({
 			>
 				{state.duration > 0 && (
 					<div className="mb-3">
-						<div onPointerUp={handleSeekCommit}>
-							<Slider
-								value={localPos}
-								min={0}
-								max={state.duration}
-								step={1}
-								onValueChange={handleSeekChange}
-							/>
-						</div>
+						<Slider
+							value={shownPos}
+							min={0}
+							max={state.duration}
+							step={1}
+							onPointerDown={startDrag}
+							onPointerUp={endDrag}
+							// A cancelled touch doesn't seek.
+							onPointerCancel={endDrag}
+							onValueChange={handleSeekDrag}
+							onValueCommit={onSeek}
+							onKeyDown={leaveSliderKeysToPlayer}
+							aria-label="Seek"
+							aria-valuetext={`${formatTime(shownPos)} of ${formatTime(state.duration)}`}
+						/>
 						<div className="flex justify-between text-xs text-white/60 mt-1">
-							<span>{formatTime(localPos)}</span>
+							<span>{formatTime(shownPos)}</span>
 							<span>{formatTime(state.duration)}</span>
 						</div>
 					</div>
@@ -289,6 +301,8 @@ export const Controls = ({
 									max={150}
 									step={1}
 									onValueChange={onVolumeChange}
+									onKeyDown={leaveSliderKeysToPlayer}
+									aria-label="Volume"
 								/>
 							</div>
 						)}

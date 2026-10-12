@@ -13,6 +13,7 @@
 		"test:coverage": "vitest run --coverage"
 	},
 	"dependencies": {
+		"@radix-ui/react-slider": "^1.4.7",
 		"@tanstack/react-virtual": "^3.11.2",
 		"@tauri-apps/api": "^2",
 		"@tauri-apps/plugin-dialog": "^2.6.0",
