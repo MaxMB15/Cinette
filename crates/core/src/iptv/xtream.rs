@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! A client for Xtream Codes panels, which serve live channels, films and
+//! A client for Xtream Codes panels, which serve live channels, movies and
 //! series through `player_api.php`.
 
 use crate::json::number_or_string;
@@ -154,8 +154,9 @@ pub struct XtreamClient {
 }
 
 impl XtreamClient {
-    /// Creates a client on the shared download client, because a full
-    /// catalogue can take longer than an API call is allowed.
+    /// Creates a client on the shared download client, because a full stream
+    /// list can take longer than an API call is allowed. The small calls set
+    /// the API limit on each request.
     pub fn new(credentials: XtreamCredentials) -> Self {
         Self {
             credentials,
@@ -167,7 +168,7 @@ impl XtreamClient {
     /// `Active` status, so either one counts.
     pub async fn authenticate(&self) -> Result<(), XtreamError> {
         let url = self.credentials.api_url("", &[]);
-        let resp: AuthResponse = self.client.get(&url).send().await?.json().await?;
+        let resp: AuthResponse = self.small_request(&url).send().await?.json().await?;
 
         match resp.user_info {
             Some(info) => {
@@ -180,6 +181,16 @@ impl XtreamClient {
             }
             None => Err(XtreamError::AuthFailed),
         }
+    }
+
+    /// A request for a reply the panel can send at once, such as the login
+    /// check or one series. A user waits on these, so a panel that stopped
+    /// answering fails within the API limit instead of the download one.
+    ///
+    /// Category lists stay on the download limit. They load alongside the
+    /// stream lists, so a shorter limit wouldn't make a refresh any quicker.
+    fn small_request(&self, url: &str) -> reqwest::RequestBuilder {
+        self.client.get(url).timeout(crate::http::API_TIMEOUT)
     }
 
     async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
@@ -213,7 +224,7 @@ impl XtreamClient {
             "get_series_info",
             &[("series_id", series_id.to_string().as_str())],
         );
-        let resp: XtreamSeriesInfoResponse = self.client.get(&url).send().await?.json().await?;
+        let resp: XtreamSeriesInfoResponse = self.small_request(&url).send().await?.json().await?;
 
         let display_name = resp
             .info

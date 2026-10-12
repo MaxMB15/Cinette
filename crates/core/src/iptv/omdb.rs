@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Film and series details from OMDb, looked up by title.
+//! Movie and series details from OMDb, looked up by title.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Film or series details from OMDb. Ratings stay as the text OMDb sends,
+/// Movie or series details from OMDb. Ratings stay as the text OMDb sends,
 /// because the UI shows them as they are.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -168,25 +168,25 @@ pub fn parse_omdb_response(json: serde_json::Value) -> Result<OmdbData, OmdbErro
 }
 
 /// Perform an OMDB API lookup for the given title.
-async fn do_fetch(
-    client: &reqwest::Client,
-    title: &str,
-    content_type: &str,
-    api_key: &str,
-) -> Result<OmdbData, OmdbError> {
-    let response = client
-        .get("https://www.omdbapi.com/")
-        .query(&[
-            ("t", title),
-            ("type", content_type),
-            ("plot", "full"),
-            ("apikey", api_key),
-        ])
+async fn do_fetch(title: &str, content_type: &str, api_key: &str) -> Result<OmdbData, OmdbError> {
+    let response = lookup_request(title, content_type, api_key)
         .send()
         .await?
         .json::<serde_json::Value>()
         .await?;
     parse_omdb_response(response)
+}
+
+// Keys are pasted in, often with a trailing newline, which OMDb would reject.
+fn lookup_request(title: &str, content_type: &str, api_key: &str) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .get("https://www.omdbapi.com/")
+        .query(&[
+            ("t", title),
+            ("type", content_type),
+            ("plot", "full"),
+            ("apikey", api_key.trim()),
+        ])
 }
 
 /// Fetch OMDB data for a title. `content_type` should be `"movie"` or `"series"`.
@@ -199,23 +199,30 @@ pub async fn fetch_omdb(
     content_type: &str,
     api_key: &str,
 ) -> Result<OmdbData, OmdbError> {
-    let client = crate::http::client();
-
     if let Some(stripped) = strip_trailing_year(title) {
-        match do_fetch(client, stripped, content_type, api_key).await {
+        match do_fetch(stripped, content_type, api_key).await {
             Ok(data) => return Ok(data),
             Err(OmdbError::Api(_)) => { /* fall through to full title */ }
             Err(e) => return Err(e),
         }
     }
 
-    do_fetch(client, title, content_type, api_key).await
+    do_fetch(title, content_type, api_key).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spaces_around_the_key_are_ignored() {
+        let request = lookup_request("Inception", "movie", " KEY\n")
+            .build()
+            .unwrap();
+        let key = request.url().query_pairs().find(|(k, _)| k == "apikey");
+        assert_eq!(key.unwrap().1, "KEY");
+    }
 
     fn full_response() -> serde_json::Value {
         json!({

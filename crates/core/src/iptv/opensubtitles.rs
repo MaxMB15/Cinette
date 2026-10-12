@@ -173,9 +173,21 @@ pub async fn search_subtitles(
     episode: Option<u32>,
     api_key: &str,
 ) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
-    let numeric_id = strip_tt_prefix(imdb_id);
+    let response = search_request(imdb_id, season, episode, api_key)
+        .send()
+        .await?;
+    let json = check_status(response)?.json::<serde_json::Value>().await?;
 
-    let mut query: Vec<(&str, String)> = vec![("imdb_id", numeric_id.to_string())];
+    parse_search_response(json)
+}
+
+fn search_request(
+    imdb_id: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    let mut query: Vec<(&str, String)> = vec![("imdb_id", strip_tt_prefix(imdb_id).to_string())];
 
     match (season, episode) {
         (Some(s), Some(e)) => {
@@ -188,16 +200,28 @@ pub async fn search_subtitles(
         }
     }
 
-    let response = crate::http::client()
-        .get("https://api.opensubtitles.com/api/v1/subtitles")
-        .query(&query)
-        .header("Api-Key", api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    let json = check_status(response)?.json::<serde_json::Value>().await?;
+    with_api_key(
+        crate::http::client()
+            .get("https://api.opensubtitles.com/api/v1/subtitles")
+            .query(&query),
+        api_key,
+    )
+}
 
-    parse_search_response(json)
+fn download_link_request(file_id: i64, api_key: &str) -> reqwest::RequestBuilder {
+    with_api_key(
+        crate::http::client()
+            .post("https://api.opensubtitles.com/api/v1/download")
+            .json(&serde_json::json!({ "file_id": file_id })),
+        api_key,
+    )
+}
+
+// Keys are pasted in, often with a trailing newline, and a header can't carry one.
+fn with_api_key(request: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+    request
+        .header("Api-Key", api_key.trim())
+        .header("Accept", "application/json")
 }
 
 /// Download a subtitle file by file_id to the given directory.
@@ -217,17 +241,7 @@ pub async fn download_subtitle(
     }
 
     // Step 1: POST /download to get a pre-signed download link.
-    let client = crate::http::client();
-    let post_body = serde_json::json!({ "file_id": file_id });
-
-    let response = client
-        .post("https://api.opensubtitles.com/api/v1/download")
-        .header("Api-Key", api_key)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .json(&post_body)
-        .send()
-        .await?;
+    let response = download_link_request(file_id, api_key).send().await?;
     let dl_response: DownloadResponse = check_status(response)?.json().await?;
 
     let extension = extract_extension(&dl_response.file_name);
@@ -239,7 +253,7 @@ pub async fn download_subtitle(
 
     // Step 2: GET the pre-signed link (no auth headers needed).
     // Request uncompressed content so the bytes written to disk are valid SRT/VTT.
-    let content = client
+    let content = crate::http::client()
         .get(&dl_response.link)
         .header("Accept-Encoding", "identity")
         .send()
@@ -274,6 +288,28 @@ fn rejected_key(status: StatusCode) -> Option<OpenSubtitlesError> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spaces_around_the_key_are_ignored() {
+        for request in [
+            search_request("tt0468569", None, None, " KEY\n"),
+            download_link_request(1, " KEY\n"),
+        ] {
+            let request = request.build().unwrap();
+            assert_eq!(request.headers()["Api-Key"], "KEY");
+        }
+    }
+
+    #[test]
+    fn episode_searches_name_the_season_and_episode() {
+        let request = search_request("tt0903747", Some(2), Some(5), "KEY")
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.url().query(),
+            Some("imdb_id=0903747&type=episode&season_number=2&episode_number=5")
+        );
+    }
 
     #[test]
     fn test_strip_tt_prefix() {

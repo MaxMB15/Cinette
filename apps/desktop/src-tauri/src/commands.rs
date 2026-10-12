@@ -135,7 +135,11 @@ pub async fn load_xtream_provider(
     username: String,
     password: String,
 ) -> Result<Vec<Channel>, String> {
-    tracing::info!("[IPTV] loading Xtream provider name={:?} url={}", name, url);
+    tracing::info!(
+        "[IPTV] loading Xtream provider name={:?} from {}",
+        name,
+        mvp_core::http::origin_for_log(&url)
+    );
     let mut channels = fetch_xtream_channels(&url, &username, &password)
         .await
         .map_err(|e| {
@@ -350,15 +354,17 @@ pub struct EpgProgramDto {
     pub category: Option<String>,
 }
 
-/// Fetch and store EPG programmes for a provider from its configured EPG URL.
+/// Fetch and store EPG programs for a provider from its configured EPG URL.
+///
+/// A guide that comes back without any programs leaves the saved guide alone
+/// and still counts as a refresh. Asking again a minute later rarely helps,
+/// and the next scheduled refresh tries again.
 #[command]
-pub async fn refresh_epg(
-    state: State<'_, AppState>,
-    provider_id: String,
-) -> Result<(), String> {
-    use mvp_core::iptv::epg::{fetch_and_parse_epg, epg_data_to_stored};
+pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> Result<(), String> {
+    use mvp_core::iptv::epg::{epg_data_to_stored, fetch_and_parse_epg, EpgError};
 
     let epg_url = {
+        let state = app.state::<AppState>();
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
         let providers = cache.get_providers().map_err(|e| e.to_string())?;
         providers
@@ -372,16 +378,28 @@ pub async fn refresh_epg(
     };
 
     tracing::info!("[EPG] fetching EPG from {}", mvp_core::http::origin_for_log(&url));
-    let epg_data = fetch_and_parse_epg(&url)
-        .await
-        .map_err(|e| format!("Failed to fetch EPG: {e}"))?;
+    let epg_data = match fetch_and_parse_epg(&url).await {
+        Ok(data) => data,
+        Err(EpgError::Empty) => {
+            tracing::warn!("[EPG] the guide for {provider_id} has no programs, keeping the saved one");
+            return Ok(());
+        }
+        Err(e) => return Err(format!("Failed to fetch EPG: {e}")),
+    };
+    tracing::info!("[EPG] parsed {} programs", epg_data.programs.len());
 
-    tracing::info!("[EPG] parsed {} programmes", epg_data.programs.len());
-    let stored = epg_data_to_stored(&epg_data, &provider_id);
-
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.save_epg_programmes(&provider_id, &stored)
-        .map_err(|e| e.to_string())
+    // A large guide takes seconds to convert and save, so it runs off the
+    // async workers.
+    tokio::task::spawn_blocking(move || {
+        let stored = epg_data_to_stored(&epg_data, &provider_id);
+        let state = app.state::<AppState>();
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        cache
+            .save_epg_programmes(&provider_id, &stored)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get EPG programmes for a channel within a Unix timestamp time range.
@@ -1260,8 +1278,7 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
 
     // 1. Fetch latest.json to get the package URL
     let latest_url = "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
-    let client = reqwest::Client::new();
-    let latest: serde_json::Value = client.get(latest_url)
+    let latest: serde_json::Value = mvp_core::http::client().get(latest_url)
         .send().await.map_err(|e| format!("Failed to fetch latest.json: {e}"))?
         .json().await.map_err(|e| format!("Failed to parse latest.json: {e}"))?;
 
@@ -1272,7 +1289,7 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
         .to_string();
 
     // 2. Download the package to a temp file
-    let response = client.get(&pkg_url)
+    let response = mvp_core::http::download_client().get(&pkg_url)
         .send().await.map_err(|e| format!("Download failed: {e}"))?;
 
     if !response.status().is_success() {
