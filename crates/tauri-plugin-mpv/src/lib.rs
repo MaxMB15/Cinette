@@ -5,14 +5,14 @@
 #[macro_use]
 extern crate objc;
 
+#[cfg(any(target_os = "ios", test))]
+mod artwork;
 mod commands;
 mod engine;
 mod idle_inhibit;
 mod lock;
 mod log_url;
 pub mod mpv;
-#[cfg(any(target_os = "ios", test))]
-mod recent;
 mod reconnect;
 mod renderer;
 

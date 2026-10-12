@@ -13,9 +13,10 @@
 //! screen controls. Rust calls it through the `mvp_ios_*` functions, and it
 //! calls back through the C callbacks registered in [`install`].
 
+use crate::artwork::{web_address, LockScreenArtwork, Select};
 use crate::lock::lock_or_recover;
+use crate::log_url::origin_for_log;
 use crate::mpv::MpvState;
-use crate::recent::RecentArtwork;
 use crate::renderer::PlatformRenderer;
 use libmpv2::{
     events::{Event, PropertyData},
@@ -239,20 +240,18 @@ pub fn set_media_info(title: Option<String>, live: bool, artwork: Option<String>
     info.live = live;
     MEDIA_INFO_GEN.fetch_add(1, Ordering::AcqRel);
     drop(info);
-    set_artwork(artwork.filter(|url| url.starts_with("http://") || url.starts_with("https://")));
+    set_artwork(artwork.and_then(web_address));
 }
 
-/// The artwork Swift has or is about to get, and the download for it.
+/// The logo the lock screen has or is about to get, and the download for it.
 struct Artwork {
-    url: Option<String>,
+    state: LockScreenArtwork,
     fetch: Option<JoinHandle<()>>,
-    recent: RecentArtwork,
 }
 
 static ARTWORK: Mutex<Artwork> = Mutex::new(Artwork {
-    url: None,
+    state: LockScreenArtwork::new(RECENT_ARTWORK, RECENT_ARTWORK_BYTES),
     fetch: None,
-    recent: RecentArtwork::new(RECENT_ARTWORK, RECENT_ARTWORK_BYTES),
 });
 
 /// Artwork larger than this is left out.
@@ -269,47 +268,41 @@ const ARTWORK_TIMEOUT: Duration = Duration::from_secs(15);
 /// Wikimedia among them, refuse requests that don't name the app.
 static USER_AGENT: OnceLock<String> = OnceLock::new();
 
-/// Downloads the channel logo and hands it to Swift. Rust fetches it
-/// because App Transport Security blocks plain `http` requests from native
-/// code, and most IPTV logos are on `http` servers.
+/// Hands a logo to Swift, or clears it on None. Swift copies the bytes
+/// before this returns.
+fn show_artwork(bytes: Option<&[u8]>) {
+    let (ptr, len) = bytes.map_or((std::ptr::null(), 0), |bytes| (bytes.as_ptr(), bytes.len()));
+    unsafe { mvp_ios_now_playing_artwork(ptr, len) };
+}
+
+/// Shows the channel logo, downloading it if it isn't kept from earlier.
+/// Rust downloads it because App Transport Security blocks plain `http`
+/// requests made through URLSession, and most IPTV logos are on `http`
+/// servers.
 fn set_artwork(url: Option<String>) {
     let mut artwork = lock_or_recover(&ARTWORK);
-    if artwork.url == url {
+    let next = artwork.state.select(url, show_artwork);
+    if next == Select::Same {
         return;
     }
-    artwork.url.clone_from(&url);
     // A slow download for the last channel would only be thrown away.
     if let Some(fetch) = artwork.fetch.take() {
         fetch.abort();
     }
-    if let Some(bytes) = url.as_deref().and_then(|url| artwork.recent.get(url)) {
-        unsafe { mvp_ios_now_playing_artwork(bytes.as_ptr(), bytes.len()) };
-        return;
-    }
-    // Swift queues this before the image below, so the old logo never
-    // shows with the new title for longer than the download takes.
-    unsafe { mvp_ios_now_playing_artwork(std::ptr::null(), 0) };
-    let Some(url) = url else { return };
+    let Select::Download(url) = next else { return };
     artwork.fetch = Some(tauri::async_runtime::spawn(async move {
         let result = fetch_artwork(&url).await;
+        if let Err(e) = &result {
+            tracing::debug!(
+                "[MPV iOS] no lock screen artwork from {}: {e}",
+                origin_for_log(&url)
+            );
+        }
         // Holding the lock keeps a newer call from clearing the artwork
         // before this one sends an old logo.
-        let mut artwork = lock_or_recover(&ARTWORK);
-        if artwork.url.as_deref() != Some(url.as_str()) {
-            return;
-        }
-        match result {
-            Ok(bytes) => {
-                unsafe { mvp_ios_now_playing_artwork(bytes.as_ptr(), bytes.len()) };
-                artwork.recent.insert(url, bytes);
-            }
-            Err(e) => {
-                tracing::debug!("[MPV iOS] no lock screen artwork from {url}: {e}");
-                // Forget the address, so the next play of this channel
-                // tries again.
-                artwork.url = None;
-            }
-        }
+        lock_or_recover(&ARTWORK)
+            .state
+            .finish(url, result.ok(), show_artwork);
     }));
 }
 
@@ -327,15 +320,26 @@ fn artwork_client() -> Result<&'static reqwest::Client, String> {
     Ok(CLIENT.get_or_init(|| client))
 }
 
+/// Downloads a logo of at most [`MAX_ARTWORK_BYTES`]. Errors leave out the
+/// address, since a logo on the IPTV panel may have the login in it.
 async fn fetch_artwork(url: &str) -> Result<Vec<u8>, String> {
+    let error = |e: reqwest::Error| e.without_url().to_string();
     let mut response = artwork_client()?
         .get(url)
         .send()
         .await
         .and_then(|r| r.error_for_status())
-        .map_err(|e| e.to_string())?;
+        .map_err(error)?;
+    // A server that says how big the logo is lets a large one fail before
+    // it downloads.
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_ARTWORK_BYTES as u64)
+    {
+        return Err("too large".into());
+    }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+    while let Some(chunk) = response.chunk().await.map_err(error)? {
         if bytes.len() + chunk.len() > MAX_ARTWORK_BYTES {
             return Err("too large".into());
         }
