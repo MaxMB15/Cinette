@@ -6,6 +6,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { RecordingsSection } from "./RecordingsSection";
 import { removeDownload, stopRecording } from "@/lib/tauri";
 import type { DownloadRecord } from "@/lib/types";
+import { makeRecording } from "@/test/detail-fixtures";
 
 vi.mock("@/hooks/useDownloads", () => ({
 	useDownloads: () => ({ downloads: [], retentionDays: null }),
@@ -19,28 +20,13 @@ vi.mock("@/lib/tauri", () => ({
 const MIN = 60;
 const now = Math.floor(Date.now() / 1000);
 
-const rec = (overrides: Partial<DownloadRecord> = {}): DownloadRecord => ({
-	id: "rec-1",
-	channelId: "rec-1",
-	title: "City News",
-	kind: "recording",
-	seriesChannelId: null,
-	status: "scheduled",
-	destPath: "",
-	totalBytes: null,
-	downloadedBytes: 0,
-	avgRateBps: null,
-	error: null,
-	createdAt: now - 60 * MIN,
-	finishedAt: null,
-	keep: false,
-	lastPlayedAt: null,
-	sourceChannelId: "xt-1-xt-0",
-	startAt: now + 60 * MIN,
-	endAt: now + 120 * MIN,
-	programTitle: null,
-	...overrides,
-});
+const rec = (overrides: Partial<DownloadRecord> = {}) =>
+	makeRecording({
+		createdAt: now - 60 * MIN,
+		startAt: now + 60 * MIN,
+		endAt: now + 120 * MIN,
+		...overrides,
+	});
 
 const done = rec({
 	id: "rec-done",

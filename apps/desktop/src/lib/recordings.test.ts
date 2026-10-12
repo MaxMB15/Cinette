@@ -32,7 +32,7 @@ import {
 	writeMargins,
 } from "./recordings";
 import { formatHHMM } from "./epg-window";
-import type { DownloadRecord, EpgProgram } from "./types";
+import { makeProgramme, makeRecording as rec } from "@/test/detail-fixtures";
 
 const MIN = 60;
 
@@ -43,35 +43,8 @@ const channel = { id: "xt-1-xt-0", name: "City News" };
 const local = (y: number, mo: number, d: number, h: number, mi = 0) =>
 	Math.floor(new Date(y, mo - 1, d, h, mi).getTime() / 1000);
 
-const prog = (startTime: number, endTime: number, title = "Evening News"): EpgProgram => ({
-	channelId: "city.news",
-	title,
-	startTime,
-	endTime,
-});
-
-const rec = (overrides: Partial<DownloadRecord> = {}): DownloadRecord => ({
-	id: "rec-1",
-	channelId: "rec-1",
-	title: "City News",
-	kind: "recording",
-	seriesChannelId: null,
-	status: "scheduled",
-	destPath: "",
-	totalBytes: null,
-	downloadedBytes: 0,
-	avgRateBps: null,
-	error: null,
-	createdAt: 0,
-	finishedAt: null,
-	keep: false,
-	lastPlayedAt: null,
-	sourceChannelId: "xt-1-xt-0",
-	startAt: 1_000,
-	endAt: 2_000,
-	programTitle: null,
-	...overrides,
-});
+const prog = (startTime: number, endTime: number, title = "Evening News") =>
+	makeProgramme(title, startTime, endTime);
 
 describe("margins", () => {
 	beforeEach(() => localStorage.clear());

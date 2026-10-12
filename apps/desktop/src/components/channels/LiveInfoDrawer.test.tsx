@@ -3,9 +3,14 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
+import type { DownloadRecord, EpgProgram } from "@/lib/types";
 import { formatHHMM } from "@/lib/epg-window";
-import { makeNewsChannel, makeProgramme } from "@/test/detail-fixtures";
+import {
+	makeCityNews,
+	makeNewsChannel,
+	makeProgramme,
+	makeRecording,
+} from "@/test/detail-fixtures";
 import { deferred } from "@/test/deferred";
 
 const tauri = vi.hoisted(() => ({
@@ -274,51 +279,21 @@ describe("LiveInfoDrawer recording", () => {
 	const MIN = 60;
 	const now = Math.floor(Date.now() / 1000);
 
-	const channel: Channel = {
-		id: "xt-1-xt-0",
-		name: "City News",
-		url: "http://example.com/live/0.ts",
-		groupTitle: "News",
-		isFavorite: false,
-		contentType: "live",
-		sources: [],
-	};
-
-	const prog = (startTime: number, endTime: number, title: string): EpgProgram => ({
-		channelId: "city.news",
-		title,
-		startTime,
-		endTime,
-	});
+	const channel = makeCityNews();
 
 	const schedule = [
-		prog(now - 90 * MIN, now - 30 * MIN, "Morning Show"),
-		prog(now - 30 * MIN, now + 30 * MIN, "Evening News"),
-		prog(now + 30 * MIN, now + 90 * MIN, "Late Show"),
+		makeProgramme("Morning Show", now - 90 * MIN, now - 30 * MIN),
+		makeProgramme("Evening News", now - 30 * MIN, now + 30 * MIN),
+		makeProgramme("Late Show", now + 30 * MIN, now + 90 * MIN),
 	];
 
-	const rec = (overrides: Partial<DownloadRecord> = {}): DownloadRecord => ({
-		id: "rec-1",
-		channelId: "rec-1",
-		title: "City News",
-		kind: "recording",
-		seriesChannelId: null,
-		status: "scheduled",
-		destPath: "",
-		totalBytes: null,
-		downloadedBytes: 0,
-		avgRateBps: null,
-		error: null,
-		createdAt: 0,
-		finishedAt: null,
-		keep: false,
-		lastPlayedAt: null,
-		sourceChannelId: "xt-1-xt-0",
-		startAt: now + 28 * MIN,
-		endAt: now + 95 * MIN,
-		programTitle: "Late Show",
-		...overrides,
-	});
+	const rec = (overrides: Partial<DownloadRecord> = {}) =>
+		makeRecording({
+			startAt: now + 28 * MIN,
+			endAt: now + 95 * MIN,
+			programTitle: "Late Show",
+			...overrides,
+		});
 
 	const renderDrawer = async () => {
 		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);

@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { makeDownload } from "@/test/channel-fixtures";
+import { makeRecording } from "@/test/detail-fixtures";
 import type { DownloadRecord } from "@/lib/types";
 
 const state = vi.hoisted(() => ({ downloads: [] as DownloadRecord[] }));
@@ -25,21 +26,15 @@ const renderRow = (overrides: Partial<DownloadRecord>) => {
 const now = Math.floor(Date.now() / 1000);
 
 /** A recording of a live channel that ended an hour ago. */
-const recording = (overrides: Partial<DownloadRecord> = {}): DownloadRecord =>
-	makeDownload({
-		id: "rec-1",
-		channelId: "rec-1",
-		title: "City News",
-		kind: "recording",
+const recording = (overrides: Partial<DownloadRecord> = {}) =>
+	makeRecording({
+		status: "completed",
 		destPath: "/downloads/recordings/City News.ts",
-		totalBytes: null,
 		downloadedBytes: 1_250_000_000,
 		createdAt: now - 3 * 86_400,
 		finishedAt: now - 3_600,
-		sourceChannelId: "xt-1-xt-0",
 		startAt: now - 7_200,
 		endAt: now - 3_600,
-		programTitle: null,
 		...overrides,
 	});
 

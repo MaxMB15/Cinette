@@ -6,7 +6,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { RecordDialog } from "./RecordDialog";
 import { scheduleRecording, stopRecording } from "@/lib/tauri";
 import { formatWindow, toLocalInputValue } from "@/lib/recordings";
-import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
+import type { DownloadRecord } from "@/lib/types";
+import { makeCityNews, makeProgramme, makeRecording } from "@/test/detail-fixtures";
 
 let downloads: DownloadRecord[] = [];
 vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ downloads }) }));
@@ -20,45 +21,19 @@ const MIN = 60;
 // A whole minute, so the datetime input shows it exactly.
 const NOW = 1_791_835_200;
 
-const channel: Channel = {
-	id: "xt-1-xt-0",
-	name: "City News",
-	url: "http://example.com/live/0.ts",
-	groupTitle: "News",
-	isFavorite: false,
-	contentType: "live",
-	sources: [],
-};
+const channel = makeCityNews();
 
-const prog = (startTime: number, endTime: number, title = "Evening News"): EpgProgram => ({
-	channelId: "city.news",
-	title,
-	startTime,
-	endTime,
-});
+const prog = (startTime: number, endTime: number, title = "Evening News") =>
+	makeProgramme(title, startTime, endTime);
 
-const rec = (overrides: Partial<DownloadRecord> = {}): DownloadRecord => ({
-	id: "rec-1",
-	channelId: "rec-1",
-	title: "Sports One",
-	kind: "recording",
-	seriesChannelId: null,
-	status: "scheduled",
-	destPath: "",
-	totalBytes: null,
-	downloadedBytes: 0,
-	avgRateBps: null,
-	error: null,
-	createdAt: 0,
-	finishedAt: null,
-	keep: false,
-	lastPlayedAt: null,
-	sourceChannelId: "xt-1-xt-7",
-	startAt: NOW + 30 * MIN,
-	endAt: NOW + 90 * MIN,
-	programTitle: null,
-	...overrides,
-});
+const rec = (overrides: Partial<DownloadRecord> = {}) =>
+	makeRecording({
+		title: "Sports One",
+		sourceChannelId: "xt-1-xt-7",
+		startAt: NOW + 30 * MIN,
+		endAt: NOW + 90 * MIN,
+		...overrides,
+	});
 
 const dialog = () => within(screen.getByRole("dialog"));
 
