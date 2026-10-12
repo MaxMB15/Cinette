@@ -31,4 +31,18 @@ if [[ "$status" != "Accepted" ]]; then
   exit 1
 fi
 
-xcrun stapler staple "$file"
+# Stapling downloads the ticket from Apple, so a dropped connection or a
+# ticket that isn't published yet fails it. Retry with a longer wait each time.
+attempts=5
+for ((attempt = 1; attempt <= attempts; attempt++)); do
+  if xcrun stapler staple "$file"; then
+    exit 0
+  fi
+  if ((attempt < attempts)); then
+    delay=$((attempt * 20))
+    echo "Stapling failed, attempt $attempt of $attempts. Retrying in ${delay}s..." >&2
+    sleep "$delay"
+  fi
+done
+echo "Error: could not staple the notarization ticket to $(basename "$file")" >&2
+exit 1
