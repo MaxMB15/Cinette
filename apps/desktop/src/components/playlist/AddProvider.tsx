@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
-import { Loader2, Upload, FileText, Link, X } from "lucide-react";
+import { LoaderCircle, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
 import {
 	filenameFromPath,
@@ -303,7 +303,7 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					)}
 
 					<Button type="submit" disabled={!canSubmit}>
-						{loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+						{loading && <LoaderCircle className="h-4 w-4 mr-2 animate-spin" />}
 						{tab === "m3u"
 							? m3uMode === "file"
 								? "Import Playlist"

@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { useEffect } from "react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { MemoryRouter, Routes, Route } from "react-router";
 import type { LayoutMode } from "@/lib/types";
 
 const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode }));

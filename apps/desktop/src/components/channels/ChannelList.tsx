@@ -2,9 +2,17 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2, Tv2, MonitorPlay, Heart, Clapperboard, History, Download } from "lucide-react";
+import {
+	LoaderCircle,
+	TvMinimal,
+	MonitorPlay,
+	Heart,
+	Clapperboard,
+	RotateCcwClock,
+	Download,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
@@ -55,12 +63,12 @@ type Tab = "live" | "movie" | "series" | "favorites" | "downloads" | "history";
 const seriesKey = (title: string): string => title.trim().toLowerCase().replace(/\s+/g, " ");
 
 const ALL_TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
-	{ id: "live", label: "Live", icon: Tv2 },
+	{ id: "live", label: "Live", icon: TvMinimal },
 	{ id: "movie", label: "Movies", icon: Clapperboard },
 	{ id: "series", label: "Series", icon: MonitorPlay },
 	{ id: "favorites", label: "Favorites", icon: Heart },
 	{ id: "downloads", label: "Downloads", icon: Download },
-	{ id: "history", label: "History", icon: History },
+	{ id: "history", label: "History", icon: RotateCcwClock },
 ];
 
 // The mobile apps have no downloads.
@@ -575,7 +583,7 @@ export const ChannelList = () => {
 	if (loading) {
 		return (
 			<div className="flex items-center justify-center h-full">
-				<Loader2 className="h-5 w-5 animate-spin text-primary" />
+				<LoaderCircle className="h-5 w-5 animate-spin text-primary" />
 			</div>
 		);
 	}
@@ -913,7 +921,7 @@ export const ChannelList = () => {
 			{showSeriesLoading && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
 					<div className="flex items-center gap-3 bg-card rounded-2xl px-6 py-4 shadow-2xl">
-						<Loader2 className="h-5 w-5 animate-spin text-primary" />
+						<LoaderCircle className="h-5 w-5 animate-spin text-primary" />
 						<span className="text-sm font-medium">Loading episodes…</span>
 					</div>
 				</div>
@@ -1118,7 +1126,7 @@ export const ChannelList = () => {
 											url={result.channelLogoUrl}
 											className="h-8 w-8 rounded"
 											fallback={
-												<Tv2 className="h-3.5 w-3.5 text-muted-foreground" />
+												<TvMinimal className="h-3.5 w-3.5 text-muted-foreground" />
 											}
 										/>
 

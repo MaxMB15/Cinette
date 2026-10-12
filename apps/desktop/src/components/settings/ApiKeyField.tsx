@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useId, useState, type FormEvent, type ReactNode, type Ref } from "react";
-import { AlertCircle, CheckCircle, Eye, EyeOff, XCircle } from "lucide-react";
+import { CircleAlert, CircleCheckBig, CircleX, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ApiKeyState } from "@/hooks/useApiKey";
@@ -33,7 +33,7 @@ const StatusLine = ({
 	children,
 }: {
 	tone: keyof typeof TONES;
-	icon: typeof CheckCircle;
+	icon: typeof CircleCheckBig;
 	children: ReactNode;
 }) => (
 	<span className={cn("flex items-center gap-1", TONES[tone])}>
@@ -45,7 +45,7 @@ const StatusLine = ({
 const KeyStatus = ({ field, validNote }: { field: ApiKeyState; validNote?: string }) => {
 	if (field.saveStatus === "error") {
 		return (
-			<StatusLine tone="error" icon={XCircle}>
+			<StatusLine tone="error" icon={CircleX}>
 				Couldn't save the key. Try again.
 			</StatusLine>
 		);
@@ -57,26 +57,26 @@ const KeyStatus = ({ field, validNote }: { field: ApiKeyState; validNote?: strin
 			return <span className="sr-only">Checking the key</span>;
 		case "valid":
 			return (
-				<StatusLine tone="ok" icon={CheckCircle}>
+				<StatusLine tone="ok" icon={CircleCheckBig}>
 					{validNote ? `Valid key. ${validNote}` : "Valid key"}
 				</StatusLine>
 			);
 		case "invalid":
 			return (
-				<StatusLine tone="error" icon={XCircle}>
+				<StatusLine tone="error" icon={CircleX}>
 					Invalid key
 				</StatusLine>
 			);
 		case "unreachable":
 			return (
-				<StatusLine tone="warn" icon={AlertCircle}>
+				<StatusLine tone="warn" icon={CircleAlert}>
 					Couldn't check the key. Check your connection and try again.
 				</StatusLine>
 			);
 	}
 	if (field.loadFailed) {
 		return (
-			<StatusLine tone="error" icon={XCircle}>
+			<StatusLine tone="error" icon={CircleX}>
 				Couldn't read the saved key
 			</StatusLine>
 		);
@@ -95,7 +95,7 @@ const SaveLabel = ({ field, name }: { field: ApiKeyState; name: string }) => {
 		case "removed":
 			return (
 				<span className="flex items-center gap-1 text-green-500">
-					<CheckCircle className="h-4 w-4" aria-hidden="true" />
+					<CircleCheckBig className="h-4 w-4" aria-hidden="true" />
 					{field.saveStatus === "saved" ? "Saved" : "Removed"}
 				</span>
 			);

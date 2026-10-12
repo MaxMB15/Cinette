@@ -14,7 +14,7 @@ import { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useChannels } from "@/hooks/useChannels";
 import {

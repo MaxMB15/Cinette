@@ -55,7 +55,7 @@ vi.mock("@/lib/tauri", () => tauri);
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => state.os }));
 
-vi.mock("react-router-dom", () => ({ useNavigate: () => state.navigate }));
+vi.mock("react-router", () => ({ useNavigate: () => state.navigate }));
 
 vi.mock("@/hooks/useChannels", () => ({
 	useChannels: () => ({

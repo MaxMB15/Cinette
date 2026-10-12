@@ -11,7 +11,7 @@ import {
 	type ReactNode,
 } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from "react-router";
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
