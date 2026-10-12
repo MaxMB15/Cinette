@@ -6,7 +6,7 @@ import * as SliderPrimitive from "@radix-ui/react-slider";
 import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
-type RootProps = React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>;
+type RootProps = React.ComponentProps<typeof SliderPrimitive.Root>;
 
 interface SliderProps extends Omit<
 	RootProps,
@@ -88,115 +88,107 @@ interface Press {
  * comes back to it later, such as from a closed overlay, keeps the source it
  * had.
  */
-const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
-	(
-		{
-			className,
-			value,
-			min = 0,
-			max = 100,
-			onValueChange,
-			onPointerDown,
-			onPointerMove,
-			onPointerUp,
-			onLostPointerCapture,
-			"aria-label": ariaLabel,
-			"aria-valuetext": ariaValueText,
-			...props
-		},
-		ref
-	) => {
-		const [focusSource, setFocusSource] = React.useState<FocusSource | null>(null);
-		const pressRef = React.useRef<Press | null>(null);
-		// How the thumb last got focus, or a press on it. It outlives a blur,
-		// so focus given back to the thumb gets the same source again.
-		const lastSourceRef = React.useRef<FocusSource>("pointer");
-		/**
-		 * Whether a press is under way. Radix holds the capture until the
-		 * release, so a press whose release never arrived, such as one on an
-		 * element that went away, doesn't count.
-		 */
-		const isPressing = (): boolean => {
-			const press = pressRef.current;
-			return !!press && press.target.hasPointerCapture(press.id);
-		};
-		/** Whether `e` comes from a pointer other than the one pressing the slider. */
-		const isOtherPointer = (e: React.PointerEvent): boolean =>
-			e.pointerId !== pressRef.current?.id;
+const Slider = ({
+	className,
+	value,
+	min = 0,
+	max = 100,
+	onValueChange,
+	onPointerDown,
+	onPointerMove,
+	onPointerUp,
+	onLostPointerCapture,
+	"aria-label": ariaLabel,
+	"aria-valuetext": ariaValueText,
+	...props
+}: SliderProps) => {
+	const [focusSource, setFocusSource] = React.useState<FocusSource | null>(null);
+	const pressRef = React.useRef<Press | null>(null);
+	// How the thumb last got focus, or a press on it. It outlives a blur,
+	// so focus given back to the thumb gets the same source again.
+	const lastSourceRef = React.useRef<FocusSource>("pointer");
+	/**
+	 * Whether a press is under way. Radix holds the capture until the
+	 * release, so a press whose release never arrived, such as one on an
+	 * element that went away, doesn't count.
+	 */
+	const isPressing = (): boolean => {
+		const press = pressRef.current;
+		return !!press && press.target.hasPointerCapture(press.id);
+	};
+	/** Whether `e` comes from a pointer other than the one pressing the slider. */
+	const isOtherPointer = (e: React.PointerEvent): boolean => e.pointerId !== pressRef.current?.id;
 
-		return (
-			<SliderPrimitive.Root
-				ref={ref}
-				min={min}
-				max={max}
-				value={[value]}
-				onValueChange={onValueChange && (([v]) => onValueChange(v))}
-				onPointerDown={(e) => {
-					// Radix skips its own handler for a prevented event.
-					if (isIgnoredPress(e) || (isPressing() && isOtherPointer(e))) {
-						e.preventDefault();
-						return;
-					}
-					pressRef.current = { id: e.pointerId, target: e.target as Element };
-					lastSourceRef.current = "pointer";
-					// A press on a thumb that already has focus doesn't focus it again.
-					setFocusSource((source) => source && "pointer");
-					onPointerDown?.(e);
+	return (
+		<SliderPrimitive.Root
+			min={min}
+			max={max}
+			value={[value]}
+			onValueChange={onValueChange && (([v]) => onValueChange(v))}
+			onPointerDown={(e) => {
+				// Radix skips its own handler for a prevented event.
+				if (isIgnoredPress(e) || (isPressing() && isOtherPointer(e))) {
+					e.preventDefault();
+					return;
+				}
+				pressRef.current = { id: e.pointerId, target: e.target as Element };
+				lastSourceRef.current = "pointer";
+				// A press on a thumb that already has focus doesn't focus it again.
+				setFocusSource((source) => source && "pointer");
+				onPointerDown?.(e);
+			}}
+			onPointerMove={(e) => {
+				if (isOtherPointer(e)) {
+					e.preventDefault();
+					return;
+				}
+				onPointerMove?.(e);
+			}}
+			onPointerUp={(e) => {
+				if (isOtherPointer(e)) {
+					e.preventDefault();
+					return;
+				}
+				pressRef.current = null;
+				onPointerUp?.(e);
+			}}
+			// Also covers a canceled touch, which sends no pointerup.
+			onLostPointerCapture={(e) => {
+				if (isOtherPointer(e)) return;
+				pressRef.current = null;
+				onLostPointerCapture?.(e);
+			}}
+			className={cn(
+				"relative -my-2 flex w-full cursor-pointer touch-none select-none items-center py-2",
+				"data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				className
+			)}
+			{...props}
+		>
+			<SliderPrimitive.Track className="relative h-2 w-full grow overflow-hidden rounded-full bg-secondary">
+				<SliderPrimitive.Range className="absolute h-full bg-primary" />
+			</SliderPrimitive.Track>
+			<SliderPrimitive.Thumb
+				aria-label={ariaLabel}
+				aria-valuetext={ariaValueText}
+				data-focus-source={focusSource ?? undefined}
+				onFocus={() => {
+					const source = isPressing()
+						? "pointer"
+						: tabbing
+							? "keyboard"
+							: lastSourceRef.current;
+					lastSourceRef.current = source;
+					setFocusSource(source);
 				}}
-				onPointerMove={(e) => {
-					if (isOtherPointer(e)) {
-						e.preventDefault();
-						return;
-					}
-					onPointerMove?.(e);
-				}}
-				onPointerUp={(e) => {
-					if (isOtherPointer(e)) {
-						e.preventDefault();
-						return;
-					}
-					pressRef.current = null;
-					onPointerUp?.(e);
-				}}
-				// Also covers a canceled touch, which sends no pointerup.
-				onLostPointerCapture={(e) => {
-					if (isOtherPointer(e)) return;
-					pressRef.current = null;
-					onLostPointerCapture?.(e);
-				}}
+				onBlur={() => setFocusSource(null)}
 				className={cn(
-					"relative -my-2 flex w-full cursor-pointer touch-none select-none items-center py-2",
-					"data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-					className
+					"block h-4 w-4 rounded-full bg-primary shadow ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none",
+					"data-[focus-source=keyboard]:ring-2 data-[focus-source=keyboard]:ring-ring data-[focus-source=keyboard]:ring-offset-2"
 				)}
-				{...props}
-			>
-				<SliderPrimitive.Track className="relative h-2 w-full grow overflow-hidden rounded-full bg-secondary">
-					<SliderPrimitive.Range className="absolute h-full bg-primary" />
-				</SliderPrimitive.Track>
-				<SliderPrimitive.Thumb
-					aria-label={ariaLabel}
-					aria-valuetext={ariaValueText}
-					data-focus-source={focusSource ?? undefined}
-					onFocus={() => {
-						const source = isPressing()
-							? "pointer"
-							: tabbing
-								? "keyboard"
-								: lastSourceRef.current;
-						lastSourceRef.current = source;
-						setFocusSource(source);
-					}}
-					onBlur={() => setFocusSource(null)}
-					className={cn(
-						"block h-4 w-4 rounded-full bg-primary shadow ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none",
-						"data-[focus-source=keyboard]:ring-2 data-[focus-source=keyboard]:ring-ring data-[focus-source=keyboard]:ring-offset-2"
-					)}
-				/>
-			</SliderPrimitive.Root>
-		);
-	}
-);
-Slider.displayName = "Slider";
+			/>
+		</SliderPrimitive.Root>
+	);
+};
 
 export { Slider };

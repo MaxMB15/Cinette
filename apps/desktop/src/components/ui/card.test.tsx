@@ -38,7 +38,7 @@ describe("Card", () => {
 		const refs = {
 			card: createRef<HTMLDivElement>(),
 			header: createRef<HTMLDivElement>(),
-			title: createRef<HTMLParagraphElement>(),
+			title: createRef<HTMLHeadingElement>(),
 			description: createRef<HTMLParagraphElement>(),
 			content: createRef<HTMLDivElement>(),
 			footer: createRef<HTMLDivElement>(),
