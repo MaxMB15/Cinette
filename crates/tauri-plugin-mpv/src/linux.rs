@@ -162,8 +162,22 @@ struct SessionState {
     wl_egl_surface: Option<WlEglSurface>,
     pending_resize: Option<(i32, i32)>,
     current_size: (i32, i32),
-    last_frame: (i32, i32, i32, i32),
+    /// Where the frontend last put the video, as x, y, width and height in
+    /// the page. The width is 0 until it does.
+    frame: (i32, i32, i32, i32),
+    /// How far the page sits from the window surface's corner, for GTK's
+    /// shadow and title bar.
     csd_offset: (i32, i32),
+}
+
+impl SessionState {
+    /// Where the subsurface goes, relative to the window surface.
+    fn position(&self) -> (i32, i32) {
+        (
+            self.frame.0 + self.csd_offset.0,
+            self.frame.1 + self.csd_offset.1,
+        )
+    }
 }
 
 impl Drop for SessionState {
@@ -179,9 +193,14 @@ impl Drop for SessionState {
 // ensures exclusive access.
 unsafe impl Send for SessionState {}
 
+/// Reads the decoration offset from GTK, or None when the window is gone.
+/// Only call it on the GLib main thread.
+type CsdQuery = Box<dyn Fn() -> Option<(i32, i32)> + Send + Sync>;
+
 /// Everything one attached session owns. The renderer and the libmpv update
 /// callback share it.
 struct Inner {
+    csd_query: CsdQuery,
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     video_active: AtomicBool,
     valid: AtomicBool,
@@ -225,6 +244,7 @@ struct Pending {
     egl: OwnedEgl,
     wayland: WaylandSession,
     csd_offset: (i32, i32),
+    csd_query: CsdQuery,
 }
 
 impl LinuxGlRenderer {
@@ -235,6 +255,10 @@ impl LinuxGlRenderer {
         egl()?;
 
         let csd_offset = query_csd_offsets(app);
+        let csd_query: CsdQuery = {
+            let app = app.clone();
+            Box::new(move || csd_offsets(&app))
+        };
 
         let window = app
             .get_webview_window("main")
@@ -272,6 +296,7 @@ impl LinuxGlRenderer {
                 egl: egl_res,
                 wayland,
                 csd_offset,
+                csd_query,
             }),
             active: None,
             first_frame_cb: Mutex::new(None),
@@ -291,6 +316,7 @@ impl PlatformRenderer for LinuxGlRenderer {
             egl: egl_res,
             wayland,
             csd_offset,
+            csd_query,
         } = self
             .pending
             .take()
@@ -358,6 +384,7 @@ impl PlatformRenderer for LinuxGlRenderer {
                     }
                 });
                 Inner {
+                    csd_query,
                     first_frame_cb: Mutex::new(first_frame_cb),
                     video_active: AtomicBool::new(true),
                     valid: AtomicBool::new(true),
@@ -369,7 +396,7 @@ impl PlatformRenderer for LinuxGlRenderer {
                         wl_egl_surface: Some(wl_egl),
                         pending_resize: None,
                         current_size: (1, 1),
-                        last_frame: (0, 0, 0, 0),
+                        frame: (0, 0, 0, 0),
                         csd_offset,
                     }),
                     egl: egl_res,
@@ -384,7 +411,12 @@ impl PlatformRenderer for LinuxGlRenderer {
     }
 
     fn resize(&mut self, _width: u32, _height: u32) {
-        // Positioning is driven by `set_frame` from the frontend layout.
+        // `set_frame` places the video. A resize can also change GTK's
+        // decorations, such as dropping the shadow on maximize, and the
+        // render checks for that.
+        if let Some(inner) = self.active.as_ref() {
+            request_render(inner);
+        }
     }
 
     fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64) {
@@ -396,9 +428,8 @@ impl PlatformRenderer for LinuxGlRenderer {
 
         {
             let mut state = lock_or_recover(&inner.state);
-            let ax = x as i32 + state.csd_offset.0;
-            let ay = y as i32 + state.csd_offset.1;
-            state.last_frame = (ax, ay, wi, hi);
+            state.frame = (x as i32, y as i32, wi, hi);
+            let (ax, ay) = state.position();
             // Only a new size needs a new EGL surface. The frontend also
             // calls this when the video moves without resizing, and
             // recreating the surface then would flash a black frame.
@@ -413,28 +444,24 @@ impl PlatformRenderer for LinuxGlRenderer {
         }
 
         drain_wayland_queue(inner);
-
-        let weak = Arc::downgrade(inner);
-        glib::idle_add_once(move || {
-            if let Some(alive) = weak.upgrade() {
-                if alive.valid.load(Ordering::Acquire) {
-                    render_frame(&alive);
-                }
-            }
-        });
+        request_render(inner);
     }
 
     fn set_visible(&mut self, visible: bool) {
         let Some(inner) = self.active.as_ref() else {
             return;
         };
+        // The lock keeps `follow_decorations` from moving the video back on
+        // screen while it's being hidden.
+        let mut state = lock_or_recover(&inner.state);
         inner.video_active.store(visible, Ordering::Release);
 
         if visible {
-            let (lx, ly, lw, lh) = lock_or_recover(&inner.state).last_frame;
-            inner.wayland.subsurface.set_position(lx, ly);
-            if lw > 0 && lh > 0 {
-                lock_or_recover(&inner.state).pending_resize = Some((lw, lh));
+            let (x, y) = state.position();
+            inner.wayland.subsurface.set_position(x, y);
+            let (_, _, w, h) = state.frame;
+            if w > 0 && h > 0 {
+                state.pending_resize = Some((w, h));
             }
         } else {
             // Move the subsurface off screen instead of attaching a null
@@ -444,6 +471,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         }
         inner.wayland.child_surface.commit();
         let _ = inner.wayland.conn.flush();
+        drop(state);
         drain_wayland_queue(inner);
     }
 
@@ -483,12 +511,52 @@ impl Drop for LinuxGlRenderer {
     }
 }
 
+/// Renders a frame soon on the GLib main thread, unless the session has
+/// ended by then.
+fn request_render(inner: &Arc<Inner>) {
+    let weak = Arc::downgrade(inner);
+    glib::idle_add_once(move || {
+        if let Some(alive) = weak.upgrade() {
+            if alive.valid.load(Ordering::Acquire) {
+                render_frame(&alive);
+            }
+        }
+    });
+}
+
+/// Moves the video when GTK's decorations change size. GTK drops the window
+/// shadow when the window is maximized or tiled, and the shadow and title bar
+/// in fullscreen, which moves the page inside the window surface. The offset
+/// read when playback started would then put the video in the wrong place.
+/// Only call it on the GLib main thread.
+fn follow_decorations(inner: &Inner) {
+    let Some(offset) = (inner.csd_query)() else {
+        return;
+    };
+    // The lock stays held while the video moves, so a `set_frame` or a
+    // `set_visible(false)` on another thread can't land in between.
+    let mut state = lock_or_recover(&inner.state);
+    if state.csd_offset == offset {
+        return;
+    }
+    tracing::debug!("[MPV] window decorations moved the page to {offset:?}");
+    state.csd_offset = offset;
+    if state.frame.2 < 1 || !inner.video_active.load(Ordering::Acquire) {
+        return;
+    }
+    let (x, y) = state.position();
+    inner.wayland.subsurface.set_position(x, y);
+    inner.wayland.child_surface.commit();
+    let _ = inner.wayland.conn.flush();
+}
+
 /// Renders one frame. Only call it on the GLib main thread.
 fn render_frame(inner: &Inner) {
     if !inner.video_active.load(Ordering::Acquire) {
         return;
     }
     let Ok(egl) = egl() else { return };
+    follow_decorations(inner);
     let display = inner.egl.display;
     let context = inner.egl.context;
 
@@ -835,8 +903,6 @@ fn wayland_egl_display(
 /// titlebar included. Adding this offset lines them up with the frontend's
 /// content area.
 fn query_csd_offsets<R: Runtime>(app: &AppHandle<R>) -> (i32, i32) {
-    use gtk::prelude::*;
-
     if app.get_webview_window("main").is_none() {
         return (0, 0);
     }
@@ -845,24 +911,26 @@ fn query_csd_offsets<R: Runtime>(app: &AppHandle<R>) -> (i32, i32) {
     let app_handle = app.clone();
 
     glib::idle_add_once(move || {
-        let Some(window) = app_handle.get_webview_window("main") else {
-            let _ = tx.send((0, 0));
-            return;
-        };
-        let offsets = (|| -> Option<(i32, i32)> {
-            let gtk_win = window.gtk_window().ok()?;
-            let vbox = window.default_vbox().ok()?;
-            let (vbox_x, vbox_y) = vbox.translate_coordinates(&gtk_win, 0, 0)?;
-            let gdk_win = gtk_win.window()?;
-            let alloc = gtk_win.allocation();
-            let shadow_x = (gdk_win.width() - alloc.width()).max(0) / 2;
-            let shadow_y = (gdk_win.height() - alloc.height()).max(0) / 2;
-            Some((shadow_x + vbox_x, shadow_y + vbox_y))
-        })();
-        let _ = tx.send(offsets.unwrap_or((0, 0)));
+        let _ = tx.send(csd_offsets(&app_handle).unwrap_or((0, 0)));
     });
     rx.recv_timeout(std::time::Duration::from_secs(2))
         .unwrap_or((0, 0))
+}
+
+/// The decoration offset as GTK has it now, or None when the window or its
+/// GDK window is missing. Only call it on the GLib main thread.
+fn csd_offsets<R: Runtime>(app: &AppHandle<R>) -> Option<(i32, i32)> {
+    use gtk::prelude::*;
+
+    let window = app.get_webview_window("main")?;
+    let gtk_win = window.gtk_window().ok()?;
+    let vbox = window.default_vbox().ok()?;
+    let (vbox_x, vbox_y) = vbox.translate_coordinates(&gtk_win, 0, 0)?;
+    let gdk_win = gtk_win.window()?;
+    let alloc = gtk_win.allocation();
+    let shadow_x = (gdk_win.width() - alloc.width()).max(0) / 2;
+    let shadow_y = (gdk_win.height() - alloc.height()).max(0) / 2;
+    Some((shadow_x + vbox_x, shadow_y + vbox_y))
 }
 
 /// Runs `f` on the GLib main thread and blocks until it returns.
