@@ -17,5 +17,6 @@ describe("Slider", () => {
 		expect(thumb).toHaveAttribute("aria-valuenow", "30");
 		expect(ref.current).not.toBe(thumb);
 		expect(ref.current?.contains(thumb)).toBe(true);
+		expect(ref.current).toHaveClass("touch-none");
 	});
 });

@@ -152,7 +152,7 @@ const Slider = ({
 				pressRef.current = null;
 				onPointerUp?.(e);
 			}}
-			// Also covers a canceled touch, which sends no pointerup.
+			// Also covers a cancelled touch, which sends no pointerup.
 			onLostPointerCapture={(e) => {
 				if (isOtherPointer(e)) return;
 				pressRef.current = null;

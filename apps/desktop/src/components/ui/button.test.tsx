@@ -27,6 +27,9 @@ describe("Button", () => {
 		const ref = createRef<HTMLButtonElement>();
 		render(<Button ref={ref}>Close</Button>);
 
-		expect(ref.current).toBe(screen.getByRole("button", { name: "Close" }));
+		const button = screen.getByRole("button", { name: "Close" });
+		expect(ref.current).toBe(button);
+		ref.current?.focus();
+		expect(button).toHaveFocus();
 	});
 });
