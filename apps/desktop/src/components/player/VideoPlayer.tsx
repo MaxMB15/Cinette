@@ -31,6 +31,7 @@ import {
 	getPlaybackPosition,
 	savePlaybackPosition,
 	deletePlaybackPosition,
+	handOffProgress,
 	resolveLocalDownload,
 	enqueueMovieDownload,
 	enqueueEpisodeDownload,
@@ -39,7 +40,6 @@ import {
 } from "@/lib/tauri";
 import { parseSrt } from "@/lib/subtitle-parser";
 import type { Channel, OmdbData, WhatsonData, SubtitleCue, SubtitleEntry } from "@/lib/types";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { useDownloads } from "@/hooks/useDownloads";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
@@ -52,6 +52,7 @@ import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
+import { hasFullscreenButton, setWindowFullscreen } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
 /** How often (ms) watch progress is persisted while playing. */
@@ -151,10 +152,11 @@ export const PlayerView = () => {
 	// its own way back.
 	const { layoutMode } = usePlatform();
 	const showBack = layoutMode === "mobile";
-	// Phones and tablets already play full screen, and the hardware buttons
-	// set the volume. An Android TV box has no touch screen, so it keeps the
-	// full screen, volume and shortcut controls for its remote.
+	// Phones and tablets set the volume with the hardware buttons. An Android
+	// TV box has no touch screen, so it keeps the volume and shortcut
+	// controls for its remote.
 	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
+	const fullscreenButton = hasFullscreenButton(touchDevice, layoutMode);
 	const [enrichedMeta, setEnrichedMeta] = useState<EnrichedMeta | null>(null);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
@@ -305,6 +307,32 @@ export const PlayerView = () => {
 	}, [mpv.state, flushProgress]);
 
 	useEffect(() => () => flushProgress(), [flushProgress]);
+
+	// This page can't save progress while it's hidden, because iOS stops its
+	// timers once the app is in the background though audio keeps playing, or
+	// after it closes with the item still playing. Rust saves it until the
+	// player is visible again.
+	useEffect(() => {
+		const handOff = () => {
+			const p = progressRef.current;
+			// Rust saves from here on. The position held here goes stale, and
+			// flushing it later, say on a stop right after the app comes back,
+			// would overwrite the newer one Rust saved.
+			p.dirty = false;
+			const { key, url, pendingStart } = p;
+			handOffProgress(key && url ? { key, url, pendingStart } : null).catch(() => {});
+		};
+		const onVisibilityChange = () => {
+			if (document.visibilityState === "hidden") handOff();
+			else handOffProgress(null).catch(() => {});
+		};
+		handOffProgress(null).catch(() => {});
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () => {
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+			handOff();
+		};
+	}, []);
 
 	// Watch time: the channel list keeps its search unless the user watched for
 	// a while (see lib/browse-state). Only forward playback counts, so time spent
@@ -825,12 +853,17 @@ export const PlayerView = () => {
 	const toggleFullscreen = useCallback(() => {
 		const next = !isFullscreen;
 		setFullscreen(next);
-		getCurrentWindow()
-			.setFullscreen(next)
-			.catch((e) => {
-				console.error("[PlayerView] setFullscreen failed:", e);
-			});
+		setWindowFullscreen(next).catch((e) => {
+			console.error("[PlayerView] setFullscreen failed:", e);
+		});
 	}, [isFullscreen, setFullscreen]);
+
+	// An iPad Split View pane narrow enough for the phone layout has no full
+	// screen button, so it leaves full screen instead of keeping the sidebar
+	// hidden.
+	useEffect(() => {
+		if (!fullscreenButton && isFullscreen) setFullscreen(false);
+	}, [fullscreenButton, isFullscreen, setFullscreen]);
 
 	// --- Keyboard ---
 	const flashOsd = useCallback((text: string) => {
@@ -922,11 +955,9 @@ export const PlayerView = () => {
 						setShowShortcuts(false);
 					} else if (isFullscreen) {
 						setFullscreen(false);
-						getCurrentWindow()
-							.setFullscreen(false)
-							.catch((e) => {
-								console.error("[PlayerView] setFullscreen(false) failed:", e);
-							});
+						setWindowFullscreen(false).catch((e) => {
+							console.error("[PlayerView] setFullscreen(false) failed:", e);
+						});
 					} else if (showInfoDrawer) {
 						setShowInfoDrawer(false);
 					} else if (showSubtitlePicker) {
@@ -1150,7 +1181,7 @@ export const PlayerView = () => {
 					touchLayout={touchDevice}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
-					onFullscreen={touchDevice ? undefined : toggleFullscreen}
+					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
 					onInfo={activeChannel ? () => setShowInfoDrawer(true) : undefined}
 					onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
 					onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}

@@ -234,6 +234,14 @@ export const getPlaybackPosition = (contentKey: string): Promise<PlaybackPositio
 export const deletePlaybackPosition = (contentKey: string): Promise<void> =>
 	invoke<void>("delete_playback_position", { contentKey });
 
+/**
+ * Has Rust save `item`'s resume point every few seconds while the player page
+ * can't, or stops when `item` is null. See `src-tauri/src/progress.rs`.
+ */
+export const handOffProgress = (
+	item: { key: string; url: string; pendingStart: number | null } | null
+): Promise<void> => invoke<void>("hand_off_progress", { item });
+
 export const clearAllCaches = (): Promise<void> => invoke<void>("clear_all_caches");
 
 // --- Group Hierarchy Commands ---

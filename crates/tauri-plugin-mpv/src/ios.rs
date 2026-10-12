@@ -73,6 +73,11 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
         // Keep the last frame at EOF so the frontend can show its controls,
         // same as desktop.
         ("keep-open", "yes"),
+        // Without this, mpv's audio output asks iOS to mix with other apps.
+        // iOS shows lock screen controls only for an app whose audio
+        // session doesn't mix, and other apps' music would keep playing
+        // over the stream.
+        ("audio-exclusive", "yes"),
         ("terminal", "no"),
         ("input-default-bindings", "no"),
         // No `ytdl` or `osc`: MPVKit builds mpv for iOS without Lua, and
