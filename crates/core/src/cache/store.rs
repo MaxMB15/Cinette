@@ -277,14 +277,9 @@ impl CacheStore {
             CREATE INDEX IF NOT EXISTS idx_downloads_series ON downloads(series_channel_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);",
         )?;
-        // Columns added after the table first shipped. Each fails harmlessly
-        // once the column exists.
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE downloads ADD COLUMN keep INTEGER NOT NULL DEFAULT 0;");
-        let _ = self
-            .conn
-            .execute_batch("ALTER TABLE downloads ADD COLUMN last_played_at INTEGER;");
+        // Columns added after the table first shipped.
+        self.add_column("downloads", "keep INTEGER NOT NULL DEFAULT 0")?;
+        self.add_column("downloads", "last_played_at INTEGER")?;
         // Full episode list per series, cached so the season/episode selector
         // works offline once any episode of the series has been downloaded.
         self.conn.execute_batch(
@@ -295,6 +290,21 @@ impl CacheStore {
             );",
         )?;
         Ok(())
+    }
+
+    /// Add the column `definition` to `table`. A table that has the column
+    /// already is left as it is. Any other error is returned, since queries
+    /// that use the column would fail without it.
+    fn add_column(&self, table: &str, definition: &str) -> Result<(), CacheError> {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {definition};");
+        match self.conn.execute_batch(&sql) {
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.starts_with("duplicate column name") =>
+            {
+                Ok(())
+            }
+            result => Ok(result?),
+        }
     }
 
     // --- Providers ---
@@ -2468,6 +2478,16 @@ mod tests {
         let got = store.get_download("d1").unwrap().unwrap();
         assert!(!got.keep);
         assert_eq!(got.last_played_at, None);
+        // The next launch finds the columns there.
+        store.init_tables().unwrap();
+    }
+
+    #[test]
+    fn adding_a_column_only_ignores_one_that_exists() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let column = "keep INTEGER NOT NULL DEFAULT 0";
+        store.add_column("downloads", column).unwrap();
+        assert!(store.add_column("no_such_table", "x INTEGER").is_err());
     }
 
     #[test]
