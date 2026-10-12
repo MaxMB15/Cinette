@@ -18,6 +18,7 @@ vi.mock("@/lib/tauri", () => ({
 }));
 
 import { AppLayout } from "./AppLayout";
+import { FullscreenContext } from "@/lib/fullscreen-context";
 
 const mounts = vi.fn();
 
@@ -67,5 +68,19 @@ describe("AppLayout", () => {
 		cleanup();
 		render(tree("/player"));
 		expect(screen.getByRole("navigation").className).toContain("hidden");
+	});
+
+	it("hides the sidebar for a full screen player only", () => {
+		platform.layoutMode = "tablet";
+		const fullscreen = (path: string) => (
+			<FullscreenContext.Provider value={{ isFullscreen: true, setFullscreen: () => {} }}>
+				{tree(path)}
+			</FullscreenContext.Provider>
+		);
+		render(fullscreen("/player"));
+		expect(screen.getByRole("complementary").className).toContain("hidden");
+		cleanup();
+		render(fullscreen("/"));
+		expect(screen.getByRole("complementary").className).not.toContain("hidden");
 	});
 });
