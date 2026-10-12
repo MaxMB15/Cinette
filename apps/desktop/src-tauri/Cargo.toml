@@ -22,7 +22,7 @@ tauri-plugin-shell = "2"
 mvp-core = { path = "../../../crates/core" }
 tauri-plugin-mpv = { path = "../../../crates/tauri-plugin-mpv" }
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
 
