@@ -360,3 +360,226 @@ describe("useChannelsProvider", () => {
 		}
 	});
 });
+
+import { createElement, type ReactNode } from "react";
+import {
+	loadM3uFile as loadM3uFileApi,
+	loadXtreamProvider,
+	removeProvider as removeProviderApi,
+	updateProvider as updateProviderApi,
+} from "@/lib/tauri";
+import { ChannelsContext, useChannels } from "./useChannels";
+import { makeProvider } from "@/test/app-fixtures";
+
+const channel = (id: string, isFavorite = false) =>
+	({ id, name: id.toUpperCase(), groupTitle: "News", isFavorite }) as never;
+
+/** Mounts the provider and waits for its first load. */
+const mountProvider = async () => {
+	const hook = renderHook(() => useChannelsProvider());
+	await waitFor(() => expect(hook.result.current.initialized).toBe(true));
+	return hook;
+};
+
+/** Runs an action that should fail and returns what it threw. */
+const failureOf = async (action: () => Promise<void>) => {
+	let caught: unknown = null;
+	await act(async () => {
+		try {
+			await action();
+		} catch (e) {
+			caught = e;
+		}
+	});
+	return caught;
+};
+
+describe("useChannelsProvider provider changes", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		localStorage.clear();
+		mockGetProviders.mockResolvedValue([]);
+		mockGetAllChannels.mockResolvedValue([]);
+	});
+
+	it("saves an edited provider and reloads the provider list", async () => {
+		const { result } = await mountProvider();
+		const renamed = makeProvider({ name: "Renamed" });
+		mockGetProviders.mockResolvedValueOnce([renamed]);
+
+		await act(() =>
+			result.current.updateProvider("p1", "Renamed", "http://new.example", "user", "secret")
+		);
+
+		expect(updateProviderApi).toHaveBeenCalledWith(
+			"p1",
+			"Renamed",
+			"http://new.example",
+			"user",
+			"secret"
+		);
+		expect(result.current.providers).toEqual([renamed]);
+		expect(result.current.error).toBeNull();
+	});
+
+	it("reports an edit the backend turns down and passes the error on", async () => {
+		const { result } = await mountProvider();
+		vi.mocked(updateProviderApi).mockRejectedValueOnce(new Error("bad url"));
+
+		const caught = await failureOf(() => result.current.updateProvider("p1", "Name", "nope"));
+
+		expect((caught as Error).message).toBe("bad url");
+		expect(result.current.error).toBe("Error: bad url");
+	});
+
+	it("adds a playlist from a file and loads its channels", async () => {
+		const { result } = await mountProvider();
+		mockGetProviders.mockResolvedValueOnce([makeProvider()]);
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+
+		await act(() => result.current.loadM3uFile("Local", "/music/list.m3u"));
+
+		expect(loadM3uFileApi).toHaveBeenCalledWith("Local", "/music/list.m3u");
+		expect(result.current.providers).toHaveLength(1);
+		expect(result.current.channels).toHaveLength(1);
+		expect(result.current.loading).toBe(false);
+	});
+
+	it("adds an Xtream account with its login", async () => {
+		const { result } = await mountProvider();
+
+		await act(() => result.current.loadXtream("Xt", "http://xt.example", "user", "secret"));
+
+		expect(loadXtreamProvider).toHaveBeenCalledWith(
+			"Xt",
+			"http://xt.example",
+			"user",
+			"secret"
+		);
+		expect(result.current.loading).toBe(false);
+	});
+
+	it("removes a provider and drops its channels", async () => {
+		mockGetProviders.mockResolvedValueOnce([makeProvider()]);
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+		const { result } = await mountProvider();
+		expect(result.current.channels).toHaveLength(1);
+
+		await act(() => result.current.removeProvider("p1"));
+
+		expect(removeProviderApi).toHaveBeenCalledWith("p1");
+		expect(result.current.providers).toEqual([]);
+		expect(result.current.channels).toEqual([]);
+	});
+
+	it("shows a failed removal without throwing", async () => {
+		mockGetProviders.mockResolvedValueOnce([makeProvider()]);
+		const { result } = await mountProvider();
+		vi.mocked(removeProviderApi).mockRejectedValueOnce(new Error("locked"));
+
+		await act(() => result.current.removeProvider("p1"));
+
+		expect(result.current.error).toBe("Error: locked");
+		expect(result.current.providers).toHaveLength(1);
+	});
+
+	it("keeps the channels it has when reloading them fails", async () => {
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+		const { result } = await mountProvider();
+		mockGetAllChannels.mockRejectedValueOnce(new Error("database locked"));
+
+		await act(() => result.current.refreshChannels());
+
+		expect(result.current.channels).toHaveLength(1);
+		expect(result.current.error).toBe("Error: database locked");
+	});
+
+	it("reports a failed provider refresh and passes the error on", async () => {
+		const { result } = await mountProvider();
+		mockGetProviders.mockClear();
+		mockRefreshProvider.mockRejectedValueOnce(new Error("offline"));
+
+		const caught = await failureOf(() => result.current.refreshProvider("p1"));
+
+		expect((caught as Error).message).toBe("offline");
+		expect(result.current.error).toBe("Error: offline");
+		expect(mockGetProviders).not.toHaveBeenCalled();
+	});
+
+	it("leaves the channel list alone when the favorite isn't in it", async () => {
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+		const { result } = await mountProvider();
+		const before = result.current.channels;
+
+		await act(() => result.current.toggleFavorite("gone"));
+
+		expect(mockToggleFavorite).toHaveBeenCalledWith("gone");
+		expect(result.current.channels).toBe(before);
+	});
+
+	it("shows a failed favorite change and keeps the star as it was", async () => {
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+		const { result } = await mountProvider();
+		mockToggleFavorite.mockRejectedValueOnce(new Error("locked"));
+
+		await act(() => result.current.toggleFavorite("c1"));
+
+		expect(result.current.error).toBe("Error: locked");
+		expect(result.current.channels[0]).toMatchObject({ id: "c1", isFavorite: false });
+	});
+
+	it("refreshes a playlist that comes due on the minute poll", async () => {
+		vi.useFakeTimers();
+		try {
+			localStorage.setItem(
+				"provider-settings-p1",
+				JSON.stringify({
+					autoRefresh: true,
+					refreshIntervalHours: 24,
+					epgAutoRefresh: false,
+					epgRefreshIntervalHours: 24,
+				})
+			);
+			mockGetProviders.mockResolvedValue([
+				makeProvider({ lastUpdated: new Date(0).toISOString() }),
+			]);
+			renderHook(() => useChannelsProvider());
+
+			// The poll on mount runs before the providers load.
+			await act(() => vi.advanceTimersByTimeAsync(0));
+			expect(mockRefreshProvider).not.toHaveBeenCalled();
+			expect(mockGetProviders).toHaveBeenCalledTimes(1);
+
+			await act(() => vi.advanceTimersByTimeAsync(60_000));
+			expect(mockRefreshProvider).toHaveBeenCalledExactlyOnceWith("p1");
+			// The refreshed playlist is read back so the next poll sees its new time.
+			expect(mockGetProviders).toHaveBeenCalledTimes(2);
+			expect(mockGetAllChannels).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("useChannels", () => {
+	it("refuses to run outside the channels provider", () => {
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			expect(() => renderHook(() => useChannels())).toThrow(
+				"useChannels must be used within a ChannelsProvider"
+			);
+		} finally {
+			consoleError.mockRestore();
+		}
+	});
+
+	it("reads the value the provider shares", () => {
+		const value = { providers: [makeProvider()] } as never;
+		const wrapper = ({ children }: { children: ReactNode }) =>
+			createElement(ChannelsContext.Provider, { value }, children);
+
+		const { result } = renderHook(() => useChannels(), { wrapper });
+
+		expect(result.current).toBe(value);
+	});
+});

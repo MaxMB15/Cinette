@@ -4,8 +4,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useSplashScreen } from "./useSplashScreen";
-import type { UpdateState } from "./useUpdateChecker";
 import { createRefreshTracker, type RefreshTracker } from "@/lib/refresh-schedule";
+import { makeUpdateState } from "@/test/app-fixtures";
 
 // Mock Tauri API calls
 vi.mock("@/lib/tauri", () => ({
@@ -28,21 +28,6 @@ const mockRefreshProvider = vi.mocked(tauri.refreshProvider);
 const mockRefreshEpg = vi.mocked(tauri.refreshEpg);
 const mockLoadProviderSettings = vi.mocked(channelsHook.loadProviderSettings);
 const mockGetEpgLastRefresh = vi.mocked(channelsHook.getEpgLastRefresh);
-
-const makeUpdateState = (overrides: Partial<UpdateState> = {}): UpdateState => ({
-	update: null,
-	checking: false,
-	installing: false,
-	progress: null,
-	error: null,
-	checkError: null,
-	packageInstall: false,
-	supported: true,
-	dismiss: vi.fn(),
-	install: vi.fn().mockResolvedValue(undefined),
-	checkForUpdates: vi.fn().mockResolvedValue(null),
-	...overrides,
-});
 
 describe("useSplashScreen", () => {
 	let tracker: RefreshTracker;
@@ -454,4 +439,150 @@ describe("useSplashScreen", () => {
 
 		expect(onComplete).toHaveBeenCalledOnce();
 	});
+
+	it("leaves out the update step where the app store handles updates", async () => {
+		const onComplete = vi.fn();
+		const updateState = makeUpdateState({ supported: false });
+		const { result } = renderHook(() => useSplashScreen({ updateState, onComplete }));
+
+		expect(result.current.steps.map((s) => s.id)).toEqual(["providers", "playlists", "epg"]);
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+
+		expect(result.current.progress).toBe(1);
+		expect(updateState.checkForUpdates).not.toHaveBeenCalled();
+		expect(onComplete).toHaveBeenCalledExactlyOnceWith(false);
+	});
+
+	it("gives up on the update check after seven seconds", async () => {
+		vi.useFakeTimers();
+		try {
+			const onComplete = vi.fn();
+			const updateState = makeUpdateState({
+				checkForUpdates: vi.fn(() => new Promise<null>(() => {})),
+			});
+			const { result } = renderHook(() => useSplashScreen({ updateState, onComplete }));
+			const updates = () => result.current.steps.find((s) => s.id === "updates");
+
+			await act(() => vi.advanceTimersByTimeAsync(0));
+			expect(updates()?.status).toBe("active");
+
+			await act(() => vi.advanceTimersByTimeAsync(6_999));
+			expect(result.current.allDone).toBe(false);
+			expect(onComplete).not.toHaveBeenCalled();
+
+			await act(() => vi.advanceTimersByTimeAsync(1));
+			expect(updates()).toMatchObject({
+				status: "error",
+				label: "Unable to check for updates",
+			});
+			expect(result.current.allDone).toBe(true);
+			expect(onComplete).toHaveBeenCalledExactlyOnceWith(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("lets the user continue when the update check fails", async () => {
+		const updateState = makeUpdateState({
+			checkForUpdates: vi.fn().mockRejectedValue(new Error("offline")),
+		});
+		const { result } = renderHook(() => useSplashScreen({ updateState }));
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+
+		expect(result.current.steps.find((s) => s.id === "updates")).toMatchObject({
+			status: "error",
+			label: "Unable to check for updates",
+		});
+	});
+
+	it("counts a playlist still waiting to retry as failed without refreshing it again", async () => {
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		await tracker
+			.run("playlist:p1", () => Promise.reject(new Error("offline")))
+			?.catch(() => {});
+		mockUseChannels.mockReturnValue({
+			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
+			initialized: true,
+			autoRefresh: tracker,
+		} as never);
+		mockLoadProviderSettings.mockReturnValue({
+			autoRefresh: true,
+			refreshIntervalHours: 24,
+			epgAutoRefresh: false,
+			epgRefreshIntervalHours: 24,
+		});
+
+		const { result } = renderHook(() => useSplashScreen({ updateState: makeUpdateState() }));
+		await waitFor(() => expect(result.current.allDone).toBe(true));
+
+		expect(mockRefreshProvider).not.toHaveBeenCalled();
+		expect(result.current.steps.find((s) => s.id === "playlists")).toMatchObject({
+			status: "error",
+			label: "Failed to refresh playlists",
+		});
+		consoleError.mockRestore();
+	});
+
+	it("stops without finishing when it closes during a playlist refresh", async () => {
+		mockUseChannels.mockReturnValue({
+			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
+			initialized: true,
+			autoRefresh: tracker,
+		} as never);
+		mockLoadProviderSettings.mockReturnValue({
+			autoRefresh: true,
+			refreshIntervalHours: 24,
+			epgAutoRefresh: false,
+			epgRefreshIntervalHours: 24,
+		});
+		let finish = () => {};
+		mockRefreshProvider.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (finish = resolve))
+		);
+		const onComplete = vi.fn();
+		const updateState = makeUpdateState();
+
+		const { unmount } = renderHook(() => useSplashScreen({ updateState, onComplete }));
+		await waitFor(() => expect(mockRefreshProvider).toHaveBeenCalledTimes(1));
+		unmount();
+		await act(async () => finish());
+
+		expect(updateState.checkForUpdates).not.toHaveBeenCalled();
+		expect(onComplete).not.toHaveBeenCalled();
+	});
+
+	type SettleCheck = (finish: (update: null) => void, fail: (e: Error) => void) => void;
+	const checkEndings: [string, SettleCheck][] = [
+		["finds nothing", (finish) => finish(null)],
+		["fails", (_finish, fail) => fail(new Error("offline"))],
+	];
+
+	it.each(checkEndings)(
+		"stops without finishing when it closes while the update check %s",
+		async (_ending, settle) => {
+			let finish: (update: null) => void = () => {};
+			let fail: (e: Error) => void = () => {};
+			const updateState = makeUpdateState({
+				checkForUpdates: vi.fn(
+					() =>
+						new Promise<null>((resolve, reject) => {
+							finish = resolve;
+							fail = reject;
+						})
+				),
+			});
+			const onComplete = vi.fn();
+
+			const { result, unmount } = renderHook(() =>
+				useSplashScreen({ updateState, onComplete })
+			);
+			await waitFor(() =>
+				expect(result.current.steps.find((s) => s.id === "updates")?.status).toBe("active")
+			);
+			unmount();
+			await act(async () => settle(finish, fail));
+
+			expect(onComplete).not.toHaveBeenCalled();
+		}
+	);
 });

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act, waitFor, cleanup } from "@testing-library/react";
 import { useUpdateChecker } from "./useUpdateChecker";
 
 vi.mock("@tauri-apps/plugin-updater", () => ({
@@ -27,6 +27,7 @@ vi.mock("@/lib/tauri", () => ({
 
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { listen, type EventCallback } from "@tauri-apps/api/event";
 import { getInstallInfo, packageUpdate } from "@/lib/tauri";
 
 const mockCheck = vi.mocked(check);
@@ -317,5 +318,83 @@ describe("useUpdateChecker", () => {
 		expect(mockPackageUpdate).toHaveBeenCalledTimes(1);
 		expect(downloadAndInstall).not.toHaveBeenCalled();
 		expect(mockRelaunch).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("useUpdateChecker over time", () => {
+	const TWO_HOURS = 2 * 60 * 60 * 1000;
+
+	beforeEach(() => {
+		mockCheck.mockResolvedValue(null);
+		mockRelaunch.mockResolvedValue(undefined);
+		mockGetInstallInfo.mockResolvedValue({
+			installType: "native",
+			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+		});
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.useRealTimers();
+		vi.clearAllMocks();
+	});
+
+	it("checks again every two hours while the app stays open", async () => {
+		vi.useFakeTimers();
+		const { unmount } = renderHook(() => useUpdateChecker());
+		await act(() => vi.advanceTimersByTimeAsync(0));
+		expect(mockCheck).toHaveBeenCalledTimes(1);
+
+		await act(() => vi.advanceTimersByTimeAsync(TWO_HOURS - 1));
+		expect(mockCheck).toHaveBeenCalledTimes(1);
+
+		await act(() => vi.advanceTimersByTimeAsync(1));
+		expect(mockCheck).toHaveBeenCalledTimes(2);
+
+		unmount();
+		await act(() => vi.advanceTimersByTimeAsync(TWO_HOURS));
+		expect(mockCheck).toHaveBeenCalledTimes(2);
+	});
+
+	it("shows package manager progress while a deb update installs", async () => {
+		mockGetInstallInfo.mockResolvedValue({
+			installType: "deb",
+			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+		});
+		mockCheck.mockResolvedValue(fakeUpdate() as never);
+		let onProgress: EventCallback<{ percent: number }> | undefined;
+		const unlisten = vi.fn();
+		vi.mocked(listen).mockImplementationOnce(async (event, handler) => {
+			expect(event).toBe("package-update://progress");
+			onProgress = handler as EventCallback<{ percent: number }>;
+			return unlisten;
+		});
+		let finishPackageUpdate = () => {};
+		mockPackageUpdate.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (finishPackageUpdate = resolve))
+		);
+
+		const { result } = renderHook(() => useUpdateChecker());
+		await waitFor(() => expect(result.current.packageInstall).toBe(true));
+
+		let installing: Promise<void> = Promise.resolve();
+		act(() => {
+			installing = result.current.install();
+		});
+		await waitFor(() => expect(onProgress).toBeDefined());
+		expect(result.current.installing).toBe(true);
+
+		act(() =>
+			onProgress!({ event: "package-update://progress", id: 1, payload: { percent: 42 } })
+		);
+		expect(result.current.progress).toBe(42);
+		expect(unlisten).not.toHaveBeenCalled();
+
+		await act(async () => {
+			finishPackageUpdate();
+			await installing;
+		});
+		expect(unlisten).toHaveBeenCalledOnce();
+		expect(mockRelaunch).toHaveBeenCalledOnce();
 	});
 });
