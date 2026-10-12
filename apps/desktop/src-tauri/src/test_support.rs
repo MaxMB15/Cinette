@@ -79,11 +79,21 @@ impl TestApp {
         self.dir.path().join("downloads")
     }
 
-    /// The folder that stands in for the app's data and config folders, with
-    /// its cache in `caches` and its logs in `logs`. `settings.json` goes here.
+    /// The folder that stands in for the app's data, local data and config
+    /// folders, with its cache in `caches` and its logs in `logs`.
+    /// `settings.json` goes here.
     pub(crate) fn app_dir(&self) -> PathBuf {
         self.dir.path().join("app")
     }
+}
+
+/// Poison `mutex` the way a thread that panics while holding it would.
+pub(crate) fn poison<T>(mutex: &Mutex<T>) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = mutex.lock();
+        panic!("poisoning a lock for a test");
+    }));
+    assert!(mutex.is_poisoned());
 }
 
 mod tests {

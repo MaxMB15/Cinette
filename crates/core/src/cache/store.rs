@@ -2015,29 +2015,6 @@ mod tests {
     }
 
     #[test]
-    fn test_xtream_provider_roundtrip() {
-        let store = CacheStore::open_in_memory().unwrap();
-        let provider = Provider {
-            id: "x1".into(),
-            name: "Xtream Test".into(),
-            provider_type: ProviderType::Xtream,
-            url: "http://xtream.example.com".into(),
-            username: Some("user".into()),
-            password: Some("pass".into()),
-            last_updated: Some("2026-01-01".into()),
-            channel_count: 500,
-            epg_url: None,
-        };
-        store.upsert_provider(&provider).unwrap();
-        let loaded = store.get_providers().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert!(matches!(loaded[0].provider_type, ProviderType::Xtream));
-        assert_eq!(loaded[0].username.as_deref(), Some("user"));
-        assert_eq!(loaded[0].password.as_deref(), Some("pass"));
-        assert_eq!(loaded[0].channel_count, 500);
-    }
-
-    #[test]
     fn test_stale_series_enriched_on_read() {
         // Simulate a channel stored with content_type="series" but NULL series_title/season/episode
         // (as would happen with data cached before those columns were added).
@@ -3376,13 +3353,12 @@ mod tests {
     }
 
     #[test]
-    fn get_provider_reads_back_every_field() {
+    fn providers_read_back_every_field() {
         let store = CacheStore::open_in_memory().unwrap();
         let provider = xtream_provider("x1");
+        let playlist = make_provider("m1", "Playlist");
         store.upsert_provider(&provider).unwrap();
-        store
-            .upsert_provider(&make_provider("m1", "Playlist"))
-            .unwrap();
+        store.upsert_provider(&playlist).unwrap();
 
         assert_eq!(
             as_json(&store.get_provider("x1").unwrap().unwrap()),
@@ -3390,9 +3366,13 @@ mod tests {
         );
         assert_eq!(
             as_json(&store.get_provider("m1").unwrap().unwrap()),
-            as_json(&make_provider("m1", "Playlist"))
+            as_json(&playlist)
         );
         assert!(store.get_provider("missing").unwrap().is_none());
+        let mut listed = store.get_providers().unwrap();
+        listed.sort_by(|a, b| a.id.cmp(&b.id));
+        let listed: Vec<_> = listed.iter().map(as_json).collect();
+        assert_eq!(listed, [as_json(&playlist), as_json(&provider)]);
     }
 
     #[test]
@@ -3755,8 +3735,8 @@ mod tests {
         rows
     }
 
-    /// Makes every `event` (INSERT or DELETE) on `table` fail, the way a full
-    /// disk fails a write partway through.
+    /// Makes every INSERT or DELETE, whichever `event` names, on `table` fail,
+    /// the way a full disk fails a write partway through.
     fn fail_on(store: &CacheStore, event: &str, table: &str) {
         store
             .conn

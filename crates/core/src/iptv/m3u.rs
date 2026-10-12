@@ -440,8 +440,7 @@ mod tests {
         let err = M3uError::from(crate::http::error_with_url(
             "unix:/get.php?username=u&password=SECRET&type=m3u_plus",
         ));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
     }
 
     #[tokio::test]
@@ -917,7 +916,7 @@ http://stream.example.com/ch2
                 .await
                 .unwrap_err();
         assert!(matches!(err, M3uError::Network(_)), "{err:?}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
     }
 
     // --- Grouping ---

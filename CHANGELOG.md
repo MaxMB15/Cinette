@@ -12,6 +12,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Without an OMDb API key, the movie and series info sheets say that a key adds the plot, cast and ratings, and link to the key field in Settings (#96).
 - The channel, movie and series info panes close when you drag them down, and grow to full height when you drag them up (#91).
 - The start screen shows the app icon in place of the blue play badge (#95).
+- The OpenSubtitles key field shows up once an OMDb or OpenSubtitles key is saved, not as soon as an OMDb key is typed, and then stays until you leave Settings (#120).
 
 ### Added
 
@@ -29,6 +30,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Channels went missing from M3U playlists that put lines such as `#EXTVLCOPT` or `#EXTGRP` between a channel and its link. They show up now. The app numbers channels by their place in the playlist, so in such a playlist the first refresh can move favorites, downloads, saved movie details and recently played channels to a different channel, once (#126).
 - A TV guide failed to load when a program's time had a letter such as é in the wrong place. Now the rest of the guide loads (#126).
+- On Linux with Wayland, on desktops where the app draws its own title bar, such as COSMIC on Pop!_OS, the video slid out of place when the window went full screen or was maximized. It sat lower and further right by the size of the title bar and the window's shadow, and its edges were cut off. The video now moves with the page (#119).
 - A download of an HLS movie showed the wrong progress. The app took the size of the movie's playlist, a few hundred bytes, as the size of the movie, so the bar was full from the start and the download history showed percentages in the thousands. The bar now pulses while the size is unknown, and the history shows how much has been saved (#117).
 - Most downloads waited close to a minute before they finished, and an HLS download waited that long before it started. ffmpeg took the normal end of each file and playlist for a dropped connection and kept trying to reconnect (#117).
 - A download from a server that can't resume one went back to the start of the movie after the connection dropped, and wrote it into the file a second time. When the server also didn't give the file's size, the end of every reply counted as a drop, so the download started over and over until you stopped it or the disk filled up. A dropped download now carries on where it stopped if the server allows it (#117).
@@ -78,6 +80,12 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Counts of one are no longer plural, as in "1 movies" or "1 groups" (#114).
 - A rating with no votes no longer shows a stray 0 beside it (#114).
 - Screen readers name the search bar's clear button and the icon buttons in Manage Categories, and say which category or provider card a button is on (#114).
+- Test next to the OMDb key now checks the key in the field. Before, it checked the saved key, so a new key failed until it was saved (#120).
+- When a key can't be checked because the service can't be reached or has a fault of its own, Settings now says so instead of calling the key invalid. A Gemini key over its rate limit no longer shows as invalid either (#120).
+- A saved API key can now be removed. Clearing the field turns Save into Remove. Before, Save stayed off while the field was blank (#120).
+- Clearing the simultaneous downloads field to type a new number no longer sets it to 1 straight away. A number outside 1 to 10 is fixed once you leave the field or press Enter. Typing 10 could leave 1 saved, because the two saves raced. They now go one at a time (#120).
+- Settings now says when it can't read a saved API key, and keeps Save on so the key can still be replaced or removed. It no longer replaces a key you started typing before the saved one loaded (#120).
+- Enter in an API key field saves the key. Screen readers name each key field and its Save, Test and show buttons, and read out whether a save or check worked (#120).
 
 ## [0.5.3] - 2026-10-09
 

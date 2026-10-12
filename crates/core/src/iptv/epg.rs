@@ -490,15 +490,6 @@ mod tests {
         assert!(ch_cnn.icon_url.is_none());
     }
 
-    #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = EpgError::from(crate::http::error_with_url(
-            "unix:/xmltv.php?username=u&password=SECRET",
-        ));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
-    }
-
     // --- Broken and unusual guides ---
 
     #[tokio::test]
@@ -517,7 +508,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, EpgError::Network(_)), "{err:?}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
     }
 
     #[test]

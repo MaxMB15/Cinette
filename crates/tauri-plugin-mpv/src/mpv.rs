@@ -26,6 +26,10 @@ use crate::linux::{
 #[cfg(target_os = "ios")]
 use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 
+/// A platform renderer and the mpv options it needs.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
+
 pub struct MpvState {
     inner: Mutex<MpvEngine>,
     renderer: Mutex<Option<Box<dyn PlatformRenderer>>>,
@@ -97,6 +101,17 @@ impl MpvState {
         hwdec: bool,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
+        self.load_with(hwdec, || self.load_impl(url, start_pos, app))
+    }
+
+    /// The body of `load()`, with the platform setup passed in as `start`.
+    /// Tests pass a `start` with a fake renderer and headless options, since
+    /// the real one opens a window when it can't embed the video.
+    pub(crate) fn load_with(
+        &self,
+        hwdec: bool,
+        start: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
         // Trip the old reconnect monitor BEFORE we destroy the parent mpv,
         // so its client handle is dropped on the next loop iteration and the
@@ -114,7 +129,7 @@ impl MpvState {
         self.fallback_active.store(false, Ordering::Release);
         self.hwdec_enabled.store(hwdec, Ordering::Release);
 
-        let result = self.load_impl(url, start_pos, app);
+        let result = start();
         if result.is_ok() {
             self.idle_inhibitor.inhibit();
         } else {
@@ -205,45 +220,9 @@ impl MpvState {
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
         // Create the NSOpenGLView renderer (main-thread work happens inside new()).
-        let mut gl_renderer = match MacosGlRenderer::new(app) {
-            Ok(r) => r,
-            Err(e) => return self.launch_fallback(url, start_pos, app, &e),
-        };
-
-        // Emit mpv://first-frame when the first video frame is rendered so the
-        // frontend knows to make the WKWebView transparent.
-        {
-            use tauri::Emitter;
-            let app_clone = app.clone();
-            gl_renderer.set_first_frame_callback(Box::new(move || {
-                let _ = app_clone.emit("mpv://first-frame", ());
-            }));
-        }
-
-        // Create mpv with embedded options and attach the renderer.
-        let attach_result = {
-            let mut engine = lock_or_recover(&self.inner);
-            match engine.create(&self.options(embedded_options())) {
-                Ok(mpv) => gl_renderer.attach(mpv),
-                Err(e) => Err(e),
-            }
-        };
-
-        if let Err(e) = attach_result {
-            lock_or_recover(&self.inner).stop();
-            return self.launch_fallback(url, start_pos, app, &e);
-        }
-
-        self.install_renderer(Box::new(gl_renderer));
-
-        let event_client = {
-            let mut engine = lock_or_recover(&self.inner);
-            engine.loadfile(url, start_pos)?;
-            engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
-        };
-        self.spawn_reconnect_monitor(event_client, url, app);
-        Ok(())
+        let renderer = MacosGlRenderer::new(app)
+            .map(|r| (Box::new(r) as Box<dyn PlatformRenderer>, embedded_options()));
+        self.load_embedded(url, start_pos, app, renderer, fallback_options)
     }
 
     #[cfg(target_os = "linux")]
@@ -253,41 +232,66 @@ impl MpvState {
         start_pos: Option<f64>,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
-        let mut gl_renderer = match LinuxGlRenderer::new(app) {
+        let renderer = LinuxGlRenderer::new(app).map(|r| {
+            let options = linux_embedded_options(r.software_gl());
+            (Box::new(r) as Box<dyn PlatformRenderer>, options)
+        });
+        self.load_embedded(url, start_pos, app, renderer, || {
+            linux_fallback_options(mpv_uses_wayland())
+        })
+    }
+
+    /// The macOS and Linux load. It plays `url` through the platform
+    /// renderer, or in the fallback window when the renderer couldn't be made
+    /// or attached. `renderer` comes with the mpv options it needs, and
+    /// `fallback` gives the options for the fallback window.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn load_embedded<R: tauri::Runtime>(
+        &self,
+        url: &str,
+        start_pos: Option<f64>,
+        app: &tauri::AppHandle<R>,
+        renderer: Result<EmbeddedRenderer, String>,
+        fallback: impl FnOnce() -> Vec<(&'static str, &'static str)>,
+    ) -> Result<(), String> {
+        let (mut renderer, options) = match renderer {
             Ok(r) => r,
-            Err(e) => return self.launch_fallback(url, start_pos, app, &e),
+            Err(e) => return self.launch_fallback(url, start_pos, app, &e, fallback),
         };
 
+        // Emit mpv://first-frame when the first video frame is rendered so the
+        // frontend knows to make the WKWebView transparent.
         {
             use tauri::Emitter;
             let app_clone = app.clone();
-            gl_renderer.set_first_frame_callback(Box::new(move || {
+            renderer.set_first_frame_callback(Box::new(move || {
                 let _ = app_clone.emit("mpv://first-frame", ());
             }));
         }
 
+        // Create mpv with embedded options and attach the renderer.
         let attach_result = {
             let mut engine = lock_or_recover(&self.inner);
-            let options = linux_embedded_options(gl_renderer.software_gl());
             match engine.create(&self.options(options)) {
-                Ok(mpv) => gl_renderer.attach(mpv),
+                Ok(mpv) => renderer.attach(mpv),
                 Err(e) => Err(e),
             }
         };
 
         if let Err(e) = attach_result {
             lock_or_recover(&self.inner).stop();
-            return self.launch_fallback(url, start_pos, app, &e);
+            return self.launch_fallback(url, start_pos, app, &e, fallback);
         }
 
-        self.install_renderer(Box::new(gl_renderer));
+        self.install_renderer(renderer);
 
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
+            #[cfg(target_os = "linux")]
             engine.configure_audio()?;
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -343,7 +347,7 @@ impl MpvState {
             let mut engine = lock_or_recover(&self.inner);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -361,7 +365,7 @@ impl MpvState {
             engine.create(&[])?;
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -374,13 +378,14 @@ impl MpvState {
         start_pos: Option<f64>,
         app: &tauri::AppHandle<R>,
         reason: &str,
+        options: impl FnOnce() -> Vec<(&'static str, &'static str)>,
     ) -> Result<(), String> {
         use tauri::Emitter;
         tracing::warn!(
             "[MPV] embedded renderer failed ({}), launching fallback window",
             reason
         );
-        let client = self.launch_fallback_impl(url, start_pos)?;
+        let client = self.launch_fallback_impl(url, start_pos, options)?;
         // Only tell the frontend once the window is up. If it fails, load()
         // tears everything down and the player shows the error instead.
         self.fallback_active.store(true, Ordering::Release);
@@ -389,31 +394,20 @@ impl MpvState {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn launch_fallback_impl(
         &self,
         url: &str,
         start_pos: Option<f64>,
+        options: impl FnOnce() -> Vec<(&'static str, &'static str)>,
     ) -> Result<Option<libmpv2::Mpv>, String> {
         let mut engine = lock_or_recover(&self.inner);
-        engine.create(&self.options(fallback_options()))?;
-        engine.loadfile(url, start_pos)?;
-        engine.set_current_url(url);
-        Ok(engine.create_event_client("reconnect-watcher").ok())
-    }
-
-    #[cfg(target_os = "linux")]
-    fn launch_fallback_impl(
-        &self,
-        url: &str,
-        start_pos: Option<f64>,
-    ) -> Result<Option<libmpv2::Mpv>, String> {
-        let mut engine = lock_or_recover(&self.inner);
-        engine.create(&self.options(linux_fallback_options(mpv_uses_wayland())))?;
+        engine.create(&self.options(options()))?;
+        #[cfg(target_os = "linux")]
         engine.configure_audio()?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
-        Ok(engine.create_event_client("reconnect-watcher").ok())
+        Ok(engine.create_event_client().ok())
     }
 
     /// Shows or hides the video surface without stopping playback.
@@ -554,6 +548,9 @@ fn with_hwdec(
 }
 
 #[cfg(test)]
+mod state_tests;
+
+#[cfg(test)]
 mod tests {
     use super::with_hwdec;
 
@@ -582,33 +579,13 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
     mod bounds {
         use crate::mpv::MpvState;
-        use crate::renderer::PlatformRenderer;
-        use libmpv2::Mpv;
-        use std::sync::{Arc, Mutex};
+        use crate::test_support::{FakeRenderer, SharedLog};
 
-        type Frames = Arc<Mutex<Vec<[f64; 4]>>>;
-
-        /// A renderer that only records where it was put.
-        struct FakeRenderer(Frames);
-
-        impl PlatformRenderer for FakeRenderer {
-            fn attach(&mut self, _mpv: &mut Mpv) -> Result<(), String> {
-                Ok(())
-            }
-            fn resize(&mut self, _width: u32, _height: u32) {}
-            fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64) {
-                self.0.lock().unwrap().push([x, y, w, h]);
-            }
-            fn set_visible(&mut self, _visible: bool) {}
-            fn set_first_frame_callback(&mut self, _cb: Box<dyn FnOnce() + Send>) {}
-            fn detach(&mut self) {}
-        }
-
-        /// Installs a fake renderer and returns the frames it gets.
-        fn install(state: &MpvState) -> Frames {
-            let frames = Frames::default();
-            state.install_renderer(Box::new(FakeRenderer(frames.clone())));
-            frames
+        /// Installs a fake renderer and returns what it records.
+        fn install(state: &MpvState) -> SharedLog {
+            let (renderer, log) = FakeRenderer::working();
+            state.install_renderer(renderer);
+            log
         }
 
         #[test]
@@ -616,8 +593,8 @@ mod tests {
             let state = MpvState::new();
             state.set_bounds(0.0, 0.0, 800.0, 600.0);
             state.set_bounds(240.0, 52.0, 960.0, 540.0);
-            let frames = install(&state);
-            assert_eq!(*frames.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+            let log = install(&state);
+            assert_eq!(log.lock().unwrap().frames, [[240.0, 52.0, 960.0, 540.0]]);
         }
 
         #[test]
@@ -625,12 +602,12 @@ mod tests {
             let state = MpvState::new();
             let first = install(&state);
             state.set_bounds(240.0, 52.0, 960.0, 540.0);
-            assert_eq!(*first.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+            assert_eq!(first.lock().unwrap().frames, [[240.0, 52.0, 960.0, 540.0]]);
 
             // Retry stops the stream and loads it again, with no new report.
             state.stop();
             let second = install(&state);
-            assert_eq!(*second.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+            assert_eq!(second.lock().unwrap().frames, [[240.0, 52.0, 960.0, 540.0]]);
         }
 
         #[test]
@@ -639,15 +616,15 @@ mod tests {
             install(&state);
             state.stop();
             state.set_bounds(0.0, 0.0, 1280.0, 720.0);
-            let frames = install(&state);
-            assert_eq!(*frames.lock().unwrap(), [[0.0, 0.0, 1280.0, 720.0]]);
+            let log = install(&state);
+            assert_eq!(log.lock().unwrap().frames, [[0.0, 0.0, 1280.0, 720.0]]);
         }
 
         #[test]
         fn leaves_a_new_renderer_alone_before_any_bounds() {
             let state = MpvState::new();
-            let frames = install(&state);
-            assert!(frames.lock().unwrap().is_empty());
+            let log = install(&state);
+            assert!(log.lock().unwrap().frames.is_empty());
         }
     }
 }

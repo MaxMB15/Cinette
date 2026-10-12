@@ -96,9 +96,32 @@ npm run format:check      # Prettier
 cargo check               # the whole Rust workspace
 ```
 
-For a coverage report, run `npm run test:coverage --workspace=apps/desktop` and open
-`apps/desktop/coverage/index.html`. CI publishes the report for `main` to
-[GitHub Pages](https://MaxMB15.github.io/MaxVideoPlayer/coverage/).
+For a frontend coverage report, run `npm run test:coverage --workspace=apps/desktop`
+and open `apps/desktop/coverage/index.html`.
+
+Rust coverage needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and
+LLVM's tools. Install them once:
+
+```bash
+rustup component add llvm-tools
+cargo install cargo-llvm-cov --locked
+```
+
+Then run the tests and open the report:
+
+```bash
+cargo llvm-cov --workspace --open
+```
+
+The plugin and app tests load libmpv, so set the library path from the setup steps
+above first. The app's tests also need the [ffmpeg sidecar](#the-ffmpeg-sidecar)
+and a built frontend in `apps/desktop/dist`, which `npm run build:desktop` makes.
+The Rust figure depends on the platform, because `macos.rs` and `linux.rs` in the
+mpv plugin each build only on their own system.
+
+CI publishes the [frontend report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
+and the [Rust report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/) for
+`main` to GitHub Pages. Both come from Linux runs.
 
 A Husky pre-commit hook runs Prettier and ESLint on the staged files through
 lint-staged, then runs the tests.
@@ -150,3 +173,12 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |
 | [Release — one-click pipeline](../.github/workflows/release-pipeline.yml) | Manual | Merges `dev` into `main`, bumps the version and pushes the tag. |
 | [Release — bump version (PR)](../.github/workflows/release-bump.yml), [Release — push tag](../.github/workflows/release-tag.yml) | Manual | The same release in two steps, for when `main` requires pull requests. |
+
+The workflows pin each action to a commit, with its version in a comment. Dependabot
+opens pull requests against `dev` each week for npm packages, crates and actions,
+once a release is a week old. Minor and patch updates come grouped by ecosystem, and
+each major update comes alone. Tauri is the exception. Its npm packages and its crates
+each come in one pull request, majors included, and the Tauri CLI won't build while
+the two differ by a minor version. Combine the two into one pull request before
+merging. Dependabot reads [`dependabot.yml`](../.github/dependabot.yml) from `main`,
+so a change to it takes effect after the next release.

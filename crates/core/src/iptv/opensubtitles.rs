@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-const API_URL: &str = "https://api.opensubtitles.com/api/v1";
+const OPENSUBTITLES_URL: &str = "https://api.opensubtitles.com/api/v1";
 
 /// How long a cached search stays fresh. New subtitles for a title turn up
 /// rarely, so a day saves requests without hiding much.
@@ -177,7 +177,7 @@ pub async fn search_subtitles(
 ) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
     search_from(
         crate::http::client(),
-        API_URL,
+        OPENSUBTITLES_URL,
         imdb_id,
         season,
         episode,
@@ -260,7 +260,14 @@ pub async fn download_subtitle(
     api_key: &str,
     dest_dir: &Path,
 ) -> Result<PathBuf, OpenSubtitlesError> {
-    download_from(crate::http::client(), API_URL, file_id, api_key, dest_dir).await
+    download_from(
+        crate::http::client(),
+        OPENSUBTITLES_URL,
+        file_id,
+        api_key,
+        dest_dir,
+    )
+    .await
 }
 
 /// The work of [`download_subtitle`], taking the client and address so tests
@@ -329,7 +336,7 @@ fn rejected_key(status: StatusCode) -> Option<OpenSubtitlesError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::test_server;
+    use crate::http::test_server::{self, header};
     use serde_json::json;
     use std::sync::mpsc::Receiver;
 
@@ -337,8 +344,8 @@ mod tests {
     fn spaces_around_the_key_are_ignored() {
         let client = crate::http::client();
         for request in [
-            search_request(client, API_URL, "tt0468569", None, None, " KEY\n"),
-            download_link_request(client, API_URL, 1, " KEY\n"),
+            search_request(client, OPENSUBTITLES_URL, "tt0468569", None, None, " KEY\n"),
+            download_link_request(client, OPENSUBTITLES_URL, 1, " KEY\n"),
         ] {
             let request = request.build().unwrap();
             assert_eq!(request.headers()["Api-Key"], "KEY");
@@ -349,7 +356,7 @@ mod tests {
     fn episode_searches_name_the_season_and_episode() {
         let request = search_request(
             crate::http::client(),
-            API_URL,
+            OPENSUBTITLES_URL,
             "tt0903747",
             Some(2),
             Some(5),
@@ -529,8 +536,7 @@ mod tests {
     #[test]
     fn http_errors_leave_out_the_request_url() {
         let err = OpenSubtitlesError::from(crate::http::error_with_url("unix:/file?token=SECRET"));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
     }
 
     #[test]
@@ -555,10 +561,6 @@ mod tests {
 
     // --- Requests against a local server ---
 
-    fn header_lines(request: &str) -> Vec<String> {
-        request.lines().map(str::to_lowercase).collect()
-    }
-
     #[tokio::test]
     async fn a_search_sends_the_title_and_key_and_lists_what_it_finds() {
         let found = json!({
@@ -571,8 +573,8 @@ mod tests {
                 }
             }]
         });
-        let (server, requests) = test_server::serve_once_recording("200 OK", found.to_string());
-        let client = test_server::client();
+        let (server, client, requests) =
+            test_server::serve_once_with_client("200 OK", found.to_string());
 
         let result = search_from(&client, &server, "tt0113277", None, None, "KEY")
             .await
@@ -584,16 +586,12 @@ mod tests {
             request.starts_with("GET /subtitles?imdb_id=0113277&type=movie HTTP/1.1"),
             "{request}"
         );
-        assert!(
-            header_lines(&request).contains(&"api-key: key".into()),
-            "{request}"
-        );
+        assert_eq!(header(&request, "api-key"), Some("KEY"), "{request}");
     }
 
     #[tokio::test]
     async fn searches_and_downloads_with_a_rejected_key_are_api_errors() {
-        let client = test_server::client();
-        let server = test_server::serve_once("401 Unauthorized", "");
+        let (server, client, _) = test_server::serve_once_with_client("401 Unauthorized", "");
         let result = search_from(&client, &server, "tt0113277", None, None, "KEY").await;
         assert!(
             matches!(&result, Err(OpenSubtitlesError::Api(m)) if m == "key rejected with HTTP 401"),
@@ -611,8 +609,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_search_is_an_http_error() {
-        let server = test_server::serve_once("500 Internal Server Error", "");
-        let client = test_server::client();
+        let (server, client, _) =
+            test_server::serve_once_with_client("500 Internal Server Error", "");
         let result = search_from(&client, &server, "tt0113277", None, None, "KEY").await;
         assert!(
             matches!(result, Err(OpenSubtitlesError::Http(_))),
@@ -620,28 +618,29 @@ mod tests {
         );
     }
 
-    /// Serves a subtitle file, answering with `status` and `file`, behind a
-    /// link to `file_name` that a separate API server hands out, the way
-    /// OpenSubtitles does. Returns the API's URL and the requests each server
-    /// read.
+    /// Serves a subtitle file at `/temp/abc`, answering with `status` and
+    /// `file`. A separate API server hands out the link to it along with
+    /// `file_name`, the name the API reports for the file, the way
+    /// OpenSubtitles does. Returns the API's URL, a client and the requests
+    /// each server read.
     fn serve_download(
         file_name: &str,
         status: &str,
         file: &str,
-    ) -> (String, Receiver<String>, Receiver<String>) {
+    ) -> (String, reqwest::Client, Receiver<String>, Receiver<String>) {
         let (files, file_requests) = test_server::serve_once_recording(status, file);
         let link = json!({ "link": format!("{files}/temp/abc"), "file_name": file_name });
-        let (api, api_requests) = test_server::serve_once_recording("200 OK", link.to_string());
-        (api, api_requests, file_requests)
+        let (api, client, api_requests) =
+            test_server::serve_once_with_client("200 OK", link.to_string());
+        (api, client, api_requests, file_requests)
     }
 
     #[tokio::test]
     async fn a_subtitle_is_saved_from_its_link_without_sending_the_key_there() {
-        let (api, api_requests, file_requests) =
+        let (api, client, api_requests, file_requests) =
             serve_download("Heat.1995.VTT", "200 OK", "WEBVTT\n");
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("subtitles");
-        let client = test_server::client();
 
         let path = download_from(&client, &api, 7, "KEY", &dest).await.unwrap();
 
@@ -652,8 +651,9 @@ mod tests {
             api_request.starts_with("POST /download HTTP/1.1"),
             "{api_request}"
         );
-        assert!(
-            header_lines(&api_request).contains(&"api-key: key".into()),
+        assert_eq!(
+            header(&api_request, "api-key"),
+            Some("KEY"),
             "{api_request}"
         );
         assert!(api_request.ends_with(r#"{"file_id":7}"#), "{api_request}");
@@ -663,22 +663,18 @@ mod tests {
             file_request.starts_with("GET /temp/abc HTTP/1.1"),
             "{file_request}"
         );
-        let file_headers = header_lines(&file_request);
-        assert!(
-            !file_headers.iter().any(|h| h.starts_with("api-key:")),
-            "{file_request}"
-        );
-        assert!(
-            file_headers.contains(&"accept-encoding: identity".into()),
+        assert_eq!(header(&file_request, "api-key"), None, "{file_request}");
+        assert_eq!(
+            header(&file_request, "accept-encoding"),
+            Some("identity"),
             "{file_request}"
         );
     }
 
     #[tokio::test]
     async fn a_file_name_without_an_extension_is_saved_as_srt() {
-        let (api, _, _) = serve_download("subtitle", "200 OK", "1\n");
+        let (api, client, _, _) = serve_download("subtitle", "200 OK", "1\n");
         let dest = tempfile::tempdir().unwrap();
-        let client = test_server::client();
         let path = download_from(&client, &api, 7, "KEY", dest.path())
             .await
             .unwrap();
@@ -701,9 +697,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_link_that_fails_saves_nothing() {
-        let (api, _, _) = serve_download("Heat.srt", "404 Not Found", "");
+        let (api, client, _, _) = serve_download("Heat.srt", "404 Not Found", "");
         let dest = tempfile::tempdir().unwrap();
-        let client = test_server::client();
         let result = download_from(&client, &api, 7, "KEY", dest.path()).await;
         assert!(
             matches!(result, Err(OpenSubtitlesError::Http(_))),
@@ -714,11 +709,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_folder_that_cannot_be_made_is_an_io_error() {
-        let (api, _, _) = serve_download("Heat.srt", "200 OK", "1\n");
+        let (api, client, _, _) = serve_download("Heat.srt", "200 OK", "1\n");
         let dir = tempfile::tempdir().unwrap();
         let taken = dir.path().join("taken");
         std::fs::write(&taken, "").unwrap();
-        let client = test_server::client();
         let result = download_from(&client, &api, 7, "KEY", &taken.join("subtitles")).await;
         assert!(
             matches!(result, Err(OpenSubtitlesError::Io(_))),
