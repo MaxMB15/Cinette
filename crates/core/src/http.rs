@@ -114,60 +114,135 @@ pub(crate) fn error_with_url(url: &str) -> reqwest::Error {
         .expect_err("a URL without a host is rejected")
 }
 
-/// A one-shot local HTTP server, so tests can check how a client handles a
-/// response without reaching a real service.
-#[cfg(test)]
-pub(crate) mod test_server {
+/// Local HTTP servers, so tests can check how a client handles a response
+/// without reaching a real service.
+///
+/// Other crates get it from the `test-util` feature, which only their
+/// dev-dependencies should turn on.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_server {
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
 
     /// Answers a single request with `status` and `body`, and returns the
     /// server's base URL.
-    pub(crate) fn serve_once(status: &'static str, body: &'static str) -> String {
+    pub fn serve_once(status: &str, body: impl Into<String>) -> String {
         serve_once_recording(status, body).0
     }
 
     /// Like [`serve_once`], and also hands back the request line and headers
     /// the server read.
-    pub(crate) fn serve_once_recording(
-        status: &'static str,
-        body: &'static str,
+    pub fn serve_once_recording(
+        status: &str,
+        body: impl Into<String>,
     ) -> (String, mpsc::Receiver<String>) {
+        serve_in_order(vec![(status.to_string(), body.into())])
+    }
+
+    /// Answers one request with each status and body in turn, then stops.
+    /// Returns the base URL and the requests the server read, in order.
+    pub fn serve_in_order(replies: Vec<(String, String)>) -> (String, mpsc::Receiver<String>) {
+        let (listener, url) = bind();
         let (sender, receiver) = mpsc::channel();
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
-        let addr = listener.local_addr().expect("read the bound address");
         std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            // The request has to be read before replying, or the client may
-            // see the connection reset instead of the response.
-            let mut request = Vec::new();
-            let mut buf = [0u8; 1024];
-            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                match stream.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => request.extend_from_slice(&buf[..n]),
-                }
+            for (status, body) in replies {
+                let Some((mut stream, request)) = accept(&listener) else {
+                    return;
+                };
+                let _ = sender.send(request);
+                respond(&mut stream, &status, &body);
             }
-            let _ = sender.send(String::from_utf8_lossy(&request).into_owned());
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
         });
-        (format!("http://{addr}"), receiver)
+        (url, receiver)
+    }
+
+    /// One reply of [`serve_routes`].
+    pub struct Route {
+        pattern: String,
+        status: String,
+        body: String,
+    }
+
+    /// Answers requests whose request line contains `pattern`, such as a path
+    /// or a query parameter, with `status` and `body`.
+    pub fn route(pattern: &str, status: &str, body: impl Into<String>) -> Route {
+        Route {
+            pattern: pattern.to_string(),
+            status: status.to_string(),
+            body: body.into(),
+        }
+    }
+
+    /// Answers every request with the first route that matches it, or with
+    /// 404 Not Found when none does, for clients that send several requests
+    /// in no fixed order. Returns the base URL and the requests the server
+    /// read. It runs until the test process ends.
+    pub fn serve_routes(routes: Vec<Route>) -> (String, mpsc::Receiver<String>) {
+        let (listener, url) = bind();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Some((mut stream, request)) = accept(&listener) {
+                let line = request.lines().next().unwrap_or_default();
+                let (status, body) = routes
+                    .iter()
+                    .find(|route| line.contains(&route.pattern))
+                    .map_or(("404 Not Found", ""), |route| {
+                        (route.status.as_str(), route.body.as_str())
+                    });
+                // A test that dropped the receiver still gets its replies.
+                let _ = sender.send(request);
+                respond(&mut stream, status, body);
+            }
+        });
+        (url, receiver)
     }
 
     /// A client that reaches the loopback server even when the machine has a
     /// proxy configured.
-    pub(crate) fn client() -> reqwest::Client {
+    pub fn client() -> reqwest::Client {
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("build a test client")
+    }
+
+    fn bind() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("read the bound address");
+        (listener, format!("http://{addr}"))
+    }
+
+    /// Waits for a client that sends a whole request line and headers, and
+    /// returns its connection and what it sent. None once the listener fails.
+    fn accept(listener: &TcpListener) -> Option<(TcpStream, String)> {
+        loop {
+            let (mut stream, _) = listener.accept().ok()?;
+            // The request has to be read before replying, or the client may
+            // see the connection reset instead of the response.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            let complete = loop {
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break true;
+                }
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break false,
+                    Ok(n) => request.extend_from_slice(&buf[..n]),
+                }
+            };
+            if complete {
+                return Some((stream, String::from_utf8_lossy(&request).into_owned()));
+            }
+        }
+    }
+
+    fn respond(stream: &mut TcpStream, status: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
     }
 }
 
@@ -225,5 +300,38 @@ mod tests {
         client();
         assert!(!set_app_version("9.9.9"));
         assert_ne!(user_agent(), "MaxVideoPlayer/9.9.9");
+    }
+
+    async fn get(url: String) -> (u16, String) {
+        let response = test_server::client().get(url).send().await.unwrap();
+        (response.status().as_u16(), response.text().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_test_server_answers_in_order_and_records_each_request() {
+        let (url, requests) = test_server::serve_in_order(vec![
+            ("200 OK".into(), "first".into()),
+            ("500 Internal Server Error".into(), "second".into()),
+        ]);
+        assert_eq!(get(format!("{url}/a")).await, (200, "first".into()));
+        assert_eq!(get(format!("{url}/b")).await, (500, "second".into()));
+        assert!(requests.recv().unwrap().starts_with("GET /a "));
+        assert!(requests.recv().unwrap().starts_with("GET /b "));
+    }
+
+    #[tokio::test]
+    async fn the_test_server_routes_by_request_line_and_404s_the_rest() {
+        let (url, _) = test_server::serve_routes(vec![
+            test_server::route("action=one", "200 OK", "one"),
+            test_server::route("/two", "201 Created", "two"),
+        ]);
+        let (one, two, other) = tokio::join!(
+            get(format!("{url}/api?action=one")),
+            get(format!("{url}/two")),
+            get(format!("{url}/three")),
+        );
+        assert_eq!(one, (200, "one".into()));
+        assert_eq!(two, (201, "two".into()));
+        assert_eq!(other, (404, String::new()));
     }
 }
