@@ -122,6 +122,7 @@ jobs:
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -154,8 +155,9 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Rust type-check of mvp-core
-        run: cargo check --locked -p mvp-core
+      # Clippy type-checks too, and any warning fails the job.
+      - name: Lint mvp-core with Clippy
+        run: cargo clippy --locked -p mvp-core --all-targets -- -D warnings
 
       - name: Run Rust tests
         run: cargo test --locked -p mvp-core -- --include-ignored
@@ -237,6 +239,7 @@ jobs:
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -270,6 +273,11 @@ jobs:
 
       - name: Build frontend
         run: npm run build:desktop
+
+      # Runs after the frontend build and the sidecar fetch, which the app's
+      # build script needs. This is the only job that checks macos.rs.
+      - name: Lint the workspace with Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Set up Developer ID signing
         id: apple
@@ -321,7 +329,7 @@ jobs:
         with:
           toolchain: stable
           # cargo-llvm-cov reads the coverage data with LLVM's tools.
-          components: llvm-tools
+          components: llvm-tools, clippy
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
@@ -359,6 +367,10 @@ jobs:
       - name: Build frontend
         run: npm run build:desktop
 
+      # Checks linux.rs and the plugin and app code that only builds here.
+      - name: Lint the workspace with Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
       # The test job covers only mvp-core. The plugin and the app need GTK and
       # libmpv, which this job installs, so the whole workspace's tests run here
       # and measure Rust coverage. The figure counts linux.rs and not macos.rs,
@@ -376,6 +388,16 @@ jobs:
           jq '{total: {lines: {pct: (.data[0].totals.lines.percent * 100 | round / 100)}}}' \
             target/rust-coverage/summary.json > rust-coverage/coverage-summary.json
           echo "Rust line coverage: $(jq .total.lines.pct rust-coverage/coverage-summary.json)%" >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs after the summary is written, so a failing run still shows the figure.
+      - name: Check Rust coverage is at least 80%
+        run: |
+          set -euo pipefail
+          pct=$(jq .total.lines.pct rust-coverage/coverage-summary.json)
+          if ! jq -e '.total.lines.pct >= 80' rust-coverage/coverage-summary.json > /dev/null; then
+            echo "::error::Rust line coverage is ${pct}%, below the 80% minimum."
+            exit 1
+          fi
 
       - name: Upload Rust coverage artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'

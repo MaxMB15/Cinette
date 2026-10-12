@@ -95,13 +95,7 @@ struct OmdbRating {
 
 /// Convert an OMDB "N/A" string to None.
 fn na_to_none(s: Option<String>) -> Option<String> {
-    s.and_then(|v| {
-        if v == "N/A" || v.is_empty() {
-            None
-        } else {
-            Some(v)
-        }
-    })
+    s.filter(|v| v != "N/A" && !v.is_empty())
 }
 
 /// Extract the Rotten Tomatoes rating from the Ratings array.

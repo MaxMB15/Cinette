@@ -51,6 +51,7 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-apple-ios-sim
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -84,3 +85,9 @@ jobs:
           APP="apps/desktop/src-tauri/gen/apple/build/arm64-sim/Max Video Player.app"
           test -d "$APP"
           plutil -p "$APP/Info.plist" | grep -E 'CFBundleIdentifier|MinimumOSVersion|CFBundleShortVersionString'
+
+      # The build above shows warnings without failing. This lints the
+      # workspace for the iOS target, including the code that only builds
+      # there, and fails on any warning.
+      - name: Lint the workspace for iOS with Clippy
+        run: cargo clippy --locked --workspace --target aarch64-apple-ios-sim --all-targets -- -D warnings

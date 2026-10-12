@@ -48,7 +48,7 @@ fn ensure_c_locale() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| unsafe {
-        libc::setlocale(libc::LC_NUMERIC, b"C\0".as_ptr() as *const _);
+        libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
     });
 }
 
