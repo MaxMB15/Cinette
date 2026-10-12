@@ -85,8 +85,9 @@ impl TestApp {
         self.dir.path().join("downloads")
     }
 
-    /// The folder that stands in for the app's data and config folders, with
-    /// its cache in `caches` and its logs in `logs`. `settings.json` goes here.
+    /// The folder that stands in for the app's data, local data and config
+    /// folders, with its cache in `caches` and its logs in `logs`.
+    /// `settings.json` goes here.
     pub(crate) fn app_dir(&self) -> PathBuf {
         self.dir.path().join("app")
     }

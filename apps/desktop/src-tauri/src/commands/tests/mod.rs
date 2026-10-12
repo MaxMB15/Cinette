@@ -78,6 +78,49 @@ fn non_empty_key_skips_missing_and_blank_keys() {
     );
 }
 
+#[test]
+fn trimmed_key_drops_spaces_and_blank_keys() {
+    assert_eq!(trimmed_key(" abc123\n"), Some("abc123"));
+    assert_eq!(trimmed_key("abc 123"), Some("abc 123"));
+    assert_eq!(trimmed_key(""), None);
+    assert_eq!(trimmed_key(" \t\n"), None);
+}
+
+#[test]
+fn omdb_key_accepted_tells_a_bad_key_from_other_answers() {
+    let found = OmdbData {
+        title: "The Matrix".into(),
+        year: None,
+        rated: None,
+        runtime: None,
+        genre: None,
+        director: None,
+        actors: None,
+        plot: None,
+        poster_url: None,
+        imdb_rating: None,
+        rotten_tomatoes: None,
+        imdb_id: None,
+        imdb_votes: None,
+    };
+    assert_eq!(omdb_key_accepted(Ok(found)), Ok(true));
+    assert_eq!(
+        omdb_key_accepted(Err(OmdbError::Api("Invalid API key!".into()))),
+        Ok(false)
+    );
+    assert_eq!(
+        omdb_key_accepted(Err(OmdbError::Api("No API key provided.".into()))),
+        Ok(false)
+    );
+    // OMDb only says this to a key it knows.
+    assert_eq!(
+        omdb_key_accepted(Err(OmdbError::Api("Request limit reached!".into()))),
+        Ok(true)
+    );
+    // A reply that can't be read says nothing about the key.
+    assert!(omdb_key_accepted(Err(OmdbError::Parse("not JSON".into()))).is_err());
+}
+
 #[tokio::test]
 async fn a_saved_key_is_read_back_and_written_to_the_app_folder() {
     let app = TestApp::new();

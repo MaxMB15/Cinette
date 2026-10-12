@@ -140,6 +140,10 @@ export const getOmdbApiKey = (): Promise<string | null> => invoke("get_omdb_api_
 
 export const setOmdbApiKey = (key: string): Promise<void> => invoke("set_omdb_api_key", { key });
 
+/** Whether OMDb takes `key`, which needn't be saved. Rejects when OMDb can't be reached. */
+export const testOmdbApiKey = (key: string): Promise<boolean> =>
+	invoke("test_omdb_api_key", { key });
+
 export const fetchOmdbData = (
 	channelId: string,
 	title: string,

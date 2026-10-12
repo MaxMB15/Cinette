@@ -23,6 +23,15 @@ export const readStorage = (key: string, area: StorageArea = "local"): string | 
 	}
 };
 
+/** Removes a stored value. Blocked storage is logged and otherwise ignored. */
+export const removeStorage = (key: string, area: StorageArea = "local"): void => {
+	try {
+		storageFor(area).removeItem(key);
+	} catch (err) {
+		console.warn(`[storage] could not remove ${key}:`, err);
+	}
+};
+
 /**
  * Stores a value and reports whether it was saved. A full quota or blocked
  * storage returns false instead of throwing.

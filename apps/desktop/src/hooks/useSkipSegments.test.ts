@@ -3,6 +3,7 @@
 
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { deferred } from "@/test/deferred";
 import { makeSegment } from "@/test/segments";
 import type { SkipSegment } from "@/lib/types";
 
@@ -38,13 +39,6 @@ const render = (query: Query) =>
 
 /** Lets pending lookups settle and React render what they set. */
 const settle = () => act(async () => {});
-
-/** A lookup that answers only when the test says so. */
-const deferred = () => {
-	let answer: (segments: SkipSegment[]) => void = () => {};
-	const promise = new Promise<SkipSegment[]>((resolve) => (answer = resolve));
-	return { promise, answer };
-};
 
 const quietWarnings = () => {
 	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -109,7 +103,7 @@ describe("useSkipSegments", () => {
 
 		it("looks up again once it moves further, keeping the last times meanwhile", async () => {
 			const intro = makeSegment();
-			const again = deferred();
+			const again = deferred<SkipSegment[]>();
 			mockGet.mockResolvedValueOnce([intro]).mockReturnValueOnce(again.promise);
 			const { result, rerender } = render(episode);
 			await waitFor(() => expect(result.current.segments).toEqual([intro]));
@@ -118,7 +112,7 @@ describe("useSkipSegments", () => {
 			expect(mockGet).toHaveBeenLastCalledWith("tt0903747", 1, 2, longer);
 			expect(result.current.segments).toEqual([intro]);
 			const moved = makeSegment({ start: 61, end: 121 });
-			again.answer([moved]);
+			again.resolve([moved]);
 			await waitFor(() => expect(result.current.segments).toEqual([moved]));
 		});
 
@@ -165,25 +159,25 @@ describe("useSkipSegments", () => {
 	});
 
 	it("ignores an answer for a stream that's no longer playing", async () => {
-		const first = deferred();
+		const first = deferred<SkipSegment[]>();
 		const other = makeSegment({ start: 10, end: 40 });
 		mockGet.mockReturnValueOnce(first.promise).mockResolvedValueOnce([other]);
 		const { result, rerender } = render(episode);
 		rerender({ ...episode, url: "http://example.com/other.mkv" });
 		await waitFor(() => expect(result.current.segments).toEqual([other]));
-		first.answer([makeSegment()]);
+		first.resolve([makeSegment()]);
 		await settle();
 		expect(result.current.segments).toEqual([other]);
 	});
 
 	it("ignores an older lookup's answer for the same video", async () => {
-		const first = deferred();
+		const first = deferred<SkipSegment[]>();
 		const moved = makeSegment({ start: 61, end: 121 });
 		mockGet.mockReturnValueOnce(first.promise).mockResolvedValueOnce([moved]);
 		const { result, rerender } = render(episode);
 		rerender({ ...episode, duration: 2900 });
 		await waitFor(() => expect(result.current.segments).toEqual([moved]));
-		first.answer([makeSegment()]);
+		first.resolve([makeSegment()]);
 		await settle();
 		expect(result.current.segments).toEqual([moved]);
 	});
