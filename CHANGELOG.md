@@ -51,7 +51,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - A search with a space before or after it no longer comes up empty (#114).
 - Counts of one are no longer plural, as in "1 movies" or "1 groups" (#114).
 - A rating with no votes no longer shows a stray 0 beside it (#114).
-- Screen readers name the search bar's clear button (#114).
+- Screen readers name the search bar's clear button and the icon buttons in Manage Categories (#114).
 
 ## [0.5.3] - 2026-10-09
 
