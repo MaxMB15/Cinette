@@ -597,7 +597,7 @@ fn build_wayland(
     let egl = egl()?;
 
     // Secondary reference to the GTK Wayland connection. Shares the same fd
-    // and object namespace, so ObjectId::from_ptr recognises GTK's objects.
+    // and object namespace, so ObjectId::from_ptr recognizes GTK's objects.
     //
     // SAFETY: `wl_display_ptr` is a valid `wl_display *` owned by GTK for
     // the lifetime of the window. `from_foreign_display` only reads the fd
@@ -641,13 +641,13 @@ fn build_wayland(
     conn.flush().map_err(|e| format!("wayland flush: {e}"))?;
 
     // Prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)` so libmpv's
-    // Wayland integration recognises the display as a Wayland one.
+    // Wayland integration recognizes the display as a Wayland one.
     // `eglGetDisplay` covers older drivers.
     const EGL_PLATFORM_WAYLAND_EXT: u32 = 0x31D8;
     let egl_display = wayland_egl_display(egl, wl_display_ptr, EGL_PLATFORM_WAYLAND_EXT)?;
 
     // `eglInitialize` is idempotent per spec, but some Mesa releases
-    // mishandle double-init on a display already initialised by GTK. Only
+    // mishandle double-init on a display already initialized by GTK. Only
     // call it if `EGL_VERSION` is not yet queryable.
     if egl.query_string(Some(egl_display), egl::VERSION).is_err() {
         egl.initialize(egl_display)
@@ -830,7 +830,7 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
         ("vo", "libmpv"),
         // `auto-copy` decodes on the GPU but copies frames to CPU for GL
         // upload. Plain `auto` can map VAAPI surfaces directly as GL
-        // textures, which produces colour corruption on drivers that
+        // textures, which produces color corruption on drivers that
         // cannot handle the NV12 to RGB interop.
         ("hwdec", "auto-copy"),
         ("ao", "pulse,pipewire,alsa,"),
