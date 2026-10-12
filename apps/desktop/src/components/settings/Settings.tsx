@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Select } from "@/components/ui/select";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform, platformName } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
@@ -42,21 +43,33 @@ import {
 	setDownloadFolder,
 	getDownloadConcurrency,
 	setDownloadConcurrency,
+	countDownloadsDue,
 } from "@/lib/tauri";
+import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { useDownloads } from "@/hooks/useDownloads";
+import { RETENTION_OPTIONS } from "@/lib/retention";
 import {
 	MAX_VOLUME,
+	SKIP_OPTIONS,
 	readDefaultVolume,
 	readHwdecEnabled,
+	readSkipIntervals,
 	writeDefaultVolume,
 	writeHwdecEnabled,
+	writeSkipInterval,
+	type SkipIntervals,
 } from "@/lib/player-prefs";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { useScrollToOmdbKey } from "@/hooks/useScrollToOmdbKey";
+import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
 import { LegalNotices } from "./LegalNotices";
 import { DownloadHistoryDialog } from "./DownloadHistory";
 
 type OmdbStatus = "idle" | "valid" | "invalid";
 type SaveStatus = "idle" | "saved" | "error";
 type HistoryStatus = "idle" | "cleared";
+
+const SKIP_CHOICES = SKIP_OPTIONS.map((n) => ({ value: n, label: `${n} seconds` }));
 
 const DonationReset = () => {
 	const [reset, setReset] = useState(false);
@@ -106,6 +119,12 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		writeDefaultVolume(volume);
 	};
 
+	const [skipIntervals, setSkipIntervals] = useState(readSkipIntervals);
+	const handleSkipChange = (direction: keyof SkipIntervals, seconds: number) => {
+		setSkipIntervals((s) => ({ ...s, [direction]: seconds }));
+		writeSkipInterval(direction, seconds);
+	};
+
 	// OMDB state
 	const [omdbKey, setOmdbKey] = useState("");
 	const [omdbKeyVisible, setOmdbKeyVisible] = useState(false);
@@ -114,6 +133,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [omdbTesting, setOmdbTesting] = useState(false);
 	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const omdbKeyInputRef = useRef<HTMLInputElement>(null);
+	// The OMDb hint in an info sheet opens Settings at the key field.
+	useScrollToOmdbKey(omdbKeyInputRef);
 
 	// OpenSubtitles state
 	const [openSubtitlesKey, setOpenSubtitlesKey] = useState("");
@@ -149,6 +171,15 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [concurrency, setConcurrency] = useState(3);
 	const [showDownloadHistory, setShowDownloadHistory] = useState(false);
 	const folderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const { retentionDays, setRetentionDays } = useDownloads();
+	/**
+	 * A shorter retention that would delete downloads at once, waiting on a
+	 * yes. `count` is null when counting failed.
+	 */
+	const [pendingRetention, setPendingRetention] = useState<{
+		days: number | null;
+		count: number | null;
+	} | null>(null);
 
 	useEffect(() => {
 		getVersion()
@@ -201,6 +232,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const handleSaveOmdbKey = async () => {
 		try {
 			await setOmdbApiKey(omdbKey);
+			rememberHasOmdbKey(Boolean(omdbKey));
 			setSaveStatus("saved");
 			setSaveError(null);
 			setOmdbStatus("idle");
@@ -299,7 +331,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 	const handleClearCaches = async () => {
 		const confirmed = await ask(
-			"Clear all cached data (OMDB, MDBList, OpenSubtitles, EPG)? This cannot be undone.",
+			"Clear cached movie and series details, guide data, episode lists and downloaded subtitles? This cannot be undone.",
 			{ title: "Clear Caches", kind: "warning" }
 		);
 		if (!confirmed) return;
@@ -349,6 +381,16 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		const clamped = Math.max(1, Math.min(10, Math.round(n)));
 		setConcurrency(clamped);
 		setDownloadConcurrency(clamped).catch(() => {});
+	};
+
+	/** `value` is a choice from RETENTION_OPTIONS, where 0 means never delete. */
+	const handleRetentionChange = async (value: number) => {
+		const days = value > 0 ? value : null;
+		if (days === retentionDays) return;
+		// When counting fails, ask anyway rather than delete without asking.
+		const count = days === null ? 0 : await countDownloadsDue(days).catch(() => null);
+		if (count === 0) setRetentionDays(days).catch(() => {});
+		else setPendingRetention({ days, count });
 	};
 
 	return (
@@ -414,11 +456,46 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								step={5}
 								onValueChange={handleDefaultVolumeChange}
 								aria-label="Default volume"
+								aria-valuetext={`${defaultVolume}%`}
 							/>
 							<p className="text-xs text-muted-foreground mt-2">
 								Playback starts at this volume. Changes you make in the player last
 								until you quit the app.
 							</p>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Skip back</p>
+								<p className="text-xs text-muted-foreground">
+									How far the skip back button, a double-tap on the left of the
+									video and the left arrow key go back.
+								</p>
+							</div>
+							<Select
+								value={skipIntervals.back}
+								onChange={(n) => handleSkipChange("back", n)}
+								options={SKIP_CHOICES}
+								className="w-32 shrink-0"
+								aria-label="Skip back"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Skip forward</p>
+								<p className="text-xs text-muted-foreground">
+									How far the skip forward button, a double-tap on the right of
+									the video and the right arrow key go forward.
+								</p>
+							</div>
+							<Select
+								value={skipIntervals.forward}
+								onChange={(n) => handleSkipChange("forward", n)}
+								options={SKIP_CHOICES}
+								className="w-32 shrink-0"
+								aria-label="Skip forward"
+							/>
 						</div>
 					</CardContent>
 				</Card>
@@ -522,9 +599,15 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent className="space-y-4">
 						<div>
 							<p className="text-sm font-medium mb-1">OMDB API</p>
+							<p className="mb-2 text-xs text-muted-foreground">
+								Adds details and ratings to movies and series. With a key set, the
+								app sends titles to OMDb and IMDb IDs to whatson-api for more
+								ratings.
+							</p>
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<Input
+										ref={omdbKeyInputRef}
 										type={omdbKeyVisible ? "text" : "password"}
 										placeholder="Enter API key…"
 										value={omdbKey}
@@ -785,6 +868,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								/>
 							</div>
 
+							{/* Retention */}
+							<div>
+								<p className="text-sm font-medium mb-1">Delete downloads after</p>
+								<p className="text-xs text-muted-foreground mb-2">
+									The app deletes a finished download this long after it was
+									downloaded or last played. Choose Keep on a download to hold on
+									to it.
+								</p>
+								<Select
+									value={retentionDays ?? 0}
+									onChange={(v) => void handleRetentionChange(v)}
+									options={RETENTION_OPTIONS}
+									aria-label="Delete downloads after"
+									className="w-40"
+								/>
+							</div>
+
 							{/* History — opened in a wide popup (Settings is too narrow). */}
 							<div>
 								<p className="text-sm font-medium mb-2">Download history</p>
@@ -837,8 +937,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent>
 						<div className="space-y-2">
 							<p className="text-xs text-muted-foreground">
-								Clears all cached metadata (OMDB, MDBList, OpenSubtitles, WhatsonTV,
-								EPG). Channel data and settings are not affected.
+								Clears cached movie and series details, guide data, episode lists
+								and downloaded subtitles. Playlists, favorites, history and settings
+								are not affected.
 							</p>
 							<div className="flex items-center gap-4">
 								<Button variant="destructive" size="sm" onClick={handleClearCaches}>
@@ -925,11 +1026,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 											"Check for Updates"
 										)}
 									</Button>
-									{!updateState.checking && !updateState.update && (
-										<span className="text-xs text-muted-foreground">
-											You're up to date.
-										</span>
-									)}
+									{/* Always rendered, so screen readers announce the result when it appears. */}
+									<span role="status" className="text-xs">
+										{!updateState.checking &&
+											!updateState.update &&
+											(updateState.checkError ? (
+												<span
+													className="text-destructive"
+													title={updateState.checkError}
+												>
+													Couldn't check for updates.
+												</span>
+											) : (
+												<span className="text-muted-foreground">
+													You're up to date.
+												</span>
+											))}
+									</span>
 								</div>
 
 								{updateState.update && (
@@ -984,6 +1097,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 				</Card>
 			</div>
 
+			<ConfirmDialog
+				open={pendingRetention !== null}
+				title="Delete downloads now?"
+				message={
+					pendingRetention?.count == null
+						? "Downloads already past this setting will be deleted now."
+						: pendingRetention.count === 1
+							? "1 download is already past this setting. It will be deleted now."
+							: `${pendingRetention.count} downloads are already past this setting. They will be deleted now.`
+				}
+				confirmLabel="Delete"
+				onConfirm={() => {
+					if (pendingRetention) setRetentionDays(pendingRetention.days).catch(() => {});
+					setPendingRetention(null);
+				}}
+				onCancel={() => setPendingRetention(null)}
+			/>
 			<DownloadHistoryDialog
 				open={showDownloadHistory}
 				onClose={() => setShowDownloadHistory(false)}

@@ -1,21 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Ratings from the whatson API, which needs no key, looked up by IMDb id.
+
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Enriched metadata from the whatson-api (aggregates ratings from 13+ platforms).
-/// All fields optional as the API may omit any of them.
+/// The API runs on a host that sleeps when idle, and the first request after a
+/// quiet spell can take most of a minute while it wakes up.
+const WAKE_UP_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Ratings and details from the whatson API, which gathers scores from many
+/// sites. Every field is optional because the API may leave any of them out.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WhatsonData {
     // Core
     pub imdb_id: Option<String>,
     pub title: Option<String>,
-    pub image: Option<String>,        // TMDB CDN poster URL
-    pub item_type: Option<String>,    // "movie" or "tvshow"
+    pub image: Option<String>,     // TMDB CDN poster URL
+    pub item_type: Option<String>, // "movie" or "tvshow"
     pub release_date: Option<String>,
-    pub runtime: Option<i64>,         // seconds
+    pub runtime: Option<i64>, // seconds
     pub certification: Option<String>,
     pub tagline: Option<String>,
 
@@ -45,22 +53,39 @@ pub struct WhatsonData {
     pub tmdb_votes: Option<i64>,
 }
 
+/// Errors from a whatson lookup.
 #[derive(Debug, Error)]
 pub enum WhatsonError {
+    /// The request failed before the server answered.
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
+    /// The server answered with an error status or a rate limit.
     #[error("Whatson API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
+    /// The API has no entry for this title. Kept apart from other errors so
+    /// callers can stop asking for it.
     #[error("Not found")]
     NotFound,
+}
+
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for WhatsonError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
 }
 
 /// Raw platform rating object from the API.
 #[derive(Debug, Deserialize)]
 struct PlatformRating {
-    #[serde(default, deserialize_with = "deserialize_string_or_number")]
+    #[serde(
+        default,
+        deserialize_with = "crate::json::deserialize_number_or_string"
+    )]
     id: Option<String>,
     #[serde(default)]
     users_rating: Option<f64>,
@@ -70,21 +95,6 @@ struct PlatformRating {
     critics_rating: Option<f64>,
     #[serde(default)]
     critics_rating_count: Option<i64>,
-}
-
-/// Deserialize a value that can be a string or a number into Option<String>.
-fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde_json::Value;
-    let v = Option::<Value>::deserialize(deserializer)?;
-    Ok(v.and_then(|v| match v {
-        Value::String(s) => Some(s),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Null => None,
-        _ => None,
-    }))
 }
 
 /// Raw API response item.
@@ -169,7 +179,11 @@ pub fn parse_whatson_response(json: serde_json::Value) -> Result<WhatsonData, Wh
     if json.is_object() && json.get("results").is_some() {
         let resp: WhatsonResponse =
             serde_json::from_value(json).map_err(|e| WhatsonError::Parse(e.to_string()))?;
-        let item = resp.results.into_iter().next().ok_or(WhatsonError::NotFound)?;
+        let item = resp
+            .results
+            .into_iter()
+            .next()
+            .ok_or(WhatsonError::NotFound)?;
         return Ok(item_to_data(item));
     }
 
@@ -190,10 +204,10 @@ pub fn parse_whatson_response(json: serde_json::Value) -> Result<WhatsonData, Wh
 /// Fetch whatson-api data for the given IMDB ID.
 /// `item_type` should be `"movie"` or `"tvshow"`.
 pub async fn fetch_whatson(imdb_id: &str, item_type: &str) -> Result<WhatsonData, WhatsonError> {
-    let client = reqwest::Client::new();
-    let response = client
+    let response = crate::http::client()
         .get("https://whatson-api.onrender.com/")
         .query(&[("imdbId", imdb_id), ("item_type", item_type)])
+        .timeout(WAKE_UP_TIMEOUT)
         .send()
         .await?;
 
@@ -323,7 +337,10 @@ mod tests {
         assert!(data.image.is_some());
         assert_eq!(data.item_type.as_deref(), Some("movie"));
         assert_eq!(data.runtime, Some(8520));
-        assert_eq!(data.tagline.as_deref(), Some("Fear can hold you prisoner. Hope can set you free."));
+        assert_eq!(
+            data.tagline.as_deref(),
+            Some("Fear can hold you prisoner. Hope can set you free.")
+        );
 
         assert_eq!(data.imdb_rating, Some(9.3));
         assert_eq!(data.imdb_votes, Some(3168950));
@@ -370,7 +387,8 @@ mod tests {
 
     #[test]
     fn test_parse_empty_results() {
-        let err = parse_whatson_response(json!({"page": 1, "results": [], "total_results": 0})).unwrap_err();
+        let err = parse_whatson_response(json!({"page": 1, "results": [], "total_results": 0}))
+            .unwrap_err();
         assert!(matches!(err, WhatsonError::NotFound));
     }
 
@@ -417,5 +435,12 @@ mod tests {
         assert!(json_str.contains("\"imdbId\""));
         assert!(json_str.contains("\"rtCriticsRating\""));
         assert!(json_str.contains("\"rtAudienceRating\""));
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = WhatsonError::from(crate::http::error_with_url("unix:/?imdbId=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

@@ -2525,6 +2525,7 @@ dependencies = [
  "futures-util",
  "libc",
  "mvp-core",
+ "oslog",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2536,12 +2537,14 @@ dependencies = [
  "tauri-plugin-os",
  "tauri-plugin-process",
  "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]
@@ -2644,6 +2647,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "memmap2",
+ "percent-encoding",
  "quick-xml 0.37.5",
  "rayon",
  "reqwest 0.12.28",
@@ -3099,6 +3103,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oslog"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d2043d1f61d77cb2f4b1f7b7b2295f40507f5f8e9d1c8bf10a1ca5f97a3969"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -4749,6 +4762,22 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bed24ed0f31939002fad4568e04ba87ba717cd22f85318b867fc427ab88e11b"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus",
 ]
 
 [[package]]

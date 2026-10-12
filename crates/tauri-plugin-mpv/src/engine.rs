@@ -2,12 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! Platform-agnostic libmpv instance management.
-//! Options (vo, hwdec, ao) are passed in by the caller; this file has zero #[cfg] blocks.
+//! Options (vo, hwdec, ao) are passed in by the caller. The only platform code
+//! here is `configure_audio`, which Linux needs after mpv starts.
 
+use crate::log_url::origin_for_log;
 use libmpv2::Mpv;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
     pub is_playing: bool,
@@ -16,17 +19,51 @@ pub struct PlayerState {
     pub volume: f64,
     pub position: f64,
     pub duration: f64,
+    /// The current load has opened and shown its first frame (or started its
+    /// audio). Stays true until the next load, so seeks and buffering later
+    /// on don't clear it. Works for live streams, where duration stays 0.
+    pub playback_started: bool,
+    /// The current load stopped before it ever started playing, for example
+    /// because the server returned an error. mpv goes back to idle when that
+    /// happens.
+    pub open_failed: bool,
+}
+
+/// Written out by hand so a logged state shows only the stream's origin,
+/// since the URL can hold the login.
+impl fmt::Debug for PlayerState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlayerState")
+            .field("is_playing", &self.is_playing)
+            .field("is_paused", &self.is_paused)
+            .field(
+                "current_url",
+                &self.current_url.as_deref().map(origin_for_log),
+            )
+            .field("volume", &self.volume)
+            .field("position", &self.position)
+            .field("duration", &self.duration)
+            .field("playback_started", &self.playback_started)
+            .field("open_failed", &self.open_failed)
+            .finish()
+    }
 }
 
 pub struct MpvEngine {
     mpv: Option<Mpv>,
     current_url: Option<String>,
     audio_logged_playing: bool,
+    playback_started: bool,
 }
 
 impl MpvEngine {
     pub fn new() -> Self {
-        Self { mpv: None, current_url: None, audio_logged_playing: false }
+        Self {
+            mpv: None,
+            current_url: None,
+            audio_logged_playing: false,
+            playback_started: false,
+        }
     }
 
     /// Create a new Mpv instance with the provided options.
@@ -63,6 +100,7 @@ impl MpvEngine {
     /// Set audio properties after mpv_initialize. Options like `aid` and `mute`
     /// must be set as properties (not init options) because `mpv_set_option_string`
     /// rejects them with MPV_ERROR_OPTION_ERROR (-7) on many libmpv builds.
+    #[cfg(target_os = "linux")]
     pub fn configure_audio(&self) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
         if let Err(e) = mpv.set_property("aid", "auto") {
@@ -100,7 +138,10 @@ impl MpvEngine {
         };
         result.map_err(|e| format!("loadfile: {}", e))?;
         if let Some(p) = start_pos.filter(|p| *p > 1.0) {
-            tracing::info!("[MPV engine] loadfile resumed at start=+{p:.3} url={url}");
+            tracing::info!(
+                "[MPV engine] loadfile resumed at start=+{p:.3} origin={}",
+                origin_for_log(url)
+            );
         }
         self.log_audio_state("after loadfile");
         Ok(())
@@ -202,6 +243,7 @@ impl MpvEngine {
     /// Record the current URL (called by MpvState after loadfile succeeds).
     pub fn set_current_url(&mut self, url: &str) {
         self.current_url = Some(url.to_string());
+        self.playback_started = false;
     }
 
     /// Stop playback and destroy the mpv instance.
@@ -212,6 +254,7 @@ impl MpvEngine {
         self.mpv = None;
         self.current_url = None;
         self.audio_logged_playing = false;
+        self.playback_started = false;
     }
 
     pub fn play(&self) -> Result<(), String> {
@@ -328,6 +371,20 @@ impl MpvEngine {
             state.is_paused = mpv.get_property::<bool>("pause").unwrap_or(false);
             state.volume = mpv.get_property::<f64>("volume").unwrap_or(100.0);
             state.is_playing = !state.is_paused && state.current_url.is_some();
+            if state.current_url.is_some() {
+                // Once playback has started the properties aren't read again.
+                let started = self.playback_started;
+                let read = |name: &str| {
+                    if started {
+                        None
+                    } else {
+                        mpv.get_property::<bool>(name).ok()
+                    }
+                };
+                (self.playback_started, state.open_failed) =
+                    open_status(started, read("seeking"), read("idle-active"));
+            }
+            state.playback_started = self.playback_started;
         }
         if !self.audio_logged_playing && state.position > 0.0 {
             self.audio_logged_playing = true;
@@ -335,5 +392,79 @@ impl MpvEngine {
             self.ensure_audio_selected();
         }
         state
+    }
+}
+
+/// Works out `(playback_started, open_failed)` for a load from the latch kept
+/// across polls and mpv's `seeking` and `idle-active` properties, which are
+/// `None` when they can't be read.
+///
+/// `seeking` is unavailable until the file is initialized and reads true until
+/// mpv's first playback restart is done, which is when the first frame is
+/// ready and audio has started. That also covers live streams and a resume
+/// start position. The result is latched so later seeks and stalls don't flip
+/// it back. libmpv defaults to idle=yes, so a load that fails before playing
+/// leaves mpv idle instead of closing it.
+fn open_status(started: bool, seeking: Option<bool>, idle_active: Option<bool>) -> (bool, bool) {
+    if started {
+        return (true, false);
+    }
+    let started = seeking == Some(false);
+    (started, !started && idle_active == Some(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{open_status, PlayerState};
+
+    #[test]
+    fn a_logged_state_hides_the_login_in_the_url() {
+        let state = PlayerState {
+            current_url: Some("http://host.test:8080/live/USER/SECRET/1.ts".into()),
+            ..PlayerState::default()
+        };
+        let logged = format!("{state:?}");
+        assert!(logged.contains("http://host.test:8080"), "{logged}");
+        assert!(!logged.contains("USER") && !logged.contains("SECRET"), "{logged}");
+    }
+
+    #[test]
+    fn open_status_waits_while_the_file_is_not_initialized() {
+        assert_eq!(open_status(false, None, Some(false)), (false, false));
+        assert_eq!(open_status(false, None, None), (false, false));
+    }
+
+    #[test]
+    fn open_status_waits_while_the_first_seek_runs() {
+        assert_eq!(open_status(false, Some(true), Some(false)), (false, false));
+    }
+
+    #[test]
+    fn open_status_starts_when_seeking_ends() {
+        assert_eq!(open_status(false, Some(false), Some(false)), (true, false));
+    }
+
+    #[test]
+    fn open_status_fails_when_mpv_goes_idle_before_playing() {
+        assert_eq!(open_status(false, None, Some(true)), (false, true));
+        assert_eq!(open_status(false, Some(true), Some(true)), (false, true));
+    }
+
+    #[test]
+    fn open_status_stays_started_once_latched() {
+        assert_eq!(open_status(true, Some(true), Some(false)), (true, false));
+        assert_eq!(open_status(true, None, Some(true)), (true, false));
+    }
+
+    #[test]
+    fn serializes_open_status_in_camel_case() {
+        let state = PlayerState {
+            playback_started: true,
+            open_failed: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(state).unwrap();
+        assert_eq!(json["playbackStarted"], true);
+        assert_eq!(json["openFailed"], true);
     }
 }

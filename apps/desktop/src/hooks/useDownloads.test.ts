@@ -19,6 +19,8 @@ const rec = (over: Partial<DownloadRecord>): DownloadRecord => ({
 	error: null,
 	createdAt: 0,
 	finishedAt: null,
+	keep: false,
+	lastPlayedAt: null,
 	...over,
 });
 

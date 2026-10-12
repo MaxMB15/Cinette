@@ -18,3 +18,4 @@ quick-xml = { version = "0.37", features = ["serialize"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 url = { version = "2", features = ["serde"] }
+percent-encoding = "2"

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import type { Provider } from "@/lib/types";
 
 vi.mock("@/lib/tauri", () => ({
@@ -12,7 +12,9 @@ vi.mock("@/lib/tauri", () => ({
 }));
 
 import { ProviderSettingsModal } from "./ProviderSettingsModal";
-import { detectEpgUrl } from "@/lib/tauri";
+import { detectEpgUrl, refreshEpg } from "@/lib/tauri";
+
+const mockRefreshEpg = vi.mocked(refreshEpg);
 
 const provider: Provider = {
 	id: "p1",
@@ -110,5 +112,52 @@ describe("ProviderSettingsModal", () => {
 		const onClose = renderModal();
 		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
 		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+});
+
+/** Presses Refresh EPG and waits for the refresh to finish. */
+const refreshGuide = async () => {
+	fireEvent.click(screen.getByRole("button", { name: "Refresh EPG" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Refresh EPG" })).toBeEnabled());
+};
+
+describe("ProviderSettingsModal guide refresh", () => {
+	beforeEach(() => localStorage.clear());
+
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+	});
+
+	it("says nothing after a refresh that saved programs", async () => {
+		mockRefreshEpg.mockResolvedValue(120);
+		renderModal();
+		await refreshGuide();
+		expect(mockRefreshEpg).toHaveBeenCalledExactlyOnceWith("p1");
+		expect(screen.queryByText(/no programs/)).toBeNull();
+	});
+
+	it("says when the guide came back empty, as a note rather than an error", async () => {
+		mockRefreshEpg.mockResolvedValueOnce(0);
+		renderModal();
+		await refreshGuide();
+		const note = screen.getByText("The guide came back with no programs, so nothing changed.");
+		expect(note).toHaveClass("text-muted-foreground");
+		expect(note).not.toHaveClass("text-destructive");
+
+		mockRefreshEpg.mockResolvedValueOnce(120);
+		await refreshGuide();
+		expect(screen.queryByText(/no programs/)).toBeNull();
+	});
+
+	it("shows why a refresh failed, and clears it on the next try", async () => {
+		mockRefreshEpg.mockRejectedValueOnce("Failed to fetch EPG: timed out");
+		renderModal();
+		await refreshGuide();
+		expect(screen.getByText("Failed to fetch EPG: timed out")).toBeInTheDocument();
+
+		mockRefreshEpg.mockResolvedValueOnce(120);
+		await refreshGuide();
+		expect(screen.queryByText("Failed to fetch EPG: timed out")).toBeNull();
 	});
 });

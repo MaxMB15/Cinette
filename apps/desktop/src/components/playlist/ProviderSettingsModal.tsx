@@ -54,6 +54,9 @@ const OFF_ON: SegmentedOption<boolean>[] = [
 	{ value: true, label: "On" },
 ];
 
+/** Shown when a guide refreshed by hand had no programs. */
+const EMPTY_GUIDE_MESSAGE = "The guide came back with no programs, so nothing changed.";
+
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
 	<p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">
 		{children}
@@ -138,6 +141,8 @@ export const ProviderSettingsModal = ({
 	const detect = useAction();
 	const epgRefresh = useAction();
 	const save = useAction();
+	// Set when a guide refreshed by hand saved no programs.
+	const [epgRefreshEmpty, setEpgRefreshEmpty] = useState(false);
 
 	const handleRefreshNow = () => refresh.run(() => onRefreshNow(provider.id));
 
@@ -151,7 +156,13 @@ export const ProviderSettingsModal = ({
 			}
 		});
 
-	const handleEpgRefreshNow = () => epgRefresh.run(() => refreshEpg(provider.id));
+	const handleEpgRefreshNow = () => {
+		setEpgRefreshEmpty(false);
+		return epgRefresh.run(async () => {
+			const saved = await refreshEpg(provider.id);
+			setEpgRefreshEmpty(saved === 0);
+		});
+	};
 
 	const handleSave = () =>
 		save.run(async () => {
@@ -412,6 +423,11 @@ export const ProviderSettingsModal = ({
 							</div>
 							{epgRefresh.message && (
 								<p className="text-xs text-destructive">{epgRefresh.message}</p>
+							)}
+							{epgRefreshEmpty && (
+								<p className="text-xs text-muted-foreground">
+									{EMPTY_GUIDE_MESSAGE}
+								</p>
 							)}
 						</div>
 					</div>

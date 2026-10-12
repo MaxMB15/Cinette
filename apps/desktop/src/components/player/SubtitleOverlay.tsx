@@ -10,8 +10,8 @@ interface SubtitleOverlayProps {
 	delay?: number; // seconds; positive = show future cues, negative = show past cues
 	fontSize?: number; // px, default 18
 	fontFamily?: string; // CSS font-family string, default system-ui
-	posX?: number; // 0–100 %, default 50
-	posY?: number; // 0–100 %, default 88
+	posX?: number; // 0 to 100 %, default 50
+	posY?: number; // 0 to 100 %, default 88
 	editMode?: boolean; // enables drag + shows dashed border
 	onPositionChange?: (x: number, y: number) => void;
 }

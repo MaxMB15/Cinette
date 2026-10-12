@@ -5,6 +5,7 @@ import { useId } from "react";
 import { X } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { useDownloads } from "@/hooks/useDownloads";
+import { deleteAt, deleteLabel } from "@/lib/retention";
 import type { DownloadRecord } from "@/lib/types";
 
 const fmtBytes = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).toFixed(0)} MB`);
@@ -22,8 +23,16 @@ const statusCell = (d: DownloadRecord) => {
 	return <span className="text-muted-foreground">{d.status}</span>;
 };
 
+/** When the retention setting deletes a finished download. Blank when it never will. */
+const deletesCell = (d: DownloadRecord, days: number | null) => {
+	if (d.status !== "completed" || !days) return "";
+	if (d.keep) return "Kept";
+	const at = deleteAt(d, days);
+	return at === null ? "" : deleteLabel(at, Date.now() / 1000);
+};
+
 export const DownloadHistory = () => {
-	const { downloads } = useDownloads();
+	const { downloads, retentionDays } = useDownloads();
 
 	if (downloads.length === 0) {
 		return <p className="text-xs text-muted-foreground">No downloads yet.</p>;
@@ -41,6 +50,7 @@ export const DownloadHistory = () => {
 						<th className="text-left">Started</th>
 						<th className="text-left">Finished</th>
 						<th className="text-left">Status</th>
+						{retentionDays !== null && <th className="text-left pl-2">Deletes</th>}
 					</tr>
 				</thead>
 				<tbody>
@@ -57,6 +67,11 @@ export const DownloadHistory = () => {
 							<td className="pr-2 whitespace-nowrap">{fmtTime(d.createdAt)}</td>
 							<td className="pr-2 whitespace-nowrap">{fmtTime(d.finishedAt)}</td>
 							<td>{statusCell(d)}</td>
+							{retentionDays !== null && (
+								<td className="pl-2 whitespace-nowrap text-muted-foreground">
+									{deletesCell(d, retentionDays)}
+								</td>
+							)}
 						</tr>
 					))}
 				</tbody>
