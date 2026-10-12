@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { offerShows, useSegmentSkipping } from "./useSegmentSkipping";
+import { offerShows, skipButtonShows, useSegmentSkipping } from "./useSegmentSkipping";
 import { NOTICE_MS, OFFER_SECONDS } from "@/lib/skip-segments";
 import type { SkipSegmentModes } from "@/lib/player-prefs";
 import { makeSegment } from "@/test/segments";
@@ -30,6 +30,7 @@ const setup = (overrides: Partial<Options> = {}) => {
 		segments: [intro, credits],
 		position: 0,
 		duration: DURATION,
+		reconnecting: false,
 		playing: true,
 		modes: BUTTONS,
 		autoplay: true,
@@ -218,6 +219,24 @@ describe("useSegmentSkipping", () => {
 			update({ position: 71, duration: DURATION });
 			expect(result.current.offer).toBeNull();
 		});
+
+		it("lets the next segment skip on its own after a press lands at its start", () => {
+			const recap = makeSegment({
+				kind: "recap",
+				start: 0,
+				end: 30,
+				autoFrom: null,
+				autoTo: null,
+			});
+			const opening = makeSegment({ start: 30, end: 90, autoFrom: 32, autoTo: 88 });
+			const { result, at, play, seek } = setup({ modes: AUTO, segments: [recap, opening] });
+			at(5);
+			act(() => void result.current.skip());
+			expect(seek).toHaveBeenCalledWith(30);
+			play(30, 32);
+			expect(seek).toHaveBeenLastCalledWith(88);
+			expect(result.current.notice).toEqual({ label: "Skipped intro" });
+		});
 	});
 
 	describe("when off", () => {
@@ -302,6 +321,52 @@ describe("useSegmentSkipping", () => {
 			expect(result.current.offer?.label).toBe("Skip intro");
 		});
 
+		it("skips a segment that starts where the skipped one ends", () => {
+			const recap = makeSegment({
+				kind: "recap",
+				start: 0,
+				end: 30,
+				fit: "shifted",
+				autoFrom: 2,
+				autoTo: 30,
+			});
+			const opening = makeSegment({
+				start: 30,
+				end: 90,
+				fit: "shifted",
+				autoFrom: 32,
+				autoTo: 90,
+			});
+			const { result, at, play, seek } = setup({ modes: AUTO, segments: [recap, opening] });
+			play(0, 2);
+			expect(seek).toHaveBeenCalledWith(30);
+			at(30.4);
+			play(31, 32);
+			expect(seek).toHaveBeenLastCalledWith(90);
+			expect(result.current.notice).toEqual({ label: "Skipped intro" });
+		});
+
+		it("doesn't bring the button back when the skip lands after a wait", () => {
+			const { result, play, at } = setup({ modes: AUTO });
+			play(55, 62);
+			// The stream buffers at the landing for a few seconds.
+			act(() => vi.advanceTimersByTime(NOTICE_MS + 1000));
+			at(118);
+			expect(result.current.offer).toBeNull();
+			at(118.9);
+			expect(result.current.offer).toBeNull();
+		});
+
+		it("doesn't skip back when held past where the skip lands", () => {
+			const { result, update, play, seek } = setup({ modes: AUTO });
+			play(55, 58);
+			update({ playing: false });
+			play(59, 118);
+			update({ position: 118.5, playing: true });
+			expect(seek).not.toHaveBeenCalled();
+			expect(result.current.notice).toBeNull();
+		});
+
 		it("skips an intro at the start when its times arrive after playback began", () => {
 			const opening = makeSegment({ start: 0, end: 50, autoFrom: 2, autoTo: 48 });
 			const { update, play, seek } = setup({ modes: AUTO, segments: [] });
@@ -340,6 +405,27 @@ describe("useSegmentSkipping", () => {
 			for (let poll = 0; poll < 5; poll++) update({ position: 0, duration: 0 });
 			expect(result.current.offer).toBeNull();
 			play(1503, 1505);
+			expect(seek).not.toHaveBeenCalled();
+		});
+
+		it("leaves out polls while the stream reconnects, even with a length", () => {
+			const recap = makeSegment({
+				kind: "recap",
+				start: 0,
+				end: 30,
+				autoFrom: 2,
+				autoTo: 28,
+			});
+			const { result, update, play, seek } = setup({
+				modes: AUTO,
+				segments: [recap, credits],
+			});
+			play(2698, 2702);
+			update({ reconnecting: true, position: 0 });
+			expect(result.current.offer).toBeNull();
+			expect(result.current.countdown).not.toBeNull();
+			update({ reconnecting: false, position: 2703 });
+			expect(result.current.countdown).toEqual({ cancelLabel: "Watch credits" });
 			expect(seek).not.toHaveBeenCalled();
 		});
 
@@ -473,6 +559,29 @@ describe("useSegmentSkipping", () => {
 
 		it("shows nothing without an offer", () => {
 			expect(offerShows(null, true)).toBe(false);
+		});
+	});
+
+	describe("skipButtonShows", () => {
+		const offer = { label: "Skip intro", next: false, fresh: true, unsure: false };
+		const none = { offer: null, notice: null, countdown: null };
+
+		it("shows the countdown's button", () => {
+			const countdown = { cancelLabel: "Watch credits" };
+			expect(skipButtonShows({ ...none, countdown }, false)).toBe(true);
+		});
+
+		it("shows a Skip button as offerShows says", () => {
+			expect(skipButtonShows({ ...none, offer }, false)).toBe(true);
+			expect(skipButtonShows({ ...none, offer: { ...offer, fresh: false } }, false)).toBe(
+				false
+			);
+			expect(skipButtonShows(none, true)).toBe(false);
+		});
+
+		it("hides the Skip button under a notice", () => {
+			const notice = { label: "Skipped recap" };
+			expect(skipButtonShows({ ...none, offer, notice }, true)).toBe(false);
 		});
 	});
 });

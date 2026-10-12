@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SkipSegmentModes } from "@/lib/player-prefs";
 import {
 	extendRun,
+	MAX_PLAY_STEP,
 	NOTICE_MS,
 	OFFER_SECONDS,
 	reachedAutoSkip,
@@ -26,6 +27,8 @@ interface SegmentSkippingOptions {
 	segments: readonly SkipSegment[];
 	position: number;
 	duration: number;
+	/** Whether the stream is reconnecting, when mpv's position isn't where the viewer is. */
+	reconnecting: boolean;
 	/**
 	 * Whether the video is playing, rather than paused or loading, with nothing
 	 * open over the prompt. The player doesn't skip on its own while it's false.
@@ -60,6 +63,16 @@ export interface SkipOffer {
  */
 export const offerShows = (offer: SkipOffer | null, controlsVisible: boolean): boolean =>
 	offer !== null && (offer.fresh || controlsVisible);
+
+/**
+ * Whether the prompt shows a button that skips: the countdown's, or the Skip
+ * button. The "Skipped intro" notice covers the Skip button of a segment
+ * right after the skipped one, as the prompt shows one thing at a time.
+ */
+export const skipButtonShows = (
+	{ offer, notice, countdown }: Pick<SegmentSkipping, "offer" | "notice" | "countdown">,
+	controlsVisible: boolean
+): boolean => countdown !== null || (notice === null && offerShows(offer, controlsVisible));
 
 /** Shown for a moment after the player skips a segment on its own. */
 export interface SkipNotice {
@@ -104,6 +117,7 @@ export const useSegmentSkipping = ({
 	segments,
 	position,
 	duration,
+	reconnecting,
 	playing,
 	modes,
 	autoplay,
@@ -117,6 +131,8 @@ export const useSegmentSkipping = ({
 	const runStartedAtRef = useRef(0);
 	// Where the current run began in the video, for `fresh`.
 	const [runStart, setRunStart] = useState<number | null>(null);
+	// Where the player's own skip lands, until playback gets there.
+	const landingRef = useRef<number | null>(null);
 	// Segments the player has skipped on its own, or started a countdown at.
 	const doneRef = useRef(new Set<string>());
 	const [skipped, setSkipped] = useState<{ key: string; at: number } | null>(null);
@@ -127,9 +143,10 @@ export const useSegmentSkipping = ({
 	} | null>(null);
 	const [countdown, setCountdown] = useState<{ key: string; kind: SkipSegmentKind } | null>(null);
 
-	// While a stream opens or reconnects, mpv reports no length and a position
-	// of 0, which isn't where the viewer is, so those polls are left out.
-	const located = duration > 0;
+	// While a stream opens, mpv reports no length, and while it reconnects its
+	// position can be 0. Neither is where the viewer is, so those polls are
+	// left out.
+	const located = duration > 0 && !reconnecting;
 	const current = located ? segmentAt(segments, position) : null;
 	const currentKey = current && segmentKey(current);
 	const mode = current ? modes[segmentGroup(current.kind)] : "off";
@@ -160,6 +177,7 @@ export const useSegmentSkipping = ({
 		if (video === null || video === videoRef.current) return;
 		videoRef.current = video;
 		doneRef.current = new Set();
+		landingRef.current = null;
 		setSkipped(null);
 		setNotice(null);
 		setCountdown(null);
@@ -170,7 +188,19 @@ export const useSegmentSkipping = ({
 	useEffect(() => {
 		if (!located) return;
 		const last = runRef.current;
-		const run = extendRun(last, position);
+		let run = extendRun(last, position);
+		// The player's own skip isn't a seek by the viewer, so playback goes on
+		// from where it began before the skip. That way a segment that starts
+		// where the skipped one ends can be skipped on its own too, and the
+		// landing doesn't count as a seek back into the skipped segment.
+		const landing = landingRef.current;
+		if (landing !== null) {
+			const jumped = last !== null && run.start !== last.start;
+			if (jumped && Math.abs(run.start - landing) <= MAX_PLAY_STEP) {
+				run = { start: last.start, last: position };
+			}
+			if (jumped || position >= landing) landingRef.current = null;
+		}
 		runRef.current = run;
 		if (run.start !== last?.start) {
 			runStartedAtRef.current = Date.now();
@@ -182,7 +212,12 @@ export const useSegmentSkipping = ({
 		const action = skipActionFor(current, duration, hasNext);
 		if (action?.type === "seek") {
 			doneRef.current.add(key);
-			latest.current.seek(current.autoTo ?? action.to);
+			const to = current.autoTo ?? action.to;
+			// Held past where the skip lands, such as behind an open overlay,
+			// there's nothing left to skip.
+			if (to <= position) return;
+			landingRef.current = to;
+			latest.current.seek(to);
 			setSkipped({ key, at: Date.now() });
 			setNotice({ key, kind: current.kind, from: position });
 		} else if (action?.type === "next" && autoplay) {
@@ -231,8 +266,12 @@ export const useSegmentSkipping = ({
 		now.offer = null;
 		doneRef.current.add(currentKey);
 		setSkipped({ key: currentKey, at: Date.now() });
-		if (action.type === "next") onNextEpisode();
-		else seek(action.to);
+		if (action.type === "next") {
+			onNextEpisode();
+		} else {
+			landingRef.current = action.to;
+			seek(action.to);
+		}
 		return true;
 	}, []);
 

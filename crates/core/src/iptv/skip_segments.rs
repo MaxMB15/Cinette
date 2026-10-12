@@ -485,7 +485,7 @@ fn check_segment(
     if share < bounds.from || share > bounds.to || length > bounds.max_length {
         return None;
     }
-    let auto_to = auto_to(&s);
+    let auto_to = auto_to(&s, duration);
     s.auto_from = auto_from.filter(|from| auto_to - from >= MIN_LENGTH);
     s.auto_to = s.auto_from.map(|_| auto_to);
     Some(s)
@@ -500,7 +500,8 @@ fn check_segment(
 /// seconds past the start skips only what's inside the segment either way, so
 /// a skip never cuts into the show. SkipDB only moves times earlier, so their
 /// end is never early. An exact match can still be up to 2 seconds off either
-/// way, so it waits that long, and `auto_to` stops that far short of the end.
+/// way, so it waits that long, and `auto_to` stops that far short of the end
+/// unless the segment runs to the end of the video.
 fn auto_from(s: &SkipSegment) -> Option<f64> {
     let checked = matches!(s.fit, Fit::Exact | Fit::Shifted);
     if !checked || !s.confidence.is_some_and(|c| c >= AUTO_CONFIDENCE) {
@@ -510,9 +511,9 @@ fn auto_from(s: &SkipSegment) -> Option<f64> {
 }
 
 /// Where a segment that may be skipped without asking is skipped to, once its
-/// end is fitted to the video. See `auto_from`.
-fn auto_to(s: &SkipSegment) -> f64 {
-    if s.fit == Fit::Exact {
+/// end is fitted to a video `duration` seconds long. See `auto_from`.
+fn auto_to(s: &SkipSegment, duration: f64) -> f64 {
+    if s.fit == Fit::Exact && s.end < duration {
         s.end - EXACT_SLACK
     } else {
         s.end
@@ -1203,6 +1204,11 @@ mod tests {
             assert_eq!(
                 fitted(segment(SegmentKind::Intro, 60.0, 67.0), 3500.0),
                 (Some(62.0), Some(65.0), 67.0)
+            );
+            // Credits that run to the end of the video can't end late.
+            assert_eq!(
+                fitted(segment(SegmentKind::Credits, 3494.0, 3500.0), 3500.0),
+                (Some(3496.0), Some(3500.0), 3500.0)
             );
         }
 

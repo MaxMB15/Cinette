@@ -69,7 +69,7 @@ import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
-import { offerShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
+import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
 import { isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
@@ -902,6 +902,7 @@ export const PlayerView = () => {
 		segments,
 		position: mpv.state.position,
 		duration: mpv.state.duration,
+		reconnecting: mpv.reconnecting,
 		playing: videoPlaying && !skipHeld,
 		modes: segmentModes,
 		autoplay,
@@ -910,9 +911,7 @@ export const PlayerView = () => {
 		onNextEpisode: playNextEpisode,
 	});
 	// Enter presses the prompt's button, so only while one is on screen.
-	const skipButtonShows =
-		!skipHeld && (skipping.countdown !== null || offerShows(skipping.offer, showControls));
-	const skipSegment = skipButtonShows ? skipping.skip : null;
+	const skipSegment = !skipHeld && skipButtonShows(skipping, showControls) ? skipping.skip : null;
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
