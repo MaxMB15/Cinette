@@ -60,6 +60,8 @@ const NOTHING_RECORDED: &str = "Nothing was recorded.";
 const STREAM_STOPPED: &str = "The stream stopped before the end.";
 const APP_CLOSED: &str = "The app closed during the recording.";
 const NOT_RUNNING: &str = "The app wasn't open or the computer was asleep at the time.";
+const RETRY_NOT_RUNNING: &str =
+    "The app wasn't open or the computer was asleep when it was time to try again.";
 
 struct Running {
     child: CommandChild,
@@ -803,14 +805,23 @@ fn merge_records(cache: &CacheStore, id: &str, into: &str, end_at: i64) -> Resul
 /// Mark a recording whose window passed before it could start.
 fn miss<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let now = manager::now_secs();
-    manager::update_record(app, id, |r| {
-        if r.status == DownloadStatus::Scheduled {
-            r.status = DownloadStatus::Missed;
-            r.error = Some(NOT_RUNNING.into());
-            r.finished_at = Some(now);
-        }
-    });
+    manager::update_record(app, id, |r| mark_missed(r, now));
     manager::emit_progress(app, id);
+}
+
+/// Mark `r` missed at `now` if it's still waiting. Only a new try after the
+/// stream failed waits with an error, and that error stays below the new
+/// first line, since it says why there was a new try at all.
+fn mark_missed(r: &mut DownloadRecord, now: i64) {
+    if r.status != DownloadStatus::Scheduled {
+        return;
+    }
+    r.status = DownloadStatus::Missed;
+    r.error = Some(match r.error.take() {
+        Some(earlier) => format!("{RETRY_NOT_RUNNING}\n{earlier}"),
+        None => NOT_RUNNING.into(),
+    });
+    r.finished_at = Some(now);
 }
 
 /// Stop the running recording `id`, which reached its end or hands its
@@ -1527,6 +1538,32 @@ mod tests {
         // The third has under a minute left, so there's no rest of it.
         assert_eq!(get(&cache, &nearly).status, DownloadStatus::Completed);
         assert_eq!(cache.list_recordings().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_missed_new_try_keeps_the_reason_for_it() {
+        let mut waiting = download("rec", "xt-1-xt-0", DownloadStatus::Scheduled);
+        mark_missed(&mut waiting, 500);
+        assert_eq!(
+            (
+                waiting.status,
+                waiting.error.as_deref(),
+                waiting.finished_at
+            ),
+            (DownloadStatus::Missed, Some(NOT_RUNNING), Some(500))
+        );
+
+        let mut retry = download("rest", "xt-1-xt-0", DownloadStatus::Scheduled);
+        retry.error = Some(format!("{STREAM_STOPPED}\nConnection reset by peer"));
+        mark_missed(&mut retry, 500);
+        assert_eq!(
+            retry.error.unwrap(),
+            format!("{RETRY_NOT_RUNNING}\n{STREAM_STOPPED}\nConnection reset by peer")
+        );
+
+        let mut done = download("done", "xt-1-xt-0", DownloadStatus::Completed);
+        mark_missed(&mut done, 500);
+        assert_eq!((done.status, done.error), (DownloadStatus::Completed, None));
     }
 
     /// An app recording the live channel "City News" since a minute ago, and
