@@ -18,7 +18,7 @@ thiserror = { workspace = true }
 reqwest = { workspace = true, features = ["json", "gzip", "deflate", "query"] }
 rayon = "1.10"
 memmap2 = "0.9"
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = "0.42"
 # fallible_uint reads and writes usize and u64, with an error when a value
 # doesn't fit, as rusqlite did by default before 0.38.
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }

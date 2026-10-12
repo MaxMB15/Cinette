@@ -88,14 +88,8 @@ jobs:
           workspaces: ". -> target"
           shared-key: ios-device
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install frontend deps
-        uses: ./.github/actions/install-frontend-deps
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
 
       # The upload always needs the App Store Connect API key. Signing uses the
       # Apple Distribution certificate and App Store profile when they're set.
@@ -151,7 +145,7 @@ jobs:
       - name: Build for the App Store
         working-directory: apps/desktop
         run: >-
-          npx tauri ios build --target aarch64 --export-method app-store-connect --ci
+          pnpm tauri ios build --target aarch64 --export-method app-store-connect --ci
           --config '{"bundle":{"iOS":{"bundleVersion":"${{ github.run_number }}"}}}'
 
       - name: Upload to TestFlight

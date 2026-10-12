@@ -28,7 +28,8 @@ You need:
 
 - Xcode 26. App Store uploads need the iOS 26 SDK.
 - The Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`
-- Node.js 24, or 22.12 or a later 22.x release, and `npm install` at the repository root
+- Node.js and pnpm, as in [development.md](development.md#prerequisites), and
+  `pnpm install` at the repository root
 
 You don't need `scripts/build-libmpv.sh` or the ffmpeg sidecar. Swift Package Manager
 downloads MPVKit on the first build.
@@ -37,7 +38,7 @@ To build for the simulator and start the app:
 
 ```bash
 cd apps/desktop
-npx tauri ios build --debug --target aarch64-sim
+pnpm tauri ios build --debug --target aarch64-sim
 
 xcrun simctl boot "iPhone 17 Pro"    # skip if a simulator is already running
 open -a Simulator
@@ -49,7 +50,7 @@ Before building for the simulator again, move or delete
 `src-tauri/gen/apple/build/arm64-sim`. The CLI fails when the app from the last build
 is still there.
 
-Always build through `npx tauri ios build`. The Xcode project's "Build Rust Code"
+Always build through `pnpm tauri ios build`. The Xcode project's "Build Rust Code"
 step asks the Tauri CLI that started the build for its options, so a plain
 `xcodebuild` run stops there with `ConnectionRefused`.
 
@@ -60,7 +61,7 @@ it to the Mac with a cable. Then build, install and start the app:
 
 ```bash
 cd apps/desktop
-npx tauri ios build --debug --target aarch64 --export-method debugging
+pnpm tauri ios build --debug --target aarch64 --export-method debugging
 
 xcrun devicectl list devices    # note the device's identifier
 xcrun devicectl device install app --device <identifier> \
@@ -77,7 +78,7 @@ build uses the team's wildcard development profile, so it doesn't register
 `com.maxvideoplayer.app` on the developer portal. TestFlight still needs the step
 under [Register the app](#1-register-the-app).
 
-If you're not on that team, open the project with `npx tauri ios open`, select the
+If you're not on that team, open the project with `pnpm tauri ios open`, select the
 `max-video-player_iOS` target, open Signing & Capabilities, and pick your own team.
 Change the bundle identifier too, because `com.maxvideoplayer.app` belongs to the
 maintainer's team. Don't commit either change.
@@ -96,7 +97,7 @@ To have the frontend reload as you edit it, run the dev server instead:
 
    ```bash
    cd apps/desktop
-   npx tauri ios dev --open --host
+   pnpm tauri ios dev --open --host
    ```
 
    Pick the Mac's Wi-Fi address if it asks. Keep the command running, because the
@@ -136,7 +137,7 @@ made from the 1024 px image in `src-tauri/icons/icon.icns`, so the iOS app has t
 same icon as the macOS app. They have no alpha channel, because App Store Connect
 rejects a 1024 px icon that has one.
 
-`npx tauri icon` writes both of those folders as well as the desktop icons, so
+`pnpm tauri icon` writes both of those folders as well as the desktop icons, so
 running it replaces these files. Restore them with git afterward unless you meant to
 change the iOS icon.
 

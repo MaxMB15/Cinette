@@ -30,6 +30,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Fixed
 
+- Some programs in the TV guide had no title or description. One with a bare `&` or an HTML entity such as `&nbsp;` came out blank, and so did one wrapped in CDATA. These now show, with an HTML entity left as written. A channel whose guide ID has an `&`, which the guide writes as `&amp;`, showed no programs at all (#220).
 - Channels went missing from M3U playlists that put lines such as `#EXTVLCOPT` or `#EXTGRP` between a channel and its link. They show up now. The app numbers channels by their place in the playlist, so in such a playlist the first refresh can move favorites, downloads, saved movie details and recently played channels to a different channel, once (#126).
 - A TV guide failed to load when a program's time had a letter such as é in the wrong place. Now the rest of the guide loads (#126).
 - On Linux with Wayland, on desktops where the app draws its own title bar, such as COSMIC on Pop!_OS, the video slid out of place when the window went full screen or was maximized. It sat lower and further right by the size of the title bar and the window's shadow, and its edges were cut off. The video now moves with the page (#119).
