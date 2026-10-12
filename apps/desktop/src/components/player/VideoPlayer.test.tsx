@@ -10,7 +10,7 @@ import {
 	type ComponentProps,
 	type ReactNode,
 } from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from "react-router-dom";
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
@@ -1773,7 +1773,7 @@ describe("subtitles", () => {
 		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
 		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
-		await waitFor(() => expect(tauri.mpvSetSubDelay).toHaveBeenCalledWith(1.5));
+		expect(tauri.mpvSetSubDelay).toHaveBeenCalledWith(1.5);
 	});
 
 	it("loads the same language for the next episode", async () => {
