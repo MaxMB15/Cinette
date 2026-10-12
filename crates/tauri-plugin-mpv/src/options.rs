@@ -29,10 +29,9 @@ pub(crate) fn shared_options() -> [(&'static str, &'static str); 8] {
         ("demuxer-max-back-bytes", "75MiB"),
         ("stream-lavf-o", LAVF_RECONNECT_OPTS),
         ("network-timeout", "30"),
-        // Hold the last frame at the end instead of going idle. The frontend
-        // reads the end of a stream from the position, and `reconnect.rs`
-        // watches `eof-reached`, which mpv only leaves set while the file
-        // stays open.
+        // Hold the last frame at the end instead of going idle. The end the
+        // frontend sees (`reached_end`) and `reconnect.rs` both read
+        // `eof-reached`, which mpv only leaves set while the file stays open.
         ("keep-open", "yes"),
         ("terminal", "yes"),
     ]

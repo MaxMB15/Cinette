@@ -32,6 +32,7 @@ vi.mock("@/lib/tauri", () => ({
 		duration: 0,
 		playbackStarted: false,
 		openFailed: false,
+		reachedEnd: false,
 	})),
 }));
 
@@ -82,6 +83,7 @@ describe("useMpv", () => {
 			duration: 0,
 			playbackStarted: false,
 			openFailed: false,
+			reachedEnd: false,
 		});
 		expect(result.current.error).toBeNull();
 		expect(result.current.fallbackActive).toBe(false);
@@ -170,18 +172,19 @@ describe("useMpv", () => {
 	});
 
 	it("resets state immediately when load is called", async () => {
-		// Start with a playing state from poll
+		// Start from a video the poll reports held on its last frame.
 		mockMpvGetState.mockResolvedValue({
-			isPlaying: true,
-			isPaused: false,
+			isPlaying: false,
+			isPaused: true,
 			currentUrl: "http://old.url",
 			volume: 80,
-			position: 45,
+			position: 120,
 			duration: 120,
+			reachedEnd: true,
 		} as never);
 
 		const { result } = renderHook(() => useMpv());
-		await waitFor(() => expect(result.current.state.isPlaying).toBe(true));
+		await waitFor(() => expect(result.current.state.reachedEnd).toBe(true));
 
 		// Now load resets position/duration immediately
 		mockMpvLoad.mockResolvedValue(undefined);
@@ -191,6 +194,7 @@ describe("useMpv", () => {
 
 		expect(result.current.state.position).toBe(0);
 		expect(result.current.state.duration).toBe(0);
+		expect(result.current.state.reachedEnd).toBe(false);
 		expect(result.current.firstFrameReady).toBe(false);
 	});
 
@@ -248,6 +252,7 @@ describe("useMpv", () => {
 			duration: 0,
 			playbackStarted: false,
 			openFailed: false,
+			reachedEnd: false,
 		});
 	});
 
@@ -288,6 +293,7 @@ describe("useMpv", () => {
 				duration: 1800,
 				playbackStarted: true,
 				openFailed: false,
+				reachedEnd: false,
 			}) as never;
 
 		it("shows the seek position before mpv confirms it", async () => {
@@ -577,6 +583,7 @@ describe("useMpv", () => {
 				duration: 0,
 				playbackStarted: false,
 				openFailed: false,
+				reachedEnd: false,
 				...overrides,
 			}) as never;
 

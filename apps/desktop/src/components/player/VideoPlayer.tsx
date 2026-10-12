@@ -87,6 +87,18 @@ const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 const MAX_WATCH_STEP_SECONDS = 5;
 /** How long the controls stay up after they appear or the player is clicked or tapped. */
 const CONTROLS_HIDE_MS = 4000;
+/**
+ * A poll this close to an episode's end counts as seeing the end coming. Polls
+ * come every second, so a hidden window whose polls slow to every few seconds
+ * still gets one.
+ */
+const END_LEAD_SECONDS = 10;
+/**
+ * The poll that finds the end has to come within this long (ms) of the last one
+ * that saw it coming. A longer gap most likely means this page's timers were
+ * stopped while mpv played on, as iOS does in the background.
+ */
+const END_SEEN_WITHIN_MS = 30_000;
 
 interface PlaybackProgress {
 	/** Resume key (see playbackKey); null for live or nothing playing. */
@@ -747,49 +759,40 @@ export const PlayerView = () => {
 	const autoplayRef = useRef(autoplay);
 	autoplayRef.current = autoplay;
 
-	// Track the last position+duration seen while actively playing.
-	// MPV resets position/duration to 0 when a video ends or a new one loads,
-	// so we can't rely on mpvStateRef at the moment isPlaying goes false.
-	const lastPlayingStateRef = useRef<{ url: string | null; position: number; duration: number }>({
-		url: null,
-		position: 0,
-		duration: 0,
-	});
+	// Advance when the episode reaches its end, not when it stops near it. A
+	// pause in the last seconds, or the resume prompt pausing the player, leaves
+	// reachedEnd false. At the end, with keep-open=yes, mpv holds the last frame,
+	// paused, so with autoplay off, on a movie or on the last episode the
+	// controls stay up and nothing else needs doing.
+	//
+	// Only an end this player saw coming counts. The ref holds the stream that
+	// a poll last saw in its final seconds and when, and any poll from further
+	// back clears it. Coming back from another page to an episode that ended
+	// there leaves it on the last frame. So does coming back to the app after
+	// iOS held this page's timers in the background for longer than
+	// END_SEEN_WITHIN_MS while mpv played on.
+	const seenNearEndRef = useRef<{ url: string; at: number } | null>(null);
 	useEffect(() => {
-		if (mpv.state.isPlaying && mpv.state.duration > 0) {
-			lastPlayingStateRef.current = {
-				url: mpv.state.currentUrl,
-				position: mpv.state.position,
-				duration: mpv.state.duration,
-			};
+		// A poll can still describe the previous stream after the app loads
+		// another one, such as from the Next episode button near the end.
+		if (!loadedUrl || mpv.state.currentUrl !== loadedUrl) return;
+		const { reachedEnd, position, duration } = mpv.state;
+		if (!reachedEnd) {
+			// useMpv sets a new state on every poll, paused or not, so a long
+			// pause in the last seconds keeps this time fresh.
+			const nearEnd = duration > 0 && duration - position <= END_LEAD_SECONDS;
+			seenNearEndRef.current = nearEnd ? { url: loadedUrl, at: Date.now() } : null;
+			return;
 		}
-	}, [mpv.state.isPlaying, mpv.state.currentUrl, mpv.state.position, mpv.state.duration]);
-
-	const prevIsPlayingRef = useRef(false);
-	useEffect(() => {
-		const wasPlaying = prevIsPlayingRef.current;
-		prevIsPlayingRef.current = mpv.state.isPlaying;
-
-		// Only react to the transition: was playing → now not playing.
-		if (!wasPlaying || mpv.state.isPlaying) return;
-
-		// Distinguish EOF from a user pause: check if position was near the end.
-		// With keep-open=yes, EOF lands in isPaused=true (last frame frozen) — we can't
-		// use isPaused=false as the EOF signal anymore, so we use position proximity instead.
-		const { url, position, duration } = lastPlayingStateRef.current;
-		// The app loading something else stops playback too, such as the Next
-		// episode button near the end. That isn't the end of the video.
-		if (url !== loadedUrl) return;
-		if (duration <= 0 || position < duration - 5) return; // mid-video pause — do nothing
-
-		// EOF reached. With autoplay on and a next episode available, advance.
+		const seen = seenNearEndRef.current;
+		if (!seen || seen.url !== loadedUrl) return;
+		seenNearEndRef.current = null;
+		if (Date.now() - seen.at > END_SEEN_WITHIN_MS) return;
 		if (autoplayRef.current && activeChannelRef.current?.contentType === "series") {
 			const next = nextEpisodeRef.current;
 			if (next) playEpisode(next);
 		}
-		// Otherwise (autoplay off, or movie, or last episode): keep-open=yes already holds
-		// MPV on the last frame with isPaused=true — controls remain visible, no action needed.
-	}, [mpv.state.isPlaying, loadedUrl, playEpisode]);
+	}, [mpv.state, loadedUrl, playEpisode]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few
@@ -928,12 +931,9 @@ export const PlayerView = () => {
 			// A confirm opened from the controls renders in a portal, and it keeps
 			// its keys while it's open.
 			if (!isInside(containerRef.current, e.target)) return;
-			// The resume prompt handles its own keys; Escape still cancels it if
-			// focus ended up elsewhere in the player.
-			if (pendingResume) {
-				if (e.key === "Escape") resolveResume("cancel");
-				return;
-			}
+			// The resume prompt handles its own keys. Its dialog takes Escape
+			// first, even when focus is on the player behind it.
+			if (pendingResume) return;
 			if (isTypingTarget(e.target)) return;
 			// Space or Enter on a button reached with Tab presses that button.
 			if ((e.key === " " || e.key === "Enter") && isKeyboardFocusedControl(e.target)) return;
@@ -1029,7 +1029,6 @@ export const PlayerView = () => {
 		[
 			mpv,
 			pendingResume,
-			resolveResume,
 			showShortcuts,
 			isFullscreen,
 			showInfoDrawer,

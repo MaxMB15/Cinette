@@ -5,7 +5,8 @@
 
 use super::{MpvEngine, PlayerState};
 use crate::test_support::{
-    headless, wait_for, wait_for_position, wait_until, wav, y4m, MediaDir, POSITION_SLACK,
+    after_seconds, headless, wait_for, wait_for_position, wait_until, wav, y4m, MediaDir, Reply,
+    Server, POSITION_SLACK,
 };
 use libmpv2::Mpv;
 
@@ -153,6 +154,54 @@ fn seeks_to_a_position_and_by_an_offset() {
     wait_for_position(6.0, || engine.get_state().position);
     engine.seek_relative(-2.5).unwrap();
     wait_for_position(3.5, || engine.get_state().position);
+}
+
+#[test]
+fn reports_the_end_only_once_playback_reaches_it() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    // Paused from the start, so nothing plays before the first check.
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &path, Some(8.5));
+
+    // A pause in the last seconds isn't the end.
+    wait_for_position(8.5, || engine.get_state().position);
+    let state = engine.get_state();
+    assert!(state.is_paused && !state.reached_end, "{state:?}");
+
+    engine.play().unwrap();
+    wait_until("the end of the file", || engine.get_state().reached_end);
+    // keep-open pauses on the last frame once the audio drains, and the end
+    // stays reported while it holds there.
+    wait_until("a pause on the last frame", || {
+        let state = engine.get_state();
+        state.is_paused && !state.is_playing && state.reached_end
+    });
+
+    // Three seconds from the end, so only mpv clearing `eof-reached` can turn
+    // the end off.
+    engine.seek(7.0).unwrap();
+    wait_until("a seek back to clear the end", || {
+        !engine.get_state().reached_end
+    });
+}
+
+#[test]
+fn a_stream_that_closes_early_hasnt_reached_its_end() {
+    // The connection closes six seconds into twenty. mpv reports the end of
+    // the file, but `reconnect.rs` reloads a stream like this one.
+    let server = Server::start(wav(20), vec![Reply::CutAfter(after_seconds(6))]);
+    let url = server.url();
+    let mut engine = engine(&[("speed", "4")]);
+    start(&mut engine, &url, None);
+
+    wait_until("the stream to close", || {
+        mpv(&engine)
+            .get_property::<bool>("eof-reached")
+            .unwrap_or(false)
+    });
+    let state = engine.get_state();
+    assert!(!state.reached_end, "{state:?}");
 }
 
 #[test]

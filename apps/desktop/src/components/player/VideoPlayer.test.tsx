@@ -49,6 +49,7 @@ const idleState = vi.hoisted(() => (): MpvPlayerState => ({
 	duration: 0,
 	playbackStarted: false,
 	openFailed: false,
+	reachedEnd: false,
 }));
 
 const env = vi.hoisted(() => ({
@@ -359,15 +360,23 @@ const playing = (currentUrl: string, position: number, duration: number) => ({
 	duration,
 	isPlaying: true,
 	isPaused: false,
+	reachedEnd: false,
 });
 
-/** What mpv reports once `url` is paused, or held on its last frame at the end. */
+/** What mpv reports once `url` is paused before its end. */
 const paused = (currentUrl: string, position: number, duration: number) => ({
 	currentUrl,
 	position,
 	duration,
 	isPlaying: false,
 	isPaused: true,
+	reachedEnd: false,
+});
+
+/** What mpv reports once `url` plays to its end and holds the last frame. */
+const ended = (currentUrl: string, duration: number) => ({
+	...paused(currentUrl, duration, duration),
+	reachedEnd: true,
 });
 
 /** The addresses mpv was asked to play, in order. */
@@ -846,6 +855,20 @@ describe("resuming", () => {
 		expect(loadedUrls()).toEqual([ep1.url]);
 	});
 
+	it("plays the episode again when the prompt for the next one is cancelled near its end", async () => {
+		remember(saved("series:show:s1e2", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await press("n");
+		// The prompt pauses episode one in its last seconds.
+		await setMpv({ state: paused(ep1.url, 1297, 1300) });
+		expect(screen.getAllByRole("dialog")).toHaveLength(1);
+		await press("Escape");
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
 	it("resumes the next episode where it was stopped", async () => {
 		remember(saved("series:show:s1e2", 600, 1300));
 		await openItem(ep1, { episodes: [ep1, ep2] });
@@ -1033,7 +1056,7 @@ describe("episodes", () => {
 	it("plays the next episode when one ends", async () => {
 		await openItem(ep1, { episodes: [ep1, ep2] });
 		await setMpv({ state: playing(ep1.url, 1296, 1300) });
-		await setMpv({ state: paused(ep1.url, 1300, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 		expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
 	});
@@ -1043,7 +1066,7 @@ describe("episodes", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Autoplay on" }));
 		expect(screen.getByRole("button", { name: "Autoplay off" })).toBeInTheDocument();
 		await setMpv({ state: playing(ep1.url, 1296, 1300) });
-		await setMpv({ state: paused(ep1.url, 1300, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url]);
 	});
 
@@ -1054,10 +1077,19 @@ describe("episodes", () => {
 		expect(loadedUrls()).toEqual([ep1.url]);
 	});
 
+	it("doesn't go on to the next episode when the viewer pauses near the end", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await setMpv({ state: paused(ep1.url, 1297, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
 	it("doesn't skip a second episode when next is pressed close to the end", async () => {
 		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
-		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await setMpv({ state: playing(ep1.url, 1299, 1300) });
 		await press("n");
+		// A poll sent before the load reports the end of episode one.
+		await setMpv({ state: ended(ep1.url, 1300) });
 		// Loading episode two stops episode one.
 		await setMpv({
 			state: {
@@ -1066,9 +1098,138 @@ describe("episodes", () => {
 				currentUrl: ep2.url,
 				position: 0,
 				duration: 0,
+				reachedEnd: false,
 			},
 		});
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("doesn't go on to the next episode for an end reached while the viewer was on another page", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1290, 1300) });
+		await goToPage("/playlists");
+		// The episode ends while the viewer is away. Back on the player, the
+		// state starts out empty and the first poll reports the end.
+		await setMpv({ state: idleState() });
+		await goToPage("/player");
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+		expect(loadedUrls()).toEqual([ep1.url]);
+		// Seeking back and playing to the end again does go on.
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("doesn't go on to the next episode for an end reached while the app was in the background", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		// iOS sends no polls while the app is in the background, though the
+		// answer to one sent just before can land after the page is hidden.
+		// The first poll after the app comes back reports the end.
+		await setVisibility("hidden");
+		await setMpv({ state: playing(ep1.url, 601, 1300) });
+		await setVisibility("visible");
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("goes on to the next episode when the app comes back before the end", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("goes on to the next episode for an end reached in a hidden window that still polls", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		await setVisibility("hidden");
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it.each([
+		["10 seconds", 1290, [ep1.url, ep2.url]],
+		["11 seconds", 1289, [ep1.url]],
+	])("counts an end as seen coming from a poll %s before it", async (_, position, urls) => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, position, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual(urls);
+	});
+
+	it("doesn't go on to the next episode for an end seen coming before a seek back", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		// It plays on to the end in the background, where iOS sends no polls.
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("doesn't go on to the next episode when the length isn't known", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 0, 0) });
+		await setMpv({ state: ended(ep1.url, 0) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it.each([
+		["goes on", 30_000, [ep1.url, ep2.url]],
+		["doesn't go on", 30_001, [ep1.url]],
+	])(
+		"%s to the next episode when the app was in the background for %i ms of its last seconds",
+		async (_, away, urls) => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const start = new Date("2026-03-01T20:00:00Z").getTime();
+			vi.setSystemTime(start);
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await setMpv({ state: playing(ep1.url, 1292, 1300) });
+			await setVisibility("hidden");
+			vi.setSystemTime(start + away);
+			await setVisibility("visible");
+			await setMpv({ state: ended(ep1.url, 1300) });
+			expect(loadedUrls()).toEqual(urls);
+		}
+	);
+
+	it("goes on to the next episode after a long pause in its last seconds", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const start = new Date("2026-03-01T20:00:00Z").getTime();
+		vi.setSystemTime(start);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: paused(ep1.url, 1295, 1300) });
+		// Polls keep coming once a second while it's paused.
+		vi.setSystemTime(start + 60_000);
+		await setMpv({ state: paused(ep1.url, 1295, 1300) });
+		vi.setSystemTime(start + 61_000);
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		vi.setSystemTime(start + 65_000);
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("asks about the next episode once when its resume prompt is cancelled", async () => {
+		remember(saved("series:show:s1e2", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(resumePrompt()).toBeInTheDocument();
+		await press("Escape");
+		// Episode one still sits at its end, and each poll says so.
+		await setMpv({ state: ended(ep1.url, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(
+			tauri.getPlaybackPosition.mock.calls.filter(([key]) => key === "series:show:s1e2")
+		).toHaveLength(1);
 	});
 });
 

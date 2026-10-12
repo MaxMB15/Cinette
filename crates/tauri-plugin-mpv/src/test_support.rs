@@ -112,10 +112,10 @@ fn new_mpv(options: &[(&str, &str)]) -> Mpv {
 }
 
 /// Bytes per second of the WAV audio, which is 8 kHz mono 16-bit.
-pub(crate) const WAV_BYTES_PER_SEC: usize = 16_000;
+const WAV_BYTES_PER_SEC: usize = 16_000;
 
 /// Length of the WAV header in front of the samples.
-pub(crate) const WAV_HEADER_LEN: usize = 44;
+const WAV_HEADER_LEN: usize = 44;
 
 /// `seconds` of silent WAV audio.
 pub(crate) fn wav(seconds: usize) -> Vec<u8> {
@@ -135,6 +135,12 @@ pub(crate) fn wav(seconds: usize) -> Vec<u8> {
     out.extend_from_slice(&data_len.to_le_bytes());
     out.resize(WAV_HEADER_LEN + data_len as usize, 0);
     out
+}
+
+/// Where a WAV body is cut after `seconds` of audio. Six seconds is more than
+/// FFmpeg reads to work out the format, so the stream starts playing.
+pub(crate) fn after_seconds(seconds: usize) -> usize {
+    WAV_HEADER_LEN + seconds * WAV_BYTES_PER_SEC
 }
 
 /// `seconds` of blank 16x16 Y4M video at 25 frames a second.

@@ -6,6 +6,7 @@
 //! here is `configure_audio`, which Linux needs after mpv starts.
 
 use crate::log_url::origin_for_log;
+use crate::reconnect::ended_early;
 use libmpv2::Mpv;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -27,6 +28,11 @@ pub struct PlayerState {
     /// because the server returned an error. mpv goes back to idle when that
     /// happens.
     pub open_failed: bool,
+    /// Playback ran to the end of the file. With keep-open, mpv then pauses on
+    /// the last frame once the audio drains. A pause near the end leaves this
+    /// false, and so does a connection that closed early, which `reconnect.rs`
+    /// reloads. A seek back or the next load clears it.
+    pub reached_end: bool,
 }
 
 /// Written out by hand so a logged state shows only the stream's origin,
@@ -45,6 +51,7 @@ impl fmt::Debug for PlayerState {
             .field("duration", &self.duration)
             .field("playback_started", &self.playback_started)
             .field("open_failed", &self.open_failed)
+            .field("reached_end", &self.reached_end)
             .finish()
     }
 }
@@ -392,6 +399,8 @@ impl MpvEngine {
                 };
                 (self.playback_started, state.open_failed) =
                     open_status(started, read("seeking"), read("idle-active"));
+                state.reached_end = mpv.get_property::<bool>("eof-reached").unwrap_or(false)
+                    && !ended_early(Some(state.position), Some(state.duration));
             }
             state.playback_started = self.playback_started;
         }
@@ -473,10 +482,12 @@ mod tests {
         let state = PlayerState {
             playback_started: true,
             open_failed: true,
+            reached_end: true,
             ..Default::default()
         };
         let json = serde_json::to_value(state).unwrap();
         assert_eq!(json["playbackStarted"], true);
         assert_eq!(json["openFailed"], true);
+        assert_eq!(json["reachedEnd"], true);
     }
 }
