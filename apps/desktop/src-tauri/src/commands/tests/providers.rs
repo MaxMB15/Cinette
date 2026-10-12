@@ -140,7 +140,7 @@ async fn favorite_ids(app: &TestApp) -> Vec<String> {
         .collect()
 }
 
-/// Loads the Xtream panel at `url` as "Panel", logging in as `user` with
+/// Loads the Xtream panel at `url` as "Panel", logging in as "user" with
 /// `password`.
 async fn load_panel(app: &TestApp, url: &str, password: &str) -> Result<Vec<Channel>, String> {
     load_xtream_provider(
@@ -361,10 +361,11 @@ impl Logged {
     /// Logs everything on this thread until the guard drops. A tokio test
     /// runs its awaits on its own thread, so their logs land here too.
     fn start(&self) -> tracing::subscriber::DefaultGuard {
-        // tracing caches whether a log line is wanted. While only one
-        // dispatcher has ever existed, a line first reached with none set
-        // stays off for good, even after this test sets its own. A second
-        // dispatcher alive for the whole run makes tracing ask again.
+        // tracing remembers whether each log line is wanted. While this
+        // test's dispatcher is the only one alive, tracing asks only the
+        // thread that first reaches a line, so a line another test's thread
+        // reaches first stays off here too. With a second dispatcher alive
+        // for the whole run, tracing asks every dispatcher instead.
         static SECOND: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
         SECOND.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
         let logged = self.clone();
@@ -400,7 +401,6 @@ async fn loading_a_provider_logs_where_it_is_without_its_login() {
     let _logging = logged.start();
     let list = test_server::serve_once("200 OK", playlist(None, &["Alpha"]));
     let (panel, _requests) = xtream_panel();
-
     let password = test_server::password();
 
     let login = format!("?username=user&password={password}");
