@@ -652,17 +652,27 @@ pub async fn fetch_omdb_data<R: Runtime>(
 
     // 3. Fetch from OMDB.
     tracing::info!("[OMDB] fetching data for title={:?} type={}", title, content_type);
-    let data = fetch_omdb(&title, &content_type, &api_key)
-        .await
-        .map_err(|e| {
-            tracing::warn!("[OMDB] fetch failed for title={:?}: {e}", title);
-            e.to_string()
-        })?;
+    let fetched = fetch_omdb(&title, &content_type, &api_key).await;
+    keep_omdb_data(&state, &channel_id, &title, fetched)
+}
+
+/// Caches what OMDb sent back for a channel and returns it. A failed lookup
+/// is passed on and not cached, so the next one asks OMDb again.
+fn keep_omdb_data(
+    state: &AppState,
+    channel_id: &str,
+    title: &str,
+    fetched: Result<OmdbData, OmdbError>,
+) -> Result<Option<OmdbData>, String> {
+    let data = fetched.map_err(|e| {
+        tracing::warn!("[OMDB] fetch failed for title={:?}: {e}", title);
+        e.to_string()
+    })?;
 
     // 4. Store in cache.
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_omdb_cache(&channel_id, &data) {
+        if let Err(e) = cache.save_omdb_cache(channel_id, &data) {
             tracing::warn!("[OMDB] failed to save cache for channel_id={}: {e}", channel_id);
         }
     }
@@ -729,17 +739,26 @@ pub async fn fetch_mdblist_data<R: Runtime>(
 
     // 3. Fetch
     tracing::info!("[MDBList] fetching data for imdb_id={} type={}", imdb_id, media_type);
-    let data = mvp_core::iptv::mdblist::fetch_mdblist(&imdb_id, &media_type, &api_key)
-        .await
-        .map_err(|e| {
-            tracing::warn!("[MDBList] fetch failed for imdb_id={}: {}", imdb_id, e);
-            e.to_string()
-        })?;
+    let fetched = mvp_core::iptv::mdblist::fetch_mdblist(&imdb_id, &media_type, &api_key).await;
+    keep_mdblist_data(&state, &imdb_id, fetched)
+}
+
+/// Caches what MDBList sent back for a title and returns it. A failed lookup
+/// is passed on and not cached, so the next one asks MDBList again.
+fn keep_mdblist_data(
+    state: &AppState,
+    imdb_id: &str,
+    fetched: Result<MdbListData, mvp_core::iptv::mdblist::MdbListError>,
+) -> Result<Option<MdbListData>, String> {
+    let data = fetched.map_err(|e| {
+        tracing::warn!("[MDBList] fetch failed for imdb_id={}: {}", imdb_id, e);
+        e.to_string()
+    })?;
 
     // 4. Cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_mdblist_cache(&imdb_id, &data) {
+        if let Err(e) = cache.save_mdblist_cache(imdb_id, &data) {
             tracing::warn!("[MDBList] failed to save cache for imdb_id={}: {}", imdb_id, e);
         }
     }
@@ -779,7 +798,19 @@ pub async fn fetch_whatson_data<R: Runtime>(
     }
     let item_type = if media_type == "show" || media_type == "series" { "tvshow" } else { "movie" };
     tracing::info!("[Whatson] fetching data for imdb_id={} type={}", imdb_id, item_type);
-    let data = match mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await {
+    let fetched = mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await;
+    keep_whatson_data(&state, &imdb_id, fetched)
+}
+
+/// Caches the ratings whatson sent back for a title and returns them. A title
+/// whatson doesn't know comes back as `None`. Neither that nor a failed lookup
+/// is cached, so the next one asks whatson again.
+fn keep_whatson_data(
+    state: &AppState,
+    imdb_id: &str,
+    fetched: Result<WhatsonData, mvp_core::iptv::whatson::WhatsonError>,
+) -> Result<Option<WhatsonData>, String> {
+    let data = match fetched {
         Ok(data) => data,
         Err(mvp_core::iptv::whatson::WhatsonError::NotFound) => {
             tracing::info!("[Whatson] no data found for imdb_id={}", imdb_id);
@@ -794,7 +825,7 @@ pub async fn fetch_whatson_data<R: Runtime>(
     // 3. Cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_whatson_cache(&imdb_id, &data) {
+        if let Err(e) = cache.save_whatson_cache(imdb_id, &data) {
             tracing::warn!("[Whatson] failed to save cache for imdb_id={}: {}", imdb_id, e);
         }
     }
@@ -864,12 +895,23 @@ async fn skip_times(
 
     // 2. Fetch, and cache what came back, even nothing.
     tracing::info!("[Skip] fetching skip times for {}", key);
-    let times = fetch_source(query, source).await.map_err(|e| {
+    let fetched = fetch_source(query, source).await;
+    keep_skip_times(state, &key, fetched)
+}
+
+/// Caches what one database had for a video under `key` and returns it. A
+/// failed lookup is passed on and not cached, so the next one asks again.
+fn keep_skip_times(
+    state: &AppState,
+    key: &str,
+    fetched: Result<SourceTimes, mvp_core::iptv::skip_segments::SkipError>,
+) -> Result<Option<SourceTimes>, String> {
+    let times = fetched.map_err(|e| {
         tracing::warn!("[Skip] fetch failed for {}: {}", key, e);
         e.to_string()
     })?;
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    if let Err(e) = cache.save_skip_segments_cache(&key, &times) {
+    if let Err(e) = cache.save_skip_segments_cache(key, &times) {
         tracing::warn!("[Skip] failed to save cache for {}: {}", key, e);
     }
     Ok(Some(times))
@@ -933,17 +975,33 @@ pub async fn search_subtitles<R: Runtime>(
 
     // 3. Search
     tracing::info!("[OpenSubtitles] searching for imdb_id={} season={:?} episode={:?}", imdb_id, season, episode);
-    let result = mvp_core::iptv::opensubtitles::search_subtitles(&imdb_id, season, episode, &api_key)
-        .await
-        .map_err(|e| {
-            tracing::warn!("[OpenSubtitles] search failed: {}", e);
-            e.to_string()
-        })?;
+    let fetched =
+        mvp_core::iptv::opensubtitles::search_subtitles(&imdb_id, season, episode, &api_key)
+            .await;
+    keep_subtitle_search(&state, &imdb_id, season, episode, fetched)
+}
+
+/// Caches the subtitles OpenSubtitles found for a title and returns them. A
+/// failed search is passed on and not cached, so the next one searches again.
+fn keep_subtitle_search(
+    state: &AppState,
+    imdb_id: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    fetched: Result<
+        mvp_core::iptv::opensubtitles::SubtitleSearchResult,
+        mvp_core::iptv::opensubtitles::OpenSubtitlesError,
+    >,
+) -> Result<Option<mvp_core::iptv::opensubtitles::SubtitleSearchResult>, String> {
+    let result = fetched.map_err(|e| {
+        tracing::warn!("[OpenSubtitles] search failed: {}", e);
+        e.to_string()
+    })?;
 
     // 4. Cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_opensubtitles_search_cache(&imdb_id, season, episode, &result) {
+        if let Err(e) = cache.save_opensubtitles_search_cache(imdb_id, season, episode, &result) {
             tracing::warn!("[OpenSubtitles] failed to save search cache: {}", e);
         }
     }
@@ -1297,21 +1355,7 @@ pub async fn categorize_provider(
             Ok(json) => {
                 match mvp_core::ai::gemini::parse_categorization_response(&json, &known_groups) {
                     Ok(result) => {
-                        let mut entries: Vec<(&str, Option<&str>, i64)> = result.hierarchy.iter()
-                            .map(|h| (h.group_name.as_str(), h.super_category.as_deref(), h.sort_order))
-                            .collect();
-                        let mut ungrouped_order = entries.last().map(|e| e.2 + 100).unwrap_or(0);
-                        for name in &result.ungrouped {
-                            entries.push((name.as_str(), None, ungrouped_order));
-                            ungrouped_order += 100;
-                        }
-
-                        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-                        cache.replace_group_hierarchy(&provider_id, &content_type, &entries)
-                            .map_err(|e| e.to_string())?;
-
-                        return cache.get_group_hierarchy(&provider_id, &content_type)
-                            .map_err(|e| e.to_string());
+                        return save_categorization(&state, &provider_id, &content_type, &result);
                     }
                     Err(e) => { last_err = e.to_string(); continue; }
                 }
@@ -1320,6 +1364,31 @@ pub async fn categorize_provider(
         }
     }
     Err(format!("Categorization failed: {}", last_err))
+}
+
+/// Replaces a provider's group order with Gemini's sorting, with the groups it
+/// left out after the rest, and returns the groups as saved.
+fn save_categorization(
+    state: &AppState,
+    provider_id: &str,
+    content_type: &str,
+    result: &mvp_core::ai::gemini::CategorizationResult,
+) -> Result<Vec<GroupHierarchyEntry>, String> {
+    let mut entries: Vec<(&str, Option<&str>, i64)> = result.hierarchy.iter()
+        .map(|h| (h.group_name.as_str(), h.super_category.as_deref(), h.sort_order))
+        .collect();
+    let mut ungrouped_order = entries.last().map(|e| e.2 + 100).unwrap_or(0);
+    for name in &result.ungrouped {
+        entries.push((name.as_str(), None, ungrouped_order));
+        ungrouped_order += 100;
+    }
+
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache.replace_group_hierarchy(provider_id, content_type, &entries)
+        .map_err(|e| e.to_string())?;
+
+    cache.get_group_hierarchy(provider_id, content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -1344,15 +1413,7 @@ pub async fn fix_uncategorized_groups(
             Ok(json) => {
                 match mvp_core::ai::gemini::parse_assignment_response(&json, &known, &cats_ref) {
                     Ok(assignments) => {
-                        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-                        for a in &assignments {
-                            cache.save_group_hierarchy(
-                                &provider_id, &content_type, &a.group_name,
-                                Some(&a.category), 0, false,
-                            ).map_err(|e| e.to_string())?;
-                        }
-                        return cache.get_group_hierarchy(&provider_id, &content_type)
-                            .map_err(|e| e.to_string());
+                        return save_assignments(&state, &provider_id, &content_type, &assignments);
                     }
                     Err(e) => { last_err = e.to_string(); continue; }
                 }
@@ -1361,6 +1422,25 @@ pub async fn fix_uncategorized_groups(
         }
     }
     Err(format!("Fix uncategorized failed: {}", last_err))
+}
+
+/// Puts each leftover group in the category Gemini picked for it and returns
+/// the provider's groups as saved.
+fn save_assignments(
+    state: &AppState,
+    provider_id: &str,
+    content_type: &str,
+    assignments: &[mvp_core::ai::gemini::GroupAssignment],
+) -> Result<Vec<GroupHierarchyEntry>, String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    for a in assignments {
+        cache.save_group_hierarchy(
+            provider_id, content_type, &a.group_name,
+            Some(&a.category), 0, false,
+        ).map_err(|e| e.to_string())?;
+    }
+    cache.get_group_hierarchy(provider_id, content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -1424,21 +1504,22 @@ pub fn get_install_info() -> InstallInfo {
     }
 }
 
-/// Fetch latest.json, download the appropriate package, and install it via pkexec.
-/// Emits "package-update://progress" events with { percent: u8 } payloads.
-#[command]
-pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+/// The newest release's latest.json, which lists the Linux packages.
+const LATEST_RELEASE_JSON: &str =
+    "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
+
+/// Downloads the `pkg_key` package listed in the latest.json at `latest_url` to
+/// a temp file ending in `.extension`, which is deleted when the returned path
+/// drops. Emits "package-update://progress" events with { percent: u8 } payloads.
+async fn download_package<R: Runtime>(
+    app: &AppHandle<R>,
+    latest_url: &str,
+    pkg_key: &str,
+    extension: &str,
+) -> Result<tempfile::TempPath, String> {
     use tauri::Emitter;
 
-    let info = get_install_info();
-    let pkg_key = match info.install_type.as_str() {
-        "deb" => "linux-deb-x86_64",
-        "rpm" => "linux-rpm-x86_64",
-        other => return Err(format!("package_update not supported for install type: {other}")),
-    };
-
     // 1. Fetch latest.json to get the package URL
-    let latest_url = "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
     let latest: serde_json::Value = mvp_core::http::client().get(latest_url)
         .send().await.map_err(|e| format!("Failed to fetch latest.json: {e}"))?
         .json().await.map_err(|e| format!("Failed to parse latest.json: {e}"))?;
@@ -1458,10 +1539,10 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     }
 
     let total_size = response.content_length().unwrap_or(0);
-    let extension = if info.install_type == "rpm" { "rpm" } else { "deb" };
-    // keep() disables auto-delete and returns a TempPath (RAII: deletes on drop)
-    // plus the raw File handle for writing. TempPath stays alive until end of
-    // function, so dpkg/rpm can access the file, and cleanup happens on all paths.
+    // into_parts() splits the temp file into the open File, for writing, and a
+    // TempPath that deletes the file when it drops. The TempPath is held until
+    // the install finishes, so dpkg or rpm can read the file, and it is
+    // deleted on every path out.
     use tempfile::Builder;
     let temp_file = Builder::new()
         .prefix("maxvideoplayer_update.")
@@ -1494,45 +1575,71 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     }
     file.flush().await.map_err(|e| format!("Flush error: {e}"))?;
     drop(file);
+    Ok(tmp_path)
+}
+
+/// Fetch latest.json, download the appropriate package, and install it via pkexec.
+/// Emits "package-update://progress" events with { percent: u8 } payloads.
+#[command]
+pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let info = get_install_info();
+    let pkg_key = match info.install_type.as_str() {
+        "deb" => "linux-deb-x86_64",
+        "rpm" => "linux-rpm-x86_64",
+        other => return Err(format!("package_update not supported for install type: {other}")),
+    };
+    let extension = if info.install_type == "rpm" { "rpm" } else { "deb" };
+    let tmp_path = download_package(&app, LATEST_RELEASE_JSON, pkg_key, extension).await?;
 
     // 3. Install via pkexec (async so we do not block the Tokio worker for the whole GUI prompt)
+    // tmp_path (TempPath) auto-deletes on drop at end of function.
+    let pkexec = || tokio::process::Command::new("pkexec");
+    install_package(pkexec, &info.install_type, &tmp_path).await
+}
+
+/// Installs the `install_type` package at `path` with the command `elevated`
+/// starts, which runs what it's given with admin rights. That's pkexec in the
+/// app, and tests pass a stand-in so nothing is installed.
+async fn install_package(
+    elevated: impl Fn() -> tokio::process::Command,
+    install_type: &str,
+    path: &std::path::Path,
+) -> Result<(), String> {
     // For deb: prefer apt-get install which resolves dependencies automatically,
     // fall back to dpkg -i for systems without apt-get.
-    let output = match info.install_type.as_str() {
+    let output = match install_type {
         "deb" => {
-            let apt_result = tokio::process::Command::new("pkexec")
+            let apt_result = elevated()
                 .arg("apt-get")
                 .arg("install")
                 .arg("-y")
                 .arg("--allow-downgrades")
-                .arg(&tmp_path)
+                .arg(path)
                 .output()
                 .await;
             match apt_result {
                 Ok(o) if o.status.success() => o,
                 _ => {
                     // Fallback to dpkg -i (no dependency resolution)
-                    tokio::process::Command::new("pkexec")
+                    elevated()
                         .arg("dpkg")
                         .arg("-i")
-                        .arg(&tmp_path)
+                        .arg(path)
                         .output()
                         .await
                         .map_err(|e| format!("Failed to run installer: {e}"))?
                 }
             }
         },
-        "rpm" => tokio::process::Command::new("pkexec")
+        "rpm" => elevated()
             .arg("rpm")
             .arg("-U")
-            .arg(&tmp_path)
+            .arg(path)
             .output()
             .await
             .map_err(|e| format!("Failed to run installer: {e}"))?,
-        _ => unreachable!(),
+        other => return Err(format!("Unsupported package type: {other}")),
     };
-
-    // tmp_path (TempPath) auto-deletes on drop at end of function.
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
