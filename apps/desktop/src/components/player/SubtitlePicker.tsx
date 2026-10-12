@@ -14,6 +14,7 @@ import type { SubtitleEntry, SubtitleSearchResult, SubtitleCue } from "@/lib/typ
 import { parseSrt } from "@/lib/subtitle-parser";
 import { getDelayStep, getDelayInterval } from "@/lib/subtitle-delay";
 import { cn } from "@/lib/utils";
+import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
 
 // ─── Font family options ───────────────────────────────────────────────────
 const FONT_FAMILIES: { label: string; value: string }[] = [
@@ -106,6 +107,8 @@ export const SubtitlePicker = ({
 		if (!delayHovered) return;
 		const handleKey = (e: KeyboardEvent) => {
 			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+			// A confirm open over the picker keeps its keys.
+			if (hasOpenFocusTrap()) return;
 			e.preventDefault();
 			e.stopPropagation();
 			const delta = e.key === "ArrowRight" ? 0.1 : -0.1;

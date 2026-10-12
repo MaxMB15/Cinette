@@ -57,6 +57,7 @@ import {
 	repeatsWhenHeld,
 } from "@/lib/hotkeys";
 import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
+import { usePlayerFocus } from "@/hooks/usePlayerFocus";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
@@ -225,24 +226,7 @@ export const PlayerView = () => {
 		};
 	}, [mpv.firstFrameReady]);
 
-	// Auto-focus the player container so keyboard controls (space, arrows)
-	// work immediately without requiring a click first.
-	useEffect(() => {
-		containerRef.current?.focus();
-	}, []);
-
-	// Re-focus after channel load completes (currentUrl changes). Leave focus
-	// alone if it's already inside the player (e.g. on the resume prompt), or
-	// on a confirm, which opens outside the player.
-	useEffect(() => {
-		if (
-			mpv.state.currentUrl &&
-			!containerRef.current?.contains(document.activeElement) &&
-			!hasOpenFocusTrap()
-		) {
-			containerRef.current?.focus();
-		}
-	}, [mpv.state.currentUrl]);
+	usePlayerFocus(containerRef, mpv.state.currentUrl);
 
 	// Report video container bounds to the Rust renderer. The CSD header bar
 	// offset is applied on the Rust side via LinuxGlRenderer::csd_offset (x, y),
@@ -265,6 +249,8 @@ export const PlayerView = () => {
 		if (!subtitleEditMode) return;
 		const handleKey = (e: KeyboardEvent) => {
 			if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+			// A confirm open over the player keeps its keys.
+			if (hasOpenFocusTrap()) return;
 			e.preventDefault();
 			setSubtitlePos((p) => ({
 				x:
@@ -888,7 +874,8 @@ export const PlayerView = () => {
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent) => {
-			// A confirm opened from the controls has the keys while it's open.
+			// A confirm opened from the controls renders in a portal, and it keeps
+			// its keys while it's open.
 			if (!isInside(containerRef.current, e.target)) return;
 			// The resume prompt handles its own keys; Escape still cancels it if
 			// focus ended up elsewhere in the player.
@@ -1037,6 +1024,9 @@ export const PlayerView = () => {
 		(activeChannel.contentType === "movie" || activeChannel.contentType === "series");
 	const downloadSlot = showPlayerDownload ? (
 		<DownloadButton
+			// A new episode closes a confirm left open for the last one, which
+			// would otherwise stop or remove the new episode's download.
+			key={activeChannel.id}
 			state={playerDownloadState}
 			onStart={() => {
 				if (!activeChannel) return;
