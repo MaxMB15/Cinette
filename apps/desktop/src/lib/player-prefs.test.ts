@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
 	readDefaultVolume,
 	writeDefaultVolume,
@@ -9,6 +9,9 @@ import {
 	writeVolumePreference,
 	readHwdecEnabled,
 	writeHwdecEnabled,
+	readSkipIntervals,
+	writeSkipInterval,
+	SKIP_INTERVALS_EVENT,
 } from "./player-prefs";
 
 describe("player-prefs", () => {
@@ -82,6 +85,38 @@ describe("player-prefs", () => {
 			expect(readHwdecEnabled()).toBe(false);
 			writeHwdecEnabled(true);
 			expect(readHwdecEnabled()).toBe(true);
+		});
+	});
+
+	describe("skip intervals", () => {
+		it("are 10 seconds each when never set", () => {
+			expect(readSkipIntervals()).toEqual({ back: 10, forward: 10 });
+		});
+
+		it("round-trips each direction on its own", () => {
+			writeSkipInterval("back", 5);
+			expect(readSkipIntervals()).toEqual({ back: 5, forward: 10 });
+			writeSkipInterval("forward", 30);
+			expect(readSkipIntervals()).toEqual({ back: 5, forward: 30 });
+		});
+
+		it("ignores lengths Settings doesn't offer", () => {
+			writeSkipInterval("forward", 30);
+			writeSkipInterval("forward", 7);
+			expect(readSkipIntervals().forward).toBe(30);
+			for (const bad of ["7", "0", "-10", "ten", ""]) {
+				localStorage.setItem("mvp_skip_back", bad);
+				expect(readSkipIntervals().back).toBe(10);
+			}
+		});
+
+		it("fires an event when a length changes", () => {
+			const listener = vi.fn();
+			window.addEventListener(SKIP_INTERVALS_EVENT, listener);
+			writeSkipInterval("back", 15);
+			writeSkipInterval("back", 8);
+			window.removeEventListener(SKIP_INTERVALS_EVENT, listener);
+			expect(listener).toHaveBeenCalledTimes(1);
 		});
 	});
 });

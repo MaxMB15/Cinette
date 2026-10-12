@@ -7,30 +7,12 @@ import { Button } from "@/components/ui/button";
 import { getWatchHistory, deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
+import { ChannelLogo } from "./ChannelLogo";
+import { formatDuration, formatRelativeDate } from "@/lib/watch-history";
 
 interface HistoryTabProps {
 	onPlay: (entry: WatchHistoryEntry) => void;
 }
-
-const formatDuration = (seconds: number): string => {
-	if (seconds < 60) return `${seconds}s`;
-	const h = Math.floor(seconds / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
-	if (h === 0) return `${m}m`;
-	return `${h}h ${m}m`;
-};
-
-const formatRelativeDate = (unixSeconds: number): string => {
-	const date = new Date(unixSeconds * 1000);
-	const now = new Date();
-	const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-	const yesterday = new Date(today.getTime() - 86400000);
-	const entryDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-	if (entryDay.getTime() === today.getTime())
-		return `Today ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-	if (entryDay.getTime() === yesterday.getTime()) return `Yesterday`;
-	return date.toLocaleDateString([], { month: "short", day: "numeric" });
-};
 
 const BADGE_COLOR: Record<string, string> = {
 	live: "bg-red-500/20 text-red-400",
@@ -141,62 +123,55 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 			<div className="flex-1 overflow-auto scrollbar-hide px-3 pb-3">
 				<div className="flex flex-col">
 					{entries.map((entry) => (
+						// Play and delete are sibling buttons so each gets its own name and
+						// keyboard focus instead of one nested inside the other.
 						<div
 							key={entry.channelId}
-							onClick={() => onPlay(entry)}
-							className="flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-accent cursor-pointer group"
+							className="flex items-center gap-3 pr-2 rounded-lg hover:bg-accent group"
 						>
-							{/* Logo */}
-							<div className="shrink-0 h-9 w-9 rounded-md overflow-hidden bg-muted flex items-center justify-center">
-								{entry.channelLogo ? (
-									<img
-										src={entry.channelLogo}
-										alt={entry.channelName}
-										className="h-full w-full object-cover"
-										onError={(e) => {
-											(e.currentTarget as HTMLImageElement).style.display =
-												"none";
-											const parent = e.currentTarget.parentElement;
-											if (parent) {
-												parent.textContent = entry.channelName
-													.charAt(0)
-													.toUpperCase();
-												parent.classList.add(
-													"text-sm",
-													"font-semibold",
-													"text-muted-foreground"
-												);
-											}
-										}}
-									/>
-								) : (
-									<span className="text-sm font-semibold text-muted-foreground">
-										{entry.channelName.charAt(0).toUpperCase()}
-									</span>
-								)}
-							</div>
+							<button
+								type="button"
+								onClick={() => onPlay(entry)}
+								className="flex flex-1 min-w-0 items-center gap-3 pl-2 py-2.5 rounded-lg text-left cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+							>
+								{/* Logo */}
+								<ChannelLogo
+									url={entry.channelLogo}
+									className="h-9 w-9 rounded-md bg-muted"
+									imgClassName="object-cover"
+									fallback={
+										<span
+											aria-hidden="true"
+											className="text-sm font-semibold text-muted-foreground"
+										>
+											{entry.channelName.charAt(0).toUpperCase()}
+										</span>
+									}
+								/>
 
-							{/* Info */}
-							<div className="flex-1 min-w-0">
-								<div className="flex items-center gap-2 mb-0.5">
-									<span className="font-medium text-sm truncate">
-										{entry.channelName}
-									</span>
-									<ContentTypeBadge type={entry.contentType} />
-									<span className="text-xs text-muted-foreground ml-auto shrink-0">
-										{formatRelativeDate(entry.lastWatchedAt)}
-									</span>
+								{/* Info */}
+								<div className="flex-1 min-w-0">
+									<div className="flex items-center gap-2 mb-0.5">
+										<span className="font-medium text-sm truncate">
+											{entry.channelName}
+										</span>
+										<ContentTypeBadge type={entry.contentType} />
+										<span className="text-xs text-muted-foreground ml-auto shrink-0">
+											{formatRelativeDate(entry.lastWatchedAt)}
+										</span>
+									</div>
+									<p className="text-xs text-muted-foreground">
+										{entry.playCount} {entry.playCount === 1 ? "play" : "plays"}{" "}
+										· {formatDuration(entry.totalDurationSeconds)} total
+									</p>
 								</div>
-								<p className="text-xs text-muted-foreground">
-									{entry.playCount} {entry.playCount === 1 ? "play" : "plays"} ·{" "}
-									{formatDuration(entry.totalDurationSeconds)} total
-								</p>
-							</div>
+							</button>
 
 							{/* Delete */}
 							<button
+								type="button"
 								onClick={(e) => handleDelete(e, entry.channelId)}
-								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
+								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
 								aria-label={`Remove ${entry.channelName} from history`}
 							>
 								<Trash2 className="h-3.5 w-3.5" />

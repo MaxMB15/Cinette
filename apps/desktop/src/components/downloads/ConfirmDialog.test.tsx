@@ -50,6 +50,24 @@ describe("ConfirmDialog", () => {
 		expect(document.activeElement).toBe(keep);
 	});
 
+	it("closes a notice with its one button, Escape or a click outside", () => {
+		const onConfirm = vi.fn();
+		render(
+			<ConfirmDialog
+				open
+				title="Couldn't remove the download"
+				message="The file is in use."
+				confirmLabel="OK"
+				onConfirm={onConfirm}
+			/>
+		);
+		expect(screen.queryByText("Cancel")).toBeNull();
+		fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+		fireEvent.click(screen.getByRole("dialog").parentElement!);
+		fireEvent.click(screen.getByText("OK"));
+		expect(onConfirm).toHaveBeenCalledTimes(3);
+	});
+
 	it("renders nothing while closed", () => {
 		render(
 			<ConfirmDialog

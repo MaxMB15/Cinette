@@ -31,7 +31,7 @@ import {
 	toLocalInputValue,
 	writeMargins,
 } from "./recordings";
-import { formatClock } from "./format";
+import { formatHHMM } from "./epg-window";
 import type { DownloadRecord, EpgProgram } from "./types";
 
 const MIN = 60;
@@ -277,14 +277,14 @@ describe("describing recordings", () => {
 		const now = local(2026, 10, 12, 9);
 		const [eight, nine] = [local(2026, 10, 12, 20), local(2026, 10, 12, 21)];
 		expect(formatWindow(eight, nine, now)).toBe(
-			`Today, ${formatClock(eight)} to ${formatClock(nine)}`
+			`Today, ${formatHHMM(eight)} to ${formatHHMM(nine)}`
 		);
 		const [late, early] = [local(2026, 10, 12, 23, 30), local(2026, 10, 13, 1)];
 		expect(formatWindow(late, early, now)).toBe(
-			`Today, ${formatClock(late)} to Tomorrow, ${formatClock(early)}`
+			`Today, ${formatHHMM(late)} to Tomorrow, ${formatHHMM(early)}`
 		);
-		expect(formatAt(nine, now)).toBe(formatClock(nine));
-		expect(formatAt(early, now)).toBe(`Tomorrow, ${formatClock(early)}`);
+		expect(formatAt(nine, now)).toBe(formatHHMM(nine));
+		expect(formatAt(early, now)).toBe(`Tomorrow, ${formatHHMM(early)}`);
 	});
 
 	it("gives each state a short status", () => {
@@ -292,7 +292,7 @@ describe("describing recordings", () => {
 		expect(recordingStatus(rec(), now)).toBe("Scheduled");
 		expect(recordingStatus(rec({ error: "The stream stopped." }), now)).toBe("Trying again");
 		expect(recordingStatus(rec({ status: "recording" }), now)).toBe(
-			`Recording until ${formatClock(2_000)}`
+			`Recording until ${formatHHMM(2_000)}`
 		);
 		expect(recordingStatus(rec({ status: "completed" }), now)).toBe("Recorded");
 		expect(

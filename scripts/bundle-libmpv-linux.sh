@@ -28,7 +28,7 @@ if ! command -v patchelf &>/dev/null; then
   exit 1
 fi
 
-# Find libmpv — prefer libs/linux/ (source build), then system pkg-config.
+# Find libmpv. Prefer libs/linux/ (source build), then system pkg-config.
 # Source build is preferred because it includes audio outputs we control.
 LIBMPV_PATH=""
 if [[ -f "$WORKSPACE_ROOT/libs/linux/libmpv.so" ]]; then
@@ -64,7 +64,7 @@ cp "$LIBMPV_PATH" "$BUNDLE_DIR/libmpv.so"
 ln -sf libmpv.so "$BUNDLE_DIR/libmpv.so.2"
 ln -sf libmpv.so "$BUNDLE_DIR/libmpv.so.1"
 
-# System libraries that must NOT be bundled — they are always present on the
+# System libraries that must NOT be bundled. They are always present on the
 # target system and bundling them causes ABI conflicts. In particular, GPU
 # drivers (Mesa/VA-API/VDPAU) and their LLVM backend must always come from the
 # system: they dlopen kernel modules and must match the host kernel ABI. Mixing
@@ -72,24 +72,24 @@ ln -sf libmpv.so "$BUNDLE_DIR/libmpv.so.1"
 SYSTEM_LIBS_RE="linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|libpthread"
 SYSTEM_LIBS_RE+="|librt\.so|libstdc\+\+|libgcc_s|libresolv|libnss_"
 SYSTEM_LIBS_RE+="|libX[a-z]|libxcb|libwayland|libdrm|libgbm"
-# GL stack — always use system Mesa/vendor driver, never bundle.
+# GL stack. Always use the system Mesa or vendor driver, never bundle.
 SYSTEM_LIBS_RE+="|libGL\.so|libEGL\.so|libGLX|libGLdispatch|libOpenGL"
-# GTK stack and its transitive deps — must match the system WebKit/GTK.
+# GTK stack and its transitive deps, which must match the system WebKit/GTK.
 SYSTEM_LIBS_RE+="|libgtk|libgdk|libglib|libgobject|libgio|libpango|libcairo|libatk"
 SYSTEM_LIBS_RE+="|libffi|libpcre|libharfbuzz|libfribidi|libgraphite"
-# Hardware video acceleration — always from the system to match GPU driver.
+# Hardware video acceleration comes from the system to match the GPU driver.
 SYSTEM_LIBS_RE+="|libva|libvdpau|libnvidia|libcuda"
-# LLVM backend used by Mesa shader compilers — must match Mesa version.
+# LLVM backend used by Mesa shader compilers, which must match the Mesa version.
 SYSTEM_LIBS_RE+="|libLLVM|libclang"
 # Core system services.
 SYSTEM_LIBS_RE+="|libdbus|libsystemd|libfontconfig|libfreetype|libudev"
 
 # bundle_all_deps: recursively resolve and copy dependencies to a fixpoint.
-# Uses the bundle dir itself as the visited set — if a .so already exists
+# Uses the bundle dir itself as the visited set. If a .so already exists
 # there, it's been processed and won't be traversed again.
 #
 # Uses process substitution (< <(...)) instead of a pipeline so that:
-#   1. The while loop body runs in the current shell — queue+= propagates.
+#   1. The while loop body runs in the current shell, so queue+= propagates.
 #   2. "|| true" after the process substitution suppresses grep exit-1 when a
 #      lib has no "=> /" lines (e.g. only linux-vdso / ld-linux deps), which
 #      would otherwise trigger set -euo pipefail and kill the script silently.

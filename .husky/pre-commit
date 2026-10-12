@@ -1,3 +1,28 @@
-npm run format
-npm run lint
+# lint-staged runs with --no-stash so it never adds to or drops from the git
+# stash, which other worktrees share. It still hides the unstaged parts of
+# partially staged files in this patch while the tasks run. It restores them
+# when the tasks pass but not when they fail, so this hook does that.
+patch=$(git rev-parse --git-path lint-staged_unstaged.patch)
+
+if [ -e "$patch" ]; then
+	echo "pre-commit: an earlier run stopped before restoring unstaged changes." >&2
+	echo "They are saved in $patch. Apply them with" >&2
+	echo "git apply --3way \"$patch\", or delete the file if you don't need them." >&2
+	exit 1
+fi
+
+if npx lint-staged --no-stash; then
+	rm -f "$patch"
+else
+	if [ -e "$patch" ]; then
+		if git apply --whitespace=nowarn --recount --unidiff-zero "$patch" ||
+			git apply --whitespace=nowarn --recount --unidiff-zero --3way "$patch"; then
+			rm -f "$patch"
+		else
+			echo "pre-commit: could not restore unstaged changes. They are saved in $patch." >&2
+		fi
+	fi
+	exit 1
+fi
+
 npm test

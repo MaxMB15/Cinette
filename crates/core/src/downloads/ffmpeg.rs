@@ -69,7 +69,7 @@ pub fn stream_copy_args(
         args.push("-movflags".into());
         args.push("+faststart".into());
     }
-    // Explicit output muxer — the `.part` extension can't be auto-detected.
+    // Name the output muxer, because ffmpeg can't detect it from the `.part` extension.
     args.push("-f".into());
     args.push(muxer.into());
     // Machine-readable progress on stdout, one key=value per line.

@@ -28,7 +28,7 @@ use mvp_core::downloads::model::{DownloadKind, DownloadRecord, DownloadStatus};
 use mvp_core::downloads::recording::{self, Action, GuideProgram, Outcome, StreamError};
 use mvp_core::downloads::redact::{redact_credentials, url_origin};
 use mvp_core::models::channel::Channel;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -477,14 +477,9 @@ fn claim(
     let providers = provider_ids(cache)?;
     let source = find_source(cache, &rec, &providers)?.ok_or(NO_CHANNEL)?;
     let records = cache.list_recordings().map_err(|e| e.to_string())?;
-    // Some file systems ignore case, so two names that differ only in case
-    // are one file there.
-    let taken: HashSet<String> = records.iter().map(|r| r.dest_path.to_lowercase()).collect();
     rec.start_at = Some(now);
     let named_at = local_now + chrono::Duration::seconds(recording::core_start(&rec) - now);
-    let dest = recording::dest_path(root, &rec.title, named_at, |p| {
-        p.exists() || taken.contains(&p.to_string_lossy().to_lowercase())
-    });
+    let dest = manager::unused_dest_path(cache, &recording::dest_path(root, &rec.title, named_at))?;
 
     rec.status = DownloadStatus::Recording;
     rec.dest_path = dest.to_string_lossy().into_owned();

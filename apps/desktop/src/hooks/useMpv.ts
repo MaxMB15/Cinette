@@ -3,7 +3,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { PlayerState } from "@/lib/types";
+import type { MpvPlayerState } from "@/lib/types";
 import {
 	mpvLoad,
 	mpvPlay,
@@ -14,21 +14,34 @@ import {
 	mpvGetState,
 } from "@/lib/tauri";
 import { readHwdecEnabled, readVolumePreference, writeVolumePreference } from "@/lib/player-prefs";
+import { isOpeningStream } from "@/lib/stream-opening";
 
-const DEFAULT_STATE: PlayerState = {
+const DEFAULT_STATE: MpvPlayerState = {
 	isPlaying: false,
 	isPaused: false,
 	currentUrl: null,
 	volume: 100,
 	position: 0,
 	duration: 0,
+	playbackStarted: false,
+	openFailed: false,
 };
 
 export const useMpv = () => {
-	const [state, setState] = useState<PlayerState>(DEFAULT_STATE);
+	const [state, setState] = useState<MpvPlayerState>(DEFAULT_STATE);
 	const [error, setError] = useState<string | null>(null);
 	const [fallbackActive, setFallbackActive] = useState(false);
 	const [firstFrameReady, setFirstFrameReady] = useState(false);
+	// Set only by the first-frame event. The mount check below also sets
+	// `firstFrameReady`, but it can't tell a stream that's still opening from
+	// one that's playing, so the spinner doesn't use it.
+	const [firstFrameSeen, setFirstFrameSeen] = useState(false);
+	// True while `mpvLoad` is in flight. Drives the "Opening stream" spinner
+	// until the polled state describes the new load.
+	const [loadPending, setLoadPending] = useState(false);
+	// Goes up by one on every load, so the spinner starts over even when the
+	// same URL is loaded again.
+	const [loadId, setLoadId] = useState(0);
 	// Set while the Rust-side reconnect monitor is re-issuing loadfile after
 	// a network-induced EndFile(Error). Cleared on the matching `mpv://reconnected`
 	// event or whenever the user starts a fresh load.
@@ -93,6 +106,11 @@ export const useMpv = () => {
 	useEffect(() => {
 		const unlistenPromise = listen("mpv://first-frame", () => {
 			setFirstFrameReady(true);
+			// A frame that arrives while a load runs most likely comes from
+			// the stream being replaced, so it doesn't end the new stream's
+			// spinner. If it was the new stream's after all, the next poll's
+			// playbackStarted ends the spinner instead.
+			if (!loadingRef.current) setFirstFrameSeen(true);
 		});
 		return () => {
 			unlistenPromise.then((fn) => fn());
@@ -198,8 +216,13 @@ export const useMpv = () => {
 	// Refs that mirror state so the `online` listener (registered once)
 	// reads the latest values without re-binding on every poll.
 	const loadFailedRef = useRef(false);
+	const openFailedRef = useRef(false);
 	const reconnectingRef = useRef(false);
 	const currentUrlRef = useRef<string | null>(null);
+	// The URL the last load asked for. The polled state still names the
+	// previous stream while a load runs, and keeps naming it if the load
+	// fails, so a retry reads this first.
+	const requestedUrlRef = useRef<string | null>(null);
 	// Sticky last-good position. We need this (rather than `state.position`)
 	// for resume-on-recovery because during a Rust-side retry the polled
 	// position can briefly drop to 0 as the new loadfile is initialising —
@@ -207,9 +230,15 @@ export const useMpv = () => {
 	// 00:00. `lastKnownPositionRef` only ever takes ON forward progress,
 	// so an outage-time recovery sees the pre-outage position.
 	const lastKnownPositionRef = useRef(0);
+	// The stream stopped before it ever played, for example because the server
+	// answered with an error. Reconnect and retries-exhausted states outrank it.
+	const openFailed = state.openFailed && !reconnecting && !loadFailed;
 	useEffect(() => {
 		loadFailedRef.current = loadFailed;
 	}, [loadFailed]);
+	useEffect(() => {
+		openFailedRef.current = openFailed;
+	}, [openFailed]);
 	useEffect(() => {
 		reconnectingRef.current = reconnecting;
 	}, [reconnecting]);
@@ -230,9 +259,13 @@ export const useMpv = () => {
 		if (loadingRef.current) return;
 		loadingRef.current = true;
 		loadedThisMountRef.current = true;
+		requestedUrlRef.current = url;
+		setLoadPending(true);
+		setLoadId((id) => id + 1);
 		setError(null);
 		setFallbackActive(false);
 		setFirstFrameReady(false);
+		setFirstFrameSeen(false);
 		setReconnecting(false);
 		setReconnectAttempt(0);
 		setBuffering(false);
@@ -259,6 +292,8 @@ export const useMpv = () => {
 			isPaused: false,
 			position: startPos ?? 0,
 			duration: 0,
+			playbackStarted: false,
+			openFailed: false,
 		}));
 		try {
 			await mpvLoad(url, startPos, readHwdecEnabled());
@@ -280,31 +315,52 @@ export const useMpv = () => {
 			throw e;
 		} finally {
 			loadingRef.current = false;
+			setLoadPending(false);
 		}
 	}, []);
+
+	/**
+	 * Loads the current stream again from where it got to, for the Retry
+	 * buttons and the recovery below. The resume point is the sticky
+	 * last-known position rather than the polled one, which can read 0 while
+	 * a fresh loadfile starts. A player reopened on a stream that kept playing
+	 * hasn't loaded anything itself, so it falls back to the polled URL.
+	 *
+	 * Resolves to false when there was nothing to load, or a load was still
+	 * running. The plugin runs one load at a time, so a second one would only
+	 * queue behind it.
+	 */
+	const reload = useCallback(async (): Promise<boolean> => {
+		const url = requestedUrlRef.current ?? currentUrlRef.current;
+		if (!url || loadingRef.current) return false;
+		const resumeAt = lastKnownPositionRef.current;
+		await load(url, resumeAt > 1.0 ? resumeAt : undefined);
+		return true;
+	}, [load]);
 
 	// Auto-recover when the OS reports the network came back online while
 	// we're either parked in `loadFailed` OR actively `reconnecting`. The
 	// Rust-side reconnect monitor sits on an exponential backoff between
 	// attempts (up to 30 s); without this hook the red banner would stay up
 	// for the full backoff window even though the user knows their internet
-	// is already back. By calling `load(currentUrl)` we hard-reset the mpv
+	// is already back. By calling `reload()` we hard-reset the mpv
 	// instance immediately: the new load clears `reconnecting`/`loadFailed`
 	// in the same tick, and `flashRecovered()` lights the green "Connection
 	// restored" banner so the user gets positive confirmation.
+	//
+	// A stream that failed to open is retried too, but without the green
+	// banner: it never played, and the spinner shows while it tries again.
 	useEffect(() => {
 		const handleOnline = () => {
-			const url = currentUrlRef.current;
-			const needsRecover = loadFailedRef.current || reconnectingRef.current;
-			if (needsRecover && url) {
-				const resumeAt = lastKnownPositionRef.current;
+			const neverOpened = openFailedRef.current;
+			const needsRecover = loadFailedRef.current || reconnectingRef.current || neverOpened;
+			if (needsRecover) {
 				console.info(
-					`[useMpv] online event (loadFailed=${loadFailedRef.current} reconnecting=${reconnectingRef.current}) — auto-recovering at pos=${resumeAt.toFixed(2)}:`,
-					url
+					`[useMpv] online event (loadFailed=${loadFailedRef.current} reconnecting=${reconnectingRef.current} openFailed=${neverOpened}) — auto-recovering at pos=${lastKnownPositionRef.current.toFixed(2)}`
 				);
-				load(url, resumeAt > 1.0 ? resumeAt : undefined)
-					.then(() => {
-						flashRecovered();
+				reload()
+					.then((reloaded) => {
+						if (reloaded && !neverOpened) flashRecovered();
 					})
 					.catch((e) => {
 						console.warn("[useMpv] auto-recover load failed:", e);
@@ -313,7 +369,7 @@ export const useMpv = () => {
 		};
 		window.addEventListener("online", handleOnline);
 		return () => window.removeEventListener("online", handleOnline);
-	}, [load, flashRecovered]);
+	}, [reload, flashRecovered]);
 
 	const play = useCallback(async () => {
 		console.log("[useMpv] play called");
@@ -339,6 +395,7 @@ export const useMpv = () => {
 		console.log("[useMpv] stop called");
 		try {
 			await mpvStop();
+			requestedUrlRef.current = null;
 			setState(DEFAULT_STATE);
 		} catch (e) {
 			console.error("[useMpv] mpvStop failed:", e);
@@ -380,7 +437,7 @@ export const useMpv = () => {
 	}, [setVolume]);
 
 	// Read-only accessor for the sticky last-known position. Callers (e.g.
-	// the Retry button) should prefer this over `state.position` for resume
+	// a source switch) should prefer this over `state.position` for resume
 	// points across hard restarts — `state.position` is polled and can read 0
 	// transiently if a fresh `loadfile` is in flight; `lastKnownPositionRef`
 	// only ever takes ON forward progress, so it survives the retry window.
@@ -390,6 +447,9 @@ export const useMpv = () => {
 		try {
 			const s = await mpvGetState();
 			console.debug("[useMpv] poll state:", JSON.stringify(s));
+			// A poll that lands mid-load may describe the previous stream (or
+			// none at all). Keep the reset state until the load returns.
+			if (loadingRef.current) return;
 			setState({
 				isPlaying: s.isPlaying,
 				isPaused: s.isPaused,
@@ -397,6 +457,8 @@ export const useMpv = () => {
 				volume: s.volume,
 				position: s.position,
 				duration: s.duration,
+				playbackStarted: s.playbackStarted,
+				openFailed: s.openFailed,
 			});
 		} catch (e) {
 			console.warn("[useMpv] poll failed:", e);
@@ -413,17 +475,31 @@ export const useMpv = () => {
 		};
 	}, [refresh]);
 
+	const opening = isOpeningStream({
+		loadPending,
+		currentUrl: state.currentUrl,
+		playbackStarted: state.playbackStarted,
+		firstFrameReady: firstFrameSeen,
+		error,
+		failed: loadFailed || openFailed,
+		reconnecting,
+	});
+
 	return {
 		state,
 		error,
 		fallbackActive,
 		firstFrameReady,
+		opening,
+		loadId,
 		reconnecting,
 		reconnectAttempt,
 		buffering,
 		loadFailed,
+		openFailed,
 		recentlyRecovered,
 		load,
+		reload,
 		getLastKnownPosition,
 		play,
 		pause,

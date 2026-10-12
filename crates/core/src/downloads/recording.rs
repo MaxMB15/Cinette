@@ -41,33 +41,17 @@ pub const RETRY_RESET_SECS: i64 = 5 * 60;
 
 /// The path for a recording of `channel_name` that starts at `start`, local
 /// time, such as `<root>/recordings/City News 2026-10-12 20.00.ts`. Two
-/// recordings can share a channel name and a minute, so while `taken` says a
-/// path is in use this tries ` (2)`, ` (3)` and so on.
-pub fn dest_path(
-    root: &Path,
-    channel_name: &str,
-    start: NaiveDateTime,
-    taken: impl Fn(&Path) -> bool,
-) -> PathBuf {
-    let dir = root.join(RECORDINGS_DIR);
-    let stem = format!(
-        "{} {}",
+/// recordings can share a channel name and a minute, so the caller numbers
+/// a path that's in use with [`unique_dest_path`].
+///
+/// [`unique_dest_path`]: crate::downloads::paths::unique_dest_path
+pub fn dest_path(root: &Path, channel_name: &str, start: NaiveDateTime) -> PathBuf {
+    let name = format!(
+        "{} {}.{CONTAINER}",
         sanitize_filename(channel_name),
         start.format("%Y-%m-%d %H.%M")
     );
-    let mut n = 1;
-    loop {
-        let name = if n == 1 {
-            format!("{stem}.{CONTAINER}")
-        } else {
-            format!("{stem} ({n}).{CONTAINER}")
-        };
-        let path = dir.join(name);
-        if !taken(&path) {
-            return path;
-        }
-        n += 1;
-    }
+    root.join(RECORDINGS_DIR).join(name)
 }
 
 /// ffmpeg arguments for recording `url` into `dest` for at most `max_secs`
@@ -662,28 +646,15 @@ mod tests {
 
     #[test]
     fn names_the_file_after_the_channel_and_local_start_time() {
-        let path = dest_path(Path::new("/dl"), "City News", at(20, 0), |_| false);
+        let path = dest_path(Path::new("/dl"), "City News", at(20, 0));
         assert_eq!(
             path,
             Path::new("/dl/recordings/City News 2026-10-12 20.00.ts")
         );
-        let odd = dest_path(Path::new("/dl"), "News: 24/7", at(9, 5), |_| false);
+        let odd = dest_path(Path::new("/dl"), "News: 24/7", at(9, 5));
         assert_eq!(
             odd,
             Path::new("/dl/recordings/News_ 24_7 2026-10-12 09.05.ts")
-        );
-    }
-
-    #[test]
-    fn numbers_a_file_name_that_is_taken() {
-        let first = Path::new("/dl/recordings/City News 2026-10-12 20.00.ts");
-        let second = Path::new("/dl/recordings/City News 2026-10-12 20.00 (2).ts");
-        let path = dest_path(Path::new("/dl"), "City News", at(20, 0), |p| {
-            p == first || p == second
-        });
-        assert_eq!(
-            path,
-            Path::new("/dl/recordings/City News 2026-10-12 20.00 (3).ts")
         );
     }
 

@@ -861,6 +861,7 @@ pub struct WatchHistoryEntryDto {
     pub last_watched_at: i64,
     pub total_duration_seconds: i64,
     pub play_count: i64,
+    pub series_title: Option<String>,
 }
 
 impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
@@ -874,6 +875,7 @@ impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
             last_watched_at: e.last_watched_at,
             total_duration_seconds: e.total_duration_seconds,
             play_count: e.play_count,
+            series_title: e.series_title,
         }
     }
 }
@@ -904,15 +906,24 @@ pub async fn record_play_end(
         .map_err(|e| e.to_string())
 }
 
+/// The newest `limit` history entries, of one content type when `content_type` is given.
 #[command]
 pub async fn get_watch_history(
     state: State<'_, AppState>,
     limit: i64,
+    content_type: Option<String>,
 ) -> Result<Vec<WatchHistoryEntryDto>, String> {
     let limit = limit.max(0) as usize;
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let entries = cache.get_watch_history(limit).map_err(|e| e.to_string())?;
-    Ok(entries.into_iter().map(WatchHistoryEntryDto::from).collect())
+    let entries = match content_type.as_deref() {
+        Some(content_type) => cache.get_watch_history_of_type(content_type, limit),
+        None => cache.get_watch_history(limit),
+    };
+    Ok(entries
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(WatchHistoryEntryDto::from)
+        .collect())
 }
 
 #[command]
@@ -926,10 +937,35 @@ pub async fn delete_history_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Delete the history of every episode of one show.
+#[command]
+pub async fn delete_history_series(
+    state: State<'_, AppState>,
+    series_title: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .delete_history_series(&series_title)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn clear_watch_history(state: State<'_, AppState>) -> Result<(), String> {
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
     cache.clear_watch_history().map_err(|e| e.to_string())
+}
+
+/// Delete the history of one content type, leaving the others and resume positions.
+#[command]
+pub async fn clear_watch_history_of_type(
+    state: State<'_, AppState>,
+    content_type: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .clear_watch_history_of_type(&content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -1505,15 +1541,14 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 /// Remove a completed download: delete the file and the DB row.
 #[command]
 pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
-    manager::remove(&app, &id)
+    manager::remove(&app, std::slice::from_ref(&id))
 }
 
+/// Remove several downloads, carrying on past any that can't be deleted. The
+/// error lists those.
 #[command]
 pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
-    for id in ids {
-        manager::remove(&app, &id)?;
-    }
-    Ok(())
+    manager::remove(&app, &ids)
 }
 
 /// Keep a download even when the retention setting would delete it, or stop
@@ -1522,13 +1557,11 @@ pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), St
 pub async fn set_download_keep(
     app: AppHandle,
     state: State<'_, AppState>,
+    manager: State<'_, DownloadManager>,
     id: String,
     keep: bool,
 ) -> Result<(), String> {
-    {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        cache.set_download_keep(&id, keep).map_err(|e| e.to_string())?;
-    }
+    manager::set_keep(&state.cache, &manager.deleting, &id, keep)?;
     manager::emit_progress(&app, &id);
     Ok(())
 }

@@ -4,6 +4,9 @@
 use crate::downloads::model::DownloadKind;
 use std::path::{Path, PathBuf};
 
+/// Added to a download's path while ffmpeg is still writing it.
+pub const PART_SUFFIX: &str = ".part";
+
 /// The folder under the download folder that holds recordings.
 pub const RECORDINGS_DIR: &str = "recordings";
 
@@ -13,8 +16,11 @@ pub const RECORDINGS_DIR: &str = "recordings";
 const MAX_NAME_BYTES: usize = 150;
 
 /// Make a filesystem-safe filename component. Replaces path separators and
-/// reserved/control characters with `_`, trims trailing dots/spaces, and caps
-/// length to keep within filesystem limits.
+/// reserved/control characters with `_`, trims dots and spaces from both ends,
+/// and caps the length in bytes to keep within filesystem limits. A leading
+/// dot would hide the file on macOS and Linux, and a name made only of dots
+/// would turn into `.` or `..`, which as a folder name points outside the
+/// download folder.
 pub fn sanitize_filename(name: &str) -> String {
     let mut s: String = name
         .chars()
@@ -25,11 +31,12 @@ pub fn sanitize_filename(name: &str) -> String {
         })
         .collect();
     truncate_on_char(&mut s, MAX_NAME_BYTES);
-    s = s.trim().trim_end_matches('.').trim().to_string();
+    let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
     if s.is_empty() {
-        s = "untitled".to_string();
+        "untitled".to_string()
+    } else {
+        s.to_string()
     }
-    s
 }
 
 /// Cut `s` to at most `max` bytes without splitting a character.
@@ -83,6 +90,47 @@ pub fn derive_dest_path(
     }
 }
 
+/// The path ffmpeg writes to while `dest` downloads.
+pub fn part_path(dest: &Path) -> PathBuf {
+    let mut path = dest.as_os_str().to_owned();
+    path.push(PART_SUFFIX);
+    PathBuf::from(path)
+}
+
+/// Equal for two download paths that name the same file. A partial path
+/// counts as its final file, and case is ignored because the default macOS
+/// file system ignores it.
+pub fn path_key(path: &str) -> String {
+    path.strip_suffix(PART_SUFFIX)
+        .unwrap_or(path)
+        .to_lowercase()
+}
+
+/// `dest`, or the first of "name (2).ext", "name (3).ext" and so on that
+/// `is_taken` turns down.
+pub fn unique_dest_path(dest: &Path, mut is_taken: impl FnMut(&Path) -> bool) -> PathBuf {
+    if !is_taken(dest) {
+        return dest.to_path_buf();
+    }
+    let stem = dest
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = dest.extension().map(|e| e.to_string_lossy().into_owned());
+    let mut n = 2;
+    loop {
+        let name = match &ext {
+            Some(ext) => format!("{stem} ({n}).{ext}"),
+            None => format!("{stem} ({n})"),
+        };
+        let candidate = dest.with_file_name(name);
+        if !is_taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +151,60 @@ mod tests {
         // A cut that lands just before a trailing space or dot is trimmed.
         let spaced = sanitize_filename(&format!("{} x", "a".repeat(149)));
         assert_eq!(spaced, "a".repeat(149));
+    }
+
+    #[test]
+    fn dot_names_never_leave_the_folder_or_hide_the_file() {
+        for name in [".", "..", ".. .", " . . ", "...", "\u{7}.."] {
+            let s = sanitize_filename(name);
+            assert!(!s.starts_with('.'), "{name:?} became {s:?}");
+            assert_ne!(s, "..");
+        }
+        assert_eq!(sanitize_filename(".. ."), "untitled");
+        assert_eq!(sanitize_filename(".hack Sign"), "hack Sign");
+        assert_eq!(sanitize_filename("Mr. Robot"), "Mr. Robot");
+        let root = Path::new("/data/dl");
+        let ep = derive_dest_path(root, DownloadKind::Episode, "E1", Some(".."), "u/1.mkv");
+        assert_eq!(ep, Path::new("/data/dl/series/untitled/E1.mkv"));
+    }
+
+    #[test]
+    fn caps_length_without_leaving_a_trailing_dot() {
+        let long = format!("{}.{}", "a".repeat(149), "b".repeat(10));
+        assert_eq!(sanitize_filename(&long), "a".repeat(149));
+    }
+
+    #[test]
+    fn part_paths_count_as_their_final_file_in_any_case() {
+        let dest = Path::new("/dl/movies/Dune.mkv");
+        assert_eq!(part_path(dest), Path::new("/dl/movies/Dune.mkv.part"));
+        assert_eq!(
+            path_key("/dl/movies/Dune.mkv.part"),
+            path_key("/DL/Movies/dune.MKV")
+        );
+        assert_ne!(
+            path_key("/dl/movies/Dune.mkv"),
+            path_key("/dl/movies/Dune 2.mkv")
+        );
+    }
+
+    #[test]
+    fn numbers_a_path_that_is_taken() {
+        let dest = Path::new("/dl/movies/Dune (2021).mkv");
+        assert_eq!(unique_dest_path(dest, |_| false), dest);
+
+        let taken = [
+            Path::new("/dl/movies/Dune (2021).mkv"),
+            Path::new("/dl/movies/Dune (2021) (2).mkv"),
+        ];
+        assert_eq!(
+            unique_dest_path(dest, |p| taken.contains(&p)),
+            Path::new("/dl/movies/Dune (2021) (3).mkv")
+        );
+        assert_eq!(
+            unique_dest_path(Path::new("/dl/noext"), |p| p == Path::new("/dl/noext")),
+            Path::new("/dl/noext (2)")
+        );
     }
 
     #[test]

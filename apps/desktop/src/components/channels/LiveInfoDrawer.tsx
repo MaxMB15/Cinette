@@ -5,12 +5,13 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Tv2, Loader2, Circle, Square, CalendarClock } from "lucide-react";
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 import { getEpgProgrammes } from "@/lib/tauri";
-import { formatClock } from "@/lib/format";
+import { formatHHMM } from "@/lib/epg-window";
 import { isMobilePlatform } from "@/lib/platform";
 import { isRecordingOf, recordingOfProgram } from "@/lib/recordings";
 import { useProviderIds } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
+import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { RecordDialog, type RecordRequest } from "@/components/downloads/RecordDialog";
 import { EpgTimelineBar, WINDOW_PAST, WINDOW_FUTURE } from "./EpgTimelineBar";
 
@@ -93,6 +94,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 		setVisible(false);
 		setTimeout(onClose, 300);
 	}, [onClose]);
+	const { sheetRef, handleProps } = useSheetDrag({ onClose: handleClose, enabled: visible });
 
 	return (
 		<div className="fixed inset-0 z-50">
@@ -106,17 +108,24 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 
 			{/* Drawer */}
 			<div
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-transform duration-300 ease-out max-h-[85vh] overflow-hidden ${
+				ref={sheetRef}
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
 				{/* Handle */}
-				<div className="flex justify-center pt-3 pb-1 shrink-0">
+				<div
+					{...handleProps}
+					className="flex justify-center pt-3 pb-1 shrink-0 select-none"
+				>
 					<div className="w-9 h-1 rounded-full bg-border" />
 				</div>
 
 				{/* Header row: logo + name + close */}
-				<div className="flex items-center gap-3 px-5 pt-2 pb-4 shrink-0">
+				<div
+					{...handleProps}
+					className="flex items-center gap-3 px-5 pt-2 pb-4 shrink-0 select-none"
+				>
 					<div className="w-10 h-10 rounded-lg bg-secondary overflow-hidden shrink-0 flex items-center justify-center">
 						{channel.logoUrl ? (
 							<img
@@ -236,7 +245,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 							</p>
 						</div>
 					) : (
-						<ul className="flex-1 overflow-y-auto px-5 pb-4">
+						<ul className="flex-1 overflow-y-auto overscroll-y-none px-5 pb-4">
 							{programmes.map((prog, idx) => {
 								const isCurrent = prog.startTime <= now && prog.endTime > now;
 								const isPast = prog.endTime <= now;
@@ -281,7 +290,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 														: "text-muted-foreground"
 												}`}
 											>
-												{formatClock(prog.startTime)}
+												{formatHHMM(prog.startTime)}
 											</span>
 
 											{/* Duration */}

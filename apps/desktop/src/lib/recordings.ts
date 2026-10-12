@@ -7,7 +7,7 @@
 // margins are a Settings choice kept in web storage, which can throw, so every
 // access is guarded and falls back to the defaults.
 
-import { formatClock } from "./format";
+import { formatHHMM } from "./epg-window";
 import type { Channel, DownloadRecord, EpgProgram, GuideProgram } from "./types";
 
 const MINUTE = 60;
@@ -282,8 +282,8 @@ export const dayLabel = (unix: number, now: number): string => {
 /** "20:00" for a time on the day of `now`, or "Tomorrow, 01:00" for one on another day. */
 export const formatAt = (unix: number, now: number): string =>
 	startOfDay(unix) === startOfDay(now)
-		? formatClock(unix)
-		: `${dayLabel(unix, now)}, ${formatClock(unix)}`;
+		? formatHHMM(unix)
+		: `${dayLabel(unix, now)}, ${formatHHMM(unix)}`;
 
 /**
  * "Today, 20:00 to 21:05" for a recording's time, or "Today, 23:30 to
@@ -292,9 +292,9 @@ export const formatAt = (unix: number, now: number): string =>
 export const formatWindow = (startAt: number, endAt: number, now: number): string => {
 	const end =
 		startOfDay(endAt) === startOfDay(startAt)
-			? formatClock(endAt)
-			: `${dayLabel(endAt, now)}, ${formatClock(endAt)}`;
-	return `${dayLabel(startAt, now)}, ${formatClock(startAt)} to ${end}`;
+			? formatHHMM(endAt)
+			: `${dayLabel(endAt, now)}, ${formatHHMM(endAt)}`;
+	return `${dayLabel(startAt, now)}, ${formatHHMM(startAt)} to ${end}`;
 };
 
 /** What a recording records, such as "Evening News on City News". */

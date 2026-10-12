@@ -1,26 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { formatClock } from "@/lib/format";
 import type { EpgProgram } from "@/lib/types";
+import { formatHHMM, getGridMarks, toPct } from "@/lib/epg-window";
 
 export const WINDOW_PAST = 3600; // default 1 hour before now
 export const WINDOW_FUTURE = 7200; // default 2 hours after now
-
-/** A Unix time in seconds as a local clock time, such as 14:30. */
-export const formatHHMM = formatClock;
-
-/** Returns Unix timestamps (seconds) of every 30-minute boundary in [windowStart, windowEnd). */
-export const getGridMarks = (windowStart: number, windowEnd: number): number[] => {
-	const marks: number[] = [];
-	const first = Math.ceil(windowStart / 1800) * 1800;
-	for (let t = first; t < windowEnd; t += 1800) marks.push(t);
-	return marks;
-};
-
-/** Maps a Unix timestamp to a percentage [0–100] within [windowStart, windowEnd]. */
-export const toPct = (t: number, windowStart: number, windowTotal: number): number =>
-	Math.max(0, Math.min(100, ((t - windowStart) / windowTotal) * 100));
 
 interface EpgTimelineBarProps {
 	programmes: EpgProgram[];

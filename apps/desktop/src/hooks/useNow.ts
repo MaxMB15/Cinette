@@ -2,10 +2,9 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useSyncExternalStore } from "react";
+import { nowSeconds } from "@/lib/date";
 
 export const NOW_TICK_MS = 30_000;
-
-const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 let now = nowSeconds();
 let timer: ReturnType<typeof setInterval> | null = null;

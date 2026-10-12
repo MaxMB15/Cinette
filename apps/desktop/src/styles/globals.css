@@ -36,7 +36,7 @@
 	}
 	html,
 	body {
-		/* Disable WKWebView elastic/bounce scroll — this is an app, not a webpage. */
+		/* Turn off WKWebView's elastic scroll. This is an app, not a web page. */
 		overflow: hidden;
 		overscroll-behavior: none;
 	}

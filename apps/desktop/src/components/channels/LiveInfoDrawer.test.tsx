@@ -91,7 +91,7 @@ describe("LiveInfoDrawer recording", () => {
 		await renderDrawer();
 		expect(screen.queryByLabelText("Record Morning Show")).toBeNull();
 		fireEvent.click(screen.getByLabelText("Record Late Show"));
-		expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Record this program");
+		expect(screen.getByRole("dialog", { name: "Record this program" })).toBeDefined();
 	});
 
 	it("waits for the guide before it offers to record now", () => {
@@ -143,7 +143,7 @@ describe("LiveInfoDrawer recording", () => {
 		await renderDrawer();
 		expect(screen.queryByText("Record")).toBeNull();
 		fireEvent.click(screen.getByText("Stop recording"));
-		expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Stop recording?");
+		expect(screen.getByRole("dialog", { name: "Stop recording?" })).toBeDefined();
 	});
 
 	it("records a time range", async () => {

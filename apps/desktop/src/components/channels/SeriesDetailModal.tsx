@@ -25,9 +25,12 @@ import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
+import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
+import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { OmdbKeyHint } from "./OmdbKeyHint";
 
 interface SeriesDetailDrawerProps {
 	showTitle: string;
@@ -80,6 +83,7 @@ export const SeriesDetailModal = ({
 	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
 		prefetchedWhatsonData ?? null
 	);
+	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, omdbLoading);
 
 	const firstEp = episodes[0];
 	const showLogoUrl = firstEp?.logoUrl;
@@ -123,6 +127,7 @@ export const SeriesDetailModal = ({
 		setVisible(false);
 		setTimeout(onClose, 300);
 	};
+	const { sheetRef, handleProps } = useSheetDrag({ onClose: handleClose, enabled: visible });
 
 	const { bySeries } = useDownloads();
 	// Episode channelId → its download record, for this series.
@@ -267,17 +272,24 @@ export const SeriesDetailModal = ({
 
 			{/* Drawer */}
 			<div
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-transform duration-300 ease-out max-h-[85vh] ${
+				ref={sheetRef}
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
 				{/* Handle */}
-				<div className="flex justify-center pt-3 pb-1 shrink-0">
+				<div
+					{...handleProps}
+					className="flex justify-center pt-3 pb-1 shrink-0 select-none"
+				>
 					<div className="w-9 h-1 rounded-full bg-border" />
 				</div>
 
 				{/* Header row */}
-				<div className="flex items-center justify-between px-5 py-2 shrink-0">
+				<div
+					{...handleProps}
+					className="flex items-center justify-between px-5 py-2 shrink-0 select-none"
+				>
 					{step !== "seasons" ? (
 						<button
 							onClick={handleBack}
@@ -294,7 +306,7 @@ export const SeriesDetailModal = ({
 								onStart={() => startBatch(seriesMissing)}
 								onStop={() => void stopDownloads(seriesActiveIds)}
 								stopCount={seriesActiveIds.length}
-								onRemove={() => void removeDownloads(seriesCompletedIds)}
+								onRemove={() => removeDownloads(seriesCompletedIds)}
 								removeSummary={`${seriesCompletedIds.length} ${seriesCompletedIds.length === 1 ? "episode" : "episodes"}`}
 								className="text-sm text-muted-foreground hover:text-foreground"
 							/>
@@ -330,7 +342,7 @@ export const SeriesDetailModal = ({
 
 							{/* Show info — ~65% of remaining space */}
 							<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
-								{omdbLoading ? (
+								{infoLoading ? (
 									<div className="flex items-center gap-2 text-muted-foreground">
 										<Loader2 className="h-3.5 w-3.5 animate-spin" />
 										<span className="text-xs">Loading info…</span>
@@ -379,11 +391,14 @@ export const SeriesDetailModal = ({
 										)}
 
 										{/* Fallback: no OMDB data */}
-										{!omdbData && (
-											<p className="text-xs text-muted-foreground">
-												Series · —
-											</p>
-										)}
+										{!omdbData &&
+											(hasOmdbKey ? (
+												<p className="text-xs text-muted-foreground">
+													Series · —
+												</p>
+											) : (
+												<OmdbKeyHint onNavigate={onClose} />
+											))}
 									</>
 								)}
 							</div>
@@ -426,7 +441,7 @@ export const SeriesDetailModal = ({
 
 				{/* Step: Seasons */}
 				{step === "seasons" && (
-					<div className="overflow-y-auto flex-1 px-3 py-2">
+					<div className="overflow-y-auto overscroll-y-none flex-1 px-3 py-2">
 						{seasons.map(([s, eps]) => {
 							const recs = eps
 								.map((e) => episodeDownloadMap.get(e.id))
@@ -470,7 +485,7 @@ export const SeriesDetailModal = ({
 										onStart={() => startBatch(missing)}
 										onStop={() => void stopDownloads(activeIds)}
 										stopCount={activeIds.length}
-										onRemove={() => void removeDownloads(completedIds)}
+										onRemove={() => removeDownloads(completedIds)}
 										removeSummary={`${completedIds.length} ${completedIds.length === 1 ? "episode" : "episodes"}`}
 										className="shrink-0 h-8 w-8 justify-center rounded-md hover:bg-accent"
 									/>
@@ -487,7 +502,7 @@ export const SeriesDetailModal = ({
 
 				{/* Step: Episodes */}
 				{step === "episodes" && (
-					<div className="overflow-y-auto flex-1 px-3 py-2">
+					<div className="overflow-y-auto overscroll-y-none flex-1 px-3 py-2">
 						{currentEpisodes.map((ep) => {
 							const sourceCount = channelSources(ep).length;
 							const epDl = episodeDownloadMap.get(ep.id);
@@ -554,7 +569,7 @@ export const SeriesDetailModal = ({
 											);
 										}}
 										onStop={() => epDl && void stopDownload(epDl.id)}
-										onRemove={() => epDl && void removeDownload(epDl.id)}
+										onRemove={() => epDl && removeDownload(epDl.id)}
 										className="shrink-0 h-8 w-8 justify-center rounded-md hover:bg-accent"
 									/>
 								</div>
@@ -580,7 +595,7 @@ export const SeriesDetailModal = ({
 							</p>
 						</div>
 						<div className="border-t border-border mx-4 shrink-0" />
-						<div className="overflow-y-auto flex-1 py-2 px-3">
+						<div className="overflow-y-auto overscroll-y-none flex-1 py-2 px-3">
 							{channelSources(sourceEp).map((src, idx) => {
 								const detail = describeSource(src);
 								return (

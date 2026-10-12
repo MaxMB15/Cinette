@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Select } from "@/components/ui/select";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform, platformName } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
@@ -44,25 +45,32 @@ import {
 	setDownloadConcurrency,
 	countDownloadsDue,
 } from "@/lib/tauri";
-import { Select } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { useDownloads } from "@/hooks/useDownloads";
 import { RETENTION_OPTIONS } from "@/lib/retention";
 import { MARGIN_OPTIONS, readMargins, writeMargins } from "@/lib/recordings";
 import {
 	MAX_VOLUME,
+	SKIP_OPTIONS,
 	readDefaultVolume,
 	readHwdecEnabled,
+	readSkipIntervals,
 	writeDefaultVolume,
 	writeHwdecEnabled,
+	writeSkipInterval,
+	type SkipIntervals,
 } from "@/lib/player-prefs";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { useScrollToOmdbKey } from "@/hooks/useScrollToOmdbKey";
+import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
 import { LegalNotices } from "./LegalNotices";
 import { DownloadHistoryDialog } from "./DownloadHistory";
 
 type OmdbStatus = "idle" | "valid" | "invalid";
 type SaveStatus = "idle" | "saved" | "error";
 type HistoryStatus = "idle" | "cleared";
+
+const SKIP_CHOICES = SKIP_OPTIONS.map((n) => ({ value: n, label: `${n} seconds` }));
 
 const DonationReset = () => {
 	const [reset, setReset] = useState(false);
@@ -112,6 +120,12 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		writeDefaultVolume(volume);
 	};
 
+	const [skipIntervals, setSkipIntervals] = useState(readSkipIntervals);
+	const handleSkipChange = (direction: keyof SkipIntervals, seconds: number) => {
+		setSkipIntervals((s) => ({ ...s, [direction]: seconds }));
+		writeSkipInterval(direction, seconds);
+	};
+
 	// OMDB state
 	const [omdbKey, setOmdbKey] = useState("");
 	const [omdbKeyVisible, setOmdbKeyVisible] = useState(false);
@@ -120,6 +134,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [omdbTesting, setOmdbTesting] = useState(false);
 	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const omdbKeyInputRef = useRef<HTMLInputElement>(null);
+	// The OMDb hint in an info sheet opens Settings at the key field.
+	useScrollToOmdbKey(omdbKeyInputRef);
 
 	// OpenSubtitles state
 	const [openSubtitlesKey, setOpenSubtitlesKey] = useState("");
@@ -217,6 +234,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const handleSaveOmdbKey = async () => {
 		try {
 			await setOmdbApiKey(omdbKey);
+			rememberHasOmdbKey(Boolean(omdbKey));
 			setSaveStatus("saved");
 			setSaveError(null);
 			setOmdbStatus("idle");
@@ -452,6 +470,40 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								until you quit the app.
 							</p>
 						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Skip back</p>
+								<p className="text-xs text-muted-foreground">
+									How far the skip back button, a double-tap on the left of the
+									video and the left arrow key go back.
+								</p>
+							</div>
+							<Select
+								value={skipIntervals.back}
+								onChange={(n) => handleSkipChange("back", n)}
+								options={SKIP_CHOICES}
+								className="w-32 shrink-0"
+								aria-label="Skip back"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Skip forward</p>
+								<p className="text-xs text-muted-foreground">
+									How far the skip forward button, a double-tap on the right of
+									the video and the right arrow key go forward.
+								</p>
+							</div>
+							<Select
+								value={skipIntervals.forward}
+								onChange={(n) => handleSkipChange("forward", n)}
+								options={SKIP_CHOICES}
+								className="w-32 shrink-0"
+								aria-label="Skip forward"
+							/>
+						</div>
 					</CardContent>
 				</Card>
 
@@ -557,6 +609,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<Input
+										ref={omdbKeyInputRef}
 										type={omdbKeyVisible ? "text" : "password"}
 										placeholder="Enter API key…"
 										value={omdbKey}
@@ -1005,11 +1058,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 											"Check for Updates"
 										)}
 									</Button>
-									{!updateState.checking && !updateState.update && (
-										<span className="text-xs text-muted-foreground">
-											You're up to date.
-										</span>
-									)}
+									{/* Always rendered, so screen readers announce the result when it appears. */}
+									<span role="status" className="text-xs">
+										{!updateState.checking &&
+											!updateState.update &&
+											(updateState.checkError ? (
+												<span
+													className="text-destructive"
+													title={updateState.checkError}
+												>
+													Couldn't check for updates.
+												</span>
+											) : (
+												<span className="text-muted-foreground">
+													You're up to date.
+												</span>
+											))}
+									</span>
 								</div>
 
 								{updateState.update && (

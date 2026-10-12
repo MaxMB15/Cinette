@@ -11,7 +11,14 @@ import {
 	useRef,
 } from "react";
 import type { Channel, Category, Provider } from "@/lib/types";
-import { parseDateMs } from "@/lib/date";
+import {
+	createRefreshTracker,
+	findDueRefreshes,
+	refreshKeys,
+	type RefreshTracker,
+} from "@/lib/refresh-schedule";
+import { deriveCategories } from "@/lib/channels";
+import { readStorage, writeStorage } from "@/lib/storage";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -69,10 +76,17 @@ export const saveProviderSettings = (id: string, settings: ProviderSettings) => 
 
 // EPG last-refresh timestamp stored separately (providers have no epg_last_updated field)
 const epgLastRefreshKey = (id: string) => `epg-last-refresh-${id}`;
-export const getEpgLastRefresh = (id: string): number =>
-	parseInt(localStorage.getItem(epgLastRefreshKey(id)) ?? "0", 10);
-export const setEpgLastRefresh = (id: string) =>
-	localStorage.setItem(epgLastRefreshKey(id), String(Date.now()));
+// A copy in memory keeps blocked storage from making every poll refresh the guide again.
+const epgLastRefreshThisSession = new Map<string, number>();
+export const getEpgLastRefresh = (id: string): number => {
+	const stored = parseInt(readStorage(epgLastRefreshKey(id)) ?? "0", 10) || 0;
+	return Math.max(stored, epgLastRefreshThisSession.get(id) ?? 0);
+};
+export const setEpgLastRefresh = (id: string) => {
+	const now = Date.now();
+	epgLastRefreshThisSession.set(id, now);
+	writeStorage(epgLastRefreshKey(id), String(now));
+};
 
 // --- Context ---
 
@@ -98,6 +112,8 @@ interface ChannelsContextValue {
 	) => Promise<void>;
 	removeProvider: (id: string) => Promise<void>;
 	toggleFavorite: (channelId: string) => Promise<void>;
+	/** Runs the automatic refreshes, shared by the splash screen and the poll. */
+	autoRefresh: RefreshTracker;
 }
 
 export const ChannelsContext = createContext<ChannelsContextValue | null>(null);
@@ -115,25 +131,11 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		return m;
 	}, [channels]);
 
-	const deriveCategories = (chs: Channel[]) => {
-		const map = new Map<string, number>();
-		for (const ch of chs) {
-			map.set(ch.groupTitle, (map.get(ch.groupTitle) ?? 0) + 1);
-		}
-		setCategories(
-			Array.from(map.entries()).map(([name, count], i) => ({
-				id: `cat-${i}`,
-				name,
-				channelCount: count,
-			}))
-		);
-	};
-
 	const refreshChannels = useCallback(async () => {
 		try {
 			const chs = await getAllChannels();
 			setChannels(chs);
-			deriveCategories(chs);
+			setCategories(deriveCategories(chs));
 		} catch (e) {
 			setError(String(e));
 		}
@@ -174,12 +176,13 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		[refreshProviders]
 	);
 
-	const loadM3u = useCallback(
-		async (name: string, url: string) => {
+	// Adding a provider of any kind runs the same steps around a different backend call.
+	const addProvider = useCallback(
+		async (add: () => Promise<unknown>) => {
 			setLoading(true);
 			setError(null);
 			try {
-				await loadM3uPlaylist(name, url);
+				await add();
 				await refreshProviders();
 				await refreshChannels();
 			} catch (e) {
@@ -190,42 +193,22 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			}
 		},
 		[refreshProviders, refreshChannels]
+	);
+
+	const loadM3u = useCallback(
+		(name: string, url: string) => addProvider(() => loadM3uPlaylist(name, url)),
+		[addProvider]
 	);
 
 	const loadM3uFile = useCallback(
-		async (name: string, path: string) => {
-			setLoading(true);
-			setError(null);
-			try {
-				await loadM3uFileApi(name, path);
-				await refreshProviders();
-				await refreshChannels();
-			} catch (e) {
-				setError(String(e));
-				throw e;
-			} finally {
-				setLoading(false);
-			}
-		},
-		[refreshProviders, refreshChannels]
+		(name: string, path: string) => addProvider(() => loadM3uFileApi(name, path)),
+		[addProvider]
 	);
 
 	const loadXtream = useCallback(
-		async (name: string, url: string, username: string, password: string) => {
-			setLoading(true);
-			setError(null);
-			try {
-				await loadXtreamProvider(name, url, username, password);
-				await refreshProviders();
-				await refreshChannels();
-			} catch (e) {
-				setError(String(e));
-				throw e;
-			} finally {
-				setLoading(false);
-			}
-		},
-		[refreshProviders, refreshChannels]
+		(name: string, url: string, username: string, password: string) =>
+			addProvider(() => loadXtreamProvider(name, url, username, password)),
+		[addProvider]
 	);
 
 	const removeProvider = useCallback(
@@ -282,47 +265,33 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		refreshProviderRef.current = refreshProvider;
 	}, [refreshProvider]);
 
-	const refreshEpgApiRef = useRef(refreshEpgApi);
-	useEffect(() => {
-		refreshEpgApiRef.current = refreshEpgApi;
-	}, []);
+	// The splash screen runs its startup refreshes through this tracker too, so
+	// the poll skips one the splash started that is still running.
+	const [autoRefresh] = useState(() => createRefreshTracker());
 
 	// Poll every 60s to check if any provider/EPG is due for refresh.
 	// Using a ref-based approach avoids resetting timers on every providers update.
+	// The tracker skips refreshes still running and backs off after failures.
 	useEffect(() => {
 		const tick = () => {
-			const now = Date.now();
-			for (const p of providersRef.current) {
-				const {
-					autoRefresh,
-					refreshIntervalHours,
-					epgAutoRefresh,
-					epgRefreshIntervalHours,
-				} = loadProviderSettings(p.id);
-
-				if (autoRefresh) {
-					const lastMs = parseDateMs(p.lastUpdated);
-					if (now - lastMs >= refreshIntervalHours * 60 * 60 * 1000) {
-						refreshProviderRef.current(p.id).catch(console.error);
-					}
-				}
-
-				if (epgAutoRefresh && p.epgUrl) {
-					const lastMs = getEpgLastRefresh(p.id);
-					if (now - lastMs >= epgRefreshIntervalHours * 60 * 60 * 1000) {
-						refreshEpgApiRef
-							.current(p.id)
-							.then(() => setEpgLastRefresh(p.id))
-							.catch(console.error);
-					}
-				}
+			const { playlistIds, epgIds } = findDueRefreshes(providersRef.current, {
+				settingsFor: loadProviderSettings,
+				epgLastRefreshFor: getEpgLastRefresh,
+			});
+			for (const id of playlistIds) {
+				autoRefresh.run(refreshKeys.playlist(id), () => refreshProviderRef.current(id));
+			}
+			for (const id of epgIds) {
+				autoRefresh.run(refreshKeys.epg(id), () =>
+					refreshEpgApi(id).then(() => setEpgLastRefresh(id))
+				);
 			}
 		};
 
 		tick(); // fire immediately on mount
 		const id = setInterval(tick, 60_000);
 		return () => clearInterval(id);
-	}, []);
+	}, [autoRefresh]);
 
 	return {
 		channels,
@@ -340,6 +309,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		updateProvider,
 		removeProvider,
 		toggleFavorite,
+		autoRefresh,
 	};
 };
 

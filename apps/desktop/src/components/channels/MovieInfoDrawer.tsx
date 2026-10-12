@@ -15,8 +15,11 @@ import {
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
+import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
+import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
+import { OmdbKeyHint } from "./OmdbKeyHint";
 
 interface MovieInfoDrawerProps {
 	movie: Channel;
@@ -44,6 +47,7 @@ export const MovieInfoDrawer = ({
 	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
 		prefetchedWhatsonData ?? null
 	);
+	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, omdbLoading);
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
@@ -93,6 +97,7 @@ export const MovieInfoDrawer = ({
 		setVisible(false);
 		setTimeout(onClose, 300);
 	};
+	const { sheetRef, handleProps } = useSheetDrag({ onClose: handleClose, enabled: visible });
 
 	const allSources = channelSources(movie);
 	const hasSources = allSources.length > 1;
@@ -142,17 +147,21 @@ export const MovieInfoDrawer = ({
 				onClick={handleClose}
 			/>
 			<div
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-transform duration-300 ease-out max-h-[85vh] overflow-hidden ${
+				ref={sheetRef}
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
 				{/* Handle */}
-				<div className="flex justify-center pt-3 pb-1 shrink-0">
+				<div
+					{...handleProps}
+					className="flex justify-center pt-3 pb-1 shrink-0 select-none"
+				>
 					<div className="w-9 h-1 rounded-full bg-border" />
 				</div>
 
 				{/* Close button */}
-				<div className="flex justify-end px-5 pt-1 shrink-0">
+				<div {...handleProps} className="flex justify-end px-5 pt-1 shrink-0 select-none">
 					<button
 						onClick={handleClose}
 						aria-label="Close"
@@ -180,7 +189,7 @@ export const MovieInfoDrawer = ({
 
 					{/* Movie info */}
 					<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
-						{omdbLoading ? (
+						{infoLoading ? (
 							<div className="flex items-center gap-2 text-muted-foreground">
 								<Loader2 className="h-3.5 w-3.5 animate-spin" />
 								<span className="text-xs">Loading info…</span>
@@ -227,9 +236,12 @@ export const MovieInfoDrawer = ({
 								)}
 
 								{/* Fallback: no OMDB data */}
-								{!omdbData && (
-									<p className="text-xs text-muted-foreground">— · —</p>
-								)}
+								{!omdbData &&
+									(hasOmdbKey ? (
+										<p className="text-xs text-muted-foreground">— · —</p>
+									) : (
+										<OmdbKeyHint onNavigate={onClose} />
+									))}
 							</>
 						)}
 					</div>
@@ -257,7 +269,7 @@ export const MovieInfoDrawer = ({
 								state={downloadState}
 								onStart={() => void enqueueMovieDownload(movie.id)}
 								onStop={() => dl && void stopDownload(dl.id)}
-								onRemove={() => dl && void removeDownload(dl.id)}
+								onRemove={() => dl && removeDownload(dl.id)}
 								className="w-full justify-center rounded-xl border border-border py-2.5 text-sm font-semibold hover:bg-accent"
 							/>
 						)}

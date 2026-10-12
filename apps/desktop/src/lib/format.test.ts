@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { formatBytes, formatClock, formatTime } from "./format";
+import { formatBytes, formatSkip, formatTime } from "./format";
 
 describe("formatTime", () => {
 	// ── Under one hour (M:SS) ─────────────────────────────────────────
@@ -64,23 +64,26 @@ describe("formatTime", () => {
 	});
 });
 
-describe("formatClock", () => {
-	it("shows the hour and minute in local time", () => {
-		const unix = new Date(2026, 9, 12, 20, 5).getTime() / 1000;
-		const expected = new Date(unix * 1000).toLocaleTimeString([], {
-			hour: "2-digit",
-			minute: "2-digit",
-		});
-		expect(formatClock(unix)).toBe(expected);
-		expect(formatClock(unix)).toMatch(/05/);
-	});
-});
-
 describe("formatBytes", () => {
 	it("shows megabytes below a gigabyte and gigabytes from there", () => {
 		expect(formatBytes(0)).toBe("0 MB");
 		expect(formatBytes(349_600_000)).toBe("350 MB");
 		expect(formatBytes(1_000_000_000)).toBe("1.0 GB");
 		expect(formatBytes(1_250_000_000)).toBe("1.3 GB");
+	});
+});
+
+describe("formatSkip", () => {
+	it("signs forward skips with a plus", () => {
+		expect(formatSkip(10)).toBe("+10s");
+	});
+
+	it("signs back skips with a minus sign", () => {
+		expect(formatSkip(-30)).toBe("−30s");
+	});
+
+	it("leaves a skip that went nowhere unsigned", () => {
+		expect(formatSkip(0)).toBe("0s");
+		expect(formatSkip(-0)).toBe("0s");
 	});
 });
