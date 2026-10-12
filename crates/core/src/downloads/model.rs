@@ -100,6 +100,13 @@ pub struct DownloadRecord {
     /// Recordings only. The guide's title for the program being recorded.
     #[serde(default)]
     pub program_title: Option<String>,
+    /// Recordings only. When the program itself starts and ends, in Unix
+    /// seconds. The recording's window adds the margins from Settings around
+    /// it. None for a time range, which has no margins.
+    #[serde(default)]
+    pub program_start: Option<i64>,
+    #[serde(default)]
+    pub program_end: Option<i64>,
 }
 
 impl DownloadRecord {
@@ -190,6 +197,8 @@ mod tests {
             start_at: None,
             end_at: None,
             program_title: None,
+            program_start: None,
+            program_end: None,
         }
     }
 }

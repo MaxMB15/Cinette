@@ -275,7 +275,9 @@ impl CacheStore {
                 source_channel_id  TEXT,
                 start_at           INTEGER,
                 end_at             INTEGER,
-                program_title      TEXT
+                program_title      TEXT,
+                program_start      INTEGER,
+                program_end        INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_downloads_channel ON downloads(channel_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_series ON downloads(series_channel_id);
@@ -296,10 +298,10 @@ impl CacheStore {
             "start_at INTEGER",
             "end_at INTEGER",
             "program_title TEXT",
+            "program_start INTEGER",
+            "program_end INTEGER",
         ] {
-            let _ = self
-                .conn
-                .execute_batch(&format!("ALTER TABLE downloads ADD COLUMN {column};"));
+            self.add_column("downloads", column)?;
         }
         // Full episode list per series, cached so the season/episode selector
         // works offline once any episode of the series has been downloaded.
@@ -311,6 +313,18 @@ impl CacheStore {
             );",
         )?;
         Ok(())
+    }
+
+    /// Add `column`, a name and a type, to `table` unless it's there already.
+    /// Any other error, such as a locked or read-only database, is returned.
+    fn add_column(&self, table: &str, column: &str) -> Result<(), CacheError> {
+        match self
+            .conn
+            .execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column};"))
+        {
+            Err(e) if e.to_string().contains("duplicate column name") => Ok(()),
+            result => Ok(result?),
+        }
     }
 
     // --- Providers ---
@@ -1335,8 +1349,9 @@ impl CacheStore {
             "INSERT INTO downloads
                 (id, channel_id, title, kind, series_channel_id, status, dest_path,
                  total_bytes, downloaded_bytes, avg_rate_bps, error, created_at, finished_at,
-                 keep, last_played_at, source_channel_id, start_at, end_at, program_title)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+                 keep, last_played_at, source_channel_id, start_at, end_at, program_title,
+                 program_start, program_end)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
              ON CONFLICT(id) DO UPDATE SET
                 status=excluded.status,
                 dest_path=excluded.dest_path,
@@ -1348,13 +1363,15 @@ impl CacheStore {
                 source_channel_id=excluded.source_channel_id,
                 start_at=excluded.start_at,
                 end_at=excluded.end_at,
-                program_title=excluded.program_title",
+                program_title=excluded.program_title,
+                program_start=excluded.program_start,
+                program_end=excluded.program_end",
             params![
                 rec.id, rec.channel_id, rec.title, kind, rec.series_channel_id,
                 rec.status.as_str(), rec.dest_path, rec.total_bytes, rec.downloaded_bytes,
                 rec.avg_rate_bps, rec.error, rec.created_at, rec.finished_at,
                 rec.keep, rec.last_played_at, rec.source_channel_id, rec.start_at,
-                rec.end_at, rec.program_title,
+                rec.end_at, rec.program_title, rec.program_start, rec.program_end,
             ],
         )?;
         Ok(())
@@ -1382,7 +1399,8 @@ impl CacheStore {
     // 0=id, 1=channel_id, 2=title, 3=kind, 4=series_channel_id, 5=status,
     // 6=dest_path, 7=total_bytes, 8=downloaded_bytes, 9=avg_rate_bps,
     // 10=error, 11=created_at, 12=finished_at, 13=keep, 14=last_played_at,
-    // 15=source_channel_id, 16=start_at, 17=end_at, 18=program_title
+    // 15=source_channel_id, 16=start_at, 17=end_at, 18=program_title,
+    // 19=program_start, 20=program_end
     fn row_to_download(row: &rusqlite::Row) -> SqlResult<DownloadRecord> {
         let kind_str: String = row.get(3)?;
         let status_str: String = row.get(5)?;
@@ -1410,6 +1428,8 @@ impl CacheStore {
             start_at: row.get(16)?,
             end_at: row.get(17)?,
             program_title: row.get(18)?,
+            program_start: row.get(19)?,
+            program_end: row.get(20)?,
         })
     }
 
@@ -2430,6 +2450,8 @@ mod tests {
             start_at: None,
             end_at: None,
             program_title: None,
+            program_start: None,
+            program_end: None,
         }
     }
 
@@ -2444,6 +2466,8 @@ mod tests {
         r.start_at = Some(1_000);
         r.end_at = Some(4_600);
         r.program_title = Some("Evening news".into());
+        r.program_start = Some(1_120);
+        r.program_end = Some(4_300);
         r
     }
 
@@ -2528,6 +2552,13 @@ mod tests {
         let rec = recording_record("r1", "c1", DownloadStatus::Scheduled);
         store.upsert_download(&rec).unwrap();
         assert_eq!(store.get_download("r1").unwrap().unwrap(), rec);
+    }
+
+    #[test]
+    fn adding_a_column_twice_is_fine_but_other_errors_come_back() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.add_column("downloads", "end_at INTEGER").unwrap();
+        assert!(store.add_column("no_such_table", "x INTEGER").is_err());
     }
 
     #[test]

@@ -176,6 +176,8 @@ pub fn enqueue_record<R: Runtime>(
         start_at: None,
         end_at: None,
         program_title: None,
+        program_start: None,
+        program_end: None,
     };
     {
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
@@ -639,6 +641,8 @@ mod tests {
             start_at: None,
             end_at: None,
             program_title: None,
+            program_start: None,
+            program_end: None,
         }
     }
 

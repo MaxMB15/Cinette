@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 /// The folder under the download folder that holds recordings.
 pub const RECORDINGS_DIR: &str = "recordings";
 
+/// The longest name `sanitize_filename` returns, in bytes. File systems
+/// allow 255 bytes in a name, which leaves room for a date, a number and an
+/// extension.
+const MAX_NAME_BYTES: usize = 150;
+
 /// Make a filesystem-safe filename component. Replaces path separators and
 /// reserved/control characters with `_`, trims trailing dots/spaces, and caps
 /// length to keep within filesystem limits.
@@ -19,11 +24,23 @@ pub fn sanitize_filename(name: &str) -> String {
             c => c,
         })
         .collect();
+    truncate_on_char(&mut s, MAX_NAME_BYTES);
     s = s.trim().trim_end_matches('.').trim().to_string();
     if s.is_empty() {
         s = "untitled".to_string();
     }
-    s.chars().take(150).collect()
+    s
+}
+
+/// Cut `s` to at most `max` bytes without splitting a character.
+fn truncate_on_char(s: &mut String, max: usize) {
+    if s.len() > max {
+        let end = (0..=max)
+            .rev()
+            .find(|&i| s.is_char_boundary(i))
+            .unwrap_or(0);
+        s.truncate(end);
+    }
 }
 
 /// Pick a file extension from the source URL, defaulting to `mkv` when the URL
@@ -75,6 +92,17 @@ mod tests {
         assert_eq!(sanitize_filename("a/b:c*?"), "a_b_c__");
         assert_eq!(sanitize_filename("  trailing.  "), "trailing");
         assert_eq!(sanitize_filename(""), "untitled");
+    }
+
+    #[test]
+    fn caps_the_name_in_bytes_without_splitting_a_character() {
+        let accented = sanitize_filename(&"é".repeat(100));
+        assert_eq!(accented, "é".repeat(75));
+        let wide = sanitize_filename(&"字".repeat(100));
+        assert_eq!(wide, "字".repeat(50));
+        // A cut that lands just before a trailing space or dot is trimmed.
+        let spaced = sanitize_filename(&format!("{} x", "a".repeat(149)));
+        assert_eq!(spaced, "a".repeat(149));
     }
 
     #[test]

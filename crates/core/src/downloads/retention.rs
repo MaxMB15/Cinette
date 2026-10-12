@@ -65,6 +65,8 @@ mod tests {
             start_at: None,
             end_at: None,
             program_title: None,
+            program_start: None,
+            program_end: None,
         }
     }
 

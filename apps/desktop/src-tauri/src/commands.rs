@@ -8,6 +8,7 @@ use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
+use mvp_core::downloads::recording::GuideProgram;
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
 use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
@@ -1607,7 +1608,8 @@ pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<us
 }
 
 /// Record the live channel `channel_id` from `start_at` to `end_at`, in Unix
-/// seconds. A start that has passed records from now.
+/// seconds, for the guide's `program` when there is one. A start that has
+/// passed records from now.
 #[command]
 pub async fn schedule_recording(
     app: AppHandle,
@@ -1615,7 +1617,7 @@ pub async fn schedule_recording(
     channel_id: String,
     start_at: i64,
     end_at: i64,
-    program_title: Option<String>,
+    program: Option<GuideProgram>,
 ) -> Result<DownloadRecord, String> {
     ensure_downloads_supported()?;
     let rec = {
@@ -1625,7 +1627,7 @@ pub async fn schedule_recording(
             &channel_id,
             start_at,
             end_at,
-            program_title,
+            program,
             manager::now_secs(),
         )?
     };

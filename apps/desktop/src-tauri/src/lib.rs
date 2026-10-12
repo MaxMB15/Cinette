@@ -196,8 +196,8 @@ pub fn run() {
                         tracing::info!("ffmpeg sidecar resolved");
                         // Start or miss the recordings that came due while the
                         // app was closed, before downloads take the connections.
-                        crate::downloads::recordings::run_check(app.handle());
-                        crate::downloads::recordings::start(app.handle());
+                        let next_check = crate::downloads::recordings::run_check(app.handle());
+                        crate::downloads::recordings::start(app.handle(), next_check);
                         // Start whatever is still queued from the last run.
                         if let Err(e) = crate::downloads::manager::pump(app.handle()) {
                             tracing::warn!("Failed to start queued downloads: {e}");
