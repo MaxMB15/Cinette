@@ -41,13 +41,14 @@ approach before you put time into it.
 4. Add or update tests for what you changed. Rust tests sit in a `tests` module at
    the bottom of the file they test, and frontend tests use Vitest.
 5. Run the checks before pushing. The pre-commit hook formats and lints the files
-   you staged, then runs the tests.
+   you staged, then runs the tests. CI also fails on any Clippy warning, and when
+   Rust line coverage drops below 80%.
 
    ```bash
    npm run format
    npm run lint
    npm test
-   cargo check
+   cargo clippy --workspace --all-targets -- -D warnings
    ```
 
 6. If you changed playback or anything platform-specific, say in the pull request

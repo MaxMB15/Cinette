@@ -94,6 +94,7 @@ npm run test:desktop      # Vitest
 npm run lint              # ESLint
 npm run format:check      # Prettier
 cargo check               # the whole Rust workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 For a frontend coverage report, run `npm run test:coverage --workspace=apps/desktop`
@@ -122,6 +123,10 @@ mpv plugin each build only on their own system.
 CI publishes the [frontend report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
 and the [Rust report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/) for
 `main` to GitHub Pages. Both come from Linux runs.
+
+CI runs Clippy with warnings as errors on macOS, on Linux and for the iOS simulator,
+so each platform's own code is checked. The Linux job also fails when Rust line
+coverage drops below 80%.
 
 A Husky pre-commit hook runs Prettier and ESLint on the staged files through
 lint-staged, then runs the tests.
@@ -167,8 +172,8 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
-| [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator |
+| [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
+| [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |
 | [Release — one-click pipeline](../.github/workflows/release-pipeline.yml) | Manual | Merges `dev` into `main`, bumps the version and pushes the tag. |
