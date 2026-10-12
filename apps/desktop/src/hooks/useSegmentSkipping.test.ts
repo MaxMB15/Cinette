@@ -457,6 +457,24 @@ describe("useSegmentSkipping", () => {
 			expect(result.current.notice).toBeNull();
 		});
 
+		it("still skips when held until a little before where the skip lands", () => {
+			const { update, play, seek } = setup({ modes: AUTO });
+			play(55, 58);
+			update({ playing: false });
+			play(59, 115);
+			update({ position: 115.5, playing: true });
+			expect(seek).toHaveBeenCalledExactlyOnceWith(118);
+		});
+
+		it("skips a short segment that the polls first reach near its end", () => {
+			const short = makeSegment({ start: 61, end: 66, autoFrom: 62, autoTo: 65 });
+			const { at, play, seek } = setup({ modes: AUTO, segments: [short] });
+			play(55, 61);
+			at(61.995);
+			at(63.005);
+			expect(seek).toHaveBeenCalledExactlyOnceWith(65);
+		});
+
 		it("still skips on its own after being held past the segment once", () => {
 			const { update, play, at, seek } = setup({ modes: AUTO });
 			play(55, 58);
@@ -536,7 +554,8 @@ describe("useSegmentSkipping", () => {
 				segments: [firstRecap, credits],
 			});
 			play(2698, 2702);
-			update({ reconnecting: true, position: 0 });
+			update({ reconnecting: true });
+			update({ position: 0 });
 			// The reconnect ends before the next poll.
 			update({ reconnecting: false });
 			expect(result.current.offer).toBeNull();
@@ -544,6 +563,19 @@ describe("useSegmentSkipping", () => {
 			update({ position: 2703 });
 			expect(result.current.countdown).toEqual({ cancelLabel: "Watch credits" });
 			expect(seek).not.toHaveBeenCalled();
+		});
+
+		it("counts the last poll from a reconnect again once playback moved off it", () => {
+			const { result, update, play, at } = setup({ segments: [firstRecap, credits] });
+			play(2698, 2702);
+			update({ reconnecting: true });
+			update({ position: 0 });
+			update({ reconnecting: false });
+			expect(result.current.offer).toBeNull();
+			at(2703);
+			// The viewer seeks back to the start.
+			at(0);
+			expect(result.current.offer?.label).toBe("Skip recap");
 		});
 
 		it("skips again in the next video", () => {

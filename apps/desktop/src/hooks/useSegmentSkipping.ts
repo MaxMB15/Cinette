@@ -222,9 +222,12 @@ export const useSegmentSkipping = ({
 		const action = skipActionFor(current, duration, hasNext);
 		if (action?.type === "seek") {
 			const to = current.autoTo ?? action.to;
-			// Held until just before or past where the skip lands, such as
-			// behind an open overlay, there's too little left to skip.
-			if (to - position < MIN_AUTO_SKIP) return;
+			const left = to - position;
+			// More than a step into the segment, playback was held there, such
+			// as behind an open overlay. Held until just before or past where
+			// the skip lands, there's too little left to skip.
+			const held = position - (current.autoFrom ?? current.start) > MAX_PLAY_STEP;
+			if (left <= 0 || (held && left < MIN_AUTO_SKIP)) return;
 			doneRef.current.add(key);
 			landingRef.current = to;
 			latest.current.seek(to);

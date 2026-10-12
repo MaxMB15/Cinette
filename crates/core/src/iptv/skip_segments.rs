@@ -730,6 +730,30 @@ mod tests {
             let result = fetch("200 OK", "<html>Busy</html>", SegmentSource::IntroDb).await;
             assert!(matches!(result, Err(SkipError::Http(_))), "{result:?}");
         }
+
+        /// The request line `fetch_from` sends to `source`.
+        async fn request_line(source: SegmentSource) -> String {
+            let (url, request) = test_server::serve_once_recording("404 Not Found", "");
+            fetch_from(&test_server::client(), &url, &query(), source)
+                .await
+                .unwrap();
+            let request = request.recv().expect("the server read a request");
+            request.lines().next().unwrap_or_default().to_string()
+        }
+
+        /// `query::sends_each_database_what_it_takes` covers the parameters.
+        /// This checks each database gets its own.
+        #[tokio::test]
+        async fn sends_each_database_its_own_query() {
+            assert_eq!(
+                request_line(SegmentSource::SkipDb).await,
+                "GET /?imdb_id=tt0903747&season=1&episode=2&duration=2820&adjust=conservative HTTP/1.1"
+            );
+            assert_eq!(
+                request_line(SegmentSource::IntroDb).await,
+                "GET /?imdb_id=tt0903747&season=1&episode=2 HTTP/1.1"
+            );
+        }
     }
 
     mod reading {

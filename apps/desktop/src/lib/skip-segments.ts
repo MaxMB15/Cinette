@@ -27,8 +27,11 @@ export const MAX_PLAY_STEP = 3;
 export const MAX_PLAY_JITTER = 0.1;
 
 /**
- * The shortest jump the player makes on its own, in seconds. Playback held
- * until near the end of a segment plays the rest of it instead.
+ * The shortest jump the player makes on its own, in seconds, when playback
+ * was held inside a segment, such as while paused. Held until near the end,
+ * it plays the rest of the segment instead. Polls that just reached the
+ * segment skip whatever is left, since in a short one the first poll inside
+ * can come with less than this to go.
  */
 export const MIN_AUTO_SKIP = 2;
 
