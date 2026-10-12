@@ -28,6 +28,9 @@ tempfile = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# The D-Bus library tauri-plugin-single-instance uses. Its address parser
+# decides whether that plugin can start on Linux.
+zbus = "5"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
