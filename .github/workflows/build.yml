@@ -94,14 +94,15 @@ jobs:
               - 'apps/desktop/src/**'
               - 'apps/desktop/*'
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.cargo/**'
               - 'scripts/build-app.sh'
               - 'scripts/build-libmpv.sh'
               - 'scripts/fetch-ffmpeg.sh'
-              - '.github/actions/install-frontend-deps/**'
+              - '.github/actions/setup-frontend/**'
               - '.github/workflows/build.yml'
             linux:
               - *shared
@@ -136,24 +137,18 @@ jobs:
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install deps
-        uses: ./.github/actions/install-frontend-deps
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
 
       - name: TypeScript type-check
         working-directory: apps/desktop
-        run: npx tsc -b --noEmit
+        run: pnpm exec tsc -b --noEmit
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Check formatting
-        run: npm run format:check
+        run: pnpm run format:check
 
       # Clippy type-checks too, and any warning fails the job.
       - name: Lint mvp-core with Clippy
@@ -164,7 +159,7 @@ jobs:
 
       - name: Run desktop tests with coverage
         working-directory: apps/desktop
-        run: npm run test:coverage
+        run: pnpm run test:coverage
 
       - name: Upload coverage artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -249,14 +244,8 @@ jobs:
           shared-key: desktop-macos
           save-if: ${{ github.event_name == 'push' }}
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Install frontend deps
-        uses: ./.github/actions/install-frontend-deps
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
 
       - name: Install system deps
         run: |
@@ -272,7 +261,7 @@ jobs:
         run: ./scripts/fetch-ffmpeg.sh macos
 
       - name: Build frontend
-        run: npm run build:desktop
+        run: pnpm run build:desktop
 
       # Runs after the frontend build and the sidecar fetch, which the app's
       # build script needs. This is the only job that checks macos.rs.
@@ -344,12 +333,6 @@ jobs:
           shared-key: desktop-linux
           save-if: ${{ github.event_name == 'push' }}
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-
       - name: Install system deps
         uses: ./.github/actions/install-linux-deps
 
@@ -361,11 +344,11 @@ jobs:
       - name: Fetch ffmpeg sidecar (used for offline downloads)
         run: ./scripts/fetch-ffmpeg.sh linux
 
-      - name: Install frontend deps
-        uses: ./.github/actions/install-frontend-deps
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
 
       - name: Build frontend
-        run: npm run build:desktop
+        run: pnpm run build:desktop
 
       # Checks linux.rs and the plugin and app code that only builds here.
       - name: Lint the workspace with Clippy

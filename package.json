@@ -3,23 +3,21 @@
 	"private": true,
 	"license": "GPL-3.0-only",
 	"description": "IPTV player for desktop and iOS, built with Tauri and mpv",
+	"packageManager": "pnpm@10.34.6+sha512.7e1ae66a83a9143c118cc1944f37cc4f2b8acddeda4b001cfa78908f6e46e45e15292739ca6c9d026426cc757e9318cc98c5551d6a16c165097b0028ba87b4e6",
 	"scripts": {
 		"prepare": "husky",
 		"format": "prettier --write \"apps/**/*.{ts,tsx,js,jsx,json,css,md}\"",
 		"format:check": "prettier --check \"apps/**/*.{ts,tsx,js,jsx,json,css,md}\"",
 		"lint": "eslint apps/desktop/src",
 		"lint:fix": "eslint apps/desktop/src --fix",
-		"dev:desktop": "npm run tauri dev --workspace=apps/desktop",
-		"dev:desktop:web": "npm run dev --workspace=apps/desktop",
-		"build:desktop": "npm run build --workspace=apps/desktop",
-		"tauri:desktop": "npm run tauri --workspace=apps/desktop",
-		"test": "cargo test -p mvp-core && npm run test --workspace=apps/desktop",
+		"dev:desktop": "pnpm --filter ./apps/desktop tauri dev",
+		"dev:desktop:web": "pnpm --filter ./apps/desktop dev",
+		"build:desktop": "pnpm --filter ./apps/desktop build",
+		"tauri:desktop": "pnpm --filter ./apps/desktop tauri",
+		"test": "cargo test -p mvp-core && pnpm --filter ./apps/desktop test",
 		"test:core": "cargo test -p mvp-core",
-		"test:desktop": "npm run test --workspace=apps/desktop"
+		"test:desktop": "pnpm --filter ./apps/desktop test"
 	},
-	"workspaces": [
-		"apps/desktop"
-	],
 	"lint-staged": {
 		"apps/**/*.{ts,tsx,js,jsx,json,css,md}": [
 			"prettier --write"
@@ -30,7 +28,6 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.39.4",
-		"@vitest/coverage-v8": "^5.0.4",
 		"eslint": "^9.39.4",
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-react": "^7.37.5",
@@ -39,6 +36,7 @@
 		"husky": "^9.1.7",
 		"lint-staged": "^16.3.3",
 		"prettier": "^3.9.9",
+		"typescript": "catalog:",
 		"typescript-eslint": "^8.71.1"
 	}
 }

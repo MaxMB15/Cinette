@@ -18,7 +18,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 build() {
-  (cd "$ROOT/apps/desktop" && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}' "$@")
+  (cd "$ROOT/apps/desktop" && pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}' "$@")
 }
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
