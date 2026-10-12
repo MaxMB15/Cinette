@@ -13,11 +13,12 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
-- Settings > Downloads > Delete downloads after. It deletes finished downloads 7, 14, 30 or 90 days after they were downloaded or last played. Keep on a download holds on to it. The Downloads tab, the movie and series pages and the download history show when each download goes (#100).
+- Settings > Downloads > Delete downloads after. It deletes finished downloads 7, 14, 30 or 90 days after they were downloaded or last played. Keep on a download holds on to it. The Downloads tab, the movie and series pages and the download history show when each download goes. Downloads that came due while the app was closed go an hour after it opens, which leaves time to keep or play them (#100).
 
 ### Fixed
 
 - A removed download stayed on the Downloads tab until the app restarted (#100).
+- Removing a download whose file can't be deleted now keeps it in the list and says which file and why. Removing a season or series carries on with the other episodes. Before, the download left the list but its file stayed on disk (#100).
 - Downloads that were running when the app quit now start again at the next launch, and queued downloads start too. Before, each interrupted download held one of the download slots until it was stopped or deleted, and the queue sat idle until another download was added. Quitting the app now stops its downloads. Before, they kept running in the background after the app closed. A download whose ffmpeg can't start now shows as failed, and the next one in line takes its place (#99).
 - Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads (#99).
 - Two downloads with the same title now save to separate files, numbered like "Dune (2).mkv". Before, they wrote to the same file, and a file already in the folder with that name was replaced (#99).

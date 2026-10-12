@@ -1415,6 +1415,20 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Delete the downloads `ids` together, so an error leaves every one of
+    /// them in place.
+    pub fn delete_downloads(&self, ids: &[String]) -> Result<(), CacheError> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM downloads WHERE id = ?1")?;
+            for id in ids {
+                stmt.execute(params![id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Drop any prior failed/cancelled records for a channel before a fresh
     /// enqueue, so a successful retry doesn't leave a stale error behind.
     /// (Active records are left untouched.)
@@ -2464,6 +2478,24 @@ mod tests {
         let mut paths = store.list_download_paths().unwrap();
         paths.sort();
         assert_eq!(paths, vec!["/tmp/d1.mkv.part", "/tmp/d2.mkv.part"]);
+    }
+
+    #[test]
+    fn deletes_several_downloads_at_once() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for id in ["d1", "d2", "d3"] {
+            store.upsert_download(&movie_record(id, id)).unwrap();
+        }
+        store
+            .delete_downloads(&["d1".into(), "d3".into(), "missing".into()])
+            .unwrap();
+        let left: Vec<_> = store
+            .list_downloads()
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(left, vec!["d2"]);
     }
 
     fn episode_record(id: &str, series: &str, status: DownloadStatus) -> DownloadRecord {

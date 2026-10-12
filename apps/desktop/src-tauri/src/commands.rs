@@ -1503,15 +1503,14 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 /// Remove a completed download: delete the file and the DB row.
 #[command]
 pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
-    manager::remove(&app, &id)
+    manager::remove(&app, std::slice::from_ref(&id))
 }
 
+/// Remove several downloads, carrying on past any that can't be deleted. The
+/// error lists those.
 #[command]
 pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
-    for id in ids {
-        manager::remove(&app, &id)?;
-    }
-    Ok(())
+    manager::remove(&app, &ids)
 }
 
 /// Keep a download even when the retention setting would delete it, or stop

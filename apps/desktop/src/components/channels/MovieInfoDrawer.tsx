@@ -257,7 +257,7 @@ export const MovieInfoDrawer = ({
 								state={downloadState}
 								onStart={() => void enqueueMovieDownload(movie.id)}
 								onStop={() => dl && void stopDownload(dl.id)}
-								onRemove={() => dl && void removeDownload(dl.id)}
+								onRemove={() => dl && removeDownload(dl.id)}
 								className="w-full justify-center rounded-xl border border-border py-2.5 text-sm font-semibold hover:bg-accent"
 							/>
 						)}

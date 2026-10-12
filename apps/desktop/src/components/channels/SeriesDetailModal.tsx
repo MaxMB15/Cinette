@@ -294,7 +294,7 @@ export const SeriesDetailModal = ({
 								onStart={() => startBatch(seriesMissing)}
 								onStop={() => void stopDownloads(seriesActiveIds)}
 								stopCount={seriesActiveIds.length}
-								onRemove={() => void removeDownloads(seriesCompletedIds)}
+								onRemove={() => removeDownloads(seriesCompletedIds)}
 								removeSummary={`${seriesCompletedIds.length} ${seriesCompletedIds.length === 1 ? "episode" : "episodes"}`}
 								className="text-sm text-muted-foreground hover:text-foreground"
 							/>
@@ -470,7 +470,7 @@ export const SeriesDetailModal = ({
 										onStart={() => startBatch(missing)}
 										onStop={() => void stopDownloads(activeIds)}
 										stopCount={activeIds.length}
-										onRemove={() => void removeDownloads(completedIds)}
+										onRemove={() => removeDownloads(completedIds)}
 										removeSummary={`${completedIds.length} ${completedIds.length === 1 ? "episode" : "episodes"}`}
 										className="shrink-0 h-8 w-8 justify-center rounded-md hover:bg-accent"
 									/>
@@ -554,7 +554,7 @@ export const SeriesDetailModal = ({
 											);
 										}}
 										onStop={() => epDl && void stopDownload(epDl.id)}
-										onRemove={() => epDl && void removeDownload(epDl.id)}
+										onRemove={() => epDl && removeDownload(epDl.id)}
 										className="shrink-0 h-8 w-8 justify-center rounded-md hover:bg-accent"
 									/>
 								</div>

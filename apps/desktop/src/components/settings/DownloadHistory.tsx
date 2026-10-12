@@ -21,12 +21,12 @@ const statusCell = (d: DownloadRecord) => {
 	return <span className="text-muted-foreground">{d.status}</span>;
 };
 
-/** When the retention setting deletes a finished download. */
+/** When the retention setting deletes a finished download. Blank when it never will. */
 const deletesCell = (d: DownloadRecord, days: number | null) => {
-	if (d.status !== "completed" || !days) return "—";
+	if (d.status !== "completed" || !days) return "";
 	if (d.keep) return "Kept";
 	const at = deleteAt(d, days);
-	return at === null ? "—" : deleteLabel(at, Date.now() / 1000);
+	return at === null ? "" : deleteLabel(at, Date.now() / 1000);
 };
 
 export const DownloadHistory = () => {

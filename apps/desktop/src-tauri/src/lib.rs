@@ -192,11 +192,11 @@ pub fn run() {
             let downloads_root = app_dir.join("downloads");
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             crate::downloads::manager::restore_settings(app.handle());
-            crate::downloads::retention::start(app.handle());
 
             #[cfg(desktop)]
             {
                 use tauri_plugin_shell::ShellExt;
+                crate::downloads::retention::start(app.handle());
                 match app.shell().sidecar("ffmpeg") {
                     Ok(_) => {
                         tracing::info!("ffmpeg sidecar resolved");
