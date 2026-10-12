@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::test_support::{
-    player, wait_until, wav, MediaDir, Reply, Server, TestApp, WAV_BYTES_PER_SEC, WAV_HEADER_LEN,
+    after_seconds, player, wait_until, wav, MediaDir, Reply, Server, TestApp,
 };
 use serde_json::json;
 use std::sync::mpsc;
@@ -19,12 +19,6 @@ const SPEED: (&str, &str) = ("speed", "4");
 
 /// A URL that is never fetched.
 const UNUSED_URL: &str = "http://example.test/live/1.ts";
-
-/// Where a WAV body is cut after `seconds` of audio. Six seconds is more than
-/// FFmpeg reads to work out the format, so the stream starts playing.
-fn after_seconds(seconds: usize) -> usize {
-    WAV_HEADER_LEN + seconds * WAV_BYTES_PER_SEC
-}
 
 /// A watcher for `url` on a new client of `player`.
 fn watcher(app: &TestApp, player: &Mpv, url: &str) -> Watcher<MockRuntime> {

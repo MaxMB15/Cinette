@@ -752,15 +752,20 @@ export const PlayerView = () => {
 	// reachedEnd false. With keep-open=yes, mpv then holds the last frame,
 	// paused, so with autoplay off, on a movie or on the last episode the
 	// controls stay up and nothing else needs doing.
-	const prevReachedEndRef = useRef(false);
+	// Only an end this player saw coming counts. The ref holds the stream it
+	// last saw short of its end, so coming back from another page to an
+	// episode that ended there leaves it on the last frame.
+	const seenShortOfEndRef = useRef<string | null>(null);
 	useEffect(() => {
-		const reachedEnd = mpv.state.reachedEnd;
-		const wasAtEnd = prevReachedEndRef.current;
-		prevReachedEndRef.current = reachedEnd;
-		if (!reachedEnd || wasAtEnd) return;
 		// A poll can still describe the previous stream after the app loads
 		// another one, such as from the Next episode button near the end.
-		if (mpv.state.currentUrl !== loadedUrl) return;
+		if (!loadedUrl || mpv.state.currentUrl !== loadedUrl) return;
+		if (!mpv.state.reachedEnd) {
+			seenShortOfEndRef.current = loadedUrl;
+			return;
+		}
+		if (seenShortOfEndRef.current !== loadedUrl) return;
+		seenShortOfEndRef.current = null;
 		if (autoplayRef.current && activeChannelRef.current?.contentType === "series") {
 			const next = nextEpisodeRef.current;
 			if (next) playEpisode(next);

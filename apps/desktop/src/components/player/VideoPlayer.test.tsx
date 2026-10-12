@@ -1086,8 +1086,10 @@ describe("episodes", () => {
 
 	it("doesn't skip a second episode when next is pressed close to the end", async () => {
 		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
-		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await setMpv({ state: playing(ep1.url, 1299, 1300) });
 		await press("n");
+		// A poll sent before the load reports the end of episode one.
+		await setMpv({ state: ended(ep1.url, 1300) });
 		// Loading episode two stops episode one.
 		await setMpv({
 			state: {
@@ -1096,8 +1098,26 @@ describe("episodes", () => {
 				currentUrl: ep2.url,
 				position: 0,
 				duration: 0,
+				reachedEnd: false,
 			},
 		});
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("doesn't go on to the next episode for an end reached while the viewer was on another page", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1290, 1300) });
+		await goToPage("/playlists");
+		// The episode ends while the viewer is away. Back on the player, the
+		// state starts out empty and the first poll reports the end.
+		await setMpv({ state: idleState() });
+		await goToPage("/player");
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+		expect(loadedUrls()).toEqual([ep1.url]);
+		// Seeking back and playing to the end again does go on.
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
 });
