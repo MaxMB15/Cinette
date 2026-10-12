@@ -16,17 +16,31 @@ pub struct PlayerState {
     pub volume: f64,
     pub position: f64,
     pub duration: f64,
+    /// The current load has opened and shown its first frame (or started its
+    /// audio). Stays true until the next load, so seeks and buffering later
+    /// on don't clear it. Works for live streams, where duration stays 0.
+    pub playback_started: bool,
+    /// The current load stopped before it ever started playing, for example
+    /// because the server returned an error. mpv goes back to idle when that
+    /// happens.
+    pub open_failed: bool,
 }
 
 pub struct MpvEngine {
     mpv: Option<Mpv>,
     current_url: Option<String>,
     audio_logged_playing: bool,
+    playback_started: bool,
 }
 
 impl MpvEngine {
     pub fn new() -> Self {
-        Self { mpv: None, current_url: None, audio_logged_playing: false }
+        Self {
+            mpv: None,
+            current_url: None,
+            audio_logged_playing: false,
+            playback_started: false,
+        }
     }
 
     /// Create a new Mpv instance with the provided options.
@@ -202,6 +216,7 @@ impl MpvEngine {
     /// Record the current URL (called by MpvState after loadfile succeeds).
     pub fn set_current_url(&mut self, url: &str) {
         self.current_url = Some(url.to_string());
+        self.playback_started = false;
     }
 
     /// Stop playback and destroy the mpv instance.
@@ -212,6 +227,7 @@ impl MpvEngine {
         self.mpv = None;
         self.current_url = None;
         self.audio_logged_playing = false;
+        self.playback_started = false;
     }
 
     pub fn play(&self) -> Result<(), String> {
@@ -328,6 +344,20 @@ impl MpvEngine {
             state.is_paused = mpv.get_property::<bool>("pause").unwrap_or(false);
             state.volume = mpv.get_property::<f64>("volume").unwrap_or(100.0);
             state.is_playing = !state.is_paused && state.current_url.is_some();
+            if state.current_url.is_some() {
+                // Once playback has started the properties aren't read again.
+                let started = self.playback_started;
+                let read = |name: &str| {
+                    if started {
+                        None
+                    } else {
+                        mpv.get_property::<bool>(name).ok()
+                    }
+                };
+                (self.playback_started, state.open_failed) =
+                    open_status(started, read("seeking"), read("idle-active"));
+            }
+            state.playback_started = self.playback_started;
         }
         if !self.audio_logged_playing && state.position > 0.0 {
             self.audio_logged_playing = true;
@@ -335,5 +365,68 @@ impl MpvEngine {
             self.ensure_audio_selected();
         }
         state
+    }
+}
+
+/// Works out `(playback_started, open_failed)` for a load from the latch kept
+/// across polls and mpv's `seeking` and `idle-active` properties, which are
+/// `None` when they can't be read.
+///
+/// `seeking` is unavailable until the file is initialized and reads true until
+/// mpv's first playback restart is done, which is when the first frame is
+/// ready and audio has started. That also covers live streams and a resume
+/// start position. The result is latched so later seeks and stalls don't flip
+/// it back. libmpv defaults to idle=yes, so a load that fails before playing
+/// leaves mpv idle instead of closing it.
+fn open_status(started: bool, seeking: Option<bool>, idle_active: Option<bool>) -> (bool, bool) {
+    if started {
+        return (true, false);
+    }
+    let started = seeking == Some(false);
+    (started, !started && idle_active == Some(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{open_status, PlayerState};
+
+    #[test]
+    fn open_status_waits_while_the_file_is_not_initialized() {
+        assert_eq!(open_status(false, None, Some(false)), (false, false));
+        assert_eq!(open_status(false, None, None), (false, false));
+    }
+
+    #[test]
+    fn open_status_waits_while_the_first_seek_runs() {
+        assert_eq!(open_status(false, Some(true), Some(false)), (false, false));
+    }
+
+    #[test]
+    fn open_status_starts_when_seeking_ends() {
+        assert_eq!(open_status(false, Some(false), Some(false)), (true, false));
+    }
+
+    #[test]
+    fn open_status_fails_when_mpv_goes_idle_before_playing() {
+        assert_eq!(open_status(false, None, Some(true)), (false, true));
+        assert_eq!(open_status(false, Some(true), Some(true)), (false, true));
+    }
+
+    #[test]
+    fn open_status_stays_started_once_latched() {
+        assert_eq!(open_status(true, Some(true), Some(false)), (true, false));
+        assert_eq!(open_status(true, None, Some(true)), (true, false));
+    }
+
+    #[test]
+    fn serializes_open_status_in_camel_case() {
+        let state = PlayerState {
+            playback_started: true,
+            open_failed: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(state).unwrap();
+        assert_eq!(json["playbackStarted"], true);
+        assert_eq!(json["openFailed"], true);
     }
 }
