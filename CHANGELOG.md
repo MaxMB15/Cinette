@@ -17,6 +17,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Fixed
 
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- The player's logs no longer show the login in a stream's link when a channel starts, buffers or reconnects (#106).
 
 ## [0.5.3] - 2026-10-09
 
