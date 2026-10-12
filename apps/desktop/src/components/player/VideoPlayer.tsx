@@ -87,6 +87,11 @@ const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 const MAX_WATCH_STEP_SECONDS = 5;
 /** How long the controls stay up after they appear or the player is clicked or tapped. */
 const CONTROLS_HIDE_MS = 4000;
+/**
+ * A poll this close to an episode's end counts as seeing the end coming. Polls
+ * come every second, so a hidden window whose timers run slower still gets one.
+ */
+const END_LEAD_SECONDS = 10;
 
 interface PlaybackProgress {
 	/** Resume key (see playbackKey); null for live or nothing playing. */
@@ -753,36 +758,29 @@ export const PlayerView = () => {
 	// paused, so with autoplay off, on a movie or on the last episode the
 	// controls stay up and nothing else needs doing.
 	//
-	// Only an end this player saw coming counts. The ref holds the stream it
-	// last saw short of its end, so coming back from another page to an
-	// episode that ended there leaves it on the last frame.
-	const seenShortOfEndRef = useRef<string | null>(null);
-	// iOS stops this page's timers in the background while mpv plays on, so
-	// the first poll after the app comes back can report an end from hours
-	// ago. Hiding the page forgets what it saw. Where polls go on while the
-	// window is hidden, the next one sees the episode short of its end again.
-	useEffect(() => {
-		const onVisibilityChange = () => {
-			if (document.visibilityState === "hidden") seenShortOfEndRef.current = null;
-		};
-		document.addEventListener("visibilitychange", onVisibilityChange);
-		return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-	}, []);
+	// Only an end this player saw coming counts. The ref holds the stream that
+	// a poll last saw in its final seconds, and any poll from further back
+	// clears it. Coming back from another page to an episode that ended there
+	// leaves it on the last frame. So does coming back to the app after iOS
+	// held this page's timers in the background while mpv played on.
+	const seenNearEndRef = useRef<string | null>(null);
 	useEffect(() => {
 		// A poll can still describe the previous stream after the app loads
 		// another one, such as from the Next episode button near the end.
 		if (!loadedUrl || mpv.state.currentUrl !== loadedUrl) return;
-		if (!mpv.state.reachedEnd) {
-			seenShortOfEndRef.current = loadedUrl;
+		const { reachedEnd, position, duration } = mpv.state;
+		if (!reachedEnd) {
+			const nearEnd = duration > 0 && duration - position <= END_LEAD_SECONDS;
+			seenNearEndRef.current = nearEnd ? loadedUrl : null;
 			return;
 		}
-		if (seenShortOfEndRef.current !== loadedUrl) return;
-		seenShortOfEndRef.current = null;
+		if (seenNearEndRef.current !== loadedUrl) return;
+		seenNearEndRef.current = null;
 		if (autoplayRef.current && activeChannelRef.current?.contentType === "series") {
 			const next = nextEpisodeRef.current;
 			if (next) playEpisode(next);
 		}
-	}, [mpv.state.reachedEnd, mpv.state.currentUrl, loadedUrl, playEpisode]);
+	}, [mpv.state, loadedUrl, playEpisode]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few

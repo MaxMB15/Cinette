@@ -1124,12 +1124,24 @@ describe("episodes", () => {
 	it("doesn't go on to the next episode for an end reached while the app was in the background", async () => {
 		await openItem(ep1, { episodes: [ep1, ep2] });
 		await setMpv({ state: playing(ep1.url, 600, 1300) });
-		// iOS sends no polls while the app is in the background, so the first
-		// one after it comes back reports the end.
+		// iOS sends no polls while the app is in the background, though the
+		// answer to one sent just before can land after the page is hidden.
+		// The first poll after the app comes back reports the end.
 		await setVisibility("hidden");
+		await setMpv({ state: playing(ep1.url, 601, 1300) });
 		await setVisibility("visible");
 		await setMpv({ state: ended(ep1.url, 1300) });
 		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("goes on to the next episode when the app comes back before the end", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
 
 	it("goes on to the next episode for an end reached in a hidden window that still polls", async () => {
