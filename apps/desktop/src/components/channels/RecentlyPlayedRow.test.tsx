@@ -23,7 +23,8 @@ const entry = (
 	channelId: string,
 	channelName: string,
 	contentType: WatchHistoryEntry["contentType"] = "live",
-	seriesTitle?: string
+	// The backend sends null for entries that aren't series.
+	seriesTitle: string | null = null
 ): WatchHistoryEntry => ({
 	channelId,
 	channelName,
