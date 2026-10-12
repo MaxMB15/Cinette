@@ -89,14 +89,14 @@ const MAX_WATCH_STEP_SECONDS = 5;
 const CONTROLS_HIDE_MS = 4000;
 /**
  * A poll this close to an episode's end counts as seeing the end coming. Polls
- * come every second, so a window whose timers are slowed but not stopped still
- * gets one.
+ * come every second, so a hidden window whose polls slow to every few seconds
+ * still gets one.
  */
 const END_LEAD_SECONDS = 10;
 /**
  * The poll that finds the end has to come within this long (ms) of the last one
- * that saw it coming. A longer gap means this page's timers were stopped while
- * mpv played on, as iOS does in the background.
+ * that saw it coming. A longer gap most likely means this page's timers were
+ * stopped while mpv played on, as iOS does in the background.
  */
 const END_SEEN_WITHIN_MS = 30_000;
 
@@ -778,6 +778,8 @@ export const PlayerView = () => {
 		if (!loadedUrl || mpv.state.currentUrl !== loadedUrl) return;
 		const { reachedEnd, position, duration } = mpv.state;
 		if (!reachedEnd) {
+			// useMpv sets a new state on every poll, paused or not, so a long
+			// pause in the last seconds keeps this time fresh.
 			const nearEnd = duration > 0 && duration - position <= END_LEAD_SECONDS;
 			seenNearEndRef.current = nearEnd ? { url: loadedUrl, at: Date.now() } : null;
 			return;

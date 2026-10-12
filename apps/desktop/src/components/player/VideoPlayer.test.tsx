@@ -1200,6 +1200,22 @@ describe("episodes", () => {
 		}
 	);
 
+	it("goes on to the next episode after a long pause in its last seconds", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const start = new Date("2026-03-01T20:00:00Z").getTime();
+		vi.setSystemTime(start);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: paused(ep1.url, 1295, 1300) });
+		// Polls keep coming once a second while it's paused.
+		vi.setSystemTime(start + 60_000);
+		await setMpv({ state: paused(ep1.url, 1295, 1300) });
+		vi.setSystemTime(start + 61_000);
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		vi.setSystemTime(start + 65_000);
+		await setMpv({ state: ended(ep1.url, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
 	it("asks about the next episode once when its resume prompt is cancelled", async () => {
 		remember(saved("series:show:s1e2", 600, 1300));
 		await openItem(ep1, { episodes: [ep1, ep2] });
