@@ -564,4 +564,64 @@ mod tests {
         let opts = vec![("vo", "gpu")];
         assert_eq!(with_hwdec(opts.clone(), false), opts);
     }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    mod bounds {
+        use super::super::MpvState;
+        use crate::renderer::PlatformRenderer;
+        use libmpv2::Mpv;
+        use std::sync::{Arc, Mutex};
+
+        type Frames = Arc<Mutex<Vec<[f64; 4]>>>;
+
+        /// A renderer that only records where it was put.
+        struct FakeRenderer(Frames);
+
+        impl PlatformRenderer for FakeRenderer {
+            fn attach(&mut self, _mpv: &mut Mpv) -> Result<(), String> {
+                Ok(())
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64) {
+                self.0.lock().unwrap().push([x, y, w, h]);
+            }
+            fn set_visible(&mut self, _visible: bool) {}
+            fn set_first_frame_callback(&mut self, _cb: Box<dyn FnOnce() + Send>) {}
+            fn detach(&mut self) {}
+        }
+
+        /// Installs a fake renderer and returns the frames it gets.
+        fn install(state: &MpvState) -> Frames {
+            let frames = Frames::default();
+            state.install_renderer(Box::new(FakeRenderer(frames.clone())));
+            frames
+        }
+
+        #[test]
+        fn starts_a_new_renderer_at_the_last_bounds() {
+            let state = MpvState::new();
+            state.set_bounds(0.0, 0.0, 800.0, 600.0);
+            state.set_bounds(240.0, 52.0, 960.0, 540.0);
+            let frames = install(&state);
+            assert_eq!(*frames.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+        }
+
+        #[test]
+        fn keeps_the_bounds_for_the_renderer_after_this_one() {
+            let state = MpvState::new();
+            let first = install(&state);
+            state.set_bounds(240.0, 52.0, 960.0, 540.0);
+            assert_eq!(*first.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+
+            let second = install(&state);
+            assert_eq!(*second.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+        }
+
+        #[test]
+        fn leaves_a_new_renderer_alone_before_any_bounds() {
+            let state = MpvState::new();
+            let frames = install(&state);
+            assert!(frames.lock().unwrap().is_empty());
+        }
+    }
 }
