@@ -4,6 +4,7 @@
 import { X } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { PinnedGroup, Category } from "@/lib/types";
+import { channelCountFor } from "@/lib/channels";
 
 interface PinnedGroupsRowProps {
 	pinnedGroups: PinnedGroup[];
@@ -21,9 +22,6 @@ export const PinnedGroupsRow = ({
 	onUnpin,
 }: PinnedGroupsRowProps) => {
 	if (pinnedGroups.length === 0) return null;
-
-	const getChannelCount = (groupName: string) =>
-		categories.find((c) => c.name === groupName)?.channelCount ?? 0;
 
 	return (
 		<div className="px-4 py-2">
@@ -44,7 +42,7 @@ export const PinnedGroupsRow = ({
 							>
 								<span>{pin.groupName}</span>
 								<span className="opacity-60 text-[10px]">
-									{getChannelCount(pin.groupName)}
+									{channelCountFor(categories, pin.groupName)}
 								</span>
 							</button>
 							<button

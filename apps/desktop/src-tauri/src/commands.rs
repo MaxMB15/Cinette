@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::downloads::manager::{self, DownloadManager};
+use crate::downloads::retention;
 use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
@@ -879,6 +880,7 @@ pub struct WatchHistoryEntryDto {
     pub last_watched_at: i64,
     pub total_duration_seconds: i64,
     pub play_count: i64,
+    pub series_title: Option<String>,
 }
 
 impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
@@ -892,6 +894,7 @@ impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
             last_watched_at: e.last_watched_at,
             total_duration_seconds: e.total_duration_seconds,
             play_count: e.play_count,
+            series_title: e.series_title,
         }
     }
 }
@@ -922,15 +925,24 @@ pub async fn record_play_end(
         .map_err(|e| e.to_string())
 }
 
+/// The newest `limit` history entries, of one content type when `content_type` is given.
 #[command]
 pub async fn get_watch_history(
     state: State<'_, AppState>,
     limit: i64,
+    content_type: Option<String>,
 ) -> Result<Vec<WatchHistoryEntryDto>, String> {
     let limit = limit.max(0) as usize;
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let entries = cache.get_watch_history(limit).map_err(|e| e.to_string())?;
-    Ok(entries.into_iter().map(WatchHistoryEntryDto::from).collect())
+    let entries = match content_type.as_deref() {
+        Some(content_type) => cache.get_watch_history_of_type(content_type, limit),
+        None => cache.get_watch_history(limit),
+    };
+    Ok(entries
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(WatchHistoryEntryDto::from)
+        .collect())
 }
 
 #[command]
@@ -944,10 +956,35 @@ pub async fn delete_history_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Delete the history of every episode of one show.
+#[command]
+pub async fn delete_history_series(
+    state: State<'_, AppState>,
+    series_title: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .delete_history_series(&series_title)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn clear_watch_history(state: State<'_, AppState>) -> Result<(), String> {
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
     cache.clear_watch_history().map_err(|e| e.to_string())
+}
+
+/// Delete the history of one content type, leaving the others and resume positions.
+#[command]
+pub async fn clear_watch_history_of_type(
+    state: State<'_, AppState>,
+    content_type: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .clear_watch_history_of_type(&content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -1533,27 +1570,29 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 
 /// Remove a completed download: delete the file and the DB row.
 #[command]
-pub async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let path = {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        cache.get_download(&id).map_err(|e| e.to_string())?.map(|r| r.dest_path)
-    };
-    if let Some(p) = path {
-        let _ = std::fs::remove_file(&p);
-    }
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.delete_download(&id).map_err(|e| e.to_string())
+pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
+    manager::remove(&app, std::slice::from_ref(&id))
 }
 
+/// Remove several downloads, carrying on past any that can't be deleted. The
+/// error lists those.
 #[command]
-pub async fn remove_downloads(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    for id in ids {
-        if let Ok(Some(rec)) = cache.get_download(&id) {
-            let _ = std::fs::remove_file(&rec.dest_path);
-        }
-        cache.delete_download(&id).map_err(|e| e.to_string())?;
-    }
+pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    manager::remove(&app, &ids)
+}
+
+/// Keep a download even when the retention setting would delete it, or stop
+/// keeping it.
+#[command]
+pub async fn set_download_keep(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    manager: State<'_, DownloadManager>,
+    id: String,
+    keep: bool,
+) -> Result<(), String> {
+    manager::set_keep(&state.cache, &manager.deleting, &id, keep)?;
+    manager::emit_progress(&app, &id);
     Ok(())
 }
 
@@ -1593,24 +1632,70 @@ pub async fn get_download_folder(manager: State<'_, DownloadManager>) -> Result<
     Ok(manager.root().to_string_lossy().to_string())
 }
 
+#[command]
+pub async fn get_download_retention(
+    manager: State<'_, DownloadManager>,
+) -> Result<Option<u32>, String> {
+    Ok(manager.retention_days())
+}
+
+/// Save how many days finished downloads are kept, or `None` for no limit,
+/// then delete what's already past it. Returns how many were deleted.
+#[command]
+pub async fn set_download_retention(
+    manager: State<'_, DownloadManager>,
+    app: AppHandle,
+    days: Option<u32>,
+) -> Result<usize, String> {
+    // 0 is "never" in the app, so it mustn't reach the sweep as "delete now".
+    let days = days.filter(|&d| d > 0);
+    // Save first, so a failed write doesn't delete anything.
+    manager::save_retention(&app, days)?;
+    manager.set_retention_days(days);
+    // The setting is saved, so report success even if the sweep fails. The
+    // hourly check tries again.
+    match retention::sweep(&app) {
+        Ok(n) => Ok(n),
+        Err(e) => {
+            tracing::warn!("Retention check failed: {e}");
+            Ok(0)
+        }
+    }
+}
+
+/// How many downloads a retention of `days` would delete right now, so
+/// Settings can ask before changing it.
+#[command]
+pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<usize, String> {
+    retention::count_due(&app, days.filter(|&d| d > 0))
+}
+
 /// Given a channel id, return the local file path if a completed download
 /// exists (and the file is present on disk), else None. The frontend calls this
-/// before playback and passes the local path to mpvLoad when present.
+/// before playback and passes the local path to mpvLoad when present, so this
+/// also records the play, which restarts the retention count.
 #[command]
 pub async fn resolve_local_download(
+    app: AppHandle,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<String>, String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let rec = cache
-        .completed_download_for_channel(&channel_id)
-        .map_err(|e| e.to_string())?;
-    Ok(rec.and_then(|r| {
-        if std::path::Path::new(&r.dest_path).exists() {
-            Some(r.dest_path)
-        } else {
-            None
+    let rec = {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        let rec = cache
+            .completed_download_for_channel(&channel_id)
+            .map_err(|e| e.to_string())?
+            .filter(|r| std::path::Path::new(&r.dest_path).exists());
+        if let Some(r) = &rec {
+            cache
+                .mark_download_played(&r.id, manager::now_secs())
+                .map_err(|e| e.to_string())?;
         }
+        rec
+    };
+    Ok(rec.map(|r| {
+        manager::emit_progress(&app, &r.id);
+        r.dest_path
     }))
 }
 

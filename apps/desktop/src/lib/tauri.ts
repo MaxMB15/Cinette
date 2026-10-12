@@ -211,13 +211,30 @@ export const recordPlayStart = (
 export const recordPlayEnd = (channelId: string, durationSeconds: number): Promise<void> =>
 	invoke<void>("record_play_end", { channelId, durationSeconds });
 
-export const getWatchHistory = (limit: number): Promise<WatchHistoryEntry[]> =>
-	invoke<WatchHistoryEntry[]>("get_watch_history", { limit });
+/** The newest `limit` history entries, only those of `contentType` when given. */
+export const getWatchHistory = (
+	limit: number,
+	contentType?: WatchHistoryEntry["contentType"]
+): Promise<WatchHistoryEntry[]> =>
+	invoke<WatchHistoryEntry[]>("get_watch_history", { limit, contentType });
 
 export const deleteHistoryEntry = (channelId: string): Promise<void> =>
 	invoke<void>("delete_history_entry", { channelId });
 
+/**
+ * Deletes the history of every episode of a show, matched by the
+ * `seriesTitle` the history entries carry. Episodes older than any loaded
+ * page go too.
+ */
+export const deleteHistorySeries = (seriesTitle: string): Promise<void> =>
+	invoke<void>("delete_history_series", { seriesTitle });
+
 export const clearWatchHistory = (): Promise<void> => invoke<void>("clear_watch_history");
+
+/** Deletes the history of one content type. Resume positions are kept. */
+export const clearWatchHistoryOfType = (
+	contentType: WatchHistoryEntry["contentType"]
+): Promise<void> => invoke<void>("clear_watch_history_of_type", { contentType });
 
 // --- Playback Position (resume) Commands ---
 
@@ -409,3 +426,16 @@ export const setDownloadFolder = (path: string): Promise<void> =>
 
 export const resolveLocalDownload = (channelId: string): Promise<string | null> =>
 	invoke("resolve_local_download", { channelId });
+
+export const setDownloadKeep = (id: string, keep: boolean): Promise<void> =>
+	invoke("set_download_keep", { id, keep });
+
+/** Days finished downloads are kept, or null to keep them until removed. */
+export const getDownloadRetention = (): Promise<number | null> => invoke("get_download_retention");
+
+/** Resolves to how many downloads the new setting deleted right away. */
+export const setDownloadRetention = (days: number | null): Promise<number> =>
+	invoke("set_download_retention", { days });
+
+export const countDownloadsDue = (days: number | null): Promise<number> =>
+	invoke("count_downloads_due", { days });

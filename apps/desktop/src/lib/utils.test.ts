@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { cn } from "./utils";
+import { cn, isFromInnerButton } from "./utils";
 
 describe("cn", () => {
 	it("merges class names", () => {
@@ -55,5 +55,27 @@ describe("cn", () => {
 
 	it("merges arrays of classes", () => {
 		expect(cn(["flex", "gap-2"], "mt-4")).toBe("flex gap-2 mt-4");
+	});
+});
+
+describe("isFromInnerButton", () => {
+	const row = document.createElement("div");
+	row.innerHTML = "<span>Name</span><button><svg><path></path></svg></button>";
+	const click = (target: Element) => ({ target, currentTarget: row });
+
+	it("is true for a click on a button in the row or on its icon", () => {
+		expect(isFromInnerButton(click(row.querySelector("button")!))).toBe(true);
+		expect(isFromInnerButton(click(row.querySelector("path")!))).toBe(true);
+	});
+
+	it("is false for a click on the row itself", () => {
+		expect(isFromInnerButton(click(row.querySelector("span")!))).toBe(false);
+		expect(isFromInnerButton(click(row))).toBe(false);
+	});
+
+	it("ignores a button around the row", () => {
+		const outer = document.createElement("button");
+		outer.appendChild(row);
+		expect(isFromInnerButton(click(row.querySelector("span")!))).toBe(false);
 	});
 });
