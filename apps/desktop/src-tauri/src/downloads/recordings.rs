@@ -19,7 +19,7 @@
 //! when the first one has something in it.
 //!
 //! Only the desktop apps record. Phones and tablets build just the parts that
-//! keep the records, and their commands refuse to schedule or stop one.
+//! keep the records, and `schedule_recording` refuses there, so none starts.
 
 use crate::commands::AppState;
 use crate::downloads::manager::{self, DownloadManager};
@@ -1020,7 +1020,7 @@ fn modified_at(path: &str) -> Option<i64> {
     Some(modified.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64)
 }
 
-#[cfg(test)]
+#[cfg(all(test, desktop))]
 mod tests {
     use super::*;
     use crate::downloads::test_support::{self, add_channel, stalls};
