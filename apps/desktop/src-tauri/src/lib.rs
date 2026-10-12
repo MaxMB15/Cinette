@@ -4,6 +4,7 @@
 mod commands;
 mod downloads;
 mod logging;
+mod progress;
 
 use commands::AppState;
 use mvp_core::cache::store::CacheStore;
@@ -95,6 +96,7 @@ pub fn run() {
             commands::save_playback_position,
             commands::get_playback_position,
             commands::delete_playback_position,
+            progress::hand_off_progress,
             commands::get_group_hierarchy,
             commands::update_group_hierarchy_entry,
             commands::delete_group_hierarchy,

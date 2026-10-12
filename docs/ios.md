@@ -55,11 +55,44 @@ step asks the Tauri CLI that started the build for its options, so a plain
 
 ### On your own iPhone or iPad
 
-The app hasn't run on a physical device yet, so treat this as the first test.
+On the device, turn on Developer Mode in Settings → Privacy & Security, and connect
+it to the Mac with a cable. Then build, install and start the app:
 
-1. On the device, turn on Developer Mode in Settings → Privacy & Security, and
-   connect it to the Mac with a cable.
-2. Start the dev server and open the project in Xcode:
+```bash
+cd apps/desktop
+npx tauri ios build --debug --target aarch64 --export-method debugging
+
+xcrun devicectl list devices    # note the device's identifier
+xcrun devicectl device install app --device <identifier> \
+  "src-tauri/gen/apple/build/arm64/Max Video Player.ipa"
+xcrun devicectl device process launch --device <identifier> com.maxvideoplayer.app
+```
+
+The build bundles the frontend, so the app runs without the Mac once it's installed.
+As with the simulator, move or delete `src-tauri/gen/apple/build/arm64` and
+`src-tauri/gen/apple/build/max-video-player_iOS.xcarchive` before the next build.
+
+The project signs automatically with team `3MLC4VWP96`, the maintainer's. A debug
+build uses the team's wildcard development profile, so it doesn't register
+`com.maxvideoplayer.app` on the developer portal. TestFlight still needs the step
+under [Register the app](#1-register-the-app).
+
+If you're not on that team, open the project with `npx tauri ios open`, select the
+`max-video-player_iOS` target, open Signing & Capabilities, and pick your own team.
+Change the bundle identifier too, because `com.maxvideoplayer.app` belongs to the
+maintainer's team. Don't commit either change.
+
+The first time the app loads a playlist or stream from a local address such as
+`192.168.1.20`, iOS asks to let it find devices on the local network. If you decline,
+turn it back on in Settings → Privacy & Security → Local Network. A VPN such as
+Tailscale, on the phone or the Mac, can keep the phone from reaching the Mac's local
+address at all. Turn it off while testing against a server on the Mac.
+
+#### With the dev server
+
+To have the frontend reload as you edit it, run the dev server instead:
+
+1. Start it and open the project in Xcode:
 
    ```bash
    cd apps/desktop
@@ -68,17 +101,9 @@ The app hasn't run on a physical device yet, so treat this as the first test.
 
    Pick the Mac's Wi-Fi address if it asks. Keep the command running, because the
    app loads its pages from it and Xcode's "Build Rust Code" step talks to it.
-3. In Xcode, choose the device as the run destination and click Run. The project
-   signs automatically with team `3MLC4VWP96`, the maintainer's. The first time,
-   Xcode registers `com.maxvideoplayer.app` and makes a development profile for it.
+2. In Xcode, choose the device as the run destination and click Run.
 
-   If you're not on that team, select the `max-video-player_iOS` target, open
-   Signing & Capabilities, and pick your own team. Change the bundle identifier
-   too, because `com.maxvideoplayer.app` belongs to the maintainer's team. Don't
-   commit either change.
-
-The phone and the Mac have to be on the same network. TestFlight builds don't need
-the Mac, as described below.
+The phone and the Mac have to be on the same network for this one.
 
 ## The Xcode project
 
