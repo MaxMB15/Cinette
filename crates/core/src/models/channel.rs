@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A playable entry from a playlist, which may be a live channel, a film or a
+/// A playable entry from a playlist, which may be a live channel, a movie or a
 /// series episode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]

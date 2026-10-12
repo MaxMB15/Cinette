@@ -4,11 +4,11 @@
 //! The parts of MaxVideoPlayer that don't depend on a platform or a UI, kept
 //! apart so they can be tested without running the app.
 
-/// Optional AI helpers for organising playlists.
+/// Optional AI helpers for organizing playlists.
 pub mod ai;
 /// The SQLite store for providers, channels, guides, metadata and watch history.
 pub mod cache;
-/// Film and episode downloads, their file paths and the ffmpeg arguments they
+/// Movie and episode downloads, their file paths and the ffmpeg arguments they
 /// run with.
 pub mod downloads;
 pub mod http;

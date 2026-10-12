@@ -135,7 +135,11 @@ pub async fn load_xtream_provider(
     username: String,
     password: String,
 ) -> Result<Vec<Channel>, String> {
-    tracing::info!("[IPTV] loading Xtream provider name={:?} url={}", name, url);
+    tracing::info!(
+        "[IPTV] loading Xtream provider name={:?} from {}",
+        name,
+        mvp_core::http::origin_for_log(&url)
+    );
     let mut channels = fetch_xtream_channels(&url, &username, &password)
         .await
         .map_err(|e| {
