@@ -98,6 +98,7 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.cargo/**'
+              - 'scripts/build-app.sh'
               - 'scripts/build-libmpv.sh'
               - 'scripts/fetch-ffmpeg.sh'
               - '.github/actions/install-frontend-deps/**'
@@ -283,9 +284,9 @@ jobs:
           api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
 
       - name: Build Tauri app (macOS)
-        # Override createUpdaterArtifacts=false so Tauri doesn't require a signing key in CI.
-        # The updater artifact + signature is only needed in the release workflow.
-        run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Builds without updater artifacts, which only the release workflow
+        # makes, and tries a failed build once more. The script says why.
+        run: ./scripts/build-app.sh
 
       - name: Notarize the DMG
         if: steps.apple.outputs.notarizing == 'true'
@@ -385,7 +386,7 @@ jobs:
           retention-days: 1
 
       - name: Build Tauri app (Linux)
-        run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: ./scripts/build-app.sh
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
