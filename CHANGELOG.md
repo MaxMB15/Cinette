@@ -21,8 +21,11 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Error messages and logs no longer show your API keys, Xtream login or the login in a playlist link (#105).
 - Testing a wrong OpenSubtitles key says the key is invalid instead of showing a request error (#105).
 - Xtream logins that contain & or + now load (#105).
-- The Gemini key is sent in a request header instead of the request URL, and spaces or a line break pasted around it are ignored (#105).
-- Online lookups give up after a timeout instead of waiting forever on a server that stopped responding (#105).
+- The Gemini key is sent in a request header instead of the request URL (#105).
+- Spaces or a line break pasted around an API key no longer make the key fail (#105).
+- Online lookups and Xtream logins give up after a timeout instead of waiting forever on a server that stopped responding (#105).
+- Large playlists on a slow connection no longer fail after 10 minutes while they are still downloading (#105).
+- Refreshing two M3U playlists at the same time no longer mixes up their downloads (#105).
 
 ## [0.5.3] - 2026-10-09
 
