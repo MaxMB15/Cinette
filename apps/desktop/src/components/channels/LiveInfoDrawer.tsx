@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Tv2, Loader2, Circle, Square, CalendarClock } from "lucide-react";
+import { X, TvMinimal, LoaderCircle, Circle, Square, CalendarClock } from "lucide-react";
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 import { getEpgProgrammes } from "@/lib/tauri";
 import { formatHHMM } from "@/lib/epg-window";
@@ -135,7 +135,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 								loading="lazy"
 							/>
 						) : (
-							<Tv2 className="h-5 w-5 text-muted-foreground/30" />
+							<TvMinimal className="h-5 w-5 text-muted-foreground/30" />
 						)}
 					</div>
 
@@ -198,7 +198,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 				{/* 3-hour timeline */}
 				{loading ? (
 					<div className="flex items-center justify-center py-8 shrink-0">
-						<Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
+						<LoaderCircle className="h-5 w-5 text-muted-foreground animate-spin" />
 					</div>
 				) : programmes.length > 0 ? (
 					<div className="px-5 pt-4 pb-1 shrink-0">
@@ -232,7 +232,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 
 					{loading ? (
 						<div className="flex items-center justify-center flex-1 py-8">
-							<Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
+							<LoaderCircle className="h-5 w-5 text-muted-foreground animate-spin" />
 						</div>
 					) : programmes.length === 0 ? (
 						<div className="flex flex-col items-center justify-center flex-1 py-8 px-5 gap-2 text-center">

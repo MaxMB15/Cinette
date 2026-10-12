@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { memo } from "react";
-import { Play, Tv2, Heart, Film } from "lucide-react";
+import { Play, TvMinimal, Heart, Film } from "lucide-react";
 import type { Channel, EpgProgram } from "@/lib/types";
 import { EpgTimelineBar } from "./EpgTimelineBar";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
@@ -108,7 +108,7 @@ const RowCardView = ({
 				<ChannelLogo
 					url={channel.logoUrl}
 					className="h-6 w-6 rounded"
-					fallback={<Tv2 className="text-muted-foreground h-3 w-3" />}
+					fallback={<TvMinimal className="text-muted-foreground h-3 w-3" />}
 				/>
 
 				<div className="min-w-0 flex-1">
@@ -197,7 +197,7 @@ const CompactRowCard = ({
 				<ChannelLogo
 					url={channel.logoUrl}
 					className="h-10 w-10 rounded-md"
-					fallback={<Tv2 className="text-muted-foreground h-4 w-4" />}
+					fallback={<TvMinimal className="text-muted-foreground h-4 w-4" />}
 				/>
 
 				<div className="min-w-0 flex-1">

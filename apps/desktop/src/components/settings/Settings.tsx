@@ -19,7 +19,7 @@ import {
 	Smartphone,
 	Tablet,
 	Tv,
-	CheckCircle,
+	CircleCheckBig,
 	Download,
 	RefreshCw,
 	FolderOpen,
@@ -134,7 +134,7 @@ const DonationReset = () => {
 		<Button size="sm" variant="secondary" onClick={handleReset} disabled={reset}>
 			{reset ? (
 				<span className="flex items-center gap-1 text-green-500">
-					<CheckCircle className="h-4 w-4" /> Reset
+					<CircleCheckBig className="h-4 w-4" /> Reset
 				</span>
 			) : (
 				"Reset donation reminder"
@@ -621,7 +621,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 									>
 										{folderStatus === "saved" ? (
 											<span className="flex items-center gap-1 text-green-500">
-												<CheckCircle className="h-4 w-4" /> Saved
+												<CircleCheckBig className="h-4 w-4" /> Saved
 											</span>
 										) : folderStatus === "error" ? (
 											<span className="text-destructive">Failed</span>
@@ -745,7 +745,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								</Button>
 								{historyStatus === "cleared" && (
 									<span className="flex items-center gap-1 text-xs text-green-500">
-										<CheckCircle className="h-3 w-3" /> History cleared
+										<CircleCheckBig className="h-3 w-3" /> History cleared
 									</span>
 								)}
 							</div>
@@ -774,7 +774,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								</Button>
 								{cacheStatus === "cleared" && (
 									<span className="flex items-center gap-1 text-xs text-green-500">
-										<CheckCircle className="h-3 w-3" /> Caches cleared
+										<CircleCheckBig className="h-3 w-3" /> Caches cleared
 									</span>
 								)}
 							</div>

@@ -2,7 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useMemo, useEffect } from "react";
-import { X, Play, ChevronLeft, ChevronRight, MonitorPlay, Loader2, Layers } from "lucide-react";
+import {
+	X,
+	Play,
+	ChevronLeft,
+	ChevronRight,
+	MonitorPlay,
+	LoaderCircle,
+	Layers,
+} from "lucide-react";
 import type { Channel, OmdbData, WhatsonData, DownloadRecord } from "@/lib/types";
 import {
 	fetchOmdbData,
@@ -346,7 +354,7 @@ export const SeriesDetailModal = ({
 							<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
 								{infoLoading ? (
 									<div className="flex items-center gap-2 text-muted-foreground">
-										<Loader2 className="h-3.5 w-3.5 animate-spin" />
+										<LoaderCircle className="h-3.5 w-3.5 animate-spin" />
 										<span className="text-xs">Loading info…</span>
 									</div>
 								) : (
