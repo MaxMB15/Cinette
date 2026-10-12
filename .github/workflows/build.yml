@@ -65,7 +65,7 @@ jobs:
       linux: ${{ steps.push-all.outputs.linux || steps.filter.outputs.linux }}
       macos: ${{ steps.push-all.outputs.macos || steps.manual.outputs.macos || steps.filter.outputs.macos }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Push — always build both platforms
         id: push-all
@@ -81,7 +81,7 @@ jobs:
 
       - name: PR — detect changed paths
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           # The whole plugin crate counts, because a list of its files missed
@@ -116,7 +116,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
@@ -137,7 +137,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
           path: apps/desktop/coverage/
@@ -199,7 +199,7 @@ jobs:
           path: coverage/rust
 
       - name: Generate frontend coverage badge
-        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
+        uses: jaywcjlove/coverage-badges-cli@998665f7962b1a3935ba8c3e786171a99436e5d1 # v2.3.0
         with:
           source: coverage/coverage-summary.json
           output: coverage/badge.svg
@@ -207,7 +207,7 @@ jobs:
 
       - name: Generate Rust coverage badge
         if: steps.rust.outcome == 'success'
-        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
+        uses: jaywcjlove/coverage-badges-cli@998665f7962b1a3935ba8c3e786171a99436e5d1 # v2.3.0
         with:
           source: coverage/rust/coverage-summary.json
           output: coverage/rust/badge.svg
@@ -233,7 +233,7 @@ jobs:
     # secrets and wait for approval. Push and PR builds use no environment.
     environment: ${{ github.event_name == 'workflow_dispatch' && 'macos-signing' || '' }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
@@ -250,7 +250,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -308,7 +308,7 @@ jobs:
           target/release/bundle/macos/*.app target/release/bundle/dmg/*.dmg
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: MaxVideoPlayer-macOS
           path: |
@@ -322,7 +322,7 @@ jobs:
     needs: [test, detect-changes]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
@@ -345,7 +345,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -401,7 +401,7 @@ jobs:
 
       - name: Upload Rust coverage artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rust-coverage-report
           path: rust-coverage/
@@ -411,7 +411,7 @@ jobs:
         run: ./scripts/build-app.sh
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: MaxVideoPlayer-Linux
           path: |
