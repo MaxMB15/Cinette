@@ -27,6 +27,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Fixed
 
+- On Linux with Wayland, on desktops where the app draws its own title bar, such as COSMIC on Pop!_OS, the video slid out of place when the window went full screen or was maximized. It sat lower and further right by the size of the title bar and the window's shadow, and its edges were cut off. The video now moves with the page (#119).
 - A download of an HLS movie showed the wrong progress. The app took the size of the movie's playlist, a few hundred bytes, as the size of the movie, so the bar was full from the start and the download history showed percentages in the thousands. The bar now pulses while the size is unknown, and the history shows how much has been saved (#117).
 - Most downloads waited close to a minute before they finished, and an HLS download waited that long before it started. ffmpeg took the normal end of each file and playlist for a dropped connection and kept trying to reconnect (#117).
 - A download from a server that can't resume one went back to the start of the movie after the connection dropped, and wrote it into the file a second time. When the server also didn't give the file's size, the end of every reply counted as a drop, so the download started over and over until you stopped it or the disk filled up. A dropped download now carries on where it stopped if the server allows it (#117).
