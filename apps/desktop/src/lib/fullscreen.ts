@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { ChangeTracker } from "@/lib/change-tracker";
 import { isMobilePlatform } from "@/lib/platform";
 import type { LayoutMode } from "@/lib/types";
 
@@ -23,4 +24,42 @@ export const hasFullscreenButton = (touch: boolean, layoutMode: LayoutMode): boo
 export const setWindowFullscreen = async (on: boolean): Promise<void> => {
 	if (isMobilePlatform()) return;
 	await getCurrentWindow().setFullscreen(on);
+};
+
+/**
+ * Reads whether the window is full screen now and after each resize, and
+ * passes it to `onChange` until the returned function is called. Going in or
+ * out of full screen resizes the window, so this also catches the ways the
+ * app doesn't start itself, such as the green button on macOS.
+ *
+ * A read sent before one of the app's own changes in `changes` is dropped,
+ * since it may come back with the state from before the change. Does nothing
+ * on iOS and Android, where the window never goes full screen, or outside
+ * Tauri, where there's no window to follow.
+ */
+export const followWindowFullscreen = (
+	onChange: (on: boolean) => void,
+	changes: ChangeTracker
+): (() => void) => {
+	if (isMobilePlatform()) return () => {};
+	let win: ReturnType<typeof getCurrentWindow>;
+	try {
+		win = getCurrentWindow();
+	} catch {
+		return () => {};
+	}
+	const read = () => {
+		const mark = changes.mark();
+		win.isFullscreen().then(
+			(on) => {
+				if (!changes.isStale(mark)) onChange(on);
+			},
+			(e) => console.error("[fullscreen] isFullscreen failed:", e)
+		);
+	};
+	read();
+	const unlisten = win.onResized(read);
+	return () => {
+		unlisten.then((fn) => fn());
+	};
 };

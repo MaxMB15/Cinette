@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, onTestFinished } from "vitest";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
-import { hasFullscreenButton, setWindowFullscreen } from "./fullscreen";
-
-const setFullscreen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+import { createChangeTracker } from "./change-tracker";
+import { followWindowFullscreen, hasFullscreenButton, setWindowFullscreen } from "./fullscreen";
+import { fakeWindow, getCurrentWindow, resetFakeWindow, settle } from "@/test/fake-window";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
-vi.mock("@tauri-apps/api/window", () => ({
-	getCurrentWindow: () => ({ setFullscreen }),
-}));
+vi.mock("@tauri-apps/api/window", () => import("@/test/fake-window"));
+
+afterEach(() => {
+	resetFakeWindow();
+});
 
 describe("hasFullscreenButton", () => {
 	it("leaves the button out of the phone layout", () => {
@@ -30,15 +32,11 @@ describe("hasFullscreenButton", () => {
 });
 
 describe("setWindowFullscreen", () => {
-	afterEach(() => {
-		setFullscreen.mockClear();
-	});
-
 	it("sets the window to full screen on desktop", async () => {
 		vi.mocked(osPlatform).mockReturnValue("macos");
 		await setWindowFullscreen(true);
 		await setWindowFullscreen(false);
-		expect(setFullscreen.mock.calls).toEqual([[true], [false]]);
+		expect(fakeWindow.setFullscreen.mock.calls).toEqual([[true], [false]]);
 	});
 
 	it("leaves the window alone on iOS and Android", async () => {
@@ -46,6 +44,89 @@ describe("setWindowFullscreen", () => {
 		await setWindowFullscreen(true);
 		vi.mocked(osPlatform).mockReturnValue("android");
 		await setWindowFullscreen(true);
-		expect(setFullscreen).not.toHaveBeenCalled();
+		expect(fakeWindow.setFullscreen).not.toHaveBeenCalled();
+	});
+});
+
+describe("followWindowFullscreen", () => {
+	it("reads the window at the start and after each resize", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		const onChange = vi.fn();
+		const stop = followWindowFullscreen(onChange, createChangeTracker());
+		await settle();
+		fakeWindow.changeFullscreen(true);
+		await settle();
+		fakeWindow.changeFullscreen(false);
+		await settle();
+		expect(onChange.mock.calls).toEqual([[false], [true], [false]]);
+
+		stop();
+		await settle();
+		expect(fakeWindow.resizeListeners()).toBe(0);
+	});
+
+	it("drops a read sent before one of the app's own changes", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		let answer: (on: boolean) => void = () => {};
+		fakeWindow.isFullscreen.mockImplementationOnce(
+			() => new Promise<boolean>((resolve) => (answer = resolve))
+		);
+		const changes = createChangeTracker();
+		const onChange = vi.fn();
+		followWindowFullscreen(onChange, changes);
+		changes.begin()();
+		answer(false);
+		await settle();
+		expect(onChange).not.toHaveBeenCalled();
+
+		fakeWindow.changeFullscreen(true);
+		await settle();
+		expect(onChange).toHaveBeenCalledWith(true);
+	});
+
+	it("drops a read that comes back while one of the app's changes runs", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		const changes = createChangeTracker();
+		const onChange = vi.fn();
+		const done = changes.begin();
+		followWindowFullscreen(onChange, changes);
+		await settle();
+		expect(onChange).not.toHaveBeenCalled();
+		done();
+	});
+
+	it("leaves the window alone on iOS and Android", async () => {
+		for (const os of ["ios", "android"] as const) {
+			vi.mocked(osPlatform).mockReturnValue(os);
+			const stop = followWindowFullscreen(vi.fn(), createChangeTracker());
+			stop();
+		}
+		await settle();
+		expect(fakeWindow.isFullscreen).not.toHaveBeenCalled();
+		expect(fakeWindow.onResized).not.toHaveBeenCalled();
+	});
+
+	it("does nothing outside Tauri, where there's no window", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		getCurrentWindow.mockImplementationOnce(() => {
+			throw new TypeError("no Tauri internals");
+		});
+		const onChange = vi.fn();
+		const stop = followWindowFullscreen(onChange, createChangeTracker());
+		stop();
+		await settle();
+		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it("logs a read that fails", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		onTestFinished(() => error.mockRestore());
+		fakeWindow.isFullscreen.mockRejectedValueOnce(new Error("window closed"));
+		const onChange = vi.fn();
+		followWindowFullscreen(onChange, createChangeTracker());
+		await settle();
+		expect(onChange).not.toHaveBeenCalled();
+		expect(error).toHaveBeenCalledWith("[fullscreen] isFullscreen failed:", expect.any(Error));
 	});
 });

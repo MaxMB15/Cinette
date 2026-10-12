@@ -7,6 +7,7 @@ import {
 	isSliderOwnKey,
 	leaveSliderKeysToPlayer,
 	playerShortcuts,
+	repeatsWhenHeld,
 	resolvePlayerHotkey,
 	SEEK_LONG,
 	SEEK_SHORT,
@@ -89,6 +90,20 @@ describe("resolvePlayerHotkey", () => {
 	});
 	it("returns null for unbound keys", () => {
 		expect(resolvePlayerHotkey(key("z"))).toBeNull();
+	});
+});
+
+describe("repeatsWhenHeld", () => {
+	it("keeps seeking and changing the volume while a key is held", () => {
+		for (const k of ["ArrowLeft", "ArrowRight", "j", "L", "ArrowUp", "ArrowDown"]) {
+			expect(repeatsWhenHeld(resolvePlayerHotkey(key(k))!)).toBe(true);
+		}
+	});
+
+	it("runs everything else once per press", () => {
+		for (const k of [" ", "k", "f", "m", "Escape", "n", "p", "s", "i", "?", "5", "Home"]) {
+			expect(repeatsWhenHeld(resolvePlayerHotkey(key(k))!)).toBe(false);
+		}
 	});
 });
 
