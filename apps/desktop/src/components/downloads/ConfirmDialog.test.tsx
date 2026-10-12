@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { isInside } from "@/lib/hotkeys";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 /** A sheet that slides in with a transform, which would clip a fixed dialog inside it. */
@@ -77,6 +78,34 @@ describe("ConfirmDialog", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(onConfirm).not.toHaveBeenCalled();
 		expect(onWindowKeyDown).not.toHaveBeenCalled();
+	});
+
+	it("keeps its keys from a player that checks where they came from", () => {
+		// React passes keys from the portal to the player's handler, like the
+		// player's own `onKeyDown`, so the player has to check.
+		const onPlayerKey = vi.fn();
+		const Player = () => {
+			const ref = useRef<HTMLDivElement>(null);
+			return (
+				<div
+					ref={ref}
+					onKeyDown={(e) => {
+						if (isInside(ref.current, e.target)) onPlayerKey(e.key);
+					}}
+				>
+					<Sheet />
+				</div>
+			);
+		};
+		render(<Player />);
+		const opener = screen.getByRole("button", { name: "Download season" });
+		fireEvent.keyDown(opener, { key: "f" });
+		expect(onPlayerKey).toHaveBeenCalledExactlyOnceWith("f");
+
+		openFrom(opener);
+		fireEvent.keyDown(document.activeElement!, { key: "f" });
+		fireEvent.keyDown(document.activeElement!, { key: " " });
+		expect(onPlayerKey).toHaveBeenCalledOnce();
 	});
 
 	it("confirms a notice on Escape", () => {

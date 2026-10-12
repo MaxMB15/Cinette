@@ -39,10 +39,10 @@ export const Dialog = ({
 	});
 
 	// Escape pressed while focus is outside the dialog, such as on the page
-	// after the focused control went away. It runs before any other handler so
-	// the screen behind never sees the key. Keys from inside the dialog are
-	// left to the handler on the backdrop, so a control inside can use Escape
-	// first.
+	// after the focused control went away. It runs before the page's own
+	// handlers so the screen behind never sees the key. Keys from inside the
+	// dialog are left to the handler on the backdrop, so a control inside can
+	// use Escape first.
 	useEffect(() => {
 		const handleKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape" || !isTopFocusTrap(dialogRef.current)) return;
@@ -71,7 +71,8 @@ export const Dialog = ({
 				if (e.key !== "Escape") return;
 				// The screen behind may have its own Escape shortcut, like leaving full screen.
 				e.stopPropagation();
-				onClose();
+				// A control inside, such as a field, can keep Escape for itself.
+				if (!e.defaultPrevented) onClose();
 			}}
 		>
 			<div

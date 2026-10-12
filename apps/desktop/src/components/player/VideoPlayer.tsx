@@ -51,10 +51,12 @@ import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
 import {
 	resolvePlayerHotkey,
+	isInside,
 	isTypingTarget,
 	isKeyboardFocusedControl,
 	repeatsWhenHeld,
 } from "@/lib/hotkeys";
+import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
@@ -230,9 +232,14 @@ export const PlayerView = () => {
 	}, []);
 
 	// Re-focus after channel load completes (currentUrl changes). Leave focus
-	// alone if it's already inside the player (e.g. on the resume prompt).
+	// alone if it's already inside the player (e.g. on the resume prompt), or
+	// on a confirm, which opens outside the player.
 	useEffect(() => {
-		if (mpv.state.currentUrl && !containerRef.current?.contains(document.activeElement)) {
+		if (
+			mpv.state.currentUrl &&
+			!containerRef.current?.contains(document.activeElement) &&
+			!hasOpenFocusTrap()
+		) {
 			containerRef.current?.focus();
 		}
 	}, [mpv.state.currentUrl]);
@@ -881,6 +888,8 @@ export const PlayerView = () => {
 
 	const handleKeyDown = useCallback(
 		(e: React.KeyboardEvent) => {
+			// A confirm opened from the controls has the keys while it's open.
+			if (!isInside(containerRef.current, e.target)) return;
 			// The resume prompt handles its own keys; Escape still cancels it if
 			// focus ended up elsewhere in the player.
 			if (pendingResume) {

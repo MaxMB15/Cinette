@@ -128,6 +128,15 @@ export const playerShortcuts = (
 	{ keys: ["Esc"], label: "Exit fullscreen / close panel / leave player" },
 ];
 
+/**
+ * True when `target` sits inside `container` in the page. React passes a key
+ * pressed in a portal, such as a confirm opened from the player's controls, to
+ * the key handlers of the components that rendered it, even though the portal
+ * is elsewhere in the page.
+ */
+export const isInside = (container: Element | null, target: EventTarget | null): boolean =>
+	container !== null && target instanceof Node && container.contains(target);
+
 /** True when the event target is a text field, so typing shouldn't trigger hotkeys. */
 export const isTypingTarget = (target: EventTarget | null): boolean => {
 	if (!(target instanceof HTMLElement)) return false;

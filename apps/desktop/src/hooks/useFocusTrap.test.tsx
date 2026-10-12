@@ -4,7 +4,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { useRef } from "react";
 import { render, fireEvent, cleanup } from "@testing-library/react";
-import { useFocusTrap } from "./useFocusTrap";
+import { hasOpenFocusTrap, useFocusTrap } from "./useFocusTrap";
 
 const Dialog = () => {
 	const ref = useRef<HTMLDivElement>(null);
@@ -77,6 +77,15 @@ describe("useFocusTrap", () => {
 		getByText("Top last").focus();
 		fireEvent.keyDown(document.activeElement!, { key: "Tab" });
 		expect(document.activeElement).toBe(getByText("Top first"));
+	});
+
+	it("says whether a modal is open", () => {
+		const { rerender } = render(<Harness open={false} />);
+		expect(hasOpenFocusTrap()).toBe(false);
+		rerender(<Harness open />);
+		expect(hasOpenFocusTrap()).toBe(true);
+		rerender(<Harness open={false} />);
+		expect(hasOpenFocusTrap()).toBe(false);
 	});
 
 	it("restores the previous focus on close", () => {

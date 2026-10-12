@@ -15,6 +15,9 @@ const FOCUSABLE = [
 /** Mounted traps, newest last. Only the newest one, the modal on top, handles keys. */
 const traps: HTMLElement[] = [];
 
+/** Whether a modal with a focus trap is open. */
+export const hasOpenFocusTrap = (): boolean => traps.length > 0;
+
 /** Whether `node` is the newest mounted focus trap, the modal on top. */
 export const isTopFocusTrap = (node: HTMLElement | null): boolean =>
 	node !== null && traps[traps.length - 1] === node;

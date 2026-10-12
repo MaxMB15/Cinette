@@ -58,14 +58,11 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads. On Linux this needs a D-Bus session bus. Without one, the app logs a warning and a second copy still opens (#99).
 - Two downloads with the same title now save to separate files, numbered like "Dune (2).mkv". Before, they wrote to the same file, and a file already in the folder with that name was replaced (#99).
 - A queued download whose playlist entry turned into another title after a refresh now fails and asks you to download it again. Before, it could save the other title under the first one's name (#99).
-
-### Fixed
-
 - Removing a provider now asks you to confirm first (#103).
 - A failed provider refresh now shows its error on the provider card (#103).
 - Re-categorize All in the category manager now sends Gemini sample titles from the content type on screen only (#103).
 - Escape now closes the playlist settings and download history dialogs (#103).
-- Confirmation prompts, like removing a provider or a download, now take keyboard focus and close with Escape without the player behind acting on the key. They also no longer get cut off inside a sheet (#103).
+- Confirmation prompts, like removing a provider or a download, now take keyboard focus and close with Escape, and the player behind no longer acts on keys pressed in them or takes focus from them when the next episode starts. They no longer get cut off inside a sheet either (#103).
 - Screen readers now name the provider form fields, the icon-only buttons in the category manager and the clear file button, and say which option of each toggle is on (#103).
 - The playlist file drop zone now opens with the keyboard (#103).
 

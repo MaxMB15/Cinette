@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+	isInside,
 	isKeyboardFocusedControl,
 	isSliderOwnKey,
 	leaveSliderKeysToPlayer,
@@ -122,6 +123,30 @@ describe("playerShortcuts", () => {
 			"Seek 15s back / 30s forward",
 			"Seek 15s back / 30s forward",
 		]);
+	});
+});
+
+describe("isInside", () => {
+	afterEach(() => {
+		document.body.innerHTML = "";
+	});
+
+	it("is true only for nodes inside the container", () => {
+		const container = document.createElement("div");
+		const child = document.createElement("button");
+		const outside = document.createElement("button");
+		container.appendChild(child);
+		document.body.append(container, outside);
+		expect(isInside(container, child)).toBe(true);
+		expect(isInside(container, container)).toBe(true);
+		expect(isInside(container, outside)).toBe(false);
+	});
+
+	it("is false without a container or a node", () => {
+		const child = document.createElement("button");
+		expect(isInside(null, child)).toBe(false);
+		expect(isInside(document.body, null)).toBe(false);
+		expect(isInside(document.body, window)).toBe(false);
 	});
 });
 

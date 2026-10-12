@@ -51,6 +51,24 @@ describe("Dialog", () => {
 		expect(onOuterKeyDown).not.toHaveBeenCalled();
 	});
 
+	it("stays open when a control inside keeps Escape", () => {
+		const onClose = vi.fn();
+		const onOuterKeyDown = vi.fn();
+		render(
+			<div onKeyDown={onOuterKeyDown}>
+				<Dialog onClose={onClose} label="Rename">
+					<input
+						aria-label="Name"
+						onKeyDown={(e) => e.key === "Escape" && e.preventDefault()}
+					/>
+				</Dialog>
+			</div>
+		);
+		fireEvent.keyDown(screen.getByRole("textbox", { name: "Name" }), { key: "Escape" });
+		expect(onClose).not.toHaveBeenCalled();
+		expect(onOuterKeyDown).not.toHaveBeenCalled();
+	});
+
 	it("lets other keys through", () => {
 		const { onClose, onOuterKeyDown } = renderDialog();
 		fireEvent.keyDown(screen.getByRole("button", { name: "Save" }), { key: "Enter" });
