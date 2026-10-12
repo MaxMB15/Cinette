@@ -1609,11 +1609,5 @@ pub async fn resolve_local_download(
     let rec = cache
         .completed_download_for_channel(&channel_id)
         .map_err(|e| e.to_string())?;
-    Ok(rec.and_then(|r| {
-        if std::path::Path::new(&r.dest_path).exists() {
-            Some(r.dest_path)
-        } else {
-            None
-        }
-    }))
+    Ok(rec.filter(|r| r.has_local_file()).map(|r| r.dest_path))
 }

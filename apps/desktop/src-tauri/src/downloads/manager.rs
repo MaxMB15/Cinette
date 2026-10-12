@@ -3,6 +3,7 @@
 
 use crate::commands::AppState;
 use crate::downloads::scheduler::ids_to_start;
+use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::downloads::ffmpeg::{
     build_ffmpeg_args, container_from_part_path, fold_progress_line, ProgressUpdate,
 };
@@ -111,6 +112,8 @@ fn save_setting<R: Runtime>(
 
 /// Create a queued DownloadRecord for a channel and persist it. Returns the id.
 /// `series_channel_id` is set for episodes so aggregate state can be computed.
+/// A channel that already has a finished download keeps it, and its id is
+/// returned instead of downloading the channel again.
 pub fn enqueue_record<R: Runtime>(
     app: &AppHandle<R>,
     channel_id: &str,
@@ -121,6 +124,16 @@ pub fn enqueue_record<R: Runtime>(
     series_title: Option<&str>,
 ) -> Result<String, String> {
     let app_state = app.state::<AppState>();
+    let finished = {
+        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+        finished_download(&cache, channel_id).map_err(|e| e.to_string())?
+    };
+    if let Some(done) = finished {
+        // The downloads list may be missing it, so it gets the record again.
+        emit_progress(app, &done.id);
+        return Ok(done.id);
+    }
+
     let manager = app.state::<DownloadManager>();
     let root = manager.root();
     let dest = derive_dest_path(&root, kind, title, series_title, url);
@@ -155,6 +168,23 @@ pub fn enqueue_record<R: Runtime>(
     // the first ffmpeg progress line.
     emit_progress(app, &id);
     Ok(id)
+}
+
+/// The channel's finished download, when its file is still on disk. A
+/// finished record whose file is gone is removed, so the channel downloads
+/// again and the list doesn't keep a download that can't play.
+fn finished_download(
+    cache: &CacheStore,
+    channel_id: &str,
+) -> Result<Option<DownloadRecord>, CacheError> {
+    match cache.completed_download_for_channel(channel_id)? {
+        Some(done) if done.has_local_file() => Ok(Some(done)),
+        Some(gone) => {
+            cache.delete_download(&gone.id)?;
+            Ok(None)
+        }
+        None => Ok(None),
+    }
 }
 
 /// Inspect the active set and start ffmpeg for any items the scheduler selects.
@@ -419,5 +449,70 @@ fn emit_progress<R: Runtime>(app: &AppHandle<R>, id: &str) {
     };
     if let Some(rec) = rec {
         let _ = app.emit("download://progress", rec);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn completed(id: &str, channel_id: &str, dest_path: &str) -> DownloadRecord {
+        DownloadRecord {
+            id: id.into(),
+            channel_id: channel_id.into(),
+            title: "Movie".into(),
+            kind: DownloadKind::Movie,
+            series_channel_id: None,
+            status: DownloadStatus::Completed,
+            dest_path: dest_path.into(),
+            total_bytes: Some(5),
+            downloaded_bytes: 5,
+            avg_rate_bps: None,
+            error: None,
+            created_at: 1,
+            finished_at: Some(2),
+        }
+    }
+
+    #[test]
+    fn a_finished_download_with_its_file_is_reused() {
+        let cache = CacheStore::open_in_memory().unwrap();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"video").unwrap();
+        let done = completed("d1", "p1-movie-10", &file.path().to_string_lossy());
+        cache.upsert_download(&done).unwrap();
+
+        assert_eq!(
+            finished_download(&cache, "p1-movie-10").unwrap(),
+            Some(done)
+        );
+        assert!(cache.get_download("d1").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_finished_download_whose_file_is_gone_is_removed() {
+        let cache = CacheStore::open_in_memory().unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let gone = file.path().to_string_lossy().into_owned();
+        drop(file);
+        cache
+            .upsert_download(&completed("d1", "p1-movie-10", &gone))
+            .unwrap();
+
+        assert_eq!(finished_download(&cache, "p1-movie-10").unwrap(), None);
+        assert_eq!(cache.get_download("d1").unwrap(), None);
+    }
+
+    #[test]
+    fn a_download_in_progress_is_not_reused() {
+        let cache = CacheStore::open_in_memory().unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut active = completed("d1", "p1-movie-10", &file.path().to_string_lossy());
+        active.status = DownloadStatus::Downloading;
+        cache.upsert_download(&active).unwrap();
+
+        assert_eq!(finished_download(&cache, "p1-movie-10").unwrap(), None);
+        assert!(cache.get_download("d1").unwrap().is_some());
     }
 }

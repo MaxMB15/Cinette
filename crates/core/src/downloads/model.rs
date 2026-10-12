@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// What a download row represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +79,12 @@ impl DownloadRecord {
             _ => None,
         }
     }
+
+    /// Whether the download finished and its file is still on disk, so it
+    /// can play without the network.
+    pub fn has_local_file(&self) -> bool {
+        self.status == DownloadStatus::Completed && Path::new(&self.dest_path).exists()
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +121,24 @@ mod tests {
         assert_eq!(r.percent(), Some(62));
         r.downloaded_bytes = 5000; // overshoot clamps to 100
         assert_eq!(r.percent(), Some(100));
+    }
+
+    #[test]
+    fn a_finished_download_has_a_local_file_while_the_file_exists() {
+        let path =
+            std::env::temp_dir().join(format!("mvp-has-local-file-{}.mkv", std::process::id()));
+        std::fs::write(&path, b"video").unwrap();
+        let mut r = sample();
+        r.status = DownloadStatus::Completed;
+        r.dest_path = path.to_string_lossy().into_owned();
+        assert!(r.has_local_file());
+
+        r.status = DownloadStatus::Downloading;
+        assert!(!r.has_local_file(), "the file isn't finished yet");
+
+        r.status = DownloadStatus::Completed;
+        std::fs::remove_file(&path).unwrap();
+        assert!(!r.has_local_file(), "the file was deleted");
     }
 
     fn sample() -> DownloadRecord {
