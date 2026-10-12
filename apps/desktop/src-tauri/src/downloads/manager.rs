@@ -12,6 +12,7 @@ use mvp_core::downloads::paths::{
     derive_dest_path, part_path, path_key, unique_dest_path, PART_SUFFIX,
 };
 use mvp_core::downloads::redact::redact_credentials;
+use mvp_core::downloads::size::media_size;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -350,7 +351,8 @@ fn uuid_like() -> String {
     format!("{nanos:x}")
 }
 
-/// Probe Content-Length so the UI can show a byte-based percentage. Best-effort.
+/// Ask the server how big the video is, so the UI can show a percentage.
+/// None when it can't say, as for an HLS stream, whose URL is a playlist.
 ///
 /// The URL is an IPTV panel's, so this goes through the panel client. It gets
 /// the API limit, because the download's progress isn't read until it returns.
@@ -361,12 +363,7 @@ async fn probe_total_bytes(url: &str) -> Option<i64> {
         .send()
         .await
         .ok()?;
-    resp.headers()
-        .get(reqwest::header::CONTENT_LENGTH)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()
+    media_size(resp.url().as_str(), resp.status(), resp.headers())
 }
 
 /// Start ffmpeg for a record `claim_queued` returned. Spawns the sidecar,
@@ -433,11 +430,11 @@ fn start_process<R: Runtime>(app: &AppHandle<R>, rec: DownloadRecord) -> Result<
     let started = now_secs();
 
     tauri::async_runtime::spawn(async move {
-        // Probe size up front (best-effort).
+        // Save the size on every start, even when there's none, so a wrong
+        // size from an older version, such as an HLS playlist's, doesn't
+        // outlive a restart.
         let total = probe_total_bytes(&url_for_probe).await;
-        if let Some(t) = total {
-            update_record(&app, &id, |r| r.total_bytes = Some(t));
-        }
+        update_record(&app, &id, |r| r.total_bytes = total);
 
         let mut acc = ProgressUpdate::default();
         let mut last_bytes: i64 = 0;
