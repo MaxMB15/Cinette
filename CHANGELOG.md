@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Max Video Player is now licensed under the GNU General Public License version 3. Its additional terms require modified versions to credit the original on their About screen and to use their own name and icon. Releases up to 0.5.3 stay under the PolyForm Noncommercial License 1.0.0. See NOTICE and TRADEMARKS.md (#75).
 - Pull requests now need the contributor agreement in CLA.md (#75).
+- The channel, movie and series info panes close when you drag them down, and grow to full height when you drag them up (#91).
 - The start screen shows the app icon in place of the blue play badge (#95).
 
 ### Added
@@ -21,6 +22,13 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Fixed
 
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+
+### Fixed
+
+- Downloads that were running when the app quit now start again at the next launch, and queued downloads start too. Before, each interrupted download held one of the download slots until it was stopped or deleted, and the queue sat idle until another download was added. Quitting the app now stops its downloads. Before, they kept running in the background after the app closed. A download whose ffmpeg can't start now shows as failed, and the next one in line takes its place (#99).
+- Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads. On Linux this needs a D-Bus session bus. Without one, the app logs a warning and a second copy still opens (#99).
+- Two downloads with the same title now save to separate files, numbered like "Dune (2).mkv". Before, they wrote to the same file, and a file already in the folder with that name was replaced (#99).
+- A queued download whose playlist entry turned into another title after a refresh now fails and asks you to download it again. Before, it could save the other title under the first one's name (#99).
 
 ## [0.5.3] - 2026-10-09
 

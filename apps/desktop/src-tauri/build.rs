@@ -25,7 +25,7 @@ fn embed_macos_rpath() {
         }
         Err(_) => {
             eprintln!(
-                "cargo:warning=libs/macos/ not found — run ./scripts/build-libmpv.sh macos first"
+                "cargo:warning=libs/macos/ not found. Run ./scripts/build-libmpv.sh macos first"
             );
         }
     }
