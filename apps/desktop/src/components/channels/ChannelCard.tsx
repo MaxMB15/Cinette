@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import { Play, Tv2, Heart, Film } from "lucide-react";
 import type { Channel, EpgProgram } from "@/lib/types";
 import { EpgTimelineBar } from "./EpgTimelineBar";
@@ -9,9 +9,9 @@ import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
-
-/** Module-level cache of URLs that failed to load — persists across remounts from virtual list scrolling. */
-const brokenImageUrls = new Set<string>();
+import { cn, isFromInnerButton } from "@/lib/utils";
+import { nowSeconds } from "@/lib/date";
+import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
 /** Width (px) of the left channel-info column in RowCard — must match spacer in ChannelList header. */
 export const ROW_CARD_LEFT_WIDTH = 180;
@@ -23,6 +23,42 @@ export const COMPACT_ROW_HEIGHT = 64;
 const aggregateToIcon = (
 	agg: "none" | "downloading" | "partial" | "complete"
 ): DownloadIconState => (agg === "none" ? "idle" : agg);
+
+/**
+ * The heart toggle each card variant shows. It always sits beside the play
+ * control, never inside it, and a clickable row leaves its click alone.
+ */
+const FavoriteButton = ({
+	isFavorite,
+	onToggle,
+	className,
+	iconClassName,
+	idleIconClassName = "text-muted-foreground",
+}: {
+	isFavorite: boolean;
+	onToggle: () => void;
+	className: string;
+	iconClassName: string;
+	idleIconClassName?: string;
+}) => (
+	<button
+		type="button"
+		onClick={onToggle}
+		className={cn(
+			"flex items-center justify-center shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+			className
+		)}
+		aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+	>
+		<Heart
+			className={cn(
+				"transition-colors",
+				iconClassName,
+				isFavorite ? "fill-current text-red-500" : idleIconClassName
+			)}
+		/>
+	</button>
+);
 
 interface ChannelCardProps {
 	channel: Channel;
@@ -38,7 +74,7 @@ interface ChannelCardProps {
 	windowEnd?: number;
 }
 
-const RowCard = memo(function RowCard({
+const RowCardView = ({
 	channel,
 	onPlay,
 	onToggleFavorite,
@@ -52,33 +88,30 @@ const RowCard = memo(function RowCard({
 	epgPrograms?: EpgProgram[];
 	windowStart?: number;
 	windowEnd?: number;
-}) {
-	const now = Math.floor(Date.now() / 1000);
+}) => {
+	const now = nowSeconds();
 
 	return (
-		/* Outer wrapper is a div (not button) so nested buttons and div[role=button] inside
-		   EpgTimelineBar are valid HTML and no nesting warnings occur. */
+		// The channel button on the left plays it, and sits beside the heart
+		// rather than around it, so each control is reached on its own. A click
+		// elsewhere on the row, such as on the timeline, plays the channel too.
 		<div
-			role="button"
-			tabIndex={0}
-			onClick={() => onPlay(channel)}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					e.preventDefault();
-					onPlay(channel);
-				}
+			onClick={(e) => {
+				if (!isFromInnerButton(e)) onPlay(channel);
 			}}
-			className="group flex items-center w-full rounded-lg hover:bg-accent/60 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+			className="group flex items-center w-full rounded-lg hover:bg-accent/60 transition-colors cursor-pointer"
 		>
-			{/* Left: channel info — fixed width (must match ROW_CARD_LEFT_WIDTH) */}
-			<div
-				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0"
+			{/* Left: channel info, fixed width (must match ROW_CARD_LEFT_WIDTH) */}
+			<button
+				type="button"
+				onClick={() => onPlay(channel)}
+				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0 text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 				style={{ width: `${ROW_CARD_LEFT_WIDTH}px` }}
 			>
 				<ChannelLogo
 					url={channel.logoUrl}
 					className="h-6 w-6 rounded"
-					iconClassName="h-3 w-3"
+					fallback={<Tv2 className="text-muted-foreground h-3 w-3" />}
 				/>
 
 				<div className="min-w-0 flex-1">
@@ -89,7 +122,7 @@ const RowCard = memo(function RowCard({
 						</p>
 					)}
 				</div>
-			</div>
+			</button>
 
 			{/* Middle: EPG timeline — flex-1, takes the bulk of row width */}
 			<div className="flex-1 min-w-0 py-1.5">
@@ -118,62 +151,20 @@ const RowCard = memo(function RowCard({
 				</span>
 
 				{onToggleFavorite && (
-					<button
-						tabIndex={0}
-						onClick={(e) => {
-							e.stopPropagation();
-							onToggleFavorite(channel);
-						}}
-						className="h-6 w-6 flex items-center justify-center rounded hover:bg-accent shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-						aria-label={
-							channel.isFavorite ? "Remove from favorites" : "Add to favorites"
-						}
-					>
-						<Heart
-							className={`h-3 w-3 transition-colors ${
-								channel.isFavorite
-									? "fill-current text-red-500"
-									: "text-muted-foreground"
-							}`}
-						/>
-					</button>
+					<FavoriteButton
+						isFavorite={channel.isFavorite}
+						onToggle={() => onToggleFavorite(channel)}
+						className="h-6 w-6 rounded hover:bg-accent"
+						iconClassName="h-3 w-3"
+					/>
 				)}
 			</div>
 		</div>
 	);
-});
-
-const ChannelLogo = ({
-	url,
-	className,
-	iconClassName,
-}: {
-	url?: string;
-	className: string;
-	iconClassName: string;
-}) => {
-	const [imgError, setImgError] = useState(() => (url ? brokenImageUrls.has(url) : false));
-	return (
-		<div
-			className={`relative bg-secondary flex items-center justify-center overflow-hidden shrink-0 ${className}`}
-		>
-			{url && !imgError ? (
-				<img
-					src={url}
-					alt=""
-					className="h-full w-full object-contain"
-					loading="lazy"
-					onError={() => {
-						brokenImageUrls.add(url);
-						setImgError(true);
-					}}
-				/>
-			) : (
-				<Tv2 className={`text-muted-foreground ${iconClassName}`} />
-			)}
-		</div>
-	);
 };
+
+const RowCard = memo(RowCardView);
+RowCard.displayName = "RowCard";
 
 /** The phone's channel row. A phone is too narrow for the timeline, so it
  *  shows the programme on now and how far into it the channel is. */
@@ -209,7 +200,7 @@ const CompactRowCard = ({
 				<ChannelLogo
 					url={channel.logoUrl}
 					className="h-10 w-10 rounded-md"
-					iconClassName="h-4 w-4"
+					fallback={<Tv2 className="text-muted-foreground h-4 w-4" />}
 				/>
 
 				<div className="min-w-0 flex-1">
@@ -237,20 +228,12 @@ const CompactRowCard = ({
 			</button>
 
 			{onToggleFavorite && (
-				<button
-					type="button"
-					onClick={() => onToggleFavorite(channel)}
-					className="h-11 w-11 -mr-2 flex items-center justify-center rounded-full shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-					aria-label={channel.isFavorite ? "Remove from favorites" : "Add to favorites"}
-				>
-					<Heart
-						className={`h-4 w-4 transition-colors ${
-							channel.isFavorite
-								? "fill-current text-red-500"
-								: "text-muted-foreground"
-						}`}
-					/>
-				</button>
+				<FavoriteButton
+					isFavorite={channel.isFavorite}
+					onToggle={() => onToggleFavorite(channel)}
+					className="h-11 w-11 -mr-2 rounded-full"
+					iconClassName="h-4 w-4"
+				/>
 			)}
 		</div>
 	);
@@ -266,9 +249,7 @@ const PosterCard = ({
 	onToggleFavorite?: (ch: Channel) => void;
 }) => {
 	const hasSources = channel.sources.length > 0;
-	const [imgError, setImgError] = useState(() =>
-		channel.logoUrl ? brokenImageUrls.has(channel.logoUrl) : false
-	);
+	const [imgError, markImgFailed] = useImageFailed(channel.logoUrl);
 	const showFallback = !channel.logoUrl || imgError;
 
 	const { byChannel, bySeries } = useDownloads();
@@ -301,10 +282,7 @@ const PosterCard = ({
 							alt=""
 							className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
 							loading="lazy"
-							onError={() => {
-								if (channel.logoUrl) brokenImageUrls.add(channel.logoUrl);
-								setImgError(true);
-							}}
+							onError={markImgFailed}
 						/>
 					) : (
 						<div className="h-full w-full bg-gradient-to-br from-secondary via-secondary/80 to-secondary/50 flex flex-col items-center justify-center gap-1">
@@ -324,33 +302,6 @@ const PosterCard = ({
 							{channel.sources.length + 1}
 						</div>
 					)}
-					{onToggleFavorite && (
-						<div
-							role="button"
-							tabIndex={0}
-							onClick={(e) => {
-								e.stopPropagation();
-								onToggleFavorite(channel);
-							}}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" || e.key === " ") {
-									e.preventDefault();
-									e.stopPropagation();
-									onToggleFavorite(channel);
-								}
-							}}
-							className="absolute top-1 left-1 z-10 h-7 w-7 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring transition-colors cursor-pointer"
-							aria-label={
-								channel.isFavorite ? "Remove from favorites" : "Add to favorites"
-							}
-						>
-							<Heart
-								className={`h-3.5 w-3.5 transition-colors ${
-									channel.isFavorite ? "fill-current text-red-500" : "text-white"
-								}`}
-							/>
-						</div>
-					)}
 					{!isSeries && dl && (dl.status === "downloading" || dl.status === "queued") && (
 						<div className="absolute left-0 right-0 bottom-0 px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
 							<div className="h-1 rounded-full bg-white/20 overflow-hidden">
@@ -368,6 +319,18 @@ const PosterCard = ({
 					{channel.name}
 				</p>
 			</button>
+			{/* A sibling of the play button, since a control nested inside a button
+			    is not reachable on its own by screen readers. The extra pixel keeps
+			    it where it sat inside the poster's border. */}
+			{onToggleFavorite && (
+				<FavoriteButton
+					isFavorite={channel.isFavorite}
+					onToggle={() => onToggleFavorite(channel)}
+					className="absolute top-[5px] left-[5px] z-10 h-7 w-7 rounded-full bg-black/50 hover:bg-black/70 transition-colors cursor-pointer"
+					iconClassName="h-3.5 w-3.5"
+					idleIconClassName="text-white"
+				/>
+			)}
 			<DownloadButton
 				state={iconState}
 				onStart={() => {
@@ -385,7 +348,7 @@ const PosterCard = ({
 	);
 };
 
-export const ChannelCard = memo(function ChannelCard({
+const ChannelCardView = ({
 	channel,
 	onPlay,
 	variant = "row",
@@ -393,7 +356,7 @@ export const ChannelCard = memo(function ChannelCard({
 	epgPrograms,
 	windowStart,
 	windowEnd,
-}: ChannelCardProps) {
+}: ChannelCardProps) => {
 	if (variant === "compact") {
 		return (
 			<CompactRowCard
@@ -416,4 +379,7 @@ export const ChannelCard = memo(function ChannelCard({
 			windowEnd={windowEnd}
 		/>
 	);
-});
+};
+
+export const ChannelCard = memo(ChannelCardView);
+ChannelCard.displayName = "ChannelCard";

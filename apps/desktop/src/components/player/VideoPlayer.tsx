@@ -42,11 +42,13 @@ import {
 import { parseSrt } from "@/lib/subtitle-parser";
 import type { Channel, OmdbData, WhatsonData, SubtitleCue, SubtitleEntry } from "@/lib/types";
 import { useFullscreen } from "@/lib/fullscreen-context";
+import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
+import { seriesTitleOf } from "@/lib/channels";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
@@ -54,7 +56,7 @@ import { nextSkip, type SkipRun } from "@/lib/skip";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
-import { hasFullscreenButton, setWindowFullscreen } from "@/lib/fullscreen";
+import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
 /** How often (ms) watch progress is persisted while playing. */
@@ -119,8 +121,6 @@ interface PendingResume {
 	apply?: () => void;
 }
 
-const showTitle = (name: string): string => name.replace(/\s+S\d{1,3}E\d{1,3}.*/i, "").trim();
-
 /** Extract season/episode numbers from a channel name like "Show S01E05". */
 const parseSeasonEpisode = (name: string): { season?: number; episode?: number } => {
 	const m = name.match(/S(\d{1,3})E(\d{1,3})/i);
@@ -148,6 +148,7 @@ export const PlayerView = () => {
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
 	const [seriesEpisodes, setSeriesEpisodes] = useState<Channel[]>([]);
 	const { isFullscreen, setFullscreen } = useFullscreen();
+	useLeaveFullscreenOnUnmount();
 	// The phone layout hides the tab bar on this route, so the player needs
 	// its own way back.
 	const { layoutMode } = usePlatform();
@@ -543,7 +544,7 @@ export const PlayerView = () => {
 		setEnrichedMeta(null);
 
 		const mediaType = activeChannel.contentType === "series" ? "series" : "movie";
-		const titleForOmdb = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
+		const titleForOmdb = seriesTitleOf(activeChannel);
 
 		fetchOmdbData(activeChannel.id, titleForOmdb, mediaType as "movie" | "series")
 			.then((omdbData) => {
@@ -631,10 +632,8 @@ export const PlayerView = () => {
 	// Derive episodes from passed list (Xtream) or local cache (M3U)
 	const localSeriesEpisodes = useMemo(() => {
 		if (!activeChannel || activeChannel.contentType !== "series") return [];
-		const title = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
-		return channels.filter(
-			(ch) => ch.contentType === "series" && (ch.seriesTitle ?? showTitle(ch.name)) === title
-		);
+		const title = seriesTitleOf(activeChannel);
+		return channels.filter((ch) => ch.contentType === "series" && seriesTitleOf(ch) === title);
 	}, [activeChannel, channels]);
 
 	// Series container id used to group download records — matches the series
@@ -642,9 +641,9 @@ export const PlayerView = () => {
 	const seriesContainerId = useMemo(() => {
 		if (!activeChannel) return "";
 		if (activeChannel.contentType !== "series") return activeChannel.id;
-		const title = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
+		const title = seriesTitleOf(activeChannel);
 		const container = channels.find(
-			(ch) => ch.contentType === "series" && (ch.seriesTitle ?? showTitle(ch.name)) === title
+			(ch) => ch.contentType === "series" && seriesTitleOf(ch) === title
 		);
 		return container?.id ?? activeChannel.id;
 	}, [activeChannel, channels]);
@@ -850,13 +849,10 @@ export const PlayerView = () => {
 	}, [location.key, navigate]);
 
 	// --- Fullscreen ---
-	const toggleFullscreen = useCallback(() => {
-		const next = !isFullscreen;
-		setFullscreen(next);
-		setWindowFullscreen(next).catch((e) => {
-			console.error("[PlayerView] setFullscreen failed:", e);
-		});
-	}, [isFullscreen, setFullscreen]);
+	const toggleFullscreen = useCallback(
+		() => setFullscreen(!isFullscreen),
+		[isFullscreen, setFullscreen]
+	);
 
 	// An iPad Split View pane narrow enough for the phone layout has no full
 	// screen button, so it leaves full screen instead of keeping the sidebar
@@ -955,9 +951,6 @@ export const PlayerView = () => {
 						setShowShortcuts(false);
 					} else if (isFullscreen) {
 						setFullscreen(false);
-						setWindowFullscreen(false).catch((e) => {
-							console.error("[PlayerView] setFullscreen(false) failed:", e);
-						});
 					} else if (showInfoDrawer) {
 						setShowInfoDrawer(false);
 					} else if (showSubtitlePicker) {
@@ -1012,7 +1005,7 @@ export const PlayerView = () => {
 
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
-	const showTitleForDrawer = activeChannel?.seriesTitle ?? showTitle(activeChannel?.name ?? "");
+	const showTitleForDrawer = activeChannel ? seriesTitleOf(activeChannel) : "";
 
 	// --- Player download control (movies + series episodes only) ---
 	const playerDl = activeChannel ? byChannel.get(activeChannel.id) : undefined;

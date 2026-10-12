@@ -25,10 +25,12 @@ import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
+import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { OmdbKeyHint } from "./OmdbKeyHint";
 
 interface SeriesDetailDrawerProps {
 	showTitle: string;
@@ -81,6 +83,7 @@ export const SeriesDetailModal = ({
 	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
 		prefetchedWhatsonData ?? null
 	);
+	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, omdbLoading);
 
 	const firstEp = episodes[0];
 	const showLogoUrl = firstEp?.logoUrl;
@@ -339,7 +342,7 @@ export const SeriesDetailModal = ({
 
 							{/* Show info — ~65% of remaining space */}
 							<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
-								{omdbLoading ? (
+								{infoLoading ? (
 									<div className="flex items-center gap-2 text-muted-foreground">
 										<Loader2 className="h-3.5 w-3.5 animate-spin" />
 										<span className="text-xs">Loading info…</span>
@@ -388,11 +391,14 @@ export const SeriesDetailModal = ({
 										)}
 
 										{/* Fallback: no OMDB data */}
-										{!omdbData && (
-											<p className="text-xs text-muted-foreground">
-												Series · —
-											</p>
-										)}
+										{!omdbData &&
+											(hasOmdbKey ? (
+												<p className="text-xs text-muted-foreground">
+													Series · —
+												</p>
+											) : (
+												<OmdbKeyHint onNavigate={onClose} />
+											))}
 									</>
 								)}
 							</div>

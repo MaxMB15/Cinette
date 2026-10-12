@@ -156,6 +156,8 @@ export interface WatchHistoryEntry {
 	lastWatchedAt: number;
 	totalDurationSeconds: number;
 	playCount: number;
+	/** The show a series entry belongs to. Set on every series entry, null on the rest. */
+	seriesTitle?: string | null;
 }
 
 export interface SubtitleEntry {

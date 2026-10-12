@@ -60,6 +60,8 @@ import {
 	type SkipIntervals,
 } from "@/lib/player-prefs";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { useScrollToOmdbKey } from "@/hooks/useScrollToOmdbKey";
+import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
 import { LegalNotices } from "./LegalNotices";
 import { DownloadHistoryDialog } from "./DownloadHistory";
 
@@ -131,6 +133,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [omdbTesting, setOmdbTesting] = useState(false);
 	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const omdbKeyInputRef = useRef<HTMLInputElement>(null);
+	// The OMDb hint in an info sheet opens Settings at the key field.
+	useScrollToOmdbKey(omdbKeyInputRef);
 
 	// OpenSubtitles state
 	const [openSubtitlesKey, setOpenSubtitlesKey] = useState("");
@@ -227,6 +232,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const handleSaveOmdbKey = async () => {
 		try {
 			await setOmdbApiKey(omdbKey);
+			rememberHasOmdbKey(Boolean(omdbKey));
 			setSaveStatus("saved");
 			setSaveError(null);
 			setOmdbStatus("idle");
@@ -595,6 +601,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<Input
+										ref={omdbKeyInputRef}
 										type={omdbKeyVisible ? "text" : "password"}
 										placeholder="Enter API key…"
 										value={omdbKey}
@@ -1012,11 +1019,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 											"Check for Updates"
 										)}
 									</Button>
-									{!updateState.checking && !updateState.update && (
-										<span className="text-xs text-muted-foreground">
-											You're up to date.
-										</span>
-									)}
+									{/* Always rendered, so screen readers announce the result when it appears. */}
+									<span role="status" className="text-xs">
+										{!updateState.checking &&
+											!updateState.update &&
+											(updateState.checkError ? (
+												<span
+													className="text-destructive"
+													title={updateState.checkError}
+												>
+													Couldn't check for updates.
+												</span>
+											) : (
+												<span className="text-muted-foreground">
+													You're up to date.
+												</span>
+											))}
+									</span>
 								</div>
 
 								{updateState.update && (
