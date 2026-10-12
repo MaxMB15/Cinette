@@ -42,6 +42,7 @@ import {
 	mpvSetVolume,
 	mpvGetState,
 } from "@/lib/tauri";
+import { deferred } from "@/test/deferred";
 import { useMpv } from "./useMpv";
 
 const mockMpvLoad = vi.mocked(mpvLoad);
@@ -282,6 +283,125 @@ describe("useMpv", () => {
 
 		expect(mockMpvSetVolume).toHaveBeenCalledWith(75);
 		expect(result.current.state.volume).toBe(75);
+	});
+
+	describe("polls that cross a seek or volume change", () => {
+		const playingAt = (position: number, volume = 100) =>
+			({
+				isPlaying: true,
+				isPaused: false,
+				currentUrl: "http://vod.url",
+				volume,
+				position,
+				duration: 1800,
+				playbackStarted: true,
+				openFailed: false,
+			}) as never;
+
+		it("shows the seek position before mpv confirms it", async () => {
+			const seekCall = deferred<void>();
+			mockMpvSeek.mockReturnValueOnce(seekCall.promise);
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			let seekDone: Promise<void>;
+			act(() => {
+				seekDone = result.current.seek(600);
+			});
+			expect(result.current.state.position).toBe(600);
+
+			await act(async () => {
+				seekCall.resolve();
+				await seekDone!;
+			});
+		});
+
+		it("keeps the seek position when an older poll lands after the seek", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			const oldPoll = deferred<never>();
+			mockMpvGetState.mockReturnValueOnce(oldPoll.promise);
+			let pollDone: Promise<void>;
+			act(() => {
+				pollDone = result.current.refresh();
+			});
+			await act(async () => {
+				await result.current.seek(600);
+			});
+			await act(async () => {
+				oldPoll.resolve(playingAt(120));
+				await pollDone!;
+			});
+			expect(result.current.state.position).toBe(600);
+			// Everything else in the poll is still taken.
+			expect(result.current.state.duration).toBe(1800);
+
+			mockMpvGetState.mockResolvedValueOnce(playingAt(601));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.position).toBe(601);
+		});
+
+		it("keeps the seek position when a poll lands while the seek runs", async () => {
+			const seekCall = deferred<void>();
+			mockMpvSeek.mockReturnValueOnce(seekCall.promise);
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			let seekDone: Promise<void>;
+			act(() => {
+				seekDone = result.current.seek(600);
+			});
+			mockMpvGetState.mockResolvedValueOnce(playingAt(120));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.position).toBe(600);
+
+			await act(async () => {
+				seekCall.resolve();
+				await seekDone!;
+			});
+		});
+
+		it("takes the polled position again after a failed seek", async () => {
+			mockMpvSeek.mockRejectedValueOnce(new Error("no stream"));
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			await act(async () => {
+				await result.current.seek(600);
+			});
+			mockMpvGetState.mockResolvedValueOnce(playingAt(120));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.position).toBe(120);
+		});
+
+		it("keeps a new volume when an older poll lands after the change", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			const oldPoll = deferred<never>();
+			mockMpvGetState.mockReturnValueOnce(oldPoll.promise);
+			let pollDone: Promise<void>;
+			act(() => {
+				pollDone = result.current.refresh();
+			});
+			await act(async () => {
+				await result.current.setVolume(40);
+			});
+			await act(async () => {
+				oldPoll.resolve(playingAt(130, 100));
+				await pollDone!;
+			});
+			expect(result.current.state.volume).toBe(40);
+			// The position isn't held back by a volume change.
+			expect(result.current.state.position).toBe(130);
+		});
 	});
 
 	it("toggleMute mutes and restores the previous volume", async () => {

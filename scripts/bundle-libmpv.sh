@@ -133,7 +133,7 @@ if [[ -f "$TESSERACT" ]]; then
 fi
 
 too_new=""
-for f in "$BINARY" "$LIBS_BUNDLE"/*.dylib "$WORKSPACE_ROOT"/apps/desktop/src-tauri/binaries/ffmpeg-*; do
+for f in "$BINARY" "$LIBS_BUNDLE"/*.dylib "$WORKSPACE_ROOT"/apps/desktop/src-tauri/binaries/max-video-player-ffmpeg-*; do
   [[ -f "$f" ]] || continue
   minos=$(minos_of "$f")
   [[ -n "$minos" ]] || continue

@@ -40,7 +40,8 @@ approach before you put time into it.
    own pull request.
 4. Add or update tests for what you changed. Rust tests sit in a `tests` module at
    the bottom of the file they test, and frontend tests use Vitest.
-5. Run the checks before pushing (the pre-commit hook runs them too):
+5. Run the checks before pushing. The pre-commit hook formats and lints the files
+   you staged, then runs the tests.
 
    ```bash
    npm run format

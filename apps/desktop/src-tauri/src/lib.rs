@@ -3,7 +3,10 @@
 
 mod commands;
 mod downloads;
+mod logging;
 mod progress;
+#[cfg(test)]
+mod test_support;
 
 use commands::AppState;
 use mvp_core::cache::store::CacheStore;
@@ -35,26 +38,187 @@ fn apply_linux_workarounds() {
     }
 }
 
+/// Decides whether `tauri-plugin-single-instance` can start on Linux, by the
+/// rules zbus uses to find the session bus.
+///
+/// The plugin opens its D-Bus connection with
+/// `zbus::blocking::connection::Builder::session().unwrap()`. zbus reads the
+/// address from `DBUS_SESSION_BUS_ADDRESS`. When that isn't set, it uses
+/// `$XDG_RUNTIME_DIR/bus`, or `/run/user/<euid>/bus` without `XDG_RUNTIME_DIR`.
+/// The unwrap panics at launch when the variable is set to something zbus
+/// can't parse, such as an empty value or the `/dev/null` some headless setups
+/// use. A bus that isn't running doesn't panic, but the plugin then can't stop
+/// a second copy and doesn't say so, so that case is reported too.
+///
+/// `dbus_address` and `runtime_dir` are the two variables as `std::env::var`
+/// reads them, so a value that isn't UTF-8 counts as unset, as it does in zbus.
+/// `socket_exists` is only asked about the fallback socket. Returns the reason
+/// to leave the plugin out, or `None` when it can start.
+#[cfg(target_os = "linux")]
+fn session_bus_problem(
+    dbus_address: Option<&str>,
+    runtime_dir: Option<&str>,
+    euid: u32,
+    socket_exists: impl Fn(&std::path::Path) -> bool,
+) -> Option<String> {
+    use std::str::FromStr;
+
+    if let Some(address) = dbus_address {
+        return zbus::Address::from_str(address)
+            .err()
+            .map(|e| format!("zbus can't use DBUS_SESSION_BUS_ADDRESS {address:?}. {e}"));
+    }
+    let socket = match runtime_dir {
+        Some(dir) => format!("{dir}/bus"),
+        None => format!("/run/user/{euid}/bus"),
+    };
+    (!socket_exists(std::path::Path::new(&socket))).then(|| {
+        format!("DBUS_SESSION_BUS_ADDRESS isn't set and there's no session bus at {socket}.")
+    })
+}
+
+/// Bring the main window to the front, for when the app is opened again
+/// while it's running.
+#[cfg(desktop)]
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Every command the frontend can call. Tests build their mock app with it
+/// too, so they reach the commands the same way the app does.
+fn invoke_handler<R: tauri::Runtime>(
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        commands::load_m3u_playlist,
+        commands::load_m3u_file,
+        commands::load_xtream_provider,
+        commands::get_providers,
+        commands::remove_provider,
+        commands::get_all_channels,
+        commands::toggle_favorite,
+        commands::refresh_provider,
+        commands::update_provider,
+        commands::get_xtream_series_episodes,
+        commands::refresh_epg,
+        commands::get_epg_programmes,
+        commands::get_epg_for_live_channels,
+        commands::search_epg_programmes,
+        commands::set_epg_url,
+        commands::detect_epg_url,
+        commands::get_omdb_api_key,
+        commands::set_omdb_api_key,
+        commands::test_omdb_api_key,
+        commands::fetch_omdb_data,
+        commands::get_mdblist_api_key,
+        commands::set_mdblist_api_key,
+        commands::test_mdblist_api_key,
+        commands::fetch_mdblist_data,
+        commands::fetch_whatson_data,
+        commands::get_skip_segments,
+        commands::get_opensubtitles_api_key,
+        commands::set_opensubtitles_api_key,
+        commands::test_opensubtitles_api_key,
+        commands::search_subtitles,
+        commands::download_subtitle,
+        commands::read_subtitle_file,
+        commands::record_play_start,
+        commands::record_play_end,
+        commands::get_watch_history,
+        commands::delete_history_entry,
+        commands::delete_history_series,
+        commands::clear_watch_history,
+        commands::clear_watch_history_of_type,
+        commands::save_playback_position,
+        commands::get_playback_position,
+        commands::delete_playback_position,
+        progress::hand_off_progress,
+        commands::get_group_hierarchy,
+        commands::update_group_hierarchy_entry,
+        commands::delete_group_hierarchy,
+        commands::pin_group,
+        commands::unpin_group,
+        commands::get_pinned_groups,
+        commands::get_gemini_api_key,
+        commands::set_gemini_api_key,
+        commands::test_gemini_api_key,
+        commands::categorize_provider,
+        commands::clear_all_caches,
+        commands::reorder_group_hierarchy_entry,
+        commands::fix_uncategorized_groups,
+        commands::rename_super_category,
+        commands::delete_super_category,
+        commands::get_install_info,
+        commands::package_update,
+        commands::enqueue_movie_download,
+        commands::enqueue_episode_download,
+        commands::enqueue_episodes_batch,
+        commands::list_downloads,
+        commands::cache_series_episodes,
+        commands::get_cached_series_episodes,
+        commands::stop_download,
+        commands::stop_downloads,
+        commands::remove_download,
+        commands::remove_downloads,
+        commands::set_download_concurrency,
+        commands::get_download_concurrency,
+        commands::set_download_folder,
+        commands::get_download_folder,
+        commands::resolve_local_download,
+        commands::set_download_keep,
+        commands::get_download_retention,
+        commands::set_download_retention,
+        commands::count_downloads_due,
+    ]
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("max_video_player=debug".parse().unwrap())
-                .add_directive("tauri_plugin_mpv=debug".parse().unwrap())
-                .add_directive("mvp_core=debug".parse().unwrap()),
-        )
-        .init();
+    logging::init();
 
     #[cfg(target_os = "linux")]
     apply_linux_workarounds();
 
     let builder = tauri::Builder::default();
+    // A second copy of the app would share the database and start the same
+    // downloads again, so opening the app again shows the open window. This
+    // plugin comes first so the second copy quits before anything else runs.
+    // On Linux it needs a D-Bus session bus, which `session_bus_problem` checks.
+    #[cfg(target_os = "linux")]
+    let single_instance = match session_bus_problem(
+        std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().as_deref(),
+        std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+        // SAFETY: geteuid takes no arguments, can't fail and touches no memory.
+        unsafe { libc::geteuid() },
+        |socket| socket.exists(),
+    ) {
+        Some(reason) => {
+            tracing::warn!("{reason} More than one copy of the app can run.");
+            false
+        }
+        None => true,
+    };
+    #[cfg(all(desktop, not(target_os = "linux")))]
+    let single_instance = true;
+    #[cfg(desktop)]
+    let builder = if single_instance {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app)
+        }))
+    } else {
+        builder
+    };
     // On iOS the App Store handles updates, and there's nothing to relaunch.
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
+
+    // Metadata and subtitle lookups name the app's version in their user agent.
+    mvp_core::http::set_app_version(env!("CARGO_PKG_VERSION"));
 
     builder
         .plugin(tauri_plugin_os::init())
@@ -63,79 +227,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_mpv::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![
-            commands::load_m3u_playlist,
-            commands::load_m3u_file,
-            commands::load_xtream_provider,
-            commands::get_providers,
-            commands::remove_provider,
-            commands::get_all_channels,
-            commands::toggle_favorite,
-            commands::refresh_provider,
-            commands::update_provider,
-            commands::get_xtream_series_episodes,
-            commands::refresh_epg,
-            commands::get_epg_programmes,
-            commands::get_epg_for_live_channels,
-            commands::search_epg_programmes,
-            commands::set_epg_url,
-            commands::detect_epg_url,
-            commands::get_omdb_api_key,
-            commands::set_omdb_api_key,
-            commands::fetch_omdb_data,
-            commands::get_mdblist_api_key,
-            commands::set_mdblist_api_key,
-            commands::test_mdblist_api_key,
-            commands::fetch_mdblist_data,
-            commands::fetch_whatson_data,
-            commands::get_opensubtitles_api_key,
-            commands::set_opensubtitles_api_key,
-            commands::test_opensubtitles_api_key,
-            commands::search_subtitles,
-            commands::download_subtitle,
-            commands::read_subtitle_file,
-            commands::record_play_start,
-            commands::record_play_end,
-            commands::get_watch_history,
-            commands::delete_history_entry,
-            commands::clear_watch_history,
-            commands::save_playback_position,
-            commands::get_playback_position,
-            commands::delete_playback_position,
-            progress::hand_off_progress,
-            commands::get_group_hierarchy,
-            commands::update_group_hierarchy_entry,
-            commands::delete_group_hierarchy,
-            commands::pin_group,
-            commands::unpin_group,
-            commands::get_pinned_groups,
-            commands::get_gemini_api_key,
-            commands::set_gemini_api_key,
-            commands::test_gemini_api_key,
-            commands::categorize_provider,
-            commands::clear_all_caches,
-            commands::reorder_group_hierarchy_entry,
-            commands::fix_uncategorized_groups,
-            commands::rename_super_category,
-            commands::delete_super_category,
-            commands::get_install_info,
-            commands::package_update,
-            commands::enqueue_movie_download,
-            commands::enqueue_episode_download,
-            commands::enqueue_episodes_batch,
-            commands::list_downloads,
-            commands::cache_series_episodes,
-            commands::get_cached_series_episodes,
-            commands::stop_download,
-            commands::stop_downloads,
-            commands::remove_download,
-            commands::remove_downloads,
-            commands::set_download_concurrency,
-            commands::get_download_concurrency,
-            commands::set_download_folder,
-            commands::get_download_folder,
-            commands::resolve_local_download,
-        ])
+        .invoke_handler(invoke_handler())
         .setup(|app| {
             let app_dir = app
                 .path()
@@ -158,6 +250,14 @@ pub fn run() {
                 _ => {}
             }
 
+            // Downloads that were running when the app quit have no ffmpeg
+            // anymore. Left as they are, each would hold a download slot for good.
+            match cache.requeue_interrupted_downloads() {
+                Ok(n) if n > 0 => tracing::info!("Requeued {n} interrupted download(s)"),
+                Err(e) => tracing::warn!("Failed to requeue interrupted downloads: {e}"),
+                _ => {}
+            }
+
             app.manage(AppState {
                 cache: Mutex::new(cache),
             });
@@ -169,8 +269,15 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_shell::ShellExt;
-                match app.shell().sidecar("ffmpeg") {
-                    Ok(_) => tracing::info!("ffmpeg sidecar resolved"),
+                crate::downloads::retention::start(app.handle());
+                match app.shell().sidecar(crate::downloads::FFMPEG_SIDECAR) {
+                    Ok(_) => {
+                        tracing::info!("ffmpeg sidecar resolved");
+                        // Start whatever is still queued from the last run.
+                        if let Err(e) = crate::downloads::manager::pump(app.handle()) {
+                            tracing::warn!("Failed to start queued downloads: {e}");
+                        }
+                    }
                     Err(e) => tracing::error!("ffmpeg sidecar missing: {e}"),
                 }
             }
@@ -209,6 +316,61 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                crate::downloads::manager::stop_all_for_exit(app);
+            }
+        });
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::session_bus_problem;
+    use std::path::Path;
+
+    /// For cases that must not look for the fallback socket.
+    fn never_asked(path: &Path) -> bool {
+        panic!("looked for {}", path.display())
+    }
+
+    /// Finds only the session bus of user 1000.
+    fn user_1000_bus(path: &Path) -> bool {
+        path == Path::new("/run/user/1000/bus")
+    }
+
+    #[test]
+    fn a_session_bus_address_zbus_can_parse_registers_the_plugin() {
+        for address in [
+            "unix:path=/run/user/1000/bus",
+            "unix:abstract=/tmp/dbus-abc,guid=0123456789abcdef0123456789abcdef",
+        ] {
+            let problem = session_bus_problem(Some(address), None, 1000, never_asked);
+            assert_eq!(problem, None, "{address:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn a_session_bus_address_zbus_cant_parse_leaves_the_plugin_out() {
+        for address in ["", "/dev/null", "disabled:", "unix:foo=bar"] {
+            let problem = session_bus_problem(Some(address), None, 1000, never_asked);
+            assert!(problem.is_some(), "{address:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn without_an_address_the_socket_in_the_runtime_dir_decides() {
+        let problem = session_bus_problem(None, Some("/run/user/1000"), 0, user_1000_bus);
+        assert_eq!(problem, None);
+        let problem = session_bus_problem(None, Some("/tmp/elsewhere"), 1000, user_1000_bus);
+        assert!(problem.unwrap().contains("/tmp/elsewhere/bus"));
+    }
+
+    #[test]
+    fn without_a_runtime_dir_the_socket_under_run_user_decides() {
+        assert_eq!(session_bus_problem(None, None, 1000, user_1000_bus), None);
+        let problem = session_bus_problem(None, None, 1001, user_1000_bus);
+        assert!(problem.unwrap().contains("/run/user/1001/bus"));
+    }
 }

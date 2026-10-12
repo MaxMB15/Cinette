@@ -2,12 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! Platform-agnostic libmpv instance management.
-//! Options (vo, hwdec, ao) are passed in by the caller; this file has zero #[cfg] blocks.
+//! Options (vo, hwdec, ao) are passed in by the caller. The only platform code
+//! here is `configure_audio`, which Linux needs after mpv starts.
 
+use crate::log_url::origin_for_log;
 use libmpv2::Mpv;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
     pub is_playing: bool,
@@ -24,6 +27,26 @@ pub struct PlayerState {
     /// because the server returned an error. mpv goes back to idle when that
     /// happens.
     pub open_failed: bool,
+}
+
+/// Written out by hand so a logged state shows only the stream's origin,
+/// since the URL can hold the login.
+impl fmt::Debug for PlayerState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlayerState")
+            .field("is_playing", &self.is_playing)
+            .field("is_paused", &self.is_paused)
+            .field(
+                "current_url",
+                &self.current_url.as_deref().map(origin_for_log),
+            )
+            .field("volume", &self.volume)
+            .field("position", &self.position)
+            .field("duration", &self.duration)
+            .field("playback_started", &self.playback_started)
+            .field("open_failed", &self.open_failed)
+            .finish()
+    }
 }
 
 pub struct MpvEngine {
@@ -77,6 +100,7 @@ impl MpvEngine {
     /// Set audio properties after mpv_initialize. Options like `aid` and `mute`
     /// must be set as properties (not init options) because `mpv_set_option_string`
     /// rejects them with MPV_ERROR_OPTION_ERROR (-7) on many libmpv builds.
+    #[cfg(target_os = "linux")]
     pub fn configure_audio(&self) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
         if let Err(e) = mpv.set_property("aid", "auto") {
@@ -114,7 +138,10 @@ impl MpvEngine {
         };
         result.map_err(|e| format!("loadfile: {}", e))?;
         if let Some(p) = start_pos.filter(|p| *p > 1.0) {
-            tracing::info!("[MPV engine] loadfile resumed at start=+{p:.3} url={url}");
+            tracing::info!(
+                "[MPV engine] loadfile resumed at start=+{p:.3} origin={}",
+                origin_for_log(url)
+            );
         }
         self.log_audio_state("after loadfile");
         Ok(())
@@ -133,9 +160,13 @@ impl MpvEngine {
     /// decoder + audio device on macOS) must explicitly signal the monitor
     /// thread to drop this client. See `MpvState::reconnect_kill` and the
     /// kill-flag flow in `crates/tauri-plugin-mpv/src/reconnect.rs`.
-    pub fn create_event_client(&self, name: &str) -> Result<libmpv2::Mpv, String> {
+    ///
+    /// The client keeps mpv's default name. libmpv2 5.0.3 frees a name it
+    /// is given before it calls `mpv_create_client`, so mpv can read an
+    /// empty name and return no handle, which libmpv2 doesn't check for.
+    pub fn create_event_client(&self) -> Result<libmpv2::Mpv, String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
-        mpv.create_client(Some(name))
+        mpv.create_client(None)
             .map_err(|e| format!("mpv_create_client: {}", e))
     }
 
@@ -194,12 +225,17 @@ impl MpvEngine {
         let current_ao = mpv
             .get_property::<String>("current-ao")
             .unwrap_or_default();
+        // mpv also ends up here when it has audio drivers but none of them
+        // could open a device, for example with no sound server running, so
+        // the message names both causes.
         if current_ao.is_empty() || current_ao == "<unset>" {
             tracing::error!(
-                "[MPV] NO AUDIO OUTPUT DRIVER — libmpv has no AO backends compiled in. \
-                 Rebuild libmpv with audio support: \
-                 sudo apt-get install libpulse-dev libasound2-dev libpipewire-0.3-dev && \
-                 ./scripts/build-libmpv.sh linux"
+                "[MPV] no audio output opened. Either no sound server or device \
+                 is available, or libmpv was built without audio drivers. On \
+                 Linux, check that PipeWire or PulseAudio is running. If you \
+                 built libmpv yourself, install libpulse-dev, libasound2-dev \
+                 and libpipewire-0.3-dev and run ./scripts/build-libmpv.sh linux \
+                 again."
             );
             return;
         }
@@ -290,7 +326,7 @@ impl MpvEngine {
         } else {
             path.to_string()
         };
-        tracing::info!("[MPV] sub-add: uri={}", uri);
+        tracing::info!("[MPV] sub-add: {}", origin_for_log(&uri));
         mpv.command("sub-add", &[&uri, "select"])
             .map_err(|e| {
                 tracing::warn!("[MPV] sub-add failed: {}", e);
@@ -387,8 +423,22 @@ fn open_status(started: bool, seeking: Option<bool>, idle_active: Option<bool>) 
 }
 
 #[cfg(test)]
+mod playback_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{open_status, PlayerState};
+
+    #[test]
+    fn a_logged_state_hides_the_login_in_the_url() {
+        let state = PlayerState {
+            current_url: Some("http://host.test:8080/live/USER/SECRET/1.ts".into()),
+            ..PlayerState::default()
+        };
+        let logged = format!("{state:?}");
+        assert!(logged.contains("http://host.test:8080"), "{logged}");
+        assert!(!logged.contains("USER") && !logged.contains("SECRET"), "{logged}");
+    }
 
     #[test]
     fn open_status_waits_while_the_file_is_not_initialized() {

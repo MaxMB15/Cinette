@@ -5,11 +5,19 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
+# A tag pushed again while its release is still building waits for that run.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The updater signing key is only given to the steps that check it and sign with
+# it, so nothing else, such as a package's install script, can read it.
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
   # Create the draft release before platform builds so parallel jobs can upload without racing
@@ -19,7 +27,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Create draft GitHub release (if missing)
         env:
@@ -51,13 +59,22 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Fail before the build, not after it, when the secret is missing or
+      # malformed.
+      - name: Check the updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: python3 scripts/sign-updater.py --check
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # build.yml saves this cache on main. A cache saved from a tag can only be
@@ -66,83 +83,26 @@ jobs:
           save-if: false
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
 
       - name: Install frontend deps
-        run: npm ci
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Install system deps
         run: |
           # ffmpeg@7 required: mpv 0.40.0 uses FF_PROFILE_* macros removed in ffmpeg 8.x
           brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
           # Make ffmpeg@7 visible to pkg-config (it is keg-only, not linked by default)
-          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Build libmpv
         run: ./scripts/build-libmpv.sh macos
 
       - name: Fetch ffmpeg sidecar (used for offline downloads)
         run: ./scripts/fetch-ffmpeg.sh macos
-
-      - name: Prepare signing key
-        run: |
-          # Tauri CLI requires the raw minisign format (starting with "untrusted comment:").
-          # The secret may be stored as:
-          #   (a) base64-encoded raw key, or
-          #   (b) raw key with actual newlines, or
-          #   (c) raw key with escaped \n (two chars) instead of real newlines.
-          # We normalize to raw format and always write to GITHUB_ENV so the key
-          # is guaranteed to have proper newlines when Tauri reads it.
-          python3 - << 'EOF'
-          import base64, os, sys
-
-          key = os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "")
-          print(f"[signing] Key length: {len(key)}, has newlines: {'yes' if chr(10) in key else 'no'}")
-
-          if not key.strip():
-              print("[signing] ERROR: no signing key set.")
-              sys.exit(1)
-
-          # Normalize literal \n (two chars) to actual newlines
-          key = key.replace("\\n", "\n")
-
-          def try_b64(s):
-              try:
-                  return base64.b64decode(s.strip(), validate=True).decode("utf-8")
-              except Exception:
-                  return None
-
-          if "untrusted comment:" in key:
-              final_key = key
-              print("[signing] Raw minisign key detected.")
-          else:
-              # Try up to 2 levels of base64 decoding to handle both
-              # single-encoded and accidentally double-encoded secrets.
-              current = key
-              final_key = None
-              for depth in range(1, 3):
-                  decoded = try_b64(current)
-                  if decoded is None:
-                      print(f"[signing] ERROR: base64 decode failed at depth {depth}.")
-                      sys.exit(1)
-                  if "untrusted comment:" in decoded:
-                      final_key = decoded
-                      print(f"[signing] Key decoded at depth {depth}.")
-                      break
-                  current = decoded
-              if final_key is None:
-                  print("[signing] ERROR: key is not a valid minisign private key.")
-                  sys.exit(1)
-
-          with open(os.environ["GITHUB_ENV"], "a") as f:
-              f.write("TAURI_SIGNING_PRIVATE_KEY<<__ENDKEY__\n")
-              f.write(final_key.rstrip("\n") + "\n")
-              f.write("__ENDKEY__\n")
-          print("[signing] Key written to GITHUB_ENV.")
-          EOF
 
       - name: Set up Developer ID signing
         id: apple
@@ -157,9 +117,9 @@ jobs:
           api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
 
       - name: Build Tauri app
-        # Build without updater artifacts so bundle_dmg.sh doesn't race with
-        # hdiutil over the .app bundle. We create the updater artifacts manually below.
-        run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Builds without updater artifacts, which are made below, and tries a
+        # failed build once more. The script says why.
+        run: ./scripts/build-app.sh
 
       - name: Notarize the DMG
         if: steps.apple.outputs.notarizing == 'true'
@@ -173,6 +133,9 @@ jobs:
           target/release/bundle/macos/*.app target/release/bundle/dmg/*.dmg
 
       - name: Create updater artifacts
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
@@ -188,29 +151,11 @@ jobs:
           UPDATER="$BUNDLE_DIR/MaxVideoPlayer.app.tar.gz"
 
           # Create the .tar.gz updater archive from the built .app
-          cd "$BUNDLE_DIR"
-          tar czf MaxVideoPlayer.app.tar.gz "${PRODUCT_NAME}.app"
-          cd -
-
-          # tauri signer sign -k always base64-decodes its argument (no raw-format
-          # detection). Re-encode the raw key as base64 so Tauri can decode it.
-          B64_KEY=$(python3 -c "import base64,os; print(base64.b64encode(os.environ['TAURI_SIGNING_PRIVATE_KEY'].encode()).decode())")
-          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-            cd apps/desktop && npx tauri signer sign \
-              -k "$B64_KEY" \
-              -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-              "../../$UPDATER"
-            cd -
-          else
-            cd apps/desktop && npx tauri signer sign \
-              -k "$B64_KEY" \
-              --no-password \
-              "../../$UPDATER"
-            cd -
-          fi
+          tar czf "$UPDATER" -C "$BUNDLE_DIR" "${PRODUCT_NAME}.app"
+          python3 scripts/sign-updater.py "$UPDATER"
 
       - name: Upload macOS updater signature
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: macos-updater-sig
           path: target/release/bundle/macos/MaxVideoPlayer.app.tar.gz.sig
@@ -220,7 +165,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          VERSION="$VERSION"
           DMG_BUILT="target/release/bundle/dmg/${PRODUCT_NAME}_${VERSION}_aarch64.dmg"
           # No version in the name, so the README's releases/latest/download link
           # always points at the newest DMG.
@@ -251,13 +195,22 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Fail before the build, not after it, when the secret is missing or
+      # malformed.
+      - name: Check the updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: python3 scripts/sign-updater.py --check
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # build.yml saves this cache on main. A cache saved from a tag can only be
@@ -266,12 +219,12 @@ jobs:
           save-if: false
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
 
       - name: Install frontend deps
-        run: rm -f package-lock.json && npm install
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Install system deps
         uses: ./.github/actions/install-linux-deps
@@ -284,46 +237,13 @@ jobs:
       - name: Fetch ffmpeg sidecar (used for offline downloads)
         run: ./scripts/fetch-ffmpeg.sh linux
 
-      - name: Prepare signing key
-        run: |
-          python3 - << 'EOF'
-          import base64, os, sys
-          key = os.environ.get("TAURI_SIGNING_PRIVATE_KEY", "")
-          if not key.strip():
-              print("[signing] ERROR: no signing key set.")
-              sys.exit(1)
-          key = key.replace("\\n", "\n")
-          def try_b64(s):
-              try: return base64.b64decode(s.strip(), validate=True).decode("utf-8")
-              except Exception: return None
-          if "untrusted comment:" in key:
-              final_key = key
-          else:
-              current = key
-              final_key = None
-              for depth in range(1, 3):
-                  decoded = try_b64(current)
-                  if decoded is None:
-                      print(f"[signing] ERROR: base64 decode failed at depth {depth}.")
-                      sys.exit(1)
-                  if "untrusted comment:" in decoded:
-                      final_key = decoded
-                      break
-                  current = decoded
-              if final_key is None:
-                  print("[signing] ERROR: key is not a valid minisign private key.")
-                  sys.exit(1)
-          with open(os.environ["GITHUB_ENV"], "a") as f:
-              f.write("TAURI_SIGNING_PRIVATE_KEY<<__ENDKEY__\n")
-              f.write(final_key.rstrip("\n") + "\n")
-              f.write("__ENDKEY__\n")
-          print("[signing] Key written to GITHUB_ENV.")
-          EOF
-
       - name: Build Tauri app
-        run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: ./scripts/build-app.sh
 
       - name: Create updater artifacts
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
@@ -354,19 +274,11 @@ jobs:
           if [[ -n "$APPIMAGE" ]]; then
             UPDATER="$BUNDLE_DIR/MaxVideoPlayer_linux.tar.gz"
             tar czf "$UPDATER" -C "$(dirname "$APPIMAGE")" "$(basename "$APPIMAGE")"
-
-            B64_KEY=$(python3 -c "import base64,os; print(base64.b64encode(os.environ['TAURI_SIGNING_PRIVATE_KEY'].encode()).decode())")
-            if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-              cd apps/desktop && npx tauri signer sign -k "$B64_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "../../$UPDATER"
-              cd -
-            else
-              cd apps/desktop && npx tauri signer sign -k "$B64_KEY" --no-password "../../$UPDATER"
-              cd -
-            fi
+            python3 scripts/sign-updater.py "$UPDATER"
           fi
 
       - name: Upload Linux updater signature
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: linux-updater-sig
           path: target/release/bundle/MaxVideoPlayer_linux.tar.gz.sig
@@ -377,7 +289,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          VERSION="$VERSION"
           BUNDLE_DIR="target/release/bundle"
 
           # Collect all Linux artifacts
@@ -417,10 +328,10 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Download updater signatures
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: sigs
 
@@ -487,7 +398,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_AUTOMATION_PAT || github.token }}

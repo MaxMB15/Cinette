@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useCallback, useEffect } from "react";
+import { DONATION_LAST_SHOWN_KEY, readStorage, writeStorage } from "@/lib/storage";
 
-const STORAGE_KEY = "donation-last-shown";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 interface UseDonationPromptOptions {
@@ -16,7 +16,7 @@ interface DonationPromptState {
 }
 
 const shouldShowNow = (): boolean => {
-	const stored = localStorage.getItem(STORAGE_KEY);
+	const stored = readStorage(DONATION_LAST_SHOWN_KEY);
 	if (!stored) return true;
 	const lastShown = parseInt(stored, 10);
 	return isNaN(lastShown) ? true : Date.now() - lastShown >= THIRTY_DAYS_MS;
@@ -31,7 +31,7 @@ export const useDonationPrompt = ({ enabled }: UseDonationPromptOptions): Donati
 	}, [enabled]);
 
 	const dismiss = useCallback(() => {
-		localStorage.setItem(STORAGE_KEY, String(Date.now()));
+		writeStorage(DONATION_LAST_SHOWN_KEY, String(Date.now()));
 		setShouldShow(false);
 	}, []);
 

@@ -8,19 +8,84 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Max Video Player is now licensed under the GNU General Public License version 3. Its additional terms require modified versions to credit the original on their About screen and to use their own name and icon. Releases up to 0.5.3 stay under the PolyForm Noncommercial License 1.0.0. See NOTICE and TRADEMARKS.md (#75).
 - Pull requests now need the contributor agreement in CLA.md (#75).
+- With no OMDb key set, the app no longer asks whatson-api for ratings, even for titles whose details it saved earlier (#92).
+- Without an OMDb API key, the movie and series info sheets say that a key adds the plot, cast and ratings, and link to the key field in Settings (#96).
+- The channel, movie and series info panes close when you drag them down, and grow to full height when you drag them up (#91).
 - The start screen shows the app icon in place of the blue play badge (#95).
+- The OpenSubtitles key field shows up once an OMDb or OpenSubtitles key is saved, not as soon as an OMDb key is typed, and then stays until you leave Settings (#120).
 
 ### Added
 
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
+- M3U playlists can mark an entry as a movie or series with a `tvg-type` attribute, for entries whose URLs don't say which it is (#92).
+- A privacy policy in docs/privacy.md, linked from Settings > About, and a demo playlist of free test streams and Blender films in docs/demo (#92).
 - Skip back and skip forward buttons beside play and pause. Settings > Playback sets how far each one jumps, from 5 to 60 seconds, and the arrow keys, J and L and the lock screen on iPhone and iPad use the same lengths (#90).
 - On phones and tablets, play and pause and the skip buttons sit in the middle of the video. A double-tap on the left or right side skips back or forward, and each further tap there skips again (#90).
 - The player shows a spinner while a stream opens, so a slow server no longer looks like a black screen. If the stream never starts, the player says so and offers Retry (#97).
+- The player can skip intros, recaps, credits and previews of the next episode. Settings > Playback sets intros and recaps, and credits and previews, each to a Skip button, Automatic or Off. Automatic skips once playback reaches the part, and shows Undo for a few seconds. At the end credits, with autoplay on, it counts down to the next episode instead. Enter skips too. The times come from SkipDB and IntroDB and need an OMDb key. The player checks them against the length of the video. It drops times made for a much longer or shorter cut, and shows the button instead of skipping when it can't be sure the times fit (#112).
+- Settings > Downloads > Delete downloads after. It deletes finished downloads 7, 14, 30 or 90 days after they were downloaded or last played. Keep on a download holds on to it. The Downloads tab, the movie and series pages and the download history show when each download goes. Downloads that came due while the app was closed go an hour after it opens, which leaves time to keep or play them (#100).
 
 ### Fixed
 
+- Channels went missing from M3U playlists that put lines such as `#EXTVLCOPT` or `#EXTGRP` between a channel and its link. They show up now. The app numbers channels by their place in the playlist, so in such a playlist the first refresh can move favorites, downloads, saved movie details and recently played channels to a different channel, once (#126).
+- A TV guide failed to load when a program's time had a letter such as é in the wrong place. Now the rest of the guide loads (#126).
+- On Linux with Wayland, on desktops where the app draws its own title bar, such as COSMIC on Pop!_OS, the video slid out of place when the window went full screen or was maximized. It sat lower and further right by the size of the title bar and the window's shadow, and its edges were cut off. The video now moves with the page (#119).
+- A download of an HLS movie showed the wrong progress. The app took the size of the movie's playlist, a few hundred bytes, as the size of the movie, so the bar was full from the start and the download history showed percentages in the thousands. The bar now pulses while the size is unknown, and the history shows how much has been saved (#117).
+- Most downloads waited close to a minute before they finished, and an HLS download waited that long before it started. ffmpeg took the normal end of each file and playlist for a dropped connection and kept trying to reconnect (#117).
+- A download from a server that can't resume one went back to the start of the movie after the connection dropped, and wrote it into the file a second time. When the server also didn't give the file's size, the end of every reply counted as a drop, so the download started over and over until you stopped it or the disk filled up. A dropped download now carries on where it stopped if the server allows it (#117).
+- The Linux .deb and .rpm no longer clash with the distribution's ffmpeg package. They installed the app's own ffmpeg as `/usr/bin/ffmpeg`, so the .deb wouldn't install where ffmpeg already was, and on Fedora the rpm wouldn't install next to mpv, which pulls in ffmpeg-free. It's now `max-video-player-ffmpeg`. Upgrading removes the app's `/usr/bin/ffmpeg`, so if you ran ffmpeg from there, install your distribution's ffmpeg package. The app's web view can no longer start ffmpeg either. Only the downloads code runs it (#116).
+- After Retry, or after the player reloaded a stream when the network came back, macOS drew the video at the size of the whole window, so the player showed only part of it until the player changed size. On Linux the video didn't show at all. A reloaded stream now starts where the player is (#115).
+- The app could lose track of whether its window was in full screen after the green button or the View menu on macOS, or after a second change made while the first was still animating. The sidebar then stayed hidden after leaving full screen or showed in it, and the full screen button and Escape acted on the wrong state. The app now follows the window's own state, and checks it again a second after its own changes in case macOS turned one down (#113).
+- Holding down a player shortcut now acts once, except for seeking and volume, which still repeat. A held F or Space flipped back and forth, and a held Escape left full screen and then the player (#113).
+- The dot on the seek bar sometimes sat apart from the end of the colored part, mostly when a video started. It also jumped back for a moment after a seek, and stopped following playback after you moved it with the arrow keys. Clicking the seek bar no longer turns off the player's keyboard shortcuts (#111).
+- Closing the player in full screen left the window in full screen, and the player came back in full screen the next time it opened. Closing the player now leaves full screen, unless the window was already in full screen when the player opened (#96, #113).
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- A failed guide download, or one that comes back empty or as an error page, no longer wipes the TV guide you already had. Refreshing the guide by hand says when it came back empty (#105).
+- Error messages and logs no longer show your API keys, Xtream login or the login in a playlist link (#105).
+- Testing a wrong OpenSubtitles key says the key is invalid instead of showing a request error (#105).
+- Xtream logins that contain &, +, # or ? now load and play. Channels loaded before keep their old links until you refresh the playlist (#105).
+- The Gemini key is sent in a request header instead of the request URL (#105).
+- Spaces or a line break pasted around an API key no longer make the key fail (#105).
+- Online lookups and Xtream logins give up after a timeout instead of waiting forever on a server that stopped responding (#105).
+- Large playlists on a slow connection no longer fail after 10 minutes while they are still downloading (#105).
+- Refreshing two M3U playlists at the same time no longer mixes up their downloads (#105).
+- The player's logs no longer show the login in a stream's link when a channel starts, buffers or reconnects (#106).
+- On Linux with Wayland, starting a video could crash the app on some desktops, and on computers without hardware video decoding the picture could stay black. Playback on Wayland now uses mpv's copy-back hardware decoding, which avoids both. X11 keeps zero-copy decoding. When OpenGL runs on the CPU, such as in a virtual machine without 3D acceleration or without a working graphics driver, the player now uses cheaper scaling, which makes a black picture there much less likely (#110).
+- Removing a playlist or provider left its watch history, saved positions, episode lists, guide data and category layout behind. Cached Xtream episode lists hold the provider's login, so the login stayed too (#92).
+- Clear All Caches left cached episode lists, guide data and downloaded subtitles behind (#92).
+- A removed download stayed on the Downloads tab until the app restarted (#100).
+- Removing a download whose file can't be deleted now keeps it in the list and says which file and why. Removing a season or series carries on with the other episodes. Before, the download left the list but its file stayed on disk (#100).
+- Holding a subtitle delay button keeps stepping the delay again (#104).
+- Settings says when the update check fails, instead of showing the app as up to date (#104).
+- Clear all in recently played clears that row's whole history, and dismissing a show removes every episode you watched, including ones older than the row lists. Each row now loads its own type, so a run of live channels no longer pushes movies and series out of their rows (#104).
+- A provider whose playlist or guide refresh fails waits longer before each new try instead of trying every minute, which for Xtream meant a login a minute. A slow refresh is no longer started a second time while it runs (#104).
+- The splash screen and the donation prompt work when the browser storage is blocked, and the splash screen finishes even when a startup step fails (#104).
+- Pressing Enter on a group's pin button pins the group instead of opening it, and Enter on a channel row's favorite button no longer starts the channel (#104).
+- Watch history rows play from the keyboard and show their delete button on focus. Screen readers now find the favorite button on movie and series posters, and name the subtitle picker buttons and the group pin button. Enter or Space steps the subtitle delay (#104).
+- Downloads that were running when the app quit now start again at the next launch, and queued downloads start too. Before, each interrupted download held one of the download slots until it was stopped or deleted, and the queue sat idle until another download was added. Quitting the app now stops its downloads. Before, they kept running in the background after the app closed. A download whose ffmpeg can't start now shows as failed, and the next one in line takes its place (#99).
+- Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads. On Linux this needs a D-Bus session bus. Without one, the app logs a warning and a second copy still opens (#99).
+- Two downloads with the same title now save to separate files, numbered like "Dune (2).mkv". Before, they wrote to the same file, and a file already in the folder with that name was replaced (#99).
+- A queued download whose playlist entry turned into another title after a refresh now fails and asks you to download it again. Before, it could save the other title under the first one's name (#99).
+- Removing a provider now asks you to confirm first (#103).
+- A failed provider refresh now shows its error on the provider card (#103).
+- Re-categorize All in Manage Categories now sends Gemini sample titles from the content type on screen only (#103).
+- Escape now closes the playlist settings and download history dialogs (#103).
+- Confirmation prompts, like removing a provider or a download, now take keyboard focus and close with Escape, and the player behind no longer acts on keys pressed in them or takes focus from them when the next episode starts. They no longer get cut off inside a sheet either (#103).
+- A Stop or Remove download prompt left open in the player no longer acts on the next episode's download (#103).
+- Screen readers now name the provider form fields and the clear file button, and say which option of each toggle is on and which group is picked in Manage Categories (#103).
+- The playlist file drop zone now opens with the keyboard (#103).
+- After you play a download, the channel list goes back to the Downloads tab instead of the live channels (#114).
+- A search with a space before or after it no longer comes up empty (#114).
+- Counts of one are no longer plural, as in "1 movies" or "1 groups" (#114).
+- A rating with no votes no longer shows a stray 0 beside it (#114).
+- Screen readers name the search bar's clear button and the icon buttons in Manage Categories, and say which category or provider card a button is on (#114).
+- Test next to the OMDb key now checks the key in the field. Before, it checked the saved key, so a new key failed until it was saved (#120).
+- When a key can't be checked because the service can't be reached or has a fault of its own, Settings now says so instead of calling the key invalid. A Gemini key over its rate limit no longer shows as invalid either (#120).
+- A saved API key can now be removed. Clearing the field turns Save into Remove. Before, Save stayed off while the field was blank (#120).
+- Clearing the simultaneous downloads field to type a new number no longer sets it to 1 straight away. A number outside 1 to 10 is fixed once you leave the field or press Enter. Typing 10 could leave 1 saved, because the two saves raced. They now go one at a time (#120).
+- Settings now says when it can't read a saved API key, and keeps Save on so the key can still be replaced or removed. It no longer replaces a key you started typing before the saved one loaded (#120).
+- Enter in an API key field saves the key. Screen readers name each key field and its Save, Test and show buttons, and read out whether a save or check worked (#120).
 
 ## [0.5.3] - 2026-10-09
 

@@ -4,27 +4,32 @@ name: iOS
 # catches changes that break the iOS build before they reach a release.
 on:
   push:
-    branches: [feature/ios-poc]
+    branches: [main, dev]
     paths:
       - "apps/desktop/**"
       - "crates/**"
       - ".cargo/**"
+      - ".github/actions/install-frontend-deps/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ios.yml"
   pull_request:
-    branches: [dev, feature/ios-poc]
+    branches: [main, dev]
     paths:
       - "apps/desktop/**"
       - "crates/**"
       - ".cargo/**"
+      - ".github/actions/install-frontend-deps/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -39,28 +44,31 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           targets: aarch64-apple-ios-sim
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           shared-key: ios-sim
-          save-if: ${{ github.event_name == 'push' }}
+          # Pull requests restore from dev. Only dev saves, since a copy saved
+          # from main would only take up room in the 10 GB cache.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
 
       - name: Install frontend deps
-        run: npm ci
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Show Xcode version
         run: xcodebuild -version

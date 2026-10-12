@@ -63,8 +63,10 @@ it exists. Fetch it once:
 ./scripts/fetch-ffmpeg.sh
 ```
 
-It downloads a static ffmpeg to `apps/desktop/src-tauri/binaries/`, named for your
-Rust target.
+It downloads a static ffmpeg to `apps/desktop/src-tauri/binaries/` as
+`max-video-player-ffmpeg-<target>`, where the target is your Rust target triple. The
+Linux packages install it in `/usr/bin`, so it has its own name rather than `ffmpeg`.
+If your `binaries/` folder still has an older `ffmpeg-<target>`, run the script again.
 
 ## Running the app
 
@@ -94,11 +96,35 @@ npm run format:check      # Prettier
 cargo check               # the whole Rust workspace
 ```
 
-For a coverage report, run `npm run test:coverage --workspace=apps/desktop` and open
-`apps/desktop/coverage/index.html`. CI publishes the report for `main` to
-[GitHub Pages](https://MaxMB15.github.io/MaxVideoPlayer/coverage/).
+For a frontend coverage report, run `npm run test:coverage --workspace=apps/desktop`
+and open `apps/desktop/coverage/index.html`.
 
-A Husky pre-commit hook formats, lints and tests before each commit.
+Rust coverage needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and
+LLVM's tools. Install them once:
+
+```bash
+rustup component add llvm-tools
+cargo install cargo-llvm-cov --locked
+```
+
+Then run the tests and open the report:
+
+```bash
+cargo llvm-cov --workspace --open
+```
+
+The plugin and app tests load libmpv, so set the library path from the setup steps
+above first. The app's tests also need the [ffmpeg sidecar](#the-ffmpeg-sidecar)
+and a built frontend in `apps/desktop/dist`, which `npm run build:desktop` makes.
+The Rust figure depends on the platform, because `macos.rs` and `linux.rs` in the
+mpv plugin each build only on their own system.
+
+CI publishes the [frontend report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
+and the [Rust report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/) for
+`main` to GitHub Pages. Both come from Linux runs.
+
+A Husky pre-commit hook runs Prettier and ESLint on the staged files through
+lint-staged, then runs the tests.
 
 ## Production build
 
@@ -141,9 +167,18 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Tests, coverage, and macOS and Linux builds uploaded as artifacts. A manual run builds a signed macOS app. |
-| [iOS](../.github/workflows/ios.yml) | Pushes to `feature/ios-poc`, and pull requests to `dev` and `feature/ios-poc` that touch the app | A debug build for the iOS simulator |
+| [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
+| [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |
 | [Release — one-click pipeline](../.github/workflows/release-pipeline.yml) | Manual | Merges `dev` into `main`, bumps the version and pushes the tag. |
 | [Release — bump version (PR)](../.github/workflows/release-bump.yml), [Release — push tag](../.github/workflows/release-tag.yml) | Manual | The same release in two steps, for when `main` requires pull requests. |
+
+The workflows pin each action to a commit, with its version in a comment. Dependabot
+opens pull requests against `dev` each week for npm packages, crates and actions,
+once a release is a week old. Minor and patch updates come grouped by ecosystem, and
+each major update comes alone. Tauri is the exception. Its npm packages and its crates
+each come in one pull request, majors included, and the Tauri CLI won't build while
+the two differ by a minor version. Combine the two into one pull request before
+merging. Dependabot reads [`dependabot.yml`](../.github/dependabot.yml) from `main`,
+so a change to it takes effect after the next release.

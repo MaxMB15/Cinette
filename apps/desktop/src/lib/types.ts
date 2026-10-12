@@ -147,6 +147,41 @@ export interface WhatsonData {
 	tmdbVotes?: number;
 }
 
+/** A part of a movie or episode the player can skip. */
+export type SkipSegmentKind = "intro" | "recap" | "credits" | "preview";
+
+/**
+ * How well the video's length matched the length the skip times were taken
+ * from. "exact" is within 2 seconds and "shifted" within 15. "unchecked" means
+ * the source had no length to compare, and "mismatch" that the lengths differ
+ * by more, so the times may be off.
+ */
+export type SkipSegmentFit = "exact" | "shifted" | "unchecked" | "mismatch";
+
+export interface SkipSegment {
+	kind: SkipSegmentKind;
+	/** Where the segment starts, in seconds. */
+	start: number;
+	/** Where it ends, in seconds. The Skip button jumps here. */
+	end: number;
+	source: "skipdb" | "introdb";
+	fit: SkipSegmentFit;
+	/** How sure the source is of the times, from 0 to 1. */
+	confidence: number | null;
+	/** The video's length minus the length the times were taken from, in seconds. */
+	offset: number | null;
+	/**
+	 * Where the player may skip from without asking, or null when the times
+	 * are only good enough for a button.
+	 */
+	autoFrom: number | null;
+	/**
+	 * Where skipping without asking jumps to, set along with `autoFrom`. It
+	 * can stop short of `end` when the times may run late.
+	 */
+	autoTo: number | null;
+}
+
 export interface WatchHistoryEntry {
 	channelId: string;
 	channelName: string;
@@ -156,6 +191,8 @@ export interface WatchHistoryEntry {
 	lastWatchedAt: number;
 	totalDurationSeconds: number;
 	playCount: number;
+	/** The show a series entry belongs to. Set on every series entry, null on the rest. */
+	seriesTitle?: string | null;
 }
 
 export interface SubtitleEntry {
@@ -219,6 +256,10 @@ export interface DownloadRecord {
 	error: string | null;
 	createdAt: number;
 	finishedAt: number | null;
+	/** The user chose Keep, so the retention setting never deletes it. */
+	keep: boolean;
+	/** When the downloaded file last started playing, in Unix seconds. */
+	lastPlayedAt: number | null;
 }
 
 /** Aggregate download state for a series card (computed in the hook). */

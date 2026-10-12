@@ -2,13 +2,18 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::downloads::manager::{self, DownloadManager};
+use crate::downloads::retention;
 use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
-use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
+use mvp_core::iptv::omdb::{fetch_omdb, OmdbData, OmdbError};
+use mvp_core::iptv::opensubtitles::SEARCH_CACHE_TTL_SECS;
+use mvp_core::iptv::skip_segments::{
+    fetch_source, resolve, SegmentSource, SkipQuery, SkipSegment, SourceTimes,
+};
 use mvp_core::iptv::whatson::WhatsonData;
 use mvp_core::iptv::xtream::{fetch_xtream_channels, fetch_xtream_series_episodes, get_xtream_epg_url};
 use mvp_core::models::channel::Channel;
@@ -34,7 +39,11 @@ pub async fn load_m3u_playlist(
     name: String,
     url: String,
 ) -> Result<Vec<Channel>, String> {
-    tracing::info!("[IPTV] loading M3U playlist name={:?} url={}", name, url);
+    tracing::info!(
+        "[IPTV] loading M3U playlist name={:?} from {}",
+        name,
+        mvp_core::http::origin_for_log(&url)
+    );
     let playlist = fetch_and_parse_m3u_with_epg(&url)
         .await
         .map_err(|e| {
@@ -130,7 +139,11 @@ pub async fn load_xtream_provider(
     username: String,
     password: String,
 ) -> Result<Vec<Channel>, String> {
-    tracing::info!("[IPTV] loading Xtream provider name={:?} url={}", name, url);
+    tracing::info!(
+        "[IPTV] loading Xtream provider name={:?} from {}",
+        name,
+        mvp_core::http::origin_for_log(&url)
+    );
     let mut channels = fetch_xtream_channels(&url, &username, &password)
         .await
         .map_err(|e| {
@@ -345,15 +358,19 @@ pub struct EpgProgramDto {
     pub category: Option<String>,
 }
 
-/// Fetch and store EPG programmes for a provider from its configured EPG URL.
+/// Fetch and store EPG programs for a provider from its configured EPG URL,
+/// and return how many were saved.
+///
+/// A guide that comes back without any programs leaves the saved guide alone
+/// and returns 0. It still counts as a refresh, because many Xtream servers
+/// have no guide and asking again soon wouldn't help. A refresh by hand tells
+/// the user.
 #[command]
-pub async fn refresh_epg(
-    state: State<'_, AppState>,
-    provider_id: String,
-) -> Result<(), String> {
-    use mvp_core::iptv::epg::{fetch_and_parse_epg, epg_data_to_stored};
+pub async fn refresh_epg<R: Runtime>(app: AppHandle<R>, provider_id: String) -> Result<usize, String> {
+    use mvp_core::iptv::epg::{epg_data_to_stored, fetch_and_parse_epg, EpgError};
 
     let epg_url = {
+        let state = app.state::<AppState>();
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
         let providers = cache.get_providers().map_err(|e| e.to_string())?;
         providers
@@ -366,17 +383,30 @@ pub async fn refresh_epg(
         return Err("No EPG URL configured for this provider".into());
     };
 
-    tracing::info!("[EPG] fetching EPG from {}", url);
-    let epg_data = fetch_and_parse_epg(&url)
-        .await
-        .map_err(|e| format!("Failed to fetch EPG: {e}"))?;
+    tracing::info!("[EPG] fetching EPG from {}", mvp_core::http::origin_for_log(&url));
+    let epg_data = match fetch_and_parse_epg(&url).await {
+        Ok(data) => data,
+        Err(EpgError::Empty) => {
+            tracing::warn!("[EPG] the guide for {provider_id} has no programs, keeping the saved one");
+            return Ok(0);
+        }
+        Err(e) => return Err(format!("Failed to fetch EPG: {e}")),
+    };
+    tracing::info!("[EPG] parsed {} programs", epg_data.programs.len());
 
-    tracing::info!("[EPG] parsed {} programmes", epg_data.programs.len());
-    let stored = epg_data_to_stored(&epg_data, &provider_id);
-
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.save_epg_programmes(&provider_id, &stored)
-        .map_err(|e| e.to_string())
+    // A large guide takes seconds to convert and save, so it runs off the
+    // async workers.
+    tokio::task::spawn_blocking(move || {
+        let stored = epg_data_to_stored(&epg_data, &provider_id);
+        let state = app.state::<AppState>();
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        cache
+            .save_epg_programmes(&provider_id, &stored)
+            .map(|()| stored.len())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Get EPG programmes for a channel within a Unix timestamp time range.
@@ -515,23 +545,79 @@ const OMDB_API_KEY: &str = "omdb_api_key";
 /// 30-day TTL in seconds
 const OMDB_CACHE_TTL: i64 = 30 * 24 * 60 * 60;
 
-/// Read the OMDB API key from the persistent Tauri Store.
+/// The saved OMDb API key, or None when there isn't one.
 #[command]
 pub async fn get_omdb_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(OMDB_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    omdb_api_key(&app)
+}
+
+/// The OMDb API key, or None when it isn't set or is blank. Whatson calls
+/// check this too, so a user who hasn't added a key sends nothing to either
+/// service.
+fn omdb_api_key<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, String> {
+    saved_key(app, OMDB_STORE_FILE, OMDB_API_KEY)
+}
+
+/// A stored key as a string, or None when it's missing, blank or not a string.
+fn non_empty_key(value: Option<serde_json::Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str().map(str::trim).map(str::to_string))
+        .filter(|k| !k.is_empty())
+}
+
+/// The saved key under `name` in the store file `file`, or None when there
+/// isn't one.
+fn saved_key<R: Runtime>(app: &AppHandle<R>, file: &str, name: &str) -> Result<Option<String>, String> {
+    let store = app.store(file).map_err(|e| e.to_string())?;
+    Ok(non_empty_key(store.get(name)))
+}
+
+/// A key as typed, without the spaces or line break a paste can bring along,
+/// or None when nothing is left.
+fn trimmed_key(key: &str) -> Option<&str> {
+    Some(key.trim()).filter(|k| !k.is_empty())
+}
+
+/// Saves an API key under `name` in the store file `file`. A blank key
+/// removes the saved one.
+fn save_key<R: Runtime>(
+    app: &AppHandle<R>,
+    file: &str,
+    name: &str,
+    key: &str,
+) -> Result<(), String> {
+    let store = app.store(file).map_err(|e| e.to_string())?;
+    match trimmed_key(key) {
+        Some(key) => store.set(name, serde_json::Value::String(key.to_string())),
+        None => {
+            store.delete(name);
+        }
+    }
+    store.save().map_err(|e| e.to_string())
 }
 
 /// Persist the OMDB API key in the Tauri Store.
 #[command]
 pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(OMDB_API_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
+    save_key(&app, OMDB_STORE_FILE, OMDB_API_KEY, &key)
+}
+
+/// Checks an OMDb API key by looking up a well-known movie with it. The key
+/// doesn't have to be saved, and the lookup skips the cache.
+#[command]
+pub async fn test_omdb_api_key(key: String) -> Result<bool, String> {
+    omdb_key_accepted(fetch_omdb("The Matrix", "movie", &key).await)
+}
+
+/// Whether OMDb took the key, from the answer to a lookup made with it. OMDb
+/// answers a bad key with "Invalid API key!". Any other error it reports,
+/// such as its daily limit, means it knew the key.
+fn omdb_key_accepted(result: Result<OmdbData, OmdbError>) -> Result<bool, String> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(OmdbError::Api(message)) => Ok(!message.contains("API key")),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Fetch OMDB data for a channel. Checks the DB cache first; fetches from
@@ -559,28 +645,34 @@ pub async fn fetch_omdb_data<R: Runtime>(
     }
 
     // 2. Retrieve API key — bail out silently if not set.
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OMDB_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[OMDB] no API key configured, skipping fetch");
-            return Ok(None);
-        }
+    let Some(api_key) = omdb_api_key(&app)? else {
+        tracing::debug!("[OMDB] no API key configured, skipping fetch");
+        return Ok(None);
     };
 
     // 3. Fetch from OMDB.
     tracing::info!("[OMDB] fetching data for title={:?} type={}", title, content_type);
-    let data = fetch_omdb(&title, &content_type, &api_key)
-        .await
-        .map_err(|e| {
-            tracing::warn!("[OMDB] fetch failed for title={:?}: {e}", title);
-            e.to_string()
-        })?;
+    let fetched = fetch_omdb(&title, &content_type, &api_key).await;
+    keep_omdb_data(&state, &channel_id, &title, fetched)
+}
+
+/// Caches what OMDb sent back for a channel and returns it. A failed lookup
+/// is passed on and not cached, so the next one asks OMDb again.
+fn keep_omdb_data(
+    state: &AppState,
+    channel_id: &str,
+    title: &str,
+    fetched: Result<OmdbData, OmdbError>,
+) -> Result<Option<OmdbData>, String> {
+    let data = fetched.map_err(|e| {
+        tracing::warn!("[OMDB] fetch failed for title={:?}: {e}", title);
+        e.to_string()
+    })?;
 
     // 4. Store in cache.
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_omdb_cache(&channel_id, &data) {
+        if let Err(e) = cache.save_omdb_cache(channel_id, &data) {
             tracing::warn!("[OMDB] failed to save cache for channel_id={}: {e}", channel_id);
         }
     }
@@ -596,19 +688,12 @@ const MDBLIST_CACHE_TTL: i64 = 7 * 24 * 60 * 60;
 
 #[command]
 pub async fn get_mdblist_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(MDBLIST_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    saved_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY)
 }
 
 #[command]
 pub async fn set_mdblist_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(MDBLIST_API_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
+    save_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY, &key)
 }
 
 /// Test an MDBList API key directly (does not use/update cache or stored key).
@@ -647,28 +732,33 @@ pub async fn fetch_mdblist_data<R: Runtime>(
     }
 
     // 2. Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(MDBLIST_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[MDBList] no API key configured, skipping fetch");
-            return Ok(None);
-        }
+    let Some(api_key) = saved_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY)? else {
+        tracing::debug!("[MDBList] no API key configured, skipping fetch");
+        return Ok(None);
     };
 
     // 3. Fetch
     tracing::info!("[MDBList] fetching data for imdb_id={} type={}", imdb_id, media_type);
-    let data = mvp_core::iptv::mdblist::fetch_mdblist(&imdb_id, &media_type, &api_key)
-        .await
-        .map_err(|e| {
-            tracing::warn!("[MDBList] fetch failed for imdb_id={}: {}", imdb_id, e);
-            e.to_string()
-        })?;
+    let fetched = mvp_core::iptv::mdblist::fetch_mdblist(&imdb_id, &media_type, &api_key).await;
+    keep_mdblist_data(&state, &imdb_id, fetched)
+}
+
+/// Caches what MDBList sent back for a title and returns it. A failed lookup
+/// is passed on and not cached, so the next one asks MDBList again.
+fn keep_mdblist_data(
+    state: &AppState,
+    imdb_id: &str,
+    fetched: Result<MdbListData, mvp_core::iptv::mdblist::MdbListError>,
+) -> Result<Option<MdbListData>, String> {
+    let data = fetched.map_err(|e| {
+        tracing::warn!("[MDBList] fetch failed for imdb_id={}: {}", imdb_id, e);
+        e.to_string()
+    })?;
 
     // 4. Cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_mdblist_cache(&imdb_id, &data) {
+        if let Err(e) = cache.save_mdblist_cache(imdb_id, &data) {
             tracing::warn!("[MDBList] failed to save cache for imdb_id={}: {}", imdb_id, e);
         }
     }
@@ -682,9 +772,11 @@ pub async fn fetch_mdblist_data<R: Runtime>(
 const WHATSON_CACHE_TTL: i64 = 7 * 24 * 60 * 60;
 
 /// Fetch whatson-api enriched ratings for an IMDB ID. Checks cache first; fetches on miss.
-/// No API key required.
+/// whatson-api needs no key of its own, but it only runs once the user has
+/// added an OMDb key, so nothing leaves the device for metadata until then.
 #[command]
-pub async fn fetch_whatson_data(
+pub async fn fetch_whatson_data<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     imdb_id: String,
     media_type: String,
@@ -699,10 +791,26 @@ pub async fn fetch_whatson_data(
         }
     }
 
-    // 2. Fetch from whatson-api
+    // 2. Fetch from whatson-api, if the user has turned on metadata lookups.
+    if omdb_api_key(&app)?.is_none() {
+        tracing::debug!("[Whatson] no OMDb API key configured, skipping fetch");
+        return Ok(None);
+    }
     let item_type = if media_type == "show" || media_type == "series" { "tvshow" } else { "movie" };
     tracing::info!("[Whatson] fetching data for imdb_id={} type={}", imdb_id, item_type);
-    let data = match mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await {
+    let fetched = mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await;
+    keep_whatson_data(&state, &imdb_id, fetched)
+}
+
+/// Caches the ratings whatson sent back for a title and returns them. A title
+/// whatson doesn't know comes back as `None`. Neither that nor a failed lookup
+/// is cached, so the next one asks whatson again.
+fn keep_whatson_data(
+    state: &AppState,
+    imdb_id: &str,
+    fetched: Result<WhatsonData, mvp_core::iptv::whatson::WhatsonError>,
+) -> Result<Option<WhatsonData>, String> {
+    let data = match fetched {
         Ok(data) => data,
         Err(mvp_core::iptv::whatson::WhatsonError::NotFound) => {
             tracing::info!("[Whatson] no data found for imdb_id={}", imdb_id);
@@ -717,12 +825,96 @@ pub async fn fetch_whatson_data(
     // 3. Cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_whatson_cache(&imdb_id, &data) {
+        if let Err(e) = cache.save_whatson_cache(imdb_id, &data) {
             tracing::warn!("[Whatson] failed to save cache for imdb_id={}: {}", imdb_id, e);
         }
     }
 
     Ok(Some(data))
+}
+
+// --- Skip Segments ---
+
+/// One day, so times added to the databases show up by the next day.
+const SKIP_SEGMENTS_CACHE_TTL: i64 = 24 * 60 * 60;
+
+/// Times to skip the intro, recap, credits and next-episode preview of a movie,
+/// or of an episode when `season` and `episode` are given, checked against the
+/// `duration` in seconds of the video being played.
+///
+/// The IMDb ID comes from OMDb, so this only goes online once the user has
+/// added an OMDb key, and nothing leaves the device for metadata until then.
+/// Both databases are asked at once. One that fails leaves the other's times,
+/// and is asked again the next time the video plays.
+#[command]
+pub async fn get_skip_segments<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    imdb_id: String,
+    season: Option<u32>,
+    episode: Option<u32>,
+    duration: f64,
+) -> Result<Vec<SkipSegment>, String> {
+    let query = SkipQuery::new(imdb_id, season, episode, duration).map_err(|e| e.to_string())?;
+    let online = omdb_api_key(&app)?.is_some();
+    if !online {
+        tracing::debug!("[Skip] no OMDb API key configured, using cached times only");
+    }
+    let (skipdb, introdb) = tokio::join!(
+        skip_times(&state, &query, SegmentSource::SkipDb, online),
+        skip_times(&state, &query, SegmentSource::IntroDb, online),
+    );
+    if let (Err(e), Err(_)) = (&skipdb, &introdb) {
+        return Err(e.clone());
+    }
+    Ok(resolve(skipdb.ok().flatten().as_ref(), introdb.ok().flatten().as_ref(), query.duration()))
+}
+
+/// One database's times for a video, from the cache, or else looked up and
+/// cached when `online`. `None` means it wasn't cached and wasn't asked.
+async fn skip_times(
+    state: &AppState,
+    query: &SkipQuery,
+    source: SegmentSource,
+    online: bool,
+) -> Result<Option<SourceTimes>, String> {
+    let key = query.cache_key(source);
+
+    // 1. Check cache. A bad entry is only logged, and looked up again.
+    {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        match cache.get_skip_segments_cache(&key, SKIP_SEGMENTS_CACHE_TTL) {
+            Ok(Some(times)) => return Ok(Some(times)),
+            Ok(None) => {}
+            Err(e) => tracing::warn!("[Skip] unreadable cache entry for {}: {}", key, e),
+        }
+    }
+    if !online {
+        return Ok(None);
+    }
+
+    // 2. Fetch, and cache what came back, even nothing.
+    tracing::info!("[Skip] fetching skip times for {}", key);
+    let fetched = fetch_source(query, source).await;
+    keep_skip_times(state, &key, fetched)
+}
+
+/// Caches what one database had for a video under `key` and returns it. A
+/// failed lookup is passed on and not cached, so the next one asks again.
+fn keep_skip_times(
+    state: &AppState,
+    key: &str,
+    fetched: Result<SourceTimes, mvp_core::iptv::skip_segments::SkipError>,
+) -> Result<Option<SourceTimes>, String> {
+    let times = fetched.map_err(|e| {
+        tracing::warn!("[Skip] fetch failed for {}: {}", key, e);
+        e.to_string()
+    })?;
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    if let Err(e) = cache.save_skip_segments_cache(key, &times) {
+        tracing::warn!("[Skip] failed to save cache for {}: {}", key, e);
+    }
+    Ok(Some(times))
 }
 
 // --- OpenSubtitles Commands ---
@@ -731,19 +923,12 @@ const OPENSUBTITLES_API_KEY: &str = "opensubtitles_api_key";
 
 #[command]
 pub async fn get_opensubtitles_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(OPENSUBTITLES_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)
 }
 
 #[command]
 pub async fn set_opensubtitles_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(OPENSUBTITLES_API_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())?;
-    Ok(())
+    save_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY, &key)
 }
 
 /// Test an OpenSubtitles API key directly (does not use/update cache or stored key).
@@ -759,8 +944,6 @@ pub async fn test_opensubtitles_api_key(key: String) -> Result<bool, String> {
     }
 }
 
-const OPENSUBTITLES_SEARCH_CACHE_TTL: i64 = 24 * 60 * 60;
-
 /// Search subtitles for a channel. Resolves IMDB ID from OMDB cache first.
 /// Returns None if no OpenSubtitles API key is configured or no OMDB data.
 #[command]
@@ -774,7 +957,7 @@ pub async fn search_subtitles<R: Runtime>(
     // 1. Check search cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        match cache.get_opensubtitles_search_cache(&imdb_id, season, episode, OPENSUBTITLES_SEARCH_CACHE_TTL) {
+        match cache.get_opensubtitles_search_cache(&imdb_id, season, episode, SEARCH_CACHE_TTL_SECS) {
             Ok(Some(data)) => {
                 tracing::debug!("[OpenSubtitles] search cache hit for imdb_id={}", imdb_id);
                 return Ok(Some(data));
@@ -785,33 +968,54 @@ pub async fn search_subtitles<R: Runtime>(
     }
 
     // 2. Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OPENSUBTITLES_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[OpenSubtitles] no API key configured");
-            return Ok(None);
-        }
+    let Some(api_key) = saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)? else {
+        tracing::debug!("[OpenSubtitles] no API key configured");
+        return Ok(None);
     };
 
     // 3. Search
     tracing::info!("[OpenSubtitles] searching for imdb_id={} season={:?} episode={:?}", imdb_id, season, episode);
-    let result = mvp_core::iptv::opensubtitles::search_subtitles(&imdb_id, season, episode, &api_key)
-        .await
-        .map_err(|e| {
-            tracing::warn!("[OpenSubtitles] search failed: {}", e);
-            e.to_string()
-        })?;
+    let fetched =
+        mvp_core::iptv::opensubtitles::search_subtitles(&imdb_id, season, episode, &api_key)
+            .await;
+    keep_subtitle_search(&state, &imdb_id, season, episode, fetched)
+}
+
+/// Caches the subtitles OpenSubtitles found for a title and returns them. A
+/// failed search is passed on and not cached, so the next one searches again.
+fn keep_subtitle_search(
+    state: &AppState,
+    imdb_id: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    fetched: Result<
+        mvp_core::iptv::opensubtitles::SubtitleSearchResult,
+        mvp_core::iptv::opensubtitles::OpenSubtitlesError,
+    >,
+) -> Result<Option<mvp_core::iptv::opensubtitles::SubtitleSearchResult>, String> {
+    let result = fetched.map_err(|e| {
+        tracing::warn!("[OpenSubtitles] search failed: {}", e);
+        e.to_string()
+    })?;
 
     // 4. Cache
     {
         let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = cache.save_opensubtitles_search_cache(&imdb_id, season, episode, &result) {
+        if let Err(e) = cache.save_opensubtitles_search_cache(imdb_id, season, episode, &result) {
             tracing::warn!("[OpenSubtitles] failed to save search cache: {}", e);
         }
     }
 
     Ok(Some(result))
+}
+
+/// Where downloaded subtitle files go.
+fn subtitles_dir<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .join("subtitles"))
 }
 
 /// Download a subtitle file by file_id. Returns the local file path.
@@ -821,18 +1025,10 @@ pub async fn download_subtitle<R: Runtime>(
     file_id: i64,
 ) -> Result<String, String> {
     // Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OPENSUBTITLES_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => return Err("No OpenSubtitles API key configured".into()),
-    };
+    let api_key = saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)?
+        .ok_or("No OpenSubtitles API key configured")?;
 
-    // Get subtitle download directory
-    let subtitles_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e: tauri::Error| e.to_string())?
-        .join("subtitles");
+    let subtitles_dir = subtitles_dir(&app)?;
 
     tracing::info!("[OpenSubtitles] downloading subtitle file_id={}", file_id);
     let path = mvp_core::iptv::opensubtitles::download_subtitle(file_id, &api_key, &subtitles_dir)
@@ -858,6 +1054,7 @@ pub struct WatchHistoryEntryDto {
     pub last_watched_at: i64,
     pub total_duration_seconds: i64,
     pub play_count: i64,
+    pub series_title: Option<String>,
 }
 
 impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
@@ -871,6 +1068,7 @@ impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
             last_watched_at: e.last_watched_at,
             total_duration_seconds: e.total_duration_seconds,
             play_count: e.play_count,
+            series_title: e.series_title,
         }
     }
 }
@@ -901,15 +1099,24 @@ pub async fn record_play_end(
         .map_err(|e| e.to_string())
 }
 
+/// The newest `limit` history entries, of one content type when `content_type` is given.
 #[command]
 pub async fn get_watch_history(
     state: State<'_, AppState>,
     limit: i64,
+    content_type: Option<String>,
 ) -> Result<Vec<WatchHistoryEntryDto>, String> {
     let limit = limit.max(0) as usize;
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let entries = cache.get_watch_history(limit).map_err(|e| e.to_string())?;
-    Ok(entries.into_iter().map(WatchHistoryEntryDto::from).collect())
+    let entries = match content_type.as_deref() {
+        Some(content_type) => cache.get_watch_history_of_type(content_type, limit),
+        None => cache.get_watch_history(limit),
+    };
+    Ok(entries
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(WatchHistoryEntryDto::from)
+        .collect())
 }
 
 #[command]
@@ -923,10 +1130,35 @@ pub async fn delete_history_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Delete the history of every episode of one show.
+#[command]
+pub async fn delete_history_series(
+    state: State<'_, AppState>,
+    series_title: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .delete_history_series(&series_title)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn clear_watch_history(state: State<'_, AppState>) -> Result<(), String> {
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
     cache.clear_watch_history().map_err(|e| e.to_string())
+}
+
+/// Delete the history of one content type, leaving the others and resume positions.
+#[command]
+pub async fn clear_watch_history_of_type(
+    state: State<'_, AppState>,
+    content_type: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .clear_watch_history_of_type(&content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -964,10 +1196,21 @@ pub async fn delete_playback_position(
         .map_err(|e| e.to_string())
 }
 
+/// Clear cached metadata, guide data and episode lists, and delete
+/// downloaded subtitle files.
 #[command]
-pub async fn clear_all_caches(state: State<'_, AppState>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.clear_all_caches().map_err(|e| e.to_string())
+pub async fn clear_all_caches<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        cache.clear_all_caches().map_err(|e| e.to_string())?;
+    }
+    match std::fs::remove_dir_all(subtitles_dir(&app)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
 }
 
 #[command]
@@ -1079,15 +1322,12 @@ const GEMINI_KEY: &str = "apiKey";
 
 #[command]
 pub async fn get_gemini_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(GEMINI_STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(store.get(GEMINI_KEY).and_then(|v| v.as_str().map(|s| s.to_string())))
+    saved_key(&app, GEMINI_STORE_FILE, GEMINI_KEY)
 }
 
 #[command]
 pub async fn set_gemini_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(GEMINI_STORE_FILE).map_err(|e| e.to_string())?;
-    store.set(GEMINI_KEY, serde_json::Value::String(key));
-    store.save().map_err(|e| e.to_string())
+    save_key(&app, GEMINI_STORE_FILE, GEMINI_KEY, &key)
 }
 
 #[command]
@@ -1115,21 +1355,7 @@ pub async fn categorize_provider(
             Ok(json) => {
                 match mvp_core::ai::gemini::parse_categorization_response(&json, &known_groups) {
                     Ok(result) => {
-                        let mut entries: Vec<(&str, Option<&str>, i64)> = result.hierarchy.iter()
-                            .map(|h| (h.group_name.as_str(), h.super_category.as_deref(), h.sort_order))
-                            .collect();
-                        let mut ungrouped_order = entries.last().map(|e| e.2 + 100).unwrap_or(0);
-                        for name in &result.ungrouped {
-                            entries.push((name.as_str(), None, ungrouped_order));
-                            ungrouped_order += 100;
-                        }
-
-                        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-                        cache.replace_group_hierarchy(&provider_id, &content_type, &entries)
-                            .map_err(|e| e.to_string())?;
-
-                        return cache.get_group_hierarchy(&provider_id, &content_type)
-                            .map_err(|e| e.to_string());
+                        return save_categorization(&state, &provider_id, &content_type, &result);
                     }
                     Err(e) => { last_err = e.to_string(); continue; }
                 }
@@ -1138,6 +1364,31 @@ pub async fn categorize_provider(
         }
     }
     Err(format!("Categorization failed: {}", last_err))
+}
+
+/// Replaces a provider's group order with Gemini's sorting, with the groups it
+/// left out after the rest, and returns the groups as saved.
+fn save_categorization(
+    state: &AppState,
+    provider_id: &str,
+    content_type: &str,
+    result: &mvp_core::ai::gemini::CategorizationResult,
+) -> Result<Vec<GroupHierarchyEntry>, String> {
+    let mut entries: Vec<(&str, Option<&str>, i64)> = result.hierarchy.iter()
+        .map(|h| (h.group_name.as_str(), h.super_category.as_deref(), h.sort_order))
+        .collect();
+    let mut ungrouped_order = entries.last().map(|e| e.2 + 100).unwrap_or(0);
+    for name in &result.ungrouped {
+        entries.push((name.as_str(), None, ungrouped_order));
+        ungrouped_order += 100;
+    }
+
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache.replace_group_hierarchy(provider_id, content_type, &entries)
+        .map_err(|e| e.to_string())?;
+
+    cache.get_group_hierarchy(provider_id, content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -1162,15 +1413,7 @@ pub async fn fix_uncategorized_groups(
             Ok(json) => {
                 match mvp_core::ai::gemini::parse_assignment_response(&json, &known, &cats_ref) {
                     Ok(assignments) => {
-                        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-                        for a in &assignments {
-                            cache.save_group_hierarchy(
-                                &provider_id, &content_type, &a.group_name,
-                                Some(&a.category), 0, false,
-                            ).map_err(|e| e.to_string())?;
-                        }
-                        return cache.get_group_hierarchy(&provider_id, &content_type)
-                            .map_err(|e| e.to_string());
+                        return save_assignments(&state, &provider_id, &content_type, &assignments);
                     }
                     Err(e) => { last_err = e.to_string(); continue; }
                 }
@@ -1179,6 +1422,25 @@ pub async fn fix_uncategorized_groups(
         }
     }
     Err(format!("Fix uncategorized failed: {}", last_err))
+}
+
+/// Puts each leftover group in the category Gemini picked for it and returns
+/// the provider's groups as saved.
+fn save_assignments(
+    state: &AppState,
+    provider_id: &str,
+    content_type: &str,
+    assignments: &[mvp_core::ai::gemini::GroupAssignment],
+) -> Result<Vec<GroupHierarchyEntry>, String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    for a in assignments {
+        cache.save_group_hierarchy(
+            provider_id, content_type, &a.group_name,
+            Some(&a.category), 0, false,
+        ).map_err(|e| e.to_string())?;
+    }
+    cache.get_group_hierarchy(provider_id, content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -1242,23 +1504,23 @@ pub fn get_install_info() -> InstallInfo {
     }
 }
 
-/// Fetch latest.json, download the appropriate package, and install it via pkexec.
-/// Emits "package-update://progress" events with { percent: u8 } payloads.
-#[command]
-pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+/// The newest release's latest.json, which lists the Linux packages.
+const LATEST_RELEASE_JSON: &str =
+    "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
+
+/// Downloads the `pkg_key` package listed in the latest.json at `latest_url` to
+/// a temp file ending in `.extension`, which is deleted when the returned path
+/// drops. Emits "package-update://progress" events with { percent: u8 } payloads.
+async fn download_package<R: Runtime>(
+    app: &AppHandle<R>,
+    latest_url: &str,
+    pkg_key: &str,
+    extension: &str,
+) -> Result<tempfile::TempPath, String> {
     use tauri::Emitter;
 
-    let info = get_install_info();
-    let pkg_key = match info.install_type.as_str() {
-        "deb" => "linux-deb-x86_64",
-        "rpm" => "linux-rpm-x86_64",
-        other => return Err(format!("package_update not supported for install type: {other}")),
-    };
-
     // 1. Fetch latest.json to get the package URL
-    let latest_url = "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
-    let client = reqwest::Client::new();
-    let latest: serde_json::Value = client.get(latest_url)
+    let latest: serde_json::Value = mvp_core::http::client().get(latest_url)
         .send().await.map_err(|e| format!("Failed to fetch latest.json: {e}"))?
         .json().await.map_err(|e| format!("Failed to parse latest.json: {e}"))?;
 
@@ -1269,7 +1531,7 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
         .to_string();
 
     // 2. Download the package to a temp file
-    let response = client.get(&pkg_url)
+    let response = mvp_core::http::download_client().get(&pkg_url)
         .send().await.map_err(|e| format!("Download failed: {e}"))?;
 
     if !response.status().is_success() {
@@ -1277,10 +1539,10 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     }
 
     let total_size = response.content_length().unwrap_or(0);
-    let extension = if info.install_type == "rpm" { "rpm" } else { "deb" };
-    // keep() disables auto-delete and returns a TempPath (RAII: deletes on drop)
-    // plus the raw File handle for writing. TempPath stays alive until end of
-    // function, so dpkg/rpm can access the file, and cleanup happens on all paths.
+    // into_parts() splits the temp file into the open File, for writing, and a
+    // TempPath that deletes the file when it drops. The TempPath is held until
+    // the install finishes, so dpkg or rpm can read the file, and it is
+    // deleted on every path out.
     use tempfile::Builder;
     let temp_file = Builder::new()
         .prefix("maxvideoplayer_update.")
@@ -1313,45 +1575,71 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     }
     file.flush().await.map_err(|e| format!("Flush error: {e}"))?;
     drop(file);
+    Ok(tmp_path)
+}
+
+/// Fetch latest.json, download the appropriate package, and install it via pkexec.
+/// Emits "package-update://progress" events with { percent: u8 } payloads.
+#[command]
+pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let info = get_install_info();
+    let pkg_key = match info.install_type.as_str() {
+        "deb" => "linux-deb-x86_64",
+        "rpm" => "linux-rpm-x86_64",
+        other => return Err(format!("package_update not supported for install type: {other}")),
+    };
+    let extension = if info.install_type == "rpm" { "rpm" } else { "deb" };
+    let tmp_path = download_package(&app, LATEST_RELEASE_JSON, pkg_key, extension).await?;
 
     // 3. Install via pkexec (async so we do not block the Tokio worker for the whole GUI prompt)
+    // tmp_path (TempPath) auto-deletes on drop at end of function.
+    let pkexec = || tokio::process::Command::new("pkexec");
+    install_package(pkexec, &info.install_type, &tmp_path).await
+}
+
+/// Installs the `install_type` package at `path` with the command `elevated`
+/// starts, which runs what it's given with admin rights. That's pkexec in the
+/// app, and tests pass a stand-in so nothing is installed.
+async fn install_package(
+    elevated: impl Fn() -> tokio::process::Command,
+    install_type: &str,
+    path: &std::path::Path,
+) -> Result<(), String> {
     // For deb: prefer apt-get install which resolves dependencies automatically,
     // fall back to dpkg -i for systems without apt-get.
-    let output = match info.install_type.as_str() {
+    let output = match install_type {
         "deb" => {
-            let apt_result = tokio::process::Command::new("pkexec")
+            let apt_result = elevated()
                 .arg("apt-get")
                 .arg("install")
                 .arg("-y")
                 .arg("--allow-downgrades")
-                .arg(&tmp_path)
+                .arg(path)
                 .output()
                 .await;
             match apt_result {
                 Ok(o) if o.status.success() => o,
                 _ => {
                     // Fallback to dpkg -i (no dependency resolution)
-                    tokio::process::Command::new("pkexec")
+                    elevated()
                         .arg("dpkg")
                         .arg("-i")
-                        .arg(&tmp_path)
+                        .arg(path)
                         .output()
                         .await
                         .map_err(|e| format!("Failed to run installer: {e}"))?
                 }
             }
         },
-        "rpm" => tokio::process::Command::new("pkexec")
+        "rpm" => elevated()
             .arg("rpm")
             .arg("-U")
-            .arg(&tmp_path)
+            .arg(path)
             .output()
             .await
             .map_err(|e| format!("Failed to run installer: {e}"))?,
-        _ => unreachable!(),
+        other => return Err(format!("Unsupported package type: {other}")),
     };
-
-    // tmp_path (TempPath) auto-deletes on drop at end of function.
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1371,8 +1659,8 @@ fn ensure_downloads_supported() -> Result<(), String> {
 
 /// Enqueue a single movie download.
 #[command]
-pub async fn enqueue_movie_download(
-    app: AppHandle,
+pub async fn enqueue_movie_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<String, String> {
@@ -1395,8 +1683,8 @@ pub async fn enqueue_movie_download(
 /// Enqueue a single already-resolved episode (the frontend passes the episode
 /// Channel from get_xtream_series_episodes, plus the parent series channel id).
 #[command]
-pub async fn enqueue_episode_download(
-    app: AppHandle,
+pub async fn enqueue_episode_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     episode: Channel,
     series_channel_id: String,
@@ -1423,8 +1711,8 @@ pub async fn enqueue_episode_download(
 /// Enqueue every episode in `episodes`. Used for whole-season, whole-series,
 /// and "download all missing". The frontend resolves/filters the list.
 #[command]
-pub async fn enqueue_episodes_batch(
-    app: AppHandle,
+pub async fn enqueue_episodes_batch<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     episodes: Vec<Channel>,
     series_channel_id: String,
@@ -1485,13 +1773,13 @@ pub async fn get_cached_series_episodes(
 }
 
 #[command]
-pub async fn stop_download(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn stop_download<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
     manager::stop_one(&app, &id)
 }
 
 /// Stop a set of active (queued + downloading) items (series or season scope).
 #[command]
-pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+pub async fn stop_downloads<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) -> Result<(), String> {
     for id in ids {
         manager::stop_one(&app, &id)?;
     }
@@ -1501,34 +1789,36 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 
 /// Remove a completed download: delete the file and the DB row.
 #[command]
-pub async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let path = {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        cache.get_download(&id).map_err(|e| e.to_string())?.map(|r| r.dest_path)
-    };
-    if let Some(p) = path {
-        let _ = std::fs::remove_file(&p);
-    }
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.delete_download(&id).map_err(|e| e.to_string())
+pub async fn remove_download<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    manager::remove(&app, std::slice::from_ref(&id))
 }
 
+/// Remove several downloads, carrying on past any that can't be deleted. The
+/// error lists those.
 #[command]
-pub async fn remove_downloads(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    for id in ids {
-        if let Ok(Some(rec)) = cache.get_download(&id) {
-            let _ = std::fs::remove_file(&rec.dest_path);
-        }
-        cache.delete_download(&id).map_err(|e| e.to_string())?;
-    }
+pub async fn remove_downloads<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) -> Result<(), String> {
+    manager::remove(&app, &ids)
+}
+
+/// Keep a download even when the retention setting would delete it, or stop
+/// keeping it.
+#[command]
+pub async fn set_download_keep<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    manager: State<'_, DownloadManager>,
+    id: String,
+    keep: bool,
+) -> Result<(), String> {
+    manager::set_keep(&state.cache, &manager.deleting, &id, keep)?;
+    manager::emit_progress(&app, &id);
     Ok(())
 }
 
 #[command]
-pub async fn set_download_concurrency(
+pub async fn set_download_concurrency<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     n: usize,
 ) -> Result<(), String> {
     // Save first, so a failed write leaves the running limit unchanged.
@@ -1545,9 +1835,9 @@ pub async fn get_download_concurrency(manager: State<'_, DownloadManager>) -> Re
 }
 
 #[command]
-pub async fn set_download_folder(
+pub async fn set_download_folder<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     path: String,
 ) -> Result<(), String> {
     // Save first, so a failed write doesn't switch the folder for this session only.
@@ -1561,23 +1851,72 @@ pub async fn get_download_folder(manager: State<'_, DownloadManager>) -> Result<
     Ok(manager.root().to_string_lossy().to_string())
 }
 
+#[command]
+pub async fn get_download_retention(
+    manager: State<'_, DownloadManager>,
+) -> Result<Option<u32>, String> {
+    Ok(manager.retention_days())
+}
+
+/// Save how many days finished downloads are kept, or `None` for no limit,
+/// then delete what's already past it. Returns how many were deleted.
+#[command]
+pub async fn set_download_retention<R: Runtime>(
+    manager: State<'_, DownloadManager>,
+    app: AppHandle<R>,
+    days: Option<u32>,
+) -> Result<usize, String> {
+    // 0 is "never" in the app, so it mustn't reach the sweep as "delete now".
+    let days = days.filter(|&d| d > 0);
+    // Save first, so a failed write doesn't delete anything.
+    manager::save_retention(&app, days)?;
+    manager.set_retention_days(days);
+    // The setting is saved, so report success even if the sweep fails. The
+    // hourly check tries again.
+    match retention::sweep(&app) {
+        Ok(n) => Ok(n),
+        Err(e) => {
+            tracing::warn!("Retention check failed: {e}");
+            Ok(0)
+        }
+    }
+}
+
+/// How many downloads a retention of `days` would delete right now, so
+/// Settings can ask before changing it.
+#[command]
+pub async fn count_downloads_due<R: Runtime>(app: AppHandle<R>, days: Option<u32>) -> Result<usize, String> {
+    retention::count_due(&app, days.filter(|&d| d > 0))
+}
+
 /// Given a channel id, return the local file path if a completed download
 /// exists (and the file is present on disk), else None. The frontend calls this
-/// before playback and passes the local path to mpvLoad when present.
+/// before playback and passes the local path to mpvLoad when present, so this
+/// also records the play, which restarts the retention count.
 #[command]
-pub async fn resolve_local_download(
+pub async fn resolve_local_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<String>, String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let rec = cache
-        .completed_download_for_channel(&channel_id)
-        .map_err(|e| e.to_string())?;
-    Ok(rec.and_then(|r| {
-        if std::path::Path::new(&r.dest_path).exists() {
-            Some(r.dest_path)
-        } else {
-            None
+    let rec = {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        let rec = cache
+            .completed_download_for_channel(&channel_id)
+            .map_err(|e| e.to_string())?
+            .filter(|r| std::path::Path::new(&r.dest_path).exists());
+        if let Some(r) = &rec {
+            cache
+                .mark_download_played(&r.id, manager::now_secs())
+                .map_err(|e| e.to_string())?;
         }
+        rec
+    };
+    Ok(rec.map(|r| {
+        manager::emit_progress(&app, &r.id);
+        r.dest_path
     }))
 }
+
+#[cfg(test)]
+mod tests;

@@ -41,7 +41,7 @@ export const RatingsRow = ({ omdbData, whatsonData }: RatingsRowProps) => {
 				<span className="flex items-center gap-1 text-[11px] font-semibold bg-yellow-500/15 text-yellow-600 dark:text-yellow-400 px-2 py-0.5 rounded-full">
 					<Star className="h-2.5 w-2.5" />
 					{imdbRating}
-					{imdbVotes && (
+					{!!imdbVotes && (
 						<span className="font-normal opacity-70">· {formatVotes(imdbVotes)}</span>
 					)}
 				</span>
@@ -49,7 +49,7 @@ export const RatingsRow = ({ omdbData, whatsonData }: RatingsRowProps) => {
 			{rtCritic !== null && (
 				<span className="text-[11px] font-semibold bg-red-500/15 text-red-500 px-2 py-0.5 rounded-full">
 					🍅 {rtCritic}%
-					{rtCriticCount && (
+					{!!rtCriticCount && (
 						<span className="font-normal opacity-70">
 							{" "}
 							· {formatVotes(rtCriticCount)}
@@ -65,7 +65,7 @@ export const RatingsRow = ({ omdbData, whatsonData }: RatingsRowProps) => {
 			{rtAudience !== null && (
 				<span className="text-[11px] font-semibold bg-orange-500/15 text-orange-500 px-2 py-0.5 rounded-full">
 					🍿 {rtAudience}%
-					{rtAudienceCount && (
+					{!!rtAudienceCount && (
 						<span className="font-normal opacity-70">
 							{" "}
 							· {formatVotes(rtAudienceCount)}

@@ -12,49 +12,35 @@ pub enum M3uError {
     #[error("invalid M3U format: missing #EXTM3U header")]
     MissingHeader,
     #[error("network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("parse error at line {line}: {message}")]
     Parse { line: usize, message: String },
 }
 
+// Playlist URLs often carry the login, so it is dropped before the error can
+// reach a log or the UI.
+impl From<reqwest::Error> for M3uError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
+}
+
 /// Parse an M3U playlist from an in-memory string.
 /// Good for small/medium playlists. For large files use `parse_m3u_file`.
 pub fn parse_m3u(content: &str) -> Result<Vec<Channel>, M3uError> {
-    let trimmed = strip_bom(content.trim());
-    if !trimmed.starts_with("#EXTM3U") {
+    let content = strip_bom(content.trim_start());
+    if !content.starts_with("#EXTM3U") {
         return Err(M3uError::MissingHeader);
     }
-
-    let lines: Vec<&str> = trimmed.lines().collect();
-    let blocks = collect_blocks_from_lines(&lines);
-
-    let channels: Vec<Channel> = blocks
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, (extinf, url))| parse_extinf_block(idx, extinf, url))
-        .collect();
-
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
-    let mut seen = std::collections::HashSet::<(String, String)>::new();
-    let channels: Vec<Channel> = channels
-        .into_iter()
-        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
-        .collect();
-
-    // Group movies with the same title under a single entry; extra URLs go into sources.
-    let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
-    let channels = group_series_episodes(channels);
-
-    Ok(channels)
+    // The lines are slices of `content`, so none of them is copied.
+    Ok(channels_from_blocks(&pair_blocks(content.lines())))
 }
 
 /// Parse an M3U file from disk using a memory-mapped view of the file.
-/// The OS maps the file into virtual memory without copying it — no per-line
-/// allocations, and parallel block detection runs across all CPU cores.
+/// The OS maps the file into memory instead of copying it, and each line is a
+/// slice of the map.
 pub fn parse_m3u_file(path: &Path) -> Result<Vec<Channel>, M3uError> {
     let file = std::fs::File::open(path)?;
     // SAFETY: the file is read-only and not modified while the map is live.
@@ -62,152 +48,52 @@ pub fn parse_m3u_file(path: &Path) -> Result<Vec<Channel>, M3uError> {
     parse_m3u_bytes(&mmap)
 }
 
-/// Parse M3U from a byte slice (e.g. a memory-mapped file).
-/// Lines are zero-copy &str slices into the input; blocks are found in parallel
-/// via par_windows(2) and parsed in parallel with rayon.
+/// Parse M3U from a byte slice, such as a memory-mapped file.
 fn parse_m3u_bytes(bytes: &[u8]) -> Result<Vec<Channel>, M3uError> {
     let content = std::str::from_utf8(bytes).map_err(|e| M3uError::Parse {
-        line: 0,
+        // Line numbers in errors count from 1, as the reader's do.
+        line: line_number_at(bytes, e.valid_up_to()),
         message: format!("UTF-8 decode error: {e}"),
     })?;
-    let content = strip_bom(content.trim_start());
-    if !content.starts_with("#EXTM3U") {
-        return Err(M3uError::MissingHeader);
-    }
+    parse_m3u(content)
+}
 
-    // Collect lines as &str slices into the mmap — no heap allocation per line.
-    let lines: Vec<&str> = content.lines().collect();
-
-    // Find (extinf, url) pairs in parallel. par_windows(2) examines every
-    // consecutive pair of lines across all rayon threads simultaneously.
-    let blocks: Vec<(&str, &str)> = lines
-        .par_windows(2)
-        .filter_map(|pair| {
-            let a = pair[0].trim();
-            let b = pair[1].trim();
-            if a.starts_with("#EXTINF:") && !b.is_empty() && !b.starts_with('#') {
-                Some((a, b))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let channels: Vec<Channel> = blocks
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, (extinf, url))| parse_extinf_block(idx, extinf, url))
-        .collect();
-
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
-    let mut seen = std::collections::HashSet::<(String, String)>::new();
-    let channels: Vec<Channel> = channels
-        .into_iter()
-        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
-        .collect();
-
-    // Group movies with the same title under a single entry; extra URLs go into sources.
-    let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
-    let channels = group_series_episodes(channels);
-
-    Ok(channels)
+/// The line, counting from 1, that holds the byte at `offset`.
+fn line_number_at(bytes: &[u8], offset: usize) -> usize {
+    bytes[..offset].iter().filter(|&&b| b == b'\n').count() + 1
 }
 
 /// Stream-parse M3U from any `BufRead` source. Collects EXTINF+URL pairs
 /// line-by-line, then parses them in parallel with rayon.
 pub fn parse_m3u_reader<R: BufRead>(reader: R) -> Result<Vec<Channel>, M3uError> {
-    let mut lines_iter = reader.lines();
+    // Line numbers in errors count from 1.
+    let read_error = |index: usize, e: std::io::Error| M3uError::Parse {
+        line: index + 1,
+        message: e.to_string(),
+    };
+    let mut lines = reader.lines().enumerate();
 
-    let first_line = lines_iter
-        .next()
-        .ok_or(M3uError::MissingHeader)?
-        .map_err(|e| M3uError::Parse {
-            line: 0,
-            message: e.to_string(),
-        })?;
-    let first_trimmed = strip_bom(first_line.trim());
-    if !first_trimmed.starts_with("#EXTM3U") {
+    let (_, first_line) = lines.next().ok_or(M3uError::MissingHeader)?;
+    let first_line = first_line.map_err(|e| read_error(0, e))?;
+    if !strip_bom(first_line.trim()).starts_with("#EXTM3U") {
         return Err(M3uError::MissingHeader);
     }
 
-    let mut blocks: Vec<(String, String)> = Vec::new();
-    let mut current_extinf: Option<String> = None;
-
-    for line_result in lines_iter {
-        let line = line_result.map_err(|e| M3uError::Parse {
-            line: blocks.len(),
-            message: e.to_string(),
-        })?;
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("#EXTINF:") {
-            current_extinf = Some(trimmed.to_string());
-        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            if let Some(extinf) = current_extinf.take() {
-                blocks.push((extinf, trimmed.to_string()));
-            }
+    // Reading stops at the first line that fails, and that line's error is
+    // returned instead of the channels.
+    let mut failed = None;
+    let lines = lines.map_while(|(index, line)| match line {
+        Ok(line) => Some(line),
+        Err(e) => {
+            failed = Some(read_error(index, e));
+            None
         }
+    });
+    let blocks = pair_blocks(lines);
+    match failed {
+        Some(err) => Err(err),
+        None => Ok(channels_from_blocks(&blocks)),
     }
-
-    let channels: Vec<Channel> = blocks
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, (extinf, url))| parse_extinf_block(idx, extinf, url))
-        .collect();
-
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
-    let mut seen = std::collections::HashSet::<(String, String)>::new();
-    let channels: Vec<Channel> = channels
-        .into_iter()
-        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
-        .collect();
-
-    // Group movies with the same title under a single entry; extra URLs go into sources.
-    let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
-    let channels = group_series_episodes(channels);
-
-    Ok(channels)
-}
-
-/// Fetch an M3U playlist from a URL using streaming HTTP.
-/// Streams the response to a temp file first to avoid holding the whole
-/// response body in memory -- critical for large (100 MB+) playlists.
-pub async fn fetch_and_parse_m3u(url: &str) -> Result<Vec<Channel>, M3uError> {
-    use tokio::io::AsyncWriteExt;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()?;
-
-    let mut response = client.get(url).send().await?.error_for_status()?;
-
-    let tmp_path = std::env::temp_dir().join(format!("mvp_m3u_{}.tmp", std::process::id()));
-
-    let mut file = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(M3uError::Io)?;
-
-    while let Some(chunk) = response.chunk().await? {
-        file.write_all(&chunk).await.map_err(M3uError::Io)?;
-    }
-    file.flush().await.map_err(M3uError::Io)?;
-    drop(file);
-
-    let path = tmp_path.clone();
-    let result = tokio::task::spawn_blocking(move || parse_m3u_file(&path))
-        .await
-        .map_err(|e| M3uError::Parse {
-            line: 0,
-            message: format!("task join error: {e}"),
-        })?;
-
-    let _ = std::fs::remove_file(&tmp_path);
-
-    result
 }
 
 /// Extract the EPG URL from the #EXTM3U header line.
@@ -229,48 +115,63 @@ pub struct M3uPlaylist {
 }
 
 /// Fetch an M3U playlist from a URL, parse channels, and extract the EPG URL from the header.
+///
+/// The download goes to a temp file instead of memory, because playlists can be
+/// over 100 MB.
 pub async fn fetch_and_parse_m3u_with_epg(url: &str) -> Result<M3uPlaylist, M3uError> {
-    use tokio::io::AsyncWriteExt;
+    fetch_playlist(crate::http::download_client(), url).await
+}
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()?;
+async fn fetch_playlist(client: &reqwest::Client, url: &str) -> Result<M3uPlaylist, M3uError> {
+    use tokio::io::AsyncWriteExt;
 
     let mut response = client.get(url).send().await?.error_for_status()?;
 
-    let tmp_path = std::env::temp_dir().join(format!("mvp_m3u_epg_{}.tmp", std::process::id()));
-
-    let mut file = tokio::fs::File::create(&tmp_path)
+    let download = TempDownload::new();
+    let mut file = tokio::fs::File::create(&download.0)
         .await
         .map_err(M3uError::Io)?;
-
     while let Some(chunk) = response.chunk().await? {
         file.write_all(&chunk).await.map_err(M3uError::Io)?;
     }
     file.flush().await.map_err(M3uError::Io)?;
     drop(file);
 
-    // Read the header portion to extract the EPG URL without loading the whole file.
-    let epg_url = {
-        use std::io::{BufRead, BufReader};
-        let f = std::fs::File::open(&tmp_path).map_err(M3uError::Io)?;
-        let mut reader = BufReader::new(f);
+    let path = download.0.clone();
+    tokio::task::spawn_blocking(move || {
+        // The EPG URL is on the header line, so only that line is read for it.
         let mut first_line = String::new();
-        reader.read_line(&mut first_line).map_err(M3uError::Io)?;
-        extract_epg_url(&first_line)
-    };
+        std::io::BufReader::new(std::fs::File::open(&path)?).read_line(&mut first_line)?;
+        let epg_url = extract_epg_url(&first_line);
+        let channels = parse_m3u_file(&path)?;
+        Ok(M3uPlaylist { channels, epg_url })
+    })
+    .await
+    .map_err(|e| M3uError::Parse {
+        line: 0,
+        message: format!("task join error: {e}"),
+    })?
+}
 
-    let path = tmp_path.clone();
-    let channels = tokio::task::spawn_blocking(move || parse_m3u_file(&path))
-        .await
-        .map_err(|e| M3uError::Parse {
-            line: 0,
-            message: format!("task join error: {e}"),
-        })??;
+/// A temp file for one playlist download, deleted when it goes out of scope so
+/// a failed download doesn't leave it behind.
+///
+/// Each download gets its own name, because the app refreshes several
+/// providers at once.
+struct TempDownload(std::path::PathBuf);
 
-    let _ = std::fs::remove_file(&tmp_path);
+impl TempDownload {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(std::env::temp_dir().join(format!("mvp_m3u_{}_{n}.tmp", std::process::id())))
+    }
+}
 
-    Ok(M3uPlaylist { channels, epg_url })
+impl Drop for TempDownload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Strip UTF-8 BOM if present (common in Windows-created M3U files).
@@ -278,24 +179,53 @@ fn strip_bom(s: &str) -> &str {
     s.strip_prefix('\u{FEFF}').unwrap_or(s)
 }
 
-fn collect_blocks_from_lines<'a>(lines: &[&'a str]) -> Vec<(&'a str, &'a str)> {
+/// Pairs each `#EXTINF` line with the link that follows it. Lines such as
+/// `#EXTVLCOPT`, `#EXTGRP` and `#KODIPROP` can sit between the two, so an
+/// `#EXTINF` waits for the next line that isn't blank or a `#` line. A second
+/// `#EXTINF:` before any link replaces the first, so an entry with no link is
+/// dropped rather than taking the next entry's link. A link with no `#EXTINF:`
+/// before it is skipped. The lines come back as given, untrimmed.
+fn pair_blocks<T: AsRef<str>>(lines: impl IntoIterator<Item = T>) -> Vec<(T, T)> {
     let mut blocks = Vec::new();
-    let mut i = 1;
-    while i < lines.len() {
-        let line = lines[i].trim();
-        if line.starts_with("#EXTINF:") {
-            if i + 1 < lines.len() {
-                let url_line = lines[i + 1].trim();
-                if !url_line.is_empty() && !url_line.starts_with('#') {
-                    blocks.push((line, url_line));
-                    i += 2;
-                    continue;
-                }
+    let mut extinf = None;
+    for line in lines {
+        let text = line.as_ref().trim();
+        if text.starts_with("#EXTINF:") {
+            extinf = Some(line);
+        } else if !text.is_empty() && !text.starts_with('#') {
+            if let Some(extinf) = extinf.take() {
+                blocks.push((extinf, line));
             }
         }
-        i += 1;
     }
     blocks
+}
+
+/// Parses the `#EXTINF` and link pairs into channels in parallel. Then it
+/// drops repeats and groups the links of each movie and episode.
+fn channels_from_blocks<T: AsRef<str> + Sync>(blocks: &[(T, T)]) -> Vec<Channel> {
+    let channels: Vec<Channel> = blocks
+        .par_iter()
+        .enumerate()
+        .filter_map(|(idx, (extinf, url))| {
+            parse_extinf_block(idx, extinf.as_ref().trim(), url.as_ref().trim())
+        })
+        .collect();
+
+    // Playlists often list the same stream in more than one group, such as a
+    // country's movie group and a server group. Only the first listing of each
+    // name and link stays.
+    let mut seen = std::collections::HashSet::<(String, String)>::new();
+    let channels: Vec<Channel> = channels
+        .into_iter()
+        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
+        .collect();
+
+    // Movies with the same title become one entry, and the other links become
+    // its sources.
+    let channels = group_movie_sources(channels);
+    // Episodes with the same show, season and episode are grouped the same way.
+    group_series_episodes(channels)
 }
 
 fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> {
@@ -310,7 +240,10 @@ fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> 
     let logo_url = extract_attr(attrs_part, "tvg-logo");
     let group_title = extract_attr(attrs_part, "group-title").unwrap_or_default();
 
-    let content_type = classify_url(url, tvg_name.as_deref().unwrap_or(&name));
+    let content_type = extract_attr(attrs_part, "tvg-type")
+        .and_then(|t| content_type_from_attr(&t))
+        .map(str::to_string)
+        .unwrap_or_else(|| classify_url(url, tvg_name.as_deref().unwrap_or(&name)));
 
     let (series_title, season, episode) = if content_type == "series" {
         match parse_series_name(&name) {
@@ -336,6 +269,18 @@ fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> 
         season,
         episode,
     })
+}
+
+/// Read a `tvg-type` attribute, which some playlists use to mark movies and
+/// series whose URLs don't say so. It only ever marks a movie or a series.
+/// `live` and unknown values fall back to the URL, so a provider export that
+/// tags every entry `live` still files `/movie/` and `/series/` URLs as VOD.
+fn content_type_from_attr(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "movie" | "movies" | "vod" => Some("movie"),
+        "series" => Some("series"),
+        _ => None,
+    }
 }
 
 /// Classify a channel by URL path and tvg-name. URL path segments (/series/, /movie/) are
@@ -487,7 +432,55 @@ fn group_movie_sources(channels: Vec<Channel>) -> Vec<Channel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
     use std::io::BufReader;
+
+    #[test]
+    fn http_errors_leave_out_the_playlist_url() {
+        let err = M3uError::from(crate::http::error_with_url(
+            "unix:/get.php?username=u&password=SECRET&type=m3u_plus",
+        ));
+        test_server::assert_hides(&err, "SECRET");
+    }
+
+    #[tokio::test]
+    async fn playlists_downloaded_at_once_stay_apart() {
+        let first = test_server::serve_once(
+            "200 OK",
+            "#EXTM3U x-tvg-url=\"http://one.test/epg.xml\"\n#EXTINF:-1,One\nhttp://one.test/1\n",
+        );
+        let second = test_server::serve_once(
+            "200 OK",
+            "#EXTM3U x-tvg-url=\"http://two.test/epg.xml\"\n#EXTINF:-1,Two\nhttp://two.test/2\n",
+        );
+        let client = test_server::client();
+        let (first, second) = tokio::join!(
+            fetch_playlist(&client, &first),
+            fetch_playlist(&client, &second)
+        );
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_eq!(first.channels[0].name, "One");
+        assert_eq!(first.epg_url.as_deref(), Some("http://one.test/epg.xml"));
+        assert_eq!(second.channels[0].name, "Two");
+        assert_eq!(second.epg_url.as_deref(), Some("http://two.test/epg.xml"));
+    }
+
+    #[test]
+    fn a_downloaded_playlist_is_deleted_afterwards() {
+        let download = TempDownload::new();
+        std::fs::write(&download.0, "#EXTM3U").unwrap();
+        let path = download.0.clone();
+        assert_ne!(path, TempDownload::new().0);
+        drop(download);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn an_error_status_is_a_network_error() {
+        let url = test_server::serve_once("404 Not Found", "#EXTM3U");
+        let result = fetch_playlist(&test_server::client(), &url).await;
+        assert!(matches!(result, Err(M3uError::Network(_))), "{result:?}");
+    }
 
     #[test]
     fn test_parse_basic_m3u() {
@@ -581,28 +574,6 @@ http://stream.example.com/ch2
     }
 
     #[test]
-    fn test_comment_line_after_extinf_skips_channel() {
-        // In the line-pair parser, EXTINF must be immediately followed by a URL.
-        // A comment line between EXTINF and URL breaks the pair — no channel produced.
-        let content =
-            "#EXTM3U\n#EXTINF:-1 group-title=\"Test\",Channel\n#EXTVLCOPT:option\nhttp://url.com\n";
-        let channels = parse_m3u(content).unwrap();
-        assert!(channels.is_empty());
-    }
-
-    #[test]
-    fn test_reader_tolerates_comment_between_extinf_and_url() {
-        // The streaming reader holds current_extinf across comment lines,
-        // so a comment between EXTINF and URL still produces a channel.
-        let content =
-            "#EXTM3U\n#EXTINF:-1 group-title=\"Test\",Channel\n#EXTVLCOPT:option\nhttp://url.com\n";
-        let reader = BufReader::new(content.as_bytes());
-        let channels = parse_m3u_reader(reader).unwrap();
-        assert_eq!(channels.len(), 1);
-        assert_eq!(channels[0].name, "Channel");
-    }
-
-    #[test]
     fn test_crlf_line_endings() {
         let content = "#EXTM3U\r\n#EXTINF:-1 group-title=\"Test\",CRLF Channel\r\nhttp://crlf.com\r\n";
         let channels = parse_m3u(content).unwrap();
@@ -672,6 +643,42 @@ http://stream.example.com/ch2
     #[test]
     fn test_plain_ts_url_without_episode_code_is_live() {
         assert_eq!(classify_url("http://host/ch1.ts", "BBC News HD"), "live");
+    }
+
+    #[test]
+    fn test_tvg_type_marks_movies_and_series() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"movie\",Sintel\n\
+            https://cdn.example.com/films/sintel.mkv\n\
+            #EXTINF:-1 tvg-type=\"Series\",Open Movies S01E02 Sintel\n\
+            https://cdn.example.com/films/sintel-ep.mkv\n\
+            #EXTINF:-1 tvg-type=\"live\",News\n\
+            http://host/live/news.m3u8\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
+        assert_eq!(channels[1].content_type, "series");
+        assert_eq!(channels[1].series_title.as_deref(), Some("Open Movies"));
+        assert_eq!(channels[1].episode, Some(2));
+        assert_eq!(channels[2].content_type, "live");
+    }
+
+    #[test]
+    fn test_tvg_type_live_does_not_beat_vod_urls() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"live\",Film\n\
+            http://host/movie/1.mp4\n\
+            #EXTINF:-1 tvg-type=\"live\",Show S01E02\n\
+            http://host/series/2.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
+        assert_eq!(channels[1].content_type, "series");
+    }
+
+    #[test]
+    fn test_unknown_tvg_type_falls_back_to_url() {
+        let content = "#EXTM3U\n#EXTINF:-1 tvg-type=\"radio\",Film\nhttp://host/movie/film.mp4\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
     }
 
     #[test]
@@ -757,5 +764,211 @@ http://stream.example.com/ch2
     fn test_extract_epg_url_with_bom_header() {
         let content = "\u{FEFF}#EXTM3U x-tvg-url=\"http://bom.com/epg.xml\"\n#EXTINF:-1,Channel\nhttp://url.com\n";
         assert_eq!(extract_epg_url(content), Some("http://bom.com/epg.xml".to_string()));
+    }
+
+    // --- Malformed playlists ---
+
+    /// Parses `bytes` from a file, the way a downloaded playlist is read.
+    fn parse_file(bytes: &[u8]) -> Result<Vec<Channel>, M3uError> {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+        parse_m3u_file(file.path())
+    }
+
+    /// A playlist saved as Latin-1 instead of UTF-8, as some older tools do.
+    const LATIN1_PLAYLIST: &[u8] = b"#EXTM3U\n#EXTINF:-1,Caf\xe9 TV\nhttp://a.test/1\n";
+
+    #[test]
+    fn a_playlist_file_that_is_not_utf8_is_a_parse_error() {
+        let result = parse_file(LATIN1_PLAYLIST);
+        assert!(
+            matches!(&result, Err(M3uError::Parse { message, .. }) if message.contains("UTF-8")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_playlist_file_without_a_header_is_rejected() {
+        for content in [
+            "",
+            "#EXTINF:-1,One\nhttp://a.test/1\n",
+            "<html>Account expired</html>",
+        ] {
+            let result = parse_file(content.as_bytes());
+            assert!(
+                matches!(result, Err(M3uError::MissingHeader)),
+                "{content:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stream_without_a_header_line_is_rejected() {
+        for content in ["", "#EXTINF:-1,One\nhttp://a.test/1\n"] {
+            let result = parse_m3u_reader(content.as_bytes());
+            assert!(
+                matches!(result, Err(M3uError::MissingHeader)),
+                "{content:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_playlist_that_is_not_utf8_is_a_parse_error_on_that_line() {
+        let header: &[u8] = b"#EXTM3U \xff\n#EXTINF:-1,One\nhttp://a.test/1\n";
+        for (bytes, bad_line) in [(header, 1), (LATIN1_PLAYLIST, 2)] {
+            for result in [parse_m3u_reader(bytes), parse_file(bytes)] {
+                assert!(
+                    matches!(result, Err(M3uError::Parse { line, .. }) if line == bad_line),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+
+    /// Parses `content` as a string, as a file and as a stream.
+    fn parse_every_way(content: &str) -> [Vec<Channel>; 3] {
+        [
+            parse_m3u(content).unwrap(),
+            parse_file(content.as_bytes()).unwrap(),
+            parse_m3u_reader(content.as_bytes()).unwrap(),
+        ]
+    }
+
+    /// Each channel's name and link, in order.
+    fn names_and_links(channels: &[Channel]) -> Vec<(&str, &str)> {
+        channels
+            .iter()
+            .map(|ch| (ch.name.as_str(), ch.url.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn an_entry_without_a_link_is_dropped_by_every_parser() {
+        // A broken entry must not take the next entry's link, even across
+        // option lines.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1,No Link\n\
+            #EXTVLCOPT:http-user-agent=Player\n\
+            #EXTINF:-1,One\nhttp://a.test/1\n\
+            #EXTINF:-1,Last";
+        for channels in parse_every_way(content) {
+            assert_eq!(names_and_links(&channels), [("One", "http://a.test/1")]);
+        }
+    }
+
+    #[test]
+    fn lines_between_an_entry_and_its_link_keep_the_entry() {
+        // Players read these lines as options for the link that follows.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 group-title=\"News\",One\n\
+            #EXTVLCOPT:http-user-agent=Player\n\
+            #EXTVLCOPT:http-referrer=http://a.test/\n\
+            http://a.test/1\n\
+            #EXTINF:-1,Two\n\
+            #EXTGRP:Sports\n\
+            \n\
+            #KODIPROP:inputstream=inputstream.adaptive\n\
+            http://a.test/2\n";
+        for channels in parse_every_way(content) {
+            let entries: Vec<_> = channels
+                .iter()
+                .map(|ch| (ch.id.as_str(), ch.name.as_str(), ch.url.as_str()))
+                .collect();
+            assert_eq!(
+                entries,
+                [
+                    ("ch-0", "One", "http://a.test/1"),
+                    ("ch-1", "Two", "http://a.test/2")
+                ]
+            );
+            assert_eq!(channels[0].group_title, "News");
+        }
+    }
+
+    #[test]
+    fn a_link_with_no_entry_before_it_is_skipped_by_every_parser() {
+        let content = "#EXTM3U\n\
+            http://a.test/stray\n\
+            #EXTINF:-1,One\nhttp://a.test/1\n\
+            http://a.test/second-link\n";
+        for channels in parse_every_way(content) {
+            assert_eq!(names_and_links(&channels), [("One", "http://a.test/1")]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_is_not_a_playlist_is_rejected() {
+        for body in ["", "<html><body>Account expired</body></html>"] {
+            let url = test_server::serve_once("200 OK", body);
+            let result = fetch_playlist(&test_server::client(), &url).await;
+            assert!(
+                matches!(result, Err(M3uError::MissingHeader)),
+                "{body:?}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_playlist_that_cannot_be_fetched_does_not_show_the_login() {
+        let err =
+            fetch_and_parse_m3u_with_epg("unix:/get.php?username=U&password=SECRET&type=m3u_plus")
+                .await
+                .unwrap_err();
+        assert!(matches!(err, M3uError::Network(_)), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
+    }
+
+    // --- Grouping ---
+
+    #[test]
+    fn the_same_film_on_two_servers_is_one_entry_with_both_links() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 group-title=\"Movies\",Heat (1995)\nhttp://a.test/movie/u/p/1.mkv\n\
+            #EXTINF:-1 group-title=\"Server 4\",HEAT (1995)\nhttp://b.test/movie/u/p/1.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 1, "{channels:?}");
+        assert_eq!(channels[0].name, "Heat (1995)");
+        assert_eq!(channels[0].url, "http://a.test/movie/u/p/1.mkv");
+        assert_eq!(channels[0].sources, ["http://b.test/movie/u/p/1.mkv"]);
+    }
+
+    #[test]
+    fn the_same_episode_on_two_servers_is_one_entry_with_both_links() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1,Suits S01E01\nhttp://a.test/series/u/p/1.mkv\n\
+            #EXTINF:-1,suits S01E01 Pilot\nhttp://b.test/series/u/p/1.mkv\n\
+            #EXTINF:-1,Suits S01E02\nhttp://a.test/series/u/p/2.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 2, "{channels:?}");
+        assert_eq!(channels[0].url, "http://a.test/series/u/p/1.mkv");
+        assert_eq!(channels[0].sources, ["http://b.test/series/u/p/1.mkv"]);
+        assert_eq!(channels[1].episode, Some(2));
+        assert!(channels[1].sources.is_empty());
+    }
+
+    #[test]
+    fn series_entries_without_an_episode_code_are_kept_apart() {
+        // Without a season and episode there is nothing to tell that two
+        // entries are the same episode.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"series\",Planet Earth\nhttp://a.test/1.mkv\n\
+            #EXTINF:-1 tvg-type=\"series\",Planet Earth\nhttp://b.test/1.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 2, "{channels:?}");
+        for ch in &channels {
+            assert_eq!(ch.content_type, "series");
+            assert_eq!(
+                (ch.series_title.as_deref(), ch.season, ch.episode),
+                (None, None, None)
+            );
+            assert!(ch.sources.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_code_without_a_show_or_an_episode_number_is_not_an_episode() {
+        assert_eq!(parse_series_name("S01E02"), None);
+        assert_eq!(parse_series_name("Doctor Who S01Extras"), None);
     }
 }

@@ -12,6 +12,10 @@ import {
 	readSkipIntervals,
 	writeSkipInterval,
 	SKIP_INTERVALS_EVENT,
+	readSkipSegmentModes,
+	writeSkipSegmentMode,
+	SKIP_SEGMENT_MODES_EVENT,
+	type SkipSegmentMode,
 } from "./player-prefs";
 
 describe("player-prefs", () => {
@@ -118,5 +122,84 @@ describe("player-prefs", () => {
 			window.removeEventListener(SKIP_INTERVALS_EVENT, listener);
 			expect(listener).toHaveBeenCalledTimes(1);
 		});
+	});
+
+	describe("skip segment modes", () => {
+		it("show a button for both groups when never set", () => {
+			expect(readSkipSegmentModes()).toEqual({ opening: "button", ending: "button" });
+		});
+
+		it("round-trips each group on its own", () => {
+			writeSkipSegmentMode("opening", "auto");
+			expect(readSkipSegmentModes()).toEqual({ opening: "auto", ending: "button" });
+			writeSkipSegmentMode("ending", "off");
+			expect(readSkipSegmentModes()).toEqual({ opening: "auto", ending: "off" });
+		});
+
+		it("ignores modes it doesn't know", () => {
+			writeSkipSegmentMode("ending", "auto");
+			writeSkipSegmentMode("ending", "always" as SkipSegmentMode);
+			expect(readSkipSegmentModes().ending).toBe("auto");
+			for (const bad of ["always", "", "AUTO"]) {
+				localStorage.setItem("mvp_skip_opening", bad);
+				expect(readSkipSegmentModes().opening).toBe("button");
+			}
+		});
+
+		it("falls back to the button when storage throws", () => {
+			const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+				throw new Error("denied");
+			});
+			try {
+				expect(readSkipSegmentModes()).toEqual({ opening: "button", ending: "button" });
+			} finally {
+				get.mockRestore();
+			}
+		});
+
+		it("fires an event when a mode changes", () => {
+			const listener = vi.fn();
+			window.addEventListener(SKIP_SEGMENT_MODES_EVENT, listener);
+			writeSkipSegmentMode("opening", "off");
+			writeSkipSegmentMode("opening", "never" as SkipSegmentMode);
+			window.removeEventListener(SKIP_SEGMENT_MODES_EVENT, listener);
+			expect(listener).toHaveBeenCalledTimes(1);
+		});
+	});
+});
+
+describe("player-prefs when storage is unavailable", () => {
+	const blocked = () => {
+		throw new DOMException("The operation is insecure.", "SecurityError");
+	};
+
+	it("falls back to the built-in settings when storage can't be read", () => {
+		const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+		try {
+			expect(readDefaultVolume()).toBe(100);
+			expect(readVolumePreference()).toEqual({ volume: 100, preMute: 100 });
+			expect(readHwdecEnabled()).toBe(true);
+			expect(readSkipIntervals()).toEqual({ back: 10, forward: 10 });
+		} finally {
+			getItem.mockRestore();
+		}
+	});
+
+	it("drops changes quietly when storage can't be written", () => {
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+		const listener = vi.fn();
+		window.addEventListener(SKIP_INTERVALS_EVENT, listener);
+		try {
+			expect(() => {
+				writeDefaultVolume(40);
+				writeVolumePreference({ volume: 40, preMute: 40 });
+				writeHwdecEnabled(false);
+				writeSkipInterval("forward", 30);
+			}).not.toThrow();
+			expect(listener).not.toHaveBeenCalled();
+		} finally {
+			window.removeEventListener(SKIP_INTERVALS_EVENT, listener);
+			setItem.mockRestore();
+		}
 	});
 });

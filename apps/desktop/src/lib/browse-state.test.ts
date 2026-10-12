@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
 	addWatchedTime,
 	consumeBrowseState,
@@ -58,5 +58,25 @@ describe("browse-state", () => {
 		addWatchedTime(-SEARCH_RESET_AFTER_MS);
 		addWatchedTime(SEARCH_RESET_AFTER_MS - 1);
 		expect(consumeBrowseState().search).toBe("matrix");
+	});
+
+	it("starts fresh when the stored state is corrupt", () => {
+		sessionStorage.setItem("mvp_browseState", "{not json");
+		expect(consumeBrowseState()).toEqual({ tab: undefined, search: "" });
+
+		saveBrowseTab("live");
+		expect(consumeBrowseState()).toEqual({ tab: "live", search: "" });
+	});
+
+	it("keeps working when the browser refuses to store anything", () => {
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+			throw new DOMException("Quota exceeded", "QuotaExceededError");
+		});
+		try {
+			expect(() => saveBrowseSearch("matrix")).not.toThrow();
+			expect(consumeBrowseState()).toEqual({ tab: undefined, search: "" });
+		} finally {
+			setItem.mockRestore();
+		}
 	});
 });

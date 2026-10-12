@@ -4,8 +4,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::channel::{Category, Channel};
+use crate::downloads::redact::redact_credentials;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Provider {
     pub id: String,
@@ -18,6 +19,27 @@ pub struct Provider {
     pub last_updated: Option<String>,
     pub channel_count: usize,
     pub epg_url: Option<String>,
+}
+
+/// Leaves the login out, so a `{:?}` in a log line or an error can't print it.
+/// A login that is set shows as `Some("***")`, and the addresses go through
+/// [`redact_credentials`], since an M3U address or an EPG address often carries
+/// the login as well.
+impl std::fmt::Debug for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hidden = |login: &Option<String>| login.as_ref().map(|_| "***");
+        f.debug_struct("Provider")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("provider_type", &self.provider_type)
+            .field("url", &redact_credentials(&self.url))
+            .field("username", &hidden(&self.username))
+            .field("password", &hidden(&self.password))
+            .field("last_updated", &self.last_updated)
+            .field("channel_count", &self.channel_count)
+            .field("epg_url", &self.epg_url.as_deref().map(redact_credentials))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -42,5 +64,73 @@ impl Playlist {
             channels,
             categories,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_hides_the_login() {
+        let provider = Provider {
+            id: "p1".into(),
+            name: "Home".into(),
+            provider_type: ProviderType::Xtream,
+            url: "http://srv:8080".into(),
+            username: Some("user1".into()),
+            password: Some("s3cret".into()),
+            last_updated: None,
+            channel_count: 3,
+            epg_url: Some("http://srv:8080/xmltv.php?username=user1&password=s3cret".into()),
+        };
+        let printed = format!("{provider:?}");
+        assert!(printed.contains("http://srv:8080"));
+        assert!(printed.contains(r#"username: Some("***")"#));
+        assert!(!printed.contains("user1"));
+        assert!(!printed.contains("s3cret"));
+
+        let m3u = Provider {
+            provider_type: ProviderType::M3u,
+            url: "http://srv:8080/get.php?username=user1&password=s3cret&type=m3u_plus".into(),
+            username: None,
+            password: None,
+            epg_url: None,
+            ..provider
+        };
+        let printed = format!("{m3u:?}");
+        assert!(printed.contains("password: None"));
+        assert!(printed.contains("get.php?username=***&password=***&type=m3u_plus"));
+        assert!(!printed.contains("user1"));
+        assert!(!printed.contains("s3cret"));
+    }
+
+    #[test]
+    fn a_playlist_lists_the_groups_of_its_channels() {
+        let provider: Provider = serde_json::from_value(serde_json::json!({
+            "id": "p1",
+            "name": "Home",
+            "type": "m3u",
+            "url": "http://example.test/list.m3u",
+            "channelCount": 2
+        }))
+        .unwrap();
+        let news = |id: &str| Channel {
+            id: id.into(),
+            group_title: "News".into(),
+            ..Channel::default()
+        };
+        let channels = vec![news("a"), news("b")];
+
+        let playlist = Playlist::new(provider, channels.clone());
+
+        assert_eq!(playlist.provider.id, "p1");
+        assert_eq!(playlist.channels, channels);
+        let groups: Vec<(&str, usize)> = playlist
+            .categories
+            .iter()
+            .map(|c| (c.name.as_str(), c.channel_count))
+            .collect();
+        assert_eq!(groups, [("News", 2)]);
     }
 }

@@ -11,6 +11,7 @@ import type {
 	OmdbData,
 	MdbListData,
 	WhatsonData,
+	SkipSegment,
 	WatchHistoryEntry,
 	SubtitleSearchResult,
 	GroupHierarchyEntry,
@@ -106,7 +107,12 @@ export const updateProvider = (
 export const getXtreamSeriesEpisodes = (channelId: string): Promise<Channel[]> =>
 	invoke("get_xtream_series_episodes", { channelId });
 
-export const refreshEpg = (providerId: string): Promise<void> =>
+/**
+ * Downloads a provider's guide and saves it. Resolves to the number of
+ * programs saved, which is 0 when the guide came back empty and the saved one
+ * was kept.
+ */
+export const refreshEpg = (providerId: string): Promise<number> =>
 	invoke("refresh_epg", { providerId });
 
 export const getEpgProgrammes = (
@@ -137,6 +143,10 @@ export const getOmdbApiKey = (): Promise<string | null> => invoke("get_omdb_api_
 
 export const setOmdbApiKey = (key: string): Promise<void> => invoke("set_omdb_api_key", { key });
 
+/** Whether OMDb takes `key`, which needn't be saved. Rejects when OMDb can't be reached. */
+export const testOmdbApiKey = (key: string): Promise<boolean> =>
+	invoke("test_omdb_api_key", { key });
+
 export const fetchOmdbData = (
 	channelId: string,
 	title: string,
@@ -160,6 +170,21 @@ export const fetchMdbListData = (imdbId: string, mediaType: string): Promise<Mdb
 
 export const fetchWhatsonData = (imdbId: string, mediaType: string): Promise<WhatsonData | null> =>
 	invoke("fetch_whatson_data", { imdbId, mediaType });
+
+// --- Skip Segments ---
+
+/**
+ * The intro, recap, credits and preview of a movie, or of an episode when
+ * `season` and `episode` are set. `duration` is the length of the video being
+ * played, in seconds, which the backend checks the times against. Empty when
+ * no OMDb key is set or nothing is known.
+ */
+export const getSkipSegments = (
+	imdbId: string,
+	season: number | null,
+	episode: number | null,
+	duration: number
+): Promise<SkipSegment[]> => invoke("get_skip_segments", { imdbId, season, episode, duration });
 
 // --- OpenSubtitles Commands ---
 
@@ -214,13 +239,30 @@ export const recordPlayStart = (
 export const recordPlayEnd = (channelId: string, durationSeconds: number): Promise<void> =>
 	invoke<void>("record_play_end", { channelId, durationSeconds });
 
-export const getWatchHistory = (limit: number): Promise<WatchHistoryEntry[]> =>
-	invoke<WatchHistoryEntry[]>("get_watch_history", { limit });
+/** The newest `limit` history entries, only those of `contentType` when given. */
+export const getWatchHistory = (
+	limit: number,
+	contentType?: WatchHistoryEntry["contentType"]
+): Promise<WatchHistoryEntry[]> =>
+	invoke<WatchHistoryEntry[]>("get_watch_history", { limit, contentType });
 
 export const deleteHistoryEntry = (channelId: string): Promise<void> =>
 	invoke<void>("delete_history_entry", { channelId });
 
+/**
+ * Deletes the history of every episode of a show, matched by the
+ * `seriesTitle` the history entries carry. Episodes older than any loaded
+ * page go too.
+ */
+export const deleteHistorySeries = (seriesTitle: string): Promise<void> =>
+	invoke<void>("delete_history_series", { seriesTitle });
+
 export const clearWatchHistory = (): Promise<void> => invoke<void>("clear_watch_history");
+
+/** Deletes the history of one content type. Resume positions are kept. */
+export const clearWatchHistoryOfType = (
+	contentType: WatchHistoryEntry["contentType"]
+): Promise<void> => invoke<void>("clear_watch_history_of_type", { contentType });
 
 // --- Playback Position (resume) Commands ---
 
@@ -412,3 +454,16 @@ export const setDownloadFolder = (path: string): Promise<void> =>
 
 export const resolveLocalDownload = (channelId: string): Promise<string | null> =>
 	invoke("resolve_local_download", { channelId });
+
+export const setDownloadKeep = (id: string, keep: boolean): Promise<void> =>
+	invoke("set_download_keep", { id, keep });
+
+/** Days finished downloads are kept, or null to keep them until removed. */
+export const getDownloadRetention = (): Promise<number | null> => invoke("get_download_retention");
+
+/** Resolves to how many downloads the new setting deleted right away. */
+export const setDownloadRetention = (days: number | null): Promise<number> =>
+	invoke("set_download_retention", { days });
+
+export const countDownloadsDue = (days: number | null): Promise<number> =>
+	invoke("count_downloads_due", { days });

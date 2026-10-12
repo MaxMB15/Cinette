@@ -10,7 +10,8 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 [![Latest release](https://img.shields.io/github/v/release/MaxMB15/MaxVideoPlayer?label=release)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/MaxMB15/MaxVideoPlayer/total)](https://github.com/MaxMB15/MaxVideoPlayer/releases)
 [![Build](https://github.com/MaxMB15/MaxVideoPlayer/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MaxMB15/MaxVideoPlayer/actions/workflows/build.yml)
-[![Coverage](https://MaxMB15.github.io/MaxVideoPlayer/coverage/badge.svg)](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
+[![Frontend coverage](https://MaxMB15.github.io/MaxVideoPlayer/coverage/badge.svg)](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
+[![Rust coverage](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/badge.svg)](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
 [Download](#download) · [Features](#features) · [Getting started](#getting-started) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md) · [Disclaimer](#disclaimer)
@@ -88,6 +89,7 @@ chmod +x MaxVideoPlayer_amd64.AppImage
 - Plays nearly every IPTV stream format, including HLS, MPEG-TS, RTMP and RTSP, through [mpv](https://mpv.io) with hardware decoding
 - Reconnects on its own when the stream or your network drops, and picks up where it left off
 - Resumes movies and episodes where you stopped, with next episode and autoplay for series
+- Skips intros, recaps and credits with a button or automatically, using times from [SkipDB](https://skipdb.tv) and [IntroDB](https://introdb.app)
 - Keyboard shortcuts for playback; press <kbd>?</kbd> in the player to see them
 - Subtitles from OpenSubtitles, with timing and position adjustment
 - Keeps your screen awake while you watch
@@ -99,7 +101,7 @@ chmod +x MaxVideoPlayer_amd64.AppImage
 - Optional category sorting with Google Gemini
 - Automatic updates, checked at launch and every two hours
 
-OpenSubtitles, OMDb and Gemini each need a free API key, which you add in Settings.
+OpenSubtitles, OMDb and Gemini each need a free API key, which you add in Settings. Skip times need the OMDb key too.
 
 <p align="center">
   <img src="docs/images/movies.jpg" width="49%" alt="The movies tab: a poster grid with genre filters, favorites and download status">
@@ -130,7 +132,7 @@ Max Video Player doesn't come with any channels or content. You need a playlist 
 
 <br>
 
-No. There are no accounts, analytics or telemetry. The app connects to the providers you add, to GitHub to check for updates, and to OMDb, OpenSubtitles or Google Gemini only if you add a key for them. When OMDb finds a title, the app also fetches extra ratings for it from [whatson-api](https://whatson-api.onrender.com). Your playlists, favorites and history stay in a database on your computer.
+No. There are no accounts, analytics or telemetry. The app connects to the providers you add, to GitHub to check for updates, and to OMDb, OpenSubtitles or Google Gemini only if you add a key for them. When OMDb finds a title, the app also fetches extra ratings for it from [whatson-api](https://whatson-api.onrender.com), and times to skip from SkipDB and IntroDB. Your playlists, favorites and history stay in a database on your computer.
 
 </details>
 
@@ -166,6 +168,10 @@ Versions 0.5.0 and 0.5.1 crash at launch, before they can check for updates. Dow
 Bug reports, ideas and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started, and [docs/development.md](docs/development.md) to build the app from source. Report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 If you find the app useful, you can [buy me a coffee](https://buymeacoffee.com/MaxMB15).
+
+## Privacy
+
+The app sends nothing to the developer. The [privacy policy](docs/privacy.md) lists what it keeps on your device, which services it connects to and what it sends them.
 
 ## Disclaimer
 
