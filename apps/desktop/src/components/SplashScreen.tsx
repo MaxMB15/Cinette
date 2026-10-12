@@ -6,7 +6,8 @@ import type { SplashScreenState, SplashStep, StepStatus } from "@/hooks/useSplas
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { openUrl } from "@/lib/openUrl";
 import { isMobilePlatform } from "@/lib/platform";
-import appIcon from "@/assets/app-icon.png";
+// The bundled app icon itself, so the start screen can never drift from it.
+import appIcon from "../../src-tauri/icons/128x128@2x.png";
 import bmcQr from "@/assets/bmc-qr.png";
 
 const BMC_URL = "https://buymeacoffee.com/MaxMB15";
