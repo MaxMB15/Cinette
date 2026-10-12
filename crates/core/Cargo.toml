@@ -19,7 +19,9 @@ reqwest = { version = "0.12", features = ["json", "gzip", "deflate"] }
 rayon = "1.10"
 memmap2 = "0.9"
 quick-xml = { version = "0.37", features = ["serialize"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+# fallible_uint reads and writes usize and u64, with an error when a value
+# doesn't fit, as rusqlite did by default before 0.38.
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 chrono = { version = "0.4", features = ["serde"] }
 url = { version = "2", features = ["serde"] }
 percent-encoding = "2"

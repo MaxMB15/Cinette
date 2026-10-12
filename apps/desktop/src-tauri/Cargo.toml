@@ -33,7 +33,7 @@ tauri = { version = "2", features = ["test"] }
 mvp-core = { path = "../../../crates/core", features = ["test-util"] }
 # A second connection to a test's cache, so a test can break it in ways the
 # app never does. The same version and features as mvp-core's.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
