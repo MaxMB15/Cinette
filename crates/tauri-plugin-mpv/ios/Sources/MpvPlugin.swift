@@ -8,6 +8,7 @@
 // the C callbacks it registers with `mvp_ios_register_callbacks`.
 
 import AVFoundation
+import ImageIO
 import MediaPlayer
 import Tauri
 import UIKit
@@ -384,6 +385,34 @@ private func onMain<T>(_ work: () -> T) -> T {
   return DispatchQueue.main.sync(execute: work)
 }
 
+/// Decodes lock screen artwork off the main thread. It's serial, so a clear
+/// and the logo after it reach the main thread in the order Rust sent them.
+private let artworkQueue = DispatchQueue(label: "com.maxvideoplayer.mpv.artwork", qos: .utility)
+
+/// The lock screen never shows artwork much bigger than this, so a larger
+/// logo is scaled down while it's decoded rather than kept at full size.
+private let maxArtworkPixels = 600
+
+/// Decodes `data` to at most `maxArtworkPixels` on its longer side. Smaller
+/// images keep their size.
+private func artworkImage(_ data: Data) -> UIImage? {
+  let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+  guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+    return nil
+  }
+  let options =
+    [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true,
+      kCGImageSourceThumbnailMaxPixelSize: maxArtworkPixels,
+    ] as CFDictionary
+  guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+    return nil
+  }
+  return UIImage(cgImage: image)
+}
+
 // MARK: C entry points called from ios.rs
 
 @_cdecl("mvp_ios_register_callbacks")
@@ -443,8 +472,9 @@ func mvpIosNowPlaying(
 func mvpIosNowPlayingArtwork(_ bytes: UnsafePointer<UInt8>?, _ length: Int) {
   // Copy the bytes now. Rust frees them when this function returns.
   let data = bytes.map { Data(bytes: $0, count: length) }
-  DispatchQueue.main.async {
-    MpvHost.shared.setArtwork(data.flatMap { UIImage(data: $0) })
+  artworkQueue.async {
+    let image = data.flatMap(artworkImage)
+    DispatchQueue.main.async { MpvHost.shared.setArtwork(image) }
   }
 }
 
