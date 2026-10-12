@@ -54,7 +54,9 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 				!compact && isPlayer && "safe-insets-black"
 			)}
 		>
-			{!compact && <Sidebar hidden={isFullscreen} />}
+			{/* Only the player goes full screen, so any other page keeps the
+			    sidebar even if full screen was left on. */}
+			{!compact && <Sidebar hidden={isFullscreen && isPlayer} />}
 			<main
 				className={cn(
 					"flex-1 overflow-hidden",
