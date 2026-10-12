@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { seriesTitleOf } from "./channels";
 import type { Channel } from "./types";
 
 /** Positions earlier than this aren't worth offering a resume for. */
@@ -14,12 +15,12 @@ const normalize = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, 
  * Channel IDs are index-based (`{provider}-ch-{n}`) and shift when a playlist
  * is refreshed, and the URL changes when the user picks a different source, so
  * neither is a reliable key. The title (plus season/episode for series) is.
- * Returns null for live channels — they have no resumable position.
+ * Returns null for live channels, which have no resumable position.
  */
 export const playbackKey = (ch: Channel): string | null => {
 	if (ch.contentType === "live") return null;
 	if (ch.contentType === "series" && ch.season != null && ch.episode != null) {
-		const title = normalize(ch.seriesTitle ?? ch.name.replace(/\s+S\d{1,3}E\d{1,3}.*/i, ""));
+		const title = normalize(seriesTitleOf(ch));
 		return `series:${title}:s${ch.season}e${ch.episode}`;
 	}
 	return `${ch.contentType}:${normalize(ch.name)}`;

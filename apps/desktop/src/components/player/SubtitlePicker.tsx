@@ -78,6 +78,12 @@ export const SubtitlePicker = ({
 	const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const holdStartRef = useRef<number>(0);
 	const holdDirectionRef = useRef<1 | -1>(1);
+	// The hold timer outlives the render that started it, so it reads the delay
+	// from here. Each step writes an absolute value, so a stale one would repeat.
+	const delayRef = useRef(subtitleDelay);
+	useEffect(() => {
+		delayRef.current = subtitleDelay;
+	}, [subtitleDelay]);
 
 	// ── Click-outside to close ──────────────────────────────────────────────
 	useEffect(() => {
@@ -109,9 +115,17 @@ export const SubtitlePicker = ({
 		return () => document.removeEventListener("keydown", handleKey);
 	}, [delayHovered, subtitleDelay, onDelayChange]);
 
-	// ── Cleanup hold timer on unmount ───────────────────────────────────────
+	// ── Stop a hold the buttons never hear end ──────────────────────────────
+	// A release outside the window, or switching apps mid-hold, sends the button
+	// no mouseup, so the window's mouseup and blur end the hold too.
 	useEffect(() => {
-		return () => clearHoldTimer();
+		window.addEventListener("mouseup", clearHoldTimer);
+		window.addEventListener("blur", clearHoldTimer);
+		return () => {
+			window.removeEventListener("mouseup", clearHoldTimer);
+			window.removeEventListener("blur", clearHoldTimer);
+			clearHoldTimer();
+		};
 	}, []);
 
 	// ── Search on mount ─────────────────────────────────────────────────────
@@ -168,26 +182,39 @@ export const SubtitlePicker = ({
 		}
 	};
 
+	const stepDelay = (delta: number) => {
+		const next = Math.round((delayRef.current + delta) * 10) / 10;
+		delayRef.current = next;
+		onDelayChange?.(next);
+	};
+
 	const scheduleNextStep = () => {
 		const elapsed = Date.now() - holdStartRef.current;
 		const step = getDelayStep(elapsed);
 		const interval = getDelayInterval(elapsed);
 		holdTimerRef.current = setTimeout(() => {
-			onDelayChange?.(
-				Math.round((subtitleDelay + holdDirectionRef.current * step) * 10) / 10
-			);
+			stepDelay(holdDirectionRef.current * step);
 			scheduleNextStep();
 		}, interval);
 	};
 
-	const startHold = (direction: 1 | -1) => {
+	const startHold = (direction: 1 | -1) => (e: React.MouseEvent) => {
+		// Only the main button holds. A right click opens the menu and never sends mouseup.
+		if (e.button !== 0) return;
+		clearHoldTimer();
 		holdDirectionRef.current = direction;
 		holdStartRef.current = Date.now();
-		onDelayChange?.(Math.round((subtitleDelay + direction * getDelayStep(0)) * 10) / 10);
+		stepDelay(direction * getDelayStep(0));
 		scheduleNextStep();
 	};
 
 	const stopHold = () => clearHoldTimer();
+
+	// A mouse press already stepped in startHold. A click with no pointer press
+	// behind it comes from Enter, Space or a screen reader, so step once here.
+	const stepOnKeyboardClick = (direction: 1 | -1) => (e: React.MouseEvent) => {
+		if (e.detail === 0) stepDelay(direction * getDelayStep(0));
+	};
 
 	// ─── Helpers ────────────────────────────────────────────────────────────
 	const formatDelay = (d: number) => {
@@ -243,6 +270,7 @@ export const SubtitlePicker = ({
 											onFontSizeChange?.(Math.max(12, subtitleFontSize - 2))
 										}
 										className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white text-xs font-bold"
+										aria-label="Smaller subtitles"
 									>
 										A−
 									</button>
@@ -254,6 +282,7 @@ export const SubtitlePicker = ({
 											onFontSizeChange?.(Math.min(40, subtitleFontSize + 2))
 										}
 										className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-white text-sm font-bold"
+										aria-label="Larger subtitles"
 									>
 										A+
 									</button>
@@ -273,9 +302,11 @@ export const SubtitlePicker = ({
 							<div className="flex items-center gap-2">
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={() => startHold(-1)}
+									onMouseDown={startHold(-1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
+									onClick={stepOnKeyboardClick(-1)}
+									aria-label="Decrease subtitle delay"
 								>
 									−
 								</button>
@@ -284,9 +315,11 @@ export const SubtitlePicker = ({
 								</span>
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={() => startHold(1)}
+									onMouseDown={startHold(1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
+									onClick={stepOnKeyboardClick(1)}
+									aria-label="Increase subtitle delay"
 								>
 									+
 								</button>
@@ -331,6 +364,7 @@ export const SubtitlePicker = ({
 						<button
 							onClick={onClose}
 							className="p-1 rounded text-white/50 hover:text-white hover:bg-white/10"
+							aria-label="Close"
 						>
 							<X className="h-4 w-4" />
 						</button>

@@ -9,14 +9,13 @@ video plays through libmpv, drawn into the same window underneath the webview.
 ```
 MaxVideoPlayer/
 ├── apps/
-│   ├── desktop/
-│   │   ├── src/                  React frontend
-│   │   │   ├── components/       UI by area: channels, player, playlist, settings, downloads, ui
-│   │   │   ├── hooks/            useChannels, useMpv, useDownloads, useUpdateChecker, ...
-│   │   │   └── lib/tauri.ts      every invoke() call to the backend
-│   │   └── src-tauri/            Tauri app: commands, download manager, bundle config
-│   ├── ios/                      iOS design notes and the first proof of concept
-│   └── android/                  Android plans (not built yet)
+│   └── desktop/
+│       ├── src/                  React frontend
+│       │   ├── components/       UI by area: channels, player, playlist, settings, downloads, ui
+│       │   ├── hooks/            useChannels, useMpv, useDownloads, useUpdateChecker, ...
+│       │   └── lib/tauri.ts      every invoke() call to the backend
+│       └── src-tauri/            Tauri app: commands, download manager, bundle config
+│           └── gen/apple/        Xcode project for iPhone and iPad
 ├── crates/
 │   ├── core/                     mvp-core: platform-independent logic
 │   └── tauri-plugin-mpv/         Tauri plugin that embeds libmpv
@@ -105,9 +104,62 @@ compositor, and libva crashes there on some desktops. X11 keeps zero-copy `auto`
 `IosMetalRenderer` passes a `CAMetalLayer` to libmpv as its `wid`, and mpv draws
 into it with `vo=gpu-next` on Vulkan through MoltenVK. mpv runs its own draw loop, so
 there's no render context to drive. The layer belongs to a view that the Swift side of
-the plugin (`ios/Sources/MpvPlugin.swift`) keeps under the transparent webview. The
-Swift side also runs the audio session and the lock screen controls. libmpv comes
-from MPVKit through Swift Package Manager. See [ios.md](ios.md).
+the plugin (`ios/Sources/MpvPlugin.swift`) keeps under the transparent webview. libmpv
+comes from MPVKit through Swift Package Manager. Building and signing are in
+[ios.md](ios.md).
+
+`engine.rs`, `reconnect.rs` and the `plugin:mpv|*` commands are the same as on
+desktop, so `lib/tauri.ts`, `useMpv` and the React player controls work unchanged.
+`ios.rs` handles what only iOS needs:
+
+- The lock screen's skip buttons, through the engine's relative seek.
+- `vid=no` while the app is in the background, because iOS ends apps that use Metal
+  there, and `vid=auto` when it comes back. Both are engine calls that only `ios.rs`
+  makes.
+- A small change to `video-aspect-override` after each resize. MPVKit's MoltenVK
+  context reads the layer's size only when mpv reconfigures its output, and this
+  makes it reconfigure.
+- An option list without `ytdl` and `osc`. MPVKit builds mpv without Lua, and
+  setting either option fails `mpv_initialize`.
+
+The Swift side does the UIKit work. It creates the Metal view and moves it when React
+sends new bounds, the device rotates or Split View changes the window. It sets the
+audio session to playback so audio continues on the lock screen, fills in Now
+Playing, handles the lock screen controls and keeps the screen awake during playback.
+Rust calls the `mvp_ios_*` C functions the Swift package exports, and Swift calls
+back through three C callbacks that Rust registers at startup. One reports moving to
+and from the background, one passes on lock screen commands, and one tells mpv that
+the video view changed size so it redraws at the new size.
+
+#### What iOS leaves out
+
+| Feature | Why | How |
+| --- | --- | --- |
+| Downloads | iOS apps can't start another program, so the ffmpeg sidecar can't run | The commands return an error, and the tab, buttons and settings are hidden |
+| Updater and relaunch | The App Store updates the app | Desktop-only plugins, and `useUpdateChecker` skips mobile |
+| Support prompt and links | App Store rules require in-app purchase for tips | Hidden on mobile |
+| Separate player window | iOS has one window | If the Metal view fails, the player shows an error |
+
+Rust gates these with `#[cfg(desktop)]` and target-specific dependencies.
+Permissions for the desktop-only plugins and the sidecar are in
+`capabilities/desktop.json`, which applies only on macOS, Linux and Windows. The
+`shell` plugin stays in the iOS build so the downloads code compiles unchanged, and
+nothing calls it there. React checks `isMobilePlatform()` from `lib/platform.ts`.
+
+#### Layouts
+
+An iPhone always gets the phone layout. An iPad picks one by window width, so Split
+View, Stage Manager and rotation switch between them:
+
+| Window width | Layout |
+| --- | --- |
+| 1024 points or more | Desktop, the same as macOS |
+| 744 to 1023 points | Tablet, the desktop layout without drag and drop |
+| Under 744 points | Phone, with a tab bar, compact channel rows and a back button in the player |
+
+`layoutModeFor` in `lib/platform.ts` picks the layout, and `usePlatform` checks again
+on every resize. A device counts as an iPhone when the short side of its screen is
+under 744 points.
 
 ## Data flow
 

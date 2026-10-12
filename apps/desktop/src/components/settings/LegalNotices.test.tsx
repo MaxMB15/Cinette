@@ -38,6 +38,12 @@ describe("LegalNotices", () => {
 		expect(openUrl).toHaveBeenCalledWith(`${REPO_URL}/tree/v1.2.3`);
 	});
 
+	it("opens the current privacy policy on main", () => {
+		render(<LegalNotices version="1.2.3" />);
+		fireEvent.click(screen.getByRole("button", { name: "Privacy policy" }));
+		expect(openUrl).toHaveBeenCalledWith(`${REPO_URL}/blob/main/docs/privacy.md`);
+	});
+
 	it("falls back to main while the version is unknown", () => {
 		expect(sourceUrl(undefined)).toBe(REPO_URL);
 		expect(sourceUrl("")).toBe(REPO_URL);

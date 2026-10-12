@@ -14,6 +14,8 @@ export interface UpdateState {
 	installing: boolean;
 	progress: number | null;
 	error: string | null;
+	/** Why the last update check failed, or null when it succeeded */
+	checkError: string | null;
 	/** true when using package manager update (deb/rpm) instead of Tauri updater */
 	packageInstall: boolean;
 	/** false on iOS and Android, where the app store updates the app */
@@ -29,6 +31,7 @@ export const useUpdateChecker = (): UpdateState => {
 	const [installing, setInstalling] = useState(false);
 	const [progress, setProgress] = useState<number | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [checkError, setCheckError] = useState<string | null>(null);
 	const [packageInstall, setPackageInstall] = useState(false);
 	const [supported] = useState(() => !isMobilePlatform());
 
@@ -46,6 +49,7 @@ export const useUpdateChecker = (): UpdateState => {
 		const promise = (async () => {
 			setChecking(true);
 			setError(null);
+			setCheckError(null);
 			try {
 				// Fetch install info once
 				if (!installInfoRef.current) {
@@ -62,6 +66,7 @@ export const useUpdateChecker = (): UpdateState => {
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.warn("[updater] check error:", msg);
+				setCheckError(msg);
 				return null;
 			} finally {
 				setChecking(false);
@@ -145,6 +150,7 @@ export const useUpdateChecker = (): UpdateState => {
 		installing,
 		progress,
 		error,
+		checkError,
 		packageInstall,
 		supported,
 		dismiss,

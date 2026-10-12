@@ -25,6 +25,8 @@ export const LegalNotices = ({ version }: LegalNoticesProps) => {
 		{ label: "Additional terms", url: fileUrl("NOTICE", version) },
 		{ label: "Source code", url: sourceUrl(version) },
 		{ label: "Third-party notices", url: fileUrl("THIRD_PARTY_NOTICES.md", version) },
+		// The policy can change after a release, so this always opens the current one.
+		{ label: "Privacy policy", url: fileUrl("docs/privacy.md") },
 	];
 
 	return (

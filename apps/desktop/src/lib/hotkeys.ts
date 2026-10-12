@@ -156,3 +156,49 @@ export const isKeyboardFocusedControl = (target: EventTarget | null): boolean =>
 		return true;
 	}
 };
+
+/** Keys a focused slider moves its value with. */
+const SLIDER_KEYS = new Set([
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowUp",
+	"ArrowDown",
+	"Home",
+	"End",
+	"PageUp",
+	"PageDown",
+]);
+
+/**
+ * True when a slider reached with the keyboard should move its own value for
+ * this key, such as an arrow on the seek or volume bar after Tab. A slider
+ * focused by a press leaves these keys to the player, so the arrows keep
+ * seeking by the skip length instead of nudging the bar one step.
+ *
+ * The `Slider` component records how its thumb got focus in
+ * `data-focus-source`. `:focus-visible` can't be used here, because WebKit
+ * starts matching it on a pressed element as soon as a key goes down.
+ */
+export const isSliderOwnKey = (target: EventTarget | null, key: string): boolean =>
+	target instanceof HTMLElement &&
+	target.getAttribute("role") === "slider" &&
+	SLIDER_KEYS.has(key) &&
+	target.getAttribute("data-focus-source") !== "pointer";
+
+/**
+ * keydown handler for a slider inside the player. A slider that owns the key
+ * (see `isSliderOwnKey`) moves and keeps the key from the player's own
+ * handlers, such as the subtitle position arrows. Otherwise the slider stays
+ * put and the key goes on to the player. There Left, Right and Home seek, Up
+ * and Down change the volume, and End, Page Up and Page Down do nothing.
+ */
+export const leaveSliderKeysToPlayer = (e: {
+	key: string;
+	target: EventTarget | null;
+	preventDefault: () => void;
+	stopPropagation: () => void;
+}): void => {
+	if (!SLIDER_KEYS.has(e.key)) return;
+	if (isSliderOwnKey(e.target, e.key)) e.stopPropagation();
+	else e.preventDefault();
+};

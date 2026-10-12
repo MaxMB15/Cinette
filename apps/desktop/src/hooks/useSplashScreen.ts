@@ -10,8 +10,9 @@ import {
 	setEpgLastRefresh,
 	useChannels,
 } from "@/hooks/useChannels";
-import { parseDateMs } from "@/lib/date";
+import { findDueRefreshes, refreshKeys } from "@/lib/refresh-schedule";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
+import { readStorage, SPLASH_SHOWN_KEY, writeStorage } from "@/lib/storage";
 
 export type StepStatus = "pending" | "active" | "done" | "error";
 
@@ -31,7 +32,21 @@ export interface SplashScreenState {
 	dismiss: () => void;
 }
 
-const SESSION_KEY = "splash-shown";
+/** One of the splash steps that refreshes a list of providers. */
+interface RefreshStep {
+	id: string;
+	ids: string[];
+	refresh: (id: string) => Promise<unknown>;
+	labels: {
+		active: string;
+		failed: string;
+		/** Plural noun for the partial failure message. */
+		sources: string;
+		done: string;
+		upToDate: string;
+		none: string;
+	};
+}
 
 interface UseSplashScreenOptions {
 	updateState: UpdateState;
@@ -45,10 +60,10 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		onCompleteRef.current = onComplete;
 	}, [onComplete]);
 
-	const alreadyShownRef = useRef(sessionStorage.getItem(SESSION_KEY) === "true");
+	const alreadyShownRef = useRef(readStorage(SPLASH_SHOWN_KEY, "session") === "true");
 
 	// Consume providers from ChannelsContext (already loaded on mount — no extra Tauri calls)
-	const { providers, initialized } = useChannels();
+	const { providers, initialized, autoRefresh } = useChannels();
 
 	// Initialize all steps immediately so they're visible from the first render.
 	// The app store updates the mobile apps, so they skip the update check.
@@ -68,7 +83,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 	const [hasProviders, setHasProviders] = useState(false);
 
 	const dismiss = useCallback(() => {
-		sessionStorage.setItem(SESSION_KEY, "true");
+		writeStorage(SPLASH_SHOWN_KEY, "true", "session");
 		setDismissed(true);
 	}, []);
 
@@ -91,89 +106,84 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// Step 1 complete — providers came from ChannelsContext, no extra fetch needed
 			setStepStatus("providers", "done", "Providers & channels loaded");
 
-			// Determine which providers need refresh
-			const now = Date.now();
-			const providerRefreshIds: string[] = [];
-			const epgRefreshIds: string[] = [];
-
-			for (const p of providers) {
-				const {
-					autoRefresh,
-					refreshIntervalHours,
-					epgAutoRefresh,
-					epgRefreshIntervalHours,
-				} = loadProviderSettings(p.id);
-
-				if (autoRefresh) {
-					const lastMs = parseDateMs(p.lastUpdated);
-					if (now - lastMs >= refreshIntervalHours * 60 * 60 * 1000) {
-						providerRefreshIds.push(p.id);
-					}
-				}
-
-				if (epgAutoRefresh && p.epgUrl) {
-					const lastMs = getEpgLastRefresh(p.id);
-					if (now - lastMs >= epgRefreshIntervalHours * 60 * 60 * 1000) {
-						epgRefreshIds.push(p.id);
-					}
-				}
-			}
+			const { playlistIds: providerRefreshIds, epgIds: epgRefreshIds } = findDueRefreshes(
+				providers,
+				{ settingsFor: loadProviderSettings, epgLastRefreshFor: getEpgLastRefresh }
+			);
 
 			const didRefreshProviders = providerRefreshIds.length > 0;
 
-			// Step 2: Refresh playlists (always shown; mark done immediately if nothing to do)
-			setStepStatus("playlists", "active", "Refreshing playlists…");
-			if (didRefreshProviders) {
-				const results = await Promise.allSettled(
-					providerRefreshIds.map((id) => refreshProvider(id))
-				);
-				if (cancelled) return;
+			// Runs the refresh through the poll's tracker. A refresh the poll already
+			// started is joined, not run twice, and the poll won't start this one
+			// again while it runs. One still waiting to retry after a failure
+			// counts as failed.
+			const tracked = (key: string, refresh: () => Promise<unknown>) =>
+				autoRefresh.run(key, refresh) ??
+				Promise.reject(new Error(`${key} failed recently, waiting to retry`));
+
+			// Runs one refresh step and returns false if the effect was cleaned up
+			// while it waited, so the caller stops too.
+			const runRefreshStep = async (step: RefreshStep): Promise<boolean> => {
+				setStepStatus(step.id, "active", step.labels.active);
+				if (step.ids.length === 0) {
+					setStepStatus(
+						step.id,
+						"done",
+						hasAnyProviders ? step.labels.upToDate : step.labels.none
+					);
+					return true;
+				}
+				const results = await Promise.allSettled(step.ids.map((id) => step.refresh(id)));
+				if (cancelled) return false;
 				const failed = results.filter((r) => r.status === "rejected").length;
 				if (failed === results.length) {
-					setStepStatus("playlists", "error", "Failed to refresh playlists");
+					setStepStatus(step.id, "error", step.labels.failed);
 				} else if (failed > 0) {
 					setStepStatus(
-						"playlists",
+						step.id,
 						"error",
-						`Failed to refresh ${failed} of ${results.length} playlists`
+						`Failed to refresh ${failed} of ${results.length} ${step.labels.sources}`
 					);
 				} else {
-					setStepStatus("playlists", "done", "Playlists refreshed");
+					setStepStatus(step.id, "done", step.labels.done);
 				}
-			} else {
-				setStepStatus(
-					"playlists",
-					"done",
-					hasAnyProviders ? "Playlists up to date" : "No playlists configured"
-				);
-			}
+				return true;
+			};
+
+			// Step 2: Refresh playlists (always shown; mark done immediately if nothing to do)
+			const playlistsFinished = await runRefreshStep({
+				id: "playlists",
+				ids: providerRefreshIds,
+				refresh: (id) => tracked(refreshKeys.playlist(id), () => refreshProvider(id)),
+				labels: {
+					active: "Refreshing playlists…",
+					failed: "Failed to refresh playlists",
+					sources: "playlists",
+					done: "Playlists refreshed",
+					upToDate: "Playlists up to date",
+					none: "No playlists configured",
+				},
+			});
+			if (!playlistsFinished) return;
 
 			// Step 3: Refresh EPG (always shown; mark done immediately if nothing to do)
-			setStepStatus("epg", "active", "Checking EPG…");
-			if (epgRefreshIds.length > 0) {
-				const results = await Promise.allSettled(
-					epgRefreshIds.map((id) => refreshEpg(id).then(() => setEpgLastRefresh(id)))
-				);
-				if (cancelled) return;
-				const failed = results.filter((r) => r.status === "rejected").length;
-				if (failed === results.length) {
-					setStepStatus("epg", "error", "Failed to refresh EPG");
-				} else if (failed > 0) {
-					setStepStatus(
-						"epg",
-						"error",
-						`Failed to refresh ${failed} of ${results.length} EPG sources`
-					);
-				} else {
-					setStepStatus("epg", "done", "EPG refreshed");
-				}
-			} else {
-				setStepStatus(
-					"epg",
-					"done",
-					hasAnyProviders ? "EPG up to date" : "No EPG configured"
-				);
-			}
+			const epgFinished = await runRefreshStep({
+				id: "epg",
+				ids: epgRefreshIds,
+				refresh: (id) =>
+					tracked(refreshKeys.epg(id), () =>
+						refreshEpg(id).then(() => setEpgLastRefresh(id))
+					),
+				labels: {
+					active: "Checking EPG…",
+					failed: "Failed to refresh EPG",
+					sources: "EPG sources",
+					done: "EPG refreshed",
+					upToDate: "EPG up to date",
+					none: "No EPG configured",
+				},
+			});
+			if (!epgFinished) return;
 
 			if (!updateState.supported) {
 				setAllDone(true);
@@ -184,7 +194,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// Step 4: Check for updates via the shared hook.
 			// checkForUpdates() joins the in-flight promise if the mount check is
 			// still running, so only one actual check() call happens.
-			// Timeout after 10s so the splash never gets stuck.
+			// Give up after 7s so the splash never gets stuck.
 			setStepStatus("updates", "active");
 			let foundUpdate: Update | null = null;
 			try {
@@ -214,11 +224,26 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			onCompleteRef.current?.(didRefreshProviders);
 		};
 
-		run();
+		run().catch((err) => {
+			// A step that throws must still leave the splash with a way out.
+			console.error("[splash] startup steps failed:", err);
+			if (cancelled) return;
+			setSteps((prev) =>
+				prev.map((s) =>
+					s.status === "pending" || s.status === "active" ? { ...s, status: "error" } : s
+				)
+			);
+			setAllDone(true);
+			onCompleteRef.current?.(true);
+		});
 		return () => {
 			cancelled = true;
 		};
-	}, [initialized]); // eslint-disable-line react-hooks/exhaustive-deps
+		// The steps run once, with the providers loaded at startup. Listing
+		// providers or updateState here would restart them whenever a refresh
+		// above updates the provider list.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [initialized]);
 
 	const progress =
 		steps.length === 0
