@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { formatTime } from "./format";
+import { formatSkip, formatTime } from "./format";
 
 describe("formatTime", () => {
 	// ── Under one hour (M:SS) ─────────────────────────────────────────
@@ -61,5 +61,20 @@ describe("formatTime", () => {
 
 	it("handles very large values", () => {
 		expect(formatTime(86400)).toBe("24:00:00");
+	});
+});
+
+describe("formatSkip", () => {
+	it("signs forward skips with a plus", () => {
+		expect(formatSkip(10)).toBe("+10s");
+	});
+
+	it("signs back skips with a minus sign", () => {
+		expect(formatSkip(-30)).toBe("−30s");
+	});
+
+	it("leaves a skip that went nowhere unsigned", () => {
+		expect(formatSkip(0)).toBe("0s");
+		expect(formatSkip(-0)).toBe("0s");
 	});
 });
