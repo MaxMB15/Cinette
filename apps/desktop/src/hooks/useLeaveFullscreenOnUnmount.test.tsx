@@ -2,17 +2,13 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { useState } from "react";
 import { FullscreenProvider, useFullscreen } from "@/lib/fullscreen-context";
-
-const win = vi.hoisted(() => ({ setFullscreen: vi.fn(() => Promise.resolve()) }));
-
-vi.mock("@tauri-apps/api/window", () => ({
-	getCurrentWindow: () => ({ setFullscreen: win.setFullscreen }),
-}));
-
+import { changeWindowFullscreen, fakeWindow, resetFakeWindow, settle } from "@/test/fake-window";
 import { useLeaveFullscreenOnUnmount } from "./useLeaveFullscreenOnUnmount";
+
+vi.mock("@tauri-apps/api/window", () => import("@/test/fake-window"));
 
 const Player = () => {
 	const { setFullscreen } = useFullscreen();
@@ -21,45 +17,68 @@ const Player = () => {
 };
 
 // Stands in for the app: the player page can close while the state lives on.
-const App = () => {
-	const [playerOpen, setPlayerOpen] = useState(true);
+const App = ({ startOpen }: { startOpen: boolean }) => {
+	const [playerOpen, setPlayerOpen] = useState(startOpen);
 	const { isFullscreen } = useFullscreen();
 	return (
 		<>
 			{playerOpen && <Player />}
+			<button onClick={() => setPlayerOpen(true)}>open player</button>
 			<button onClick={() => setPlayerOpen(false)}>close player</button>
 			<p>fullscreen={String(isFullscreen)}</p>
 		</>
 	);
 };
 
-const renderApp = () =>
+const renderApp = async (startOpen = true) => {
 	render(
 		<FullscreenProvider>
-			<App />
+			<App startOpen={startOpen} />
 		</FullscreenProvider>
 	);
+	await act(settle);
+};
 
 describe("useLeaveFullscreenOnUnmount", () => {
 	afterEach(() => {
 		cleanup();
-		vi.clearAllMocks();
+		resetFakeWindow();
 	});
 
-	it("leaves fullscreen when the player closes while fullscreen", () => {
-		renderApp();
+	it("leaves fullscreen when the player closes while fullscreen", async () => {
+		await renderApp();
 		fireEvent.click(screen.getByText("fullscreen"));
 		expect(screen.getByText("fullscreen=true")).toBeTruthy();
 
 		fireEvent.click(screen.getByText("close player"));
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
-		expect(win.setFullscreen.mock.calls).toEqual([[true], [false]]);
+		expect(fakeWindow.setFullscreen.mock.calls).toEqual([[true], [false]]);
 	});
 
-	it("leaves the window alone when the player closes outside fullscreen", () => {
-		renderApp();
+	it("leaves the window alone when the player closes outside fullscreen", async () => {
+		await renderApp();
 		fireEvent.click(screen.getByText("close player"));
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
-		expect(win.setFullscreen).not.toHaveBeenCalled();
+		expect(fakeWindow.setFullscreen).not.toHaveBeenCalled();
+	});
+
+	it("keeps a window that was fullscreen before the player opened", async () => {
+		await renderApp(false);
+		await changeWindowFullscreen(true);
+		fireEvent.click(screen.getByText("open player"));
+		fireEvent.click(screen.getByText("close player"));
+		expect(screen.getByText("fullscreen=true")).toBeTruthy();
+		expect(fakeWindow.setFullscreen).not.toHaveBeenCalled();
+	});
+
+	it("leaves fullscreen when the player entered it after the window left", async () => {
+		await renderApp(false);
+		await changeWindowFullscreen(true);
+		fireEvent.click(screen.getByText("open player"));
+		await changeWindowFullscreen(false);
+		fireEvent.click(screen.getByText("fullscreen"));
+		fireEvent.click(screen.getByText("close player"));
+		expect(screen.getByText("fullscreen=false")).toBeTruthy();
+		expect(fakeWindow.setFullscreen.mock.calls).toEqual([[true], [false]]);
 	});
 });

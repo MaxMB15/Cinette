@@ -49,7 +49,12 @@ import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
-import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
+import {
+	resolvePlayerHotkey,
+	isTypingTarget,
+	isKeyboardFocusedControl,
+	repeatsWhenHeld,
+} from "@/lib/hotkeys";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
@@ -895,6 +900,7 @@ export const PlayerView = () => {
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
 			e.preventDefault();
+			if (e.repeat && !repeatsWhenHeld(action)) return;
 
 			const s = mpv.state;
 			switch (action.type) {
