@@ -39,6 +39,12 @@ const introAfterRecap = makeSegment({
 /** An intro whose times fit exactly, so the player may skip only 3 seconds of it. */
 const shortIntro = makeSegment({ start: 60, end: 67, autoFrom: 62, autoTo: 65 });
 
+/**
+ * A step small enough to land between a floor and a slightly lower one. It's
+ * exact in binary, so the time left before a skip lands is exact too.
+ */
+const SLIVER = 1 / 256;
+
 const BUTTONS: SkipSegmentModes = { opening: "button", ending: "button" };
 const AUTO: SkipSegmentModes = { opening: "auto", ending: "auto" };
 
@@ -477,20 +483,20 @@ describe("useSegmentSkipping", () => {
 			expect(seek).toHaveBeenCalledExactlyOnceWith(65);
 		});
 
-		it("plays the rest of a short segment when held in it until near its end", () => {
+		it("plays the rest of a short segment held in until just under two seconds before where the skip lands", () => {
 			const { result, update, at, play, seek } = setup({
 				modes: AUTO,
 				segments: [shortIntro],
 			});
 			play(55, 61);
 			at(61.9);
-			update({ position: 63.1, playing: false });
+			update({ position: 63 + SLIVER, playing: false });
 			update({ playing: true });
 			expect(seek).not.toHaveBeenCalled();
 			expect(result.current.notice).toBeNull();
 		});
 
-		it("skips a short segment held in until exactly two seconds before its end", () => {
+		it("skips a short segment held in until exactly two seconds before where the skip lands", () => {
 			const { update, at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
 			play(55, 61);
 			at(61.9);
@@ -499,16 +505,16 @@ describe("useSegmentSkipping", () => {
 			expect(seek).toHaveBeenCalledExactlyOnceWith(65);
 		});
 
-		it("doesn't jump less than a second", () => {
+		it("doesn't jump just under a second", () => {
 			const { result, at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
 			play(55, 61);
 			at(61.9);
-			at(64.1);
+			at(64 + SLIVER);
 			expect(seek).not.toHaveBeenCalled();
 			expect(result.current.notice).toBeNull();
 		});
 
-		it("jumps a second that a late poll leaves", () => {
+		it("jumps exactly a second that a late poll leaves", () => {
 			const { at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
 			play(55, 61);
 			at(61.5);
