@@ -404,8 +404,7 @@ describe("Controls seek bar", () => {
 		};
 	};
 
-	// jsdom has no pointer events or pointer capture. Captures are kept by
-	// pointer. As in browsers, a touch or pen press captures its pointer
+	// jsdom has no pointer capture, so captures are kept here by pointer. As in browsers, a touch or pen press captures its pointer
 	// before any handler runs, and the release lets it go after them.
 	const captured = new Set<number>();
 	const captureOnPress = (e: PointerEvent) => {

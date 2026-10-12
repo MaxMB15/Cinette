@@ -4,9 +4,9 @@
 import { afterAll, beforeAll } from "vitest";
 
 /**
- * jsdom has no PointerEvent, and without one pointer events lose their
- * coordinates. This mouse event carries the pointer fields as well. Unless
- * the test says otherwise, it comes from the first mouse.
+ * jsdom's PointerEvent starts from the spec's defaults, pointer 0 with no
+ * type. This mouse event carries the pointer fields as well. Unless the test
+ * says otherwise, it comes from the first mouse.
  */
 export class TestPointerEvent extends MouseEvent {
 	readonly pointerId: number;
