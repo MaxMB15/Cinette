@@ -533,6 +533,32 @@ async fn refreshing_an_xtream_provider_restores_its_guide_address() {
 }
 
 #[tokio::test]
+async fn refreshing_an_xtream_provider_keeps_the_movies_its_panel_failed_to_list() {
+    let app = TestApp::new();
+    let (url, _requests) = xtream_panel();
+    let mut channels = load_panel(&app, &url, &test_server::password())
+        .await
+        .unwrap();
+    let id = only_provider(&app).await.id;
+    // An earlier load listed a movie, and the panel now answers 404 for movies.
+    let movie_id = format!("{id}-movie-5");
+    channels.push(Channel {
+        content_type: "movie".into(),
+        ..channel(&movie_id, "Heat", "http://example.test/movie/5.mkv")
+    });
+    cache(&app).save_channels(&id, &channels).unwrap();
+    toggle_favorite(app.state(), movie_id.clone())
+        .await
+        .unwrap();
+
+    refresh_provider(app.state(), id).await.unwrap();
+
+    assert_eq!(channel_names(&app).await, ["Heat", "News One", "Show"]);
+    assert_eq!(favorite_ids(&app).await, [movie_id]);
+    assert_eq!(only_provider(&app).await.channel_count, 3);
+}
+
+#[tokio::test]
 async fn refreshing_a_missing_provider_is_an_error() {
     let app = TestApp::new();
     assert_eq!(

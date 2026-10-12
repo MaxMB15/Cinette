@@ -4164,8 +4164,8 @@ mod tests {
         rows
     }
 
-    /// Makes every INSERT or DELETE, whichever `event` names, on `table` fail,
-    /// the way a full disk fails a write partway through.
+    /// Makes every INSERT, UPDATE or DELETE, whichever `event` names, on
+    /// `table` fail, the way a full disk fails a write partway through.
     fn fail_on(store: &CacheStore, event: &str, table: &str) {
         store
             .conn
@@ -4211,6 +4211,44 @@ mod tests {
             .unwrap();
         store.save_channels("p1", &[new]).unwrap();
         assert_eq!(store.get_channels("p1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_move_that_fails_partway_changes_nothing_and_runs_again() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[channel_at("p1-xt-0", "http://srv/live/u/p/7.ts", "live")],
+            )
+            .unwrap();
+        store
+            .record_play_start("p1-xt-0", "Seven", None, "live")
+            .unwrap();
+        let before = snapshot(&store);
+        // The channels have moved by the time the history fails, so the
+        // rollback has something to undo.
+        fail_on(&store, "UPDATE", "watch_history");
+
+        assert_db_errors!(store.migrate());
+        assert_eq!(snapshot(&store), before);
+        assert_eq!(user_version(&store), 0);
+
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_UPDATE_watch_history")
+            .unwrap();
+        store.migrate().unwrap();
+        assert_eq!(
+            ids_and_favorites(&store, "p1"),
+            owned(&[("p1-live-7", false)])
+        );
+        assert_eq!(
+            store.get_watch_history(10).unwrap()[0].channel_id,
+            "p1-live-7"
+        );
+        assert_eq!(user_version(&store), MIGRATIONS.len());
     }
 
     #[test]
@@ -4261,6 +4299,7 @@ mod tests {
             // A provider with nothing saved fails on its own row.
             store.remove_provider("empty"),
             store.save_channels("p1", &[]),
+            store.save_channels_keeping("p1", &[], &["movie"]),
             store.toggle_favorite("p1-ch-0"),
             store.upsert_channel("p1", &make_channel("p1-ch-9", "New", "News")),
             store.save_epg_data("p1-ch-0", "[]"),
@@ -4314,6 +4353,7 @@ mod tests {
             store.get_provider_for_channel("p1-ch-0"),
             store.remove_provider("p1"),
             store.save_channels("p1", &[]),
+            store.save_channels_keeping("p1", &[], &["movie"]),
             store.get_channels("p1"),
             store.get_all_channels(),
             store.get_channel_by_id("p1-ch-0"),
