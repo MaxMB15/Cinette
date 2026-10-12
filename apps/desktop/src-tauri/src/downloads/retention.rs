@@ -174,11 +174,11 @@ mod tests {
         // The download stays until the interval is up. Only on a machine too
         // slow to look before then can it be gone already.
         assert!(kept || started.elapsed() >= interval);
-        wait_until("the first check deletes the download", || {
-            download(&app, "a").is_none()
-        });
+        // The check takes the record out before it deletes the file, so once
+        // the file is gone the record is too.
+        wait_until("the first check deletes the download", || !file.exists());
         assert!(started.elapsed() >= interval);
-        assert!(!file.exists());
+        assert!(download(&app, "a").is_none());
         // The thread checks every interval until the tests end. With no
         // retention set, each check returns at once.
         app.downloads().set_retention_days(None);

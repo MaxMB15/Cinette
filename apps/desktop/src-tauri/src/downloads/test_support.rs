@@ -48,8 +48,8 @@ pub(crate) fn stalls() -> &'static str {
 /// Audio samples in the video `video_url` serves.
 const SAMPLES: usize = 1_000_000;
 
-/// The length of the video `video_url` serves. The size probe takes a length
-/// for a video's only from a megabyte up, the private `MIN_VIDEO_BYTES` in
+/// The length of the video `video_url` serves. The size probe ignores a
+/// video length under a megabyte, set by the private `MIN_VIDEO_BYTES` in
 /// `mvp_core::downloads::size`, so this has to stay above it by hand.
 pub(crate) const VIDEO_BYTES: i64 = 44 + SAMPLES as i64;
 
