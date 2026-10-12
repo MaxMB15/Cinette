@@ -628,6 +628,18 @@ mod tests {
     }
 
     #[test]
+    fn references_that_name_no_character_are_kept_as_written() {
+        let data = parse_epg(
+            r#"<tv><programme channel="c1"><title>A&#0;B</title><desc>Tom & Jerry; more</desc><category>&#x110000;</category></programme></tv>"#,
+        )
+        .unwrap();
+        let program = &data.programs[0];
+        assert_eq!(program.title, "A&#0;B");
+        assert_eq!(program.description, "Tom & Jerry; more");
+        assert_eq!(program.category.as_deref(), Some("&#x110000;"));
+    }
+
+    #[test]
     fn cdata_and_markup_inside_a_field_are_read_as_text() {
         let data = parse_epg(
             r#"<tv><programme channel="c1"><title><![CDATA[Rock & <Roll>]]></title><desc>A <b>bold</b> move</desc></programme></tv>"#,
