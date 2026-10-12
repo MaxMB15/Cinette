@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Trash2, Loader2, Clock } from "lucide-react";
+import { Trash, LoaderCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getWatchHistory, deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -89,7 +89,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 	if (loading) {
 		return (
 			<div className="flex items-center justify-center h-full py-12">
-				<Loader2 className="h-5 w-5 animate-spin text-primary" />
+				<LoaderCircle className="h-5 w-5 animate-spin text-primary" />
 			</div>
 		);
 	}
@@ -115,7 +115,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 					onClick={handleClearAll}
 					className="text-xs text-muted-foreground hover:text-destructive gap-1.5"
 				>
-					<Trash2 className="h-3.5 w-3.5" />
+					<Trash className="h-3.5 w-3.5" />
 					Clear All
 				</Button>
 			</div>
@@ -175,7 +175,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
 								aria-label={`Remove ${entry.channelName} from history`}
 							>
-								<Trash2 className="h-3.5 w-3.5" />
+								<Trash className="h-3.5 w-3.5" />
 							</button>
 						</div>
 					))}

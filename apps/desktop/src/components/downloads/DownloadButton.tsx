@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState } from "react";
-import { Download, DownloadCloud, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
+import { Download, CloudDownload, CircleCheck, LoaderCircle, CircleAlert } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isMobilePlatform } from "@/lib/platform";
 import type { DownloadIconState } from "@/lib/types";
@@ -134,20 +134,20 @@ const iconFor = (state: DownloadIconState) => {
 	switch (state) {
 		case "complete":
 			return {
-				Icon: CheckCircle2,
+				Icon: CircleCheck,
 				color: "text-emerald-500",
 				label: "Downloaded",
 			};
 		case "partial":
 			return {
-				Icon: DownloadCloud,
+				Icon: CloudDownload,
 				color: "text-amber-400",
 				label: "Partially downloaded",
 			};
 		case "downloading":
-			return { Icon: Loader2, color: "text-blue-400", label: "Downloading" };
+			return { Icon: LoaderCircle, color: "text-blue-400", label: "Downloading" };
 		case "failed":
-			return { Icon: AlertCircle, color: "text-red-500", label: "Download failed — retry" };
+			return { Icon: CircleAlert, color: "text-red-500", label: "Download failed — retry" };
 		default:
 			return { Icon: Download, color: "text-muted-foreground", label: "Download" };
 	}

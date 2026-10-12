@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useEffect, useRef } from "react";
-import { Check, Loader2, X, Settings, ArrowLeft } from "lucide-react";
+import { Check, LoaderCircle, X, Settings, ArrowLeft } from "lucide-react";
 import {
 	searchSubtitles,
 	downloadSubtitle,
@@ -377,7 +377,7 @@ export const SubtitlePicker = ({
 				{/* Search loading */}
 				{loading && (
 					<div className="flex items-center gap-2 p-3 text-white/60">
-						<Loader2 className="h-4 w-4 animate-spin" />
+						<LoaderCircle className="h-4 w-4 animate-spin" />
 						<span>Searching…</span>
 					</div>
 				)}
@@ -438,7 +438,7 @@ export const SubtitlePicker = ({
 										className="w-full text-left px-3 py-1.5 rounded-lg text-xs hover:bg-white/10 disabled:opacity-50 flex items-center gap-1.5"
 									>
 										{downloadingId === entry.fileId ? (
-											<Loader2 className="h-3 w-3 animate-spin shrink-0" />
+											<LoaderCircle className="h-3 w-3 animate-spin shrink-0" />
 										) : selectedFileId === entry.fileId ? (
 											<Check className="h-3 w-3 shrink-0 text-blue-400" />
 										) : (

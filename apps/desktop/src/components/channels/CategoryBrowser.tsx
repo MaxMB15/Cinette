@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import type { ReactNode } from "react";
-import { ChevronRight, FolderOpen, Tv2 } from "lucide-react";
+import { ChevronRight, FolderOpen, TvMinimal } from "lucide-react";
 import { formatCount } from "@/lib/format";
 
 interface SuperCategoryInfo {
@@ -70,7 +70,7 @@ export const CategoryBrowser = ({
 				<CategoryTile
 					key={group.name}
 					name={group.name}
-					icon={<Tv2 className="h-4 w-4 text-muted-foreground/70" />}
+					icon={<TvMinimal className="h-4 w-4 text-muted-foreground/70" />}
 					detail={formatCount(group.channelCount, "channel")}
 					onSelect={() => onSelectGroup(group.name)}
 				/>

@@ -6,7 +6,7 @@ import {
 	RefreshCw,
 	Plus,
 	Pencil,
-	Trash2,
+	Trash,
 	Sparkles,
 	Check,
 	X,
@@ -514,7 +514,7 @@ export const CategoryManager = ({
 											className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10"
 											title="Delete category"
 										>
-											<Trash2 className="h-3 w-3" />
+											<Trash className="h-3 w-3" />
 										</button>
 									</>
 								)}

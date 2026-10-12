@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { Loader2, RotateCw, WifiOff } from "lucide-react";
+import { LoaderCircle, RotateCw, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ConnectionStatusOverlayProps {
@@ -84,7 +84,7 @@ export const ConnectionStatusOverlay = ({
 			title: "Connection issues",
 			detail: "Stream stalled — waiting for network.",
 			Icon: <WifiOff className="h-5 w-5" />,
-			Trailing: <Loader2 className="h-4 w-4 animate-spin text-amber-300" />,
+			Trailing: <LoaderCircle className="h-4 w-4 animate-spin text-amber-300" />,
 		},
 		reconnecting: {
 			container: "border-red-400/50 bg-red-950/85 text-red-100 shadow-red-500/20",
@@ -95,7 +95,7 @@ export const ConnectionStatusOverlay = ({
 					? `Reconnecting to stream (attempt #${reconnectAttempt})…`
 					: "Reconnecting to stream…",
 			Icon: <WifiOff className="h-5 w-5" />,
-			Trailing: <Loader2 className="h-4 w-4 animate-spin text-red-300" />,
+			Trailing: <LoaderCircle className="h-4 w-4 animate-spin text-red-300" />,
 		},
 		failed: {
 			container: "border-red-400/60 bg-red-950/90 text-red-100 shadow-red-500/30",
