@@ -43,7 +43,7 @@ describe("UpdateBanner", () => {
 	});
 
 	it("shows fallback text when the update has no notes", () => {
-		const state = makeUpdateState({ update: fakeUpdate({ body: undefined }) });
+		const state = makeUpdateState({ update: fakeUpdate({ body: null }) });
 		render(<UpdateBanner state={state} />);
 		expect(screen.getByText("A new version is ready to install.")).toBeTruthy();
 	});

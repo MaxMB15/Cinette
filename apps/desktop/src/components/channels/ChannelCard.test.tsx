@@ -5,7 +5,8 @@ import { render, screen, fireEvent, cleanup, within } from "@testing-library/rea
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 import { nowSeconds } from "@/lib/date";
-import { makeNewsChannel, makeMovieDownload, makeEpisode, makeMovie } from "@/test/detail-fixtures";
+import { makeChannel, makeDownload } from "@/test/channel-fixtures";
+import { makeMovieDownload, makeEpisode, makeMovie } from "@/test/detail-fixtures";
 
 const tauri = vi.hoisted(() => ({
 	enqueueMovieDownload: vi.fn<(id: string) => Promise<string>>(),
@@ -215,7 +216,7 @@ describe("ChannelCard poster variant", () => {
 	});
 
 	it("shows a series' episode downloads but leaves starting and stopping them to its page", () => {
-		const series = makeNewsChannel({ id: "series-1", name: "Show", contentType: "series" });
+		const series = makeChannel({ id: "series-1", name: "Show", contentType: "series" });
 		const episode = makeEpisode(1, 1, "Pilot");
 		const { container, rerender } = render(
 			<ChannelCard channel={series} onPlay={vi.fn()} variant="poster" />
@@ -226,7 +227,15 @@ describe("ChannelCard poster variant", () => {
 		downloads.bySeries = new Map([
 			[
 				"series-1",
-				[makeMovieDownload({ id: "dl-ep", channelId: episode.id, status: "downloading" })],
+				[
+					makeDownload({
+						id: "dl-ep",
+						channelId: episode.id,
+						kind: "episode",
+						seriesChannelId: "series-1",
+						status: "downloading",
+					}),
+				],
 			],
 		]);
 		rerender(<ChannelCard channel={{ ...series }} onPlay={vi.fn()} variant="poster" />);
@@ -239,7 +248,15 @@ describe("ChannelCard poster variant", () => {
 		downloads.bySeries = new Map([
 			[
 				"series-1",
-				[makeMovieDownload({ id: "dl-ep", channelId: episode.id, status: "completed" })],
+				[
+					makeDownload({
+						id: "dl-ep",
+						channelId: episode.id,
+						kind: "episode",
+						seriesChannelId: "series-1",
+						status: "completed",
+					}),
+				],
 			],
 		]);
 		rerender(<ChannelCard channel={{ ...series }} onPlay={vi.fn()} variant="poster" />);

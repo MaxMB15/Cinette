@@ -795,6 +795,7 @@ describe("ChannelList filters", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Show favorites only" }));
 		// The Harbor Lights card stands for its first listed episode, which is a favorite.
 		expect(screen.getByText("Harbor Lights")).toBeInTheDocument();
+		expect(screen.queryByText("Dune Road")).toBeNull();
 	});
 
 	it("says so when the heart filter leaves nothing", async () => {
@@ -943,7 +944,7 @@ describe("ChannelList category hierarchy", () => {
 	it("narrows a category's groups to the search", async () => {
 		await renderList();
 		fireEvent.click(screen.getByText("Sports"));
-		typeSearch("TEN");
+		typeSearch(" TEN ");
 		await waitForDebounce();
 
 		expect(screen.getByRole("button", { name: /^Tennis/ })).toBeInTheDocument();

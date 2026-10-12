@@ -420,7 +420,12 @@ export const CategoryManager = ({
 					const groups = entries.filter((e) => e.superCategory === catName);
 					const isRenaming = renamingCategory === catName;
 					return (
-						<div key={catName} className="rounded-xl border border-border bg-card">
+						<div
+							key={catName}
+							role="group"
+							aria-label={catName}
+							className="rounded-xl border border-border bg-card"
+						>
 							{/* Category header */}
 							<div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
 								{isRenaming ? (
@@ -535,7 +540,11 @@ export const CategoryManager = ({
 
 				{/* Uncategorized */}
 				{uncategorized.length > 0 && (
-					<div className="rounded-xl border-2 border-dashed border-border bg-card/50">
+					<div
+						role="group"
+						aria-label="Uncategorized"
+						className="rounded-xl border-2 border-dashed border-border bg-card/50"
+					>
 						<div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
 							<span className="text-sm font-semibold text-muted-foreground flex-1">
 								Uncategorized

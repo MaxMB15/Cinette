@@ -62,9 +62,8 @@ vi.mock("./ProviderSettingsModal", () => ({
 
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
-/** The card for one provider, found by its name. */
-const card = (name: string) =>
-	screen.getByRole("heading", { name }).closest(".rounded-lg") as HTMLElement;
+/** The card for one provider. */
+const card = (name: string) => screen.getByRole("group", { name });
 
 const cardButton = (provider: string, title: string) =>
 	within(card(provider)).getByRole("button", { name: title });

@@ -95,12 +95,12 @@ const click = async (name: string) => {
 	await flush();
 };
 
-/** The card for one category, found by its heading. */
-const card = (name: string) =>
-	screen.getByText(name, { selector: "span" }).closest(".rounded-xl") as HTMLElement;
+/** The card for one category. */
+const card = (name: string) => screen.getByRole("group", { name });
 
 beforeEach(() => {
-	vi.clearAllMocks();
+	// Resetting drops values a test queued and didn't use, which clearing keeps.
+	vi.resetAllMocks();
 	vi.mocked(getGeminiApiKey).mockResolvedValue("test-key");
 	vi.mocked(ask).mockResolvedValue(true);
 	for (const fn of [
@@ -125,6 +125,11 @@ describe("CategoryManager counts", () => {
 		await renderManager([entry("Action", "Films", 0)]);
 		expect(screen.getByText("movie · 1 group · 1 category")).toBeInTheDocument();
 		expect(within(card("Films")).getByText("1 group")).toBeInTheDocument();
+	});
+
+	it("doesn't make a count of one uncategorized group plural", async () => {
+		await renderManager([entry("Action", "Films", 0), entry("Drama", null, 1)]);
+		expect(within(card("Uncategorized")).getByText("1 group")).toBeInTheDocument();
 	});
 
 	it("lists the provider's groups as uncategorized before anything is sorted", async () => {

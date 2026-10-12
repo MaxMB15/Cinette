@@ -81,7 +81,7 @@ export const PlaylistManager = () => {
 						const isRefreshing = refreshingIds.has(p.id);
 						const isFile = p.url.startsWith("file://");
 						return (
-							<Card key={p.id}>
+							<Card key={p.id} role="group" aria-label={p.name}>
 								<CardHeader className="py-4">
 									<div className="flex items-center justify-between">
 										<div className="flex items-center gap-2 min-w-0">

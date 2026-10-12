@@ -6,8 +6,14 @@ import type { Update } from "@tauri-apps/plugin-updater";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import type { Provider } from "@/lib/types";
 
-/** An update as the updater plugin reports it, with only the fields the app reads. */
-export const fakeUpdate = (overrides: Partial<Update> = {}): Update =>
+/**
+ * An update as the updater plugin reports it, with only the fields the app
+ * reads. The plugin types `body` as an optional string, but an update without
+ * notes comes from Rust as `null`, so the overrides accept that too.
+ */
+export const fakeUpdate = (
+	overrides: Omit<Partial<Update>, "body"> & { body?: string | null } = {}
+): Update =>
 	({
 		version: "2.0.0",
 		body: "Release notes",
