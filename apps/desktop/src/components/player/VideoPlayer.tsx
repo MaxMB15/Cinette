@@ -1001,9 +1001,7 @@ export const PlayerView = () => {
 		(activeChannel.contentType === "movie" || activeChannel.contentType === "series");
 	const downloadSlot = showPlayerDownload ? (
 		<DownloadButton
-			// A new episode closes a confirm left open for the last one, which
-			// would otherwise stop or remove the new episode's download.
-			key={activeChannel.id}
+			itemId={activeChannel.id}
 			state={playerDownloadState}
 			onStart={() => {
 				if (!activeChannel) return;

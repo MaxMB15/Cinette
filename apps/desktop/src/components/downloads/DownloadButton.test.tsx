@@ -66,3 +66,60 @@ describe("DownloadButton", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 });
+
+describe("DownloadButton for a changing item", () => {
+	afterEach(cleanup);
+
+	/** The player's button, which stays mounted as one episode follows another. */
+	const PlayerButton = (props: {
+		itemId: string;
+		state: "downloading" | "complete" | "idle";
+		onStop?: () => void;
+		onRemove?: () => Promise<unknown>;
+	}) => (
+		<DownloadButton
+			itemId={props.itemId}
+			state={props.state}
+			onStart={vi.fn()}
+			onStop={props.onStop ?? vi.fn()}
+			onRemove={props.onRemove ?? (() => Promise.resolve())}
+		/>
+	);
+
+	it("closes a confirm left open for the last item", () => {
+		const onStop = vi.fn();
+		const { rerender } = render(
+			<PlayerButton itemId="e1" state="downloading" onStop={onStop} />
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Downloading" }));
+		expect(screen.getByRole("dialog", { name: "Stop download?" })).toBeInTheDocument();
+
+		rerender(<PlayerButton itemId="e2" state="downloading" onStop={onStop} />);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(onStop).not.toHaveBeenCalled();
+	});
+
+	it("keeps a confirm open while the item stays the same", () => {
+		const { rerender } = render(<PlayerButton itemId="e1" state="downloading" />);
+		fireEvent.click(screen.getByRole("button", { name: "Downloading" }));
+		rerender(<PlayerButton itemId="e1" state="downloading" />);
+		expect(screen.getByRole("dialog", { name: "Stop download?" })).toBeInTheDocument();
+	});
+
+	it("still says a removal failed after the next item starts", async () => {
+		let fail: (reason: string) => void = () => {};
+		const onRemove = () =>
+			new Promise((_resolve, reject) => {
+				fail = reject;
+			});
+		const { rerender } = render(
+			<PlayerButton itemId="e1" state="complete" onRemove={onRemove} />
+		);
+		confirmRemove();
+		rerender(<PlayerButton itemId="e2" state="idle" onRemove={onRemove} />);
+
+		await act(async () => fail("Could not delete /a.mkv: denied"));
+		const dialog = screen.getByRole("dialog", { name: "Couldn't remove the download" });
+		expect(dialog.textContent).toContain("Could not delete /a.mkv: denied");
+	});
+});

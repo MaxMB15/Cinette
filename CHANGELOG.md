@@ -63,6 +63,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Re-categorize All in Manage Categories now sends Gemini sample titles from the content type on screen only (#103).
 - Escape now closes the playlist settings and download history dialogs (#103).
 - Confirmation prompts, like removing a provider or a download, now take keyboard focus and close with Escape, and the player behind no longer acts on keys pressed in them or takes focus from them when the next episode starts. They no longer get cut off inside a sheet either (#103).
+- A Stop or Remove download prompt left open in the player no longer acts on the next episode's download (#103).
 - Screen readers now name the provider form fields and the clear file button, and say which option of each toggle is on and which group is picked in Manage Categories (#103).
 - The playlist file drop zone now opens with the keyboard (#103).
 - After you play a download, the channel list goes back to the Downloads tab instead of the live channels (#114).

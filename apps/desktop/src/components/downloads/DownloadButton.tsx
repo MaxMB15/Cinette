@@ -12,6 +12,11 @@ const DOWNLOADS_SUPPORTED = !isMobilePlatform();
 export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" | "failed";
 
 interface DownloadButtonProps {
+	/**
+	 * The item the button is for. A confirm left open closes when this changes,
+	 * so it can't stop or remove the next item's download.
+	 */
+	itemId?: string;
 	state: DownloadIconState;
 	/** Start (idle/partial). For a series or season this downloads all missing episodes.
 	 *  Any large-batch confirm is handled by the parent. */
@@ -28,6 +33,7 @@ interface DownloadButtonProps {
 }
 
 export const DownloadButton = ({
+	itemId,
 	state,
 	onStart,
 	onStop,
@@ -39,6 +45,13 @@ export const DownloadButton = ({
 }: DownloadButtonProps) => {
 	const [confirm, setConfirm] = useState<null | "stop" | "remove">(null);
 	const [removeError, setRemoveError] = useState<string | null>(null);
+	// Closed while rendering rather than in an effect, so the confirm never
+	// shows for the new item. A failed removal is still reported.
+	const [confirmItemId, setConfirmItemId] = useState(itemId);
+	if (confirmItemId !== itemId) {
+		setConfirmItemId(itemId);
+		setConfirm(null);
+	}
 
 	if (!DOWNLOADS_SUPPORTED) return null;
 
