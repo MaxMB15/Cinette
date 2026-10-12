@@ -3,10 +3,12 @@
 
 import { Controls } from "./Controls";
 import { ConnectionStatusOverlay } from "./ConnectionStatusOverlay";
+import { OpeningIndicator } from "./OpeningIndicator";
 import { SubtitlePicker } from "./SubtitlePicker";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
+import { VideoTapLayer } from "./VideoTapLayer";
 import { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -40,17 +42,21 @@ import {
 import { parseSrt } from "@/lib/subtitle-parser";
 import type { Channel, OmdbData, WhatsonData, SubtitleCue, SubtitleEntry } from "@/lib/types";
 import { useFullscreen } from "@/lib/fullscreen-context";
+import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
+import { seriesTitleOf } from "@/lib/channels";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
-import { formatTime } from "@/lib/format";
+import { formatSkip, formatTime } from "@/lib/format";
+import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
+import { nextSkip, type SkipRun } from "@/lib/skip";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
-import { hasFullscreenButton, setWindowFullscreen } from "@/lib/fullscreen";
+import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
 /** How often (ms) watch progress is persisted while playing. */
@@ -59,6 +65,8 @@ const MAX_VOLUME = 150;
 const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 /** Position jumps larger than this between polls are seeks, not watching. */
 const MAX_WATCH_STEP_SECONDS = 5;
+/** How long the controls stay up after they appear or the player is clicked or tapped. */
+const CONTROLS_HIDE_MS = 4000;
 
 interface PlaybackProgress {
 	/** Resume key (see playbackKey); null for live or nothing playing. */
@@ -113,8 +121,6 @@ interface PendingResume {
 	apply?: () => void;
 }
 
-const showTitle = (name: string): string => name.replace(/\s+S\d{1,3}E\d{1,3}.*/i, "").trim();
-
 /** Extract season/episode numbers from a channel name like "Show S01E05". */
 const parseSeasonEpisode = (name: string): { season?: number; episode?: number } => {
 	const m = name.match(/S(\d{1,3})E(\d{1,3})/i);
@@ -142,6 +148,7 @@ export const PlayerView = () => {
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
 	const [seriesEpisodes, setSeriesEpisodes] = useState<Channel[]>([]);
 	const { isFullscreen, setFullscreen } = useFullscreen();
+	useLeaveFullscreenOnUnmount();
 	// The phone layout hides the tab bar on this route, so the player needs
 	// its own way back.
 	const { layoutMode } = usePlatform();
@@ -537,7 +544,7 @@ export const PlayerView = () => {
 		setEnrichedMeta(null);
 
 		const mediaType = activeChannel.contentType === "series" ? "series" : "movie";
-		const titleForOmdb = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
+		const titleForOmdb = seriesTitleOf(activeChannel);
 
 		fetchOmdbData(activeChannel.id, titleForOmdb, mediaType as "movie" | "series")
 			.then((omdbData) => {
@@ -625,10 +632,8 @@ export const PlayerView = () => {
 	// Derive episodes from passed list (Xtream) or local cache (M3U)
 	const localSeriesEpisodes = useMemo(() => {
 		if (!activeChannel || activeChannel.contentType !== "series") return [];
-		const title = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
-		return channels.filter(
-			(ch) => ch.contentType === "series" && (ch.seriesTitle ?? showTitle(ch.name)) === title
-		);
+		const title = seriesTitleOf(activeChannel);
+		return channels.filter((ch) => ch.contentType === "series" && seriesTitleOf(ch) === title);
 	}, [activeChannel, channels]);
 
 	// Series container id used to group download records — matches the series
@@ -636,9 +641,9 @@ export const PlayerView = () => {
 	const seriesContainerId = useMemo(() => {
 		if (!activeChannel) return "";
 		if (activeChannel.contentType !== "series") return activeChannel.id;
-		const title = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
+		const title = seriesTitleOf(activeChannel);
 		const container = channels.find(
-			(ch) => ch.contentType === "series" && (ch.seriesTitle ?? showTitle(ch.name)) === title
+			(ch) => ch.contentType === "series" && seriesTitleOf(ch) === title
 		);
 		return container?.id ?? activeChannel.id;
 	}, [activeChannel, channels]);
@@ -773,13 +778,69 @@ export const PlayerView = () => {
 	}, [mpv.state.isPlaying, playEpisode]);
 
 	// --- Controls visibility ---
+	// Bumped by each click or tap so pressing a button, such as skip a few
+	// times in a row, keeps the controls up.
+	const [controlsActivity, setControlsActivity] = useState(0);
 	useEffect(() => {
 		if (!showControls) return;
-		const timer = setTimeout(() => setShowControls(false), 4000);
+		const timer = setTimeout(() => setShowControls(false), CONTROLS_HIDE_MS);
 		return () => clearTimeout(timer);
-	}, [showControls]);
+	}, [showControls, controlsActivity]);
 
+	const revealControls = useCallback(() => {
+		setShowControls(true);
+		setControlsActivity((n) => n + 1);
+	}, []);
 	const handleMouseMove = useCallback(() => setShowControls(true), []);
+	// A tap on a touch screen also sends a mousemove, which would undo the
+	// tap's toggle, so there only a real mouse or trackpad shows the controls.
+	const handlePointerMove = useCallback((e: React.PointerEvent) => {
+		if (e.pointerType === "mouse") setShowControls(true);
+	}, []);
+
+	// --- Skipping ---
+	const [skip, setSkip] = useState(readSkipIntervals);
+	useEffect(() => {
+		const update = () => setSkip(readSkipIntervals());
+		window.addEventListener(SKIP_INTERVALS_EVENT, update);
+		return () => window.removeEventListener(SKIP_INTERVALS_EVENT, update);
+	}, []);
+	// Same test as the seek bar, which live channels usually don't get.
+	const seekable = mpv.state.duration > 0;
+
+	// Skips in a row add up, as nextSkip describes. The returned total is how
+	// far the run of skips has moved.
+	const lastSkipRef = useRef<SkipRun | null>(null);
+	useEffect(() => {
+		lastSkipRef.current = null;
+	}, [mpv.state.currentUrl]);
+	const skipBy = useCallback(
+		(seconds: number): number => {
+			const s = mpvStateRef.current;
+			const run = nextSkip(lastSkipRef.current, s.position, s.duration, seconds, Date.now());
+			lastSkipRef.current = run;
+			mpv.seek(run.target);
+			return run.total;
+		},
+		[mpv]
+	);
+	// The tap layer keeps its clicks from the player, so a double-tap skip
+	// restarts the hide timer here, as a press on a skip button does. Hidden
+	// controls stay hidden.
+	const skipFromTap = useCallback(
+		(seconds: number): number => {
+			setControlsActivity((n) => n + 1);
+			return skipBy(seconds);
+		},
+		[skipBy]
+	);
+	const seekTo = useCallback(
+		(position: number) => {
+			lastSkipRef.current = null;
+			mpv.seek(position);
+		},
+		[mpv]
+	);
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
@@ -788,13 +849,10 @@ export const PlayerView = () => {
 	}, [location.key, navigate]);
 
 	// --- Fullscreen ---
-	const toggleFullscreen = useCallback(() => {
-		const next = !isFullscreen;
-		setFullscreen(next);
-		setWindowFullscreen(next).catch((e) => {
-			console.error("[PlayerView] setFullscreen failed:", e);
-		});
-	}, [isFullscreen, setFullscreen]);
+	const toggleFullscreen = useCallback(
+		() => setFullscreen(!isFullscreen),
+		[isFullscreen, setFullscreen]
+	);
 
 	// An iPad Split View pane narrow enough for the phone layout has no full
 	// screen button, so it leaves full screen instead of keeping the sidebar
@@ -832,7 +890,7 @@ export const PlayerView = () => {
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
 
-			const action = resolvePlayerHotkey(e);
+			const action = resolvePlayerHotkey(e, skip);
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
@@ -854,16 +912,13 @@ export const PlayerView = () => {
 					mpv.toggleMute();
 					flashOsd(s.volume > 0 ? "Muted" : "Unmuted");
 					break;
-				case "seekBy": {
-					const target = Math.max(0, s.position + action.seconds);
-					mpv.seek(s.duration > 0 ? Math.min(target, s.duration - 1) : target);
-					flashOsd(`${action.seconds > 0 ? "+" : "−"}${Math.abs(action.seconds)}s`);
+				case "seekBy":
+					flashOsd(formatSkip(skipBy(action.seconds)));
 					break;
-				}
 				case "seekToPercent":
 					if (s.duration > 0) {
 						const target = (s.duration * action.percent) / 100;
-						mpv.seek(target);
+						seekTo(target);
 						flashOsd(formatTime(target));
 					}
 					break;
@@ -896,9 +951,6 @@ export const PlayerView = () => {
 						setShowShortcuts(false);
 					} else if (isFullscreen) {
 						setFullscreen(false);
-						setWindowFullscreen(false).catch((e) => {
-							console.error("[PlayerView] setFullscreen(false) failed:", e);
-						});
 					} else if (showInfoDrawer) {
 						setShowInfoDrawer(false);
 					} else if (showSubtitlePicker) {
@@ -934,6 +986,9 @@ export const PlayerView = () => {
 			canShowSubtitles,
 			activeChannel,
 			flushProgress,
+			skip,
+			skipBy,
+			seekTo,
 		]
 	);
 
@@ -950,7 +1005,7 @@ export const PlayerView = () => {
 
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
-	const showTitleForDrawer = activeChannel?.seriesTitle ?? showTitle(activeChannel?.name ?? "");
+	const showTitleForDrawer = activeChannel ? seriesTitleOf(activeChannel) : "";
 
 	// --- Player download control (movies + series episodes only) ---
 	const playerDl = activeChannel ? byChannel.get(activeChannel.id) : undefined;
@@ -981,9 +1036,14 @@ export const PlayerView = () => {
 				}
 			}}
 			onStop={() => playerDl && void stopDownload(playerDl.id)}
-			onRemove={() => playerDl && void removeDownload(playerDl.id)}
+			onRemove={() => playerDl && removeDownload(playerDl.id)}
 		/>
 	) : undefined;
+
+	// Resumes where the stream broke, not from the start of the movie or episode.
+	const retryStream = () => {
+		mpv.reload().catch(() => {});
+	};
 
 	return (
 		<div
@@ -993,8 +1053,9 @@ export const PlayerView = () => {
 					? "player-container fixed inset-0 z-[9999] bg-transparent focus:outline-none"
 					: "player-container relative h-full w-full bg-transparent focus:outline-none"
 			}
-			onMouseMove={handleMouseMove}
-			onClick={() => setShowControls(true)}
+			onMouseMove={touchDevice ? undefined : handleMouseMove}
+			onPointerMove={touchDevice ? handlePointerMove : undefined}
+			onClick={revealControls}
 			onKeyDown={handleKeyDown}
 			tabIndex={0}
 		>
@@ -1011,22 +1072,14 @@ export const PlayerView = () => {
 			<ConnectionStatusOverlay
 				reconnecting={mpv.reconnecting}
 				reconnectAttempt={mpv.reconnectAttempt}
-				buffering={mpv.buffering}
+				// Buffering before the first frame is part of opening, which has
+				// its own spinner. Failures and reconnects still outrank it.
+				buffering={mpv.buffering && !mpv.opening}
 				loadFailed={mpv.loadFailed}
+				openFailed={mpv.openFailed}
 				recentlyRecovered={mpv.recentlyRecovered}
-				onRetry={() => {
-					const url = mpv.state.currentUrl;
-					if (!url) return;
-					// Preserve playback position across the hard restart so
-					// the user resumes where they were when the stream broke,
-					// not from the beginning of the movie/episode. We use the
-					// sticky `getLastKnownPosition()` (rather than the polled
-					// `state.position`) so the retry is symmetric with the
-					// `online`-triggered auto-recovery and robust to the
-					// transient position=0 window during the `loadfile`.
-					const resumeAt = mpv.getLastKnownPosition();
-					mpv.load(url, resumeAt > 1.0 ? resumeAt : undefined).catch(() => {});
-				}}
+				onRetry={retryStream}
+				belowTopBar={showBack}
 			/>
 
 			<div
@@ -1044,6 +1097,7 @@ export const PlayerView = () => {
 					</div>
 				)}
 				{!mpv.error &&
+					!mpv.opening &&
 					!mpv.state.currentUrl &&
 					!mpv.state.isPlaying &&
 					!mpv.state.isPaused && (
@@ -1051,7 +1105,17 @@ export const PlayerView = () => {
 							Select a channel to start watching
 						</p>
 					)}
+				{mpv.opening && <OpeningIndicator key={mpv.loadId} onRetry={retryStream} />}
 			</div>
+
+			{touchDevice && (
+				<VideoTapLayer
+					seekable={seekable}
+					skip={skip}
+					onSkip={skipFromTap}
+					onTap={() => setShowControls((v) => !v)}
+				/>
+			)}
 
 			{(activeChannelName || showBack) && showControls && (
 				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-gradient-to-b from-black/60 to-transparent p-4 pt-[calc(1rem_+_env(safe-area-inset-top))] pl-[calc(1rem_+_env(safe-area-inset-left))] pr-[calc(1rem_+_env(safe-area-inset-right))]">
@@ -1103,7 +1167,14 @@ export const PlayerView = () => {
 					onPlay={mpv.play}
 					onPause={mpv.pause}
 					onStop={handleStop}
-					onSeek={mpv.seek}
+					onSeek={seekTo}
+					skip={seekable ? skip : undefined}
+					onSkip={(seconds) => flashOsd(formatSkip(skipBy(seconds)))}
+					touchLayout={touchDevice}
+					// Play, pause and skip do nothing useful while the stream opens
+					// or after it fails, and the spinner or the error has the middle
+					// to itself.
+					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
@@ -1223,7 +1294,9 @@ export const PlayerView = () => {
 				<LiveInfoDrawer channel={activeChannel} onClose={() => setShowInfoDrawer(false)} />
 			)}
 
-			{showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+			{showShortcuts && (
+				<ShortcutsOverlay skip={skip} onClose={() => setShowShortcuts(false)} />
+			)}
 
 			{pendingResume && (
 				<ResumePrompt

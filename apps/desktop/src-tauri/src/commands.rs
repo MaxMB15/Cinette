@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::downloads::manager::{self, DownloadManager};
+use crate::downloads::retention;
 use mvp_core::cache::store::{
     CacheStore, GroupHierarchyEntry, PinnedGroup, PlaybackPosition, WatchHistoryEntry,
 };
@@ -548,6 +549,21 @@ pub async fn get_omdb_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<St
     Ok(key)
 }
 
+/// The OMDb API key, or None when it isn't set or is blank. Whatson calls
+/// check this too, so a user who hasn't added a key sends nothing to either
+/// service.
+fn omdb_api_key<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, String> {
+    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
+    Ok(non_empty_key(store.get(OMDB_API_KEY)))
+}
+
+/// A stored key as a string, or None when it's missing, blank or not a string.
+fn non_empty_key(value: Option<serde_json::Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str().map(str::trim).map(str::to_string))
+        .filter(|k| !k.is_empty())
+}
+
 /// Persist the OMDB API key in the Tauri Store.
 #[command]
 pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
@@ -582,13 +598,9 @@ pub async fn fetch_omdb_data<R: Runtime>(
     }
 
     // 2. Retrieve API key — bail out silently if not set.
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OMDB_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[OMDB] no API key configured, skipping fetch");
-            return Ok(None);
-        }
+    let Some(api_key) = omdb_api_key(&app)? else {
+        tracing::debug!("[OMDB] no API key configured, skipping fetch");
+        return Ok(None);
     };
 
     // 3. Fetch from OMDB.
@@ -705,9 +717,11 @@ pub async fn fetch_mdblist_data<R: Runtime>(
 const WHATSON_CACHE_TTL: i64 = 7 * 24 * 60 * 60;
 
 /// Fetch whatson-api enriched ratings for an IMDB ID. Checks cache first; fetches on miss.
-/// No API key required.
+/// whatson-api needs no key of its own, but it only runs once the user has
+/// added an OMDb key, so nothing leaves the device for metadata until then.
 #[command]
-pub async fn fetch_whatson_data(
+pub async fn fetch_whatson_data<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     imdb_id: String,
     media_type: String,
@@ -722,7 +736,11 @@ pub async fn fetch_whatson_data(
         }
     }
 
-    // 2. Fetch from whatson-api
+    // 2. Fetch from whatson-api, if the user has turned on metadata lookups.
+    if omdb_api_key(&app)?.is_none() {
+        tracing::debug!("[Whatson] no OMDb API key configured, skipping fetch");
+        return Ok(None);
+    }
     let item_type = if media_type == "show" || media_type == "series" { "tvshow" } else { "movie" };
     tracing::info!("[Whatson] fetching data for imdb_id={} type={}", imdb_id, item_type);
     let data = match mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await {
@@ -835,6 +853,15 @@ pub async fn search_subtitles<R: Runtime>(
     Ok(Some(result))
 }
 
+/// Where downloaded subtitle files go.
+fn subtitles_dir<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .join("subtitles"))
+}
+
 /// Download a subtitle file by file_id. Returns the local file path.
 #[command]
 pub async fn download_subtitle<R: Runtime>(
@@ -848,12 +875,7 @@ pub async fn download_subtitle<R: Runtime>(
         _ => return Err("No OpenSubtitles API key configured".into()),
     };
 
-    // Get subtitle download directory
-    let subtitles_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e: tauri::Error| e.to_string())?
-        .join("subtitles");
+    let subtitles_dir = subtitles_dir(&app)?;
 
     tracing::info!("[OpenSubtitles] downloading subtitle file_id={}", file_id);
     let path = mvp_core::iptv::opensubtitles::download_subtitle(file_id, &api_key, &subtitles_dir)
@@ -879,6 +901,7 @@ pub struct WatchHistoryEntryDto {
     pub last_watched_at: i64,
     pub total_duration_seconds: i64,
     pub play_count: i64,
+    pub series_title: Option<String>,
 }
 
 impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
@@ -892,6 +915,7 @@ impl From<WatchHistoryEntry> for WatchHistoryEntryDto {
             last_watched_at: e.last_watched_at,
             total_duration_seconds: e.total_duration_seconds,
             play_count: e.play_count,
+            series_title: e.series_title,
         }
     }
 }
@@ -922,15 +946,24 @@ pub async fn record_play_end(
         .map_err(|e| e.to_string())
 }
 
+/// The newest `limit` history entries, of one content type when `content_type` is given.
 #[command]
 pub async fn get_watch_history(
     state: State<'_, AppState>,
     limit: i64,
+    content_type: Option<String>,
 ) -> Result<Vec<WatchHistoryEntryDto>, String> {
     let limit = limit.max(0) as usize;
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let entries = cache.get_watch_history(limit).map_err(|e| e.to_string())?;
-    Ok(entries.into_iter().map(WatchHistoryEntryDto::from).collect())
+    let entries = match content_type.as_deref() {
+        Some(content_type) => cache.get_watch_history_of_type(content_type, limit),
+        None => cache.get_watch_history(limit),
+    };
+    Ok(entries
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(WatchHistoryEntryDto::from)
+        .collect())
 }
 
 #[command]
@@ -944,10 +977,35 @@ pub async fn delete_history_entry(
         .map_err(|e| e.to_string())
 }
 
+/// Delete the history of every episode of one show.
+#[command]
+pub async fn delete_history_series(
+    state: State<'_, AppState>,
+    series_title: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .delete_history_series(&series_title)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn clear_watch_history(state: State<'_, AppState>) -> Result<(), String> {
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
     cache.clear_watch_history().map_err(|e| e.to_string())
+}
+
+/// Delete the history of one content type, leaving the others and resume positions.
+#[command]
+pub async fn clear_watch_history_of_type(
+    state: State<'_, AppState>,
+    content_type: String,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .clear_watch_history_of_type(&content_type)
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -985,10 +1043,21 @@ pub async fn delete_playback_position(
         .map_err(|e| e.to_string())
 }
 
+/// Clear cached metadata, guide data and episode lists, and delete
+/// downloaded subtitle files.
 #[command]
-pub async fn clear_all_caches(state: State<'_, AppState>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.clear_all_caches().map_err(|e| e.to_string())
+pub async fn clear_all_caches<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        cache.clear_all_caches().map_err(|e| e.to_string())?;
+    }
+    match std::fs::remove_dir_all(subtitles_dir(&app)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
 }
 
 #[command]
@@ -1521,27 +1590,29 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 
 /// Remove a completed download: delete the file and the DB row.
 #[command]
-pub async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let path = {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        cache.get_download(&id).map_err(|e| e.to_string())?.map(|r| r.dest_path)
-    };
-    if let Some(p) = path {
-        let _ = std::fs::remove_file(&p);
-    }
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    cache.delete_download(&id).map_err(|e| e.to_string())
+pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
+    manager::remove(&app, std::slice::from_ref(&id))
 }
 
+/// Remove several downloads, carrying on past any that can't be deleted. The
+/// error lists those.
 #[command]
-pub async fn remove_downloads(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    for id in ids {
-        if let Ok(Some(rec)) = cache.get_download(&id) {
-            let _ = std::fs::remove_file(&rec.dest_path);
-        }
-        cache.delete_download(&id).map_err(|e| e.to_string())?;
-    }
+pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    manager::remove(&app, &ids)
+}
+
+/// Keep a download even when the retention setting would delete it, or stop
+/// keeping it.
+#[command]
+pub async fn set_download_keep(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    manager: State<'_, DownloadManager>,
+    id: String,
+    keep: bool,
+) -> Result<(), String> {
+    manager::set_keep(&state.cache, &manager.deleting, &id, keep)?;
+    manager::emit_progress(&app, &id);
     Ok(())
 }
 
@@ -1581,23 +1652,87 @@ pub async fn get_download_folder(manager: State<'_, DownloadManager>) -> Result<
     Ok(manager.root().to_string_lossy().to_string())
 }
 
+#[command]
+pub async fn get_download_retention(
+    manager: State<'_, DownloadManager>,
+) -> Result<Option<u32>, String> {
+    Ok(manager.retention_days())
+}
+
+/// Save how many days finished downloads are kept, or `None` for no limit,
+/// then delete what's already past it. Returns how many were deleted.
+#[command]
+pub async fn set_download_retention(
+    manager: State<'_, DownloadManager>,
+    app: AppHandle,
+    days: Option<u32>,
+) -> Result<usize, String> {
+    // 0 is "never" in the app, so it mustn't reach the sweep as "delete now".
+    let days = days.filter(|&d| d > 0);
+    // Save first, so a failed write doesn't delete anything.
+    manager::save_retention(&app, days)?;
+    manager.set_retention_days(days);
+    // The setting is saved, so report success even if the sweep fails. The
+    // hourly check tries again.
+    match retention::sweep(&app) {
+        Ok(n) => Ok(n),
+        Err(e) => {
+            tracing::warn!("Retention check failed: {e}");
+            Ok(0)
+        }
+    }
+}
+
+/// How many downloads a retention of `days` would delete right now, so
+/// Settings can ask before changing it.
+#[command]
+pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<usize, String> {
+    retention::count_due(&app, days.filter(|&d| d > 0))
+}
+
 /// Given a channel id, return the local file path if a completed download
 /// exists (and the file is present on disk), else None. The frontend calls this
-/// before playback and passes the local path to mpvLoad when present.
+/// before playback and passes the local path to mpvLoad when present, so this
+/// also records the play, which restarts the retention count.
 #[command]
 pub async fn resolve_local_download(
+    app: AppHandle,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<String>, String> {
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let rec = cache
-        .completed_download_for_channel(&channel_id)
-        .map_err(|e| e.to_string())?;
-    Ok(rec.and_then(|r| {
-        if std::path::Path::new(&r.dest_path).exists() {
-            Some(r.dest_path)
-        } else {
-            None
+    let rec = {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        let rec = cache
+            .completed_download_for_channel(&channel_id)
+            .map_err(|e| e.to_string())?
+            .filter(|r| std::path::Path::new(&r.dest_path).exists());
+        if let Some(r) = &rec {
+            cache
+                .mark_download_played(&r.id, manager::now_secs())
+                .map_err(|e| e.to_string())?;
         }
+        rec
+    };
+    Ok(rec.map(|r| {
+        manager::emit_progress(&app, &r.id);
+        r.dest_path
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn non_empty_key_skips_missing_and_blank_keys() {
+        assert_eq!(non_empty_key(None), None);
+        assert_eq!(non_empty_key(Some(json!(""))), None);
+        assert_eq!(non_empty_key(Some(json!("   "))), None);
+        assert_eq!(non_empty_key(Some(json!(42))), None);
+        assert_eq!(
+            non_empty_key(Some(json!(" abc123 "))).as_deref(),
+            Some("abc123")
+        );
+    }
 }

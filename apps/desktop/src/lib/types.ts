@@ -56,6 +56,15 @@ export interface PlayerState {
 	duration: number;
 }
 
+/** What the mpv plugin reports, which adds how the current load is opening. */
+export interface MpvPlayerState extends PlayerState {
+	/** The current load has opened and shown its first frame or started its
+	 *  audio. Set by the mpv plugin and kept until the next load. */
+	playbackStarted: boolean;
+	/** The current load stopped before it ever started playing. */
+	openFailed: boolean;
+}
+
 export interface EpgProgram {
 	channelId: string;
 	title: string;
@@ -147,6 +156,8 @@ export interface WatchHistoryEntry {
 	lastWatchedAt: number;
 	totalDurationSeconds: number;
 	playCount: number;
+	/** The show a series entry belongs to. Set on every series entry, null on the rest. */
+	seriesTitle?: string | null;
 }
 
 export interface SubtitleEntry {
@@ -210,6 +221,10 @@ export interface DownloadRecord {
 	error: string | null;
 	createdAt: number;
 	finishedAt: number | null;
+	/** The user chose Keep, so the retention setting never deletes it. */
+	keep: boolean;
+	/** When the downloaded file last started playing, in Unix seconds. */
+	lastPlayedAt: number | null;
 }
 
 /** Aggregate download state for a series card (computed in the hook). */

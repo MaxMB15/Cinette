@@ -296,7 +296,10 @@ fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> 
     let logo_url = extract_attr(attrs_part, "tvg-logo");
     let group_title = extract_attr(attrs_part, "group-title").unwrap_or_default();
 
-    let content_type = classify_url(url, tvg_name.as_deref().unwrap_or(&name));
+    let content_type = extract_attr(attrs_part, "tvg-type")
+        .and_then(|t| content_type_from_attr(&t))
+        .map(str::to_string)
+        .unwrap_or_else(|| classify_url(url, tvg_name.as_deref().unwrap_or(&name)));
 
     let (series_title, season, episode) = if content_type == "series" {
         match parse_series_name(&name) {
@@ -322,6 +325,18 @@ fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> 
         season,
         episode,
     })
+}
+
+/// Read a `tvg-type` attribute, which some playlists use to mark movies and
+/// series whose URLs don't say so. It only ever marks a movie or a series.
+/// `live` and unknown values fall back to the URL, so a provider export that
+/// tags every entry `live` still files `/movie/` and `/series/` URLs as VOD.
+fn content_type_from_attr(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "movie" | "movies" | "vod" => Some("movie"),
+        "series" => Some("series"),
+        _ => None,
+    }
 }
 
 /// Classify a channel by URL path and tvg-name. URL path segments (/series/, /movie/) are
@@ -707,6 +722,42 @@ http://stream.example.com/ch2
     #[test]
     fn test_plain_ts_url_without_episode_code_is_live() {
         assert_eq!(classify_url("http://host/ch1.ts", "BBC News HD"), "live");
+    }
+
+    #[test]
+    fn test_tvg_type_marks_movies_and_series() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"movie\",Sintel\n\
+            https://cdn.example.com/films/sintel.mkv\n\
+            #EXTINF:-1 tvg-type=\"Series\",Open Movies S01E02 Sintel\n\
+            https://cdn.example.com/films/sintel-ep.mkv\n\
+            #EXTINF:-1 tvg-type=\"live\",News\n\
+            http://host/live/news.m3u8\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
+        assert_eq!(channels[1].content_type, "series");
+        assert_eq!(channels[1].series_title.as_deref(), Some("Open Movies"));
+        assert_eq!(channels[1].episode, Some(2));
+        assert_eq!(channels[2].content_type, "live");
+    }
+
+    #[test]
+    fn test_tvg_type_live_does_not_beat_vod_urls() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"live\",Film\n\
+            http://host/movie/1.mp4\n\
+            #EXTINF:-1 tvg-type=\"live\",Show S01E02\n\
+            http://host/series/2.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
+        assert_eq!(channels[1].content_type, "series");
+    }
+
+    #[test]
+    fn test_unknown_tvg_type_falls_back_to_url() {
+        let content = "#EXTM3U\n#EXTINF:-1 tvg-type=\"radio\",Film\nhttp://host/movie/film.mp4\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
     }
 
     #[test]

@@ -35,11 +35,22 @@ impl From<reqwest::Error> for XtreamError {
 }
 
 /// The server address and login for one Xtream provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct XtreamCredentials {
     pub server: String,
     pub username: String,
     pub password: String,
+}
+
+/// Leaves the login out, so a `{:?}` in a log line or an error can't print it.
+impl std::fmt::Debug for XtreamCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XtreamCredentials")
+            .field("server", &self.server)
+            .field("username", &"***")
+            .field("password", &"***")
+            .finish()
+    }
 }
 
 impl XtreamCredentials {
@@ -486,6 +497,21 @@ mod tests {
     fn test_credentials_strip_trailing_slash() {
         let creds = XtreamCredentials::new("http://srv.example.com:8080/", "u", "p");
         assert_eq!(creds.server, "http://srv.example.com:8080");
+    }
+
+    #[test]
+    fn test_debug_hides_the_login() {
+        // Built field by field because CodeQL reads a literal passed to a
+        // parameter named `password` as a hard-coded credential.
+        let creds = XtreamCredentials {
+            server: "http://srv:8080".into(),
+            username: "user1".into(),
+            password: "s3cret".into(),
+        };
+        let printed = format!("{creds:?}");
+        assert!(printed.contains("http://srv:8080"));
+        assert!(!printed.contains("user1"));
+        assert!(!printed.contains("s3cret"));
     }
 
     #[test]

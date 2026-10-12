@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import type { SkipIntervals } from "./player-prefs";
+
 /** Player keyboard actions. Resolved from key events by `resolvePlayerHotkey`. */
 export type PlayerAction =
 	| { type: "togglePlay" }
@@ -16,9 +18,13 @@ export type PlayerAction =
 	| { type: "toggleShortcuts" }
 	| { type: "escape" };
 
+/** How far the plain arrow and J/L keys jump when no skip lengths are passed in. */
 export const SEEK_SHORT = 10;
+/** How far Shift with an arrow or J/L jumps. */
 export const SEEK_LONG = 30;
 export const VOLUME_STEP = 5;
+
+const DEFAULT_SKIP: SkipIntervals = { back: SEEK_SHORT, forward: SEEK_SHORT };
 
 interface KeyLike {
 	key: string;
@@ -31,9 +37,13 @@ interface KeyLike {
 /**
  * Map a keydown event to a player action, or null if the key isn't bound.
  * Combinations with Cmd/Ctrl/Alt are never handled so OS and app shortcuts
- * (Cmd+F, Cmd+M, Cmd+Q, …) keep working.
+ * (Cmd+F, Cmd+M, Cmd+Q, …) keep working. `skip` sets how far the plain arrow
+ * and J/L keys jump.
  */
-export const resolvePlayerHotkey = (e: KeyLike): PlayerAction | null => {
+export const resolvePlayerHotkey = (
+	e: KeyLike,
+	skip: SkipIntervals = DEFAULT_SKIP
+): PlayerAction | null => {
 	if (e.ctrlKey || e.metaKey || e.altKey) return null;
 
 	// Digit keys: 0–9 jump to 0%–90% of the runtime (YouTube convention).
@@ -51,15 +61,13 @@ export const resolvePlayerHotkey = (e: KeyLike): PlayerAction | null => {
 		case "M":
 			return { type: "toggleMute" };
 		case "ArrowLeft":
-			return { type: "seekBy", seconds: e.shiftKey ? -SEEK_LONG : -SEEK_SHORT };
-		case "ArrowRight":
-			return { type: "seekBy", seconds: e.shiftKey ? SEEK_LONG : SEEK_SHORT };
 		case "j":
 		case "J":
-			return { type: "seekBy", seconds: e.shiftKey ? -SEEK_LONG : -SEEK_SHORT };
+			return { type: "seekBy", seconds: e.shiftKey ? -SEEK_LONG : -skip.back };
+		case "ArrowRight":
 		case "l":
 		case "L":
-			return { type: "seekBy", seconds: e.shiftKey ? SEEK_LONG : SEEK_SHORT };
+			return { type: "seekBy", seconds: e.shiftKey ? SEEK_LONG : skip.forward };
 		case "Home":
 			return { type: "seekToPercent", percent: 0 };
 		case "ArrowUp":
@@ -87,13 +95,18 @@ export const resolvePlayerHotkey = (e: KeyLike): PlayerAction | null => {
 	}
 };
 
+const skipLabel = ({ back, forward }: SkipIntervals): string =>
+	back === forward ? `Seek ${back}s back / forward` : `Seek ${back}s back / ${forward}s forward`;
+
 /** Shortcut reference shown in the player's "?" overlay. */
-export const PLAYER_SHORTCUTS: { keys: string[]; label: string }[] = [
+export const playerShortcuts = (
+	skip: SkipIntervals = DEFAULT_SKIP
+): { keys: string[]; label: string }[] => [
 	{ keys: ["Space", "K"], label: "Play / pause" },
 	{ keys: ["F"], label: "Toggle fullscreen (or double-click)" },
 	{ keys: ["M"], label: "Mute / unmute" },
-	{ keys: ["←", "→"], label: `Seek ${SEEK_SHORT}s back / forward` },
-	{ keys: ["J", "L"], label: `Seek ${SEEK_SHORT}s back / forward` },
+	{ keys: ["←", "→"], label: skipLabel(skip) },
+	{ keys: ["J", "L"], label: skipLabel(skip) },
 	{ keys: ["Shift ←", "Shift →"], label: `Seek ${SEEK_LONG}s back / forward` },
 	{ keys: ["Shift J", "Shift L"], label: `Seek ${SEEK_LONG}s back / forward` },
 	{ keys: ["0–9"], label: "Jump to 0%–90%" },
@@ -142,4 +155,50 @@ export const isKeyboardFocusedControl = (target: EventTarget | null): boolean =>
 	} catch {
 		return true;
 	}
+};
+
+/** Keys a focused slider moves its value with. */
+const SLIDER_KEYS = new Set([
+	"ArrowLeft",
+	"ArrowRight",
+	"ArrowUp",
+	"ArrowDown",
+	"Home",
+	"End",
+	"PageUp",
+	"PageDown",
+]);
+
+/**
+ * True when a slider reached with the keyboard should move its own value for
+ * this key, such as an arrow on the seek or volume bar after Tab. A slider
+ * focused by a press leaves these keys to the player, so the arrows keep
+ * seeking by the skip length instead of nudging the bar one step.
+ *
+ * The `Slider` component records how its thumb got focus in
+ * `data-focus-source`. `:focus-visible` can't be used here, because WebKit
+ * starts matching it on a pressed element as soon as a key goes down.
+ */
+export const isSliderOwnKey = (target: EventTarget | null, key: string): boolean =>
+	target instanceof HTMLElement &&
+	target.getAttribute("role") === "slider" &&
+	SLIDER_KEYS.has(key) &&
+	target.getAttribute("data-focus-source") !== "pointer";
+
+/**
+ * keydown handler for a slider inside the player. A slider that owns the key
+ * (see `isSliderOwnKey`) moves and keeps the key from the player's own
+ * handlers, such as the subtitle position arrows. Otherwise the slider stays
+ * put and the key goes on to the player. There Left, Right and Home seek, Up
+ * and Down change the volume, and End, Page Up and Page Down do nothing.
+ */
+export const leaveSliderKeysToPlayer = (e: {
+	key: string;
+	target: EventTarget | null;
+	preventDefault: () => void;
+	stopPropagation: () => void;
+}): void => {
+	if (!SLIDER_KEYS.has(e.key)) return;
+	if (isSliderOwnKey(e.target, e.key)) e.stopPropagation();
+	else e.preventDefault();
 };

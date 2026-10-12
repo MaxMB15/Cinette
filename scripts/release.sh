@@ -7,7 +7,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_CONF="$REPO_ROOT/apps/desktop/src-tauri/tauri.conf.json"
 CARGO_TOML="$REPO_ROOT/apps/desktop/src-tauri/Cargo.toml"
-SETTINGS_TSX="$REPO_ROOT/apps/desktop/src/components/settings/Settings.tsx"
 
 # ── Git-flow branch guard ─────────────────────────────────────────────────────
 cd "$REPO_ROOT"
@@ -73,16 +72,16 @@ case "$CONFIRM" in
   *) echo "Aborted."; exit 0 ;;
 esac
 
-# ── Bump version in tauri.conf.json, Cargo.toml, Settings.tsx ────────────────
+# ── Bump version in tauri.conf.json and Cargo.toml ───────────────────────────
 python3 "$REPO_ROOT/scripts/bump-version.py" "$NEW"
 
-# ── Refresh workspace lockfile after Cargo.toml version change ────────────────
-( cd "$REPO_ROOT" && cargo generate-lockfile )
+# ── Update the app's own entry in Cargo.lock, leaving dependencies as they are ─
+( cd "$REPO_ROOT" && cargo update --workspace )
 echo "  Updated Cargo.lock"
 
 # ── Commit ───────────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-git add "$TAURI_CONF" "$CARGO_TOML" "$SETTINGS_TSX" Cargo.lock
+git add "$TAURI_CONF" "$CARGO_TOML" Cargo.lock
 git commit -m "chore: bump version to $NEW"
 echo "  Committed version bump"
 

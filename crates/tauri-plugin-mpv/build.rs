@@ -12,6 +12,7 @@ const COMMANDS: &[&str] = &[
     "mpv_set_visible",
     "mpv_get_state",
     "mpv_set_media_info",
+    "mpv_set_skip_intervals",
 ];
 
 fn main() {

@@ -167,6 +167,10 @@ Bug reports, ideas and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIB
 
 If you find the app useful, you can [buy me a coffee](https://buymeacoffee.com/MaxMB15).
 
+## Privacy
+
+The app sends nothing to the developer. The [privacy policy](docs/privacy.md) lists what it keeps on your device, which services it connects to and what it sends them.
+
 ## Disclaimer
 
 Max Video Player is only a player. It doesn't include, host, sell or link to any channels, playlists or streams. You add your own sources, and the author has no control over, and no knowledge of, what you add or watch.
