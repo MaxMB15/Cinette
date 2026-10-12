@@ -484,19 +484,36 @@ describe("useSegmentSkipping", () => {
 			});
 			play(55, 61);
 			at(61.9);
-			update({ position: 62.9, playing: false });
-			update({ position: 63.5, playing: true });
+			update({ position: 63.1, playing: false });
+			update({ playing: true });
 			expect(seek).not.toHaveBeenCalled();
 			expect(result.current.notice).toBeNull();
 		});
 
-		it("doesn't jump a fraction of a second", () => {
+		it("skips a short segment held in until exactly two seconds before its end", () => {
+			const { update, at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
+			play(55, 61);
+			at(61.9);
+			update({ position: 63, playing: false });
+			update({ playing: true });
+			expect(seek).toHaveBeenCalledExactlyOnceWith(65);
+		});
+
+		it("doesn't jump less than a second", () => {
 			const { result, at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
 			play(55, 61);
 			at(61.9);
-			at(64.85);
+			at(64.1);
 			expect(seek).not.toHaveBeenCalled();
 			expect(result.current.notice).toBeNull();
+		});
+
+		it("jumps a second that a late poll leaves", () => {
+			const { at, play, seek } = setup({ modes: AUTO, segments: [shortIntro] });
+			play(55, 61);
+			at(61.5);
+			at(64);
+			expect(seek).toHaveBeenCalledExactlyOnceWith(65);
 		});
 
 		it("still skips on its own after being held past the segment once", () => {

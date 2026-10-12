@@ -28,16 +28,17 @@ export const MAX_PLAY_JITTER = 0.1;
 
 /**
  * The shortest jump the player makes on its own, in seconds. With less than
- * this left of a segment, the rest plays, since so short a jump saves no time
- * and still empties the stream's buffer.
+ * this left before where the skip would land, the rest plays, since so short a
+ * jump saves almost no time and can make playback stutter.
  */
 export const MIN_AUTO_SKIP = 1;
 
 /**
  * The shortest jump the player makes on its own, in seconds, after playback
- * was held inside a segment, such as while paused. Held until near the end,
- * the rest plays. Polls that just reached a segment need only `MIN_AUTO_SKIP`,
- * since in a short one the first poll inside can come with less than this to go.
+ * was held at or past the point it may skip a segment from, such as while
+ * paused. Held until closer than this to where the skip would land, the rest
+ * plays. A poll that has just reached that point needs only `MIN_AUTO_SKIP`,
+ * since a late poll can reach it with less than this to go.
  */
 export const MIN_SKIP_AFTER_HOLD = 2;
 
