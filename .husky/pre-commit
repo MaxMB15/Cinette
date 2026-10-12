@@ -11,7 +11,7 @@ if [ -e "$patch" ]; then
 	exit 1
 fi
 
-if npx lint-staged --no-stash; then
+if pnpm exec lint-staged --no-stash; then
 	rm -f "$patch"
 else
 	if [ -e "$patch" ]; then
@@ -25,4 +25,4 @@ else
 	exit 1
 fi
 
-npm test
+pnpm test

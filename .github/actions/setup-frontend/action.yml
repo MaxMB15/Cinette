@@ -1,0 +1,27 @@
+name: Set up the frontend
+description: >-
+  Install pnpm at the version package.json's packageManager names, then Node,
+  then the packages at their locked versions. pnpm runs a dependency's install
+  script only if pnpm-workspace.yaml allows it, and stops on one it doesn't list.
+
+runs:
+  using: composite
+  steps:
+    # setup-node finds pnpm's store through pnpm, so pnpm goes first.
+    - name: Install pnpm
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24
+        cache: pnpm
+
+    # Not --ignore-scripts: it also skips the check for dependencies with
+    # install scripts that pnpm-workspace.yaml doesn't list. The repo's own
+    # prepare script still runs, and HUSKY=0 makes it skip the Git hooks.
+    - name: Install packages
+      shell: bash
+      env:
+        HUSKY: "0"
+      run: pnpm install --frozen-lockfile

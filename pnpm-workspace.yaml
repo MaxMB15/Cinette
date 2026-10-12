@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+packages:
+  - apps/desktop
+
+# Versions that more than one package.json uses. ESLint runs from the root and
+# parses with TypeScript, so it gets the same TypeScript as the app.
+catalog:
+  typescript: ~5.6.3
+
+# No dependency runs an install script. esbuild's only checks its binary, and
+# it works without that. A new dependency that has an install script stops the
+# install until it's listed here.
+allowBuilds:
+  esbuild: false
+strictDepBuilds: true

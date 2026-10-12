@@ -74,7 +74,7 @@ def main() -> None:
     env = dict(os.environ)
     env["TAURI_SIGNING_PRIVATE_KEY"] = base64.b64encode(key.encode()).decode()
     result = subprocess.run(
-        ["npx", "tauri", "signer", "sign", str(archive)], cwd=DESKTOP_DIR, env=env
+        ["pnpm", "tauri", "signer", "sign", str(archive)], cwd=DESKTOP_DIR, env=env
     )
     sys.exit(result.returncode)
 

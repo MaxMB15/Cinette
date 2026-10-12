@@ -45,9 +45,9 @@ approach before you put time into it.
    Rust line coverage drops below 80%.
 
    ```bash
-   npm run format
-   npm run lint
-   npm test
+   pnpm format
+   pnpm lint
+   pnpm test
    cargo clippy --workspace --all-targets -- -D warnings
    ```
 

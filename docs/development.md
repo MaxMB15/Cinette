@@ -8,6 +8,8 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 
 - [Rust](https://rustup.rs) (stable)
 - [Node.js](https://nodejs.org) 24, or 22.12 or a later 22.x release
+- [pnpm](https://pnpm.io/installation). With Node 24, `corepack enable pnpm` sets it
+  up. pnpm 10 or later switches itself to the version that `package.json` names.
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
@@ -71,33 +73,42 @@ If your `binaries/` folder still has an older `ffmpeg-<target>`, run the script 
 ## Running the app
 
 ```bash
-npm install
+pnpm install
 
 # macOS: point the binary at the libmpv you built
 export DYLD_LIBRARY_PATH="$(pwd)/libs/macos:$DYLD_LIBRARY_PATH"
 
-npm run dev:desktop
+pnpm dev:desktop
 ```
 
 This starts Vite and the Tauri app with hot reload for the frontend. Rust changes
 rebuild and restart the app.
 
-`npm run dev:desktop:web` runs only the frontend in a browser. Anything that calls
+`pnpm dev:desktop:web` runs only the frontend in a browser. Anything that calls
 the Rust backend won't work there, but it's quick for layout work.
+
+`pnpm install` doesn't run dependencies' install scripts. If a new dependency has one,
+the install stops until the package is listed under `allowBuilds` in
+`pnpm-workspace.yaml`, with `true` to run its script or `false` to skip it.
+
+If you installed the packages with npm before the switch to pnpm, delete
+`node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
+pnpm leaves the packages npm put at the top in place, and they can hide a missing
+dependency that CI then catches.
 
 ## Tests and checks
 
 ```bash
-npm test                  # Rust core tests, then frontend tests
-npm run test:core         # cargo test -p mvp-core
-npm run test:desktop      # Vitest
-npm run lint              # ESLint
-npm run format:check      # Prettier
+pnpm test                 # Rust core tests, then frontend tests
+pnpm test:core            # cargo test -p mvp-core
+pnpm test:desktop         # Vitest
+pnpm lint                 # ESLint
+pnpm format:check         # Prettier
 cargo check               # the whole Rust workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-For a frontend coverage report, run `npm run test:coverage --workspace=apps/desktop`
+For a frontend coverage report, run `pnpm --filter ./apps/desktop test:coverage`
 and open `apps/desktop/coverage/index.html`.
 
 Rust coverage needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and
@@ -116,7 +127,7 @@ cargo llvm-cov --workspace --open
 
 The plugin and app tests load libmpv, so set the library path from the setup steps
 above first. The app's tests also need the [ffmpeg sidecar](#the-ffmpeg-sidecar)
-and a built frontend in `apps/desktop/dist`, which `npm run build:desktop` makes.
+and a built frontend in `apps/desktop/dist`, which `pnpm build:desktop` makes.
 The Rust figure depends on the platform, because `macos.rs` and `linux.rs` in the
 mpv plugin each build only on their own system.
 
@@ -136,7 +147,7 @@ lint-staged, then runs the tests.
 ## Production build
 
 ```bash
-cd apps/desktop && npx tauri build
+cd apps/desktop && pnpm tauri build
 ```
 
 On macOS, `scripts/bundle-libmpv.sh` runs as Tauri's `beforeBundleCommand`. It copies
@@ -156,7 +167,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 
 - TypeScript and React use arrow functions everywhere, never `function`
   declarations. `export default function` is the one exception.
-- Prettier formats `apps/**`; run `npm run format`.
+- Prettier formats `apps/**`; run `pnpm format`.
 - All `invoke()` calls to the Rust backend live in `apps/desktop/src/lib/tauri.ts`.
 - On macOS, AppKit and OpenGL calls must run on the main thread. See
   [architecture.md](architecture.md#macos).
