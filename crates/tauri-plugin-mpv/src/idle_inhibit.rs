@@ -1,33 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Platform-native idle/sleep inhibition.
+//! Keeps the display from dimming or sleeping while video plays.
 //!
-//! Prevents the display from dimming or the system from sleeping while
-//! video is playing — standard behavior for media players.
-//!
-//! - macOS: IOPMAssertionCreateWithName / IOPMAssertionRelease
-//! - Linux: D-Bus org.freedesktop.ScreenSaver.Inhibit / UnInhibit
-//! - iOS: UIApplication.isIdleTimerDisabled
+//! - macOS takes an IOKit power assertion with `IOPMAssertionCreateWithName`.
+//! - Linux asks `org.freedesktop.ScreenSaver` over D-Bus, then GNOME's
+//!   session manager.
+//! - iOS sets `UIApplication.isIdleTimerDisabled`.
 
+use crate::lock::lock_or_recover;
 use std::sync::Mutex;
 
-/// Manages a single idle-inhibit assertion. Thread-safe — callers can
-/// `inhibit()` and `uninhibit()` from any thread.
+/// Holds at most one idle inhibit at a time. `inhibit` and `uninhibit` can
+/// be called from any thread.
 pub struct IdleInhibitor {
     inner: Mutex<InhibitState>,
 }
 
 struct InhibitState {
-    /// Platform-specific handle to the active assertion.
+    /// The active IOKit assertion.
     #[cfg(target_os = "macos")]
     assertion_id: u32,
+    /// The cookie from whichever D-Bus interface took the inhibit.
     #[cfg(target_os = "linux")]
     cookie: Option<u32>,
     active: bool,
 }
 
 impl IdleInhibitor {
+    /// Creates an inhibitor that isn't holding anything yet.
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(InhibitState {
@@ -42,7 +43,7 @@ impl IdleInhibitor {
 
     /// Prevent the display from sleeping. No-op if already inhibited.
     pub fn inhibit(&self) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = lock_or_recover(&self.inner);
         if state.active {
             return;
         }
@@ -54,7 +55,7 @@ impl IdleInhibitor {
 
     /// Allow the display to sleep again. No-op if not inhibited.
     pub fn uninhibit(&self) {
-        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = lock_or_recover(&self.inner);
         if !state.active {
             return;
         }
@@ -62,8 +63,6 @@ impl IdleInhibitor {
         state.active = false;
         tracing::debug!("[idle-inhibit] display sleep uninhibited");
     }
-
-    // ── macOS ────────────────────────────────────────────────────────────
 
     #[cfg(target_os = "macos")]
     fn platform_inhibit(&self, state: &mut InhibitState) -> bool {
@@ -73,10 +72,10 @@ impl IdleInhibitor {
         #[link(name = "IOKit", kind = "framework")]
         extern "C" {
             fn IOPMAssertionCreateWithName(
-                assertion_type: *const c_void,   // CFStringRef
-                level: u32,                       // IOPMAssertionLevel
-                reason: *const c_void,            // CFStringRef
-                assertion_id: *mut u32,           // IOPMAssertionID*
+                assertion_type: *const c_void, // CFStringRef
+                level: u32,                    // IOPMAssertionLevel
+                reason: *const c_void,         // CFStringRef
+                assertion_id: *mut u32,        // IOPMAssertionID*
             ) -> i32; // IOReturn
         }
 
@@ -84,22 +83,20 @@ impl IdleInhibitor {
         let assertion_type = cfstring("PreventUserIdleDisplaySleep");
         let reason = cfstring("Max Video Player: video playback active");
         if assertion_type.is_null() || reason.is_null() {
-            if !assertion_type.is_null() { unsafe { CFRelease(assertion_type) }; }
-            if !reason.is_null() { unsafe { CFRelease(reason) }; }
+            if !assertion_type.is_null() {
+                unsafe { CFRelease(assertion_type) };
+            }
+            if !reason.is_null() {
+                unsafe { CFRelease(reason) };
+            }
             tracing::warn!("[idle-inhibit] CFStringCreateWithBytes returned null");
             return false;
         }
         let mut assertion_id: u32 = 0;
 
         // kIOPMAssertionLevelOn = 255
-        let ret = unsafe {
-            IOPMAssertionCreateWithName(
-                assertion_type,
-                255,
-                reason,
-                &mut assertion_id,
-            )
-        };
+        let ret =
+            unsafe { IOPMAssertionCreateWithName(assertion_type, 255, reason, &mut assertion_id) };
 
         unsafe {
             CFRelease(reason);
@@ -129,17 +126,17 @@ impl IdleInhibitor {
         state.assertion_id = 0;
     }
 
-    // ── Linux ────────────────────────────────────────────────────────────
-
     #[cfg(target_os = "linux")]
     fn platform_inhibit(&self, state: &mut InhibitState) -> bool {
-        // Try org.freedesktop.ScreenSaver first (works on KDE, XFCE, MATE),
-        // then org.gnome.SessionManager (GNOME, Pop!_OS, COSMIC-legacy).
+        // KDE, XFCE and MATE answer on org.freedesktop.ScreenSaver. GNOME,
+        // Pop!_OS and older COSMIC releases use org.gnome.SessionManager.
         if let Some(cookie) = dbus_screensaver_inhibit() {
             state.cookie = Some(cookie);
             return true;
         }
-        tracing::info!("[idle-inhibit] D-Bus ScreenSaver.Inhibit unavailable, trying GNOME SessionManager");
+        tracing::info!(
+            "[idle-inhibit] D-Bus ScreenSaver.Inhibit unavailable, trying GNOME SessionManager"
+        );
         if let Some(cookie) = dbus_gnome_inhibit() {
             state.cookie = Some(cookie);
             return true;
@@ -151,14 +148,12 @@ impl IdleInhibitor {
     #[cfg(target_os = "linux")]
     fn platform_uninhibit(&self, state: &mut InhibitState) {
         if let Some(cookie) = state.cookie.take() {
-            // Try both interfaces — only one will have issued the cookie,
-            // but the other will harmlessly fail.
+            // Only one interface issued the cookie. Calling the other fails
+            // without side effects.
             let _ = dbus_screensaver_uninhibit(cookie);
             let _ = dbus_gnome_uninhibit(cookie);
         }
     }
-
-    // ── iOS ──────────────────────────────────────────────────────────────
 
     /// `UIApplication.isIdleTimerDisabled`, set by the plugin's Swift side.
     #[cfg(target_os = "ios")]
@@ -171,8 +166,6 @@ impl IdleInhibitor {
     fn platform_uninhibit(&self, _state: &mut InhibitState) {
         crate::ios::set_idle_timer_disabled(false);
     }
-
-    // ── Fallback (other platforms) ───────────────────────────────────────
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
     fn platform_inhibit(&self, _state: &mut InhibitState) -> bool {
@@ -188,8 +181,6 @@ impl Drop for IdleInhibitor {
         self.uninhibit();
     }
 }
-
-// ── macOS helpers ────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -222,20 +213,23 @@ fn cfstring(s: &str) -> *const std::ffi::c_void {
     }
 }
 
-// ── Linux D-Bus helpers ──────────────────────────────────────────────────
-
-/// Call a D-Bus method and return the result. Uses `dbus-send` / `gdbus`
-/// command-line tools to avoid adding a heavy D-Bus crate dependency.
-/// These tools are present on virtually all Linux desktop systems.
+/// Calls a D-Bus method that returns a `u32`.
+///
+/// It runs the `gdbus` command line tool, which nearly every Linux desktop
+/// ships, rather than pulling in a D-Bus crate.
 #[cfg(target_os = "linux")]
 fn dbus_call_u32(bus: &str, path: &str, method: &str, args: &[&str]) -> Option<u32> {
     let mut cmd = std::process::Command::new("gdbus");
     cmd.arg("call")
         .arg("--session")
-        .arg("--timeout").arg("3") // seconds; avoid blocking playback on a hung bus
-        .arg("--dest").arg(bus)
-        .arg("--object-path").arg(path)
-        .arg("--method").arg(method);
+        .arg("--timeout")
+        .arg("3") // Seconds, so a hung bus can't stall playback.
+        .arg("--dest")
+        .arg(bus)
+        .arg("--object-path")
+        .arg(path)
+        .arg("--method")
+        .arg(method);
     for arg in args {
         cmd.arg(arg);
     }
@@ -243,7 +237,6 @@ fn dbus_call_u32(bus: &str, path: &str, method: &str, args: &[&str]) -> Option<u
     if !output.status.success() {
         return None;
     }
-    // gdbus output format: "(uint32 12345,)\n"
     let stdout = String::from_utf8_lossy(&output.stdout);
     extract_u32_from_gdbus(&stdout)
 }
@@ -253,23 +246,27 @@ fn dbus_call_void(bus: &str, path: &str, method: &str, args: &[&str]) -> bool {
     let mut cmd = std::process::Command::new("gdbus");
     cmd.arg("call")
         .arg("--session")
-        .arg("--timeout").arg("3")
-        .arg("--dest").arg(bus)
-        .arg("--object-path").arg(path)
-        .arg("--method").arg(method);
+        .arg("--timeout")
+        .arg("3")
+        .arg("--dest")
+        .arg(bus)
+        .arg("--object-path")
+        .arg(path)
+        .arg("--method")
+        .arg(method);
     for arg in args {
         cmd.arg(arg);
     }
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// Reads the number out of gdbus output such as `(uint32 12345,)` or
+/// `(12345,)`.
 #[cfg(target_os = "linux")]
 fn extract_u32_from_gdbus(s: &str) -> Option<u32> {
-    // Formats: "(uint32 12345,)" or "(12345,)"
     let s = s.trim();
     let inner = s.strip_prefix('(')?.strip_suffix(')')?;
     let val_str = inner.trim_end_matches(',').trim();
-    // Try "uint32 NNN" format first
     if let Some(num_str) = val_str.strip_prefix("uint32 ") {
         return num_str.trim().parse().ok();
     }
@@ -298,13 +295,18 @@ fn dbus_screensaver_uninhibit(cookie: u32) -> bool {
 
 #[cfg(target_os = "linux")]
 fn dbus_gnome_inhibit() -> Option<u32> {
-    // org.gnome.SessionManager.Inhibit(app_id, toplevel_xid, reason, flags)
-    // flags: 8 = Inhibit idle (GSM_INHIBITOR_FLAG_IDLE)
+    // The arguments are app_id, toplevel_xid, reason and flags. Flag 8 is
+    // GSM_INHIBITOR_FLAG_IDLE.
     dbus_call_u32(
         "org.gnome.SessionManager",
         "/org/gnome/SessionManager",
         "org.gnome.SessionManager.Inhibit",
-        &["Max Video Player", "uint32 0", "Video playback active", "uint32 8"],
+        &[
+            "Max Video Player",
+            "uint32 0",
+            "Video playback active",
+            "uint32 8",
+        ],
     )
 }
 

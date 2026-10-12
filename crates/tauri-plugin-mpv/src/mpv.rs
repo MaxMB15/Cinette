@@ -7,6 +7,7 @@
 pub use crate::engine::PlayerState;
 use crate::engine::MpvEngine;
 use crate::idle_inhibit::IdleInhibitor;
+use crate::lock::lock_or_recover;
 use crate::renderer::PlatformRenderer;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -74,11 +75,7 @@ impl MpvState {
     /// hardware-decoder leak on macOS; silently bailing on a poisoned lock
     /// would re-introduce exactly the bug it's here to prevent.
     fn cancel_reconnect_monitor(&self) {
-        let mut guard = self
-            .reconnect_kill
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        if let Some(flag) = guard.take() {
+        if let Some(flag) = lock_or_recover(&self.reconnect_kill).take() {
             flag.store(true, Ordering::Release);
         }
     }
@@ -90,7 +87,7 @@ impl MpvState {
         hwdec: bool,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
-        let _transition = self.transition.lock().unwrap_or_else(|p| p.into_inner());
+        let _transition = lock_or_recover(&self.transition);
         // Trip the old reconnect monitor BEFORE we destroy the parent mpv,
         // so its client handle is dropped on the next loop iteration and the
         // old libmpv core is actually released (see field docstring).
@@ -100,9 +97,9 @@ impl MpvState {
         // until the main thread processes the closure. The main thread's on_window_event
         // resize handler also needs the renderer mutex — holding the mutex while calling
         // exec_sync causes a deadlock. Dropping outside the lock avoids this.
-        let old_renderer = self.renderer.lock().map_err(|e| e.to_string())?.take();
+        let old_renderer = lock_or_recover(&self.renderer).take();
         drop(old_renderer); // calls detach() with renderer mutex RELEASED
-        self.inner.lock().map_err(|e| e.to_string())?.stop();
+        lock_or_recover(&self.inner).stop();
         self.idle_inhibitor.uninhibit();
         self.fallback_active.store(false, Ordering::Release);
         self.hwdec_enabled.store(hwdec, Ordering::Release);
@@ -114,13 +111,9 @@ impl MpvState {
             // A load can fail after the renderer is attached, such as when
             // mpv rejects the file. Tear down what it set up, in the same
             // order as stop(), so no empty video surface or core is left.
-            let renderer = self
-                .renderer
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .take();
+            let renderer = lock_or_recover(&self.renderer).take();
             drop(renderer);
-            self.inner.lock().unwrap_or_else(|p| p.into_inner()).stop();
+            lock_or_recover(&self.inner).stop();
         }
         // The old stream stopped above, so a failed load leaves nothing
         // playing. Turning the session off also clears its Now Playing info.
@@ -165,12 +158,7 @@ impl MpvState {
         // failed to store the flag here, the next `cancel_reconnect_monitor`
         // would have nothing to trip and the watcher would keep its client
         // handle alive — leaking the libmpv core on the next load.
-        let mut slot = self
-            .reconnect_kill
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        *slot = Some(kill.clone());
-        drop(slot);
+        *lock_or_recover(&self.reconnect_kill) = Some(kill.clone());
         crate::reconnect::spawn(c, url.to_string(), app.clone(), kill);
     }
 
@@ -199,7 +187,7 @@ impl MpvState {
 
         // Create mpv with embedded options and attach the renderer.
         let attach_result = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             match engine.create(&self.options(embedded_options())) {
                 Ok(mpv) => gl_renderer.attach(mpv),
                 Err(e) => Err(e),
@@ -207,17 +195,17 @@ impl MpvState {
         };
 
         if let Err(e) = attach_result {
-            self.inner.lock().map_err(|e| e.to_string())?.stop();
+            lock_or_recover(&self.inner).stop();
             return self.launch_fallback(url, start_pos, app, &e);
         }
 
         {
-            let mut renderer = self.renderer.lock().map_err(|e| e.to_string())?;
+            let mut renderer = lock_or_recover(&self.renderer);
             *renderer = Some(Box::new(gl_renderer));
         }
 
         let event_client = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
             engine.create_event_client("reconnect-watcher").ok()
@@ -247,7 +235,7 @@ impl MpvState {
         }
 
         let attach_result = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             match engine.create(&self.options(linux_embedded_options())) {
                 Ok(mpv) => gl_renderer.attach(mpv),
                 Err(e) => Err(e),
@@ -255,17 +243,17 @@ impl MpvState {
         };
 
         if let Err(e) = attach_result {
-            self.inner.lock().map_err(|e| e.to_string())?.stop();
+            lock_or_recover(&self.inner).stop();
             return self.launch_fallback(url, start_pos, app, &e);
         }
 
         {
-            let mut renderer = self.renderer.lock().map_err(|e| e.to_string())?;
+            let mut renderer = lock_or_recover(&self.renderer);
             *renderer = Some(Box::new(gl_renderer));
         }
 
         let event_client = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             engine.configure_audio()?;
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
@@ -301,7 +289,7 @@ impl MpvState {
         options.extend(self.options(ios_embedded_options()));
 
         let attach_result = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             // Start without video if the app is in the background. This is
             // read with the engine locked, so the lifecycle job that turns
             // video back on can only run after mpv exists.
@@ -315,17 +303,17 @@ impl MpvState {
         };
         if let Err(e) = attach_result {
             drop(metal_renderer);
-            self.inner.lock().map_err(|e| e.to_string())?.stop();
+            lock_or_recover(&self.inner).stop();
             return Err(e);
         }
 
         {
-            let mut renderer = self.renderer.lock().map_err(|e| e.to_string())?;
+            let mut renderer = lock_or_recover(&self.renderer);
             *renderer = Some(Box::new(metal_renderer));
         }
 
         let event_client = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
             engine.create_event_client("reconnect-watcher").ok()
@@ -342,7 +330,7 @@ impl MpvState {
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
         let event_client = {
-            let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+            let mut engine = lock_or_recover(&self.inner);
             engine.create(&[])?;
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
@@ -352,6 +340,7 @@ impl MpvState {
         Ok(())
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn launch_fallback<R: tauri::Runtime>(
         &self,
         url: &str,
@@ -364,7 +353,7 @@ impl MpvState {
             "[MPV] embedded renderer failed ({}), launching fallback window",
             reason
         );
-        let client = self.launch_fallback_impl(url, start_pos, reason)?;
+        let client = self.launch_fallback_impl(url, start_pos)?;
         // Only tell the frontend once the window is up. If it fails, load()
         // tears everything down and the player shows the error instead.
         self.fallback_active.store(true, Ordering::Release);
@@ -378,9 +367,8 @@ impl MpvState {
         &self,
         url: &str,
         start_pos: Option<f64>,
-        _reason: &str,
     ) -> Result<Option<libmpv2::Mpv>, String> {
-        let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+        let mut engine = lock_or_recover(&self.inner);
         engine.create(&self.options(fallback_options()))?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
@@ -392,9 +380,8 @@ impl MpvState {
         &self,
         url: &str,
         start_pos: Option<f64>,
-        _reason: &str,
     ) -> Result<Option<libmpv2::Mpv>, String> {
-        let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
+        let mut engine = lock_or_recover(&self.inner);
         engine.create(&self.options(linux_fallback_options()))?;
         engine.configure_audio()?;
         engine.loadfile(url, start_pos)?;
@@ -402,58 +389,28 @@ impl MpvState {
         Ok(engine.create_event_client("reconnect-watcher").ok())
     }
 
-    #[cfg(target_os = "ios")]
-    fn launch_fallback_impl(
-        &self,
-        _url: &str,
-        _start_pos: Option<f64>,
-        reason: &str,
-    ) -> Result<Option<libmpv2::Mpv>, String> {
-        Err(format!("video output failed: {reason}"))
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
-    fn launch_fallback_impl(
-        &self,
-        url: &str,
-        start_pos: Option<f64>,
-        _reason: &str,
-    ) -> Result<Option<libmpv2::Mpv>, String> {
-        let mut engine = self.inner.lock().map_err(|e| e.to_string())?;
-        engine.create(&[])?;
-        engine.loadfile(url, start_pos)?;
-        engine.set_current_url(url);
-        Ok(engine.create_event_client("reconnect-watcher").ok())
-    }
-
     /// Reposition the video surface to a CSS-pixel rect reported by the frontend.
     pub fn set_visible(&self, visible: bool) {
-        if let Ok(mut renderer) = self.renderer.lock() {
-            if let Some(ref mut r) = *renderer {
-                r.set_visible(visible);
-            }
+        if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
+            r.set_visible(visible);
         }
     }
 
     pub fn set_bounds(&self, x: f64, y: f64, w: f64, h: f64) {
-        if let Ok(mut renderer) = self.renderer.lock() {
-            if let Some(ref mut r) = *renderer {
-                r.set_frame(x, y, w, h);
-            }
+        if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
+            r.set_frame(x, y, w, h);
         }
     }
 
     /// Forward a window resize to the active renderer (e.g. from Tauri WindowEvent::Resized).
     pub fn resize(&self, width: u32, height: u32) {
-        if let Ok(mut renderer) = self.renderer.lock() {
-            if let Some(ref mut r) = *renderer {
-                r.resize(width, height);
-            }
+        if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
+            r.resize(width, height);
         }
     }
 
     pub fn play(&self) -> Result<(), String> {
-        let result = self.inner.lock().map_err(|e| e.to_string())?.play();
+        let result = lock_or_recover(&self.inner).play();
         if result.is_ok() {
             self.idle_inhibitor.inhibit();
         }
@@ -461,7 +418,7 @@ impl MpvState {
     }
 
     pub fn pause(&self) -> Result<(), String> {
-        let result = self.inner.lock().map_err(|e| e.to_string())?.pause();
+        let result = lock_or_recover(&self.inner).pause();
         if result.is_ok() {
             self.idle_inhibitor.uninhibit();
         }
@@ -469,43 +426,33 @@ impl MpvState {
     }
 
     pub fn stop(&self) {
-        let _transition = self.transition.lock().unwrap_or_else(|p| p.into_inner());
+        let _transition = lock_or_recover(&self.transition);
         // Same ordering rule as `load()`: cancel the monitor BEFORE the
         // engine drops the parent `Mpv`, otherwise the watcher's client
         // keeps the libmpv core alive (hardware decoder + audio device).
         // `cancel_reconnect_monitor` itself is poison-tolerant.
         self.cancel_reconnect_monitor();
-        let old_renderer = match self.renderer.lock() {
-            Ok(mut r) => r.take(),
-            Err(p) => p.into_inner().take(),
-        };
+        let old_renderer = lock_or_recover(&self.renderer).take();
         drop(old_renderer); // detach() runs synchronously on GLib main thread
-        match self.inner.lock() {
-            Ok(mut e) => e.stop(),
-            Err(p) => p.into_inner().stop(),
-        }
+        lock_or_recover(&self.inner).stop();
         self.idle_inhibitor.uninhibit();
         #[cfg(target_os = "ios")]
         crate::ios::set_audio_active(false);
     }
 
     pub fn seek(&self, position: f64) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.seek(position)
+        lock_or_recover(&self.inner).seek(position)
     }
 
     /// Seek forward (positive) or back (negative) by `offset` seconds.
     pub fn seek_relative(&self, offset: f64) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.seek_relative(offset)
+        lock_or_recover(&self.inner).seek_relative(offset)
     }
 
     /// Turn video output off or back on while audio keeps playing. iOS
     /// uses this when the app goes to the background.
     pub fn set_video_enabled(&self, enabled: bool) {
-        let result = match self.inner.lock() {
-            Ok(engine) => engine.set_video_enabled(enabled),
-            Err(e) => Err(e.to_string()),
-        };
-        if let Err(e) = result {
+        if let Err(e) = lock_or_recover(&self.inner).set_video_enabled(enabled) {
             tracing::debug!("[MPV] set_video_enabled({enabled}): {e}");
         }
     }
@@ -529,27 +476,27 @@ impl MpvState {
     }
 
     pub fn set_volume(&self, volume: f64) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.set_volume(volume)
+        lock_or_recover(&self.inner).set_volume(volume)
     }
 
     pub fn sub_add(&self, path: &str) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.sub_add(path)
+        lock_or_recover(&self.inner).sub_add(path)
     }
 
     pub fn sub_remove(&self, id: i64) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.sub_remove(id)
+        lock_or_recover(&self.inner).sub_remove(id)
     }
 
     pub fn set_sub_pos(&self, pos: f64) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.set_sub_pos(pos)
+        lock_or_recover(&self.inner).set_sub_pos(pos)
     }
 
     pub fn set_sub_delay(&self, delay: f64) -> Result<(), String> {
-        self.inner.lock().map_err(|e| e.to_string())?.set_sub_delay(delay)
+        lock_or_recover(&self.inner).set_sub_delay(delay)
     }
 
     pub fn get_state(&self) -> PlayerState {
-        self.inner.lock().unwrap().get_state()
+        lock_or_recover(&self.inner).get_state()
     }
 }
 
