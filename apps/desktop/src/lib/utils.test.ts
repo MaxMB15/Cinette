@@ -45,7 +45,7 @@ describe("cn", () => {
 	});
 
 	it("handles responsive prefix conflicts", () => {
-		// md:px-2 and md:px-6 conflict — last wins
+		// md:px-2 and md:px-6 conflict, so the last one wins
 		expect(cn("md:px-2", "md:px-6")).toBe("md:px-6");
 	});
 

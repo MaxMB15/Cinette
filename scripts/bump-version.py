@@ -6,7 +6,8 @@
 Bump the desktop app version in:
   - apps/desktop/src-tauri/tauri.conf.json
   - apps/desktop/src-tauri/Cargo.toml (first [package] version line)
-  - apps/desktop/src/components/settings/Settings.tsx (About line)
+
+The About section in Settings reads the version at runtime, so it needs no edit.
 
 Usage:
   python3 scripts/bump-version.py NEW_VERSION
@@ -23,7 +24,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TAURI_CONF = ROOT / "apps/desktop/src-tauri/tauri.conf.json"
 CARGO_TOML = ROOT / "apps/desktop/src-tauri/Cargo.toml"
-SETTINGS_TSX = ROOT / "apps/desktop/src/components/settings/Settings.tsx"
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -53,16 +53,6 @@ def bump(new: str) -> None:
     )
     CARGO_TOML.write_text(updated, encoding="utf-8")
     print(f"  Updated {CARGO_TOML.relative_to(ROOT)}")
-
-    raw = SETTINGS_TSX.read_text(encoding="utf-8")
-    updated = re.sub(
-        r"Max Video Player v\d+\.\d+\.\d+",
-        f"Max Video Player v{new}",
-        raw,
-        count=1,
-    )
-    SETTINGS_TSX.write_text(updated, encoding="utf-8")
-    print(f"  Updated {SETTINGS_TSX.relative_to(ROOT)}")
 
 
 def main() -> None:

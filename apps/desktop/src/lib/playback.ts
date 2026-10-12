@@ -14,7 +14,7 @@ const normalize = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, 
  * Channel IDs are index-based (`{provider}-ch-{n}`) and shift when a playlist
  * is refreshed, and the URL changes when the user picks a different source, so
  * neither is a reliable key. The title (plus season/episode for series) is.
- * Returns null for live channels — they have no resumable position.
+ * Returns null for live channels, which have no resumable position.
  */
 export const playbackKey = (ch: Channel): string | null => {
 	if (ch.contentType === "live") return null;

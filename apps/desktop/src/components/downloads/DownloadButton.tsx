@@ -13,7 +13,7 @@ export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" 
 
 interface DownloadButtonProps {
 	state: DownloadIconState;
-	/** Start (idle/partial) — for series/season this is "download all missing".
+	/** Start (idle/partial). For a series or season this downloads all missing episodes.
 	 *  Any large-batch confirm is handled by the parent. */
 	onStart: () => void;
 	/** Stop in-progress (downloading). */

@@ -14,7 +14,6 @@ apps/desktop/src-tauri/target/
 
 # IDE
 .vscode/
-.claude/
 .idea/
 *.swp
 *.swo
@@ -38,27 +37,13 @@ coverage/
 apps/desktop/resources/
 
 # ffmpeg sidecar binaries (fetched via scripts/fetch-ffmpeg.sh)
-apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/binaries
 
-# Pre-built libraries (workspace: desktop uses macos/linux/windows, ios uses ios/, android uses android/)
-libs/macos/*.dylib
-libs/macos-bundle/
-libs/linux/*.so
-libs/windows/*.dll
-libs/ios/*.a
-libs/android/**/*.so
-libs/mpv-src/
-libs/macos/
+# libmpv built by scripts/build-libmpv.sh, and the source it builds from
+/libs
 
 # Worktrees
 .worktrees/
-
-# AI Generated Files
-.claude/
-docs/plans/
-docs/superpowers/
-CLAUDE.md
-.superpowers/
 
 # Copied in by tauri-plugin-mpv's build script for the iOS Swift package
 crates/tauri-plugin-mpv/.tauri/

@@ -98,7 +98,8 @@ For a coverage report, run `npm run test:coverage --workspace=apps/desktop` and 
 `apps/desktop/coverage/index.html`. CI publishes the report for `main` to
 [GitHub Pages](https://MaxMB15.github.io/MaxVideoPlayer/coverage/).
 
-A Husky pre-commit hook formats, lints and tests before each commit.
+A Husky pre-commit hook runs Prettier and ESLint on the staged files through
+lint-staged, then runs the tests.
 
 ## Production build
 
