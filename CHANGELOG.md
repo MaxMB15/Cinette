@@ -15,6 +15,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 - The player shows a spinner while a stream opens, so a slow server no longer looks like a black screen. If the stream never starts, the player says so and offers Retry (#97).
 
+### Fixed
+
+- A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+
 ## [0.5.3] - 2026-10-09
 
 ### Added
