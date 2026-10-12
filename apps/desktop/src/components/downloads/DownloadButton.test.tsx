@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { DownloadButton } from "./DownloadButton";
 
@@ -135,12 +135,35 @@ describe("DownloadButton for a changing item", () => {
 				onRemove={() => Promise.reject("Could not delete /a.mkv: denied")}
 			/>
 		);
+		screen.getByRole("button", { name: "Downloaded" }).focus();
 		confirmRemove();
 		await screen.findByRole("dialog", { name: "Couldn't remove the download" });
 
 		rerender(<PlayerButton itemId="e2" state="idle" />);
 		const dialog = screen.getByRole("dialog", { name: "Couldn't remove the download" });
 		expect(dialog.textContent).toContain("Could not delete /a.mkv: denied");
+
+		fireEvent.click(within(dialog).getByRole("button", { name: "OK" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(screen.getByRole("button", { name: "Download" })).not.toHaveFocus();
+		expect(document.body).toHaveFocus();
+	});
+
+	it("hands focus back after a failed removal while the item stays the same", async () => {
+		render(
+			<PlayerButton
+				itemId="e1"
+				state="complete"
+				onRemove={() => Promise.reject("Could not delete /a.mkv: denied")}
+			/>
+		);
+		const button = screen.getByRole("button", { name: "Downloaded" });
+		button.focus();
+		confirmRemove();
+		const dialog = await screen.findByRole("dialog", { name: "Couldn't remove the download" });
+
+		fireEvent.click(within(dialog).getByRole("button", { name: "OK" }));
+		expect(button).toHaveFocus();
 	});
 
 	it("still says a removal failed after the next item starts", async () => {

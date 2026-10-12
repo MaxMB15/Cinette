@@ -13,7 +13,7 @@ export const DEFAULT_SUBTITLE_POSITION: SubtitlePosition = { x: 50, y: 88 };
 /** How far one arrow key press moves the subtitles, in percent. */
 export const SUBTITLE_NUDGE_STEP = 2;
 
-/** Which way each arrow key moves the subtitles. */
+/** Which way and how far each arrow key moves the subtitles. */
 const ARROW_STEPS = new Map<string, { dx: number; dy: number }>([
 	["ArrowLeft", { dx: -SUBTITLE_NUDGE_STEP, dy: 0 }],
 	["ArrowRight", { dx: SUBTITLE_NUDGE_STEP, dy: 0 }],
