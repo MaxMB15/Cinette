@@ -13,7 +13,9 @@ import { useFullscreen } from "@/lib/fullscreen-context";
 export const useLeaveFullscreenOnUnmount = () => {
 	const { isFullscreen, setFullscreen } = useFullscreen();
 	const isFullscreenRef = useRef(isFullscreen);
-	isFullscreenRef.current = isFullscreen;
+	useEffect(() => {
+		isFullscreenRef.current = isFullscreen;
+	}, [isFullscreen]);
 
 	useEffect(
 		() => () => {

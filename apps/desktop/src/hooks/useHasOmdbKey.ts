@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { getOmdbApiKey } from "@/lib/tauri";
+import type { OmdbData } from "@/lib/types";
 
 // The last answer, so a sheet that opens again shows it at once while it checks.
 let lastKnown: boolean | null = null;
@@ -19,7 +20,7 @@ export const rememberHasOmdbKey = (hasKey: boolean | null) => {
  * it opens sees a key added since it last opened. A sheet that already has
  * OMDb details passes false and skips the check.
  */
-export const useHasOmdbKey = (needed: boolean): boolean | null => {
+const useHasOmdbKey = (needed: boolean): boolean | null => {
 	const [hasKey, setHasKey] = useState<boolean | null>(lastKnown);
 	useEffect(() => {
 		if (!needed) return;
@@ -38,4 +39,19 @@ export const useHasOmdbKey = (needed: boolean): boolean | null => {
 		};
 	}, [needed]);
 	return hasKey;
+};
+
+/**
+ * What a movie or series sheet needs to know about OMDb. The key only matters
+ * when OMDb came back with nothing, so it isn't checked while OMDb loads or
+ * once it has details. Without details the sheet keeps loading until the key
+ * check answers too, so the hint about adding a key doesn't flash.
+ */
+export const useOmdbInfoState = (
+	omdbData: OmdbData | null,
+	omdbLoading: boolean
+): { hasOmdbKey: boolean | null; infoLoading: boolean } => {
+	const hasOmdbKey = useHasOmdbKey(!omdbLoading && !omdbData);
+	const infoLoading = omdbLoading || (!omdbData && hasOmdbKey === null);
+	return { hasOmdbKey, infoLoading };
 };

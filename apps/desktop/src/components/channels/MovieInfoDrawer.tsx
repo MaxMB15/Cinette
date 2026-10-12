@@ -15,7 +15,7 @@ import {
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
-import { useHasOmdbKey } from "@/hooks/useHasOmdbKey";
+import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { OmdbKeyHint } from "./OmdbKeyHint";
 
@@ -45,11 +45,7 @@ export const MovieInfoDrawer = ({
 	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
 		prefetchedWhatsonData ?? null
 	);
-	// The key only matters when OMDb came back with nothing, so skip the check
-	// while it loads or once it has details.
-	const hasOmdbKey = useHasOmdbKey(!omdbLoading && !omdbData);
-	// Without OMDb data, wait for the key check too, so the hint doesn't flash.
-	const infoLoading = omdbLoading || (!omdbData && hasOmdbKey === null);
+	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, omdbLoading);
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
