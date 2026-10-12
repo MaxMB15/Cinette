@@ -34,6 +34,17 @@ fn apply_linux_workarounds() {
     }
 }
 
+/// Bring the main window to the front, for when the app is opened again
+/// while it's running.
+#[cfg(desktop)]
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -49,9 +60,15 @@ pub fn run() {
     apply_linux_workarounds();
 
     let builder = tauri::Builder::default();
+    // A second copy of the app would share the database and start the same
+    // downloads again, so opening the app again shows the open window. This
+    // plugin comes first so the second copy quits before anything else runs.
     // On iOS the App Store handles updates, and there's nothing to relaunch.
     #[cfg(desktop)]
     let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app)
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
@@ -160,6 +177,14 @@ pub fn run() {
                 _ => {}
             }
 
+            // Downloads that were running when the app quit have no ffmpeg
+            // anymore. Left as they are, each would hold a download slot for good.
+            match cache.requeue_interrupted_downloads() {
+                Ok(n) if n > 0 => tracing::info!("Requeued {n} interrupted download(s)"),
+                Err(e) => tracing::warn!("Failed to requeue interrupted downloads: {e}"),
+                _ => {}
+            }
+
             app.manage(AppState {
                 cache: Mutex::new(cache),
             });
@@ -173,7 +198,13 @@ pub fn run() {
             {
                 use tauri_plugin_shell::ShellExt;
                 match app.shell().sidecar("ffmpeg") {
-                    Ok(_) => tracing::info!("ffmpeg sidecar resolved"),
+                    Ok(_) => {
+                        tracing::info!("ffmpeg sidecar resolved");
+                        // Start whatever is still queued from the last run.
+                        if let Err(e) = crate::downloads::manager::pump(app.handle()) {
+                            tracing::warn!("Failed to start queued downloads: {e}");
+                        }
+                    }
                     Err(e) => tracing::error!("ffmpeg sidecar missing: {e}"),
                 }
             }
@@ -212,6 +243,11 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                crate::downloads::manager::stop_all_for_exit(app);
+            }
+        });
 }
