@@ -160,9 +160,13 @@ impl MpvEngine {
     /// decoder + audio device on macOS) must explicitly signal the monitor
     /// thread to drop this client. See `MpvState::reconnect_kill` and the
     /// kill-flag flow in `crates/tauri-plugin-mpv/src/reconnect.rs`.
-    pub fn create_event_client(&self, name: &str) -> Result<libmpv2::Mpv, String> {
+    ///
+    /// The client keeps mpv's default name. libmpv2 5.0.3 frees a name it
+    /// is given before it calls `mpv_create_client`, so mpv can read an
+    /// empty name and return no handle, which libmpv2 doesn't check for.
+    pub fn create_event_client(&self) -> Result<libmpv2::Mpv, String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
-        mpv.create_client(Some(name))
+        mpv.create_client(None)
             .map_err(|e| format!("mpv_create_client: {}", e))
     }
 

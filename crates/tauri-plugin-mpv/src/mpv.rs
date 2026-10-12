@@ -240,7 +240,7 @@ impl MpvState {
             let mut engine = lock_or_recover(&self.inner);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -287,7 +287,7 @@ impl MpvState {
             engine.configure_audio()?;
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -343,7 +343,7 @@ impl MpvState {
             let mut engine = lock_or_recover(&self.inner);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -361,7 +361,7 @@ impl MpvState {
             engine.create(&[])?;
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
-            engine.create_event_client("reconnect-watcher").ok()
+            engine.create_event_client().ok()
         };
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
@@ -399,7 +399,7 @@ impl MpvState {
         engine.create(&self.options(fallback_options()))?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
-        Ok(engine.create_event_client("reconnect-watcher").ok())
+        Ok(engine.create_event_client().ok())
     }
 
     #[cfg(target_os = "linux")]
@@ -413,7 +413,7 @@ impl MpvState {
         engine.configure_audio()?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
-        Ok(engine.create_event_client("reconnect-watcher").ok())
+        Ok(engine.create_event_client().ok())
     }
 
     /// Shows or hides the video surface without stopping playback.
