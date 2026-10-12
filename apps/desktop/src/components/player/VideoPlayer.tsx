@@ -29,6 +29,7 @@ import {
 	readSubtitleFile,
 	mpvSubAdd,
 	mpvSubRemove,
+	mpvSetSubDelay,
 	mpvGetState,
 	getPlaybackPosition,
 	savePlaybackPosition,
@@ -1288,9 +1289,7 @@ export const PlayerView = () => {
 					onFontFamilyChange={setSubtitleFontFamily}
 					onDelayChange={(d) => {
 						setSubtitleDelay(d);
-						import("@/lib/tauri").then(({ mpvSetSubDelay }) =>
-							mpvSetSubDelay(d).catch(() => {})
-						);
+						mpvSetSubDelay(d).catch(() => {});
 					}}
 					onSettingsModeChange={(active) => setSubtitleEditMode(active)}
 				/>
