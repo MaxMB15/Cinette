@@ -1,0 +1,21 @@
+name: Install frontend dependencies
+description: >-
+  Install the npm packages at their locked versions without running any install
+  scripts, so no package code runs before the build. On Linux, also install the
+  Tauri CLI's native binding at the CLI's locked version.
+
+runs:
+  using: composite
+  steps:
+    - name: Install npm packages
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm ci --ignore-scripts
+        # The lockfile only lists the CLI's macOS binding (npm/cli#4828), so
+        # npm ci leaves it out on Linux. Pin it to the CLI's version, since a
+        # newer binding would build and sign the release.
+        if [[ "$RUNNER_OS" == "Linux" ]] && ! npm ls @tauri-apps/cli-linux-x64-gnu > /dev/null 2>&1; then
+          version=$(node -p "require('@tauri-apps/cli/package.json').version")
+          npm install --no-save --ignore-scripts "@tauri-apps/cli-linux-x64-gnu@$version"
+        fi

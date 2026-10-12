@@ -15,6 +15,7 @@ import {
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
+import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
 
@@ -93,6 +94,7 @@ export const MovieInfoDrawer = ({
 		setVisible(false);
 		setTimeout(onClose, 300);
 	};
+	const { sheetRef, handleProps } = useSheetDrag({ onClose: handleClose, enabled: visible });
 
 	const allSources = channelSources(movie);
 	const hasSources = allSources.length > 1;
@@ -142,17 +144,21 @@ export const MovieInfoDrawer = ({
 				onClick={handleClose}
 			/>
 			<div
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-transform duration-300 ease-out max-h-[85vh] overflow-hidden ${
+				ref={sheetRef}
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
 				{/* Handle */}
-				<div className="flex justify-center pt-3 pb-1 shrink-0">
+				<div
+					{...handleProps}
+					className="flex justify-center pt-3 pb-1 shrink-0 select-none"
+				>
 					<div className="w-9 h-1 rounded-full bg-border" />
 				</div>
 
 				{/* Close button */}
-				<div className="flex justify-end px-5 pt-1 shrink-0">
+				<div {...handleProps} className="flex justify-end px-5 pt-1 shrink-0 select-none">
 					<button
 						onClick={handleClose}
 						aria-label="Close"

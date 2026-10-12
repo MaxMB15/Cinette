@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { useId } from "react";
+
 interface ConfirmDialogProps {
 	open: boolean;
 	title: string;
@@ -19,20 +21,23 @@ export const ConfirmDialog = ({
 	onConfirm,
 	onCancel,
 }: ConfirmDialogProps) => {
+	const titleId = useId();
 	if (!open) return null;
 	return (
 		<div
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby={titleId}
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
 			onClick={onCancel ?? onConfirm}
 		>
 			<div
-				role="dialog"
-				aria-modal="true"
-				aria-label={title}
 				className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl"
 				onClick={(e) => e.stopPropagation()}
 			>
-				<h3 className="text-sm font-semibold mb-1.5">{title}</h3>
+				<h3 id={titleId} className="text-sm font-semibold mb-1.5">
+					{title}
+				</h3>
 				<p className="text-xs text-muted-foreground mb-4 max-h-[50vh] overflow-y-auto whitespace-pre-line break-words">
 					{message}
 				</p>

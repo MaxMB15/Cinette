@@ -61,8 +61,8 @@ describe("DownloadButton", () => {
 		expect(dialog.textContent).toContain("Deleted 1 of 2.");
 		expect(dialog.textContent).toContain("Could not delete /b.mkv: denied");
 
-		// Clicking outside a notice closes it.
-		fireEvent.click(dialog.parentElement!);
+		// Clicking the backdrop around a notice closes it.
+		fireEvent.click(dialog);
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 });

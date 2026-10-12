@@ -4,10 +4,11 @@
 
 set -euo pipefail
 
-# Build/download libmpv for target platform.
-# Output: libs/<platform>/ (workspace root — desktop uses macos/linux/windows, ios uses ios/, android uses android/)
+# Builds libmpv from source for the desktop app. iOS gets libmpv from MPVKit
+# through Swift Package Manager instead, so it has no case here.
+# Output: libs/<platform>/ at the repository root.
 #
-# Usage: ./scripts/build-libmpv.sh macos|ios|android
+# Usage: ./scripts/build-libmpv.sh macos|linux
 
 PLATFORM="${1:-}"
 LIBS_DIR="$(cd "$(dirname "$0")/.." && pwd)/libs"
@@ -94,25 +95,6 @@ case "$PLATFORM" in
     echo "    Done."
     ;;
 
-  ios)
-    echo "==> Building libmpv for iOS (arm64)..."
-    mkdir -p "$LIBS_DIR/ios"
-    echo "    iOS static library build requires cross-compiling mpv + ffmpeg"
-    echo "    for aarch64-apple-ios. Use mpv-build with iOS toolchain or"
-    echo "    download pre-built from: https://github.com/nichobi/iina-plus"
-    echo "    Place libmpv.a in libs/ios/ (for apps/ios)"
-    ;;
-
-  android)
-    echo "==> Building libmpv for Android..."
-    mkdir -p "$LIBS_DIR/android/arm64-v8a"
-    mkdir -p "$LIBS_DIR/android/armeabi-v7a"
-    echo "    Android .so build requires NDK cross-compilation."
-    echo "    Use mpv-android build scripts or download pre-built from:"
-    echo "    https://github.com/nichobi/mpv-android"
-    echo "    Place libmpv.so in libs/android/<abi>/ (for apps/android)"
-    ;;
-
   linux)
     echo "==> Building libmpv from source for Linux..."
     mkdir -p "$LIBS_DIR/linux"
@@ -131,7 +113,7 @@ case "$PLATFORM" in
       exit 1
     fi
 
-    # Check audio dev packages — at least one is REQUIRED for playback with sound.
+    # Check audio dev packages. At least one is REQUIRED for playback with sound.
     # Without these, the resulting libmpv.so will have zero AO (audio output)
     # drivers and mpv will silently disable all audio.
     AUDIO_FOUND=false
@@ -167,8 +149,8 @@ case "$PLATFORM" in
 
     # Build with audio + video output support.
     # Audio backends are conditionally enabled based on available dev headers.
-    # If no audio dev headers are found, the build will warn but continue —
-    # the AUDIO_FOUND check above already warns the user.
+    # If no audio dev headers are found, the build continues, since the
+    # AUDIO_FOUND check above already warns the user.
     BUILD_DIR="$MPV_SRC/build-linux"
     echo "    Running meson setup..."
 
@@ -182,7 +164,7 @@ case "$PLATFORM" in
       -Dx11=enabled
       -Dwayland=enabled
       -Dvulkan=disabled
-      # Disable optional features we don't need — avoids auto-detection pulling
+      # Disable optional features we don't need, so auto-detection doesn't pull
       # in deps that may not be on the CI runner (lua, javascript, etc.)
       # Note: libplacebo is a hard requirement of mpv 0.40.0 (not a meson option),
       # so libplacebo-dev must be installed.
@@ -219,7 +201,7 @@ case "$PLATFORM" in
     meson setup "$BUILD_DIR" "$MPV_SRC" "${MESON_ARGS[@]}"
 
     echo "    Building libmpv.so (this takes a few minutes)..."
-    # Build all targets — the .so name varies by mpv version/config
+    # Build all targets, because the .so name varies by mpv version and config
     ninja -C "$BUILD_DIR"
 
     # Copy .so to libs/linux/
@@ -236,9 +218,9 @@ case "$PLATFORM" in
     ;;
 
   *)
-    echo "Usage: $0 {macos|linux|ios|android}"
+    echo "Usage: $0 {macos|linux}"
     echo ""
-    echo "Downloads or builds libmpv for the target platform."
+    echo "Builds libmpv for the target platform."
     echo "Output goes to libs/<platform>/"
     exit 1
     ;;

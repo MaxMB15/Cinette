@@ -58,7 +58,7 @@ pub fn build_ffmpeg_args(url: &str, dest_part: &str, container: &str) -> Vec<Str
         args.push("-movflags".into());
         args.push("+faststart".into());
     }
-    // Explicit output muxer — the `.part` extension can't be auto-detected.
+    // Name the output muxer, because ffmpeg can't detect it from the `.part` extension.
     args.push("-f".into());
     args.push(muxer.into());
     // Machine-readable progress on stdout, one key=value per line.
