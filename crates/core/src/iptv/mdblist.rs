@@ -186,9 +186,7 @@ pub async fn fetch_mdblist(
     media_type: &str,
     api_key: &str,
 ) -> Result<MdbListData, MdbListError> {
-    let response = crate::http::client()
-        .get("https://mdblist.com/api/")
-        .query(&[("apikey", api_key), ("i", imdb_id), ("m", media_type)])
+    let response = lookup_request(imdb_id, media_type, api_key)
         .send()
         .await?
         .json::<serde_json::Value>()
@@ -196,10 +194,30 @@ pub async fn fetch_mdblist(
     parse_mdblist_response(response)
 }
 
+// Keys are pasted in, often with a trailing newline, which MDBList would reject.
+fn lookup_request(imdb_id: &str, media_type: &str, api_key: &str) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .get("https://mdblist.com/api/")
+        .query(&[
+            ("apikey", api_key.trim()),
+            ("i", imdb_id),
+            ("m", media_type),
+        ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spaces_around_the_key_are_ignored() {
+        let request = lookup_request("tt0468569", "movie", " KEY\n")
+            .build()
+            .unwrap();
+        let key = request.url().query_pairs().find(|(k, _)| k == "apikey");
+        assert_eq!(key.unwrap().1, "KEY");
+    }
 
     fn full_response() -> serde_json::Value {
         json!({
