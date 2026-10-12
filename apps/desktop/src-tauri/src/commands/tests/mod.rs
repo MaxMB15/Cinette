@@ -10,6 +10,13 @@ mod services;
 use super::*;
 use crate::test_support::TestApp;
 use serde_json::json;
+use std::sync::MutexGuard;
+
+/// The app's cache, for setting up what a test needs and checking what a
+/// command saved.
+fn cache(app: &TestApp) -> MutexGuard<'_, CacheStore> {
+    app.state().inner().cache.lock().unwrap()
+}
 
 #[test]
 fn non_empty_key_skips_missing_and_blank_keys() {
