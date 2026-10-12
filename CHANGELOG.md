@@ -15,7 +15,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
 - M3U playlists can mark an entry as a movie or series with a `tvg-type` attribute, for entries whose URLs don't say which it is (#92).
-- A privacy policy in docs/privacy.md, and a demo playlist of free test streams and Blender films in docs/demo (#92).
+- A privacy policy in docs/privacy.md, linked from Settings > About, and a demo playlist of free test streams and Blender films in docs/demo (#92).
 
 ### Fixed
 
