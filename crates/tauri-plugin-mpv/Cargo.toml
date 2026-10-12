@@ -20,7 +20,7 @@ libmpv2 = { version = "6", features = ["render"] }
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
+cocoa = "0.27"
 objc = "0.2"
 dispatch = "0.2"
 libc = "0.2"
