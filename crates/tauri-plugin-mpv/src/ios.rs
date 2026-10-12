@@ -454,7 +454,7 @@ const OBSERVE_TITLE: u64 = 4;
 /// info in step with pause, seeks, duration and title. It also gets mpv to
 /// resize its output when the view changes size, see [`OutputResize`].
 fn run_watcher(
-    mut client: Mpv,
+    client: Mpv,
     id: u64,
     kill: Arc<AtomicBool>,
     mut first_frame: Option<Box<dyn FnOnce() + Send>>,
