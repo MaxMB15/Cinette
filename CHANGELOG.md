@@ -16,6 +16,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Fixed
 
+- A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
 - A failed guide download, or one that comes back empty or as an error page, no longer wipes the TV guide you already had (#105).
 - Error messages and logs no longer show your API keys, Xtream login or the login in a playlist link (#105).
 - Testing a wrong OpenSubtitles key says the key is invalid instead of showing a request error (#105).
