@@ -141,7 +141,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Pull requests build only the platforms their changes affect. A manual run builds a signed macOS app. |
+| [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

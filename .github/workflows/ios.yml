@@ -9,6 +9,7 @@ on:
       - "apps/desktop/**"
       - "crates/**"
       - ".cargo/**"
+      - ".github/actions/install-frontend-deps/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "package.json"
@@ -20,6 +21,7 @@ on:
       - "apps/desktop/**"
       - "crates/**"
       - ".cargo/**"
+      - ".github/actions/install-frontend-deps/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "package.json"
@@ -54,7 +56,9 @@ jobs:
         with:
           workspaces: ". -> target"
           shared-key: ios-sim
-          save-if: ${{ github.event_name == 'push' }}
+          # Pull requests restore from dev. Only dev saves, since a copy saved
+          # from main would only take up room in the 10 GB cache.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -63,7 +67,7 @@ jobs:
           cache: npm
 
       - name: Install frontend deps
-        run: npm ci
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Show Xcode version
         run: xcodebuild -version

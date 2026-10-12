@@ -29,6 +29,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Test builds keep line numbers for backtraces but drop the rest of the debug
+  # info, which is most of their size in the Rust caches.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   # ── Enforce merge source for PRs targeting main ─────────────────────────
@@ -38,8 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate source branch
+        env:
+          HEAD: ${{ github.head_ref }}
         run: |
-          HEAD="${{ github.head_ref }}"
           if [[ "$HEAD" == "dev" || "$HEAD" == chore-bump-v* || "$HEAD" == chore/release-* || "$HEAD" == chore/sync-main-* ]]; then
             echo "OK: '$HEAD' is allowed to merge into main."
           else
@@ -53,6 +57,10 @@ jobs:
   # On manual runs: macOS only.
   detect-changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # paths-filter lists a pull request's files through the API.
+      pull-requests: read
     outputs:
       linux: ${{ steps.push-all.outputs.linux || steps.filter.outputs.linux }}
       macos: ${{ steps.push-all.outputs.macos || steps.manual.outputs.macos || steps.filter.outputs.macos }}
@@ -76,60 +84,32 @@ jobs:
         uses: dorny/paths-filter@v3
         id: filter
         with:
+          # The whole plugin crate counts, because a list of its files missed
+          # new ones. Both builds also run when CI itself changes.
           filters: |
+            shared: &shared
+              - 'crates/tauri-plugin-mpv/**'
+              - 'crates/core/**'
+              - 'apps/desktop/src-tauri/**'
+              - 'apps/desktop/src/**'
+              - 'apps/desktop/*'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - 'scripts/build-libmpv.sh'
+              - 'scripts/fetch-ffmpeg.sh'
+              - '.github/actions/install-frontend-deps/**'
+              - '.github/workflows/build.yml'
             linux:
-              - 'crates/tauri-plugin-mpv/src/linux.rs'
-              - 'crates/tauri-plugin-mpv/src/renderer.rs'
-              - 'crates/tauri-plugin-mpv/src/commands.rs'
-              - 'crates/tauri-plugin-mpv/src/engine.rs'
-              - 'crates/tauri-plugin-mpv/src/mpv.rs'
-              - 'crates/tauri-plugin-mpv/src/lib.rs'
-              - 'crates/tauri-plugin-mpv/src/reconnect.rs'
-              - 'crates/tauri-plugin-mpv/src/idle_inhibit.rs'
-              - 'crates/tauri-plugin-mpv/src/lock.rs'
-              - 'crates/tauri-plugin-mpv/src/options.rs'
-              - 'crates/tauri-plugin-mpv/build.rs'
-              - 'crates/tauri-plugin-mpv/permissions/**'
-              - 'crates/tauri-plugin-mpv/Cargo.toml'
-              - 'crates/core/**'
-              - 'apps/desktop/src-tauri/**'
-              - 'apps/desktop/src/**'
-              - 'apps/desktop/*'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'scripts/build-libmpv.sh'
+              - *shared
               - 'scripts/bundle-libmpv-linux.sh'
-              - 'scripts/fetch-ffmpeg.sh'
               - '.github/actions/install-linux-deps/**'
-              - '.github/workflows/build.yml'
             macos:
-              - 'crates/tauri-plugin-mpv/src/macos.rs'
-              - 'crates/tauri-plugin-mpv/src/renderer.rs'
-              - 'crates/tauri-plugin-mpv/src/commands.rs'
-              - 'crates/tauri-plugin-mpv/src/engine.rs'
-              - 'crates/tauri-plugin-mpv/src/mpv.rs'
-              - 'crates/tauri-plugin-mpv/src/lib.rs'
-              - 'crates/tauri-plugin-mpv/src/reconnect.rs'
-              - 'crates/tauri-plugin-mpv/src/idle_inhibit.rs'
-              - 'crates/tauri-plugin-mpv/src/lock.rs'
-              - 'crates/tauri-plugin-mpv/src/options.rs'
-              - 'crates/tauri-plugin-mpv/build.rs'
-              - 'crates/tauri-plugin-mpv/permissions/**'
-              - 'crates/tauri-plugin-mpv/Cargo.toml'
-              - 'crates/core/**'
-              - 'apps/desktop/src-tauri/**'
-              - 'apps/desktop/src/**'
-              - 'apps/desktop/*'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'scripts/build-libmpv.sh'
+              - *shared
               - 'scripts/bundle-libmpv.sh'
-              - 'scripts/fetch-ffmpeg.sh'
-              - '.github/workflows/build.yml'
+              - '.github/actions/macos-signing/**'
 
   # ── Tests (run on every push and PR) ────────────────────────────────────
   test:
@@ -159,7 +139,7 @@ jobs:
           cache: npm
 
       - name: Install deps
-        run: npm ci --ignore-scripts
+        uses: ./.github/actions/install-frontend-deps
 
       - name: TypeScript type-check
         working-directory: apps/desktop
@@ -172,10 +152,10 @@ jobs:
         run: npm run format:check
 
       - name: Rust type-check of mvp-core
-        run: cargo check -p mvp-core
+        run: cargo check --locked -p mvp-core
 
       - name: Run Rust tests
-        run: cargo test -p mvp-core -- --include-ignored
+        run: cargo test --locked -p mvp-core -- --include-ignored
 
       - name: Run desktop tests with coverage
         working-directory: apps/desktop
@@ -248,14 +228,14 @@ jobs:
           cache: npm
 
       - name: Install frontend deps
-        run: npm ci
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Install system deps
         run: |
           # ffmpeg@7 required: mpv 0.40.0 uses FF_PROFILE_* macros removed in ffmpeg 8.x
           brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
           # Make ffmpeg@7 visible to pkg-config (it is keg-only, not linked by default)
-          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Prepare libmpv for bundle
         run: ./scripts/build-libmpv.sh macos
@@ -340,11 +320,7 @@ jobs:
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Install frontend deps
-        run: |
-          npm ci
-          # npm ci can skip platform-specific optional deps (npm/cli#4828).
-          # Ensure the Tauri CLI native binding for Linux is present.
-          npm ls @tauri-apps/cli-linux-x64-gnu 2>/dev/null || npm install --no-save @tauri-apps/cli-linux-x64-gnu
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Build frontend
         run: npm run build:desktop
@@ -352,7 +328,7 @@ jobs:
       # The test job covers only mvp-core. The plugin and the app need GTK and
       # libmpv, which this job installs.
       - name: Run plugin and app tests
-        run: cargo test -p tauri-plugin-mpv -p max-video-player
+        run: cargo test --locked -p tauri-plugin-mpv -p max-video-player
 
       - name: Build Tauri app (Linux)
         run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
@@ -366,3 +342,29 @@ jobs:
             target/release/bundle/rpm/*.rpm
             target/release/bundle/appimage/*.AppImage
           if-no-files-found: warn
+
+  # ── Overall result ──────────────────────────────────────────────────────
+  # One check that sums up the whole run, so a ruleset can require it instead
+  # of each job. A skipped job is fine, but a failed or cancelled one isn't,
+  # including detect-changes, whose failure would otherwise skip the builds.
+  ci-status:
+    if: always()
+    needs:
+      - check-merge-source
+      - detect-changes
+      - test
+      - deploy-coverage
+      - build-macos
+      - build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the other jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          if jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' <<< "$NEEDS" > /dev/null; then
+            echo "::error::A job failed or was cancelled."
+            exit 1
+          fi
