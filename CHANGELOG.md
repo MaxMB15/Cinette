@@ -14,6 +14,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The start screen shows the app icon in place of the blue play badge (#95).
 - The OpenSubtitles key field shows up once an OMDb or OpenSubtitles key is saved, not as soon as an OMDb key is typed, and then stays until you leave Settings (#120).
 - Downloading a movie or episode that has already finished hands back the finished download instead of downloading it again. If its file was deleted, it downloads again (#107).
+- Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip buttons are bigger and the settings gear has a new shape (#223).
 
 ### Added
 
