@@ -40,18 +40,16 @@ import { PlayerView } from "./VideoPlayer";
 type Mpv = ReturnType<typeof useMpv>;
 
 /** What mpv reports with nothing loaded. */
-const idleState = vi.hoisted(
-	() => (): MpvPlayerState => ({
-		isPlaying: false,
-		isPaused: false,
-		currentUrl: null,
-		volume: 100,
-		position: 0,
-		duration: 0,
-		playbackStarted: false,
-		openFailed: false,
-	})
-);
+const idleState = vi.hoisted(() => (): MpvPlayerState => ({
+	isPlaying: false,
+	isPaused: false,
+	currentUrl: null,
+	volume: 100,
+	position: 0,
+	duration: 0,
+	playbackStarted: false,
+	openFailed: false,
+}));
 
 const env = vi.hoisted(() => ({
 	channels: [] as Channel[],
