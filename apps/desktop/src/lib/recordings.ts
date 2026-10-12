@@ -140,9 +140,10 @@ export const rangeWindow = (start: string, minutes: number): RecordingWindow | n
 export const providerOf = (channelId: string, providerIds: string[]): string | undefined =>
 	providerIds
 		.filter((p) => channelId.startsWith(`${p}-`))
-		.reduce<
-			string | undefined
-		>((best, p) => (best !== undefined && best.length >= p.length ? best : p), undefined);
+		.reduce<string | undefined>(
+			(best, p) => (best !== undefined && best.length >= p.length ? best : p),
+			undefined
+		);
 
 /** Whether the channels `a` and `b` come from one known provider. */
 const sameProvider = (a: string, b: string, providerIds: string[]): boolean => {
