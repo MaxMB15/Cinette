@@ -29,19 +29,12 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { listen, type EventCallback } from "@tauri-apps/api/event";
 import { getInstallInfo, packageUpdate } from "@/lib/tauri";
+import { fakeUpdate } from "@/test/app-fixtures";
 
 const mockCheck = vi.mocked(check);
 const mockRelaunch = vi.mocked(relaunch);
 const mockGetInstallInfo = vi.mocked(getInstallInfo);
 const mockPackageUpdate = vi.mocked(packageUpdate);
-
-const fakeUpdate = (overrides: Record<string, unknown> = {}) => ({
-	version: "2.0.0",
-	body: "Release notes",
-	date: "2026-01-01",
-	downloadAndInstall: vi.fn().mockResolvedValue(undefined),
-	...overrides,
-});
 
 describe("useUpdateChecker", () => {
 	beforeEach(() => {
@@ -362,10 +355,11 @@ describe("useUpdateChecker over time", () => {
 			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
 		});
 		mockCheck.mockResolvedValue(fakeUpdate() as never);
+		let listenedTo: string | undefined;
 		let onProgress: EventCallback<{ percent: number }> | undefined;
 		const unlisten = vi.fn();
 		vi.mocked(listen).mockImplementationOnce(async (event, handler) => {
-			expect(event).toBe("package-update://progress");
+			listenedTo = event;
 			onProgress = handler as EventCallback<{ percent: number }>;
 			return unlisten;
 		});
@@ -382,6 +376,7 @@ describe("useUpdateChecker over time", () => {
 			installing = result.current.install();
 		});
 		await waitFor(() => expect(onProgress).toBeDefined());
+		expect(listenedTo).toBe("package-update://progress");
 		expect(result.current.installing).toBe(true);
 
 		act(() =>

@@ -5,7 +5,7 @@ import { render, screen, fireEvent, cleanup, within } from "@testing-library/rea
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 import { nowSeconds } from "@/lib/date";
-import { makeChannel, makeDownload, makeEpisode, makeMovie } from "@/test/detail-fixtures";
+import { makeNewsChannel, makeMovieDownload, makeEpisode, makeMovie } from "@/test/detail-fixtures";
 
 const tauri = vi.hoisted(() => ({
 	enqueueMovieDownload: vi.fn<(id: string) => Promise<string>>(),
@@ -154,7 +154,7 @@ describe("ChannelCard poster variant", () => {
 	});
 
 	const withDownload = (overrides: Partial<DownloadRecord>) => {
-		downloads.byChannel = new Map([["mv1", makeDownload(overrides)]]);
+		downloads.byChannel = new Map([["mv1", makeMovieDownload(overrides)]]);
 	};
 
 	/** The bar along the poster's bottom edge that fills as a download runs. */
@@ -215,7 +215,7 @@ describe("ChannelCard poster variant", () => {
 	});
 
 	it("shows a series' episode downloads but leaves starting and stopping them to its page", () => {
-		const series = makeChannel({ id: "series-1", name: "Show", contentType: "series" });
+		const series = makeNewsChannel({ id: "series-1", name: "Show", contentType: "series" });
 		const episode = makeEpisode(1, 1, "Pilot");
 		const { container, rerender } = render(
 			<ChannelCard channel={series} onPlay={vi.fn()} variant="poster" />
@@ -226,7 +226,7 @@ describe("ChannelCard poster variant", () => {
 		downloads.bySeries = new Map([
 			[
 				"series-1",
-				[makeDownload({ id: "dl-ep", channelId: episode.id, status: "downloading" })],
+				[makeMovieDownload({ id: "dl-ep", channelId: episode.id, status: "downloading" })],
 			],
 		]);
 		rerender(<ChannelCard channel={{ ...series }} onPlay={vi.fn()} variant="poster" />);
@@ -239,7 +239,7 @@ describe("ChannelCard poster variant", () => {
 		downloads.bySeries = new Map([
 			[
 				"series-1",
-				[makeDownload({ id: "dl-ep", channelId: episode.id, status: "completed" })],
+				[makeMovieDownload({ id: "dl-ep", channelId: episode.id, status: "completed" })],
 			],
 		]);
 		rerender(<ChannelCard channel={{ ...series }} onPlay={vi.fn()} variant="poster" />);

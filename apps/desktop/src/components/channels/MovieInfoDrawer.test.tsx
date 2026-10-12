@@ -6,7 +6,7 @@ import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DownloadRecord, OmdbData, WhatsonData } from "@/lib/types";
-import { makeDownload, makeMovie, makeOmdb } from "@/test/detail-fixtures";
+import { makeMovieDownload, makeMovie, makeOmdb } from "@/test/detail-fixtures";
 
 const tauri = vi.hoisted(() => ({
 	getOmdbApiKey: vi.fn<() => Promise<string | null>>(),
@@ -261,7 +261,7 @@ describe("MovieInfoDrawer", () => {
 
 	describe("downloads", () => {
 		const withDownload = (overrides: Partial<DownloadRecord>) => {
-			downloads.byChannel = new Map([["mv1", makeDownload(overrides)]]);
+			downloads.byChannel = new Map([["mv1", makeMovieDownload(overrides)]]);
 		};
 
 		it("starts a download", async () => {

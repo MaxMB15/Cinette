@@ -6,7 +6,8 @@ import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Channel, DownloadRecord, OmdbData, WhatsonData } from "@/lib/types";
-import { makeDownload, makeEpisode, makeOmdb } from "@/test/detail-fixtures";
+import { makeDownload } from "@/test/channel-fixtures";
+import { makeEpisode, makeOmdb } from "@/test/detail-fixtures";
 
 const tauri = vi.hoisted(() => ({
 	getOmdbApiKey: vi.fn<() => Promise<string | null>>(),
@@ -97,6 +98,7 @@ const loaded = async () => {
 	await act(async () => {});
 };
 
+/** A download of `ep` that finished just now. */
 const epDownload = (ep: Channel, status: DownloadRecord["status"]) =>
 	makeDownload({
 		id: `dl-${ep.id}`,
@@ -106,6 +108,7 @@ const epDownload = (ep: Channel, status: DownloadRecord["status"]) =>
 		seriesChannelId: SERIES,
 		status,
 		destPath: `/downloads/${ep.id}.mkv`,
+		finishedAt: Math.floor(Date.now() / 1000),
 	});
 
 const withDownloads = (...records: DownloadRecord[]) => {

@@ -2,20 +2,19 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import type { Channel, DownloadRecord, EpgProgram, OmdbData } from "@/lib/types";
+import { makeChannel, makeDownload } from "./channel-fixtures";
 
-/** A live channel with one source, no logo and no guide id. */
-export const makeChannel = (overrides: Partial<Channel> = {}): Channel => ({
-	id: "ch1",
-	name: "News 24",
-	url: "http://live.example.test/news24.ts",
-	groupTitle: "News",
-	isFavorite: false,
-	contentType: "live",
-	sources: [],
-	...overrides,
-});
+/** News 24, a live channel with no logo and no guide id. */
+export const makeNewsChannel = (overrides: Partial<Channel> = {}): Channel =>
+	makeChannel({
+		id: "ch1",
+		name: "News 24",
+		url: "http://live.example.test/news24.ts",
+		groupTitle: "News",
+		...overrides,
+	});
 
-/** A movie with one source. */
+/** Sintel, a movie. */
 export const makeMovie = (overrides: Partial<Channel> = {}): Channel =>
 	makeChannel({
 		id: "mv1",
@@ -78,22 +77,13 @@ export const makeOmdb = (overrides: Partial<OmdbData> = {}): OmdbData => ({
 	...overrides,
 });
 
-/** A finished movie download that isn't kept. */
-export const makeDownload = (overrides: Partial<DownloadRecord> = {}): DownloadRecord => ({
-	id: "dl1",
-	channelId: "mv1",
-	title: "Sintel",
-	kind: "movie",
-	seriesChannelId: null,
-	status: "completed",
-	destPath: "/downloads/sintel.mkv",
-	totalBytes: 1000,
-	downloadedBytes: 1000,
-	avgRateBps: null,
-	error: null,
-	createdAt: 0,
-	finishedAt: Math.floor(Date.now() / 1000),
-	keep: false,
-	lastPlayedAt: null,
-	...overrides,
-});
+/** A download of `makeMovie` that finished just now and isn't kept. */
+export const makeMovieDownload = (overrides: Partial<DownloadRecord> = {}): DownloadRecord =>
+	makeDownload({
+		id: "dl1",
+		channelId: "mv1",
+		title: "Sintel",
+		destPath: "/downloads/sintel.mkv",
+		finishedAt: Math.floor(Date.now() / 1000),
+		...overrides,
+	});

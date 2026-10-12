@@ -318,19 +318,25 @@ describe("SubtitlePicker search and selection", () => {
 		const failure = new Error("download failed");
 		tauri.downloadSubtitle.mockRejectedValue(failure);
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-		const { onSubtitleSelected, onClose } = renderPicker();
-		await screen.findByText("en (2)");
+		try {
+			const { onSubtitleSelected, onClose } = renderPicker();
+			await screen.findByText("en (2)");
 
-		fireEvent.click(entryButton("Sintel.2010.720p"));
-		expect(
-			await screen.findByText("Failed to load subtitle. Try another.")
-		).toBeInTheDocument();
-		expect(consoleError).toHaveBeenCalledWith("[SubtitlePicker] subtitle load error:", failure);
-		expect(onSubtitleSelected).not.toHaveBeenCalled();
-		expect(onClose).not.toHaveBeenCalled();
-		expect(entryButton("Sintel.NL")).toBeEnabled();
-		expect(hasCheck(entryButton("Sintel.2010.720p"))).toBe(false);
-		consoleError.mockRestore();
+			fireEvent.click(entryButton("Sintel.2010.720p"));
+			expect(
+				await screen.findByText("Failed to load subtitle. Try another.")
+			).toBeInTheDocument();
+			expect(consoleError).toHaveBeenCalledWith(
+				"[SubtitlePicker] subtitle load error:",
+				failure
+			);
+			expect(onSubtitleSelected).not.toHaveBeenCalled();
+			expect(onClose).not.toHaveBeenCalled();
+			expect(entryButton("Sintel.NL")).toBeEnabled();
+			expect(hasCheck(entryButton("Sintel.2010.720p"))).toBe(false);
+		} finally {
+			consoleError.mockRestore();
+		}
 	});
 
 	it("pins the subtitle in use at the top and turns subtitles off with None", async () => {

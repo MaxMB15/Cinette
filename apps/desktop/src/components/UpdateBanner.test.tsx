@@ -4,30 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { UpdateBanner } from "./UpdateBanner";
-import type { UpdateState } from "@/hooks/useUpdateChecker";
-
-const fakeUpdate = (overrides: Record<string, unknown> = {}) => ({
-	version: "2.0.0",
-	body: "Release notes here",
-	date: "2026-01-01",
-	downloadAndInstall: vi.fn(),
-	...overrides,
-});
-
-const makeState = (overrides: Partial<UpdateState> = {}): UpdateState => ({
-	update: null,
-	checking: false,
-	installing: false,
-	progress: null,
-	error: null,
-	checkError: null,
-	packageInstall: false,
-	supported: true,
-	dismiss: vi.fn(),
-	install: vi.fn().mockResolvedValue(undefined),
-	checkForUpdates: vi.fn().mockResolvedValue(null),
-	...overrides,
-});
+import { fakeUpdate, makeUpdateState } from "@/test/app-fixtures";
 
 describe("UpdateBanner", () => {
 	beforeEach(() => {
@@ -41,18 +18,18 @@ describe("UpdateBanner", () => {
 	// ── Visibility ────────────────────────────────────────────────────
 
 	it("renders nothing when there is no update", () => {
-		const { container } = render(<UpdateBanner state={makeState()} />);
+		const { container } = render(<UpdateBanner state={makeUpdateState()} />);
 		expect(container.firstChild).toBeNull();
 	});
 
 	it("renders nothing when hidden prop is true even with an update", () => {
-		const state = makeState({ update: fakeUpdate() as never });
+		const state = makeUpdateState({ update: fakeUpdate() });
 		const { container } = render(<UpdateBanner state={state} hidden />);
 		expect(container.firstChild).toBeNull();
 	});
 
 	it("renders the banner when an update is available", () => {
-		const state = makeState({ update: fakeUpdate() as never });
+		const state = makeUpdateState({ update: fakeUpdate() });
 		render(<UpdateBanner state={state} />);
 		expect(screen.getByText(/Update available — v2\.0\.0/)).toBeTruthy();
 	});
@@ -60,15 +37,13 @@ describe("UpdateBanner", () => {
 	// ── Content ───────────────────────────────────────────────────────
 
 	it("shows the update body as description", () => {
-		const state = makeState({ update: fakeUpdate() as never });
+		const state = makeUpdateState({ update: fakeUpdate() });
 		render(<UpdateBanner state={state} />);
-		expect(screen.getByText("Release notes here")).toBeTruthy();
+		expect(screen.getByText("Release notes")).toBeTruthy();
 	});
 
-	it("shows fallback text when update body is null", () => {
-		const state = makeState({
-			update: fakeUpdate({ body: null }) as never,
-		});
+	it("shows fallback text when the update has no notes", () => {
+		const state = makeUpdateState({ update: fakeUpdate({ body: undefined }) });
 		render(<UpdateBanner state={state} />);
 		expect(screen.getByText("A new version is ready to install.")).toBeTruthy();
 	});
@@ -76,14 +51,14 @@ describe("UpdateBanner", () => {
 	// ── Install button ────────────────────────────────────────────────
 
 	it("shows Install button when not installing", () => {
-		const state = makeState({ update: fakeUpdate() as never });
+		const state = makeUpdateState({ update: fakeUpdate() });
 		render(<UpdateBanner state={state} />);
 		expect(screen.getByText("Install")).toBeTruthy();
 	});
 
 	it("calls install when Install button is clicked", () => {
 		const install = vi.fn();
-		const state = makeState({ update: fakeUpdate() as never, install });
+		const state = makeUpdateState({ update: fakeUpdate(), install });
 		render(<UpdateBanner state={state} />);
 
 		fireEvent.click(screen.getByText("Install"));
@@ -93,14 +68,14 @@ describe("UpdateBanner", () => {
 	// ── Dismiss button ────────────────────────────────────────────────
 
 	it("shows dismiss button when not installing", () => {
-		const state = makeState({ update: fakeUpdate() as never });
+		const state = makeUpdateState({ update: fakeUpdate() });
 		render(<UpdateBanner state={state} />);
 		expect(screen.getByLabelText("Dismiss update")).toBeTruthy();
 	});
 
 	it("calls dismiss when dismiss button is clicked", () => {
 		const dismiss = vi.fn();
-		const state = makeState({ update: fakeUpdate() as never, dismiss });
+		const state = makeUpdateState({ update: fakeUpdate(), dismiss });
 		render(<UpdateBanner state={state} />);
 
 		fireEvent.click(screen.getByLabelText("Dismiss update"));
@@ -110,8 +85,8 @@ describe("UpdateBanner", () => {
 	// ── Installing state ──────────────────────────────────────────────
 
 	it("hides Install and dismiss buttons while installing", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			installing: true,
 			progress: 50,
 		});
@@ -122,8 +97,8 @@ describe("UpdateBanner", () => {
 	});
 
 	it("shows download progress during install", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			installing: true,
 			progress: 42,
 		});
@@ -132,8 +107,8 @@ describe("UpdateBanner", () => {
 	});
 
 	it("shows Installing… when progress is null during install", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			installing: true,
 			progress: null,
 		});
@@ -142,8 +117,8 @@ describe("UpdateBanner", () => {
 	});
 
 	it("renders progress bar during install with progress", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			installing: true,
 			progress: 75,
 		});
@@ -156,8 +131,8 @@ describe("UpdateBanner", () => {
 	// ── Package install (deb/rpm) ─────────────────────────────────────
 
 	it("shows password required hint when package download completes", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			installing: true,
 			progress: 100,
 			packageInstall: true,
@@ -167,8 +142,8 @@ describe("UpdateBanner", () => {
 	});
 
 	it("shows Install button for package installs (same as native)", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			packageInstall: true,
 		});
 		render(<UpdateBanner state={state} />);
@@ -178,8 +153,8 @@ describe("UpdateBanner", () => {
 	// ── Error state ───────────────────────────────────────────────────
 
 	it("displays error message when error is set", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			error: "Update failed: Download request failed with status: 404 Not Found",
 		});
 		render(<UpdateBanner state={state} />);
@@ -189,8 +164,8 @@ describe("UpdateBanner", () => {
 	});
 
 	it("shows Install button alongside error so user can retry", () => {
-		const state = makeState({
-			update: fakeUpdate() as never,
+		const state = makeUpdateState({
+			update: fakeUpdate(),
 			error: "Update failed: network error",
 			installing: false,
 		});
@@ -201,7 +176,7 @@ describe("UpdateBanner", () => {
 	});
 
 	it("does not show error when error is null", () => {
-		const state = makeState({ update: fakeUpdate() as never, error: null });
+		const state = makeUpdateState({ update: fakeUpdate(), error: null });
 		render(<UpdateBanner state={state} />);
 		expect(screen.queryByText(/Update failed/)).toBeNull();
 	});

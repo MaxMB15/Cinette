@@ -789,15 +789,16 @@ describe("ChannelList filters", () => {
 		expect(screen.getByText("3 channels")).toBeInTheDocument();
 	});
 
-	it("says so when the heart filter leaves nothing", async () => {
+	it("keeps a show whose first episode is a favorite under the heart filter", async () => {
 		await renderList();
 		await openTab("Series");
 		fireEvent.click(screen.getByRole("button", { name: "Show favorites only" }));
 		// The Harbor Lights card stands for its first listed episode, which is a favorite.
 		expect(screen.getByText("Harbor Lights")).toBeInTheDocument();
+	});
 
+	it("says so when the heart filter leaves nothing", async () => {
 		state.channels = library.map((ch) => ({ ...ch, isFavorite: false }));
-		cleanup();
 		saveBrowseTab("movie");
 		await renderList();
 		fireEvent.click(screen.getByRole("button", { name: "Show favorites only" }));
@@ -1471,6 +1472,14 @@ describe("ChannelList on a phone", () => {
 		expect(screen.queryByRole("button", { name: /^Downloads/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Show downloaded only" })).toBeNull();
 		expect(screen.getByRole("button", { name: "Show favorites only" })).toBeInTheDocument();
+	});
+
+	it("opens on the live tab when the downloads tab was remembered", async () => {
+		saveBrowseTab("downloads");
+		const PhoneList = await loadPhoneList();
+		await renderList(PhoneList);
+		expect(screen.getByText("3 channels")).toBeInTheDocument();
+		expect(screen.getByText("News 24")).toBeInTheDocument();
 	});
 
 	it("shows what's on now in each row instead of a timeline", async () => {

@@ -497,30 +497,35 @@ describe("useSplashScreen", () => {
 
 	it("counts a playlist still waiting to retry as failed without refreshing it again", async () => {
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-		await tracker
-			.run("playlist:p1", () => Promise.reject(new Error("offline")))
-			?.catch(() => {});
-		mockUseChannels.mockReturnValue({
-			providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
-			initialized: true,
-			autoRefresh: tracker,
-		} as never);
-		mockLoadProviderSettings.mockReturnValue({
-			autoRefresh: true,
-			refreshIntervalHours: 24,
-			epgAutoRefresh: false,
-			epgRefreshIntervalHours: 24,
-		});
+		try {
+			await tracker
+				.run("playlist:p1", () => Promise.reject(new Error("offline")))
+				?.catch(() => {});
+			mockUseChannels.mockReturnValue({
+				providers: [{ id: "p1", lastUpdated: new Date(0).toISOString(), epgUrl: null }],
+				initialized: true,
+				autoRefresh: tracker,
+			} as never);
+			mockLoadProviderSettings.mockReturnValue({
+				autoRefresh: true,
+				refreshIntervalHours: 24,
+				epgAutoRefresh: false,
+				epgRefreshIntervalHours: 24,
+			});
 
-		const { result } = renderHook(() => useSplashScreen({ updateState: makeUpdateState() }));
-		await waitFor(() => expect(result.current.allDone).toBe(true));
+			const { result } = renderHook(() =>
+				useSplashScreen({ updateState: makeUpdateState() })
+			);
+			await waitFor(() => expect(result.current.allDone).toBe(true));
 
-		expect(mockRefreshProvider).not.toHaveBeenCalled();
-		expect(result.current.steps.find((s) => s.id === "playlists")).toMatchObject({
-			status: "error",
-			label: "Failed to refresh playlists",
-		});
-		consoleError.mockRestore();
+			expect(mockRefreshProvider).not.toHaveBeenCalled();
+			expect(result.current.steps.find((s) => s.id === "playlists")).toMatchObject({
+				status: "error",
+				label: "Failed to refresh playlists",
+			});
+		} finally {
+			consoleError.mockRestore();
+		}
 	});
 
 	it("stops without finishing when it closes during a playlist refresh", async () => {

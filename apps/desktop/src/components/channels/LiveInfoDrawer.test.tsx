@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EpgProgram } from "@/lib/types";
 import { formatHHMM } from "@/lib/epg-window";
-import { makeChannel, makeProgramme } from "@/test/detail-fixtures";
+import { makeNewsChannel, makeProgramme } from "@/test/detail-fixtures";
 
 const tauri = vi.hoisted(() => ({
 	getEpgProgrammes: vi.fn<(id: string, start: number, end: number) => Promise<EpgProgram[]>>(),
@@ -26,7 +26,7 @@ const film = makeProgramme("Afternoon Film", T + 900, T + 6300);
 const evening = makeProgramme("Evening News", T + 6300, T + 13500);
 const schedule = [breakfast, midday, film, evening];
 
-const channel = makeChannel({ tvgId: "news24.uk" });
+const channel = makeNewsChannel({ tvgId: "news24.uk" });
 
 /** The schedule's row for a programme. The timeline shows the same titles. */
 const row = (title: string) =>
@@ -77,7 +77,7 @@ describe("LiveInfoDrawer", () => {
 	});
 
 	it("asks by the channel id when the channel has no guide id", async () => {
-		render(<LiveInfoDrawer channel={makeChannel()} onClose={vi.fn()} />);
+		render(<LiveInfoDrawer channel={makeNewsChannel()} onClose={vi.fn()} />);
 		await flush();
 		expect(tauri.getEpgProgrammes).toHaveBeenCalledWith(
 			"ch1",
@@ -89,7 +89,7 @@ describe("LiveInfoDrawer", () => {
 	it("shows the channel's name and logo", async () => {
 		const { container } = render(
 			<LiveInfoDrawer
-				channel={makeChannel({ logoUrl: "https://img.example.test/news24.png" })}
+				channel={makeNewsChannel({ logoUrl: "https://img.example.test/news24.png" })}
 				onClose={vi.fn()}
 			/>
 		);
@@ -225,7 +225,7 @@ describe("LiveInfoDrawer", () => {
 		const { rerender } = render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
 		rerender(
 			<LiveInfoDrawer
-				channel={makeChannel({ id: "ch2", name: "Sports 1", tvgId: "sports1.uk" })}
+				channel={makeNewsChannel({ id: "ch2", name: "Sports 1", tvgId: "sports1.uk" })}
 				onClose={vi.fn()}
 			/>
 		);
