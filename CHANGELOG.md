@@ -58,6 +58,11 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads. On Linux this needs a D-Bus session bus. Without one, the app logs a warning and a second copy still opens (#99).
 - Two downloads with the same title now save to separate files, numbered like "Dune (2).mkv". Before, they wrote to the same file, and a file already in the folder with that name was replaced (#99).
 - A queued download whose playlist entry turned into another title after a refresh now fails and asks you to download it again. Before, it could save the other title under the first one's name (#99).
+- After you play a download, the channel list goes back to the Downloads tab instead of the live channels (#114).
+- A search with a space before or after it no longer comes up empty (#114).
+- Counts of one are no longer plural, as in "1 movies" or "1 groups" (#114).
+- A rating with no votes no longer shows a stray 0 beside it (#114).
+- Screen readers name the search bar's clear button and the icon buttons in Manage Categories, and say which category or provider card a button is on (#114).
 
 ## [0.5.3] - 2026-10-09
 
