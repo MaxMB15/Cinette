@@ -136,7 +136,7 @@ describe("SplashScreen", () => {
 	});
 
 	it("describes the update in general terms when it has no release notes", () => {
-		show(makeSplash({ update: fakeUpdate({ body: undefined }) }));
+		show(makeSplash({ update: fakeUpdate({ body: null }) }));
 		expect(screen.getByText("A new version is ready to install.")).toBeInTheDocument();
 	});
 

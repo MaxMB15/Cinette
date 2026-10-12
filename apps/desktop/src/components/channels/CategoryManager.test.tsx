@@ -99,7 +99,8 @@ const click = async (name: string) => {
 const card = (name: string) => screen.getByRole("group", { name });
 
 beforeEach(() => {
-	// Resetting drops values a test queued and didn't use, which clearing keeps.
+	// Resetting drops the return values a test set, including queued ones it
+	// didn't use. Clearing keeps them.
 	vi.resetAllMocks();
 	vi.mocked(getGeminiApiKey).mockResolvedValue("test-key");
 	vi.mocked(ask).mockResolvedValue(true);
@@ -171,7 +172,7 @@ describe("CategoryManager categories", () => {
 		fireEvent.change(name, { target: { value: "Classics" } });
 		expect(button("Create")).toBeDisabled();
 		fireEvent.keyDown(name, { key: "Enter" });
-		expect(screen.getAllByText("Classics", { selector: "span" })).toHaveLength(1);
+		expect(screen.getAllByRole("group", { name: "Classics" })).toHaveLength(1);
 
 		fireEvent.change(name, { target: { value: "Shorts" } });
 		fireEvent.keyDown(name, { key: "Enter" });
