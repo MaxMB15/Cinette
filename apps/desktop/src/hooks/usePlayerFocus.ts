@@ -10,8 +10,9 @@ import { hasOpenFocusTrap, onFocusLostOnClose } from "./useFocusTrap";
  * player, such as on the resume prompt, stays put. So does focus on a confirm
  * opened from the controls, which renders outside the player. When the last
  * dialog closes and can't hand focus back, the player takes focus too. That
- * happens when the element that had focus when the dialog opened is gone, as
- * when the next episode replaced the button that opened it.
+ * happens when the element that had focus as the dialog opened is gone or
+ * can't take focus, as when the next episode replaced the button that opened
+ * it, or when nothing had focus.
  */
 export const usePlayerFocus = (
 	containerRef: RefObject<HTMLElement | null>,

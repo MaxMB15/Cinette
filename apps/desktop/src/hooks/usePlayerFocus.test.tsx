@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useRef } from "react";
+import { StrictMode, useRef, type RefObject } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DownloadButton } from "@/components/downloads/DownloadButton";
@@ -42,6 +42,12 @@ const Player = ({
 			{notice && <Confirm action="OK" />}
 		</>
 	);
+};
+
+/** Calls `usePlayerFocus` on an element its parent owns, so the element can outlive the hook. */
+const Focuser = ({ target }: { target: RefObject<HTMLElement | null> }) => {
+	usePlayerFocus(target, null);
+	return null;
 };
 
 const player = () => screen.getByTestId("player");
@@ -98,6 +104,49 @@ describe("usePlayerFocus", () => {
 		rerender(<Player url="http://example.test/1" confirm />);
 		rerender(<Player url="http://example.test/1" />);
 		expect(player()).toHaveFocus();
+	});
+
+	it("doesn't take focus as a confirm opens under StrictMode", () => {
+		const { rerender } = render(
+			<StrictMode>
+				<Player url="http://example.test/1" />
+			</StrictMode>
+		);
+		player().blur();
+		const focused = vi.fn();
+		player().addEventListener("focus", focused);
+		rerender(
+			<StrictMode>
+				<Player url="http://example.test/1" confirm />
+			</StrictMode>
+		);
+		expect(button("Remove")).toHaveFocus();
+		expect(focused).not.toHaveBeenCalled();
+		rerender(
+			<StrictMode>
+				<Player url="http://example.test/1" />
+			</StrictMode>
+		);
+		expect(player()).toHaveFocus();
+	});
+
+	it("stops taking focus back once it unmounts", () => {
+		const Owner = ({ watching, confirm }: { watching: boolean; confirm: boolean }) => {
+			const ref = useRef<HTMLDivElement>(null);
+			return (
+				<>
+					<div ref={ref} tabIndex={-1} data-testid="player" />
+					{watching && <Focuser target={ref} />}
+					{confirm && <Confirm action="Remove" />}
+				</>
+			);
+		};
+		const { rerender } = render(<Owner watching confirm={false} />);
+		rerender(<Owner watching={false} confirm={false} />);
+		player().blur();
+		rerender(<Owner watching={false} confirm />);
+		rerender(<Owner watching={false} confirm={false} />);
+		expect(document.body).toHaveFocus();
 	});
 
 	it("leaves focus to a notice that opens as the confirm closes", () => {

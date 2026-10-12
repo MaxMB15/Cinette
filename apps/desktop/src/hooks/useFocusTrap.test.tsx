@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { useRef } from "react";
+import { StrictMode, useRef, type ReactNode } from "react";
 import { render, fireEvent, cleanup } from "@testing-library/react";
 import { hasOpenFocusTrap, onFocusLostOnClose, useFocusTrap } from "./useFocusTrap";
 
@@ -54,6 +54,9 @@ const Pair = ({ opener, bottom, top }: { opener: boolean; bottom: boolean; top: 
 		{bottom && <NamedTrap name="Bottom" />}
 	</div>
 );
+
+/** Renders as the app does in development, where React runs each effect's cleanup once early. */
+const strict = (ui: ReactNode) => <StrictMode>{ui}</StrictMode>;
 
 /** Unsubscribes the listeners a test added. */
 const stops: (() => void)[] = [];
@@ -236,6 +239,27 @@ describe("useFocusTrap", () => {
 		expect(listener).not.toHaveBeenCalled();
 		rerender(<Pair opener={false} bottom={false} top={false} />);
 		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("stays quiet under StrictMode until the modal really closes", () => {
+		const listener = listen();
+		const { rerender } = render(strict(<Harness open={false} />));
+		expect(document.body).toHaveFocus();
+		rerender(strict(<Harness open />));
+		expect(listener).not.toHaveBeenCalled();
+		rerender(strict(<Harness open={false} />));
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("hands focus back to the opener under StrictMode", () => {
+		const listener = listen();
+		const { getByText, rerender } = render(strict(<Harness open={false} />));
+		getByText("Behind").focus();
+		rerender(strict(<Harness open />));
+		expect(document.activeElement).toBe(getByText("First"));
+		rerender(strict(<Harness open={false} />));
+		expect(document.activeElement).toBe(getByText("Behind"));
+		expect(listener).not.toHaveBeenCalled();
 	});
 
 	it("leaves focus that moved outside while the modal was open", () => {

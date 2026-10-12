@@ -89,7 +89,9 @@ export const useFocusTrap = (ref: RefObject<HTMLElement | null>): void => {
 			if (!isLost()) return;
 			if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
 			// focus() does nothing on <body> or a control that is disabled or hidden.
-			if (isLost() && traps.length === 0) {
+			// In development, StrictMode runs this cleanup once with the modal still
+			// on the page, which isn't a close.
+			if (isLost() && traps.length === 0 && !node.isConnected) {
 				focusLostListeners.forEach((listener) => listener());
 			}
 		};
