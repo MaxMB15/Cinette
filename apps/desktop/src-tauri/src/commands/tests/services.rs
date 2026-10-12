@@ -133,6 +133,79 @@ fn shown(segments: &[SkipSegment]) -> Vec<(SegmentKind, f64, f64, SegmentSource)
         .collect()
 }
 
+/// Each service's name in its key commands, with the file and the name its
+/// key is saved under. Those can't change without losing the keys users have
+/// already saved.
+const SAVED_KEYS: &[(&str, &str, &str)] = &[
+    ("omdb", "settings.json", "omdb_api_key"),
+    ("mdblist", "settings.json", "mdblist_api_key"),
+    ("opensubtitles", "settings.json", "opensubtitles_api_key"),
+    ("gemini", "gemini.json", "apiKey"),
+];
+
+/// What the store file `file` in the app folder holds under `name`.
+fn saved_in_file(app: &TestApp, file: &str, name: &str) -> Value {
+    let text = std::fs::read_to_string(app.app_dir().join(file)).unwrap();
+    serde_json::from_str::<Value>(&text).unwrap()[name].clone()
+}
+
+#[test]
+fn each_service_keeps_its_own_key_without_the_spaces_a_paste_brings() {
+    let app = TestApp::new();
+    for (service, _, _) in SAVED_KEYS {
+        let get = format!("get_{service}_api_key");
+        assert_eq!(app.invoke(&get, json!({})), Ok(Value::Null));
+        let set = format!("set_{service}_api_key");
+        let pasted = format!(" {service}-key\n");
+        assert_eq!(app.invoke(&set, json!({ "key": pasted })), Ok(Value::Null));
+    }
+
+    for (service, file, name) in SAVED_KEYS {
+        let kept = json!(format!("{service}-key"));
+        let get = format!("get_{service}_api_key");
+        assert_eq!(app.invoke(&get, json!({})), Ok(kept.clone()));
+        assert_eq!(saved_in_file(&app, file, name), kept);
+    }
+}
+
+#[test]
+fn a_blank_key_removes_the_saved_one() {
+    let app = TestApp::new();
+    for (service, file, name) in SAVED_KEYS {
+        let set = format!("set_{service}_api_key");
+        app.invoke(&set, json!({ "key": "abc123" })).unwrap();
+
+        assert_eq!(app.invoke(&set, json!({ "key": " \t\n" })), Ok(Value::Null));
+
+        let get = format!("get_{service}_api_key");
+        assert_eq!(app.invoke(&get, json!({})), Ok(Value::Null));
+        assert_eq!(saved_in_file(&app, file, name), Value::Null);
+    }
+}
+
+/// A key a header can't carry is no real key, so Gemini is never asked.
+#[test]
+fn a_gemini_key_that_cannot_be_sent_is_turned_down() {
+    let app = TestApp::new();
+    let checked = app.invoke("test_gemini_api_key", json!({ "key": UNSENDABLE_KEY }));
+    assert_eq!(checked, Ok(json!(false)));
+}
+
+/// OpenSubtitles only turns a key down when its own answer says so, and a
+/// check that never went out says nothing about the key.
+#[test]
+fn an_opensubtitles_key_check_that_cannot_be_sent_is_an_error() {
+    let app = TestApp::new();
+    let failed = app
+        .invoke(
+            "test_opensubtitles_api_key",
+            json!({ "key": UNSENDABLE_KEY }),
+        )
+        .unwrap_err();
+    let failed = failed.as_str().unwrap();
+    assert!(failed.starts_with("HTTP request failed:"), "{failed}");
+}
+
 #[tokio::test]
 async fn omdb_is_not_asked_without_a_key() {
     let app = TestApp::new();
