@@ -444,14 +444,14 @@ impl CacheStore {
 
     /// Moves Xtream channels saved under the old list position ids, such as
     /// `vod-3`, to ids made from the panel's own ids, such as `movie-812`, and
-    /// takes their favorites, history, downloads and saved episode lists
-    /// along. The panel's id comes from each saved URL, so every saved
-    /// channel moves at once, without waiting for a refresh that might miss
-    /// one of the lists.
+    /// takes their favorites, history, downloads, recordings and saved
+    /// episode lists along. The panel's id comes from each saved URL, so
+    /// every saved channel moves at once, without waiting for a refresh that
+    /// might miss one of the lists.
     ///
     /// A position id may have passed to another channel before this runs, so
-    /// history and downloads, which keep the channel's name, move only to a
-    /// channel with that name, and otherwise stay where they are.
+    /// history, downloads and recordings, which keep the channel's name, move
+    /// only to a channel with that name, and otherwise stay where they are.
     fn move_xtream_position_ids(&self) -> Result<(), CacheError> {
         let saved: Vec<(String, String, String, String)> = self.rows_of(
             "SELECT c.id, c.provider_id, c.url, c.name FROM channels c
@@ -506,6 +506,7 @@ impl CacheStore {
         )?;
         self.move_watch_history(&moves)?;
         self.move_downloads(&moves)?;
+        self.move_recordings(&moves)?;
         self.move_series_links(&moves)?;
         // OMDb details are looked up by title, and nothing saved with them
         // says which channel they were for, so they can't be checked. The
@@ -596,6 +597,26 @@ impl CacheStore {
                       SELECT 1 FROM downloads WHERE channel_id = ?2 AND status = 'completed')",
                 params![id, new_id],
             )?;
+        }
+        Ok(())
+    }
+
+    /// Moves each recording's link to the live channel it records. A
+    /// recording keeps its channel's name as its title, so the link moves
+    /// only to a channel with that name. One that stays is found by name
+    /// when the recording starts.
+    fn move_recordings(&self, moves: &ChannelMoves) -> Result<(), CacheError> {
+        let rows: Vec<(String, String, String)> = self.rows_of(
+            "SELECT id, source_channel_id, title FROM downloads
+             WHERE source_channel_id IN (SELECT old_id FROM channel_id_moves)",
+        )?;
+        for (id, old_id, title) in rows {
+            if let Some(new_id) = moves.for_name(&old_id, &title) {
+                self.conn.execute(
+                    "UPDATE downloads SET source_channel_id = ?2 WHERE id = ?1",
+                    params![id, new_id],
+                )?;
+            }
         }
         Ok(())
     }
@@ -3933,6 +3954,42 @@ mod tests {
 
         assert_eq!(download_channels(&store), ["d1 p1-vod-0"]);
         assert_eq!(texts(&store, "SELECT channel_id FROM watch_history"), ["p1-vod-0"]);
+    }
+
+    #[test]
+    fn a_recording_follows_the_live_channel_of_its_name() {
+        let store = store_before_migrations();
+        store.upsert_provider(&xtream_provider("p1")).unwrap();
+        store
+            .save_channels(
+                "p1",
+                &[
+                    named("Sports", channel_at("p1-xt-0", "http://srv/live/u/p/8.ts", "live")),
+                    named("City News", channel_at("p1-xt-1", "http://srv/live/u/p/7.ts", "live")),
+                ],
+            )
+            .unwrap();
+        // Both were scheduled while their channel was the first live one,
+        // which Sports is now. No channel is named Weather any more.
+        let news = recording_record("rec-1", "p1-xt-0", DownloadStatus::Scheduled);
+        store.upsert_download(&news).unwrap();
+        let weather = DownloadRecord {
+            title: "Weather".into(),
+            ..recording_record("rec-2", "p1-xt-0", DownloadStatus::Scheduled)
+        };
+        store.upsert_download(&weather).unwrap();
+
+        store.migrate().unwrap();
+
+        // A recording's own id stays its channel id.
+        assert_eq!(
+            texts(
+                &store,
+                "SELECT id || ' ' || channel_id || ' ' || source_channel_id
+                 FROM downloads ORDER BY id"
+            ),
+            ["rec-1 rec-1 p1-live-7", "rec-2 rec-2 p1-xt-0"]
+        );
     }
 
     #[test]
