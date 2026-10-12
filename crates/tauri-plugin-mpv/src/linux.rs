@@ -569,7 +569,7 @@ impl Drop for LinuxGlRenderer {
 /// The task holds a `Weak`, so a task still queued when `detach` runs can't
 /// keep the render context alive after mpv is destroyed.
 fn request_render(weak: Weak<Inner>) {
-    glib::idle_add_once(move || {
+    gtk::glib::idle_add_once(move || {
         if let Some(alive) = weak.upgrade() {
             if alive.valid.load(Ordering::Acquire) {
                 render_frame(&alive);
@@ -982,7 +982,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let main_ctx = glib::MainContext::default();
+    let main_ctx = gtk::glib::MainContext::default();
     if main_ctx.is_owner() {
         return f();
     }
