@@ -105,7 +105,21 @@ describe("repeatsWhenHeld", () => {
 	});
 
 	it("runs everything else once per press", () => {
-		for (const k of [" ", "k", "f", "m", "Escape", "n", "p", "s", "i", "?", "5", "Home"]) {
+		for (const k of [
+			" ",
+			"k",
+			"f",
+			"m",
+			"Escape",
+			"n",
+			"p",
+			"s",
+			"i",
+			"?",
+			"5",
+			"Home",
+			"Enter",
+		]) {
 			expect(repeatsWhenHeld(resolvePlayerHotkey(key(k))!)).toBe(false);
 		}
 	});

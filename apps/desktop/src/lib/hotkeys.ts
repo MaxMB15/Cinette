@@ -102,7 +102,7 @@ export const resolvePlayerHotkey = (
  * Whether the action runs again while its key is held down. Seeking and
  * volume keep going. The rest run once per press, since a held F, Space or M
  * would flip back and forth, a held Escape would leave fullscreen and then
- * the player, and a held N or P would skip several episodes.
+ * the player, and a held N, P or Enter would skip several episodes.
  */
 export const repeatsWhenHeld = (action: PlayerAction): boolean =>
 	action.type === "seekBy" || action.type === "volumeBy";

@@ -953,9 +953,9 @@ export const PlayerView = () => {
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
 			// Enter is only taken when there's something to skip, so it still
-			// presses a button that has focus.
+			// presses a button that has focus. Held down, it skips once.
 			if (action.type === "skipSegment") {
-				if (skipSegment?.()) e.preventDefault();
+				if (!e.repeat && skipSegment?.()) e.preventDefault();
 				return;
 			}
 			e.preventDefault();
