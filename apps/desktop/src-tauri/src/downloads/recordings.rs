@@ -532,7 +532,7 @@ fn claim(
     let recordings = records
         .iter()
         .filter(|r| r.id != rec.id && r.status == DownloadStatus::Recording)
-        .filter(|r| r.source_channel_id.as_deref().is_some_and(&same_provider))
+        .filter(|r| r.source_channel_id.as_deref().is_some_and(same_provider))
         .map(|r| r.id.clone())
         .collect();
     Ok(Some(Claim {

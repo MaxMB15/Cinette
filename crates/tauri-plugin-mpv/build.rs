@@ -97,11 +97,10 @@ fn link_libmpv() {
             if output.status.success() {
                 let args = String::from_utf8_lossy(&output.stdout);
                 for arg in args.split_whitespace() {
-                    if arg.starts_with("-L") {
-                        println!("cargo:rustc-link-search=native={}", &arg[2..]);
+                    if let Some(dir) = arg.strip_prefix("-L") {
+                        println!("cargo:rustc-link-search=native={}", dir);
                     }
                 }
-                return;
             }
         }
     }
