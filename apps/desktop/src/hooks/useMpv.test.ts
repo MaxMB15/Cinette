@@ -42,6 +42,7 @@ import {
 	mpvSetVolume,
 	mpvGetState,
 } from "@/lib/tauri";
+import { deferred } from "@/test/deferred";
 import { useMpv } from "./useMpv";
 
 const mockMpvLoad = vi.mocked(mpvLoad);
@@ -296,17 +297,6 @@ describe("useMpv", () => {
 				playbackStarted: true,
 				openFailed: false,
 			}) as never;
-
-		/** A promise and the function that settles it, to hold a call in flight. */
-		const deferred = <T>() => {
-			let resolve!: (value: T) => void;
-			let reject!: (reason: unknown) => void;
-			const promise = new Promise<T>((res, rej) => {
-				resolve = res;
-				reject = rej;
-			});
-			return { promise, resolve, reject };
-		};
 
 		it("shows the seek position before mpv confirms it", async () => {
 			const seekCall = deferred<void>();

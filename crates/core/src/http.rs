@@ -114,60 +114,195 @@ pub(crate) fn error_with_url(url: &str) -> reqwest::Error {
         .expect_err("a URL without a host is rejected")
 }
 
-/// A one-shot local HTTP server, so tests can check how a client handles a
-/// response without reaching a real service.
-#[cfg(test)]
-pub(crate) mod test_server {
+/// Local HTTP servers, so tests can check how a client handles a response
+/// without reaching a real service.
+///
+/// Each server records a request before it replies, so once the client has
+/// its response the request is waiting, and `try_recv` or `try_iter` on the
+/// receiver won't block. A test that waits with `recv` should use
+/// `recv_timeout` instead, so a request that never comes fails the test
+/// rather than hanging it.
+///
+/// Other crates get it from the `test-util` feature, which only their
+/// dev-dependencies should turn on.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_server {
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// How long a server waits for the rest of a request before dropping the
+    /// connection, so a client that stalls can't hold it up.
+    const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
     /// Answers a single request with `status` and `body`, and returns the
     /// server's base URL.
-    pub(crate) fn serve_once(status: &'static str, body: &'static str) -> String {
+    pub fn serve_once(status: &str, body: impl Into<String>) -> String {
         serve_once_recording(status, body).0
     }
 
-    /// Like [`serve_once`], and also hands back the request line and headers
-    /// the server read.
-    pub(crate) fn serve_once_recording(
-        status: &'static str,
-        body: &'static str,
+    /// Like [`serve_once`], and also hands back the request the server read,
+    /// with its request line, headers and body.
+    pub fn serve_once_recording(
+        status: &str,
+        body: impl Into<String>,
     ) -> (String, mpsc::Receiver<String>) {
+        serve_in_order(vec![(status.to_string(), body.into())])
+    }
+
+    /// Answers one request with each status and body in turn, and stops after
+    /// the last reply. A client that closes or stalls before sending a whole
+    /// request gets no reply and doesn't use one up, so wait on the requests
+    /// with a timeout. Returns the base URL and the requests the server read,
+    /// in order.
+    pub fn serve_in_order(replies: Vec<(String, String)>) -> (String, mpsc::Receiver<String>) {
+        let (listener, url) = bind();
         let (sender, receiver) = mpsc::channel();
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
-        let addr = listener.local_addr().expect("read the bound address");
         std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            // The request has to be read before replying, or the client may
-            // see the connection reset instead of the response.
-            let mut request = Vec::new();
-            let mut buf = [0u8; 1024];
-            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                match stream.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => request.extend_from_slice(&buf[..n]),
-                }
+            for (status, body) in replies {
+                let Some((mut stream, request)) = accept(&listener) else {
+                    return;
+                };
+                let _ = sender.send(request);
+                respond(&mut stream, &status, &body);
             }
-            let _ = sender.send(String::from_utf8_lossy(&request).into_owned());
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
         });
-        (format!("http://{addr}"), receiver)
+        (url, receiver)
+    }
+
+    /// One reply of [`serve_routes`].
+    pub struct Route {
+        pattern: String,
+        status: String,
+        body: String,
+    }
+
+    /// A route that answers requests whose request line contains `pattern`,
+    /// such as a path or a query parameter, with `status` and `body`.
+    pub fn route(pattern: &str, status: &str, body: impl Into<String>) -> Route {
+        Route {
+            pattern: pattern.to_string(),
+            status: status.to_string(),
+            body: body.into(),
+        }
+    }
+
+    /// Answers every request with the first route that matches it, or with
+    /// 404 Not Found when none does, for clients that send several requests
+    /// in no fixed order. A pattern matches anywhere in the request line, so
+    /// `/two` also matches `/twofold`. List the more specific route first.
+    /// Returns the base URL and the requests the server read. It runs until
+    /// the test process ends.
+    pub fn serve_routes(routes: Vec<Route>) -> (String, mpsc::Receiver<String>) {
+        let (listener, url) = bind();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Some((mut stream, request)) = accept(&listener) {
+                let line = request.lines().next().unwrap_or_default();
+                let (status, body) = routes
+                    .iter()
+                    .find(|route| line.contains(&route.pattern))
+                    .map_or(("404 Not Found", ""), |route| {
+                        (route.status.as_str(), route.body.as_str())
+                    });
+                // A test that dropped the receiver still gets its replies.
+                let _ = sender.send(request);
+                respond(&mut stream, status, body);
+            }
+        });
+        (url, receiver)
     }
 
     /// A client that reaches the loopback server even when the machine has a
     /// proxy configured.
-    pub(crate) fn client() -> reqwest::Client {
+    pub fn client() -> reqwest::Client {
         reqwest::Client::builder()
             .no_proxy()
             .build()
             .expect("build a test client")
+    }
+
+    /// A listener on a free loopback port, and its base URL.
+    fn bind() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+        let addr = listener.local_addr().expect("read the bound address");
+        (listener, format!("http://{addr}"))
+    }
+
+    /// Waits for a client that sends a whole request, and returns its
+    /// connection and what it sent. None once the listener fails.
+    fn accept(listener: &TcpListener) -> Option<(TcpStream, String)> {
+        loop {
+            let (mut stream, _) = listener.accept().ok()?;
+            let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+            if let Some(request) = read_request(&mut stream) {
+                return Some((stream, request));
+            }
+        }
+    }
+
+    /// Reads the request line and headers, then as many bytes of body as
+    /// `Content-Length` gives. All of it has to be read before replying, or
+    /// the client may see the connection reset instead of the response.
+    /// None when the client closes or stalls first.
+    ///
+    /// # Panics
+    ///
+    /// On a chunked body, which the clients under test never send. The panic
+    /// names the cause, where a half read request would only show up as a
+    /// reset connection.
+    fn read_request(stream: &mut TcpStream) -> Option<String> {
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        let mut total = None;
+        loop {
+            if total.is_none() {
+                if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&request[..end]);
+                    let chunked = header(&head, "transfer-encoding")
+                        .is_some_and(|value| value.to_ascii_lowercase().contains("chunked"));
+                    assert!(
+                        !chunked,
+                        "the test server doesn't read chunked request bodies"
+                    );
+                    total = Some((end + 4).saturating_add(content_length(&head)));
+                }
+            }
+            if let Some(total) = total.filter(|&total| request.len() >= total) {
+                request.truncate(total);
+                return Some(String::from_utf8_lossy(&request).into_owned());
+            }
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => request.extend_from_slice(&buf[..n]),
+            }
+        }
+    }
+
+    /// The value of the header called `name` in a request's headers, matched
+    /// in any case.
+    fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+        head.lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(key, _)| key.trim().eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.trim())
+    }
+
+    /// The `Content-Length` in a request's headers, or 0 when there's none.
+    fn content_length(head: &str) -> usize {
+        header(head, "content-length")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Sends a reply with `status` and `body`, and closes the connection.
+    fn respond(stream: &mut TcpStream, status: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
     }
 }
 
@@ -225,5 +360,73 @@ mod tests {
         client();
         assert!(!set_app_version("9.9.9"));
         assert_ne!(user_agent(), "MaxVideoPlayer/9.9.9");
+    }
+
+    async fn get(url: String) -> (u16, String) {
+        let response = test_server::client().get(url).send().await.unwrap();
+        (response.status().as_u16(), response.text().await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_test_server_answers_in_order_and_records_each_request() {
+        let (url, requests) = test_server::serve_in_order(vec![
+            ("200 OK".into(), "first".into()),
+            ("500 Internal Server Error".into(), "second".into()),
+        ]);
+        assert_eq!(get(format!("{url}/a")).await, (200, "first".into()));
+        assert_eq!(get(format!("{url}/b")).await, (500, "second".into()));
+        let requests: Vec<_> = requests.try_iter().collect();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /a "));
+        assert!(requests[1].starts_with("GET /b "));
+    }
+
+    #[tokio::test]
+    async fn the_test_server_reads_and_records_the_whole_body() {
+        let (url, requests) = test_server::serve_once_recording("200 OK", "done");
+        // Larger than one read, so the body arrives in pieces.
+        let body = "x".repeat(256 * 1024);
+        let response = test_server::client()
+            .post(format!("{url}/upload"))
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "done");
+        let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(request.starts_with("POST /upload "));
+        assert!(request.ends_with(&format!("\r\n\r\n{body}")));
+    }
+
+    #[test]
+    fn the_test_server_records_only_the_body_content_length_gives() {
+        use std::io::{Read, Write};
+
+        let (url, requests) = test_server::serve_once_recording("200 OK", "done");
+        let mut stream = std::net::TcpStream::connect(url.trim_start_matches("http://")).unwrap();
+        stream
+            .write_all(b"POST / HTTP/1.1\r\ncontent-LENGTH: 3\r\n\r\nabcextra")
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.ends_with("\r\n\r\ndone"), "{response}");
+        let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(request.ends_with("\r\n\r\nabc"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn the_test_server_routes_by_request_line_and_answers_404_to_the_rest() {
+        let (url, _) = test_server::serve_routes(vec![
+            test_server::route("action=one", "200 OK", "one"),
+            test_server::route("/two", "201 Created", "two"),
+        ]);
+        let (one, two, other) = tokio::join!(
+            get(format!("{url}/api?action=one")),
+            get(format!("{url}/two")),
+            get(format!("{url}/three")),
+        );
+        assert_eq!(one, (200, "one".into()));
+        assert_eq!(two, (201, "two".into()));
+        assert_eq!(other, (404, String::new()));
     }
 }

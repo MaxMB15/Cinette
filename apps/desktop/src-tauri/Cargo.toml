@@ -26,6 +26,12 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
 
+[dev-dependencies]
+# The mock runtime, so tests can build an app and call commands without a window.
+tauri = { version = "2", features = ["test"] }
+# The local HTTP servers from mvp-core's own tests.
+mvp-core = { path = "../../../crates/core", features = ["test-util"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser

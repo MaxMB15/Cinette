@@ -9,7 +9,7 @@ use mvp_core::cache::store::{
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
-use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
+use mvp_core::iptv::omdb::{fetch_omdb, OmdbData, OmdbError};
 use mvp_core::iptv::opensubtitles::SEARCH_CACHE_TTL_SECS;
 use mvp_core::iptv::skip_segments::{
     fetch_source, resolve, SegmentSource, SkipQuery, SkipSegment, SourceTimes,
@@ -545,22 +545,17 @@ const OMDB_API_KEY: &str = "omdb_api_key";
 /// 30-day TTL in seconds
 const OMDB_CACHE_TTL: i64 = 30 * 24 * 60 * 60;
 
-/// Read the OMDB API key from the persistent Tauri Store.
+/// The saved OMDb API key, or None when there isn't one.
 #[command]
 pub async fn get_omdb_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(OMDB_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    omdb_api_key(&app)
 }
 
 /// The OMDb API key, or None when it isn't set or is blank. Whatson calls
 /// check this too, so a user who hasn't added a key sends nothing to either
 /// service.
 fn omdb_api_key<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(non_empty_key(store.get(OMDB_API_KEY)))
+    saved_key(app, OMDB_STORE_FILE, OMDB_API_KEY)
 }
 
 /// A stored key as a string, or None when it's missing, blank or not a string.
@@ -570,8 +565,21 @@ fn non_empty_key(value: Option<serde_json::Value>) -> Option<String> {
         .filter(|k| !k.is_empty())
 }
 
-/// Saves an API key under `name` in the store file `file`, without the
-/// spaces or line break a paste can bring along.
+/// The saved key under `name` in the store file `file`, or None when there
+/// isn't one.
+fn saved_key<R: Runtime>(app: &AppHandle<R>, file: &str, name: &str) -> Result<Option<String>, String> {
+    let store = app.store(file).map_err(|e| e.to_string())?;
+    Ok(non_empty_key(store.get(name)))
+}
+
+/// A key as typed, without the spaces or line break a paste can bring along,
+/// or None when nothing is left.
+fn trimmed_key(key: &str) -> Option<&str> {
+    Some(key.trim()).filter(|k| !k.is_empty())
+}
+
+/// Saves an API key under `name` in the store file `file`. A blank key
+/// removes the saved one.
 fn save_key<R: Runtime>(
     app: &AppHandle<R>,
     file: &str,
@@ -579,7 +587,12 @@ fn save_key<R: Runtime>(
     key: &str,
 ) -> Result<(), String> {
     let store = app.store(file).map_err(|e| e.to_string())?;
-    store.set(name, serde_json::Value::String(key.trim().to_string()));
+    match trimmed_key(key) {
+        Some(key) => store.set(name, serde_json::Value::String(key.to_string())),
+        None => {
+            store.delete(name);
+        }
+    }
     store.save().map_err(|e| e.to_string())
 }
 
@@ -587,6 +600,24 @@ fn save_key<R: Runtime>(
 #[command]
 pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
     save_key(&app, OMDB_STORE_FILE, OMDB_API_KEY, &key)
+}
+
+/// Checks an OMDb API key by looking up a well-known movie with it. The key
+/// doesn't have to be saved, and the lookup skips the cache.
+#[command]
+pub async fn test_omdb_api_key(key: String) -> Result<bool, String> {
+    omdb_key_accepted(fetch_omdb("The Matrix", "movie", &key).await)
+}
+
+/// Whether OMDb took the key, from the answer to a lookup made with it. OMDb
+/// answers a bad key with "Invalid API key!". Any other error it reports,
+/// such as its daily limit, means it knew the key.
+fn omdb_key_accepted(result: Result<OmdbData, OmdbError>) -> Result<bool, String> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(OmdbError::Api(message)) => Ok(!message.contains("API key")),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Fetch OMDB data for a channel. Checks the DB cache first; fetches from
@@ -647,11 +678,7 @@ const MDBLIST_CACHE_TTL: i64 = 7 * 24 * 60 * 60;
 
 #[command]
 pub async fn get_mdblist_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(MDBLIST_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    saved_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY)
 }
 
 #[command]
@@ -695,13 +722,9 @@ pub async fn fetch_mdblist_data<R: Runtime>(
     }
 
     // 2. Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(MDBLIST_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[MDBList] no API key configured, skipping fetch");
-            return Ok(None);
-        }
+    let Some(api_key) = saved_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY)? else {
+        tracing::debug!("[MDBList] no API key configured, skipping fetch");
+        return Ok(None);
     };
 
     // 3. Fetch
@@ -858,11 +881,7 @@ const OPENSUBTITLES_API_KEY: &str = "opensubtitles_api_key";
 
 #[command]
 pub async fn get_opensubtitles_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(OPENSUBTITLES_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)
 }
 
 #[command]
@@ -907,13 +926,9 @@ pub async fn search_subtitles<R: Runtime>(
     }
 
     // 2. Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OPENSUBTITLES_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[OpenSubtitles] no API key configured");
-            return Ok(None);
-        }
+    let Some(api_key) = saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)? else {
+        tracing::debug!("[OpenSubtitles] no API key configured");
+        return Ok(None);
     };
 
     // 3. Search
@@ -952,11 +967,8 @@ pub async fn download_subtitle<R: Runtime>(
     file_id: i64,
 ) -> Result<String, String> {
     // Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OPENSUBTITLES_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => return Err("No OpenSubtitles API key configured".into()),
-    };
+    let api_key = saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)?
+        .ok_or("No OpenSubtitles API key configured")?;
 
     let subtitles_dir = subtitles_dir(&app)?;
 
@@ -1252,8 +1264,7 @@ const GEMINI_KEY: &str = "apiKey";
 
 #[command]
 pub async fn get_gemini_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(GEMINI_STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(store.get(GEMINI_KEY).and_then(|v| v.as_str().map(|s| s.to_string())))
+    saved_key(&app, GEMINI_STORE_FILE, GEMINI_KEY)
 }
 
 #[command]
@@ -1541,8 +1552,8 @@ fn ensure_downloads_supported() -> Result<(), String> {
 
 /// Enqueue a single movie download.
 #[command]
-pub async fn enqueue_movie_download(
-    app: AppHandle,
+pub async fn enqueue_movie_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<String, String> {
@@ -1565,8 +1576,8 @@ pub async fn enqueue_movie_download(
 /// Enqueue a single already-resolved episode (the frontend passes the episode
 /// Channel from get_xtream_series_episodes, plus the parent series channel id).
 #[command]
-pub async fn enqueue_episode_download(
-    app: AppHandle,
+pub async fn enqueue_episode_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     episode: Channel,
     series_channel_id: String,
@@ -1593,8 +1604,8 @@ pub async fn enqueue_episode_download(
 /// Enqueue every episode in `episodes`. Used for whole-season, whole-series,
 /// and "download all missing". The frontend resolves/filters the list.
 #[command]
-pub async fn enqueue_episodes_batch(
-    app: AppHandle,
+pub async fn enqueue_episodes_batch<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     episodes: Vec<Channel>,
     series_channel_id: String,
@@ -1655,13 +1666,13 @@ pub async fn get_cached_series_episodes(
 }
 
 #[command]
-pub async fn stop_download(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn stop_download<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
     manager::stop_one(&app, &id)
 }
 
 /// Stop a set of active (queued + downloading) items (series or season scope).
 #[command]
-pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+pub async fn stop_downloads<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) -> Result<(), String> {
     for id in ids {
         manager::stop_one(&app, &id)?;
     }
@@ -1671,22 +1682,22 @@ pub async fn stop_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), Stri
 
 /// Remove a completed download: delete the file and the DB row.
 #[command]
-pub async fn remove_download(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn remove_download<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
     manager::remove(&app, std::slice::from_ref(&id))
 }
 
 /// Remove several downloads, carrying on past any that can't be deleted. The
 /// error lists those.
 #[command]
-pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+pub async fn remove_downloads<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) -> Result<(), String> {
     manager::remove(&app, &ids)
 }
 
 /// Keep a download even when the retention setting would delete it, or stop
 /// keeping it.
 #[command]
-pub async fn set_download_keep(
-    app: AppHandle,
+pub async fn set_download_keep<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     manager: State<'_, DownloadManager>,
     id: String,
@@ -1698,9 +1709,9 @@ pub async fn set_download_keep(
 }
 
 #[command]
-pub async fn set_download_concurrency(
+pub async fn set_download_concurrency<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     n: usize,
 ) -> Result<(), String> {
     // Save first, so a failed write leaves the running limit unchanged.
@@ -1717,9 +1728,9 @@ pub async fn get_download_concurrency(manager: State<'_, DownloadManager>) -> Re
 }
 
 #[command]
-pub async fn set_download_folder(
+pub async fn set_download_folder<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     path: String,
 ) -> Result<(), String> {
     // Save first, so a failed write doesn't switch the folder for this session only.
@@ -1743,9 +1754,9 @@ pub async fn get_download_retention(
 /// Save how many days finished downloads are kept, or `None` for no limit,
 /// then delete what's already past it. Returns how many were deleted.
 #[command]
-pub async fn set_download_retention(
+pub async fn set_download_retention<R: Runtime>(
     manager: State<'_, DownloadManager>,
-    app: AppHandle,
+    app: AppHandle<R>,
     days: Option<u32>,
 ) -> Result<usize, String> {
     // 0 is "never" in the app, so it mustn't reach the sweep as "delete now".
@@ -1767,7 +1778,7 @@ pub async fn set_download_retention(
 /// How many downloads a retention of `days` would delete right now, so
 /// Settings can ask before changing it.
 #[command]
-pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<usize, String> {
+pub async fn count_downloads_due<R: Runtime>(app: AppHandle<R>, days: Option<u32>) -> Result<usize, String> {
     retention::count_due(&app, days.filter(|&d| d > 0))
 }
 
@@ -1776,8 +1787,8 @@ pub async fn count_downloads_due(app: AppHandle, days: Option<u32>) -> Result<us
 /// before playback and passes the local path to mpvLoad when present, so this
 /// also records the play, which restarts the retention count.
 #[command]
-pub async fn resolve_local_download(
-    app: AppHandle,
+pub async fn resolve_local_download<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Option<String>, String> {
@@ -1801,19 +1812,4 @@ pub async fn resolve_local_download(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn non_empty_key_skips_missing_and_blank_keys() {
-        assert_eq!(non_empty_key(None), None);
-        assert_eq!(non_empty_key(Some(json!(""))), None);
-        assert_eq!(non_empty_key(Some(json!("   "))), None);
-        assert_eq!(non_empty_key(Some(json!(42))), None);
-        assert_eq!(
-            non_empty_key(Some(json!(" abc123 "))).as_deref(),
-            Some("abc123")
-        );
-    }
-}
+mod tests;

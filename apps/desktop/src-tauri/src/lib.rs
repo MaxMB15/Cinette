@@ -5,6 +5,8 @@ mod commands;
 mod downloads;
 mod logging;
 mod progress;
+#[cfg(test)]
+mod test_support;
 
 use commands::AppState;
 use mvp_core::cache::store::CacheStore;
@@ -157,6 +159,7 @@ pub fn run() {
             commands::detect_epg_url,
             commands::get_omdb_api_key,
             commands::set_omdb_api_key,
+            commands::test_omdb_api_key,
             commands::fetch_omdb_data,
             commands::get_mdblist_api_key,
             commands::set_mdblist_api_key,

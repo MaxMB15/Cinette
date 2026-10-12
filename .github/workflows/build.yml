@@ -119,6 +119,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -170,9 +172,12 @@ jobs:
           retention-days: 1
 
   # ── Coverage badge deploy (push to main only, needs write) ─────────────
+  # The frontend report goes to coverage/ and the Rust report to coverage/rust/.
+  # The Rust report comes from build-linux. If that job made no report, the
+  # frontend report still goes up and the last Rust report stays.
   deploy-coverage:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success' }}
+    needs: [test, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -182,11 +187,28 @@ jobs:
           name: coverage-report
           path: coverage
 
-      - name: Generate coverage badge
+      - name: Download the Rust coverage report
+        id: rust
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: rust-coverage-report
+          path: coverage/rust
+
+      - name: Generate frontend coverage badge
         uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
         with:
           source: coverage/coverage-summary.json
           output: coverage/badge.svg
+          label: frontend coverage
+
+      - name: Generate Rust coverage badge
+        if: steps.rust.outcome == 'success'
+        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
+        with:
+          source: coverage/rust/coverage-summary.json
+          output: coverage/rust/badge.svg
+          label: Rust coverage
 
       - name: Deploy coverage to gh-pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
@@ -212,6 +234,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -293,6 +317,15 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          # cargo-llvm-cov reads the coverage data with LLVM's tools.
+          components: llvm-tools
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-llvm-cov@0.8.7
 
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -326,9 +359,30 @@ jobs:
         run: npm run build:desktop
 
       # The test job covers only mvp-core. The plugin and the app need GTK and
-      # libmpv, which this job installs.
-      - name: Run plugin and app tests
-        run: cargo test --locked -p tauri-plugin-mpv -p max-video-player
+      # libmpv, which this job installs, so the whole workspace's tests run here
+      # and measure Rust coverage. The figure counts linux.rs and not macos.rs,
+      # since each builds only on its own platform.
+      - name: Run Rust tests with coverage
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --workspace --no-report
+          cargo llvm-cov report --summary-only
+          cargo llvm-cov report --html --output-dir target/rust-coverage
+          cargo llvm-cov report --json --summary-only --output-path target/rust-coverage/summary.json
+          mv target/rust-coverage/html rust-coverage
+          # The badge reads the summary format the frontend report writes,
+          # with the percentage rounded to two places as that one is.
+          jq '{total: {lines: {pct: (.data[0].totals.lines.percent * 100 | round / 100)}}}' \
+            target/rust-coverage/summary.json > rust-coverage/coverage-summary.json
+          echo "Rust line coverage: $(jq .total.lines.pct rust-coverage/coverage-summary.json)%" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Rust coverage artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: rust-coverage-report
+          path: rust-coverage/
+          retention-days: 1
 
       - name: Build Tauri app (Linux)
         run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
