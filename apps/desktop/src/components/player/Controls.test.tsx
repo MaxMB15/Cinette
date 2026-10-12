@@ -89,7 +89,7 @@ describe("Controls", () => {
 		expect(screen.getByRole("button", { name: "Next episode" })).toBeInTheDocument();
 	});
 
-	it("shows only the core buttons when no other handlers are given", () => {
+	it("shows only skip, play, stop and mute by default", () => {
 		renderControls({ onPrevEpisode: undefined, onNextEpisode: undefined });
 		const names = screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
 		expect(names).toEqual([
@@ -314,6 +314,8 @@ describe("Controls source menu", () => {
 		expect(menu).toHaveTextContent("xtream.example.com · TS");
 		expect(menu).not.toHaveTextContent("alice");
 		expect(menu).not.toHaveTextContent("hunter2");
+		// Nor in a tooltip or a label that screen readers read out.
+		expect(menu.outerHTML).not.toMatch(/alice|hunter2/);
 	});
 
 	it("switches to the chosen source and closes the menu", () => {
@@ -368,6 +370,7 @@ describe("Controls source menu", () => {
 describe("Controls seek bar", () => {
 	const renderSeekBar = (overrides: Partial<PlayerState> = {}) => {
 		const onSeek = vi.fn();
+		const onVolumeChange = vi.fn();
 		const controls = (state: PlayerState) => (
 			<Controls
 				state={state}
@@ -376,7 +379,7 @@ describe("Controls seek bar", () => {
 				onPause={noop}
 				onStop={noop}
 				onSeek={onSeek}
-				onVolumeChange={noop}
+				onVolumeChange={onVolumeChange}
 			/>
 		);
 		const view = render(controls({ ...playing, ...overrides }));
@@ -386,7 +389,9 @@ describe("Controls seek bar", () => {
 		const track = () => root().firstElementChild!;
 		return {
 			onSeek,
+			onVolumeChange,
 			thumb,
+			volume: () => screen.getByRole("slider", { name: "Volume" }),
 			root,
 			track,
 			valueNow: () => Number(thumb().getAttribute("aria-valuenow")),
@@ -565,6 +570,36 @@ describe("Controls seek bar", () => {
 				expect(notCanceled).toBe(false);
 				expect(onWindowKey).toHaveBeenCalledTimes(1);
 				expect(bar.onSeek).not.toHaveBeenCalled();
+			} finally {
+				window.removeEventListener("keydown", onWindowKey);
+			}
+		});
+
+		it("turns the volume up one step per arrow when reached with Tab", () => {
+			const bar = renderSeekBar();
+			tabTo(bar.volume());
+			fireEvent.keyDown(bar.volume(), { key: "ArrowRight" });
+			expect(bar.onVolumeChange).toHaveBeenCalledExactlyOnceWith(101);
+		});
+
+		it("lets the volume go up to 150%", () => {
+			const bar = renderSeekBar();
+			expect(bar.volume()).toHaveAttribute("aria-valuemax", "150");
+			tabTo(bar.volume());
+			fireEvent.keyDown(bar.volume(), { key: "End" });
+			expect(bar.onVolumeChange).toHaveBeenLastCalledWith(150);
+		});
+
+		it("leaves the arrows to the player after a click on the volume", () => {
+			const bar = renderSeekBar();
+			const onWindowKey = vi.fn();
+			window.addEventListener("keydown", onWindowKey);
+			try {
+				clickThumb(bar.volume());
+				expect(bar.volume()).toHaveFocus();
+				fireEvent.keyDown(bar.volume(), { key: "ArrowRight" });
+				expect(onWindowKey).toHaveBeenCalledTimes(1);
+				expect(bar.onVolumeChange).not.toHaveBeenCalled();
 			} finally {
 				window.removeEventListener("keydown", onWindowKey);
 			}
