@@ -19,14 +19,12 @@
 //! X11 sessions aren't embedded. They use the separate window fallback in
 //! `MpvState`.
 
+use crate::gl_render::GlRenderContext;
 use crate::lock::lock_or_recover;
 use crate::options::shared_options;
 use crate::renderer::PlatformRenderer;
 use khronos_egl as egl;
-use libmpv2::{
-    render::{mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType},
-    Mpv,
-};
+use libmpv2::{render::mpv_render_update, Mpv};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -252,7 +250,7 @@ struct Inner {
     // frees mpv's GL resources, `state` destroys the EGL surface and
     // WlEglSurface, `egl` destroys the GL context and `wayland` tears down
     // the subsurface tree.
-    render_ctx: RenderContext,
+    render_ctx: GlRenderContext,
     state: Mutex<SessionState>,
     egl: OwnedEgl,
     wayland: WaylandSession,
@@ -363,18 +361,17 @@ impl PlatformRenderer for LinuxGlRenderer {
 
         let first_frame_cb = lock_or_recover(&self.first_frame_cb).take();
 
-        // Raw pointers aren't Send, so the handle crosses to the GLib main
-        // thread as a `usize`, which saves a wrapper with its own
-        // `unsafe impl Send`. The caller holds the `MpvEngine` lock for the
-        // whole call, so the handle stays valid, and only the main thread
-        // dereferences it.
-        let mpv_ptr_usize = mpv.ctx.as_ptr() as usize;
+        // The closure has to be 'static, so `mpv` crosses to the GLib main
+        // thread as an address. The caller holds the `MpvEngine` lock for
+        // the whole call and `run_on_glib_main` waits for the closure, so the
+        // address stays valid while the main thread uses it.
+        let mpv_addr = &*mpv as *const Mpv as usize;
 
         // The render context and its update callback have to be set up on
         // the GLib main thread as well. `Inner` is Send, so the Arc comes back
         // over the channel without a wrapper.
         let inner = run_on_glib_main(move || -> Result<Arc<Inner>, String> {
-            let mpv_ptr = mpv_ptr_usize as *mut c_void;
+            let mpv = unsafe { &*(mpv_addr as *const Mpv) };
             let egl = egl()?;
             let mut egl_res = egl_res;
             let mut wayland = wayland;
@@ -392,17 +389,11 @@ impl PlatformRenderer for LinuxGlRenderer {
                 gl_proc_address(name)
             }
 
-            let mut render_ctx = RenderContext::new(
-                unsafe { &mut *mpv_ptr.cast() },
-                vec![
-                    RenderParam::ApiType(RenderParamApiType::OpenGl),
-                    RenderParam::InitParams(OpenGLInitParams {
-                        get_proc_address,
-                        ctx: std::ptr::null_mut::<c_void>(),
-                    }),
-                ],
-            )
-            .map_err(|e| format!("mpv_render_context_create: {e}"))?;
+            // SAFETY: `detach` drops the session on this thread before it
+            // returns, and `MpvState` detaches the renderer before it stops
+            // the engine, so the context goes before mpv. Idle tasks hold
+            // only a `Weak`, so none of them keeps the session alive longer.
+            let mut render_ctx = unsafe { GlRenderContext::new(mpv, get_proc_address) }?;
 
             unsafe {
                 gl::ClearColor(0.0, 0.0, 0.0, 1.0);
@@ -423,15 +414,7 @@ impl PlatformRenderer for LinuxGlRenderer {
                 let decorations = window
                     .map(|(window, vbox)| DecorationWatch::start(&window, &vbox, weak.clone()));
                 let weak = weak.clone();
-                render_ctx.set_update_callback(move || {
-                    if let Some(alive) = weak.upgrade() {
-                        glib::idle_add_once(move || {
-                            if alive.valid.load(Ordering::Acquire) {
-                                render_frame(&alive);
-                            }
-                        });
-                    }
-                });
+                render_ctx.set_update_callback(move || request_render(weak.clone()));
                 Inner {
                     decorations: Mutex::new(decorations),
                     first_frame_cb: Mutex::new(first_frame_cb),
@@ -493,7 +476,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         }
 
         drain_wayland_queue(inner);
-        request_render(inner);
+        request_render(Arc::downgrade(inner));
     }
 
     fn set_visible(&mut self, visible: bool) {
@@ -526,7 +509,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         // may have changed while the video was hidden. A paused video gets no
         // other render.
         if visible {
-            request_render(inner);
+            request_render(Arc::downgrade(inner));
         }
     }
 
@@ -576,8 +559,10 @@ impl Drop for LinuxGlRenderer {
 
 /// Renders a frame soon on the GLib main thread, unless the session has
 /// ended by then.
-fn request_render(inner: &Arc<Inner>) {
-    let weak = Arc::downgrade(inner);
+///
+/// The task holds a `Weak`, so a task still queued when `detach` runs can't
+/// keep the render context alive after mpv is destroyed.
+fn request_render(weak: Weak<Inner>) {
     glib::idle_add_once(move || {
         if let Some(alive) = weak.upgrade() {
             if alive.valid.load(Ordering::Acquire) {

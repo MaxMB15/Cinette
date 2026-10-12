@@ -31,8 +31,10 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
 
 pub struct MpvState {
-    inner: Mutex<MpvEngine>,
+    /// Declared before `inner` so it drops first. A renderer's render
+    /// context has to be freed before the engine destroys the mpv core.
     renderer: Mutex<Option<Box<dyn PlatformRenderer>>>,
+    inner: Mutex<MpvEngine>,
     /// Where the frontend last put the video, in CSS pixels, as x, y, width
     /// and height. Each load makes a new renderer, but the frontend reports
     /// the player area only when the player mounts, when the stream URL
@@ -285,6 +287,9 @@ impl MpvState {
         };
 
         if let Err(e) = attach_result {
+            // Same order as stop(), so nothing the renderer set up outlives
+            // the core it was made for.
+            drop(renderer);
             lock_or_recover(&self.inner).stop();
             return self.launch_fallback(url, start_pos, app, &e, fallback);
         }
