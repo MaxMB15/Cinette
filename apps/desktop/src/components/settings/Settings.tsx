@@ -522,6 +522,11 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent className="space-y-4">
 						<div>
 							<p className="text-sm font-medium mb-1">OMDB API</p>
+							<p className="mb-2 text-xs text-muted-foreground">
+								Adds details and ratings to movies and series. With a key set, the
+								app sends titles to OMDb and IMDb IDs to whatson-api for more
+								ratings.
+							</p>
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<Input

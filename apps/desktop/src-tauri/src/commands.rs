@@ -525,6 +525,21 @@ pub async fn get_omdb_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<St
     Ok(key)
 }
 
+/// The OMDb API key, or None when it isn't set or is blank. Whatson calls
+/// check this too, so a user who hasn't added a key sends nothing to either
+/// service.
+fn omdb_api_key<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, String> {
+    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
+    Ok(non_empty_key(store.get(OMDB_API_KEY)))
+}
+
+/// A stored key as a string, or None when it's missing, blank or not a string.
+fn non_empty_key(value: Option<serde_json::Value>) -> Option<String> {
+    value
+        .and_then(|v| v.as_str().map(str::trim).map(str::to_string))
+        .filter(|k| !k.is_empty())
+}
+
 /// Persist the OMDB API key in the Tauri Store.
 #[command]
 pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
@@ -559,13 +574,9 @@ pub async fn fetch_omdb_data<R: Runtime>(
     }
 
     // 2. Retrieve API key — bail out silently if not set.
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OMDB_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[OMDB] no API key configured, skipping fetch");
-            return Ok(None);
-        }
+    let Some(api_key) = omdb_api_key(&app)? else {
+        tracing::debug!("[OMDB] no API key configured, skipping fetch");
+        return Ok(None);
     };
 
     // 3. Fetch from OMDB.
@@ -682,9 +693,11 @@ pub async fn fetch_mdblist_data<R: Runtime>(
 const WHATSON_CACHE_TTL: i64 = 7 * 24 * 60 * 60;
 
 /// Fetch whatson-api enriched ratings for an IMDB ID. Checks cache first; fetches on miss.
-/// No API key required.
+/// whatson-api needs no key of its own, but it only runs once the user has
+/// added an OMDb key, so nothing leaves the device for metadata until then.
 #[command]
-pub async fn fetch_whatson_data(
+pub async fn fetch_whatson_data<R: Runtime>(
+    app: AppHandle<R>,
     state: State<'_, AppState>,
     imdb_id: String,
     media_type: String,
@@ -699,7 +712,11 @@ pub async fn fetch_whatson_data(
         }
     }
 
-    // 2. Fetch from whatson-api
+    // 2. Fetch from whatson-api, if the user has turned on metadata lookups.
+    if omdb_api_key(&app)?.is_none() {
+        tracing::debug!("[Whatson] no OMDb API key configured, skipping fetch");
+        return Ok(None);
+    }
     let item_type = if media_type == "show" || media_type == "series" { "tvshow" } else { "movie" };
     tracing::info!("[Whatson] fetching data for imdb_id={} type={}", imdb_id, item_type);
     let data = match mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await {
@@ -1595,4 +1612,22 @@ pub async fn resolve_local_download(
             None
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn non_empty_key_skips_missing_and_blank_keys() {
+        assert_eq!(non_empty_key(None), None);
+        assert_eq!(non_empty_key(Some(json!(""))), None);
+        assert_eq!(non_empty_key(Some(json!("   "))), None);
+        assert_eq!(non_empty_key(Some(json!(42))), None);
+        assert_eq!(
+            non_empty_key(Some(json!(" abc123 "))).as_deref(),
+            Some("abc123")
+        );
+    }
 }
