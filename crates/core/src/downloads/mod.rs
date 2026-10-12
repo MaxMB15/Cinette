@@ -6,3 +6,4 @@ pub mod model;
 pub mod paths;
 pub mod redact;
 pub mod retention;
+pub mod size;

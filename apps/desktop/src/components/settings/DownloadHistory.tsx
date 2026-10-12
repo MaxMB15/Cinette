@@ -3,6 +3,7 @@
 
 import { X } from "lucide-react";
 import { useDownloads } from "@/hooks/useDownloads";
+import { downloadPercent } from "@/lib/download-progress";
 import { deleteAt, deleteLabel } from "@/lib/retention";
 import type { DownloadRecord } from "@/lib/types";
 
@@ -10,12 +11,22 @@ const fmtBytes = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).t
 const fmtRate = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).toFixed(1)} MB/s`);
 const fmtTime = (t: number | null) => (t == null ? "—" : new Date(t * 1000).toLocaleString());
 
+/**
+ * How much has been saved, out of the video's size while the download is
+ * unfinished. A finished one shows only its file's size, which stays right for
+ * a download whose size an older version took from an HLS playlist.
+ */
+const sizeCell = (d: DownloadRecord) =>
+	d.totalBytes && d.status !== "completed"
+		? `${fmtBytes(d.downloadedBytes)} / ${fmtBytes(d.totalBytes)}`
+		: fmtBytes(d.downloadedBytes);
+
 const statusCell = (d: DownloadRecord) => {
 	if (d.status === "completed") return <span className="text-emerald-500">Done</span>;
 	if (d.status === "failed")
 		return <span className="text-red-400">Failed{d.error ? ` — ${d.error}` : ""}</span>;
 	if (d.status === "downloading") {
-		const pct = d.totalBytes ? Math.round((d.downloadedBytes / d.totalBytes) * 100) : null;
+		const pct = downloadPercent(d);
 		return <span className="text-blue-400">{pct == null ? "…" : `${pct}%`}</span>;
 	}
 	return <span className="text-muted-foreground">{d.status}</span>;
@@ -56,11 +67,7 @@ export const DownloadHistory = () => {
 						<tr key={d.id} className="border-t border-border/40">
 							<td className="py-2 pr-2 max-w-[180px] truncate">{d.title}</td>
 							<td className="pr-2">{d.kind}</td>
-							<td className="pr-2 whitespace-nowrap">
-								{d.totalBytes
-									? `${fmtBytes(d.downloadedBytes)} / ${fmtBytes(d.totalBytes)}`
-									: fmtBytes(d.downloadedBytes)}
-							</td>
+							<td className="pr-2 whitespace-nowrap">{sizeCell(d)}</td>
 							<td className="pr-2 whitespace-nowrap">{fmtRate(d.avgRateBps)}</td>
 							<td className="pr-2 whitespace-nowrap">{fmtTime(d.createdAt)}</td>
 							<td className="pr-2 whitespace-nowrap">{fmtTime(d.finishedAt)}</td>

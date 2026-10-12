@@ -8,6 +8,7 @@ import { EpgTimelineBar } from "./EpgTimelineBar";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
 import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { DownloadProgressBar } from "@/components/downloads/DownloadProgressBar";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { cn, isFromInnerButton } from "@/lib/utils";
 import { nowSeconds } from "@/lib/date";
@@ -304,14 +305,7 @@ const PosterCard = ({
 					)}
 					{!isSeries && dl && (dl.status === "downloading" || dl.status === "queued") && (
 						<div className="absolute left-0 right-0 bottom-0 px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
-							<div className="h-1 rounded-full bg-white/20 overflow-hidden">
-								<div
-									className="h-full bg-blue-400"
-									style={{
-										width: `${dl.totalBytes ? Math.min(100, Math.round((dl.downloadedBytes / dl.totalBytes) * 100)) : 0}%`,
-									}}
-								/>
-							</div>
+							<DownloadProgressBar download={dl} />
 						</div>
 					)}
 				</div>
