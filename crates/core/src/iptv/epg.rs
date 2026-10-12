@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Downloading and reading XMLTV programme guides.
+//! Downloading and reading XMLTV program guides.
 
 use chrono::NaiveDateTime;
 use quick_xml::events::Event;
@@ -20,10 +20,13 @@ pub enum EpgError {
     /// The download failed or the server answered with an error status.
     #[error("network error: {0}")]
     Network(#[source] reqwest::Error),
-    /// The server answered without any programmes, such as an empty body or
+    /// The server answered without any programs, such as an empty body or
     /// an "account expired" page.
-    #[error("the guide has no programmes")]
+    #[error("the guide has no programs")]
     Empty,
+    /// Reading the guide stopped before it finished.
+    #[error("reading the guide failed: {0}")]
+    Interrupted(#[from] tokio::task::JoinError),
 }
 
 // Request URLs can carry API keys and logins, so they are dropped before the
@@ -34,7 +37,7 @@ impl From<reqwest::Error> for EpgError {
     }
 }
 
-/// One programme in the guide.
+/// One program in the guide.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgProgram {
     pub channel_id: String,
@@ -48,7 +51,7 @@ pub struct EpgProgram {
 }
 
 /// A channel as the guide names it. `id` is what playlist entries use to
-/// find their programmes.
+/// find their programs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgChannel {
     pub id: String,
@@ -217,13 +220,15 @@ fn parse_epg_time(raw: &str) -> i64 {
 
 /// Fetch XMLTV EPG data from a URL and parse it.
 ///
-/// An error status from the server comes back as `EpgError::Network`.
+/// An error status from the server comes back as `EpgError::Network`, and a
+/// reply without any programs as `EpgError::Empty`. Parsing runs on a blocking
+/// thread, because a large guide takes seconds to read.
 pub async fn fetch_and_parse_epg(url: &str) -> Result<EpgData, EpgError> {
     fetch_epg(crate::http::download_client(), url).await
 }
 
 async fn fetch_epg(client: &reqwest::Client, url: &str) -> Result<EpgData, EpgError> {
-    // An error page or an empty reply parses as a guide with no programmes, and
+    // An error page or an empty reply parses as a guide with no programs, and
     // saving that would wipe the guide the user already has.
     let body = client
         .get(url)
@@ -232,7 +237,7 @@ async fn fetch_epg(client: &reqwest::Client, url: &str) -> Result<EpgData, EpgEr
         .error_for_status()?
         .text()
         .await?;
-    let data = parse_epg(&body)?;
+    let data = tokio::task::spawn_blocking(move || parse_epg(&body)).await??;
     if data.programs.is_empty() {
         return Err(EpgError::Empty);
     }
@@ -274,7 +279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reply_without_programmes_is_not_saved_as_an_empty_guide() {
+    async fn a_reply_without_programs_is_not_saved_as_an_empty_guide() {
         for body in [
             "",
             "<html><body>Account expired</body></html>",
