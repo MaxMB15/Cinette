@@ -26,10 +26,11 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 pub struct MpvState {
     inner: Mutex<MpvEngine>,
     renderer: Mutex<Option<Box<dyn PlatformRenderer>>>,
-    /// Where the frontend last put the video, in logical pixels, as x, y,
-    /// width and height. Each load makes a new renderer, and the frontend
-    /// only reports the player area when it moves, so a new renderer starts
-    /// here.
+    /// Where the frontend last put the video, in CSS pixels, as x, y, width
+    /// and height. Each load makes a new renderer, but the frontend reports
+    /// the player area only when the player mounts, when the stream URL
+    /// changes and when the player changes size, so a new renderer starts
+    /// here. Locked only while `renderer` is held.
     bounds: Mutex<Option<[f64; 4]>>,
     fallback_active: AtomicBool,
     /// Whether the next mpv instance may use hardware decoding. Set from the
@@ -140,19 +141,27 @@ impl MpvState {
 
     /// Makes `renderer` the active one and moves its surface to where the
     /// frontend last put the video. Without this, reloading the same stream
-    /// leaves the new surface at its starting frame, which is the whole
-    /// window on macOS and the top left corner on Linux.
+    /// leaves the new surface at its starting frame. That's the whole window
+    /// on macOS, and a single pixel on Linux, where the video doesn't show.
     ///
     /// The bounds are read with the renderer locked, so a `set_bounds` that
-    /// lands in between still reaches the new renderer.
+    /// runs after the old renderer is taken out and before this one is
+    /// installed still reaches it.
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
     fn install_renderer(&self, mut renderer: Box<dyn PlatformRenderer>) {
-        let mut active = lock_or_recover(&self.renderer);
-        let bounds = *lock_or_recover(&self.bounds);
-        if let Some([x, y, w, h]) = bounds {
-            renderer.set_frame(x, y, w, h);
-        }
-        *active = Some(renderer);
+        let replaced = {
+            let mut active = lock_or_recover(&self.renderer);
+            let bounds = *lock_or_recover(&self.bounds);
+            if let Some([x, y, w, h]) = bounds {
+                renderer.set_frame(x, y, w, h);
+            }
+            active.replace(renderer)
+        };
+        // `load()` takes the old renderer out first, so this is only a
+        // safeguard. Its detach waits on the main thread, which can be
+        // waiting on the renderer lock in `resize()`, so it's dropped after
+        // the lock is released.
+        drop(replaced);
     }
 
     /// Helper: spawn the auto-reconnect monitor for the currently loaded URL.
@@ -413,10 +422,11 @@ impl MpvState {
     /// Moves the video surface to a rect in CSS pixels reported by the
     /// frontend, and keeps it for the renderer the next load makes.
     pub fn set_bounds(&self, x: f64, y: f64, w: f64, h: f64) {
-        // Stored before the renderer is locked, never while it is, so this
-        // can't deadlock with `install_renderer`.
+        // Stored and applied under one renderer lock, so two reports can't
+        // leave the stored bounds different from where the renderer is.
+        let mut active = lock_or_recover(&self.renderer);
         *lock_or_recover(&self.bounds) = Some([x, y, w, h]);
-        if let Some(r) = lock_or_recover(&self.renderer).as_mut() {
+        if let Some(r) = active.as_mut() {
             r.set_frame(x, y, w, h);
         }
     }
@@ -567,7 +577,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
     mod bounds {
-        use super::super::MpvState;
+        use crate::mpv::MpvState;
         use crate::renderer::PlatformRenderer;
         use libmpv2::Mpv;
         use std::sync::{Arc, Mutex};
@@ -613,8 +623,20 @@ mod tests {
             state.set_bounds(240.0, 52.0, 960.0, 540.0);
             assert_eq!(*first.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
 
+            // Retry stops the stream and loads it again, with no new report.
+            state.stop();
             let second = install(&state);
             assert_eq!(*second.lock().unwrap(), [[240.0, 52.0, 960.0, 540.0]]);
+        }
+
+        #[test]
+        fn keeps_bounds_reported_while_no_renderer_is_active() {
+            let state = MpvState::new();
+            install(&state);
+            state.stop();
+            state.set_bounds(0.0, 0.0, 1280.0, 720.0);
+            let frames = install(&state);
+            assert_eq!(*frames.lock().unwrap(), [[0.0, 0.0, 1280.0, 720.0]]);
         }
 
         #[test]

@@ -26,7 +26,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Fixed
 
-- After Retry, or after the player reloaded a stream when the network came back, macOS drew the video at the size of the whole window, so the player showed only part of it until the player changed size. On Linux the video sat in the top left corner. A reloaded stream now starts where the player is (#115).
+- After Retry, or after the player reloaded a stream when the network came back, macOS drew the video at the size of the whole window, so the player showed only part of it until the player changed size. On Linux the video didn't show at all. A reloaded stream now starts where the player is (#115).
 - The app could lose track of whether its window was in full screen after the green button or the View menu on macOS, or after a second change made while the first was still animating. The sidebar then stayed hidden after leaving full screen or showed in it, and the full screen button and Escape acted on the wrong state. The app now follows the window's own state, and checks it again a second after its own changes in case macOS turned one down (#113).
 - Holding down a player shortcut now acts once, except for seeking and volume, which still repeat. A held F or Space flipped back and forth, and a held Escape left full screen and then the player (#113).
 - The dot on the seek bar sometimes sat apart from the end of the colored part, mostly when a video started. It also jumped back for a moment after a seek, and stopped following playback after you moved it with the arrow keys. Clicking the seek bar no longer turns off the player's keyboard shortcuts (#111).

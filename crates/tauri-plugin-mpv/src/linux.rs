@@ -552,10 +552,14 @@ fn render_frame(inner: &Inner) {
 
     inner.render_ctx.report_swap();
 
-    // Take the callback out first, so it doesn't run with the lock held.
-    let first_frame_cb = lock_or_recover(&inner.first_frame_cb).take();
-    if let Some(cb) = first_frame_cb {
-        cb();
+    // A resize redraws the surface without a new frame, which doesn't count
+    // as the first one. Take the callback out first, so it doesn't run with
+    // the lock held.
+    if has_frame {
+        let first_frame_cb = lock_or_recover(&inner.first_frame_cb).take();
+        if let Some(cb) = first_frame_cb {
+            cb();
+        }
     }
 }
 
