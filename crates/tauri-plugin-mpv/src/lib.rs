@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-#![allow(dead_code)]
-
 #[cfg(target_os = "macos")]
 #[macro_use]
 extern crate objc;
@@ -10,18 +8,21 @@ extern crate objc;
 mod commands;
 mod engine;
 mod idle_inhibit;
+mod lock;
+mod log_url;
 pub mod mpv;
 mod reconnect;
 mod renderer;
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "linux")]
-mod linux;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod options;
+
 #[cfg(target_os = "ios")]
 mod ios;
-#[cfg(target_os = "android")]
-mod android;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use tauri::{
     plugin::{Builder, TauriPlugin},
