@@ -752,7 +752,7 @@ export const ChannelList = () => {
 				<div
 					className={cn(
 						"flex items-center shrink-0",
-						compactRows && "px-3 pb-2 empty:hidden"
+						compactRows && "px-3 pt-2.5 pb-2 empty:hidden"
 					)}
 				>
 					{activeTab !== "history" && activeTab !== "downloads" && (

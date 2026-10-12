@@ -7,7 +7,7 @@ through libmpv from [MPVKit](https://github.com/mpvkit/MPVKit) release
 they do on desktop. The app needs iOS or iPadOS 17.5 and ships through TestFlight and
 then the App Store.
 
-The plan behind the port is in [`apps/ios/DESIGN.md`](../apps/ios/DESIGN.md).
+How the iOS pieces fit together is in [architecture.md](architecture.md#ios).
 
 ## How it differs from desktop
 
@@ -146,11 +146,23 @@ mpv:
 If App Store Connect emails an `ITMS-91053` warning about a missing reason after an
 upload, add the category it names.
 
+### App Transport Security
+
+App Transport Security only covers URLSession and the web view. mpv and `reqwest`
+open their own connections, so streams and API calls over plain HTTP aren't affected.
+`apps/desktop/src-tauri/Info.ios.plist` turns on `NSAllowsArbitraryLoadsInWebContent`,
+so channel logos served over HTTP still load, and `NSAllowsLocalNetworking`, which
+lets the web view reach local addresses. It sets `NSAllowsArbitraryLoads` to `false`
+on purpose. The Tauri CLI merges this file over the macOS `Info.plist`, which allows
+all loads, so leaving the key out would turn App Transport Security off on iOS too,
+and App Review asks for a reason when an app does that. HTTP logos load in the
+simulator but haven't been checked on a device yet.
+
 ## Continuous integration
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| [iOS](../.github/workflows/ios.yml) | Pushes to `feature/ios-poc`, and pull requests to `dev` and `feature/ios-poc` that touch the app | A debug build for the simulator. Nothing is signed. |
+| [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the simulator. Nothing is signed. |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | A release build for devices, signed for the App Store and uploaded to TestFlight |
 
 The TestFlight workflow uses the `macos-signing` environment, so a reviewer approves
@@ -235,3 +247,18 @@ and signing through the key needs Admin.
   server and no analytics. Requests for metadata, subtitles and category sorting go
   straight from the device to those services, with the user's own keys where one is
   needed.
+
+## Licensing
+
+The App Store's terms add restrictions that GPLv3 forbids, so a third party can't
+put GPL code on the store. The copyright owner can, because the owner isn't bound
+by their own license, and the [contributor agreement](../CLA.md) gives the owner
+the rights to ship contributions too.
+
+That only holds while nobody else's GPL code is in the iOS build:
+
+- Use the `MPVKit` product, never `MPVKit-GPL`.
+- Add no other GPL dependencies.
+
+The LGPL requires that users can relink the app with a changed library. The full
+source is public, so anyone can rebuild it.
