@@ -239,7 +239,8 @@ impl MpvState {
 
         let attach_result = {
             let mut engine = lock_or_recover(&self.inner);
-            match engine.create(&self.options(linux_embedded_options())) {
+            let options = linux_embedded_options(gl_renderer.software_gl());
+            match engine.create(&self.options(options)) {
                 Ok(mpv) => gl_renderer.attach(mpv),
                 Err(e) => Err(e),
             }

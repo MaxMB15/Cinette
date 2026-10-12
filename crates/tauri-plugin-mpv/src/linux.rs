@@ -107,6 +107,8 @@ struct OwnedEgl {
     surface: Option<egl::Surface>,
     context: egl::Context,
     config: egl::Config,
+    /// Whether the context draws on the CPU. See [`is_software_gl`].
+    software_gl: bool,
 }
 
 impl Drop for OwnedEgl {
@@ -214,6 +216,8 @@ pub struct LinuxGlRenderer {
     /// mutex is only there for `Sync`. Nothing contends it, because the
     /// command thread sets and takes it before the renderer is shared.
     first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Whether OpenGL runs on the CPU, such as Mesa's llvmpipe.
+    software_gl: bool,
 }
 
 /// The EGL and Wayland resources `new` builds for `attach`.
@@ -261,6 +265,7 @@ impl LinuxGlRenderer {
         };
 
         let (egl_res, wayland) = build_wayland_on_main_thread(wl_surface_ptr, wl_display_ptr)?;
+        let software_gl = egl_res.software_gl;
 
         Ok(Self {
             pending: Some(Pending {
@@ -270,7 +275,13 @@ impl LinuxGlRenderer {
             }),
             active: None,
             first_frame_cb: Mutex::new(None),
+            software_gl,
         })
+    }
+
+    /// Whether OpenGL runs on the CPU. Pass it to [`embedded_options`].
+    pub fn software_gl(&self) -> bool {
+        self.software_gl
     }
 }
 
@@ -729,11 +740,18 @@ fn build_wayland(
         .create_context(egl_display, config, None, &context_attribs)
         .map_err(|e| format!("eglCreateContext: {e:?}"))?;
 
+    let renderer = gl_renderer_name(egl, egl_display, egl_surface, egl_context);
+    tracing::info!(
+        "[MPV] OpenGL renderer: {}",
+        renderer.as_deref().unwrap_or("unknown")
+    );
+
     let egl_res = OwnedEgl {
         display: egl_display,
         surface: Some(egl_surface),
         context: egl_context,
         config,
+        software_gl: renderer.as_deref().is_some_and(is_software_gl),
     };
     let wayland = WaylandSession {
         wl_egl_surface: Some(wl_egl_surface),
@@ -743,6 +761,39 @@ fn build_wayland(
         conn,
     };
     Ok((egl_res, wayland))
+}
+
+/// Reads `GL_RENDERER` with the new context, then releases the context.
+fn gl_renderer_name(
+    egl: &egl::DynamicInstance<egl::EGL1_4>,
+    display: egl::Display,
+    surface: egl::Surface,
+    context: egl::Context,
+) -> Option<String> {
+    egl.make_current(display, Some(surface), Some(surface), Some(context))
+        .ok()?;
+    gl::load_with(|name| gl_proc_address(name) as *const _);
+    // SAFETY: The context is current, and a non-null `glGetString` result
+    // is a NUL-terminated string that the driver keeps alive.
+    let name = unsafe {
+        let ptr = gl::GetString(gl::RENDERER);
+        (!ptr.is_null()).then(|| {
+            std::ffi::CStr::from_ptr(ptr.cast())
+                .to_string_lossy()
+                .into_owned()
+        })
+    };
+    let _ = egl.make_current(display, None, None, None);
+    name
+}
+
+/// Whether a `GL_RENDERER` string names a renderer that draws on the CPU.
+/// The names are the ones mpv itself checks for.
+fn is_software_gl(renderer: &str) -> bool {
+    renderer.contains("llvmpipe")
+        || renderer.contains("softpipe")
+        || renderer == "Software Rasterizer"
+        || renderer == "Mesa X11"
 }
 
 fn wayland_egl_display(
@@ -861,8 +912,26 @@ fn drain_wayland_queue(inner: &Inner) {
 /// that list, and there a failed attempt falls back cleanly.
 const LINUX_HWDEC: &str = "auto-copy-safe";
 
+/// Cheaper scaling and no dithering, the same settings as mpv's `fast`
+/// profile apart from its HDR ones. That profile is new in mpv 0.37, and an
+/// option libmpv doesn't know fails the whole load, so these are spelled out.
+///
+/// mpv 0.37 made its slower, sharper scalers the default. On a software
+/// renderer they cost a lot of CPU, and in testing with Mesa's llvmpipe and
+/// libmpv 0.37 the embedded picture stayed black in about half the runs.
+/// With these options it showed every time.
+const SOFTWARE_GL_OPTIONS: [(&str, &str); 6] = [
+    ("scale", "bilinear"),
+    ("dscale", "bilinear"),
+    ("dither", "no"),
+    ("correct-downscaling", "no"),
+    ("linear-downscaling", "no"),
+    ("sigmoid-upscaling", "no"),
+];
+
 /// Options for embedded playback through the OpenGL render context.
-pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
+/// `software_gl` comes from [`LinuxGlRenderer::software_gl`].
+pub fn embedded_options(software_gl: bool) -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
         ("vo", "libmpv"),
         ("hwdec", LINUX_HWDEC),
@@ -877,6 +946,9 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
         ("config", "no"),
         ("video-sync", "audio"),
     ];
+    if software_gl {
+        options.extend(SOFTWARE_GL_OPTIONS);
+    }
     options.extend(shared_options());
     options.push(("msg-level", "all=info"));
     options
@@ -927,7 +999,7 @@ fn wayland_in_env(
 
 #[cfg(test)]
 mod tests {
-    use super::wayland_in_env;
+    use super::{is_software_gl, wayland_in_env};
     use std::ffi::OsString;
     use std::path::Path;
 
@@ -1008,5 +1080,20 @@ mod tests {
         ));
         assert!(!wayland_in_env(env(&[("WAYLAND_DISPLAY", "")]), no_files));
         assert!(!wayland_in_env(env(&[]), no_files));
+    }
+
+    #[test]
+    fn software_renderers_are_recognized() {
+        assert!(is_software_gl("llvmpipe (LLVM 19.1.1, 256 bits)"));
+        assert!(is_software_gl("softpipe"));
+        assert!(is_software_gl("Software Rasterizer"));
+        assert!(is_software_gl("Mesa X11"));
+        assert!(!is_software_gl("Mesa Intel(R) UHD Graphics 620 (KBL GT2)"));
+        assert!(!is_software_gl(
+            "AMD Radeon RX 6600 (radeonsi, navi23, LLVM 19.1.1, DRM 3.57)"
+        ));
+        assert!(!is_software_gl("NVIDIA GeForce RTX 3060/PCIe/SSE2"));
+        // virgl draws on the host GPU.
+        assert!(!is_software_gl("virgl (NVIDIA GeForce RTX 3060)"));
     }
 }
