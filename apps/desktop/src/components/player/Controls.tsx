@@ -59,9 +59,8 @@ interface ControlsProps {
 	skip?: SkipIntervals;
 	onSkip?: (seconds: number) => void;
 	/**
-	 * Phones and tablets. Play and pause, the skip buttons and the episode
-	 * buttons move to a row in the middle of the video, which leaves the bottom
-	 * bar room for the rest.
+	 * Phones and tablets. Play and pause and the skip buttons move to a row in
+	 * the middle of the video, which leaves the bottom bar room for the rest.
 	 */
 	touchLayout?: boolean;
 }
@@ -143,8 +142,6 @@ export const Controls = ({
 					onPause={onPause}
 					skip={skip}
 					onSkip={onSkip}
-					onPrevEpisode={onPrevEpisode}
-					onNextEpisode={onNextEpisode}
 				/>
 			)}
 			<div
@@ -290,7 +287,7 @@ export const Controls = ({
 					<div className="flex-1" />
 
 					{/* Episode navigation — right side */}
-					{!touchLayout && onPrevEpisode && (
+					{onPrevEpisode && (
 						<Button
 							variant="ghost"
 							size="icon"
@@ -302,7 +299,7 @@ export const Controls = ({
 						</Button>
 					)}
 
-					{!touchLayout && onNextEpisode && (
+					{onNextEpisode && (
 						<Button
 							variant="ghost"
 							size="icon"

@@ -72,4 +72,9 @@ describe("formatSkip", () => {
 	it("signs back skips with a minus sign", () => {
 		expect(formatSkip(-30)).toBe("−30s");
 	});
+
+	it("leaves a skip that went nowhere unsigned", () => {
+		expect(formatSkip(0)).toBe("0s");
+		expect(formatSkip(-0)).toBe("0s");
+	});
 });

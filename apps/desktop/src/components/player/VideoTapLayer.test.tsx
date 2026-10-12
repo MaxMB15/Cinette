@@ -26,7 +26,11 @@ const MIDDLE = 500;
 const RIGHT = 900;
 
 const setup = (seekable = true) => {
-	const onSkip = vi.fn();
+	// Adds up skips in the same direction, as the player does. The label shows the total.
+	let total = 0;
+	const onSkip = vi.fn((seconds: number) =>
+		Math.sign(total) === Math.sign(seconds) ? (total += seconds) : (total = seconds)
+	);
 	const onTap = vi.fn();
 	const { container } = render(
 		<VideoTapLayer
@@ -96,6 +100,41 @@ describe("VideoTapLayer", () => {
 		expect(screen.getByText("−30s")).toBeInTheDocument();
 		vi.advanceTimersByTime(SKIP_CHAIN_MS);
 		expect(onTap).not.toHaveBeenCalled();
+	});
+
+	it("shows how far the player really skipped", () => {
+		const { onSkip, tap } = setup();
+		onSkip.mockReturnValueOnce(-4);
+		tap(LEFT);
+		tap(LEFT);
+		expect(screen.getByText("−4s")).toBeInTheDocument();
+	});
+
+	it("drops a waiting tap at the side when a tap in the middle follows", () => {
+		const { onSkip, onTap, tap } = setup();
+		tap(LEFT);
+		tap(MIDDLE);
+		vi.advanceTimersByTime(DOUBLE_TAP_MS);
+		expect(onTap).toHaveBeenCalledTimes(1);
+		expect(onSkip).not.toHaveBeenCalled();
+	});
+
+	it("drops a waiting tap on one side when a tap on the other side follows", () => {
+		const { onSkip, onTap, tap } = setup();
+		tap(LEFT);
+		tap(RIGHT);
+		vi.advanceTimersByTime(DOUBLE_TAP_MS);
+		expect(onTap).toHaveBeenCalledTimes(1);
+		expect(onSkip).not.toHaveBeenCalled();
+	});
+
+	it("ignores a release whose press started somewhere else", () => {
+		const { onSkip, onTap, layer } = setup();
+		fireEvent.pointerUp(layer, { clientX: MIDDLE, clientY: 250 });
+		fireEvent.pointerUp(layer, { clientX: LEFT, clientY: 250 });
+		vi.advanceTimersByTime(SKIP_CHAIN_MS);
+		expect(onTap).not.toHaveBeenCalled();
+		expect(onSkip).not.toHaveBeenCalled();
 	});
 
 	it("only toggles the controls when the stream can't seek", () => {

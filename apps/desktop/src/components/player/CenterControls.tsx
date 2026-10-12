@@ -1,18 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useRef } from "react";
-import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Play, Pause } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SkipIntervals } from "@/lib/player-prefs";
 import { SkipIcon } from "./SkipIcon";
-
-/**
- * An episode button press this soon after the last one is dropped. On a phone
- * the episode buttons sit where a double-tap skips, so a double-tap aimed at
- * the video could otherwise move two episodes.
- */
-export const EPISODE_PRESS_GAP_MS = 1000;
 
 interface CenterControlsProps {
 	visible: boolean;
@@ -23,15 +15,15 @@ interface CenterControlsProps {
 	/** How far the skip buttons jump. Leave out when the stream can't seek. */
 	skip?: SkipIntervals;
 	onSkip?: (seconds: number) => void;
-	onPrevEpisode?: () => void;
-	onNextEpisode?: () => void;
 }
 
 /**
- * The middle row of the touch player. Skip back, play or pause and skip
- * forward sit in the middle, with the previous and next episode further out.
- * Only the buttons take taps, so a double-tap beside them still reaches the
- * video.
+ * The middle row of the touch player, with skip back, play or pause and skip
+ * forward. Only the buttons take taps, so a double-tap beside them still
+ * reaches the video. The skip buttons reach into the areas where a double-tap
+ * skips, which is harmless since they skip the same way. Anything else here,
+ * such as the episode buttons, would catch taps aimed at the video, so those stay
+ * in the bottom bar.
  */
 export const CenterControls = ({
 	visible,
@@ -40,24 +32,12 @@ export const CenterControls = ({
 	onPause,
 	skip,
 	onSkip,
-	onPrevEpisode,
-	onNextEpisode,
 }: CenterControlsProps) => {
-	const hasEpisodes = !!onPrevEpisode || !!onNextEpisode;
-	const lastEpisodePressRef = useRef(-Infinity);
-	const episodePress = (go: () => void) => () => {
-		const now = performance.now();
-		if (now - lastEpisodePressRef.current < EPISODE_PRESS_GAP_MS) return;
-		lastEpisodePressRef.current = now;
-		go();
-	};
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
 	const button = cn(
 		"flex shrink-0 items-center justify-center rounded-full text-white transition-transform active:scale-90",
 		visible && "pointer-events-auto"
 	);
-	// An empty slot keeps play and pause in the middle when only one episode button shows.
-	const episodeSlot = <span className="h-11 w-11 shrink-0" />;
 
 	return (
 		<div
@@ -67,20 +47,6 @@ export const CenterControls = ({
 			)}
 		>
 			<div className="flex items-center gap-4 drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)] sm:gap-8">
-				{hasEpisodes &&
-					(onPrevEpisode ? (
-						<button
-							type="button"
-							onClick={episodePress(onPrevEpisode)}
-							aria-label="Previous episode"
-							className={cn(button, "h-11 w-11 bg-black/30 active:bg-white/20")}
-						>
-							<SkipBack className="h-5 w-5 fill-current" />
-						</button>
-					) : (
-						episodeSlot
-					))}
-
 				{skipButtons && (
 					<button
 						type="button"
@@ -128,20 +94,6 @@ export const CenterControls = ({
 						/>
 					</button>
 				)}
-
-				{hasEpisodes &&
-					(onNextEpisode ? (
-						<button
-							type="button"
-							onClick={episodePress(onNextEpisode)}
-							aria-label="Next episode"
-							className={cn(button, "h-11 w-11 bg-black/30 active:bg-white/20")}
-						>
-							<SkipForward className="h-5 w-5 fill-current" />
-						</button>
-					) : (
-						episodeSlot
-					))}
 			</div>
 		</div>
 	);

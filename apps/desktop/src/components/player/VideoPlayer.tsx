@@ -49,6 +49,7 @@ import { sortEpisodes } from "@/lib/episodes";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
+import { nextSkip, type SkipRun } from "@/lib/skip";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
@@ -61,8 +62,6 @@ const MAX_VOLUME = 150;
 const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 /** Position jumps larger than this between polls are seeks, not watching. */
 const MAX_WATCH_STEP_SECONDS = 5;
-/** A skip this soon after the last one in the same direction adds to it. */
-const SKIP_CHAIN_MS = 1500;
 /** How long the controls stay up after they appear or the player is clicked or tapped. */
 const CONTROLS_HIDE_MS = 4000;
 
@@ -809,31 +808,31 @@ export const PlayerView = () => {
 	// Same test as the seek bar, which live channels usually don't get.
 	const seekable = mpv.state.duration > 0;
 
-	// The polled position lags behind a seek, so a skip soon after another one
-	// in the same direction starts from where that one was going. The returned
-	// total is how far the run of skips has gone.
-	const lastSkipRef = useRef<{ target: number; total: number; at: number } | null>(null);
+	// Skips in a row add up, as nextSkip describes. The returned total is how
+	// far the run of skips has moved.
+	const lastSkipRef = useRef<SkipRun | null>(null);
 	useEffect(() => {
 		lastSkipRef.current = null;
 	}, [mpv.state.currentUrl]);
 	const skipBy = useCallback(
 		(seconds: number): number => {
 			const s = mpvStateRef.current;
-			const last = lastSkipRef.current;
-			const chain =
-				last &&
-				Date.now() - last.at < SKIP_CHAIN_MS &&
-				Math.sign(last.total) === Math.sign(seconds)
-					? last
-					: null;
-			const wanted = Math.max(0, (chain ? chain.target : s.position) + seconds);
-			const target = s.duration > 0 ? Math.min(wanted, s.duration - 1) : wanted;
-			const total = (chain ? chain.total : 0) + seconds;
-			lastSkipRef.current = { target, total, at: Date.now() };
-			mpv.seek(target);
-			return total;
+			const run = nextSkip(lastSkipRef.current, s.position, s.duration, seconds, Date.now());
+			lastSkipRef.current = run;
+			mpv.seek(run.target);
+			return run.total;
 		},
 		[mpv]
+	);
+	// The tap layer keeps its clicks from the player, so a double-tap skip
+	// restarts the hide timer here, as a press on a skip button does. Hidden
+	// controls stay hidden.
+	const skipFromTap = useCallback(
+		(seconds: number): number => {
+			setControlsActivity((n) => n + 1);
+			return skipBy(seconds);
+		},
+		[skipBy]
 	);
 	const seekTo = useCallback(
 		(position: number) => {
@@ -1120,7 +1119,7 @@ export const PlayerView = () => {
 				<VideoTapLayer
 					seekable={seekable}
 					skip={skip}
-					onSkip={skipBy}
+					onSkip={skipFromTap}
 					onTap={() => setShowControls((v) => !v)}
 				/>
 			)}

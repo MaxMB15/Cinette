@@ -22,7 +22,8 @@ interface VideoTapLayerProps {
 	/** False when the stream can't seek. Every tap then just toggles the controls. */
 	seekable: boolean;
 	skip: SkipIntervals;
-	onSkip: (seconds: number) => void;
+	/** Skips and returns how far the run of skips has moved, which the label shows. */
+	onSkip: (seconds: number) => number;
 	/** A single tap, which shows or hides the controls. */
 	onTap: () => void;
 }
@@ -40,7 +41,7 @@ export const VideoTapLayer = ({ seekable, skip, onSkip, onTap }: VideoTapLayerPr
 	);
 	const downRef = useRef<{ x: number; y: number } | null>(null);
 	const pendingTapRef = useRef<{ side: Side; timer: ReturnType<typeof setTimeout> } | null>(null);
-	const chainRef = useRef<{ side: Side; until: number; total: number } | null>(null);
+	const chainRef = useRef<{ side: Side; until: number } | null>(null);
 	const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	useEffect(
@@ -59,11 +60,9 @@ export const VideoTapLayer = ({ seekable, skip, onSkip, onTap }: VideoTapLayerPr
 		return pending.side;
 	};
 
-	const skipFrom = (side: Side, now: number, previousTotal: number) => {
-		const step = side === "back" ? skip.back : skip.forward;
-		const total = previousTotal + step;
-		chainRef.current = { side, until: now + SKIP_CHAIN_MS, total };
-		onSkip(side === "back" ? -step : step);
+	const skipSide = (side: Side, now: number) => {
+		chainRef.current = { side, until: now + SKIP_CHAIN_MS };
+		const total = onSkip(side === "back" ? -skip.back : skip.forward);
 		setFeedback({ side, total, shown: true });
 		if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
 		hideTimerRef.current = setTimeout(
@@ -76,7 +75,9 @@ export const VideoTapLayer = ({ seekable, skip, onSkip, onTap }: VideoTapLayerPr
 		if (e.isPrimary === false) return;
 		const down = downRef.current;
 		downRef.current = null;
-		if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > TAP_SLOP) return;
+		// A swipe isn't a tap, and neither is a release whose press started
+		// somewhere else, such as on a button.
+		if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > TAP_SLOP) return;
 
 		const rect = e.currentTarget.getBoundingClientRect();
 		const x = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5;
@@ -91,13 +92,12 @@ export const VideoTapLayer = ({ seekable, skip, onSkip, onTap }: VideoTapLayerPr
 
 		const chain = chainRef.current;
 		chainRef.current = null;
-		if (side && chain && chain.side === side && now < chain.until) {
-			cancelPendingTap();
-			skipFrom(side, now, chain.total);
-			return;
-		}
-		if (side && cancelPendingTap() === side) {
-			skipFrom(side, now, 0);
+		// A tap drops any single tap still waiting. Two on the same side make a
+		// double-tap, and otherwise only the newer one counts, so two quick taps
+		// never toggle the controls twice.
+		const pendingSide = cancelPendingTap();
+		if (side && ((chain && chain.side === side && now < chain.until) || pendingSide === side)) {
+			skipSide(side, now);
 			return;
 		}
 		if (side) {
@@ -141,9 +141,7 @@ export const VideoTapLayer = ({ seekable, skip, onSkip, onTap }: VideoTapLayerPr
 							<ChevronsRight className="h-7 w-7" />
 						)}
 						<span className="text-sm font-semibold tabular-nums">
-							{formatSkip(
-								feedback.side === "back" ? -feedback.total : feedback.total
-							)}
+							{formatSkip(feedback.total)}
 						</span>
 					</div>
 				</div>
