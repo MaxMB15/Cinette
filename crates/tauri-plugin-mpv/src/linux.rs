@@ -65,8 +65,8 @@ fn egl() -> Result<&'static egl::DynamicInstance<egl::EGL1_4>, String> {
 /// Resolves a GL function pointer through the EGL loader.
 ///
 /// Both the `gl` crate's `load_with` and libmpv's `get_proc_address` callback
-/// use it. `attach` calls `gl::load_with` once, on the GLib main thread, while
-/// the EGL context is current.
+/// use it. `gl_renderer_name` and `attach` call `gl::load_with` on the GLib
+/// main thread, each while the EGL context is current.
 fn gl_proc_address(name: &str) -> *mut c_void {
     match egl() {
         Ok(egl) => egl
@@ -561,8 +561,10 @@ fn render_frame(inner: &Inner) {
 
     // A resize redraws the last frame, so a paused video doesn't go black.
     // Before the first frame there is nothing to redraw, and a render would
-    // fire the first frame callback too early, as the macOS renderer never
-    // does.
+    // fire the first frame callback too early. The macOS renderer likewise
+    // only renders when mpv reports a new frame. If mpv drops the first frame
+    // because this callback ran late, the picture stays black until the next
+    // one arrives.
     if !has_frame && !(resized && inner.drew_frame.load(Ordering::Relaxed)) {
         return;
     }
@@ -912,21 +914,24 @@ fn drain_wayland_queue(inner: &Inner) {
 /// that list, and there a failed attempt falls back cleanly.
 const LINUX_HWDEC: &str = "auto-copy-safe";
 
-/// Cheaper scaling and no dithering, the same settings as mpv's `fast`
-/// profile apart from its HDR ones. That profile is new in mpv 0.37, and an
-/// option libmpv doesn't know fails the whole load, so these are spelled out.
+/// Cheaper scaling, no dithering and no HDR peak detection, the settings of
+/// mpv's `fast` profile apart from `allow-delayed-peak-detect`, which is
+/// newer than some distributions' libmpv. The profile itself is new in mpv
+/// 0.37, and an option libmpv doesn't know fails the whole load, so these are
+/// spelled out.
 ///
 /// mpv 0.37 made its slower, sharper scalers the default. On a software
 /// renderer they cost a lot of CPU, and in testing with Mesa's llvmpipe and
 /// libmpv 0.37 the embedded picture stayed black in about half the runs.
 /// With these options it showed every time.
-const SOFTWARE_GL_OPTIONS: [(&str, &str); 6] = [
+const SOFTWARE_GL_OPTIONS: [(&str, &str); 7] = [
     ("scale", "bilinear"),
     ("dscale", "bilinear"),
     ("dither", "no"),
     ("correct-downscaling", "no"),
     ("linear-downscaling", "no"),
     ("sigmoid-upscaling", "no"),
+    ("hdr-compute-peak", "no"),
 ];
 
 /// Options for embedded playback through the OpenGL render context.

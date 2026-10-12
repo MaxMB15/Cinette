@@ -126,8 +126,8 @@ mod tests {
                 ("msg-level", "all=info"),
             ]
         );
-        // A software renderer adds cheaper scaling and turns off dithering,
-        // in front of the shared options.
+        // A software renderer adds cheaper scaling and turns off dithering
+        // and HDR peak detection, in front of the shared options.
         let mut software = crate::linux::embedded_options(false);
         software.splice(
             6..6,
@@ -138,6 +138,7 @@ mod tests {
                 ("correct-downscaling", "no"),
                 ("linear-downscaling", "no"),
                 ("sigmoid-upscaling", "no"),
+                ("hdr-compute-peak", "no"),
             ],
         );
         assert_eq!(crate::linux::embedded_options(true), software);
