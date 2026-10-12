@@ -1274,8 +1274,7 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
 
     // 1. Fetch latest.json to get the package URL
     let latest_url = "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
-    let client = reqwest::Client::new();
-    let latest: serde_json::Value = client.get(latest_url)
+    let latest: serde_json::Value = mvp_core::http::client().get(latest_url)
         .send().await.map_err(|e| format!("Failed to fetch latest.json: {e}"))?
         .json().await.map_err(|e| format!("Failed to parse latest.json: {e}"))?;
 
@@ -1286,7 +1285,7 @@ pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
         .to_string();
 
     // 2. Download the package to a temp file
-    let response = client.get(&pkg_url)
+    let response = mvp_core::http::download_client().get(&pkg_url)
         .send().await.map_err(|e| format!("Download failed: {e}"))?;
 
     if !response.status().is_success() {
