@@ -844,4 +844,156 @@ http://stream.example.com/ch2
         let content = "\u{FEFF}#EXTM3U x-tvg-url=\"http://bom.com/epg.xml\"\n#EXTINF:-1,Channel\nhttp://url.com\n";
         assert_eq!(extract_epg_url(content), Some("http://bom.com/epg.xml".to_string()));
     }
+
+    // --- Malformed playlists ---
+
+    /// Parses `bytes` from a file, the way a downloaded playlist is read.
+    fn parse_file(bytes: &[u8]) -> Result<Vec<Channel>, M3uError> {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+        parse_m3u_file(file.path())
+    }
+
+    /// A playlist saved as Latin-1 instead of UTF-8, as some older tools do.
+    const LATIN1_PLAYLIST: &[u8] = b"#EXTM3U\n#EXTINF:-1,Caf\xe9 TV\nhttp://a.test/1\n";
+
+    #[test]
+    fn a_playlist_file_that_is_not_utf8_is_a_parse_error() {
+        let result = parse_file(LATIN1_PLAYLIST);
+        assert!(
+            matches!(&result, Err(M3uError::Parse { message, .. }) if message.contains("UTF-8")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_playlist_file_without_a_header_is_rejected() {
+        for content in [
+            "",
+            "#EXTINF:-1,One\nhttp://a.test/1\n",
+            "<html>Account expired</html>",
+        ] {
+            let result = parse_file(content.as_bytes());
+            assert!(
+                matches!(result, Err(M3uError::MissingHeader)),
+                "{content:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stream_without_a_header_line_is_rejected() {
+        for content in ["", "#EXTINF:-1,One\nhttp://a.test/1\n"] {
+            let result = parse_m3u_reader(content.as_bytes());
+            assert!(
+                matches!(result, Err(M3uError::MissingHeader)),
+                "{content:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stream_that_is_not_utf8_is_a_parse_error() {
+        let header: &[u8] = b"#EXTM3U \xff\n#EXTINF:-1,One\nhttp://a.test/1\n";
+        for bytes in [header, LATIN1_PLAYLIST] {
+            let result = parse_m3u_reader(bytes);
+            assert!(matches!(result, Err(M3uError::Parse { .. })), "{result:?}");
+        }
+    }
+
+    #[test]
+    fn an_entry_without_a_link_is_dropped_by_every_parser() {
+        // A broken entry must not take the next entry's link.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1,No Link\n\
+            #EXTINF:-1,One\nhttp://a.test/1\n\
+            #EXTINF:-1,Last";
+        let parsed = [
+            parse_m3u(content).unwrap(),
+            parse_file(content.as_bytes()).unwrap(),
+            parse_m3u_reader(content.as_bytes()).unwrap(),
+        ];
+        for channels in parsed {
+            let entries: Vec<_> = channels
+                .iter()
+                .map(|ch| (ch.name.as_str(), ch.url.as_str()))
+                .collect();
+            assert_eq!(entries, [("One", "http://a.test/1")]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_is_not_a_playlist_is_rejected() {
+        for body in ["", "<html><body>Account expired</body></html>"] {
+            let url = test_server::serve_once("200 OK", body);
+            let result = fetch_playlist(&test_server::client(), &url).await;
+            assert!(
+                matches!(result, Err(M3uError::MissingHeader)),
+                "{body:?}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_playlist_that_cannot_be_fetched_does_not_show_the_login() {
+        let err =
+            fetch_and_parse_m3u_with_epg("unix:/get.php?username=U&password=SECRET&type=m3u_plus")
+                .await
+                .unwrap_err();
+        assert!(matches!(err, M3uError::Network(_)), "{err:?}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    // --- Grouping ---
+
+    #[test]
+    fn the_same_film_on_two_servers_is_one_entry_with_both_links() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 group-title=\"Movies\",Heat (1995)\nhttp://a.test/movie/u/p/1.mkv\n\
+            #EXTINF:-1 group-title=\"Server 4\",HEAT (1995)\nhttp://b.test/movie/u/p/1.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 1, "{channels:?}");
+        assert_eq!(channels[0].name, "Heat (1995)");
+        assert_eq!(channels[0].url, "http://a.test/movie/u/p/1.mkv");
+        assert_eq!(channels[0].sources, ["http://b.test/movie/u/p/1.mkv"]);
+    }
+
+    #[test]
+    fn the_same_episode_on_two_servers_is_one_entry_with_both_links() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1,Suits S01E01\nhttp://a.test/series/u/p/1.mkv\n\
+            #EXTINF:-1,suits S01E01 Pilot\nhttp://b.test/series/u/p/1.mkv\n\
+            #EXTINF:-1,Suits S01E02\nhttp://a.test/series/u/p/2.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 2, "{channels:?}");
+        assert_eq!(channels[0].url, "http://a.test/series/u/p/1.mkv");
+        assert_eq!(channels[0].sources, ["http://b.test/series/u/p/1.mkv"]);
+        assert_eq!(channels[1].episode, Some(2));
+        assert!(channels[1].sources.is_empty());
+    }
+
+    #[test]
+    fn series_entries_without_an_episode_code_are_kept_apart() {
+        // Without a season and episode there is nothing to tell that two
+        // entries are the same episode.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"series\",Planet Earth\nhttp://a.test/1.mkv\n\
+            #EXTINF:-1 tvg-type=\"series\",Planet Earth\nhttp://b.test/1.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels.len(), 2, "{channels:?}");
+        for ch in &channels {
+            assert_eq!(ch.content_type, "series");
+            assert_eq!(
+                (ch.series_title.as_deref(), ch.season, ch.episode),
+                (None, None, None)
+            );
+            assert!(ch.sources.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_code_without_a_show_or_an_episode_number_is_not_an_episode() {
+        assert_eq!(parse_series_name("S01E02"), None);
+        assert_eq!(parse_series_name("Doctor Who S01Extras"), None);
+    }
 }

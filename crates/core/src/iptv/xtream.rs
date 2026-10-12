@@ -1105,6 +1105,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_live_list_still_lists_movies_and_series() {
+        let server = serve_panel(vec![route(
+            "action=get_live_streams ",
+            "503 Service Unavailable",
+            "",
+        )]);
+        let channels = fetch_all_channels(&panel(&server)).await.unwrap();
+        let ids: Vec<_> = channels.iter().map(|ch| ch.id.as_str()).collect();
+        assert_eq!(ids, ["vod-0", "ser-0"]);
+    }
+
+    #[tokio::test]
     async fn a_panel_with_nothing_to_list_is_an_invalid_response() {
         let server = serve_panel(vec![
             route("action=get_live_streams ", "200 OK", "[]"),
@@ -1184,7 +1196,7 @@ mod tests {
             }
         );
         assert_eq!(episodes[1].url, format!("{server}/series/u/p/901.mkv"));
-        let request = requests.recv().unwrap();
+        let request = requests.try_recv().unwrap();
         assert!(
             request.starts_with(
                 "GET /player_api.php?username=u&password=p&action=get_series_info&series_id=42 "
