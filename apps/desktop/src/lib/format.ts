@@ -15,3 +15,13 @@ export const formatTime = (seconds: number): string => {
 	}
 	return `${m}:${String(s).padStart(2, "0")}`;
 };
+
+/** A time of day such as "20:00", in local time and the user's clock format. */
+export const formatClock = (unix: number): string =>
+	new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** A file size such as "350 MB" or "1.2 GB". */
+export const formatBytes = (bytes: number): string =>
+	bytes >= 1_000_000_000
+		? `${(bytes / 1_000_000_000).toFixed(1)} GB`
+		: `${Math.round(bytes / 1_000_000)} MB`;

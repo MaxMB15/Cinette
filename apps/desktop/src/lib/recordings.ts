@@ -7,7 +7,8 @@
 // margins are a Settings choice kept in web storage, which can throw, so every
 // access is guarded and falls back to the defaults.
 
-import type { Channel, DownloadRecord, EpgProgram } from "./types";
+import { formatClock } from "./format";
+import type { Channel, DownloadRecord, EpgProgram, GuideProgram } from "./types";
 
 const MINUTE = 60;
 
@@ -59,12 +60,18 @@ export const writeMargins = (margins: RecordingMargins): void => {
 	} catch {}
 };
 
-/** What to record, in Unix seconds. */
+/** What to record, in Unix seconds, and the guide's program when there is one. */
 export interface RecordingWindow {
 	startAt: number;
 	endAt: number;
-	programTitle: string | null;
+	program: GuideProgram | null;
 }
+
+const guideProgram = (prog: EpgProgram): GuideProgram => ({
+	title: prog.title,
+	start: prog.startTime,
+	end: prog.endTime,
+});
 
 /**
  * "Record now" from `now`. It runs until the program on air ends, plus the
@@ -79,16 +86,20 @@ export const recordNowWindow = (
 		? {
 				startAt: now,
 				endAt: onAir.endTime + margins.after * MINUTE,
-				programTitle: onAir.title,
+				program: guideProgram(onAir),
 			}
-		: { startAt: now, endAt: now + NO_GUIDE_LENGTH, programTitle: null };
+		: { startAt: now, endAt: now + NO_GUIDE_LENGTH, program: null };
 
 /** A program from the guide, with the margins around it. */
 export const programWindow = (prog: EpgProgram, margins: RecordingMargins): RecordingWindow => ({
 	startAt: prog.startTime - margins.before * MINUTE,
 	endAt: prog.endTime + margins.after * MINUTE,
-	programTitle: prog.title,
+	program: guideProgram(prog),
 });
+
+/** Whether `window` runs longer than a recording can, as a long guide entry might. */
+export const isTooLong = (window: Pick<RecordingWindow, "startAt" | "endAt">): boolean =>
+	window.endAt - window.startAt > MAX_LENGTH_MINUTES * MINUTE;
 
 /**
  * A local date and time as a datetime-local input gives it, such as
@@ -118,8 +129,43 @@ export const rangeWindow = (start: string, minutes: number): RecordingWindow | n
 	const startAt = parseLocalDateTime(start);
 	if (startAt === null || !Number.isInteger(minutes)) return null;
 	if (minutes <= 0 || minutes > MAX_LENGTH_MINUTES) return null;
-	return { startAt, endAt: startAt + minutes * MINUTE, programTitle: null };
+	return { startAt, endAt: startAt + minutes * MINUTE, program: null };
 };
+
+/**
+ * The provider of the channel `channelId`, as the app works it out. A
+ * channel's id starts with its provider's id and a "-", and the longest
+ * such provider id wins.
+ */
+export const providerOf = (channelId: string, providerIds: string[]): string | undefined =>
+	providerIds
+		.filter((p) => channelId.startsWith(`${p}-`))
+		.reduce<
+			string | undefined
+		>((best, p) => (best !== undefined && best.length >= p.length ? best : p), undefined);
+
+/** Whether the channels `a` and `b` come from one known provider. */
+const sameProvider = (a: string, b: string, providerIds: string[]): boolean => {
+	const provider = providerOf(a, providerIds);
+	return provider !== undefined && provider === providerOf(b, providerIds);
+};
+
+/**
+ * Whether `rec` records `channel`. Channel ids follow each channel's place in
+ * the playlist, so a refresh can give an id to another channel. A
+ * recording's title is its channel's name, and the name decides within one
+ * provider, as in the app. Without a known provider the ids have to match.
+ */
+export const isRecordingOf = (
+	rec: DownloadRecord,
+	channel: Pick<Channel, "id" | "name">,
+	providerIds: string[]
+): boolean =>
+	rec.kind === "recording" &&
+	rec.title === channel.name &&
+	rec.sourceChannelId != null &&
+	(rec.sourceChannelId === channel.id ||
+		sameProvider(rec.sourceChannelId, channel.id, providerIds));
 
 /** A recording that's waiting to start or running. */
 export const isActiveRecording = (rec: DownloadRecord): boolean =>
@@ -141,18 +187,25 @@ export const overlapping = (
 
 /**
  * What the confirm step says about recordings at the same time, or null when
- * there are none. Two recordings of one channel become one.
+ * there are none. Two recordings of one channel become one. A recording from
+ * another provider uses another connection, so it doesn't count.
  */
 export const overlapWarning = (
 	window: Pick<RecordingWindow, "startAt" | "endAt">,
-	sourceChannelId: string,
-	records: DownloadRecord[]
+	channel: Pick<Channel, "id" | "name">,
+	records: DownloadRecord[],
+	providerIds: string[]
 ): string | null => {
 	const hits = overlapping(window, records);
-	if (hits.length === 0) return null;
-	const others = hits.filter((r) => r.sourceChannelId !== sourceChannelId);
+	const same = hits.filter((r) => isRecordingOf(r, channel, providerIds));
+	const others = hits.filter(
+		(r) =>
+			!same.includes(r) &&
+			r.sourceChannelId != null &&
+			sameProvider(r.sourceChannelId, channel.id, providerIds)
+	);
 	const notes: string[] = [];
-	if (others.length < hits.length) {
+	if (same.length > 0) {
 		notes.push("It overlaps a recording of this channel, so the two become one recording.");
 	}
 	if (others.length > 0) {
@@ -161,39 +214,28 @@ export const overlapWarning = (
 				? `a recording of ${others[0].title}`
 				: `${others.length} other recordings`;
 		notes.push(
-			`It overlaps ${what}. Many providers allow one stream at a time, so one of them may fail.`
+			`It overlaps ${what} from the same provider. Many providers allow one stream at a time, so one of them may fail.`
 		);
 	}
-	return notes.join(" ");
+	return notes.length > 0 ? notes.join(" ") : null;
 };
 
-/** The waiting or running recording of the live channel that covers `prog`. */
+/**
+ * Of `records`, the recordings of one channel, the waiting or running one
+ * that covers `prog`.
+ */
 export const recordingOfProgram = (
 	records: DownloadRecord[],
-	sourceChannelId: string,
 	prog: EpgProgram,
 	now: number
 ): DownloadRecord | undefined =>
 	records.find(
 		(r) =>
 			isActiveRecording(r) &&
-			r.sourceChannelId === sourceChannelId &&
 			r.startAt != null &&
 			r.endAt != null &&
 			r.startAt <= Math.max(prog.startTime, now) &&
 			r.endAt >= prog.endTime
-	);
-
-/** The recording that's running on the live channel, if any. */
-export const runningRecordingOf = (
-	records: DownloadRecord[],
-	sourceChannelId: string
-): DownloadRecord | undefined =>
-	records.find(
-		(r) =>
-			r.kind === "recording" &&
-			r.status === "recording" &&
-			r.sourceChannelId === sourceChannelId
 	);
 
 /** How far a running recording is, from 0 to 1, going by the clock. */
@@ -219,9 +261,6 @@ export const sortRecordings = (records: DownloadRecord[]): DownloadRecord[] =>
 		return isActiveRecording(a) ? diff : -diff;
 	});
 
-const timeOf = (unix: number): string =>
-	new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
 const startOfDay = (unix: number): number => {
 	const d = new Date(unix * 1000);
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -240,17 +279,36 @@ export const dayLabel = (unix: number, now: number): string => {
 	});
 };
 
-/** "Today, 20:00 to 21:05" for a recording's time. */
-export const formatWindow = (startAt: number, endAt: number, now: number): string =>
-	`${dayLabel(startAt, now)}, ${timeOf(startAt)} to ${timeOf(endAt)}`;
+/** "20:00" for a time on the day of `now`, or "Tomorrow, 01:00" for one on another day. */
+export const formatAt = (unix: number, now: number): string =>
+	startOfDay(unix) === startOfDay(now)
+		? formatClock(unix)
+		: `${dayLabel(unix, now)}, ${formatClock(unix)}`;
+
+/**
+ * "Today, 20:00 to 21:05" for a recording's time, or "Today, 23:30 to
+ * Tomorrow, 01:00" when it ends on another day.
+ */
+export const formatWindow = (startAt: number, endAt: number, now: number): string => {
+	const end =
+		startOfDay(endAt) === startOfDay(startAt)
+			? formatClock(endAt)
+			: `${dayLabel(endAt, now)}, ${formatClock(endAt)}`;
+	return `${dayLabel(startAt, now)}, ${formatClock(startAt)} to ${end}`;
+};
+
+/** What a recording records, such as "Evening News on City News". */
+export const recordingLabel = (rec: DownloadRecord): string =>
+	rec.programTitle ? `${rec.programTitle} on ${rec.title}` : rec.title;
 
 /** A short status for a recording in the list. */
-export const recordingStatus = (rec: DownloadRecord): string => {
+export const recordingStatus = (rec: DownloadRecord, now: number): string => {
 	switch (rec.status) {
 		case "scheduled":
-			return "Scheduled";
+			// After a stream fails, the app tries again a little later.
+			return rec.error ? "Trying again" : "Scheduled";
 		case "recording":
-			return rec.endAt != null ? `Recording until ${timeOf(rec.endAt)}` : "Recording";
+			return rec.endAt != null ? `Recording until ${formatAt(rec.endAt, now)}` : "Recording";
 		case "completed":
 			return rec.error ? "Ended early" : "Recorded";
 		case "missed":
@@ -261,6 +319,25 @@ export const recordingStatus = (rec: DownloadRecord): string => {
 			return "";
 	}
 };
+
+const STATUS_COLOR: Partial<Record<DownloadRecord["status"], string>> = {
+	recording: "text-red-400",
+	scheduled: "text-blue-400",
+	missed: "text-amber-500",
+	failed: "text-red-400",
+};
+
+/** The text color for a recording's status. Amber when it ended early or is trying again. */
+export const recordingStatusColor = (rec: DownloadRecord): string =>
+	(rec.status === "completed" || rec.status === "scheduled") && rec.error
+		? "text-amber-500"
+		: (STATUS_COLOR[rec.status] ?? "text-muted-foreground");
+
+/**
+ * A recording's error in plain words, which is its first line. The app puts
+ * what ffmpeg said on the lines after it, for a tooltip.
+ */
+export const errorSummary = (error: string): string => error.split("\n", 1)[0];
 
 /**
  * The name of a finished recording, from its file, such as
@@ -280,6 +357,6 @@ export const recordingChannel = (rec: DownloadRecord): Channel => ({
 	url: rec.destPath,
 	groupTitle: "Recordings",
 	isFavorite: false,
-	contentType: "movie",
+	contentType: "recording",
 	sources: [],
 });

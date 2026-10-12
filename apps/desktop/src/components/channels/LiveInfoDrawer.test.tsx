@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { LiveInfoDrawer } from "./LiveInfoDrawer";
 import { getEpgProgrammes, stopRecording } from "@/lib/tauri";
@@ -9,6 +9,7 @@ import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 
 let downloads: DownloadRecord[] = [];
 vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ downloads }) }));
+vi.mock("@/hooks/useChannels", () => ({ useProviderIds: () => ["xt-1"] }));
 vi.mock("@/lib/tauri", () => ({
 	getEpgProgrammes: vi.fn(),
 	scheduleRecording: vi.fn(() => Promise.resolve({})),
@@ -93,11 +94,48 @@ describe("LiveInfoDrawer recording", () => {
 		expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Record this program");
 	});
 
-	it("cancels the recording that covers a program", async () => {
+	it("waits for the guide before it offers to record now", () => {
+		vi.mocked(getEpgProgrammes).mockReturnValue(new Promise(() => {}));
+		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+		expect((screen.getByText("Record") as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("asks before it cancels the recording that covers a program, which may cover more", async () => {
+		downloads = [rec({ endAt: now + 150 * MIN, programTitle: "Late Show" })];
+		await renderDrawer();
+		fireEvent.click(screen.getByLabelText("Cancel the recording of Late Show"));
+		expect(stopRecording).not.toHaveBeenCalled();
+		const dialog = within(screen.getByRole("dialog", { name: "Cancel this recording?" }));
+		expect(
+			dialog.getByText(/^This cancels the whole recording of Late Show on City News, /)
+		).toBeDefined();
+		fireEvent.click(dialog.getByText("Cancel recording"));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(stopRecording).toHaveBeenCalledWith("rec-1");
+	});
+
+	it("keeps the recording when the user changes their mind", async () => {
 		downloads = [rec()];
 		await renderDrawer();
 		fireEvent.click(screen.getByLabelText("Cancel the recording of Late Show"));
-		expect(stopRecording).toHaveBeenCalledWith("rec-1");
+		fireEvent.click(within(screen.getByRole("dialog")).getByText("Keep"));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(stopRecording).not.toHaveBeenCalled();
+	});
+
+	it("finds the channel's recording after a refresh gave the channel another id", async () => {
+		downloads = [
+			rec({ sourceChannelId: "xt-1-xt-4", status: "recording", startAt: now - MIN }),
+		];
+		await renderDrawer();
+		expect(screen.getByText("Stop recording")).toBeDefined();
+	});
+
+	it("leaves out another channel's recording that took over this channel's id", async () => {
+		downloads = [rec({ title: "Sports One", status: "recording", startAt: now - MIN })];
+		await renderDrawer();
+		expect(screen.queryByText("Stop recording")).toBeNull();
+		expect(screen.getByLabelText("Record Late Show")).toBeDefined();
 	});
 
 	it("offers to stop the channel's running recording", async () => {

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 interface ConfirmDialogProps {
 	open: boolean;
@@ -10,6 +11,8 @@ interface ConfirmDialogProps {
 	confirmLabel: string;
 	onConfirm: () => void;
 	onCancel: () => void;
+	/** The label of the button that closes the dialog without acting. */
+	cancelLabel?: string;
 	/** A red confirm button, for actions that delete something. On by default. */
 	destructive?: boolean;
 	confirmDisabled?: boolean;
@@ -17,27 +20,46 @@ interface ConfirmDialogProps {
 	children?: ReactNode;
 }
 
-export const ConfirmDialog = ({
-	open,
+/**
+ * A modal that asks before an action. Focus moves into it when it opens and
+ * stays there, Escape cancels it, and keys pressed in it don't reach what is
+ * behind it, such as the player's shortcuts.
+ */
+export const ConfirmDialog = (props: ConfirmDialogProps) =>
+	props.open ? <ConfirmPanel {...props} /> : null;
+
+/** Mounted only while the dialog is open, so the focus trap starts on each open. */
+const ConfirmPanel = ({
 	title,
 	message,
 	confirmLabel,
 	onConfirm,
 	onCancel,
+	cancelLabel = "Cancel",
 	destructive = true,
 	confirmDisabled = false,
 	children,
 }: ConfirmDialogProps) => {
-	if (!open) return null;
+	const dialogRef = useRef<HTMLDivElement>(null);
+	useFocusTrap(dialogRef);
 	return (
 		<div
 			className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
 			onClick={onCancel}
+			onKeyDown={(e) => {
+				// The focus trap listens for Tab on the document, so Tab carries on.
+				if (e.key === "Tab") return;
+				e.stopPropagation();
+				if (e.key === "Escape") onCancel();
+			}}
 		>
 			<div
+				ref={dialogRef}
 				role="dialog"
+				aria-modal="true"
 				aria-label={title}
-				className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl"
+				tabIndex={-1}
+				className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl outline-none"
 				onClick={(e) => e.stopPropagation()}
 			>
 				<h3 className="text-sm font-semibold mb-1.5">{title}</h3>
@@ -48,7 +70,7 @@ export const ConfirmDialog = ({
 						className="px-3 py-1.5 text-xs rounded-md hover:bg-accent"
 						onClick={onCancel}
 					>
-						Cancel
+						{cancelLabel}
 					</button>
 					<button
 						className={`px-3 py-1.5 text-xs rounded-md disabled:opacity-50 disabled:pointer-events-none ${

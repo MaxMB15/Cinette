@@ -7,7 +7,9 @@ import { RecordingsSection } from "./RecordingsSection";
 import { removeDownload, stopRecording } from "@/lib/tauri";
 import type { DownloadRecord } from "@/lib/types";
 
-vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ retentionDays: null }) }));
+vi.mock("@/hooks/useDownloads", () => ({
+	useDownloads: () => ({ downloads: [], retentionDays: null }),
+}));
 vi.mock("@/lib/tauri", () => ({
 	removeDownload: vi.fn(() => Promise.resolve()),
 	stopRecording: vi.fn(() => Promise.resolve()),
@@ -68,20 +70,24 @@ describe("RecordingsSection", () => {
 			status: "recording",
 			startAt: now - 30 * MIN,
 			endAt: now + 30 * MIN,
+			downloadedBytes: 350_000_000,
 		});
 		render(<RecordingsSection recordings={[done, missed, rec(), running]} onPlay={vi.fn()} />);
 		const statuses = rows().map((r) => r.textContent ?? "");
-		expect(statuses[0]).toMatch(/Recording until/);
+		expect(statuses[0]).toMatch(/Recording until .+, 350 MB/);
 		expect(statuses[1]).toMatch(/Scheduled/);
 		expect(statuses[2]).toMatch(/Missed/);
 		expect(statuses[3]).toMatch(/Recorded/);
 		expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
 	});
 
-	it("cancels a scheduled recording", () => {
+	it("asks before it cancels a scheduled recording", async () => {
 		render(<RecordingsSection recordings={[rec()]} onPlay={vi.fn()} />);
 		fireEvent.click(screen.getByText("Cancel"));
-		expect(stopRecording).toHaveBeenCalledWith("rec-1");
+		expect(stopRecording).not.toHaveBeenCalled();
+		const dialog = within(screen.getByRole("dialog", { name: "Cancel this recording?" }));
+		fireEvent.click(dialog.getByText("Cancel recording"));
+		await waitFor(() => expect(stopRecording).toHaveBeenCalledWith("rec-1"));
 	});
 
 	it("asks before it stops a running recording", async () => {
@@ -113,10 +119,18 @@ describe("RecordingsSection", () => {
 		await waitFor(() => expect(removeDownload).toHaveBeenCalledWith("rec-done"));
 	});
 
-	it("says why a recording ended early", () => {
-		const early = { ...done, error: "The stream stopped before the end." };
-		render(<RecordingsSection recordings={[early]} onPlay={vi.fn()} />);
+	it("says why a recording ended early, with what ffmpeg said in a tooltip", () => {
+		const error = "The stream stopped before the end.\nConnection reset by peer";
+		render(<RecordingsSection recordings={[{ ...done, error }]} onPlay={vi.fn()} />);
 		expect(screen.getByText("Ended early")).toBeDefined();
+		const reason = screen.getByText("The stream stopped before the end.");
+		expect(reason.getAttribute("title")).toBe(error);
+	});
+
+	it("says when it's trying a failed recording again", () => {
+		const retrying = rec({ startAt: now + MIN, error: "The stream stopped before the end." });
+		render(<RecordingsSection recordings={[retrying]} onPlay={vi.fn()} />);
+		expect(screen.getByText("Trying again")).toBeDefined();
 		expect(screen.getByText("The stream stopped before the end.")).toBeDefined();
 	});
 

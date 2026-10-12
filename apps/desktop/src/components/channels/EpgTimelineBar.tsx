@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { formatClock } from "@/lib/format";
 import type { EpgProgram } from "@/lib/types";
 
 export const WINDOW_PAST = 3600; // default 1 hour before now
 export const WINDOW_FUTURE = 7200; // default 2 hours after now
 
-export const formatHHMM = (unix: number): string =>
-	new Date(unix * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** A Unix time in seconds as a local clock time, such as 14:30. */
+export const formatHHMM = formatClock;
 
 /** Returns Unix timestamps (seconds) of every 30-minute boundary in [windowStart, windowEnd). */
 export const getGridMarks = (windowStart: number, windowEnd: number): number[] => {

@@ -3,15 +3,19 @@
 
 import { useState } from "react";
 import { Disc, Play, Trash2 } from "lucide-react";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
+import { formatBytes } from "@/lib/format";
 import {
+	errorSummary,
 	formatWindow,
 	recordingChannel,
 	recordingProgress,
 	recordingStatus,
+	recordingStatusColor,
 	sortRecordings,
 } from "@/lib/recordings";
-import { removeDownload, stopRecording } from "@/lib/tauri";
+import { removeDownload } from "@/lib/tauri";
 import type { Channel, DownloadRecord } from "@/lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { StopRecordingDialog } from "./RecordDialog";
@@ -22,18 +26,6 @@ interface RecordingsSectionProps {
 	recordings: DownloadRecord[];
 	onPlay: (channel: Channel) => void;
 }
-
-const fmtSize = (bytes: number) =>
-	bytes >= 1_000_000_000
-		? `${(bytes / 1_000_000_000).toFixed(1)} GB`
-		: `${Math.round(bytes / 1_000_000)} MB`;
-
-const STATUS_COLOR: Partial<Record<DownloadRecord["status"], string>> = {
-	recording: "text-red-400",
-	scheduled: "text-blue-400",
-	missed: "text-amber-500",
-	failed: "text-red-400",
-};
 
 /** The Recordings list in the Downloads tab. */
 export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps) => {
@@ -55,10 +47,6 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 			{error && <p className="text-xs text-red-400 mb-2">{error}</p>}
 			<ul className="flex flex-col gap-1.5">
 				{sortRecordings(recordings).map((rec) => {
-					const color =
-						rec.status === "completed" && rec.error
-							? "text-amber-500"
-							: (STATUS_COLOR[rec.status] ?? "text-muted-foreground");
 					const when =
 						rec.startAt != null && rec.endAt != null
 							? formatWindow(rec.startAt, rec.endAt, now)
@@ -87,10 +75,14 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 								</p>
 								<p className="text-xs text-muted-foreground truncate">
 									{when && <span>{when}. </span>}
-									<span className={color}>{recordingStatus(rec)}</span>
-									{rec.status === "completed" && rec.downloadedBytes > 0 && (
-										<span>, {fmtSize(rec.downloadedBytes)}</span>
-									)}
+									<span className={recordingStatusColor(rec)}>
+										{recordingStatus(rec, now)}
+									</span>
+									{/* A running recording's size grows as it goes. */}
+									{(rec.status === "completed" || rec.status === "recording") &&
+										rec.downloadedBytes > 0 && (
+											<span>, {formatBytes(rec.downloadedBytes)}</span>
+										)}
 								</p>
 								{rec.status === "recording" && (
 									<div
@@ -111,9 +103,12 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 										/>
 									</div>
 								)}
-								{rec.error && rec.status !== "scheduled" && (
-									<p className="text-xs text-muted-foreground/80 mt-0.5">
-										{rec.error}
+								{rec.error && (
+									<p
+										className="text-xs text-muted-foreground/80 mt-0.5 truncate"
+										title={rec.error}
+									>
+										{errorSummary(rec.error)}
 									</p>
 								)}
 								{rec.status === "completed" && (
@@ -122,9 +117,7 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 							</div>
 							<div className="flex items-center gap-1 shrink-0">
 								{rec.status === "scheduled" && (
-									<RowButton onClick={() => run(stopRecording(rec.id))}>
-										Cancel
-									</RowButton>
+									<RowButton onClick={() => setStopping(rec)}>Cancel</RowButton>
 								)}
 								{rec.status === "recording" && (
 									<RowButton onClick={() => setStopping(rec)}>Stop</RowButton>
@@ -173,14 +166,12 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 	);
 };
 
-const RowButton = ({
-	children,
-	...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { children: React.ReactNode }) => (
-	<button
+/** A small button in a recording's row. */
+const RowButton = (props: ButtonProps) => (
+	<Button
+		variant="ghost"
+		size="sm"
+		className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground"
 		{...props}
-		className="flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-	>
-		{children}
-	</button>
+	/>
 );

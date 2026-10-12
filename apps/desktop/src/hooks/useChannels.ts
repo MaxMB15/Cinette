@@ -348,3 +348,9 @@ export const useChannels = (): ChannelsContextValue => {
 	if (!ctx) throw new Error("useChannels must be used within a ChannelsProvider");
 	return ctx;
 };
+
+/** The ids of the user's providers, which tell which provider a channel is from. */
+export const useProviderIds = (): string[] => {
+	const { providers } = useChannels();
+	return useMemo(() => providers.map((p) => p.id), [providers]);
+};

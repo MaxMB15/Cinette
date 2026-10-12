@@ -5,11 +5,12 @@ import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-li
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { RecordDialog } from "./RecordDialog";
 import { scheduleRecording, stopRecording } from "@/lib/tauri";
-import { toLocalInputValue } from "@/lib/recordings";
+import { formatWindow, toLocalInputValue } from "@/lib/recordings";
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
 
 let downloads: DownloadRecord[] = [];
 vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ downloads }) }));
+vi.mock("@/hooks/useChannels", () => ({ useProviderIds: () => ["xt-1"] }));
 vi.mock("@/lib/tauri", () => ({
 	scheduleRecording: vi.fn(() => Promise.resolve({})),
 	stopRecording: vi.fn(() => Promise.resolve()),
@@ -88,15 +89,14 @@ describe("RecordDialog", () => {
 		).toBeDefined();
 		fireEvent.click(dialog().getByText("Record"));
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
-		expect(scheduleRecording).toHaveBeenCalledWith(
-			"xt-1-xt-0",
-			NOW,
-			NOW + 25 * MIN,
-			"Evening News"
-		);
+		expect(scheduleRecording).toHaveBeenCalledWith("xt-1-xt-0", NOW, NOW + 25 * MIN, {
+			title: "Evening News",
+			start: NOW - 10 * MIN,
+			end: NOW + 20 * MIN,
+		});
 	});
 
-	it("records a program with the margins and warns about another channel at the same time", async () => {
+	it("records a program with the margins and warns about another channel of its provider", async () => {
 		downloads = [rec()];
 		const onClose = vi.fn();
 		const p = prog(NOW + 60 * MIN, NOW + 120 * MIN, "Late Show");
@@ -107,15 +107,30 @@ describe("RecordDialog", () => {
 				onClose={onClose}
 			/>
 		);
-		expect(dialog().getByText(/^It overlaps a recording of Sports One\./)).toBeDefined();
+		expect(
+			dialog().getByText(/^It overlaps a recording of Sports One from the same provider\./)
+		).toBeDefined();
 		fireEvent.click(dialog().getByText("Record"));
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
 		expect(scheduleRecording).toHaveBeenCalledWith(
 			"xt-1-xt-0",
 			NOW + 58 * MIN,
 			NOW + 125 * MIN,
-			"Late Show"
+			{ title: "Late Show", start: NOW + 60 * MIN, end: NOW + 120 * MIN }
 		);
+	});
+
+	it("won't record a program that runs longer than a recording can", () => {
+		const p = prog(NOW + 60 * MIN, NOW + 14 * 60 * MIN, "Marathon");
+		render(
+			<RecordDialog
+				channel={channel}
+				request={{ type: "program", program: p }}
+				onClose={() => {}}
+			/>
+		);
+		expect(dialog().getByText("A recording can be up to 12 hours long.")).toBeDefined();
+		expect((dialog().getByText("Record") as HTMLButtonElement).disabled).toBe(true);
 	});
 
 	it("records a time range once it has a start and a length", async () => {
@@ -162,7 +177,7 @@ describe("RecordDialog", () => {
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
-	it("asks before it stops a recording", async () => {
+	it("asks before it stops a recording, naming its whole time", async () => {
 		const onClose = vi.fn();
 		const running = rec({ id: "rec-9", status: "recording", title: "City News" });
 		render(
@@ -172,11 +187,67 @@ describe("RecordDialog", () => {
 				onClose={onClose}
 			/>
 		);
+		const when = formatWindow(NOW + 30 * MIN, NOW + 90 * MIN, NOW);
 		expect(
-			dialog().getByText("The recording of City News keeps what it has so far.")
+			dialog().getByText(
+				`This stops the whole recording of City News, ${when}. What it recorded so far stays.`
+			)
 		).toBeDefined();
 		fireEvent.click(dialog().getByText("Stop"));
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
 		expect(stopRecording).toHaveBeenCalledWith("rec-9");
+	});
+
+	it("asks before it cancels a waiting recording, and stops once however often it's clicked", async () => {
+		const onClose = vi.fn();
+		const waiting = rec({ title: "City News", programTitle: "Late Show" });
+		render(
+			<RecordDialog
+				channel={channel}
+				request={{ type: "stop", recording: waiting }}
+				onClose={onClose}
+			/>
+		);
+		const when = formatWindow(NOW + 30 * MIN, NOW + 90 * MIN, NOW);
+		expect(dialog().getByText("Cancel this recording?")).toBeDefined();
+		expect(
+			dialog().getByText(
+				`This cancels the whole recording of Late Show on City News, ${when}.`
+			)
+		).toBeDefined();
+		const cancel = dialog().getByText("Cancel recording");
+		fireEvent.click(cancel);
+		fireEvent.click(cancel);
+		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		expect(stopRecording).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes by the recording's latest state", () => {
+		const asked = rec({ status: "recording" });
+		downloads = [{ ...asked, status: "completed" }];
+		render(
+			<RecordDialog
+				channel={channel}
+				request={{ type: "stop", recording: asked }}
+				onClose={() => {}}
+			/>
+		);
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("stays open with the reason when stopping fails", async () => {
+		vi.mocked(stopRecording).mockRejectedValueOnce("The recording couldn't be found.");
+		const onClose = vi.fn();
+		render(
+			<RecordDialog
+				channel={channel}
+				request={{ type: "stop", recording: rec({ status: "recording" }) }}
+				onClose={onClose}
+			/>
+		);
+		fireEvent.click(dialog().getByText("Stop"));
+		expect(await screen.findByText("The recording couldn't be found.")).toBeDefined();
+		expect(onClose).not.toHaveBeenCalled();
+		expect((dialog().getByText("Stop") as HTMLButtonElement).disabled).toBe(false);
 	});
 });

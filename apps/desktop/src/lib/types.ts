@@ -10,7 +10,8 @@ export interface Channel {
 	tvgId?: string;
 	tvgName?: string;
 	isFavorite: boolean;
-	contentType: "live" | "movie" | "series";
+	/** A "recording" is a finished recording of a live channel, played from its file. */
+	contentType: "live" | "movie" | "series" | "recording";
 	sources: string[];
 	/**
 	 * Frontend-only: the full ordered source list, captured when a non-default
@@ -236,6 +237,17 @@ export interface DownloadRecord {
 	endAt?: number | null;
 	/** For a recording, the program or programs it records. */
 	programTitle?: string | null;
+	/** For a recording of a program, when the program itself starts, in Unix seconds. */
+	programStart?: number | null;
+	/** For a recording of a program, when the program itself ends, in Unix seconds. */
+	programEnd?: number | null;
+}
+
+/** A program from the guide that a recording is for, with its times in Unix seconds. */
+export interface GuideProgram {
+	title: string;
+	start: number;
+	end: number;
 }
 
 /** Aggregate download state for a series card (computed in the hook). */

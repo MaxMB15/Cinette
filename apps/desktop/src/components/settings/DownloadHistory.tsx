@@ -3,22 +3,29 @@
 
 import { X } from "lucide-react";
 import { useDownloads } from "@/hooks/useDownloads";
+import { useNow } from "@/hooks/useNow";
+import { formatBytes } from "@/lib/format";
+import { errorSummary, recordingStatus, recordingStatusColor } from "@/lib/recordings";
 import { deleteAt, deleteLabel } from "@/lib/retention";
 import type { DownloadRecord } from "@/lib/types";
 
-const fmtBytes = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).toFixed(0)} MB`);
+const fmtBytes = (b: number | null) => (b == null ? "—" : formatBytes(b));
 const fmtRate = (b: number | null) => (b == null ? "—" : `${(b / 1_000_000).toFixed(1)} MB/s`);
 const fmtTime = (t: number | null) => (t == null ? "—" : new Date(t * 1000).toLocaleString());
 
-const statusCell = (d: DownloadRecord) => {
-	if (d.status === "completed" && d.kind === "recording" && d.error)
-		return <span className="text-amber-500">Ended early. {d.error}</span>;
+const statusCell = (d: DownloadRecord, now: number) => {
+	if (d.kind === "recording") {
+		// The first line of an error is in plain words, and what ffmpeg said follows it.
+		return (
+			<span className={recordingStatusColor(d)} title={d.error ?? undefined}>
+				{recordingStatus(d, now)}
+				{d.error && `. ${errorSummary(d.error)}`}
+			</span>
+		);
+	}
 	if (d.status === "completed") return <span className="text-emerald-500">Done</span>;
 	if (d.status === "failed")
 		return <span className="text-red-400">Failed{d.error ? `. ${d.error}` : ""}</span>;
-	if (d.status === "missed") return <span className="text-amber-500">Missed</span>;
-	if (d.status === "scheduled") return <span className="text-muted-foreground">Scheduled</span>;
-	if (d.status === "recording") return <span className="text-red-400">Recording</span>;
 	if (d.status === "downloading") {
 		const pct = d.totalBytes ? Math.round((d.downloadedBytes / d.totalBytes) * 100) : null;
 		return <span className="text-blue-400">{pct == null ? "…" : `${pct}%`}</span>;
@@ -36,6 +43,7 @@ const deletesCell = (d: DownloadRecord, days: number | null) => {
 
 export const DownloadHistory = () => {
 	const { downloads, retentionDays } = useDownloads();
+	const now = useNow();
 
 	if (downloads.length === 0) {
 		return <p className="text-xs text-muted-foreground">No downloads yet.</p>;
@@ -67,9 +75,16 @@ export const DownloadHistory = () => {
 									: fmtBytes(d.downloadedBytes)}
 							</td>
 							<td className="pr-2 whitespace-nowrap">{fmtRate(d.avgRateBps)}</td>
-							<td className="pr-2 whitespace-nowrap">{fmtTime(d.createdAt)}</td>
+							<td className="pr-2 whitespace-nowrap">
+								{/* A recording starts at its time, not when it was set up. */}
+								{fmtTime(
+									d.kind === "recording"
+										? (d.startAt ?? d.createdAt)
+										: d.createdAt
+								)}
+							</td>
 							<td className="pr-2 whitespace-nowrap">{fmtTime(d.finishedAt)}</td>
-							<td>{statusCell(d)}</td>
+							<td>{statusCell(d, now)}</td>
 							{retentionDays !== null && (
 								<td className="pl-2 whitespace-nowrap text-muted-foreground">
 									{deletesCell(d, retentionDays)}
