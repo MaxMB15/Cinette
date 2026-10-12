@@ -467,28 +467,16 @@ mod tests {
         assert!(data.imdb_votes.is_none());
     }
 
-    #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = OmdbError::from(crate::http::error_with_url("unix:/?apikey=SECRET"));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
-    }
-
     // --- Lookups against a local server ---
 
-    fn reply(status: &str, body: serde_json::Value) -> (String, String) {
-        (status.to_string(), body.to_string())
-    }
-
-    fn not_found() -> serde_json::Value {
-        json!({ "Response": "False", "Error": "Movie not found!" })
-    }
+    /// What OMDb sends for a title it doesn't know.
+    const NOT_FOUND: &str = r#"{"Response":"False","Error":"Movie not found!"}"#;
 
     /// Looks `title` up on a local server that gives `replies` in turn, and
     /// returns the result with the request line of each lookup sent.
     async fn look_up(
         title: &str,
-        replies: Vec<(String, String)>,
+        replies: &[(&str, &str)],
     ) -> (Result<OmdbData, OmdbError>, Vec<String>) {
         let (server, requests) = test_server::serve_in_order(replies);
         let client = test_server::client();
@@ -504,7 +492,7 @@ mod tests {
     async fn a_title_with_a_year_is_looked_up_without_it_first() {
         let (result, lines) = look_up(
             "The Dark Knight (2008)",
-            vec![reply("200 OK", full_response())],
+            &[("200 OK", &full_response().to_string())],
         )
         .await;
         assert_eq!(
@@ -521,9 +509,9 @@ mod tests {
     async fn the_full_title_is_tried_when_omdb_does_not_know_the_bare_one() {
         let (result, lines) = look_up(
             "Heat (1995)",
-            vec![
-                reply("200 OK", not_found()),
-                reply("200 OK", full_response()),
+            &[
+                ("200 OK", NOT_FOUND),
+                ("200 OK", &full_response().to_string()),
             ],
         )
         .await;
@@ -541,7 +529,7 @@ mod tests {
     async fn a_title_unknown_with_and_without_its_year_is_an_api_error() {
         let (result, lines) = look_up(
             "Heat (1995)",
-            vec![reply("200 OK", not_found()), reply("200 OK", not_found())],
+            &[("200 OK", NOT_FOUND), ("200 OK", NOT_FOUND)],
         )
         .await;
         assert!(
@@ -555,9 +543,9 @@ mod tests {
     async fn a_failed_lookup_is_not_retried_with_the_full_title() {
         let (result, lines) = look_up(
             "Heat (1995)",
-            vec![
-                ("503 Service Unavailable".into(), "<html>down</html>".into()),
-                reply("200 OK", full_response()),
+            &[
+                ("503 Service Unavailable", "<html>down</html>"),
+                ("200 OK", &full_response().to_string()),
             ],
         )
         .await;
@@ -572,7 +560,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, OmdbError::Http(_)), "{err:?}");
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
     }
 }

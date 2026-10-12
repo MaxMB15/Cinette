@@ -538,8 +538,7 @@ mod tests {
         let err = request_error(crate::http::error_with_url(
             "unix:/v1beta/models?key=SECRET",
         ));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        crate::http::test_server::assert_hides(&err, "SECRET");
     }
 
     #[test]

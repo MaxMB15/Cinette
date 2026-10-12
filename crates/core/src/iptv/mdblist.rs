@@ -421,32 +421,19 @@ mod tests {
         assert!(data.letterboxd_rating.is_none());
     }
 
-    #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = MdbListError::from(crate::http::error_with_url("unix:/api/?apikey=SECRET"));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
-    }
-
     // --- Lookups against a local server ---
-
-    /// Looks a film up on a local server that answers with `status` and
-    /// `body`, and returns the result with the request the server read.
-    async fn look_up(status: &str, body: String) -> (Result<MdbListData, MdbListError>, String) {
-        let (server, requests) = test_server::serve_once_recording(status, body);
-        let url = format!("{server}/api/");
-        let client = test_server::client();
-        let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
-        (result, requests.try_recv().unwrap())
-    }
 
     #[tokio::test]
     async fn a_lookup_sends_the_id_type_and_key_and_reads_the_ratings() {
-        let (result, request) = look_up("200 OK", full_response().to_string()).await;
+        let (server, client, requests) =
+            test_server::serve_once_with_client("200 OK", full_response().to_string());
+        let url = format!("{server}/api/");
+        let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
         assert_eq!(
             result.unwrap(),
             parse_mdblist_response(full_response()).unwrap()
         );
+        let request = requests.try_recv().unwrap();
         assert!(
             request.starts_with("GET /api/?apikey=KEY&i=tt0468569&m=movie HTTP/1.1"),
             "{request}"
@@ -455,7 +442,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_reply_that_is_not_json_is_an_http_error() {
-        let (result, _) = look_up("502 Bad Gateway", "<html>bad gateway</html>".into()).await;
+        let (server, client, _) =
+            test_server::serve_once_with_client("502 Bad Gateway", "<html>bad gateway</html>");
+        let url = format!("{server}/api/");
+        let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
         assert!(matches!(result, Err(MdbListError::Http(_))), "{result:?}");
     }
 
@@ -466,7 +456,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, MdbListError::Http(_)), "{err:?}");
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
     }
 }

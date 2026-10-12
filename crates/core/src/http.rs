@@ -148,7 +148,18 @@ pub mod test_server {
         status: &str,
         body: impl Into<String>,
     ) -> (String, mpsc::Receiver<String>) {
-        serve_in_order(vec![(status.to_string(), body.into())])
+        let body: String = body.into();
+        serve_in_order(&[(status, &body)])
+    }
+
+    /// Like [`serve_once_recording`], with a [`client`] to reach the server.
+    /// Returns the base URL, the client and the request the server read.
+    pub fn serve_once_with_client(
+        status: &str,
+        body: impl Into<String>,
+    ) -> (String, reqwest::Client, mpsc::Receiver<String>) {
+        let (url, requests) = serve_once_recording(status, body);
+        (url, client(), requests)
     }
 
     /// Answers one request with each status and body in turn, and stops after
@@ -156,7 +167,11 @@ pub mod test_server {
     /// request gets no reply and doesn't use one up, so wait on the requests
     /// with a timeout. Returns the base URL and the requests the server read,
     /// in order.
-    pub fn serve_in_order(replies: Vec<(String, String)>) -> (String, mpsc::Receiver<String>) {
+    pub fn serve_in_order(replies: &[(&str, &str)]) -> (String, mpsc::Receiver<String>) {
+        let replies: Vec<(String, String)> = replies
+            .iter()
+            .map(|&(status, body)| (status.to_string(), body.to_string()))
+            .collect();
         let (listener, url) = bind();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -223,6 +238,14 @@ pub mod test_server {
             .expect("build a test client")
     }
 
+    /// Asserts that `secret` shows up in neither the `Display` nor the
+    /// `Debug` text of `err`.
+    #[track_caller]
+    pub fn assert_hides(err: &(impl std::fmt::Debug + std::fmt::Display), secret: &str) {
+        assert!(!err.to_string().contains(secret), "{err}");
+        assert!(!format!("{err:?}").contains(secret), "{err:?}");
+    }
+
     /// A listener on a free loopback port, and its base URL.
     fn bind() -> (TcpListener, String) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
@@ -282,7 +305,7 @@ pub mod test_server {
 
     /// The value of the header called `name` in a request's headers, matched
     /// in any case.
-    fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    pub(crate) fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
         head.lines()
             .filter_map(|line| line.split_once(':'))
             .find(|(key, _)| key.trim().eq_ignore_ascii_case(name))
@@ -369,9 +392,9 @@ mod tests {
 
     #[tokio::test]
     async fn the_test_server_answers_in_order_and_records_each_request() {
-        let (url, requests) = test_server::serve_in_order(vec![
-            ("200 OK".into(), "first".into()),
-            ("500 Internal Server Error".into(), "second".into()),
+        let (url, requests) = test_server::serve_in_order(&[
+            ("200 OK", "first"),
+            ("500 Internal Server Error", "second"),
         ]);
         assert_eq!(get(format!("{url}/a")).await, (200, "first".into()));
         assert_eq!(get(format!("{url}/b")).await, (500, "second".into()));

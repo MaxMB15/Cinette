@@ -495,7 +495,12 @@ pub async fn fetch_xtream_series_episodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server::{
+        self, assert_hides, route, serve_in_order, serve_once, serve_once_recording, serve_routes,
+        Route,
+    };
     use serde_json::json;
+    use std::sync::OnceLock;
 
     // ── EPG URL ───────────────────────────────────────────────────────
 
@@ -868,15 +873,6 @@ mod tests {
         assert!(series.category_id.is_none());
     }
 
-    #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = XtreamError::from(crate::http::error_with_url(
-            "unix:/player_api.php?username=u&password=SECRET",
-        ));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
-    }
-
     fn categories() -> HashMap<String, String> {
         HashMap::from([("3".to_string(), "News".to_string())])
     }
@@ -964,11 +960,6 @@ mod tests {
 
     // ── Talking to a panel ─────────────────────────────────────────────
 
-    use crate::http::test_server::{
-        route, serve_in_order, serve_once, serve_once_recording, serve_routes, Route,
-    };
-    use std::sync::OnceLock;
-
     const AUTH_OK: &str = r#"{"user_info":{"auth":1,"status":"Active"}}"#;
 
     /// A client for a local test server, shared across tests like the real one.
@@ -976,7 +967,7 @@ mod tests {
         static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
         XtreamClient {
             credentials: XtreamCredentials::new(server, "u", "p"),
-            client: CLIENT.get_or_init(crate::http::test_server::client),
+            client: CLIENT.get_or_init(test_server::client),
         }
     }
 
@@ -1048,12 +1039,9 @@ mod tests {
 
     #[tokio::test]
     async fn replies_that_are_not_json_are_network_errors() {
-        let (server, _) = serve_in_order(vec![
-            (
-                "503 Service Unavailable".into(),
-                "<html>Maintenance</html>".into(),
-            ),
-            ("200 OK".into(), "<html>Maintenance</html>".into()),
+        let (server, _) = serve_in_order(&[
+            ("503 Service Unavailable", "<html>Maintenance</html>"),
+            ("200 OK", "<html>Maintenance</html>"),
         ]);
         let client = panel(&server);
         let login = client.authenticate().await.unwrap_err();
@@ -1207,16 +1195,16 @@ mod tests {
 
     #[tokio::test]
     async fn series_info_without_a_name_or_cover_keeps_the_list_entry() {
-        let (server, _) = serve_in_order(vec![
+        let (server, _) = serve_in_order(&[
             (
-                "200 OK".into(),
-                json!({
+                "200 OK",
+                &json!({
                     "info": { "name": "", "cover": "" },
                     "episodes": { "1": [{ "id": 5, "episode_num": 1 }] }
                 })
                 .to_string(),
             ),
-            ("200 OK".into(), json!({ "info": null }).to_string()),
+            ("200 OK", &json!({ "info": null }).to_string()),
         ]);
         let client = panel(&server);
         let logo = Some("http://img.example.test/wire.jpg");
@@ -1254,8 +1242,7 @@ mod tests {
                 .unwrap_err();
         for err in [channels, episodes] {
             assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
-            assert!(!err.to_string().contains("SECRET"), "{err}");
-            assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+            assert_hides(&err, "SECRET");
         }
     }
 }
