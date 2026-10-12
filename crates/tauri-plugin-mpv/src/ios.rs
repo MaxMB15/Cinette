@@ -294,7 +294,7 @@ fn set_artwork(url: Option<String>) {
         let result = fetch_artwork(&url).await;
         if let Err(e) = &result {
             tracing::debug!(
-                "[MPV iOS] no lock screen artwork from {}: {e}",
+                "[MPV ios] no lock screen artwork from {}: {e}",
                 origin_for_log(&url)
             );
         }

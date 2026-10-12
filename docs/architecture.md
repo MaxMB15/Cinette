@@ -135,8 +135,8 @@ desktop, so `lib/tauri.ts`, `useMpv` and the React player controls work unchange
 - The channel logo on the lock screen. `ios.rs` downloads it with `reqwest` and hands
   the bytes to Swift, because App Transport Security blocks plain HTTP requests made
   through URLSession and most IPTV logos are on HTTP servers. `artwork.rs` decides
-  when a logo downloads, shows or is dropped, and keeps the last few, so it's tested
-  on every platform.
+  when a logo downloads, shows or is dropped, and keeps the last few. It builds on
+  every platform, so its tests run on desktop too.
 - `vid=no` while the app is in the background, because iOS ends apps that use Metal
   there, and `vid=auto` when it comes back. Both are engine calls that only `ios.rs`
   makes.

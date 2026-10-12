@@ -157,9 +157,9 @@ mod tests {
     }
 
     /// What one call handed to the lock screen, None meaning a clear.
-    type Shown = Vec<Option<Vec<u8>>>;
+    type Handed = Vec<Option<Vec<u8>>>;
 
-    fn select(artwork: &mut LockScreenArtwork, url: Option<&str>) -> (Select, Shown) {
+    fn select(artwork: &mut LockScreenArtwork, url: Option<&str>) -> (Select, Handed) {
         let mut shown = Vec::new();
         let next = artwork.select(url.map(String::from), |bytes| {
             shown.push(bytes.map(<[u8]>::to_vec));
@@ -167,7 +167,7 @@ mod tests {
         (next, shown)
     }
 
-    fn finish(artwork: &mut LockScreenArtwork, url: &str, bytes: Option<Vec<u8>>) -> Shown {
+    fn finish(artwork: &mut LockScreenArtwork, url: &str, bytes: Option<Vec<u8>>) -> Handed {
         let mut shown = Vec::new();
         artwork.finish(url.into(), bytes, |bytes| {
             shown.push(bytes.map(<[u8]>::to_vec))
@@ -225,6 +225,16 @@ mod tests {
             select(&mut artwork, Some("a")),
             (Select::Download("a".into()), vec![None])
         );
+    }
+
+    #[test]
+    fn a_download_failing_after_a_switch_leaves_the_new_logo() {
+        let mut artwork = LockScreenArtwork::new(8, 100);
+        select(&mut artwork, Some("a"));
+        select(&mut artwork, Some("b"));
+
+        assert_eq!(finish(&mut artwork, "a", None), []);
+        assert_eq!(select(&mut artwork, Some("b")), (Select::Same, vec![]));
     }
 
     #[test]
