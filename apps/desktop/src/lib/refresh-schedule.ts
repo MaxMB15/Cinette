@@ -59,3 +59,57 @@ export const findDueRefreshes = (
 	}
 	return { playlistIds, epgIds };
 };
+
+/** The first wait before trying a failed refresh again. */
+export const RETRY_FIRST_DELAY_MS = 5 * 60 * 1000;
+/** The longest wait between tries, so a source that comes back is picked up the same day. */
+export const RETRY_MAX_DELAY_MS = 6 * HOUR_MS;
+
+/** How long to wait after the given number of failures in a row, doubling each time. */
+export const retryDelayMs = (failures: number): number =>
+	Math.min(RETRY_FIRST_DELAY_MS * 2 ** Math.max(failures - 1, 0), RETRY_MAX_DELAY_MS);
+
+export interface RefreshTracker {
+	/**
+	 * Starts the refresh for this key unless one is still running or the last
+	 * one failed too recently. Returns whether it started.
+	 */
+	run: (key: string, refresh: () => Promise<unknown>) => boolean;
+}
+
+/**
+ * Keeps the auto refresh poll from piling up work. A refresh that runs longer
+ * than a poll interval isn't started a second time, and a refresh that fails
+ * waits longer before each new try instead of running every poll. For Xtream
+ * every try sends the login, so a provider that's down would otherwise get one
+ * a minute.
+ */
+export const createRefreshTracker = (clock: () => number = Date.now): RefreshTracker => {
+	const running = new Set<string>();
+	const failures = new Map<string, { count: number; retryAt: number }>();
+
+	const run = (key: string, refresh: () => Promise<unknown>): boolean => {
+		const failure = failures.get(key);
+		if (running.has(key) || (failure && clock() < failure.retryAt)) return false;
+		running.add(key);
+		refresh()
+			.then(() => {
+				failures.delete(key);
+			})
+			.catch((e: unknown) => {
+				const count = (failure?.count ?? 0) + 1;
+				const delay = retryDelayMs(count);
+				failures.set(key, { count, retryAt: clock() + delay });
+				console.error(
+					`[refresh] ${key} failed, trying again in ${Math.round(delay / 60_000)} min:`,
+					e
+				);
+			})
+			.finally(() => {
+				running.delete(key);
+			});
+		return true;
+	};
+
+	return { run };
+};

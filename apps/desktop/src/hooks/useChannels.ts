@@ -11,7 +11,7 @@ import {
 	useRef,
 } from "react";
 import type { Channel, Category, Provider } from "@/lib/types";
-import { findDueRefreshes } from "@/lib/refresh-schedule";
+import { createRefreshTracker, findDueRefreshes } from "@/lib/refresh-schedule";
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
 import {
@@ -260,19 +260,19 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 
 	// Poll every 60s to check if any provider/EPG is due for refresh.
 	// Using a ref-based approach avoids resetting timers on every providers update.
+	// The tracker skips refreshes still running and backs off after failures.
 	useEffect(() => {
+		const tracker = createRefreshTracker();
 		const tick = () => {
 			const { playlistIds, epgIds } = findDueRefreshes(providersRef.current, {
 				settingsFor: loadProviderSettings,
 				epgLastRefreshFor: getEpgLastRefresh,
 			});
 			for (const id of playlistIds) {
-				refreshProviderRef.current(id).catch(console.error);
+				tracker.run(`playlist:${id}`, () => refreshProviderRef.current(id));
 			}
 			for (const id of epgIds) {
-				refreshEpgApi(id)
-					.then(() => setEpgLastRefresh(id))
-					.catch(console.error);
+				tracker.run(`epg:${id}`, () => refreshEpgApi(id).then(() => setEpgLastRefresh(id)));
 			}
 		};
 

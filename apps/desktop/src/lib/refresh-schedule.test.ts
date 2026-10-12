@@ -3,7 +3,15 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { Provider } from "@/lib/types";
-import { findDueRefreshes, isRefreshDue, type RefreshSettings } from "./refresh-schedule";
+import {
+	RETRY_FIRST_DELAY_MS,
+	RETRY_MAX_DELAY_MS,
+	createRefreshTracker,
+	findDueRefreshes,
+	isRefreshDue,
+	retryDelayMs,
+	type RefreshSettings,
+} from "./refresh-schedule";
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse("2026-10-12T12:00:00Z");
@@ -90,5 +98,96 @@ describe("findDueRefreshes", () => {
 			NOW
 		);
 		expect(due.playlistIds).toEqual(["missing", "garbled"]);
+	});
+});
+
+describe("retryDelayMs", () => {
+	it("doubles the wait after each failure", () => {
+		expect(retryDelayMs(1)).toBe(RETRY_FIRST_DELAY_MS);
+		expect(retryDelayMs(2)).toBe(2 * RETRY_FIRST_DELAY_MS);
+		expect(retryDelayMs(3)).toBe(4 * RETRY_FIRST_DELAY_MS);
+	});
+
+	it("never waits longer than the cap", () => {
+		expect(retryDelayMs(20)).toBe(RETRY_MAX_DELAY_MS);
+	});
+});
+
+describe("createRefreshTracker", () => {
+	/** Lets the promise callbacks of a finished refresh run. */
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	const setup = () => {
+		let now = NOW;
+		const tracker = createRefreshTracker(() => now);
+		return { tracker, advance: (ms: number) => (now += ms) };
+	};
+
+	it("doesn't start a refresh that is still running", async () => {
+		const { tracker } = setup();
+		let finish = () => {};
+		const refresh = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+
+		expect(tracker.run("epg:p1", refresh)).toBe(true);
+		expect(tracker.run("epg:p1", refresh)).toBe(false);
+		expect(refresh).toHaveBeenCalledTimes(1);
+
+		finish();
+		await settle();
+		expect(tracker.run("epg:p1", refresh)).toBe(true);
+		expect(refresh).toHaveBeenCalledTimes(2);
+	});
+
+	it("tracks each key on its own", () => {
+		const { tracker } = setup();
+		const refresh = vi.fn(() => new Promise<void>(() => {}));
+
+		expect(tracker.run("epg:p1", refresh)).toBe(true);
+		expect(tracker.run("epg:p2", refresh)).toBe(true);
+		expect(tracker.run("playlist:p1", refresh)).toBe(true);
+	});
+
+	it("waits longer after each failure before trying again", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const { tracker, advance } = setup();
+		const refresh = vi.fn(() => Promise.reject(new Error("login failed")));
+
+		tracker.run("epg:p1", refresh);
+		await settle();
+		advance(RETRY_FIRST_DELAY_MS - 1);
+		expect(tracker.run("epg:p1", refresh)).toBe(false);
+		advance(1);
+		expect(tracker.run("epg:p1", refresh)).toBe(true);
+		await settle();
+
+		advance(RETRY_FIRST_DELAY_MS);
+		expect(tracker.run("epg:p1", refresh)).toBe(false);
+		advance(RETRY_FIRST_DELAY_MS);
+		expect(tracker.run("epg:p1", refresh)).toBe(true);
+		expect(refresh).toHaveBeenCalledTimes(3);
+		vi.mocked(console.error).mockRestore();
+	});
+
+	it("forgets earlier failures once a refresh works", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const { tracker, advance } = setup();
+		const refresh = vi
+			.fn<() => Promise<void>>(() => Promise.resolve())
+			.mockRejectedValueOnce(new Error("down"))
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("down again"));
+
+		tracker.run("playlist:p1", refresh);
+		await settle();
+		advance(RETRY_FIRST_DELAY_MS);
+		tracker.run("playlist:p1", refresh);
+		await settle();
+		expect(tracker.run("playlist:p1", refresh)).toBe(true);
+		await settle();
+
+		// The new failure starts over at the first wait, not the second.
+		advance(RETRY_FIRST_DELAY_MS);
+		expect(tracker.run("playlist:p1", refresh)).toBe(true);
+		vi.mocked(console.error).mockRestore();
 	});
 });
