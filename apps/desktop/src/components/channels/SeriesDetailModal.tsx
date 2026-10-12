@@ -3,13 +3,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { X, Play, ChevronLeft, ChevronRight, MonitorPlay, Loader2, Layers } from "lucide-react";
-import type {
-	Channel,
-	OmdbData,
-	WhatsonData,
-	DownloadRecord,
-	AggregateDownloadState,
-} from "@/lib/types";
+import type { Channel, OmdbData, WhatsonData, DownloadRecord } from "@/lib/types";
 import {
 	fetchOmdbData,
 	fetchWhatsonData,
@@ -25,10 +19,11 @@ import { RatingsRow } from "@/components/ui/ratings-row";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { dedupeEpisodes } from "@/lib/episodes";
 import { formatCount } from "@/lib/format";
+import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
-import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { OmdbKeyHint } from "./OmdbKeyHint";
@@ -48,11 +43,25 @@ interface SeriesDetailDrawerProps {
 	prefetchedWhatsonData?: WhatsonData | null;
 }
 
-const aggToIcon = (a: AggregateDownloadState): DownloadIconState => (a === "none" ? "idle" : a);
-
 /** Whether an episode already has a download in flight or done (not re-enqueued). */
 const isCovered = (r: DownloadRecord | undefined): boolean =>
-	!!r && (r.status === "completed" || r.status === "downloading" || r.status === "queued");
+	!!r && (r.status === "completed" || isActiveDownload(r));
+
+/**
+ * What the download button of a season or of the whole series shows and acts
+ * on. `records` holds the download `groupDownloads` keeps for each episode
+ * that has one.
+ */
+const episodeGroupDownloads = (eps: Channel[], downloads: Map<string, DownloadRecord>) => {
+	const records = eps.map((e) => downloads.get(e.id)).filter((r): r is DownloadRecord => !!r);
+	return {
+		records,
+		state: aggregateIconState(aggregateForSeries(records, eps.length)),
+		missing: eps.filter((e) => !isCovered(downloads.get(e.id))),
+		activeIds: records.filter(isActiveDownload).map((r) => r.id),
+		completedIds: records.filter((r) => r.status === "completed").map((r) => r.id),
+	};
+};
 
 const episodeTitle = (name: string): string => {
 	const stripped = name.replace(/^.*?\bS\d{1,3}E\d{1,3}\s*/i, "").trim();
@@ -187,16 +196,8 @@ export const SeriesDetailModal = ({
 		[seasons, selectedSeason]
 	);
 
-	// Whole-series aggregate + scoped id lists for the header download control.
-	const seriesRecs = deduped
-		.map((e) => episodeDownloadMap.get(e.id))
-		.filter((r): r is DownloadRecord => !!r);
-	const seriesState = aggToIcon(aggregateForSeries(seriesRecs, deduped.length));
-	const seriesMissing = deduped.filter((e) => !isCovered(episodeDownloadMap.get(e.id)));
-	const seriesActiveIds = seriesRecs
-		.filter((r) => r.status === "downloading" || r.status === "queued")
-		.map((r) => r.id);
-	const seriesCompletedIds = seriesRecs.filter((r) => r.status === "completed").map((r) => r.id);
+	// The header's download control covers the whole series.
+	const series = episodeGroupDownloads(deduped, episodeDownloadMap);
 
 	const handleSeasonClick = (season: number) => {
 		setSelectedSeason(season);
@@ -303,15 +304,15 @@ export const SeriesDetailModal = ({
 						<div className="flex-1 flex items-center gap-3">
 							<DownloadButton
 								showLabel
-								state={seriesState}
-								onStart={() => startBatch(seriesMissing)}
-								onStop={() => void stopDownloads(seriesActiveIds)}
-								stopCount={seriesActiveIds.length}
-								onRemove={() => removeDownloads(seriesCompletedIds)}
-								removeSummary={formatCount(seriesCompletedIds.length, "episode")}
+								state={series.state}
+								onStart={() => startBatch(series.missing)}
+								onStop={() => void stopDownloads(series.activeIds)}
+								stopCount={series.activeIds.length}
+								onRemove={() => removeDownloads(series.completedIds)}
+								removeSummary={formatCount(series.completedIds.length, "episode")}
 								className="text-sm text-muted-foreground hover:text-foreground"
 							/>
-							<RetentionNote records={seriesRecs} compact />
+							<RetentionNote records={series.records} compact />
 						</div>
 					)}
 					<button
@@ -444,19 +445,7 @@ export const SeriesDetailModal = ({
 				{step === "seasons" && (
 					<div className="overflow-y-auto overscroll-y-none flex-1 px-3 py-2">
 						{seasons.map(([s, eps]) => {
-							const recs = eps
-								.map((e) => episodeDownloadMap.get(e.id))
-								.filter((r): r is DownloadRecord => !!r);
-							const seasonState = aggToIcon(aggregateForSeries(recs, eps.length));
-							const missing = eps.filter(
-								(e) => !isCovered(episodeDownloadMap.get(e.id))
-							);
-							const activeIds = recs
-								.filter((r) => r.status === "downloading" || r.status === "queued")
-								.map((r) => r.id);
-							const completedIds = recs
-								.filter((r) => r.status === "completed")
-								.map((r) => r.id);
+							const season = episodeGroupDownloads(eps, episodeDownloadMap);
 							return (
 								<div
 									key={s}
@@ -482,12 +471,15 @@ export const SeriesDetailModal = ({
 										<ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
 									</button>
 									<DownloadButton
-										state={seasonState}
-										onStart={() => startBatch(missing)}
-										onStop={() => void stopDownloads(activeIds)}
-										stopCount={activeIds.length}
-										onRemove={() => removeDownloads(completedIds)}
-										removeSummary={formatCount(completedIds.length, "episode")}
+										state={season.state}
+										onStart={() => startBatch(season.missing)}
+										onStop={() => void stopDownloads(season.activeIds)}
+										stopCount={season.activeIds.length}
+										onRemove={() => removeDownloads(season.completedIds)}
+										removeSummary={formatCount(
+											season.completedIds.length,
+											"episode"
+										)}
 										className="shrink-0 h-8 w-8 justify-center rounded-md hover:bg-accent"
 									/>
 								</div>
@@ -507,14 +499,7 @@ export const SeriesDetailModal = ({
 						{currentEpisodes.map((ep) => {
 							const sourceCount = channelSources(ep).length;
 							const epDl = episodeDownloadMap.get(ep.id);
-							const epState: DownloadIconState =
-								epDl?.status === "completed"
-									? "complete"
-									: epDl?.status === "downloading" || epDl?.status === "queued"
-										? "downloading"
-										: epDl?.status === "failed"
-											? "failed"
-											: "idle";
+							const epState = downloadIconState(epDl);
 							return (
 								<div
 									key={ep.id}

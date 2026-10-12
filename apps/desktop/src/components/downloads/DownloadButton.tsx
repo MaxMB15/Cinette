@@ -5,11 +5,10 @@ import { useState } from "react";
 import { Download, DownloadCloud, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { isMobilePlatform } from "@/lib/platform";
+import type { DownloadIconState } from "@/lib/types";
 
 /** The mobile apps can't run the ffmpeg sidecar, so they have no downloads. */
 const DOWNLOADS_SUPPORTED = !isMobilePlatform();
-
-export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" | "failed";
 
 interface DownloadButtonProps {
 	/**

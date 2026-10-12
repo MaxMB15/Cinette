@@ -298,3 +298,6 @@ export interface GuideProgram {
 
 /** Aggregate download state for a series card (computed in the hook). */
 export type AggregateDownloadState = "none" | "downloading" | "partial" | "complete";
+
+/** What the download button shows. A series or season can be partly downloaded. */
+export type DownloadIconState = "idle" | "downloading" | "partial" | "complete" | "failed";

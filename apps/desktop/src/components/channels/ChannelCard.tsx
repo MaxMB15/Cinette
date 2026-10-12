@@ -7,11 +7,12 @@ import type { Channel, EpgProgram } from "@/lib/types";
 import { EpgTimelineBar } from "./EpgTimelineBar";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
-import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { DownloadProgressBar } from "@/components/downloads/DownloadProgressBar";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { cn, isFromInnerButton } from "@/lib/utils";
 import { nowSeconds } from "@/lib/date";
+import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
 /** Width (px) of the left channel-info column in RowCard — must match spacer in ChannelList header. */
@@ -19,11 +20,6 @@ export const ROW_CARD_LEFT_WIDTH = 180;
 
 /** Height (px) of the phone's channel row. The list's virtualizer uses it. */
 export const COMPACT_ROW_HEIGHT = 64;
-
-/** Map a series aggregate state to the DownloadButton icon state. */
-const aggregateToIcon = (
-	agg: "none" | "downloading" | "partial" | "complete"
-): DownloadIconState => (agg === "none" ? "idle" : agg);
 
 /**
  * The heart toggle each card variant shows. It always sits beside the play
@@ -258,17 +254,11 @@ const PosterCard = ({
 	const dl = byChannel.get(channel.id);
 	const seriesEps = isSeries ? (bySeries.get(channel.id) ?? []) : [];
 
-	const iconState: DownloadIconState = isSeries
+	const iconState = isSeries
 		? // totalEpisodes is unknown at the card level (resolved in the drawer),
 			// so pass 0 → aggregateForSeries never returns "complete" here.
-			aggregateToIcon(aggregateForSeries(seriesEps, 0))
-		: dl?.status === "completed"
-			? "complete"
-			: dl?.status === "downloading" || dl?.status === "queued"
-				? "downloading"
-				: dl?.status === "failed"
-					? "failed"
-					: "idle";
+			aggregateIconState(aggregateForSeries(seriesEps, 0))
+		: downloadIconState(dl);
 
 	return (
 		<div className="group flex flex-col text-left relative">
@@ -311,7 +301,7 @@ const PosterCard = ({
 			{/* Siblings of the play button, since screen readers can't reach a
 			    control or a progress bar nested inside a button on its own. The
 			    extra pixel keeps each one inside the poster's border. */}
-			{!isSeries && dl && (dl.status === "downloading" || dl.status === "queued") && (
+			{!isSeries && dl && isActiveDownload(dl) && (
 				<div className="pointer-events-none absolute inset-x-0 top-0 aspect-[2/1] flex items-end p-px rounded-lg overflow-hidden">
 					<div className="w-full px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
 						<DownloadProgressBar download={dl} />

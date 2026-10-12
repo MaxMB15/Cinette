@@ -45,9 +45,10 @@ import type { Channel, OmdbData, WhatsonData, SubtitleCue, SubtitleEntry } from 
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
-import { DownloadButton, type DownloadIconState } from "@/components/downloads/DownloadButton";
+import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
+import { downloadIconState } from "@/lib/download-status";
 import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
 import {
@@ -1067,14 +1068,7 @@ export const PlayerView = () => {
 
 	// --- Player download control (movies + series episodes only) ---
 	const playerDl = activeChannel ? byChannel.get(activeChannel.id) : undefined;
-	const playerDownloadState: DownloadIconState =
-		playerDl?.status === "completed"
-			? "complete"
-			: playerDl?.status === "downloading" || playerDl?.status === "queued"
-				? "downloading"
-				: playerDl?.status === "failed"
-					? "failed"
-					: "idle";
+	const playerDownloadState = downloadIconState(playerDl);
 	const showPlayerDownload =
 		!!activeChannel &&
 		(activeChannel.contentType === "movie" || activeChannel.contentType === "series");
