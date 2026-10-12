@@ -51,6 +51,8 @@ pub struct DownloadManager {
     /// Held for a whole `pump`. Two pumps reading the queue at once would
     /// both pick its first download and start it twice.
     pump_lock: Mutex<()>,
+    /// The downloads being deleted right now.
+    pub(crate) deleting: Deleting,
 }
 
 impl DownloadManager {
@@ -62,6 +64,7 @@ impl DownloadManager {
             retention_days: Mutex::new(None),
             exiting: AtomicBool::new(false),
             pump_lock: Mutex::new(()),
+            deleting: Deleting::default(),
         }
     }
 
@@ -579,6 +582,8 @@ pub(crate) struct Deleted {
     pub removed: Vec<String>,
     /// Why each of the others couldn't be. Their records stay.
     pub errors: Vec<String>,
+    /// The downloads whose files stayed, back in the cache.
+    pub put_back: Vec<String>,
 }
 
 /// Delete downloads and their files at the user's request, carrying on past
@@ -619,15 +624,19 @@ fn removal_error(deleted: &Deleted) -> Option<String> {
 /// the download gone. The files are deleted after the lock is let go, so a
 /// slow drive doesn't hold up the rest of the app. A download whose file
 /// can't be deleted goes back in the cache, so the app keeps showing the
-/// space it takes.
+/// space it takes, with any Keep the user set while it was out.
 pub(crate) fn delete_downloads<R: Runtime>(
     app: &AppHandle<R>,
     missing: MissingFile,
     select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
 ) -> Result<Deleted, String> {
-    let deleted = delete_selected(&app.state::<AppState>().cache, missing, select)?;
+    let deleting = &app.state::<DownloadManager>().deleting;
+    let deleted = delete_selected(&app.state::<AppState>().cache, deleting, missing, select)?;
     for id in &deleted.removed {
         emit_removed(app, id);
+    }
+    for id in &deleted.put_back {
+        emit_progress(app, id);
     }
     Ok(deleted)
 }
@@ -635,14 +644,73 @@ pub(crate) fn delete_downloads<R: Runtime>(
 /// `delete_downloads` without the events.
 fn delete_selected(
     cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
     missing: MissingFile,
     select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
 ) -> Result<Deleted, String> {
-    let taken = {
-        let cache = cache.lock().map_err(|e| e.to_string())?;
-        let records = select(&cache)?;
-        take_records(&cache, records)?
-    };
+    let taken = take_selected(cache, deleting, select)?;
+    let (mut deleted, failed) = delete_files(taken, missing);
+    deleted.put_back = put_back(cache, deleting, &deleted.removed, failed)?;
+    Ok(deleted)
+}
+
+/// The downloads `delete_selected` has taken out of the cache while it
+/// deletes their files, each with the Keep the user set on it meanwhile, if
+/// any. Only used while the cache lock is held, so it always agrees with the
+/// cache about which downloads are out.
+#[derive(Default)]
+pub(crate) struct Deleting(Mutex<HashMap<String, Option<bool>>>);
+
+impl Deleting {
+    fn ids(&self) -> MutexGuard<'_, HashMap<String, Option<bool>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Keep a download even when the retention setting would delete it, or stop
+/// keeping it. A download that's out of the cache while its file is deleted
+/// gets the Keep when it comes back because the file stayed.
+pub(crate) fn set_keep(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    id: &str,
+    keep: bool,
+) -> Result<(), String> {
+    let cache = cache.lock().map_err(|e| e.to_string())?;
+    let found = cache
+        .set_download_keep(id, keep)
+        .map_err(|e| e.to_string())?;
+    if !found {
+        if let Some(pending) = deleting.ids().get_mut(id) {
+            *pending = Some(keep);
+        }
+    }
+    Ok(())
+}
+
+/// Take the downloads `select` picks out of the cache, each paired with
+/// whether its file goes too, and note them in `deleting`.
+fn take_selected(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    select: impl FnOnce(&CacheStore) -> Result<Vec<DownloadRecord>, String>,
+) -> Result<Vec<(DownloadRecord, bool)>, String> {
+    let cache = cache.lock().map_err(|e| e.to_string())?;
+    let records = select(&cache)?;
+    let taken = take_records(&cache, records)?;
+    let mut ids = deleting.ids();
+    for (rec, _) in &taken {
+        ids.insert(rec.id.clone(), None);
+    }
+    Ok(taken)
+}
+
+/// Delete the files of the downloads `take_selected` took. Returns what was
+/// deleted and the downloads whose files couldn't be.
+fn delete_files(
+    taken: Vec<(DownloadRecord, bool)>,
+    missing: MissingFile,
+) -> (Deleted, Vec<DownloadRecord>) {
     let mut deleted = Deleted::default();
     let mut failed = Vec::new();
     for (rec, file_unused) in taken {
@@ -659,15 +727,34 @@ fn delete_selected(
             }
         }
     }
-    if !failed.is_empty() {
-        let cache = cache.lock().map_err(|e| e.to_string())?;
-        for rec in &failed {
-            if let Err(e) = cache.upsert_download(rec) {
-                tracing::warn!("Could not put back a download whose file stayed: {e}");
-            }
+    (deleted, failed)
+}
+
+/// Put the downloads whose files stayed back in the cache, with any Keep set
+/// on them while they were out, and drop everything `take_selected` noted
+/// from `deleting`. Returns the ids put back.
+fn put_back(
+    cache: &Mutex<CacheStore>,
+    deleting: &Deleting,
+    removed: &[String],
+    failed: Vec<DownloadRecord>,
+) -> Result<Vec<String>, String> {
+    let cache = cache.lock().map_err(|e| e.to_string())?;
+    let mut ids = deleting.ids();
+    for id in removed {
+        ids.remove(id);
+    }
+    let mut put_back = Vec::new();
+    for mut rec in failed {
+        if let Some(Some(keep)) = ids.remove(&rec.id) {
+            rec.keep = keep;
+        }
+        match cache.upsert_download(&rec) {
+            Ok(()) => put_back.push(rec.id),
+            Err(e) => tracing::warn!("Could not put back a download whose file stayed: {e}"),
         }
     }
-    Ok(deleted)
+    Ok(put_back)
 }
 
 /// Take `records` out of the cache, each paired with whether its file goes
@@ -792,13 +879,14 @@ mod tests {
 
     /// Delete the downloads `ids` the way `delete_downloads` does.
     fn delete(cache: &Mutex<CacheStore>, ids: &[&str], missing: MissingFile) -> Deleted {
-        delete_selected(cache, missing, |c| {
-            Ok(ids
-                .iter()
-                .filter_map(|id| c.get_download(id).unwrap())
-                .collect())
-        })
-        .unwrap()
+        delete_selected(cache, &Deleting::default(), missing, |c| select(c, ids)).unwrap()
+    }
+
+    fn select(cache: &CacheStore, ids: &[&str]) -> Result<Vec<DownloadRecord>, String> {
+        Ok(ids
+            .iter()
+            .filter_map(|id| cache.get_download(id).unwrap())
+            .collect())
     }
 
     fn exists(cache: &Mutex<CacheStore>, id: &str) -> bool {
@@ -926,6 +1014,46 @@ mod tests {
         assert!(!file.exists());
         let back = cache.lock().unwrap().get_download("a").unwrap().unwrap();
         assert_eq!(back.last_played_at, Some(42));
+    }
+
+    #[test]
+    fn a_keep_set_while_the_files_are_deleted_comes_back_with_a_file_that_stayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked.mkv");
+        std::fs::create_dir(&blocked).unwrap();
+        let file = dir.path().join("fine.mkv");
+        std::fs::write(&file, b"video").unwrap();
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        {
+            let c = cache.lock().unwrap();
+            c.upsert_download(&completed("a", &blocked)).unwrap();
+            c.upsert_download(&completed("b", &file)).unwrap();
+        }
+        let deleting = Deleting::default();
+
+        // The steps of `delete_selected`, with the user pressing Keep on both
+        // downloads while their files are being deleted.
+        let taken = take_selected(&cache, &deleting, |c| select(c, &["a", "b"])).unwrap();
+        set_keep(&cache, &deleting, "a", true).unwrap();
+        set_keep(&cache, &deleting, "b", true).unwrap();
+        let (deleted, failed) = delete_files(taken, MissingFile::Forget);
+        let put = put_back(&cache, &deleting, &deleted.removed, failed).unwrap();
+
+        assert_eq!(deleted.removed, vec!["b"]);
+        assert_eq!(put, vec!["a"]);
+        let back = cache.lock().unwrap().get_download("a").unwrap().unwrap();
+        assert!(back.keep);
+        assert!(!exists(&cache, "b"));
+        assert!(deleting.ids().is_empty());
+    }
+
+    #[test]
+    fn a_keep_for_a_download_that_isnt_there_does_nothing() {
+        let cache = Mutex::new(CacheStore::open_in_memory().unwrap());
+        let deleting = Deleting::default();
+        set_keep(&cache, &deleting, "gone", true).unwrap();
+        assert!(!exists(&cache, "gone"));
+        assert!(deleting.ids().is_empty());
     }
 
     #[test]

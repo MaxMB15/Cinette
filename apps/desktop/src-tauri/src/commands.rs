@@ -1519,13 +1519,11 @@ pub async fn remove_downloads(app: AppHandle, ids: Vec<String>) -> Result<(), St
 pub async fn set_download_keep(
     app: AppHandle,
     state: State<'_, AppState>,
+    manager: State<'_, DownloadManager>,
     id: String,
     keep: bool,
 ) -> Result<(), String> {
-    {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
-        cache.set_download_keep(&id, keep).map_err(|e| e.to_string())?;
-    }
+    manager::set_keep(&state.cache, &manager.deleting, &id, keep)?;
     manager::emit_progress(&app, &id);
     Ok(())
 }

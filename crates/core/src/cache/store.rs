@@ -1336,13 +1336,14 @@ impl CacheStore {
         Ok(())
     }
 
-    /// Set whether the retention setting skips this download.
-    pub fn set_download_keep(&self, id: &str, keep: bool) -> Result<(), CacheError> {
-        self.conn.execute(
+    /// Set whether the retention setting skips this download. Returns
+    /// whether there was a download `id` to set it on.
+    pub fn set_download_keep(&self, id: &str, keep: bool) -> Result<bool, CacheError> {
+        let changed = self.conn.execute(
             "UPDATE downloads SET keep = ?2 WHERE id = ?1",
             params![id, keep],
         )?;
-        Ok(())
+        Ok(changed > 0)
     }
 
     /// Record that the downloaded file started playing at `at`.
@@ -2429,7 +2430,8 @@ mod tests {
         let store = CacheStore::open_in_memory().unwrap();
         let mut rec = movie_record("d1", "c1");
         store.upsert_download(&rec).unwrap();
-        store.set_download_keep("d1", true).unwrap();
+        assert!(store.set_download_keep("d1", true).unwrap());
+        assert!(!store.set_download_keep("missing", true).unwrap());
         store.mark_download_played("d1", 500).unwrap();
 
         // A download task saving its older copy of the record.
