@@ -554,12 +554,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_request_that_cannot_be_sent_does_not_show_the_key() {
-        let client = test_server::client();
-        let err = fetch_from(&client, "unix:/", "Heat (1995)", "movie", "SECRET")
-            .await
-            .unwrap_err();
-        assert!(matches!(err, OmdbError::Http(_)), "{err:?}");
+    async fn a_request_that_cannot_connect_does_not_show_the_key() {
+        let url = format!("{}/", test_server::refused_url());
+        let err = fetch_from(
+            &test_server::client(),
+            &url,
+            "Heat (1995)",
+            "movie",
+            "SECRET",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, OmdbError::Http(e) if e.is_connect()),
+            "{err:?}"
+        );
         test_server::assert_hides(&err, "SECRET");
     }
 }

@@ -505,6 +505,9 @@ mod tests {
         let (server, client, _) =
             test_server::serve_once_with_client("200 OK", "<html>waking up</html>");
         let result = fetch_from(&client, &server, "tt0111161", "movie").await;
-        assert!(matches!(result, Err(WhatsonError::Http(_))), "{result:?}");
+        assert!(
+            matches!(&result, Err(WhatsonError::Http(e)) if e.is_decode()),
+            "{result:?}"
+        );
     }
 }

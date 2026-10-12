@@ -446,16 +446,22 @@ mod tests {
             test_server::serve_once_with_client("502 Bad Gateway", "<html>bad gateway</html>");
         let url = format!("{server}/api/");
         let result = fetch_from(&client, &url, "tt0468569", "movie", "KEY").await;
-        assert!(matches!(result, Err(MdbListError::Http(_))), "{result:?}");
+        assert!(
+            matches!(&result, Err(MdbListError::Http(e)) if e.is_decode()),
+            "{result:?}"
+        );
     }
 
     #[tokio::test]
-    async fn a_request_that_cannot_be_sent_does_not_show_the_key() {
-        let client = test_server::client();
-        let err = fetch_from(&client, "unix:/api/", "tt0468569", "movie", "SECRET")
+    async fn a_request_that_cannot_connect_does_not_show_the_key() {
+        let url = format!("{}/api/", test_server::refused_url());
+        let err = fetch_from(&test_server::client(), &url, "tt0468569", "movie", "SECRET")
             .await
             .unwrap_err();
-        assert!(matches!(err, MdbListError::Http(_)), "{err:?}");
+        assert!(
+            matches!(&err, MdbListError::Http(e) if e.is_connect()),
+            "{err:?}"
+        );
         test_server::assert_hides(&err, "SECRET");
     }
 }

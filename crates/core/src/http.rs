@@ -229,6 +229,14 @@ pub mod test_server {
         (url, receiver)
     }
 
+    /// A base URL on a loopback port that nothing listens on, so a request
+    /// to it fails to connect and the error carries the full URL.
+    pub fn refused_url() -> String {
+        // The port is free once the listener drops, and nothing else in the
+        // tests binds to a port it didn't get from the system.
+        bind().1
+    }
+
     /// A client that reaches the loopback server even when the machine has a
     /// proxy configured.
     pub fn client() -> reqwest::Client {
@@ -303,10 +311,12 @@ pub mod test_server {
         }
     }
 
-    /// The value of the header called `name` in a request's headers, matched
-    /// in any case.
-    pub(crate) fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
-        head.lines()
+    /// The value of the header called `name` in a request, matched in any
+    /// case. Only the headers are read, not the body after them.
+    pub(crate) fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+        request
+            .lines()
+            .take_while(|line| !line.is_empty())
             .filter_map(|line| line.split_once(':'))
             .find(|(key, _)| key.trim().eq_ignore_ascii_case(name))
             .map(|(_, value)| value.trim())
