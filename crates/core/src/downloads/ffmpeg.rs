@@ -38,12 +38,14 @@ pub fn build_ffmpeg_args(url: &str, dest_part: &str, container: &str) -> Vec<Str
         "-hide_banner".into(),
         "-loglevel".into(),
         "error".into(),
-        // Transparent recovery from transient network drops.
+        // Reconnect after a dropped connection and carry on from where the
+        // reply broke off. ffmpeg can tell a reply broke off when the server
+        // gave its size. There's no `-reconnect_at_eof`: it takes the normal
+        // end of every file and HLS playlist for a drop and keeps trying to
+        // reconnect for close to a minute.
         "-reconnect".into(),
         "1".into(),
         "-reconnect_streamed".into(),
-        "1".into(),
-        "-reconnect_at_eof".into(),
         "1".into(),
         "-reconnect_delay_max".into(),
         "30".into(),
@@ -117,6 +119,13 @@ mod tests {
         // URL is the argument right after -i.
         let i = args.iter().position(|a| a == "-i").unwrap();
         assert_eq!(args[i + 1], "http://h/movie/u/p/1.mkv");
+    }
+
+    #[test]
+    fn does_not_reconnect_when_a_file_ends() {
+        let args = build_ffmpeg_args("http://h/movie/u/p/1.m3u8", "/tmp/1.mkv.part", "mkv");
+        assert!(!args.iter().any(|a| a == "-reconnect_at_eof"));
+        assert!(args.windows(2).any(|w| w[0] == "-reconnect" && w[1] == "1"));
     }
 
     #[test]
