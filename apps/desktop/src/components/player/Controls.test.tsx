@@ -109,7 +109,9 @@ describe("Controls seek bar", () => {
 		};
 	};
 
-	// jsdom has no pointer events or pointer capture.
+	// jsdom has no pointer events or pointer capture. Captures are kept by
+	// pointer, so a finger Radix didn't capture doesn't move the bar.
+	const captured = new Set<number>();
 	const saved = {
 		PointerEvent: window.PointerEvent,
 		setPointerCapture: Element.prototype.setPointerCapture,
@@ -119,15 +121,19 @@ describe("Controls seek bar", () => {
 	beforeAll(() => {
 		class TestPointerEvent extends MouseEvent {
 			readonly pointerId: number;
+			readonly pointerType: string;
+			readonly isPrimary: boolean;
 			constructor(type: string, init: PointerEventInit = {}) {
 				super(type, init);
 				this.pointerId = init.pointerId ?? 1;
+				this.pointerType = init.pointerType ?? "mouse";
+				this.isPrimary = init.isPrimary ?? true;
 			}
 		}
 		window.PointerEvent = TestPointerEvent as typeof PointerEvent;
-		Element.prototype.setPointerCapture = () => {};
-		Element.prototype.hasPointerCapture = () => true;
-		Element.prototype.releasePointerCapture = () => {};
+		Element.prototype.setPointerCapture = (id: number) => void captured.add(id);
+		Element.prototype.hasPointerCapture = (id: number) => captured.has(id);
+		Element.prototype.releasePointerCapture = (id: number) => void captured.delete(id);
 	});
 	afterAll(() => {
 		Object.assign(window, { PointerEvent: saved.PointerEvent });
@@ -140,6 +146,7 @@ describe("Controls seek bar", () => {
 
 	afterEach(() => {
 		cleanup();
+		captured.clear();
 		vi.restoreAllMocks();
 	});
 
@@ -163,7 +170,21 @@ describe("Controls seek bar", () => {
 		fireEvent.pointerUp(target, { pointerId: 1, ...init });
 
 	/** Focuses the thumb the way Tab does, without a press. */
-	const tabTo = (thumb: HTMLElement) => act(() => thumb.focus());
+	const tabTo = (thumb: HTMLElement) =>
+		act(() => {
+			fireEvent.keyDown(document.activeElement ?? document.body, { key: "Tab" });
+			thumb.focus();
+		});
+	/**
+	 * Moves focus away and gives it back without Tab, the way an overlay such
+	 * as the shortcuts list does when it closes.
+	 */
+	const giveFocusBack = (thumb: HTMLElement) =>
+		act(() => {
+			screen.getByRole("button", { name: "Stop" }).focus();
+			fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+			thumb.focus();
+		});
 	/** Presses and releases the thumb, which focuses it without moving the bar. */
 	const clickThumb = (thumb: HTMLElement) => {
 		press(thumb);
@@ -217,10 +238,10 @@ describe("Controls seek bar", () => {
 
 		it("keeps its keys from the player's other handlers when reached with Tab", () => {
 			const bar = renderSeekBar();
+			tabTo(bar.thumb());
 			const onWindowKey = vi.fn();
 			window.addEventListener("keydown", onWindowKey);
 			try {
-				tabTo(bar.thumb());
 				fireEvent.keyDown(bar.thumb(), { key: "ArrowUp" });
 				expect(onWindowKey).not.toHaveBeenCalled();
 				// Keys the slider doesn't use still reach the player.
@@ -254,6 +275,35 @@ describe("Controls seek bar", () => {
 			fireEvent.keyDown(bar.thumb(), { key: "End" });
 			expect(bar.onSeek).not.toHaveBeenCalled();
 			expect(bar.valueNow()).toBe(120);
+		});
+
+		it("leaves its keys to the player when focus comes back to it after a click", () => {
+			const bar = renderSeekBar();
+			clickThumb(bar.thumb());
+			giveFocusBack(bar.thumb());
+			expect(bar.thumb()).toHaveFocus();
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
+			fireEvent.keyDown(bar.thumb(), { key: "End" });
+			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+		});
+
+		it("leaves its keys to the player when focus comes back after a click on the focused bar", () => {
+			const bar = renderSeekBar();
+			tabTo(bar.thumb());
+			clickThumb(bar.thumb());
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
+			giveFocusBack(bar.thumb());
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "pointer");
+		});
+
+		it("keeps its keys when focus comes back to it after Tab", () => {
+			const bar = renderSeekBar();
+			tabTo(bar.thumb());
+			giveFocusBack(bar.thumb());
+			expect(bar.thumb()).toHaveAttribute("data-focus-source", "keyboard");
+			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
+			expect(bar.onSeek).toHaveBeenCalledWith(121);
 		});
 
 		it("takes its keys back once Tab returns to it", () => {
@@ -304,7 +354,7 @@ describe("Controls seek bar", () => {
 			expect(bar.valueNow()).toBe(121);
 		});
 
-		it("drops the drag without seeking when the touch is cancelled", () => {
+		it("drops the drag without seeking when the touch is canceled", () => {
 			const bar = renderSeekBar();
 			withWidth(bar.root());
 			press(bar.track(), { clientX: 500 });
@@ -320,6 +370,33 @@ describe("Controls seek bar", () => {
 			release(bar.track(), { clientX: 500, button: 2 });
 			expect(bar.onSeek).not.toHaveBeenCalled();
 			expect(bar.valueNow()).toBe(120);
+		});
+
+		it("ignores a Control-click, which opens the context menu on a Mac", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			press(bar.track(), { clientX: 500, ctrlKey: true });
+			release(bar.track(), { clientX: 500, ctrlKey: true });
+			expect(bar.onSeek).not.toHaveBeenCalled();
+			expect(bar.valueNow()).toBe(120);
+		});
+
+		it("follows only the first finger on the bar", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			const touch = { pointerType: "touch" };
+			press(bar.track(), { ...touch, clientX: 500 });
+			press(bar.track(), { ...touch, pointerId: 2, isPrimary: false, clientX: 100 });
+			fireEvent.pointerMove(bar.track(), { ...touch, pointerId: 1, clientX: 750 });
+			release(bar.track(), { ...touch, clientX: 750 });
+			expect(bar.onSeek).toHaveBeenCalledTimes(1);
+			expect(bar.onSeek).toHaveBeenCalledWith(1350);
+
+			// The second finger was never pressing the bar, so it doesn't seek
+			// once the first one lets go.
+			fireEvent.pointerMove(bar.track(), { ...touch, pointerId: 2, clientX: 250 });
+			release(bar.track(), { ...touch, pointerId: 2, clientX: 250 });
+			expect(bar.onSeek).toHaveBeenCalledTimes(1);
 		});
 
 		it("drops a drag when the stream changes under it", () => {

@@ -184,7 +184,7 @@ export const Controls = ({
 						{/* The release is handled here, after the slider's own handlers. */}
 						<div
 							onPointerUp={() => endPress(true)}
-							// A cancelled touch doesn't seek.
+							// A canceled touch doesn't seek.
 							onPointerCancel={() => endPress(false)}
 						>
 							<Slider

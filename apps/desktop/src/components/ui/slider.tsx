@@ -26,6 +26,37 @@ interface SliderProps extends Omit<
 type FocusSource = "pointer" | "keyboard";
 
 /**
+ * True while Tab or Shift+Tab is moving focus. Focus that arrives any other
+ * way, such as an overlay giving it back when it closes, isn't from the
+ * keyboard, even though no press is under way.
+ */
+let tabbing = false;
+if (typeof document !== "undefined") {
+	document.addEventListener(
+		"keydown",
+		(e) => {
+			tabbing = e.key === "Tab";
+		},
+		true
+	);
+	document.addEventListener(
+		"pointerdown",
+		() => {
+			tabbing = false;
+		},
+		true
+	);
+}
+
+/**
+ * Presses that shouldn't move the slider. Radix only checks for the primary
+ * button, but a Control-click on a Mac opens the context menu, which takes the
+ * release. A second finger would move the bar while the first is still down.
+ */
+const isIgnoredPress = (e: React.PointerEvent): boolean =>
+	e.button !== 0 || (e.pointerType === "mouse" && e.ctrlKey) || e.isPrimary === false;
+
+/**
  * A horizontal slider for one value.
  *
  * The thumb and the filled part of the track are both drawn from `value` in
@@ -33,8 +64,10 @@ type FocusSource = "pointer" | "keyboard";
  * which has the same color. The root reaches 8px above and below the track
  * so the thin bar is easier to grab, without taking more room in the layout.
  *
- * Only the primary button moves it, so a right-click doesn't. The focus ring
- * only shows when the thumb was reached with the keyboard.
+ * Only a press with the primary button or the first finger moves it, so a
+ * right-click or a Control-click doesn't. The focus ring only shows when the
+ * thumb was reached with Tab. Focus that comes back to it later, such as from
+ * a closed overlay, keeps the source it had.
  */
 const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
 	(
@@ -57,6 +90,9 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 		// True from a press until its release, so focus that arrives in
 		// between came from the press.
 		const pressingRef = React.useRef(false);
+		// How the thumb last got focus. It outlives a blur, so focus given
+		// back to the thumb gets the same source again.
+		const lastSourceRef = React.useRef<FocusSource>("pointer");
 		const endPress = () => {
 			pressingRef.current = false;
 		};
@@ -70,11 +106,12 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 				onValueChange={onValueChange && (([v]) => onValueChange(v))}
 				onPointerDown={(e) => {
 					// Radix skips its own handler for a prevented event.
-					if (e.button !== 0) {
+					if (isIgnoredPress(e)) {
 						e.preventDefault();
 						return;
 					}
 					pressingRef.current = true;
+					lastSourceRef.current = "pointer";
 					// A press on a thumb that already has focus doesn't focus it again.
 					setFocusSource((source) => source && "pointer");
 					onPointerDown?.(e);
@@ -83,7 +120,7 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 					endPress();
 					onPointerUp?.(e);
 				}}
-				// Also covers a cancelled touch, which sends no pointerup.
+				// Also covers a canceled touch, which sends no pointerup.
 				onLostPointerCapture={(e) => {
 					endPress();
 					onLostPointerCapture?.(e);
@@ -102,7 +139,15 @@ const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, S
 					aria-label={ariaLabel}
 					aria-valuetext={ariaValueText}
 					data-focus-source={focusSource ?? undefined}
-					onFocus={() => setFocusSource(pressingRef.current ? "pointer" : "keyboard")}
+					onFocus={() => {
+						const source = pressingRef.current
+							? "pointer"
+							: tabbing
+								? "keyboard"
+								: lastSourceRef.current;
+						lastSourceRef.current = source;
+						setFocusSource(source);
+					}}
 					onBlur={() => setFocusSource(null)}
 					className={cn(
 						"block h-4 w-4 rounded-full bg-primary shadow ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none",

@@ -189,8 +189,8 @@ export const isSliderOwnKey = (target: EventTarget | null, key: string): boolean
  * keydown handler for a slider inside the player. A slider that owns the key
  * (see `isSliderOwnKey`) moves and keeps the key from the player's own
  * handlers, such as the subtitle position arrows. Otherwise the slider stays
- * put and the key goes on to the player, where the arrows and Home seek and
- * End does nothing.
+ * put and the key goes on to the player. There Left, Right and Home seek, Up
+ * and Down change the volume, and End does nothing.
  */
 export const leaveSliderKeysToPlayer = (e: {
 	key: string;
