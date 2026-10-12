@@ -109,7 +109,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            crate::linux::fallback_options(),
+            crate::linux::fallback_options(true),
             vec![
                 ("hwdec", "auto-copy-safe"),
                 ("ao", "pulse,pipewire,alsa,"),
@@ -126,5 +126,9 @@ mod tests {
                 ("msg-level", "all=info"),
             ]
         );
+        // On X11 only the decoding mode differs.
+        let mut x11 = crate::linux::fallback_options(true);
+        x11[0] = ("hwdec", "auto");
+        assert_eq!(crate::linux::fallback_options(false), x11);
     }
 }

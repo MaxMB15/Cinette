@@ -18,7 +18,10 @@ use std::sync::{
 use crate::macos::{embedded_options, fallback_options, MacosGlRenderer};
 
 #[cfg(target_os = "linux")]
-use crate::linux::{embedded_options as linux_embedded_options, fallback_options as linux_fallback_options, LinuxGlRenderer};
+use crate::linux::{
+    embedded_options as linux_embedded_options, fallback_options as linux_fallback_options,
+    mpv_uses_wayland, LinuxGlRenderer,
+};
 
 #[cfg(target_os = "ios")]
 use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
@@ -382,7 +385,7 @@ impl MpvState {
         start_pos: Option<f64>,
     ) -> Result<Option<libmpv2::Mpv>, String> {
         let mut engine = lock_or_recover(&self.inner);
-        engine.create(&self.options(linux_fallback_options()))?;
+        engine.create(&self.options(linux_fallback_options(mpv_uses_wayland())))?;
         engine.configure_audio()?;
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);

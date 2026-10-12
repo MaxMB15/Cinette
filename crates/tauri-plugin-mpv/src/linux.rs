@@ -497,6 +497,10 @@ fn render_frame(inner: &Inner) {
             }
             None => {
                 tracing::warn!("[MPV] EGL surface recreation failed on resize");
+                // The old surface is gone. A zero size makes this function
+                // return before it touches the surface, and makes the next
+                // `set_frame` queue another attempt.
+                state.current_size = (0, 0);
                 drop(state);
                 return;
             }
@@ -645,8 +649,8 @@ fn build_wayland(
     child_surface.commit();
     conn.flush().map_err(|e| format!("wayland flush: {e}"))?;
 
-    // Prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)` so libmpv's
-    // Wayland integration recognises the display as a Wayland one.
+    // Prefer `eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT)`, which tells
+    // EGL the native display is a Wayland one instead of letting it guess.
     // `eglGetDisplay` covers older drivers.
     const EGL_PLATFORM_WAYLAND_EXT: u32 = 0x31D8;
     let egl_display = wayland_egl_display(egl, wl_display_ptr, EGL_PLATFORM_WAYLAND_EXT)?;
@@ -828,18 +832,21 @@ fn drain_wayland_queue(inner: &Inner) {
     let _ = queue.dispatch_pending(&mut dummy);
 }
 
-/// The hardware decoding mode for both Linux option sets.
+/// The hardware decoding mode for embedded playback, and for the fallback
+/// window when mpv opens it on Wayland.
 ///
 /// Copy mode decodes on the GPU and copies each frame back for upload, so
-/// mpv never maps decoder surfaces into the renderer. Zero-copy `auto` and
-/// `auto-safe` open a VA-API display through the compositor, which segfaults
-/// inside libva on some Wayland setups, and the mapped surfaces have shown
-/// wrong colors on drivers that can't convert NV12.
+/// mpv never maps decoder surfaces into the renderer. Zero-copy `auto` opens
+/// a VA-API display through the Wayland compositor, which segfaults inside
+/// libva on some setups, and the mapped surfaces have shown wrong colors on
+/// drivers that can't convert NV12.
 ///
-/// The `-safe` list leaves out Vulkan. On a machine without Vulkan video
-/// decoding, such as Mesa's software driver, a failed Vulkan attempt leaves
-/// the embedded picture black even after mpv falls back to software
-/// decoding.
+/// Plain `auto-copy` also tries Vulkan. With libmpv 0.37, a failed Vulkan
+/// attempt on a machine without Vulkan video decoding, such as Mesa's
+/// software driver, left the embedded picture black even after mpv fell
+/// back to software decoding. The `-safe` list in 0.37 leaves Vulkan out.
+/// Newer releases, including the 0.40 the AppImage bundles, put Vulkan on
+/// that list, and there a failed attempt falls back cleanly.
 const LINUX_HWDEC: &str = "auto-copy-safe";
 
 /// Options for embedded playback through the OpenGL render context.
@@ -864,10 +871,14 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Options for the separate fallback window, where mpv picks `vo=gpu` and
-/// shows its own controls.
-pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
+/// shows its own controls. `wayland` says whether mpv will open that window
+/// on Wayland, see [`mpv_uses_wayland`].
+pub fn fallback_options(wayland: bool) -> Vec<(&'static str, &'static str)> {
+    // X11 never reaches libva's Wayland code, so keep zero-copy decoding
+    // there. X11 sessions always use this window.
+    let hwdec = if wayland { LINUX_HWDEC } else { "auto" };
     let mut options = vec![
-        ("hwdec", LINUX_HWDEC),
+        ("hwdec", hwdec),
         ("ao", "pulse,pipewire,alsa,"),
         ("config", "no"),
         ("video-sync", "display-resample"),
@@ -875,4 +886,59 @@ pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
     options.extend(shared_options());
     options.push(("msg-level", "all=info"));
     options
+}
+
+/// Whether mpv's own window will connect to a Wayland compositor. mpv tries
+/// Wayland first whenever one is reachable, even when the app itself runs
+/// through XWayland with `GDK_BACKEND=x11`, so any sign of a Wayland session
+/// counts.
+pub fn mpv_uses_wayland() -> bool {
+    wayland_in_env(|key| std::env::var_os(key))
+}
+
+fn wayland_in_env(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    var("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
+        || var("WAYLAND_SOCKET").is_some()
+        || var("XDG_SESSION_TYPE").is_some_and(|v| v == "wayland")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wayland_in_env;
+    use std::ffi::OsString;
+
+    fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |key| {
+            vars.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    #[test]
+    fn wayland_display_means_wayland() {
+        assert!(wayland_in_env(env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        // GDK_BACKEND=x11 doesn't stop mpv from using Wayland.
+        assert!(wayland_in_env(env(&[
+            ("WAYLAND_DISPLAY", "wayland-1"),
+            ("GDK_BACKEND", "x11"),
+            ("DISPLAY", ":0"),
+        ])));
+    }
+
+    #[test]
+    fn socket_or_session_type_means_wayland() {
+        assert!(wayland_in_env(env(&[("WAYLAND_SOCKET", "5")])));
+        assert!(wayland_in_env(env(&[("XDG_SESSION_TYPE", "wayland")])));
+    }
+
+    #[test]
+    fn x11_session_is_not_wayland() {
+        assert!(!wayland_in_env(env(&[
+            ("DISPLAY", ":0"),
+            ("XDG_SESSION_TYPE", "x11")
+        ])));
+        assert!(!wayland_in_env(env(&[("WAYLAND_DISPLAY", "")])));
+        assert!(!wayland_in_env(env(&[])));
+    }
 }
