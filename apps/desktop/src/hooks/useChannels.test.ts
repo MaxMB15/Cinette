@@ -180,7 +180,7 @@ vi.mock("@/lib/tauri", () => ({
 	removeProvider: vi.fn().mockResolvedValue(undefined),
 	getAllChannels: vi.fn().mockResolvedValue([]),
 	refreshProvider: vi.fn().mockResolvedValue(undefined),
-	refreshEpg: vi.fn().mockResolvedValue(undefined),
+	refreshEpg: vi.fn().mockResolvedValue(120),
 	updateProvider: vi.fn().mockResolvedValue(undefined),
 	toggleFavorite: vi.fn().mockResolvedValue(true),
 }));
@@ -355,7 +355,7 @@ describe("useChannelsProvider", () => {
 			await act(() => vi.advanceTimersByTimeAsync(60_000));
 			expect(mockRefreshEpg).toHaveBeenCalledTimes(2);
 		} finally {
-			mockRefreshEpg.mockResolvedValue(undefined);
+			mockRefreshEpg.mockResolvedValue(120);
 			vi.useRealTimers();
 		}
 	});

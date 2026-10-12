@@ -586,10 +586,14 @@ fn render_frame(inner: &Inner) {
     inner.render_ctx.report_swap();
     inner.drew_frame.store(true, Ordering::Relaxed);
 
-    // Take the callback out first, so it doesn't run with the lock held.
-    let first_frame_cb = lock_or_recover(&inner.first_frame_cb).take();
-    if let Some(cb) = first_frame_cb {
-        cb();
+    // A resize redraws the surface without a new frame, which doesn't count
+    // as the first one. Take the callback out first, so it doesn't run with
+    // the lock held.
+    if has_frame {
+        let first_frame_cb = lock_or_recover(&inner.first_frame_cb).take();
+        if let Some(cb) = first_frame_cb {
+            cb();
+        }
     }
 }
 
@@ -631,7 +635,7 @@ fn build_wayland(
     let egl = egl()?;
 
     // Secondary reference to the GTK Wayland connection. Shares the same fd
-    // and object namespace, so ObjectId::from_ptr recognises GTK's objects.
+    // and object namespace, so ObjectId::from_ptr recognizes GTK's objects.
     //
     // SAFETY: `wl_display_ptr` is a valid `wl_display *` owned by GTK for
     // the lifetime of the window. `from_foreign_display` only reads the fd
@@ -681,7 +685,7 @@ fn build_wayland(
     let egl_display = wayland_egl_display(egl, wl_display_ptr, EGL_PLATFORM_WAYLAND_EXT)?;
 
     // `eglInitialize` is idempotent per spec, but some Mesa releases
-    // mishandle double-init on a display already initialised by GTK. Only
+    // mishandle double-init on a display already initialized by GTK. Only
     // call it if `EGL_VERSION` is not yet queryable.
     if egl.query_string(Some(egl_display), egl::VERSION).is_err() {
         egl.initialize(egl_display)

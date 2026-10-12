@@ -322,7 +322,7 @@ impl MpvEngine {
         } else {
             path.to_string()
         };
-        tracing::info!("[MPV] sub-add: uri={}", uri);
+        tracing::info!("[MPV] sub-add: {}", origin_for_log(&uri));
         mpv.command("sub-add", &[&uri, "select"])
             .map_err(|e| {
                 tracing::warn!("[MPV] sub-add failed: {}", e);

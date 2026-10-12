@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Subtitle search and download through the OpenSubtitles API.
+
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// TTL for OpenSubtitles search cache: 24 hours.
+/// How long a cached search stays fresh. New subtitles for a title turn up
+/// rarely, so a day saves requests without hiding much.
 pub const SEARCH_CACHE_TTL_SECS: i64 = 24 * 60 * 60;
 
+/// One subtitle file the user can pick. `file_id` is what a download asks for.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleEntry {
@@ -18,6 +23,8 @@ pub struct SubtitleEntry {
     pub download_count: Option<i64>,
 }
 
+/// The subtitles found for a title, with the languages among them so the
+/// picker can group entries by language.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleSearchResult {
@@ -25,16 +32,30 @@ pub struct SubtitleSearchResult {
     pub languages: Vec<String>,
 }
 
+/// Errors from searching for or downloading subtitles.
 #[derive(Debug, Error)]
 pub enum OpenSubtitlesError {
+    /// The request failed or the server answered with an error status.
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
+    /// OpenSubtitles rejected the API key. Kept apart from `Http` so a key test
+    /// can report a wrong key rather than a failed request.
     #[error("OpenSubtitles API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
+    /// The subtitle file could not be saved.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for OpenSubtitlesError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
 }
 
 // --- Raw API response shapes ---
@@ -42,14 +63,10 @@ pub enum OpenSubtitlesError {
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     data: Vec<SubtitleItem>,
-    #[allow(dead_code)]
-    total_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SubtitleItem {
-    #[allow(dead_code)]
-    id: Option<String>,
     attributes: SubtitleAttributes,
 }
 
@@ -64,8 +81,6 @@ struct SubtitleAttributes {
 #[derive(Debug, Deserialize)]
 struct SubtitleFile {
     file_id: Option<i64>,
-    #[allow(dead_code)]
-    cd_number: Option<i64>,
     file_name: Option<String>,
 }
 
@@ -73,10 +88,6 @@ struct SubtitleFile {
 struct DownloadResponse {
     link: String,
     file_name: String,
-    #[allow(dead_code)]
-    requests: Option<i64>,
-    #[allow(dead_code)]
-    remaining: Option<i64>,
 }
 
 // --- Helpers ---
@@ -97,18 +108,13 @@ fn extract_extension(file_name: &str) -> String {
         .to_lowercase()
 }
 
-fn build_client() -> Result<reqwest::Client, OpenSubtitlesError> {
-    reqwest::Client::builder()
-        .user_agent("MaxVideoPlayer/0.1.0")
-        .build()
-        .map_err(OpenSubtitlesError::Http)
-}
-
 /// Parse a raw search API JSON value into a `SubtitleSearchResult`.
 /// Separated from the HTTP call for unit testing.
-pub fn parse_search_response(json: serde_json::Value) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
-    let resp: SearchResponse = serde_json::from_value(json)
-        .map_err(|e| OpenSubtitlesError::Parse(e.to_string()))?;
+pub fn parse_search_response(
+    json: serde_json::Value,
+) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
+    let resp: SearchResponse =
+        serde_json::from_value(json).map_err(|e| OpenSubtitlesError::Parse(e.to_string()))?;
 
     let mut entries: Vec<SubtitleEntry> = Vec::new();
 
@@ -167,11 +173,21 @@ pub async fn search_subtitles(
     episode: Option<u32>,
     api_key: &str,
 ) -> Result<SubtitleSearchResult, OpenSubtitlesError> {
-    let numeric_id = strip_tt_prefix(imdb_id);
+    let response = search_request(imdb_id, season, episode, api_key)
+        .send()
+        .await?;
+    let json = check_status(response)?.json::<serde_json::Value>().await?;
 
-    let mut query: Vec<(&str, String)> = vec![
-        ("imdb_id", numeric_id.to_string()),
-    ];
+    parse_search_response(json)
+}
+
+fn search_request(
+    imdb_id: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    let mut query: Vec<(&str, String)> = vec![("imdb_id", strip_tt_prefix(imdb_id).to_string())];
 
     match (season, episode) {
         (Some(s), Some(e)) => {
@@ -184,20 +200,28 @@ pub async fn search_subtitles(
         }
     }
 
-    let client = build_client()?;
-    let response = client
-        .get("https://api.opensubtitles.com/api/v1/subtitles")
-        .query(&query)
-        .header("Api-Key", api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await?
-        .error_for_status()
-        .map_err(OpenSubtitlesError::Http)?
-        .json::<serde_json::Value>()
-        .await?;
+    with_api_key(
+        crate::http::client()
+            .get("https://api.opensubtitles.com/api/v1/subtitles")
+            .query(&query),
+        api_key,
+    )
+}
 
-    parse_search_response(response)
+fn download_link_request(file_id: i64, api_key: &str) -> reqwest::RequestBuilder {
+    with_api_key(
+        crate::http::client()
+            .post("https://api.opensubtitles.com/api/v1/download")
+            .json(&serde_json::json!({ "file_id": file_id })),
+        api_key,
+    )
+}
+
+// Keys are pasted in, often with a trailing newline, and a header can't carry one.
+fn with_api_key(request: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+    request
+        .header("Api-Key", api_key.trim())
+        .header("Accept", "application/json")
 }
 
 /// Download a subtitle file by file_id to the given directory.
@@ -217,34 +241,24 @@ pub async fn download_subtitle(
     }
 
     // Step 1: POST /download to get a pre-signed download link.
-    let client = build_client()?;
-    let post_body = serde_json::json!({ "file_id": file_id });
-
-    let dl_response: DownloadResponse = client
-        .post("https://api.opensubtitles.com/api/v1/download")
-        .header("Api-Key", api_key)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .json(&post_body)
-        .send()
-        .await?
-        .error_for_status()
-        .map_err(OpenSubtitlesError::Http)?
-        .json()
-        .await?;
+    let response = download_link_request(file_id, api_key).send().await?;
+    let dl_response: DownloadResponse = check_status(response)?.json().await?;
 
     let extension = extract_extension(&dl_response.file_name);
-    let extension = if extension.is_empty() { "srt".to_string() } else { extension };
+    let extension = if extension.is_empty() {
+        "srt".to_string()
+    } else {
+        extension
+    };
 
     // Step 2: GET the pre-signed link (no auth headers needed).
     // Request uncompressed content so the bytes written to disk are valid SRT/VTT.
-    let content = client
+    let content = crate::http::client()
         .get(&dl_response.link)
         .header("Accept-Encoding", "identity")
         .send()
         .await?
-        .error_for_status()
-        .map_err(OpenSubtitlesError::Http)?
+        .error_for_status()?
         .bytes()
         .await?;
 
@@ -255,10 +269,47 @@ pub async fn download_subtitle(
     Ok(dest_path)
 }
 
+fn check_status(response: reqwest::Response) -> Result<reqwest::Response, OpenSubtitlesError> {
+    match rejected_key(response.status()) {
+        Some(err) => Err(err),
+        None => Ok(response.error_for_status()?),
+    }
+}
+
+/// OpenSubtitles answers a wrong or revoked key with 401 or 403. Reporting that
+/// as an API error rather than an HTTP one lets the app tell the user the key is
+/// wrong instead of blaming the network.
+fn rejected_key(status: StatusCode) -> Option<OpenSubtitlesError> {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        .then(|| OpenSubtitlesError::Api(format!("key rejected with HTTP {}", status.as_u16())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spaces_around_the_key_are_ignored() {
+        for request in [
+            search_request("tt0468569", None, None, " KEY\n"),
+            download_link_request(1, " KEY\n"),
+        ] {
+            let request = request.build().unwrap();
+            assert_eq!(request.headers()["Api-Key"], "KEY");
+        }
+    }
+
+    #[test]
+    fn episode_searches_name_the_season_and_episode() {
+        let request = search_request("tt0903747", Some(2), Some(5), "KEY")
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.url().query(),
+            Some("imdb_id=0903747&type=episode&season_number=2&episode_number=5")
+        );
+    }
 
     #[test]
     fn test_strip_tt_prefix() {
@@ -315,13 +366,24 @@ mod tests {
         let result = parse_search_response(json).unwrap();
         assert_eq!(result.entries.len(), 2);
 
-        let en = result.entries.iter().find(|e| e.language_code == "en").unwrap();
+        let en = result
+            .entries
+            .iter()
+            .find(|e| e.language_code == "en")
+            .unwrap();
         assert_eq!(en.file_id, 4052244);
         assert_eq!(en.format, "srt");
-        assert_eq!(en.release_name.as_deref(), Some("The.Dark.Knight.2008.BluRay"));
+        assert_eq!(
+            en.release_name.as_deref(),
+            Some("The.Dark.Knight.2008.BluRay")
+        );
         assert_eq!(en.download_count, Some(5000));
 
-        let fr = result.entries.iter().find(|e| e.language_code == "fr").unwrap();
+        let fr = result
+            .entries
+            .iter()
+            .find(|e| e.language_code == "fr")
+            .unwrap();
         assert_eq!(fr.file_id, 9988776);
 
         // Languages list is sorted and unique.
@@ -385,5 +447,32 @@ mod tests {
         assert!(!s.contains("\"languageName\""));
         assert!(s.contains("\"releaseName\""));
         assert!(s.contains("\"downloadCount\""));
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = OpenSubtitlesError::from(crate::http::error_with_url("unix:/file?token=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    #[test]
+    fn a_rejected_key_is_an_api_error() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let err = rejected_key(status);
+            assert!(matches!(err, Some(OpenSubtitlesError::Api(_))), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn other_statuses_are_left_to_the_http_check() {
+        for status in [
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(rejected_key(status).is_none(), "{status}");
+        }
     }
 }

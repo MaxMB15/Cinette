@@ -351,9 +351,16 @@ fn uuid_like() -> String {
 }
 
 /// Probe Content-Length so the UI can show a byte-based percentage. Best-effort.
+///
+/// The URL is an IPTV panel's, so this goes through the panel client. It gets
+/// the API limit, because the download's progress isn't read until it returns.
 async fn probe_total_bytes(url: &str) -> Option<i64> {
-    let client = reqwest::Client::new();
-    let resp = client.head(url).send().await.ok()?;
+    let resp = mvp_core::http::download_client()
+        .head(url)
+        .timeout(mvp_core::http::API_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
     resp.headers()
         .get(reqwest::header::CONTENT_LENGTH)?
         .to_str()
