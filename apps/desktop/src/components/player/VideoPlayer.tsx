@@ -190,6 +190,13 @@ export const PlayerView = () => {
 	activeChannelRef.current = activeChannel;
 	const playStartTimeRef = useRef<number | null>(null);
 	const progressRef = useRef<PlaybackProgress>(EMPTY_PROGRESS);
+	// The URL mpv was last asked to play. For a download it's the file's path
+	// rather than the channel's URL.
+	const [loadedUrl, setLoadedUrl] = useState(() => sessionStorage.getItem(LOADED_URL_KEY));
+	const rememberLoadedUrl = useCallback((url: string) => {
+		sessionStorage.setItem(LOADED_URL_KEY, url);
+		setLoadedUrl(url);
+	}, []);
 	// Guards against out-of-order resolution when items are opened in quick succession.
 	const startRequestRef = useRef(0);
 	const loadRequestRef = useRef(0);
@@ -381,7 +388,7 @@ export const PlayerView = () => {
 					if (loadId !== loadRequestRef.current) return;
 					const target = local ?? ch.url;
 					progress.url = target;
-					sessionStorage.setItem(LOADED_URL_KEY, target);
+					rememberLoadedUrl(target);
 					return mpv.load(target, startPos);
 				})
 				.catch(() => {});
@@ -389,7 +396,7 @@ export const PlayerView = () => {
 			setActiveChannel(ch);
 			apply?.();
 		},
-		[mpv]
+		[mpv, rememberLoadedUrl]
 	);
 
 	/**
@@ -483,7 +490,7 @@ export const PlayerView = () => {
 				adoptBackgroundProgress().finally(() => startPlayback(ch, "nav"));
 			} else {
 				loadRequestRef.current++;
-				sessionStorage.setItem(LOADED_URL_KEY, navUrl);
+				rememberLoadedUrl(navUrl);
 				mpv.load(navUrl).catch(() => {});
 				setActiveChannelName(navState.channelName ?? null);
 				setActiveChannel(null);
@@ -709,11 +716,11 @@ export const PlayerView = () => {
 				pendingStart: startPos ?? null,
 			};
 			loadRequestRef.current++;
-			sessionStorage.setItem(LOADED_URL_KEY, url);
+			rememberLoadedUrl(url);
 			mpv.load(url, startPos).catch(() => {});
 			setActiveChannel({ ...ch, url, sourceList: availableSources });
 		},
-		[mpv, flushProgress, availableSources]
+		[mpv, flushProgress, availableSources, rememberLoadedUrl]
 	);
 
 	const playEpisode = useCallback(
@@ -753,15 +760,20 @@ export const PlayerView = () => {
 	// Track the last position+duration seen while actively playing.
 	// MPV resets position/duration to 0 when a video ends or a new one loads,
 	// so we can't rely on mpvStateRef at the moment isPlaying goes false.
-	const lastPlayingStateRef = useRef({ position: 0, duration: 0 });
+	const lastPlayingStateRef = useRef<{ url: string | null; position: number; duration: number }>({
+		url: null,
+		position: 0,
+		duration: 0,
+	});
 	useEffect(() => {
 		if (mpv.state.isPlaying && mpv.state.duration > 0) {
 			lastPlayingStateRef.current = {
+				url: mpv.state.currentUrl,
 				position: mpv.state.position,
 				duration: mpv.state.duration,
 			};
 		}
-	}, [mpv.state.isPlaying, mpv.state.position, mpv.state.duration]);
+	}, [mpv.state.isPlaying, mpv.state.currentUrl, mpv.state.position, mpv.state.duration]);
 
 	const prevIsPlayingRef = useRef(false);
 	useEffect(() => {
@@ -774,7 +786,10 @@ export const PlayerView = () => {
 		// Distinguish EOF from a user pause: check if position was near the end.
 		// With keep-open=yes, EOF lands in isPaused=true (last frame frozen) — we can't
 		// use isPaused=false as the EOF signal anymore, so we use position proximity instead.
-		const { position, duration } = lastPlayingStateRef.current;
+		const { url, position, duration } = lastPlayingStateRef.current;
+		// The app loading something else stops playback too, such as the Next
+		// episode button near the end. That isn't the end of the video.
+		if (url !== loadedUrl) return;
 		if (duration <= 0 || position < duration - 5) return; // mid-video pause — do nothing
 
 		// EOF reached. With autoplay on and a next episode available, advance.
@@ -784,7 +799,7 @@ export const PlayerView = () => {
 		}
 		// Otherwise (autoplay off, or movie, or last episode): keep-open=yes already holds
 		// MPV on the last frame with isPaused=true — controls remain visible, no action needed.
-	}, [mpv.state.isPlaying, playEpisode]);
+	}, [mpv.state.isPlaying, loadedUrl, playEpisode]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few
@@ -848,14 +863,14 @@ export const PlayerView = () => {
 
 	// --- Intros, recaps, credits and previews ---
 	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
-	const segments = useSkipSegments({
+	const { video, segments } = useSkipSegments({
 		imdbId: activeImdbId,
 		contentType: activeChannel?.contentType,
 		season: subtitleSeason,
 		episode: subtitleEpisode,
 		// The polled length belongs to the stream mpv reports, which trails
-		// the channel for a moment after switching.
-		url: activeChannel?.url === mpv.state.currentUrl ? mpv.state.currentUrl : null,
+		// the one asked for by a moment after switching.
+		url: loadedUrl === mpv.state.currentUrl ? loadedUrl : null,
 		duration: mpv.state.duration,
 		enabled: segmentModes.opening !== "off" || segmentModes.ending !== "off",
 	});
@@ -863,18 +878,22 @@ export const PlayerView = () => {
 		const next = nextEpisodeRef.current;
 		if (next) playEpisode(next);
 	}, [playEpisode]);
+	// Something open over the prompt holds it, so the player doesn't skip
+	// where the notice and its Undo can't be seen.
+	const skipHeld = showShortcuts || !!pendingResume || showSubtitlePicker || showInfoDrawer;
 	const skipping = useSegmentSkipping({
+		video,
 		segments,
 		position: mpv.state.position,
 		duration: mpv.state.duration,
-		playing: mpv.state.isPlaying && !mpv.state.isPaused,
+		playing: mpv.state.isPlaying && !mpv.state.isPaused && !skipHeld,
 		modes: segmentModes,
 		autoplay,
 		hasNext: nextEpisode !== null,
 		seek: seekTo,
 		onNextEpisode: playNextEpisode,
 	});
-	const skipSegment = skipping.skip;
+	const skipSegment = skipHeld ? null : skipping.skip;
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
@@ -928,6 +947,12 @@ export const PlayerView = () => {
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
+			// Enter is only taken when there's something to skip, so it still
+			// presses a button that has focus.
+			if (action.type === "skipSegment") {
+				if (skipSegment?.()) e.preventDefault();
+				return;
+			}
 			e.preventDefault();
 
 			const s = mpv.state;
@@ -979,9 +1004,6 @@ export const PlayerView = () => {
 					break;
 				case "toggleShortcuts":
 					setShowShortcuts((v) => !v);
-					break;
-				case "skipSegment":
-					skipSegment();
 					break;
 				case "escape":
 					if (showShortcuts) {
@@ -1187,12 +1209,13 @@ export const PlayerView = () => {
 				</div>
 			)}
 
-			{!mpv.fallbackActive && !pendingResume && !showShortcuts && (
+			{!mpv.fallbackActive && (
 				<SkipSegmentPrompt
 					skipping={skipping}
 					controlsVisible={showControls}
 					playing={mpv.state.isPlaying && !mpv.state.isPaused}
-					onPressed={() => containerRef.current?.focus()}
+					held={skipHeld}
+					onFocusLost={() => containerRef.current?.focus()}
 				/>
 			)}
 

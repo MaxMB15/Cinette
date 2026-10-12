@@ -55,12 +55,12 @@ import {
 	readHwdecEnabled,
 	readSkipIntervals,
 	readSkipSegmentModes,
+	SKIP_INTERVALS_EVENT,
 	SKIP_SEGMENT_MODES_EVENT,
 	writeDefaultVolume,
 	writeHwdecEnabled,
 	writeSkipInterval,
 	writeSkipSegmentMode,
-	type SkipIntervals,
 	type SkipSegmentMode,
 } from "@/lib/player-prefs";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
@@ -133,11 +133,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		writeDefaultVolume(volume);
 	};
 
-	const [skipIntervals, setSkipIntervals] = useState(readSkipIntervals);
-	const handleSkipChange = (direction: keyof SkipIntervals, seconds: number) => {
-		setSkipIntervals((s) => ({ ...s, [direction]: seconds }));
-		writeSkipInterval(direction, seconds);
-	};
+	const skipIntervals = usePlayerPref(readSkipIntervals, SKIP_INTERVALS_EVENT);
 	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
 
 	// OMDB state
@@ -489,7 +485,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							</div>
 							<Select
 								value={skipIntervals.back}
-								onChange={(n) => handleSkipChange("back", n)}
+								onChange={(n) => writeSkipInterval("back", n)}
 								options={SKIP_CHOICES}
 								className="w-32 shrink-0"
 								aria-label="Skip back"
@@ -506,7 +502,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							</div>
 							<Select
 								value={skipIntervals.forward}
-								onChange={(n) => handleSkipChange("forward", n)}
+								onChange={(n) => writeSkipInterval("forward", n)}
 								options={SKIP_CHOICES}
 								className="w-32 shrink-0"
 								aria-label="Skip forward"
@@ -534,8 +530,8 @@ export const Settings = ({ updateState }: SettingsProps) => {
 							<div>
 								<p className="text-sm font-medium">Credits and previews</p>
 								<p className="text-xs text-muted-foreground">
-									Automatic also counts down to the next episode at the end
-									credits when autoplay is on.
+									At end credits, Automatic counts down to the next episode while
+									Autoplay is on in the player's controls.
 								</p>
 							</div>
 							<Select

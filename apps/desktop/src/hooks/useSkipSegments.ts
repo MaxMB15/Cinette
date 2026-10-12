@@ -8,6 +8,19 @@ import type { Channel, SkipSegment } from "@/lib/types";
 /** What `useSkipSegments` returns while it has nothing, kept the same between renders. */
 export const NO_SEGMENTS: readonly SkipSegment[] = Object.freeze([]);
 
+/**
+ * How far the stream's length can move from the one the times were looked
+ * up with, in seconds, before they're looked up again. The first length a
+ * TS or HLS stream reports can be an estimate.
+ */
+export const LENGTH_DRIFT = 15;
+
+/** The most lookups for one video, counting the ones tried again after a failure. */
+export const MAX_LOOKUPS = 3;
+
+/** How long to wait before trying a failed lookup again, in milliseconds. */
+export const RETRY_MS = 30_000;
+
 interface SkipSegmentsQuery {
 	/** The IMDb ID of the movie or series, which comes from OMDb. */
 	imdbId: string | null;
@@ -22,10 +35,32 @@ interface SkipSegmentsQuery {
 	enabled: boolean;
 }
 
+export interface SkipSegmentsFound {
+	/**
+	 * Tells videos apart, so `useSegmentSkipping` knows when to start over.
+	 * Null when there's nothing to look up.
+	 */
+	video: string | null;
+	/** The parts that can be skipped, in order. */
+	segments: readonly SkipSegment[];
+}
+
+/** One lookup for a video, kept to decide whether to look it up again. */
+interface Lookup {
+	video: string;
+	/** The length it was looked up with. */
+	duration: number;
+	/** How many lookups the video has had, this one included. */
+	count: number;
+	/** When it may be tried again after failing, in epoch milliseconds, or null. */
+	retryAt: number | null;
+}
+
 /**
- * The parts of the movie or episode playing that can be skipped, in order.
- * They're looked up once the stream's length is known, and again only for a
- * new stream. Live channels, and episodes without a season and episode
+ * The parts of the movie or episode playing that can be skipped. They're
+ * looked up once the stream's length is known, and again when the length
+ * moves by more than `LENGTH_DRIFT` or a lookup fails, up to `MAX_LOOKUPS`
+ * times a video. Live channels, and episodes without a season and episode
  * number, have none.
  */
 export const useSkipSegments = ({
@@ -36,42 +71,55 @@ export const useSkipSegments = ({
 	url,
 	duration,
 	enabled,
-}: SkipSegmentsQuery): readonly SkipSegment[] => {
-	const [found, setFound] = useState<{ key: string; segments: SkipSegment[] } | null>(null);
-	// The length is only read when the lookup starts, so the small changes
-	// some streams report while playing don't look the times up again.
-	const durationRef = useRef(duration);
-	durationRef.current = duration;
+}: SkipSegmentsQuery): SkipSegmentsFound => {
+	const [found, setFound] = useState<{ video: string; segments: SkipSegment[] } | null>(null);
+	// Bumped when a failed lookup may be tried again.
+	const [retry, setRetry] = useState(0);
+	const lookupRef = useRef<Lookup | null>(null);
+	const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(retryTimerRef.current), []);
 
 	const isEpisode = contentType === "series";
 	const known = isEpisode
 		? season !== undefined && episode !== undefined
 		: contentType === "movie";
-	const key =
-		enabled && imdbId && url && duration > 0 && known
-			? `${url}|${imdbId}|${season}|${episode}`
-			: null;
+	const lookupSeason = isEpisode ? (season ?? null) : null;
+	const lookupEpisode = isEpisode ? (episode ?? null) : null;
+	const video =
+		imdbId && url && known ? `${url}|${imdbId}|${lookupSeason}|${lookupEpisode}` : null;
+	const ready = enabled && video !== null && duration > 0;
 
 	useEffect(() => {
-		if (key === null || imdbId === null) return;
-		let cancelled = false;
-		getSkipSegments(
-			imdbId,
-			isEpisode ? (season ?? null) : null,
-			isEpisode ? (episode ?? null) : null,
-			durationRef.current
-		)
+		if (!ready || video === null || imdbId === null) return;
+		const last = lookupRef.current?.video === video ? lookupRef.current : null;
+		if (last) {
+			if (last.count >= MAX_LOOKUPS) return;
+			const due =
+				last.retryAt !== null
+					? Date.now() >= last.retryAt
+					: Math.abs(duration - last.duration) > LENGTH_DRIFT;
+			if (!due) return;
+		}
+		const lookup: Lookup = { video, duration, count: (last?.count ?? 0) + 1, retryAt: null };
+		lookupRef.current = lookup;
+		getSkipSegments(imdbId, lookupSeason, lookupEpisode, duration)
 			.then((segments) => {
-				if (cancelled) return;
-				setFound({ key, segments: [...segments].sort((a, b) => a.start - b.start) });
+				if (lookupRef.current !== lookup) return;
+				setFound({ video, segments: [...segments].sort((a, b) => a.start - b.start) });
 			})
-			.catch((e) => console.warn("[skip] looking up skip times failed:", e));
-		return () => {
-			cancelled = true;
-		};
-		// The key covers every input that changes the answer.
+			.catch((e) => {
+				console.warn("[skip] looking up skip times failed:", e);
+				if (lookupRef.current !== lookup) return;
+				lookup.retryAt = Date.now() + RETRY_MS;
+				clearTimeout(retryTimerRef.current);
+				retryTimerRef.current = setTimeout(() => setRetry((n) => n + 1), RETRY_MS);
+			});
+		// The video covers every other input that changes the answer.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [key]);
+	}, [ready, video, duration, retry]);
 
-	return found !== null && found.key === key ? found.segments : NO_SEGMENTS;
+	return {
+		video,
+		segments: found !== null && found.video === video ? found.segments : NO_SEGMENTS,
+	};
 };

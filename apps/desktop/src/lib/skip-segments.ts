@@ -27,12 +27,23 @@ export const NOTICE_MS = 5000;
 /** How long the countdown to the next episode runs, in milliseconds. */
 export const COUNTDOWN_MS = 5000;
 
+/**
+ * How long a skipped segment keeps its button hidden, in milliseconds, so a
+ * poll from before the seek that lands inside it again doesn't bring the
+ * button back.
+ */
+export const SKIP_SETTLE_MS = 3000;
+
 /** Which Settings choice covers a kind of segment. */
 export const segmentGroup = (kind: SkipSegmentKind): keyof SkipSegmentModes =>
 	kind === "intro" || kind === "recap" ? "opening" : "ending";
 
-/** Tells segments apart within one video. */
-export const segmentKey = (s: SkipSegment): string => `${s.kind}@${s.start}`;
+/**
+ * Tells segments apart within one video. The backend sends at most one
+ * segment of each kind, so the kind is enough, and it stays the same when
+ * the times are looked up again for a new length.
+ */
+export const segmentKey = (s: SkipSegment): string => s.kind;
 
 /**
  * The segment playing at `position`, if any. Its last second doesn't count,

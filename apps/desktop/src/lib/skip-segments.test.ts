@@ -26,11 +26,10 @@ describe("segmentGroup", () => {
 });
 
 describe("segmentKey", () => {
-	it("tells segments apart by kind and start", () => {
+	it("tells segments apart by kind, which stays the same when the times move", () => {
 		const intro = makeSegment();
-		expect(segmentKey(intro)).toBe(segmentKey(makeSegment({ end: 90 })));
+		expect(segmentKey(intro)).toBe(segmentKey(makeSegment({ start: 58, end: 118 })));
 		expect(segmentKey(intro)).not.toBe(segmentKey(makeSegment({ kind: "recap" })));
-		expect(segmentKey(intro)).not.toBe(segmentKey(makeSegment({ start: 61 })));
 	});
 });
 

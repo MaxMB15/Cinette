@@ -118,7 +118,7 @@ export const playerShortcuts = (
 	{ keys: ["N", "P"], label: "Next / previous episode" },
 	{ keys: ["S"], label: "Subtitles" },
 	{ keys: ["I"], label: "Info" },
-	{ keys: ["Enter"], label: "Skip intro, recap or credits" },
+	{ keys: ["Enter"], label: "Skip intro or credits / next episode" },
 	{ keys: ["?"], label: "Show / hide this list" },
 	{ keys: ["Esc"], label: "Exit fullscreen / close panel / leave player" },
 ];

@@ -89,8 +89,40 @@ export const writeHwdecEnabled = (enabled: boolean): void => {
 	} catch {}
 };
 
-const SKIP_BACK_KEY = "mvp_skip_back";
-const SKIP_FORWARD_KEY = "mvp_skip_forward";
+/**
+ * Reads and saves a group of Settings choices, one localStorage key per
+ * field. A value that isn't in `allowed` reads as `fallback` and isn't
+ * saved. Saving fires `event`, which `usePlayerPref` listens for.
+ */
+const choiceGroup = <F extends string, V extends string | number>(
+	keys: Record<F, string>,
+	allowed: readonly V[],
+	fallback: V,
+	event: string,
+	parse: (raw: string | null) => unknown
+) => {
+	const isAllowed = (v: unknown): v is V => allowed.includes(v as V);
+	const readOne = (field: F): V => {
+		try {
+			const v = parse(localStorage.getItem(keys[field]));
+			return isAllowed(v) ? v : fallback;
+		} catch {
+			return fallback;
+		}
+	};
+	const fields = Object.keys(keys) as F[];
+	return {
+		read: (): Record<F, V> =>
+			Object.fromEntries(fields.map((f) => [f, readOne(f)])) as Record<F, V>,
+		write: (field: F, value: V): void => {
+			if (!isAllowed(value)) return;
+			try {
+				localStorage.setItem(keys[field], String(value));
+				window.dispatchEvent(new Event(event));
+			} catch {}
+		},
+	};
+};
 
 /** The skip lengths Settings offers, in seconds. */
 export const SKIP_OPTIONS: readonly number[] = [5, 10, 15, 30, 60];
@@ -106,32 +138,20 @@ export interface SkipIntervals {
 	forward: number;
 }
 
-const readSkip = (key: string): number => {
-	try {
-		const n = Number(localStorage.getItem(key));
-		return SKIP_OPTIONS.includes(n) ? n : BUILTIN_SKIP;
-	} catch {
-		return BUILTIN_SKIP;
-	}
-};
+const skipIntervals = choiceGroup<keyof SkipIntervals, number>(
+	{ back: "mvp_skip_back", forward: "mvp_skip_forward" },
+	SKIP_OPTIONS,
+	BUILTIN_SKIP,
+	SKIP_INTERVALS_EVENT,
+	Number
+);
 
 /** How far the player skips back and forward. 10 seconds each unless changed in Settings. */
-export const readSkipIntervals = (): SkipIntervals => ({
-	back: readSkip(SKIP_BACK_KEY),
-	forward: readSkip(SKIP_FORWARD_KEY),
-});
+export const readSkipIntervals: () => SkipIntervals = skipIntervals.read;
 
 /** Save one skip length. Values that aren't in SKIP_OPTIONS are ignored. */
-export const writeSkipInterval = (direction: keyof SkipIntervals, seconds: number): void => {
-	if (!SKIP_OPTIONS.includes(seconds)) return;
-	try {
-		localStorage.setItem(
-			direction === "back" ? SKIP_BACK_KEY : SKIP_FORWARD_KEY,
-			String(seconds)
-		);
-		window.dispatchEvent(new Event(SKIP_INTERVALS_EVENT));
-	} catch {}
-};
+export const writeSkipInterval: (direction: keyof SkipIntervals, seconds: number) => void =
+	skipIntervals.write;
 
 /**
  * What the player does at a part of a movie or episode that can be skipped.
@@ -148,42 +168,20 @@ export interface SkipSegmentModes {
 	ending: SkipSegmentMode;
 }
 
-const SKIP_SEGMENT_KEYS: Record<keyof SkipSegmentModes, string> = {
-	opening: "mvp_skip_opening",
-	ending: "mvp_skip_ending",
-};
-const SKIP_SEGMENT_MODES: readonly SkipSegmentMode[] = ["button", "auto", "off"];
-const BUILTIN_SKIP_SEGMENT_MODE: SkipSegmentMode = "button";
-
 /** Window event fired after either skip mode changes. */
 export const SKIP_SEGMENT_MODES_EVENT = "mvp-skip-segment-modes";
 
-const isSkipSegmentMode = (v: unknown): v is SkipSegmentMode =>
-	SKIP_SEGMENT_MODES.includes(v as SkipSegmentMode);
-
-const readSkipSegmentMode = (group: keyof SkipSegmentModes): SkipSegmentMode => {
-	try {
-		const raw = localStorage.getItem(SKIP_SEGMENT_KEYS[group]);
-		return isSkipSegmentMode(raw) ? raw : BUILTIN_SKIP_SEGMENT_MODE;
-	} catch {
-		return BUILTIN_SKIP_SEGMENT_MODE;
-	}
-};
+const skipSegmentModes = choiceGroup<keyof SkipSegmentModes, SkipSegmentMode>(
+	{ opening: "mvp_skip_opening", ending: "mvp_skip_ending" },
+	["button", "auto", "off"],
+	"button",
+	SKIP_SEGMENT_MODES_EVENT,
+	(raw) => raw
+);
 
 /** How the player handles intros and credits. A Skip button for both unless changed in Settings. */
-export const readSkipSegmentModes = (): SkipSegmentModes => ({
-	opening: readSkipSegmentMode("opening"),
-	ending: readSkipSegmentMode("ending"),
-});
+export const readSkipSegmentModes: () => SkipSegmentModes = skipSegmentModes.read;
 
 /** Save the mode for one group. Unknown modes are ignored. */
-export const writeSkipSegmentMode = (
-	group: keyof SkipSegmentModes,
-	mode: SkipSegmentMode
-): void => {
-	if (!isSkipSegmentMode(mode)) return;
-	try {
-		localStorage.setItem(SKIP_SEGMENT_KEYS[group], mode);
-		window.dispatchEvent(new Event(SKIP_SEGMENT_MODES_EVENT));
-	} catch {}
-};
+export const writeSkipSegmentMode: (group: keyof SkipSegmentModes, mode: SkipSegmentMode) => void =
+	skipSegmentModes.write;

@@ -20,6 +20,7 @@ const AUTO: SkipSegmentModes = { opening: "auto", ending: "auto" };
 /** Renders the hook at `position` 0, with a way to move the position along. */
 const setup = (overrides: Partial<Options> = {}) => {
 	let props: Options = {
+		video: "s01e02",
 		segments: [intro, credits],
 		position: 0,
 		duration: DURATION,
@@ -70,19 +71,28 @@ describe("useSegmentSkipping", () => {
 		});
 
 		it("keeps the button for the first seconds only, unless the controls show", () => {
-			const { result, at } = setup();
-			at(60);
-			at(60 + OFFER_SECONDS - 1);
+			const { result, play } = setup();
+			play(58, 60 + OFFER_SECONDS - 1);
 			expect(result.current.offer?.fresh).toBe(true);
-			at(60 + OFFER_SECONDS);
+			play(60 + OFFER_SECONDS, 60 + OFFER_SECONDS);
 			expect(result.current.offer?.fresh).toBe(false);
 		});
 
-		it("counts the first seconds from where the segment was first seen", () => {
-			const { result, at } = setup();
+		it("counts the first seconds from where playback started in the segment", () => {
+			const { result, at, play } = setup();
 			at(90);
 			expect(result.current.offer?.fresh).toBe(true);
-			at(90 + OFFER_SECONDS - 1);
+			play(91, 90 + OFFER_SECONDS - 1);
+			expect(result.current.offer?.fresh).toBe(true);
+			play(90 + OFFER_SECONDS, 90 + OFFER_SECONDS);
+			expect(result.current.offer?.fresh).toBe(false);
+		});
+
+		it("shows the button afresh after a seek within the segment", () => {
+			const { result, at, play } = setup();
+			play(58, 80);
+			expect(result.current.offer?.fresh).toBe(false);
+			at(100);
 			expect(result.current.offer?.fresh).toBe(true);
 		});
 
@@ -100,6 +110,30 @@ describe("useSegmentSkipping", () => {
 			at(120);
 			at(71);
 			expect(result.current.offer).toBeNull();
+		});
+
+		it("does nothing more when pressed twice at once", () => {
+			const { result, at, seek } = setup();
+			at(70);
+			let again = true;
+			act(() => {
+				result.current.skip();
+				again = result.current.skip();
+			});
+			expect(again).toBe(false);
+			expect(seek).toHaveBeenCalledTimes(1);
+		});
+
+		it("offers the segment again after a seek back into it right away", () => {
+			const { result, at, play } = setup();
+			at(70);
+			act(() => void result.current.skip());
+			at(120);
+			act(() => vi.advanceTimersByTime(500));
+			at(65);
+			act(() => vi.advanceTimersByTime(3000));
+			play(66, 67);
+			expect(result.current.offer?.label).toBe("Skip intro");
 		});
 
 		it("offers the segment again when playback goes back into it later", () => {
@@ -125,6 +159,9 @@ describe("useSegmentSkipping", () => {
 			at(2700);
 			expect(result.current.offer).toMatchObject({ label: "Next episode", next: true });
 			act(() => void result.current.skip());
+			expect(onNextEpisode).toHaveBeenCalledTimes(1);
+			expect(result.current.offer).toBeNull();
+			expect(result.current.skip()).toBe(false);
 			expect(onNextEpisode).toHaveBeenCalledTimes(1);
 		});
 
@@ -240,8 +277,31 @@ describe("useSegmentSkipping", () => {
 		it("skips again in the next video", () => {
 			const { update, play, seek } = setup({ modes: AUTO });
 			play(58, 61);
-			update({ segments: [makeSegment()], position: 0 });
+			update({ video: "s01e03", segments: [makeSegment()], position: 0 });
 			play(1, 60);
+			expect(seek).toHaveBeenCalledTimes(2);
+		});
+
+		it("doesn't skip an undone segment again when its times come again", () => {
+			const { result, update, play, at, seek } = setup({ modes: AUTO });
+			play(55, 61);
+			at(120);
+			act(() => result.current.undo());
+			// Looked up again for a new length, so the times moved a little.
+			update({ segments: [makeSegment({ start: 59, end: 119, autoFrom: 59 }), credits] });
+			at(50);
+			play(51, 70);
+			expect(seek).toHaveBeenCalledTimes(2);
+		});
+
+		it("doesn't start over when the video is lost for a moment", () => {
+			const { result, update, play, at, seek } = setup({ modes: AUTO });
+			play(55, 61);
+			at(120);
+			act(() => result.current.undo());
+			update({ video: null, segments: [] });
+			update({ video: "s01e02", segments: [intro, credits] });
+			play(60, 70);
 			expect(seek).toHaveBeenCalledTimes(2);
 		});
 	});
@@ -254,16 +314,47 @@ describe("useSegmentSkipping", () => {
 			expect(result.current.offer).toBeNull();
 			act(() => void result.current.skip());
 			expect(onNextEpisode).toHaveBeenCalledTimes(1);
+			expect(result.current.countdown).toBeNull();
+		});
+
+		it("goes on once when the countdown ends and Enter is pressed at once", () => {
+			const { result, play, onNextEpisode } = setup({ modes: AUTO });
+			play(2698, 2700);
+			let again = true;
+			act(() => {
+				result.current.skip();
+				again = result.current.skip();
+			});
+			expect(again).toBe(false);
+			expect(onNextEpisode).toHaveBeenCalledTimes(1);
 		});
 
 		it("stays on the credits when the countdown is canceled", () => {
-			const { result, play } = setup({ modes: AUTO });
+			const { result, play, onNextEpisode } = setup({ modes: AUTO });
 			play(2698, 2700);
 			act(() => result.current.cancelCountdown());
 			expect(result.current.countdown).toBeNull();
 			play(2701, 2710);
 			expect(result.current.countdown).toBeNull();
 			expect(result.current.offer).toBeNull();
+			// Enter has no button to press.
+			expect(result.current.skip()).toBe(false);
+			expect(onNextEpisode).not.toHaveBeenCalled();
+		});
+
+		it("stops the countdown when autoplay is turned off", () => {
+			const { result, play, update } = setup({ modes: AUTO });
+			play(2698, 2700);
+			update({ autoplay: false });
+			expect(result.current.countdown).toBeNull();
+			expect(result.current.offer?.label).toBe("Next episode");
+		});
+
+		it("stops the countdown when the credits are set to the button", () => {
+			const { result, play, update } = setup({ modes: AUTO });
+			play(2698, 2700);
+			update({ modes: BUTTONS });
+			expect(result.current.countdown).toBeNull();
 		});
 
 		it("stops the countdown when playback leaves the credits", () => {
