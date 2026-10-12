@@ -4,7 +4,7 @@
 use crate::commands::AppState;
 use crate::downloads::recordings;
 use crate::downloads::scheduler::{start_queued, waits_for_recording};
-use mvp_core::cache::store::CacheStore;
+use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::downloads::ffmpeg::{
     build_ffmpeg_args, container_from_part_path, fold_progress_line, ProgressUpdate,
 };
@@ -164,6 +164,8 @@ fn save_setting<R: Runtime>(
 
 /// Create a queued DownloadRecord for a channel and persist it. Returns the id.
 /// `series_channel_id` is set for episodes so aggregate state can be computed.
+/// A channel that already has a finished download keeps it, and its id is
+/// returned instead of downloading the channel again.
 pub fn enqueue_record<R: Runtime>(
     app: &AppHandle<R>,
     channel_id: &str,
@@ -174,6 +176,20 @@ pub fn enqueue_record<R: Runtime>(
     series_title: Option<&str>,
 ) -> Result<String, String> {
     let app_state = app.state::<AppState>();
+    let finished = {
+        let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
+        finished_download(&cache, channel_id).map_err(|e| e.to_string())?
+    };
+    match finished {
+        Finished::Playable(id) => {
+            // The downloads list may be missing it, so it gets the record again.
+            emit_progress(app, &id);
+            return Ok(id);
+        }
+        Finished::Removed(id) => emit_removed(app, &id),
+        Finished::Nothing => {}
+    }
+
     let manager = app.state::<DownloadManager>();
     let root = manager.root();
     let dest = derive_dest_path(&root, kind, title, series_title, url);
@@ -220,6 +236,31 @@ pub fn enqueue_record<R: Runtime>(
     // the first ffmpeg progress line.
     emit_progress(app, &id);
     Ok(id)
+}
+
+/// A channel's finished download, as `enqueue_record` finds it.
+#[derive(Debug, PartialEq)]
+enum Finished {
+    /// The channel has no finished download.
+    Nothing,
+    /// The id of a finished download whose file is still on disk.
+    Playable(String),
+    /// The id of a finished download whose file was gone, now removed.
+    Removed(String),
+}
+
+/// The channel's finished download. A finished record whose file is gone is
+/// removed, so the channel downloads again and the list doesn't keep a
+/// download that can't play.
+fn finished_download(cache: &CacheStore, channel_id: &str) -> Result<Finished, CacheError> {
+    match cache.completed_download_for_channel(channel_id)? {
+        Some(done) if done.has_local_file() => Ok(Finished::Playable(done.id)),
+        Some(gone) => {
+            cache.delete_download(&gone.id)?;
+            Ok(Finished::Removed(gone.id))
+        }
+        None => Ok(Finished::Nothing),
+    }
 }
 
 /// `dest`, or `dest` with " (2)", " (3)" and so on added to the name when
@@ -301,19 +342,22 @@ fn claim_queued(cache: &CacheStore, id: &str) -> Result<Option<DownloadRecord>, 
     Ok(Some(rec))
 }
 
+/// Why a download can't start again once its channel changed or went away.
+const PLAYLIST_CHANGED: &str =
+    "The playlist changed after this download was added. Download it again.";
+
 /// The stream URL for `rec`, from its channel. M3U channel ids are positions
 /// in the playlist, so after a refresh that reorders it the same id can name
-/// another title. A download whose channel has a different title from when
-/// it was added fails rather than saving another film under its name.
+/// another title. A download whose channel is gone, or has a different title
+/// from when it was added, fails rather than saving another film under its
+/// name.
 fn source_url(cache: &CacheStore, rec: &DownloadRecord) -> Result<String, String> {
     let channel = cache
         .get_channel_by_id(&rec.channel_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("channel not found: {}", rec.channel_id))?;
+        .ok_or_else(|| PLAYLIST_CHANGED.to_string())?;
     if channel.name != rec.title {
-        return Err(
-            "The playlist changed after this download was added. Download it again.".to_string(),
-        );
+        return Err(PLAYLIST_CHANGED.to_string());
     }
     Ok(channel.url)
 }

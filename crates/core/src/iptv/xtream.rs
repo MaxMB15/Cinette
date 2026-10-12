@@ -7,8 +7,9 @@
 use crate::json::number_or_string;
 use crate::models::channel::Channel;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use url::form_urlencoded;
 
@@ -19,7 +20,8 @@ pub enum XtreamError {
     /// active.
     #[error("authentication failed")]
     AuthFailed,
-    /// The request failed or the reply was not the JSON the panel should send.
+    /// The request failed, a list came back with an error status, or the
+    /// reply was not the JSON the panel should send.
     #[error("network error: {0}")]
     Network(#[source] reqwest::Error),
     /// The JSON was valid but not in the expected shape.
@@ -225,23 +227,28 @@ impl XtreamClient {
         self.client.get(url).timeout(crate::http::API_TIMEOUT)
     }
 
-    async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
+    /// Fetches one of the panel's lists. A reply with an error status fails
+    /// even when its body parses, since a panel can send an empty list with
+    /// an error, and the refresh would then drop every saved channel of that
+    /// list.
+    async fn get_list<T: DeserializeOwned>(&self, action: &str) -> Result<Vec<T>, XtreamError> {
         let url = self.credentials.api_url(action, &[]);
-        let cats: Vec<XtreamCategory> = self.client.get(&url).send().await?.json().await?;
+        Ok(self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
+    }
+
+    async fn get_categories(&self, action: &str) -> Result<HashMap<String, String>, XtreamError> {
+        let cats: Vec<XtreamCategory> = self.get_list(action).await?;
         Ok(cats
             .into_iter()
             .map(|c| (c.category_id, c.category_name))
             .collect())
-    }
-
-    async fn fetch_streams_raw(&self, action: &str) -> Result<Vec<XtreamStream>, XtreamError> {
-        let url = self.credentials.api_url(action, &[]);
-        Ok(self.client.get(&url).send().await?.json().await?)
-    }
-
-    async fn fetch_series_raw(&self) -> Result<Vec<XtreamSeries>, XtreamError> {
-        let url = self.credentials.api_url("get_series", &[]);
-        Ok(self.client.get(&url).send().await?.json().await?)
     }
 
     /// Fetch all episodes for a specific series from the Xtream `get_series_info` endpoint.
@@ -296,7 +303,7 @@ impl XtreamClient {
                 };
 
                 channels.push(Channel {
-                    id: format!("xt-ep-{series_id}-s{season}-{i}"),
+                    id: episode_id(series_id, season, i),
                     name,
                     url: self.credentials.series_stream_url(&ep_id.to_string(), ext),
                     logo_url: logo.map(|s| s.to_string()),
@@ -315,29 +322,60 @@ impl XtreamClient {
     }
 }
 
+/// The channels an Xtream panel lists, and the lists that didn't load.
+#[derive(Debug, Default, PartialEq)]
+pub struct XtreamChannels {
+    pub channels: Vec<Channel>,
+    /// Content types whose list failed to load, such as `movie` when the
+    /// panel didn't answer for its movies. The panel may still have them, so
+    /// a refresh keeps the ones saved before.
+    pub failed_content_types: Vec<&'static str>,
+}
+
+impl XtreamChannels {
+    /// Adds the channels of one of the panel's lists, or notes its content
+    /// type as failed when the list didn't load.
+    fn add_list<T: Listing>(
+        &mut self,
+        content_type: &'static str,
+        list: Result<Vec<T>, XtreamError>,
+        to_channel: impl Fn(T) -> Option<Channel>,
+    ) {
+        match list {
+            Ok(listings) => self.channels.extend(channels_from(listings, to_channel)),
+            Err(_) => self.failed_content_types.push(content_type),
+        }
+    }
+}
+
 /// Authenticate then fetch all 6 Xtream endpoints simultaneously (3 stream lists + 3 category
 /// lists). Each fetch is independent. A failed one is logged and skipped, so a server that
-/// supports only some endpoints still returns what it can.
+/// supports only some endpoints still returns what it can, and a failed stream list is named
+/// in `failed_content_types`.
+///
+/// Channel ids come from the panel's own stream and series ids, so favorites,
+/// history and downloads stay with the same channel when the panel reorders
+/// its lists.
 pub async fn fetch_xtream_channels(
     server: &str,
     username: &str,
     password: &str,
-) -> Result<Vec<Channel>, XtreamError> {
+) -> Result<XtreamChannels, XtreamError> {
     let creds = XtreamCredentials::new(server, username, password);
     fetch_all_channels(&XtreamClient::new(creds)).await
 }
 
 /// The work of [`fetch_xtream_channels`], taking the client so tests can point
 /// it at a local server.
-async fn fetch_all_channels(client: &XtreamClient) -> Result<Vec<Channel>, XtreamError> {
+async fn fetch_all_channels(client: &XtreamClient) -> Result<XtreamChannels, XtreamError> {
     client.authenticate().await?;
 
     let (live_streams_r, live_cats_r, vod_streams_r, vod_cats_r, series_r, series_cats_r) = tokio::join!(
-        client.fetch_streams_raw("get_live_streams"),
+        client.get_list::<XtreamStream>("get_live_streams"),
         client.get_categories("get_live_categories"),
-        client.fetch_streams_raw("get_vod_streams"),
+        client.get_list::<XtreamStream>("get_vod_streams"),
         client.get_categories("get_vod_categories"),
-        client.fetch_series_raw(),
+        client.get_list::<XtreamSeries>("get_series"),
         client.get_categories("get_series_categories"),
     );
 
@@ -352,43 +390,133 @@ async fn fetch_all_channels(client: &XtreamClient) -> Result<Vec<Channel>, Xtrea
     let vod_cats = vod_cats_r.unwrap_or_default();
     let series_cats = series_cats_r.unwrap_or_default();
 
-    let mut all: Vec<Channel> = Vec::new();
     let creds = &client.credentials;
+    let mut fetched = XtreamChannels::default();
+    fetched.add_list("live", live_streams_r, |s| {
+        live_channel(creds, &live_cats, s)
+    });
+    fetched.add_list("movie", vod_streams_r, |s| vod_channel(creds, &vod_cats, s));
+    fetched.add_list("series", series_r, |s| series_channel(&series_cats, s));
 
-    if let Ok(streams) = live_streams_r {
-        all.extend(
-            streams
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, s)| live_channel(creds, &live_cats, i, s)),
-        );
-    }
-
-    if let Ok(streams) = vod_streams_r {
-        all.extend(
-            streams
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, s)| vod_channel(creds, &vod_cats, i, s)),
-        );
-    }
-
-    if let Ok(series_list) = series_r {
-        all.extend(
-            series_list
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, s)| series_channel(&series_cats, i, s)),
-        );
-    }
-
-    if all.is_empty() {
+    if fetched.channels.is_empty() {
         return Err(XtreamError::InvalidResponse(
             "No streams returned from any endpoint".to_string(),
         ));
     }
 
-    Ok(all)
+    Ok(fetched)
+}
+
+/// An entry in one of the panel's lists.
+trait Listing {
+    /// The category the entry is listed in.
+    fn category_id(&self) -> Option<&str>;
+}
+
+impl Listing for XtreamStream {
+    fn category_id(&self) -> Option<&str> {
+        self.category_id.as_deref()
+    }
+}
+
+impl Listing for XtreamSeries {
+    fn category_id(&self) -> Option<&str> {
+        self.category_id.as_deref()
+    }
+}
+
+/// Turns one of the panel's lists into channels with unique ids. A panel can
+/// list a stream in more than one category. Its first listing gets the plain
+/// id and later ones add their category id, as in `live-7-c12`, so a listing
+/// keeps its id when the panel adds or moves other channels.
+fn channels_from<T: Listing>(
+    listings: Vec<T>,
+    to_channel: impl Fn(T) -> Option<Channel>,
+) -> Vec<Channel> {
+    let mut taken = HashSet::new();
+    listings
+        .into_iter()
+        .filter_map(|listing| {
+            let category_id = listing.category_id().map(str::to_string);
+            let mut channel = to_channel(listing)?;
+            channel.id = unique_id(&mut taken, channel.id, category_id.as_deref());
+            Some(channel)
+        })
+        .collect()
+}
+
+/// `id` when no channel has it yet, else `id` with the category id added,
+/// else `id` with the first free number from 2 added. The id it returns is
+/// added to `taken`.
+fn unique_id(taken: &mut HashSet<String>, id: String, category_id: Option<&str>) -> String {
+    let unique = if !taken.contains(&id) {
+        id
+    } else if let Some(with_category) = category_id
+        .filter(|category| !category.is_empty())
+        .map(|category| format!("{id}-c{category}"))
+        .filter(|candidate| !taken.contains(candidate))
+    {
+        with_category
+    } else {
+        let mut n = 2;
+        loop {
+            let candidate = format!("{id}-{n}");
+            if !taken.contains(&candidate) {
+                break candidate;
+            }
+            n += 1;
+        }
+    };
+    taken.insert(unique.clone());
+    unique
+}
+
+/// A channel's id from its content type and the panel's id for it, such as
+/// `live-7`.
+fn channel_id(content_type: &str, panel_id: impl std::fmt::Display) -> String {
+    format!("{content_type}-{panel_id}")
+}
+
+/// The id a channel saved under one of the old list position ids, such as
+/// `vod-3`, has now. Older versions named Xtream channels by their place in
+/// the panel's lists, so an id passed to another channel whenever the panel
+/// added or reordered one. The panel's id is read back from the saved URL.
+/// Returns None for any other id, or for a URL this module didn't build.
+pub(crate) fn id_for_position_id(position_id: &str, url: &str) -> Option<String> {
+    let (old_prefix, position) = position_id.split_once('-')?;
+    if !is_number(position) {
+        return None;
+    }
+    let (content_type, panel_id) = match old_prefix {
+        "xt" => ("live", stream_id_in_url(url)?),
+        "vod" => ("movie", stream_id_in_url(url)?),
+        "ser" => ("series", url.strip_prefix("xtream://series/")?),
+        _ => return None,
+    };
+    is_number(panel_id).then(|| channel_id(content_type, panel_id))
+}
+
+/// An episode's id, such as `xt-ep-42-s1-0`, from the panel's id for its
+/// series, the season and the episode's place in that season.
+fn episode_id(series_id: u64, season: u32, index: usize) -> String {
+    format!("xt-ep-{series_id}-s{season}-{index}")
+}
+
+/// The id of the series an episode id such as `xt-ep-42-s1-0` belongs to,
+/// such as `series-42`. Returns None for any other id.
+pub(crate) fn series_id_for_episode_id(episode_id: &str) -> Option<String> {
+    let (series_id, _) = episode_id.strip_prefix("xt-ep-")?.split_once('-')?;
+    is_number(series_id).then(|| channel_id("series", series_id))
+}
+
+/// The stream id in a live or movie URL, which ends in `/{id}.{extension}`.
+fn stream_id_in_url(url: &str) -> Option<&str> {
+    let file = url.rsplit('/').next()?;
+    file.split_once('.').map(|(stream_id, _)| stream_id)
+}
+
+fn is_number(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Logs an endpoint that failed. The errors carry no URL, so the login stays out
@@ -402,13 +530,12 @@ fn warn_if_failed<T>(action: &str, result: &Result<T, XtreamError>) {
 fn live_channel(
     creds: &XtreamCredentials,
     categories: &HashMap<String, String>,
-    index: usize,
     stream: XtreamStream,
 ) -> Option<Channel> {
     let stream_id = stream.stream_id?;
     let ext = stream.container_extension.as_deref().unwrap_or("ts");
     Some(Channel {
-        id: format!("xt-{index}"),
+        id: channel_id("live", stream_id),
         url: creds.live_stream_url(stream_id, ext),
         name: stream.name.unwrap_or_else(|| format!("Stream {stream_id}")),
         logo_url: stream.stream_icon.filter(|u| !u.is_empty()),
@@ -422,13 +549,12 @@ fn live_channel(
 fn vod_channel(
     creds: &XtreamCredentials,
     categories: &HashMap<String, String>,
-    index: usize,
     stream: XtreamStream,
 ) -> Option<Channel> {
     let stream_id = stream.stream_id?;
     let ext = stream.container_extension.as_deref().unwrap_or("mp4");
     Some(Channel {
-        id: format!("vod-{index}"),
+        id: channel_id("movie", stream_id),
         url: creds.vod_stream_url(stream_id, ext),
         name: stream.name.unwrap_or_else(|| format!("VOD {stream_id}")),
         logo_url: stream.stream_icon.filter(|u| !u.is_empty()),
@@ -440,14 +566,10 @@ fn vod_channel(
 
 /// Series come without episodes, which are fetched when the user opens one,
 /// so the URL only records which series it is.
-fn series_channel(
-    categories: &HashMap<String, String>,
-    index: usize,
-    series: XtreamSeries,
-) -> Option<Channel> {
+fn series_channel(categories: &HashMap<String, String>, series: XtreamSeries) -> Option<Channel> {
     let series_id = series.series_id?;
     Some(Channel {
-        id: format!("ser-{index}"),
+        id: channel_id("series", series_id),
         name: series.name.unwrap_or_else(|| format!("Series {series_id}")),
         url: format!("xtream://series/{series_id}"),
         logo_url: series.cover.filter(|u| !u.is_empty()),
@@ -893,9 +1015,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            live_channel(&creds, &categories(), 2, stream),
+            live_channel(&creds, &categories(), stream),
             Some(Channel {
-                id: "xt-2".into(),
+                id: "live-7".into(),
                 name: "CNN".into(),
                 url: format!("http://srv/live/u/{}/7.ts", test_server::password()),
                 logo_url: Some("http://img/cnn.png".into()),
@@ -918,9 +1040,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            vod_channel(&creds, &categories(), 0, stream),
+            vod_channel(&creds, &categories(), stream),
             Some(Channel {
-                id: "vod-0".into(),
+                id: "movie-9".into(),
                 name: "VOD 9".into(),
                 url: format!("http://srv/movie/u/{}/9.mp4", test_server::password()),
                 group_title: "Uncategorized".into(),
@@ -939,9 +1061,9 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            series_channel(&categories(), 1, series),
+            series_channel(&categories(), series),
             Some(Channel {
-                id: "ser-1".into(),
+                id: "series-5".into(),
                 name: "Series 5".into(),
                 url: "xtream://series/5".into(),
                 logo_url: Some("http://img/wire.jpg".into()),
@@ -956,10 +1078,141 @@ mod tests {
     fn test_entries_without_an_id_are_skipped() {
         let creds = login("http://srv");
         let stream = || serde_json::from_value::<XtreamStream>(json!({ "name": "x" })).unwrap();
-        assert_eq!(live_channel(&creds, &categories(), 0, stream()), None);
-        assert_eq!(vod_channel(&creds, &categories(), 0, stream()), None);
+        assert_eq!(live_channel(&creds, &categories(), stream()), None);
+        assert_eq!(vod_channel(&creds, &categories(), stream()), None);
         let series: XtreamSeries = serde_json::from_value(json!({ "name": "x" })).unwrap();
-        assert_eq!(series_channel(&categories(), 0, series), None);
+        assert_eq!(series_channel(&categories(), series), None);
+    }
+
+    fn stream(stream_id: u64, category_id: &str) -> XtreamStream {
+        serde_json::from_value(json!({ "stream_id": stream_id, "category_id": category_id }))
+            .unwrap()
+    }
+
+    fn ids(channels: &[Channel]) -> Vec<&str> {
+        channels.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_stream_listed_twice_adds_the_category_to_its_second_id() {
+        let creds = login("http://srv");
+        let streams = vec![
+            stream(7, "3"),
+            stream(8, "3"),
+            stream(7, "12"),
+            stream(7, "12"),
+            stream(7, ""),
+        ];
+        let channels = channels_from(streams, |s| live_channel(&creds, &categories(), s));
+        assert_eq!(
+            ids(&channels),
+            ["live-7", "live-8", "live-7-c12", "live-7-2", "live-7-3"]
+        );
+    }
+
+    #[test]
+    fn a_listing_keeps_its_id_when_other_channels_move() {
+        let creds = login("http://srv");
+        let to_channel = |s: XtreamStream| live_channel(&creds, &categories(), s);
+        let before = channels_from(vec![stream(7, "3"), stream(7, "12")], to_channel);
+        let after = channels_from(
+            vec![
+                stream(9, "3"),
+                stream(7, "3"),
+                stream(8, "5"),
+                stream(7, "12"),
+            ],
+            to_channel,
+        );
+        assert_eq!(ids(&before), ["live-7", "live-7-c12"]);
+        assert_eq!(ids(&after), ["live-9", "live-7", "live-8", "live-7-c12"]);
+    }
+
+    #[test]
+    fn a_list_that_fails_is_noted_and_the_others_are_kept() {
+        let creds = login("http://srv");
+        let failed = || Err(XtreamError::InvalidResponse("no answer".into()));
+        let series: XtreamSeries = serde_json::from_value(json!({ "series_id": 5 })).unwrap();
+
+        let mut fetched = XtreamChannels::default();
+        fetched.add_list("live", Ok(vec![stream(7, "3")]), |s| {
+            live_channel(&creds, &categories(), s)
+        });
+        fetched.add_list("movie", failed(), |s| vod_channel(&creds, &categories(), s));
+        fetched.add_list("series", Ok(vec![series]), |s| {
+            series_channel(&categories(), s)
+        });
+
+        assert_eq!(ids(&fetched.channels), ["live-7", "series-5"]);
+        assert_eq!(fetched.failed_content_types, ["movie"]);
+    }
+
+    #[test]
+    fn an_empty_list_is_not_a_failed_one() {
+        let creds = login("http://srv");
+        let mut fetched = XtreamChannels::default();
+        fetched.add_list("movie", Ok(Vec::new()), |s| {
+            vod_channel(&creds, &categories(), s)
+        });
+        assert_eq!(fetched, XtreamChannels::default());
+    }
+
+    #[test]
+    fn position_ids_map_to_the_panels_ids_in_the_saved_url() {
+        // A dot or slash in the password must not change where the id is read.
+        let password = format!("pa.ss/word-{}", test_server::password());
+        let creds = XtreamCredentials::new("http://srv:8080/", "user", &password);
+        let cases = [
+            ("xt-0", creds.live_stream_url(7, "ts"), "live-7"),
+            ("xt-12", creds.live_stream_url(7, "m3u8"), "live-7"),
+            ("vod-3", creds.vod_stream_url(812, "mkv"), "movie-812"),
+            ("ser-41", "xtream://series/5".to_string(), "series-5"),
+        ];
+        for (position_id, url, expected) in cases {
+            assert_eq!(
+                id_for_position_id(position_id, &url).as_deref(),
+                Some(expected),
+                "{position_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_ids_and_urls_have_no_new_id() {
+        let creds = login("http://srv");
+        let live = creds.live_stream_url(7, "ts");
+        for (id, url) in [
+            ("live-7", live.as_str()),
+            ("ch-3", live.as_str()),
+            ("xt-ep-5-s1-0", "http://srv/series/u/p/100.mkv"),
+            ("xt-", live.as_str()),
+            ("xt-1a", live.as_str()),
+            ("xt-0", "http://srv/live/u/p/stream"),
+            ("xt-0", "http://srv/live/u/p/abc.ts"),
+            ("vod-0", "http://srv/movie/u/p/.mp4"),
+            ("ser-0", "http://srv/series/5"),
+            ("ser-0", "xtream://series/"),
+        ] {
+            assert_eq!(id_for_position_id(id, url), None, "{id} {url}");
+        }
+    }
+
+    #[test]
+    fn an_episode_id_names_its_series() {
+        assert_eq!(
+            series_id_for_episode_id(&episode_id(42, 1, 0)).as_deref(),
+            Some("series-42")
+        );
+        for id in [
+            "xt-ep-",
+            "xt-ep-42",
+            "xt-ep--s1-0",
+            "xt-ep-x-s1-0",
+            "ser-42",
+            "series-42",
+        ] {
+            assert_eq!(series_id_for_episode_id(id), None, "{id}");
+        }
     }
 
     // ── Talking to a panel ─────────────────────────────────────────────
@@ -1062,23 +1315,24 @@ mod tests {
     async fn a_refresh_lists_live_channels_then_movies_then_series() {
         let server = serve_panel(vec![]);
         let password = test_server::password();
-        let channels = fetch_all_channels(&panel(&server)).await.unwrap();
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
         assert_eq!(
-            id_group_url(&channels),
+            id_group_url(&fetched.channels),
             [
                 (
-                    "xt-0",
+                    "live-7",
                     "News",
                     format!("{server}/live/u/{password}/7.ts").as_str()
                 ),
                 (
-                    "vod-0",
+                    "movie-9",
                     "Movies",
                     format!("{server}/movie/u/{password}/9.mkv").as_str()
                 ),
-                ("ser-0", "Drama", "xtream://series/4"),
+                ("series-4", "Drama", "xtream://series/4"),
             ]
         );
+        assert!(fetched.failed_content_types.is_empty());
     }
 
     #[tokio::test]
@@ -1092,14 +1346,16 @@ mod tests {
             route("action=get_series_categories ", "200 OK", "not json"),
         ]);
         let live = format!("{server}/live/u/{}/7.ts", test_server::password());
-        let channels = fetch_all_channels(&panel(&server)).await.unwrap();
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
         assert_eq!(
-            id_group_url(&channels),
+            id_group_url(&fetched.channels),
             [
-                ("xt-0", "News", live.as_str()),
-                ("ser-0", "Uncategorized", "xtream://series/4"),
+                ("live-7", "News", live.as_str()),
+                ("series-4", "Uncategorized", "xtream://series/4"),
             ]
         );
+        // A failed category list only loses the group names.
+        assert_eq!(fetched.failed_content_types, ["movie"]);
     }
 
     #[tokio::test]
@@ -1109,9 +1365,57 @@ mod tests {
             "503 Service Unavailable",
             "",
         )]);
-        let channels = fetch_all_channels(&panel(&server)).await.unwrap();
-        let ids: Vec<_> = channels.iter().map(|ch| ch.id.as_str()).collect();
-        assert_eq!(ids, ["vod-0", "ser-0"]);
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
+        assert_eq!(ids(&fetched.channels), ["movie-9", "series-4"]);
+        assert_eq!(fetched.failed_content_types, ["live"]);
+    }
+
+    #[tokio::test]
+    async fn a_list_sent_with_an_error_status_counts_as_failed() {
+        // Both bodies parse as empty lists, which would read as lists the
+        // panel emptied.
+        let server = serve_panel(vec![
+            route("action=get_vod_streams ", "500 Internal Server Error", "[]"),
+            route("action=get_series ", "404 Not Found", "[]"),
+        ]);
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
+        assert_eq!(ids(&fetched.channels), ["live-7"]);
+        assert_eq!(fetched.failed_content_types, ["movie", "series"]);
+    }
+
+    #[tokio::test]
+    async fn a_category_list_sent_with_an_error_status_is_not_used() {
+        let server = serve_panel(vec![route(
+            "action=get_live_categories ",
+            "500 Internal Server Error",
+            r#"[{"category_id":"3","category_name":"Stale"}]"#,
+        )]);
+        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
+        let groups: Vec<(&str, &str)> = fetched
+            .channels
+            .iter()
+            .map(|c| (c.id.as_str(), c.group_title.as_str()))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                ("live-7", "Uncategorized"),
+                ("movie-9", "Movies"),
+                ("series-4", "Drama"),
+            ]
+        );
+        assert!(fetched.failed_content_types.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_error_status_does_not_show_the_login() {
+        let server = serve_once("500 Internal Server Error", "[]");
+        let err = panel(&server)
+            .get_list::<XtreamStream>("get_vod_streams")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
+        assert_hides(&err, &test_server::password());
     }
 
     #[tokio::test]

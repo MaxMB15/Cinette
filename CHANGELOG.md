@@ -13,6 +13,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The channel, movie and series info panes close when you drag them down, and grow to full height when you drag them up (#91).
 - The start screen shows the app icon in place of the blue play badge (#95).
 - The OpenSubtitles key field shows up once an OMDb or OpenSubtitles key is saved, not as soon as an OMDb key is typed, and then stays until you leave Settings (#120).
+- Downloading a movie or episode that has already finished hands back the finished download instead of downloading it again. If its file was deleted, it downloads again (#107).
 
 ### Added
 
@@ -51,6 +52,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Online lookups and Xtream logins give up after a timeout instead of waiting forever on a server that stopped responding (#105).
 - Large playlists on a slow connection no longer fail after 10 minutes while they are still downloading (#105).
 - Refreshing two M3U playlists at the same time no longer mixes up their downloads (#105).
+- Favorites, watch history, downloads and movie details stay with the right Xtream channel when the provider adds or reorders channels. Before, they could move to a different channel, and a downloaded movie could play in place of the one you picked (#107).
+- Refreshing an Xtream provider while its live, movie or series list fails to load keeps the channels you had from that list instead of removing them (#107).
 - The player's logs no longer show the login in a stream's link when a channel starts, buffers or reconnects (#106).
 - On Linux with Wayland, starting a video could crash the app on some desktops, and on computers without hardware video decoding the picture could stay black. Playback on Wayland now uses mpv's copy-back hardware decoding, which avoids both. X11 keeps zero-copy decoding. When OpenGL runs on the CPU, such as in a virtual machine without 3D acceleration or without a working graphics driver, the player now uses cheaper scaling, which makes a black picture there much less likely (#110).
 - Removing a playlist or provider left its watch history, saved positions, episode lists, guide data and category layout behind. Cached Xtream episode lists hold the provider's login, so the login stayed too (#92).

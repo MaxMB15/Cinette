@@ -322,6 +322,59 @@ fn picks_a_path_no_download_or_file_uses() {
     );
 }
 
+/// The finished download `d1` of a file in `dir`, which is written there only
+/// `with_file`.
+fn finished_in(dir: &tempfile::TempDir, with_file: bool) -> DownloadRecord {
+    let file = dir.path().join("Dune (2021).mkv");
+    if with_file {
+        std::fs::write(&file, b"video").unwrap();
+    }
+    finished("d1", &file)
+}
+
+#[test]
+fn a_finished_download_with_its_file_is_reused() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = CacheStore::open_in_memory().unwrap();
+    cache.upsert_download(&finished_in(&dir, true)).unwrap();
+
+    assert_eq!(
+        finished_download(&cache, "c-d1").unwrap(),
+        Finished::Playable("d1".into())
+    );
+    assert!(cache.get_download("d1").unwrap().is_some());
+}
+
+#[test]
+fn a_finished_download_whose_file_is_gone_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = CacheStore::open_in_memory().unwrap();
+    cache.upsert_download(&finished_in(&dir, false)).unwrap();
+
+    assert_eq!(
+        finished_download(&cache, "c-d1").unwrap(),
+        Finished::Removed("d1".into())
+    );
+    assert_eq!(cache.get_download("d1").unwrap(), None);
+}
+
+#[test]
+fn a_download_in_progress_is_not_reused() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = CacheStore::open_in_memory().unwrap();
+    let active = DownloadRecord {
+        status: DownloadStatus::Downloading,
+        ..finished_in(&dir, true)
+    };
+    cache.upsert_download(&active).unwrap();
+
+    assert_eq!(
+        finished_download(&cache, "c-d1").unwrap(),
+        Finished::Nothing
+    );
+    assert!(cache.get_download("d1").unwrap().is_some());
+}
+
 #[test]
 fn starts_only_while_the_channel_keeps_its_title() {
     let cache = CacheStore::open_in_memory().unwrap();
@@ -338,10 +391,10 @@ fn starts_only_while_the_channel_keeps_its_title() {
     cache
         .upsert_channel("p1", &channel(&rec.channel_id, "Arrival (2016)"))
         .unwrap();
-    assert!(source_url(&cache, &rec).is_err());
+    assert_eq!(source_url(&cache, &rec), Err(PLAYLIST_CHANGED.to_string()));
 
     let gone = queued("b", "/dl/b.mkv.part");
-    assert!(source_url(&cache, &gone).is_err());
+    assert_eq!(source_url(&cache, &gone), Err(PLAYLIST_CHANGED.to_string()));
 }
 
 /// Queue a download of a new channel that plays `url`, as adding one in the
@@ -405,6 +458,52 @@ fn a_download_saves_the_whole_video_and_how_big_it_is() {
     assert_eq!(done.error, None);
     assert_eq!(download(&app, &id), Some(done));
     assert!(!is_running(&app, &id));
+}
+
+/// A URL `enqueue` saves without fetching it, since nothing pumps the queue.
+const NOT_FETCHED: &str = "http://example.test/movie/u/7.mkv";
+
+fn download_ids(app: &TestApp) -> Vec<String> {
+    let state = app.state();
+    let cache = state.cache.lock().unwrap();
+    let downloads = cache.list_downloads().unwrap();
+    downloads.into_iter().map(|rec| rec.id).collect()
+}
+
+#[test]
+fn enqueueing_a_finished_download_hands_it_back() {
+    let app = TestApp::new();
+    let dir = tempfile::tempdir().unwrap();
+    let done = finished_in(&dir, true);
+    add_download(&app, &done);
+    let events = Events::watch(&app);
+
+    let id = enqueue(&app, "c-d1", "Dune (2021)", NOT_FETCHED);
+    assert_eq!(id, "d1");
+    assert_eq!(download_ids(&app), ["d1"]);
+    // The frontend gets the record again, in case its list missed it.
+    assert_eq!(events.sent(), vec![DownloadEvent::Progress(done)]);
+}
+
+#[test]
+fn enqueueing_a_finished_download_whose_file_is_gone_downloads_it_again() {
+    let app = TestApp::new();
+    let dir = tempfile::tempdir().unwrap();
+    add_download(&app, &finished_in(&dir, false));
+    let events = Events::watch(&app);
+
+    let id = enqueue(&app, "c-d1", "Dune (2021)", NOT_FETCHED);
+    assert_eq!(download_ids(&app), [id.as_str()]);
+    let queued = download(&app, &id).unwrap();
+    assert_eq!(queued.status, DownloadStatus::Queued);
+    assert_eq!(queued.channel_id, "c-d1");
+    assert_eq!(
+        events.sent(),
+        vec![
+            DownloadEvent::Removed("d1".into()),
+            DownloadEvent::Progress(queued),
+        ]
+    );
 }
 
 #[test]

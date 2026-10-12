@@ -533,8 +533,8 @@ fn unclaim(cache: &CacheStore, id: &str) -> Result<(), String> {
     cache.upsert_download(&rec).map_err(|e| e.to_string())
 }
 
-/// The live channel to record. Channel ids follow each channel's place in
-/// the playlist, so after a refresh the saved one can point at another
+/// The live channel to record. M3U channel ids follow each channel's place
+/// in the playlist, so after a refresh the saved one can point at another
 /// channel. Then this looks for the channel by name in the same provider.
 fn find_source(
     cache: &CacheStore,

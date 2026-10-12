@@ -232,8 +232,8 @@ fn same_provider(a: &DownloadRecord, b: &DownloadRecord, providers: &[String]) -
     provider.is_some() && provider == provider_of_recording(b, providers)
 }
 
-/// Whether `a` and `b` record one channel. Channel ids follow each channel's
-/// place in the playlist, so a refresh can give an id to another channel.
+/// Whether `a` and `b` record one channel. An M3U channel's id follows its
+/// place in the playlist, so a refresh can give the id to another channel.
 /// A recording's title is its channel's name, and the name decides, within
 /// one provider. Without a known provider the ids have to match as well.
 pub fn same_channel(a: &DownloadRecord, b: &DownloadRecord, providers: &[String]) -> bool {
@@ -242,7 +242,7 @@ pub fn same_channel(a: &DownloadRecord, b: &DownloadRecord, providers: &[String]
 }
 
 /// The channel to record for a recording of the channel called `name`.
-/// Channel ids follow each channel's place in the playlist, so after a
+/// An M3U channel's id follows its place in the playlist, so after a
 /// refresh the saved id can belong to another channel. The `saved` channel
 /// counts only while its name still matches. Otherwise this looks for the
 /// name among `channels`, the provider's channels.
