@@ -7,8 +7,9 @@ pub mod scheduler;
 
 /// The name Tauri knows the bundled ffmpeg by. The Linux packages install it in
 /// `/usr/bin`, so it can't be plain `ffmpeg`, which the distribution's own
-/// ffmpeg package owns. `tauri.conf.json`, the desktop capability and
-/// `scripts/fetch-ffmpeg.sh` use the same name.
+/// ffmpeg package owns. `tauri.conf.json`, `scripts/fetch-ffmpeg.sh` and
+/// `scripts/bundle-libmpv.sh` use the same name. The app starts it from Rust,
+/// which capabilities don't govern, so no capability names it.
 pub const FFMPEG_SIDECAR: &str = "max-video-player-ffmpeg";
 
 #[cfg(test)]
@@ -16,9 +17,20 @@ mod tests {
     use super::FFMPEG_SIDECAR;
     use serde_json::Value;
 
-    /// The sidecar's path as the bundle config and the capability give it.
+    /// The sidecar's path as the bundle config gives it.
     fn sidecar_path() -> String {
         format!("binaries/{FFMPEG_SIDECAR}")
+    }
+
+    /// The identifier of each permission in the capability file `json`.
+    fn permissions(json: &str) -> Vec<String> {
+        let capability: Value = serde_json::from_str(json).unwrap();
+        capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().or(p["identifier"].as_str()).unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -30,26 +42,36 @@ mod tests {
         );
     }
 
+    /// The downloads code doesn't need a shell permission to start ffmpeg. One
+    /// would only let the web view run it, with any arguments.
     #[test]
-    fn the_desktop_capability_lets_the_app_run_the_sidecar() {
-        let capability: Value =
-            serde_json::from_str(include_str!("../../capabilities/desktop.json")).unwrap();
-        let allowed = capability["permissions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|p| p["identifier"] == "shell:allow-execute")
-            .expect("the capability allows running a program");
-        assert_eq!(allowed["allow"][0]["name"], sidecar_path());
-        assert_eq!(allowed["allow"][0]["sidecar"], true);
+    fn no_capability_lets_the_web_view_run_programs() {
+        for json in [
+            include_str!("../../capabilities/default.json"),
+            include_str!("../../capabilities/desktop.json"),
+        ] {
+            let shell: Vec<_> = permissions(json)
+                .into_iter()
+                .filter(|p| p.starts_with("shell:"))
+                .collect();
+            assert!(shell.is_empty(), "{shell:?}");
+        }
     }
 
     #[test]
     fn the_fetch_script_names_the_binary_for_the_sidecar() {
         let script = include_str!("../../../../../scripts/fetch-ffmpeg.sh");
+        let name = format!("SIDECAR={FFMPEG_SIDECAR}");
         assert!(
-            script.contains(&format!("SIDECAR={FFMPEG_SIDECAR}\n")),
-            "scripts/fetch-ffmpeg.sh should set SIDECAR={FFMPEG_SIDECAR}"
+            script.lines().any(|line| line.trim_end() == name),
+            "scripts/fetch-ffmpeg.sh should set {name}"
         );
+        assert!(script.contains(r#"DEST="$OUT_DIR/${SIDECAR}-"#));
+    }
+
+    #[test]
+    fn the_bundle_script_checks_the_sidecars_minimum_macos() {
+        let script = include_str!("../../../../../scripts/bundle-libmpv.sh");
+        assert!(script.contains(&format!("binaries/{FFMPEG_SIDECAR}-*")));
     }
 }
