@@ -342,6 +342,7 @@ fn fail_to_start<R: Runtime>(app: &AppHandle<R>, rec: &DownloadRecord, err: &str
 /// Put a running download back in the queue and stop its ffmpeg, without
 /// marking it failed. A recording that needs the provider's connection does
 /// this. The download starts over once no recording of its provider runs.
+#[cfg(desktop)]
 pub fn requeue<R: Runtime>(app: &AppHandle<R>, id: &str) {
     update_record(app, id, |r| {
         if r.status == DownloadStatus::Downloading {

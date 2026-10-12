@@ -17,49 +17,64 @@
 //!
 //! A recording whose stream fails tries again a few times, in a new file
 //! when the first one has something in it.
+//!
+//! Only the desktop apps record. Phones and tablets build just the parts that
+//! keep the records, and their commands refuse to schedule or stop one.
 
 use crate::commands::AppState;
-use crate::downloads::keep_awake;
 use crate::downloads::manager::{self, DownloadManager};
-use chrono::NaiveDateTime;
 use mvp_core::cache::store::CacheStore;
-use mvp_core::downloads::ffmpeg::{fold_progress_line, ProgressUpdate};
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord, DownloadStatus};
-use mvp_core::downloads::recording::{self, Action, GuideProgram, Outcome, StreamError};
-use mvp_core::downloads::redact::{redact_credentials, url_origin};
-use mvp_core::models::channel::Channel;
+use mvp_core::downloads::recording::{self, GuideProgram};
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
-use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use tauri::async_runtime::Receiver;
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::CommandChild;
+#[cfg(desktop)]
+use {
+    crate::downloads::keep_awake,
+    chrono::NaiveDateTime,
+    mvp_core::downloads::ffmpeg::{fold_progress_line, ProgressUpdate},
+    mvp_core::downloads::recording::{Action, Outcome, StreamError},
+    mvp_core::downloads::redact::{redact_credentials, url_origin},
+    mvp_core::models::channel::Channel,
+    std::panic::AssertUnwindSafe,
+    std::path::Path,
+    tauri::async_runtime::Receiver,
+    tauri_plugin_shell::process::CommandEvent,
+    tauri_plugin_shell::ShellExt,
+};
 
 /// The longest the app goes without checking for recordings to start or
 /// stop, in seconds.
+#[cfg(desktop)]
 const CHECK_INTERVAL_SECS: i64 = 30;
 /// How long ffmpeg has to close its file after it's asked to stop. After
 /// that it's killed.
 const STOP_GRACE: Duration = Duration::from_secs(15);
 /// How long a recording waits after it stops its provider's downloads or
 /// recordings, so the provider sees their connections close first.
+#[cfg(desktop)]
 const HANDOVER_PAUSE: Duration = Duration::from_secs(3);
 /// How long quitting waits for recordings to close their files.
 const EXIT_GRACE: Duration = Duration::from_secs(3);
 /// How early ffmpeg may reach its length limit, in seconds. The limit counts
 /// the stream's own time, and a provider often sends the first seconds of a
 /// stream in a burst.
+#[cfg(desktop)]
 const LENGTH_EARLY_SECS: i64 = 60;
 
+#[cfg(desktop)]
 const NO_CHANNEL: &str = "The channel isn't in the playlist anymore.";
 const NOTHING_RECORDED: &str = "Nothing was recorded.";
+#[cfg(desktop)]
 const STREAM_STOPPED: &str = "The stream stopped before the end.";
 const APP_CLOSED: &str = "The app closed during the recording.";
+#[cfg(desktop)]
 const NOT_RUNNING: &str = "The app wasn't open or the computer was asleep at the time.";
+#[cfg(desktop)]
 const RETRY_NOT_RUNNING: &str =
     "The app wasn't open or the computer was asleep when it was time to try again.";
 
@@ -68,6 +83,7 @@ struct Running {
     /// Set once the app asks ffmpeg to stop, so its exit counts as the end.
     stopping: bool,
     /// When ffmpeg reaches its length limit, in Unix seconds.
+    #[cfg(desktop)]
     limit_at: i64,
 }
 
@@ -76,6 +92,7 @@ struct Running {
 pub struct Recorder {
     running: Mutex<HashMap<String, Running>>,
     /// One check at a time, so a recording can't start twice.
+    #[cfg(desktop)]
     check: Mutex<()>,
     /// How many times each recording has tried again after its stream failed.
     tries: Mutex<HashMap<String, u32>>,
@@ -96,6 +113,7 @@ impl Recorder {
     }
 
     /// Wait for `wait`, or until something calls `wake`.
+    #[cfg(desktop)]
     fn sleep(&self, wait: Duration) {
         let woken = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
         let (mut woken, _) = self
@@ -206,6 +224,7 @@ fn recover_records(
 
 /// Keep checking on a thread of its own. Call once, after the first
 /// `run_check`, with what it returned.
+#[cfg(desktop)]
 pub fn start<R: Runtime>(app: &AppHandle<R>, first: Option<i64>) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()
@@ -233,6 +252,7 @@ pub fn check_soon<R: Runtime>(app: &AppHandle<R>) {
 
 /// Run `check` and log what goes wrong. A panic in one check must not end
 /// every check after it. Returns when to check next.
+#[cfg(desktop)]
 pub fn run_check<R: Runtime>(app: &AppHandle<R>) -> Option<i64> {
     match std::panic::catch_unwind(AssertUnwindSafe(|| check(app))) {
         Ok(Ok(next_check)) => next_check,
@@ -249,6 +269,7 @@ pub fn run_check<R: Runtime>(app: &AppHandle<R>) -> Option<i64> {
 
 /// Start, extend, stop or miss whatever is due now. Returns when to check
 /// next.
+#[cfg(desktop)]
 fn check<R: Runtime>(app: &AppHandle<R>) -> Result<Option<i64>, String> {
     if exiting(app) {
         return Ok(None);
@@ -278,12 +299,14 @@ fn check<R: Runtime>(app: &AppHandle<R>) -> Result<Option<i64>, String> {
     Ok(plan.next_check)
 }
 
+#[cfg(desktop)]
 fn exiting<R: Runtime>(app: &AppHandle<R>) -> bool {
     app.try_state::<DownloadManager>()
         .is_some_and(|m| m.exiting.load(Ordering::SeqCst))
 }
 
 /// Start recording `id`. One that can't start is marked failed.
+#[cfg(desktop)]
 fn begin<R: Runtime>(app: &AppHandle<R>, id: &str) {
     if let Err(e) = try_begin(app, id) {
         tracing::warn!("Could not start a recording: {e}");
@@ -306,6 +329,7 @@ fn begin<R: Runtime>(app: &AppHandle<R>, id: &str) {
     }
 }
 
+#[cfg(desktop)]
 fn try_begin<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     let root = app.state::<DownloadManager>().root();
     let claimed = {
@@ -414,6 +438,7 @@ fn try_begin<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
 }
 
 /// Run `f` on the cache and log what goes wrong.
+#[cfg(desktop)]
 fn with_cache<R: Runtime>(app: &AppHandle<R>, f: impl FnOnce(&CacheStore) -> Result<(), String>) {
     let app_state = app.state::<AppState>();
     let done = app_state
@@ -428,6 +453,7 @@ fn with_cache<R: Runtime>(app: &AppHandle<R>, f: impl FnOnce(&CacheStore) -> Res
 
 /// Wait for those of the recordings `ids` that were asked to stop to close
 /// their files. Returns whether there were any.
+#[cfg(desktop)]
 fn wait_for_stops<R: Runtime>(app: &AppHandle<R>, ids: &[String]) -> bool {
     let recorder = app.state::<Recorder>();
     let stopping = || {
@@ -447,6 +473,7 @@ fn wait_for_stops<R: Runtime>(app: &AppHandle<R>, ids: &[String]) -> bool {
 }
 
 /// What a recording needs to start.
+#[cfg(desktop)]
 #[derive(Debug, PartialEq)]
 struct Claim {
     /// The stream to record.
@@ -463,6 +490,7 @@ struct Claim {
 /// a file named for when its program starts, or for `local_now` once it has.
 /// This happens under the cache lock, so a cancel either comes first or finds
 /// the recording started. Returns `None` when `id` isn't waiting to start.
+#[cfg(desktop)]
 fn claim(
     cache: &CacheStore,
     id: &str,
@@ -517,6 +545,7 @@ fn claim(
 
 /// Put the recording `id` back to waiting, as when the app quits while it
 /// starts. The next launch starts it again, or misses it.
+#[cfg(desktop)]
 fn unclaim(cache: &CacheStore, id: &str) -> Result<(), String> {
     let Some(mut rec) = cache.get_download(id).map_err(|e| e.to_string())? else {
         return Ok(());
@@ -536,6 +565,7 @@ fn unclaim(cache: &CacheStore, id: &str) -> Result<(), String> {
 /// The live channel to record. Channel ids follow each channel's place in
 /// the playlist, so after a refresh the saved one can point at another
 /// channel. Then this looks for the channel by name in the same provider.
+#[cfg(desktop)]
 fn find_source(
     cache: &CacheStore,
     rec: &DownloadRecord,
@@ -558,6 +588,7 @@ fn find_source(
 }
 
 /// How a recording's ffmpeg exited.
+#[cfg(desktop)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Exit {
     /// The app asked it to stop.
@@ -571,6 +602,7 @@ enum Exit {
 
 /// Follow a recording's ffmpeg until it exits, saving the size of the file
 /// as it grows. `url` is the stream, which ffmpeg's errors can name.
+#[cfg(desktop)]
 async fn watch<R: Runtime>(
     app: AppHandle<R>,
     id: String,
@@ -639,6 +671,7 @@ async fn watch<R: Runtime>(
 
 /// Finish recording `id` now that its ffmpeg is gone, then let the
 /// provider's downloads go on. `detail` is ffmpeg's error.
+#[cfg(desktop)]
 fn settle<R: Runtime>(app: &AppHandle<R>, id: &str, exit: Exit, detail: Option<String>) {
     let recorder = app.state::<Recorder>();
     let next = {
@@ -677,6 +710,7 @@ fn settle<R: Runtime>(app: &AppHandle<R>, id: &str, exit: Exit, detail: Option<S
 /// deleted. When the stream failed, the recording tries again after a while,
 /// in a new record when the first one keeps what it got. `tries` counts the
 /// tries of each recording. Returns the id of the recording to start next.
+#[cfg(desktop)]
 fn settle_record(
     cache: &CacheStore,
     id: &str,
@@ -760,6 +794,7 @@ fn settle_record(
 /// Let the running recording `into` take in `id`, which is due on the same
 /// channel, so both end up in one file. Starts `id` on its own when `into`
 /// is stopping or has ended.
+#[cfg(desktop)]
 fn merge<R: Runtime>(app: &AppHandle<R>, id: &str, into: &str, end_at: i64) {
     let stopping = app
         .state::<Recorder>()
@@ -788,6 +823,7 @@ fn merge<R: Runtime>(app: &AppHandle<R>, id: &str, into: &str, end_at: i64) {
 /// Move the end of the recording `into` to `end_at`, never earlier, and drop
 /// the scheduled recording `id`. Returns false, changing nothing, when
 /// `into` isn't recording or `id` isn't waiting.
+#[cfg(desktop)]
 fn merge_records(cache: &CacheStore, id: &str, into: &str, end_at: i64) -> Result<bool, String> {
     let get = |id: &str| cache.get_download(id).map_err(|e| e.to_string());
     let (Some(mut target), Some(next)) = (get(into)?, get(id)?) else {
@@ -803,6 +839,7 @@ fn merge_records(cache: &CacheStore, id: &str, into: &str, end_at: i64) -> Resul
 }
 
 /// Mark a recording whose window passed before it could start.
+#[cfg(desktop)]
 fn miss<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let now = manager::now_secs();
     manager::update_record(app, id, |r| mark_missed(r, now));
@@ -812,6 +849,7 @@ fn miss<R: Runtime>(app: &AppHandle<R>, id: &str) {
 /// Mark `r` missed at `now` if it's still waiting. Only a new try after the
 /// stream failed waits with an error, and that error stays below the new
 /// first line, since it says why there was a new try at all.
+#[cfg(desktop)]
 fn mark_missed(r: &mut DownloadRecord, now: i64) {
     if r.status != DownloadStatus::Scheduled {
         return;
@@ -826,6 +864,7 @@ fn mark_missed(r: &mut DownloadRecord, now: i64) {
 
 /// Stop the running recording `id`, which reached its end or hands its
 /// provider's connection over to the next recording.
+#[cfg(desktop)]
 fn finish<R: Runtime>(app: &AppHandle<R>, id: &str) {
     let ended = {
         let app_state = app.state::<AppState>();
