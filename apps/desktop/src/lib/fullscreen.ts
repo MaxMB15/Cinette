@@ -33,7 +33,9 @@ export const setWindowFullscreen = async (on: boolean): Promise<void> => {
  * app doesn't start itself, such as the green button on macOS.
  *
  * A read sent before one of the app's own changes in `changes` is dropped,
- * since it may come back with the state from before the change. Does nothing
+ * since it may come back with the state from before the change. Dragging the
+ * window's edge resizes it many times a second, so only one read runs at a
+ * time, with one more after it if the window resized meanwhile. Does nothing
  * on iOS and Android, where the window never goes full screen, or outside
  * Tauri, where there's no window to follow.
  */
@@ -48,18 +50,38 @@ export const followWindowFullscreen = (
 	} catch {
 		return () => {};
 	}
+	let stopped = false;
+	let reading = false;
+	let resizedMeanwhile = false;
 	const read = () => {
+		if (reading) {
+			resizedMeanwhile = true;
+			return;
+		}
+		reading = true;
 		const mark = changes.mark();
-		win.isFullscreen().then(
-			(on) => {
-				if (!changes.isStale(mark)) onChange(on);
-			},
-			(e) => console.error("[fullscreen] isFullscreen failed:", e)
-		);
+		win.isFullscreen()
+			.then(
+				(on) => {
+					if (!stopped && !changes.isStale(mark)) onChange(on);
+				},
+				(e) => console.error("[fullscreen] isFullscreen failed:", e)
+			)
+			.finally(() => {
+				reading = false;
+				if (resizedMeanwhile && !stopped) {
+					resizedMeanwhile = false;
+					read();
+				}
+			});
 	};
 	read();
-	const unlisten = win.onResized(read);
+	const unlisten = win.onResized(read).catch((e) => {
+		console.error("[fullscreen] onResized failed:", e);
+		return () => {};
+	});
 	return () => {
+		stopped = true;
 		unlisten.then((fn) => fn());
 	};
 };
