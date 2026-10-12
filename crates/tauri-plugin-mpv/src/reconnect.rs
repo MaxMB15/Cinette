@@ -116,19 +116,7 @@ struct UrlPayload<'a> {
 /// the audio device busy while the next stream loads. The thread checks
 /// `kill` at least once a second.
 pub fn spawn<R: Runtime>(client: Mpv, url: String, app: AppHandle<R>, kill: Arc<AtomicBool>) {
-    let watcher = Watcher {
-        client,
-        log_origin: origin_for_log(&url),
-        url,
-        app,
-        kill,
-        attempt: 0,
-        next_retry_at: None,
-        buffering_emitted: false,
-        last_known_pos: None,
-        recovery_baseline: None,
-        recovery_started_at: None,
-    };
+    let watcher = Watcher::new(client, url, app, kill);
     if let Err(e) = std::thread::Builder::new()
         .name("mpv-reconnect".into())
         .spawn(move || watcher.run())
@@ -200,6 +188,24 @@ struct Watcher<R: Runtime> {
 }
 
 impl<R: Runtime> Watcher<R> {
+    /// A watcher for a stream that is healthy so far. Tests build one this
+    /// way and run it on a thread of their own.
+    fn new(client: Mpv, url: String, app: AppHandle<R>, kill: Arc<AtomicBool>) -> Self {
+        Self {
+            client,
+            log_origin: origin_for_log(&url),
+            url,
+            app,
+            kill,
+            attempt: 0,
+            next_retry_at: None,
+            buffering_emitted: false,
+            last_known_pos: None,
+            recovery_baseline: None,
+            recovery_started_at: None,
+        }
+    }
+
     fn run(mut self) {
         // Best effort. Without it the event stream is only noisier.
         if let Err(e) = self.client.disable_deprecated_events() {
@@ -502,6 +508,9 @@ fn resume_option(last_known_pos: Option<f64>) -> Option<String> {
         .filter(|p| *p > 1.0)
         .map(|p| format!("start=+{p:.3}"))
 }
+
+#[cfg(test)]
+mod watcher_tests;
 
 #[cfg(test)]
 mod tests {
