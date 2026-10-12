@@ -5,7 +5,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { useState } from "react";
 import { FullscreenProvider, useFullscreen } from "@/lib/fullscreen-context";
-import { fakeWindow, resetFakeWindow, settle } from "@/test/fake-window";
+import { changeWindowFullscreen, fakeWindow, resetFakeWindow, settle } from "@/test/fake-window";
 import { useLeaveFullscreenOnUnmount } from "./useLeaveFullscreenOnUnmount";
 
 vi.mock("@tauri-apps/api/window", () => import("@/test/fake-window"));
@@ -64,13 +64,21 @@ describe("useLeaveFullscreenOnUnmount", () => {
 
 	it("keeps a window that was fullscreen before the player opened", async () => {
 		await renderApp(false);
-		await act(async () => {
-			fakeWindow.changeFullscreen(true);
-			await settle();
-		});
+		await changeWindowFullscreen(true);
 		fireEvent.click(screen.getByText("open player"));
 		fireEvent.click(screen.getByText("close player"));
 		expect(screen.getByText("fullscreen=true")).toBeTruthy();
 		expect(fakeWindow.setFullscreen).not.toHaveBeenCalled();
+	});
+
+	it("leaves fullscreen when the player entered it after the window left", async () => {
+		await renderApp(false);
+		await changeWindowFullscreen(true);
+		fireEvent.click(screen.getByText("open player"));
+		await changeWindowFullscreen(false);
+		fireEvent.click(screen.getByText("fullscreen"));
+		fireEvent.click(screen.getByText("close player"));
+		expect(screen.getByText("fullscreen=false")).toBeTruthy();
+		expect(fakeWindow.setFullscreen.mock.calls).toEqual([[true], [false]]);
 	});
 });

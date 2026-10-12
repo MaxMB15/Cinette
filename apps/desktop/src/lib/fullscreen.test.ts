@@ -52,7 +52,7 @@ describe("followWindowFullscreen", () => {
 	it("reads the window at the start and after each resize", async () => {
 		vi.mocked(osPlatform).mockReturnValue("macos");
 		const onChange = vi.fn();
-		const stop = followWindowFullscreen(onChange, createChangeTracker());
+		const { stop } = followWindowFullscreen(onChange, createChangeTracker());
 		await settle();
 		fakeWindow.changeFullscreen(true);
 		await settle();
@@ -74,6 +74,7 @@ describe("followWindowFullscreen", () => {
 		const changes = createChangeTracker();
 		const onChange = vi.fn();
 		followWindowFullscreen(onChange, changes);
+		await settle();
 		changes.begin()();
 		answer(false);
 		await settle();
@@ -98,8 +99,9 @@ describe("followWindowFullscreen", () => {
 	it("leaves the window alone on iOS and Android", async () => {
 		for (const os of ["ios", "android"] as const) {
 			vi.mocked(osPlatform).mockReturnValue(os);
-			const stop = followWindowFullscreen(vi.fn(), createChangeTracker());
-			stop();
+			const follower = followWindowFullscreen(vi.fn(), createChangeTracker());
+			follower.recheck();
+			follower.stop();
 		}
 		await settle();
 		expect(fakeWindow.isFullscreen).not.toHaveBeenCalled();
@@ -112,13 +114,14 @@ describe("followWindowFullscreen", () => {
 			throw new TypeError("no Tauri internals");
 		});
 		const onChange = vi.fn();
-		const stop = followWindowFullscreen(onChange, createChangeTracker());
-		stop();
+		const follower = followWindowFullscreen(onChange, createChangeTracker());
+		follower.recheck();
+		follower.stop();
 		await settle();
 		expect(onChange).not.toHaveBeenCalled();
 	});
 
-	it("logs a read that fails", async () => {
+	it("logs a read that fails and reads again at the next resize", async () => {
 		vi.mocked(osPlatform).mockReturnValue("macos");
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		onTestFinished(() => error.mockRestore());
@@ -128,6 +131,44 @@ describe("followWindowFullscreen", () => {
 		await settle();
 		expect(onChange).not.toHaveBeenCalled();
 		expect(error).toHaveBeenCalledWith("[fullscreen] isFullscreen failed:", expect.any(Error));
+
+		fakeWindow.changeFullscreen(true);
+		await settle();
+		expect(onChange).toHaveBeenCalledWith(true);
+	});
+
+	it("reads the window only once it follows its resizes", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		let listen = () => {};
+		const register = fakeWindow.onResized.getMockImplementation()!;
+		fakeWindow.onResized.mockImplementationOnce(
+			(handler) => new Promise((resolve) => (listen = () => resolve(register(handler))))
+		);
+		const onChange = vi.fn();
+		followWindowFullscreen(onChange, createChangeTracker());
+		await settle();
+		// A change while the listener is being set up fires no handler.
+		fakeWindow.changeFullscreen(true);
+		listen();
+		await settle();
+		expect(onChange.mock.calls).toEqual([[true]]);
+	});
+
+	it("reads the window again when asked", async () => {
+		vi.mocked(osPlatform).mockReturnValue("macos");
+		const onChange = vi.fn();
+		const follower = followWindowFullscreen(onChange, createChangeTracker());
+		await settle();
+		// macOS turned a change down, so the window stayed as it was.
+		fakeWindow.isFullscreen.mockResolvedValueOnce(true);
+		follower.recheck();
+		await settle();
+		expect(onChange).toHaveBeenLastCalledWith(true);
+
+		follower.stop();
+		follower.recheck();
+		await settle();
+		expect(fakeWindow.isFullscreen).toHaveBeenCalledTimes(2);
 	});
 
 	it("reads once at a time while the window is being resized", async () => {
@@ -156,7 +197,8 @@ describe("followWindowFullscreen", () => {
 			() => new Promise<boolean>((resolve) => (answer = resolve))
 		);
 		const onChange = vi.fn();
-		const stop = followWindowFullscreen(onChange, createChangeTracker());
+		const { stop } = followWindowFullscreen(onChange, createChangeTracker());
+		await settle();
 		stop();
 		answer(true);
 		await settle();
@@ -168,7 +210,7 @@ describe("followWindowFullscreen", () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		onTestFinished(() => error.mockRestore());
 		fakeWindow.onResized.mockRejectedValueOnce(new Error("no permission"));
-		const stop = followWindowFullscreen(vi.fn(), createChangeTracker());
+		const { stop } = followWindowFullscreen(vi.fn(), createChangeTracker());
 		await settle();
 		stop();
 		await settle();

@@ -27,10 +27,29 @@ export const setWindowFullscreen = async (on: boolean): Promise<void> => {
 };
 
 /**
- * Reads whether the window is full screen now and after each resize, and
- * passes it to `onChange` until the returned function is called. Going in or
- * out of full screen resizes the window, so this also catches the ways the
- * app doesn't start itself, such as the green button on macOS.
+ * How long after one of the app's own full screen changes to read the window
+ * again, in milliseconds. It's longer than the macOS animation, so the change
+ * has landed or been turned down by then.
+ */
+export const RECHECK_MS = 1000;
+
+/** Follows the window's full screen state. See `followWindowFullscreen`. */
+export interface FullscreenFollower {
+	/**
+	 * Reads the window again. Call it a while after one of the app's own
+	 * changes, since macOS can turn a change down without resizing the window.
+	 */
+	recheck: () => void;
+	/** Stops following, and passes nothing more on. */
+	stop: () => void;
+}
+
+/**
+ * Reads whether the window is full screen once it can follow its resizes,
+ * then after each resize, and passes it to `onChange` until `stop` is
+ * called. Going in or out of full screen resizes the window, so this also
+ * catches the ways the app doesn't start itself, such as the green button
+ * on macOS.
  *
  * A read sent before one of the app's own changes in `changes` is dropped,
  * since it may come back with the state from before the change. Dragging the
@@ -42,18 +61,20 @@ export const setWindowFullscreen = async (on: boolean): Promise<void> => {
 export const followWindowFullscreen = (
 	onChange: (on: boolean) => void,
 	changes: ChangeTracker
-): (() => void) => {
-	if (isMobilePlatform()) return () => {};
+): FullscreenFollower => {
+	const idle = { recheck: () => {}, stop: () => {} };
+	if (isMobilePlatform()) return idle;
 	let win: ReturnType<typeof getCurrentWindow>;
 	try {
 		win = getCurrentWindow();
 	} catch {
-		return () => {};
+		return idle;
 	}
 	let stopped = false;
 	let reading = false;
 	let resizedMeanwhile = false;
 	const read = () => {
+		if (stopped) return;
 		if (reading) {
 			resizedMeanwhile = true;
 			return;
@@ -69,19 +90,24 @@ export const followWindowFullscreen = (
 			)
 			.finally(() => {
 				reading = false;
-				if (resizedMeanwhile && !stopped) {
+				if (resizedMeanwhile) {
 					resizedMeanwhile = false;
 					read();
 				}
 			});
 	};
-	read();
 	const unlisten = win.onResized(read).catch((e) => {
 		console.error("[fullscreen] onResized failed:", e);
 		return () => {};
 	});
-	return () => {
-		stopped = true;
-		unlisten.then((fn) => fn());
+	// Reading only once the listener is in place means a change made while
+	// it was being set up isn't missed.
+	unlisten.then(() => read());
+	return {
+		recheck: read,
+		stop: () => {
+			stopped = true;
+			unlisten.then((fn) => fn());
+		},
 	};
 };

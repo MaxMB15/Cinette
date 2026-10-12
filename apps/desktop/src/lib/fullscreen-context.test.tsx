@@ -3,8 +3,9 @@
 
 import { describe, it, expect, vi, afterEach, onTestFinished } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { RECHECK_MS } from "./fullscreen";
 import { FullscreenProvider, useFullscreen } from "./fullscreen-context";
-import { fakeWindow, resetFakeWindow, settle } from "@/test/fake-window";
+import { changeWindowFullscreen, fakeWindow, resetFakeWindow, settle } from "@/test/fake-window";
 
 vi.mock("@tauri-apps/api/window", () => import("@/test/fake-window"));
 
@@ -25,13 +26,6 @@ const renderToggle = async () => {
 	);
 	await act(settle);
 };
-
-/** Changes the window the way the green button on macOS would. */
-const changeWindow = (on: boolean) =>
-	act(async () => {
-		fakeWindow.changeFullscreen(on);
-		await settle();
-	});
 
 describe("FullscreenProvider", () => {
 	afterEach(() => {
@@ -67,9 +61,9 @@ describe("FullscreenProvider", () => {
 
 	it("follows the window when it changes without the app", async () => {
 		await renderToggle();
-		await changeWindow(true);
+		await changeWindowFullscreen(true);
 		expect(screen.getByText("fullscreen=true")).toBeTruthy();
-		await changeWindow(false);
+		await changeWindowFullscreen(false);
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
 	});
 
@@ -84,11 +78,7 @@ describe("FullscreenProvider", () => {
 		fakeWindow.isFullscreen.mockImplementationOnce(
 			() => new Promise<boolean>((resolve) => (answer = resolve))
 		);
-		render(
-			<FullscreenProvider>
-				<Toggle />
-			</FullscreenProvider>
-		);
+		await renderToggle();
 		fireEvent.click(screen.getByText("fullscreen=false"));
 		await act(async () => {
 			answer(false);
@@ -106,7 +96,25 @@ describe("FullscreenProvider", () => {
 		await act(settle);
 		expect(screen.getByText("fullscreen=true")).toBeTruthy();
 
-		await changeWindow(false);
+		await changeWindowFullscreen(false);
+		expect(screen.getByText("fullscreen=false")).toBeTruthy();
+	});
+
+	it("reads the window again after its own change, which macOS can turn down", async () => {
+		await renderToggle();
+		vi.useFakeTimers();
+		onTestFinished(() => {
+			vi.useRealTimers();
+		});
+		// The window stays as it was and doesn't resize.
+		fakeWindow.setFullscreen.mockResolvedValueOnce(undefined);
+		fireEvent.click(screen.getByText("fullscreen=false"));
+		await act(() => vi.advanceTimersByTimeAsync(RECHECK_MS - 1));
+		expect(screen.getByText("fullscreen=true")).toBeTruthy();
+
+		await act(() => vi.advanceTimersByTimeAsync(1));
+		vi.useRealTimers();
+		await act(settle);
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
 	});
 

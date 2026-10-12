@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { act } from "@testing-library/react";
 import { vi } from "vitest";
 
 let fullscreen = false;
@@ -46,3 +47,13 @@ export const resetFakeWindow = () => {
 
 /** Waits until the window's pending answers have reached the app. */
 export const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Changes full screen the way the green button on macOS would, and waits
+ * for a rendered app to read it.
+ */
+export const changeWindowFullscreen = (on: boolean) =>
+	act(async () => {
+		fakeWindow.changeFullscreen(on);
+		await settle();
+	});

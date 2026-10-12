@@ -9,15 +9,17 @@ import { useFullscreen } from "@/lib/fullscreen-context";
  * another page such as the OMDb hint in an info sheet. The player's own
  * fullscreen controls go with it, so the next page would otherwise be left
  * in a fullscreen window. A window that was already fullscreen when the
- * player opened, such as from the green button on macOS, stays that way.
+ * player opened, such as from the green button on macOS, stays that way
+ * unless it left fullscreen while the player was open.
  */
 export const useLeaveFullscreenOnUnmount = () => {
 	const { isFullscreen, setFullscreen } = useFullscreen();
 	const isFullscreenRef = useRef(isFullscreen);
-	// Only the first render's value is kept.
+	// Whether the window has been fullscreen since the player opened.
 	const wasFullscreenRef = useRef(isFullscreen);
 	useEffect(() => {
 		isFullscreenRef.current = isFullscreen;
+		if (!isFullscreen) wasFullscreenRef.current = false;
 	}, [isFullscreen]);
 
 	useEffect(
