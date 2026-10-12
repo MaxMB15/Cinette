@@ -433,7 +433,7 @@ export const SeriesDetailModal = ({
 
 				{/* Step: Seasons */}
 				{step === "seasons" && (
-					<div className="overflow-y-auto flex-1 px-3 py-2">
+					<div className="overflow-y-auto overscroll-y-none flex-1 px-3 py-2">
 						{seasons.map(([s, eps]) => {
 							const recs = eps
 								.map((e) => episodeDownloadMap.get(e.id))
@@ -494,7 +494,7 @@ export const SeriesDetailModal = ({
 
 				{/* Step: Episodes */}
 				{step === "episodes" && (
-					<div className="overflow-y-auto flex-1 px-3 py-2">
+					<div className="overflow-y-auto overscroll-y-none flex-1 px-3 py-2">
 						{currentEpisodes.map((ep) => {
 							const sourceCount = channelSources(ep).length;
 							const epDl = episodeDownloadMap.get(ep.id);
@@ -580,7 +580,7 @@ export const SeriesDetailModal = ({
 							</p>
 						</div>
 						<div className="border-t border-border mx-4 shrink-0" />
-						<div className="overflow-y-auto flex-1 py-2 px-3">
+						<div className="overflow-y-auto overscroll-y-none flex-1 py-2 px-3">
 							{channelSources(sourceEp).map((src, idx) => {
 								const detail = describeSource(src);
 								return (

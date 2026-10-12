@@ -204,7 +204,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 							</p>
 						</div>
 					) : (
-						<ul className="flex-1 overflow-y-auto px-5 pb-4">
+						<ul className="flex-1 overflow-y-auto overscroll-y-none px-5 pb-4">
 							{programmes.map((prog, idx) => {
 								const isCurrent = prog.startTime <= now && prog.endTime > now;
 								const isPast = prog.endTime <= now;

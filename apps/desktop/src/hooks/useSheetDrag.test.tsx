@@ -225,9 +225,18 @@ describe("useSheetDrag", () => {
 	it("expands to full height after a drag up", () => {
 		const { getByTestId, getByText } = render(<Sheet onClose={() => {}} />);
 		const sheet = getByTestId("sheet");
+		scrollable(getByTestId("list"), 0);
 		expect(sheet.style.maxHeight).toBe("85vh");
 		drag(getByText("Header"), [200, 150, 100, 50]);
 		expect(sheet.style.maxHeight).toContain("100vh");
+	});
+
+	it("doesn't grow when everything already fits", () => {
+		const { getByTestId, getByText } = render(<Sheet onClose={() => {}} />);
+		const sheet = getByTestId("sheet");
+		const end = drag(getByText("Header"), [200, 150, 100, 50]);
+		expect(sheet.style.maxHeight).toBe("85vh");
+		expect(end.defaultPrevented).toBe(true);
 	});
 
 	it("keeps following a touch whose element a re-render removed", () => {
@@ -245,15 +254,33 @@ describe("useSheetDrag", () => {
 		expect(onClose).toHaveBeenCalledOnce();
 	});
 
-	it("leaves the list free to scroll until the touch moves down", () => {
+	it("leaves the list free to scroll until the touch clearly pulls down", () => {
 		const onClose = vi.fn();
 		const { getByTestId } = render(<Sheet onClose={onClose} />);
 		const list = getByTestId("list");
 		scrollable(list, 0);
 		touch(list, "touchstart", 100);
 		const still = touch(list, "touchmove", 100);
+		const wobble = touch(list, "touchmove", 103);
+		const up = touch(list, "touchmove", 40);
 		touch(list, "touchend");
 		expect(still.defaultPrevented).toBe(false);
+		expect(wobble.defaultPrevented).toBe(false);
+		expect(up.defaultPrevented).toBe(false);
+		expect(onClose).not.toHaveBeenCalled();
+		expect(getByTestId("sheet").style.transform).toBe("");
+	});
+
+	it("claims a pull down from the top of the list once it passes the slop", () => {
+		const { getByTestId } = render(<Sheet onClose={() => {}} />);
+		const list = getByTestId("list");
+		scrollable(list, 0);
+		touch(list, "touchstart", 100);
+		const small = touch(list, "touchmove", 103);
+		const pull = touch(list, "touchmove", 130);
+		touch(list, "touchcancel");
+		expect(small.defaultPrevented).toBe(false);
+		expect(pull.defaultPrevented).toBe(true);
 	});
 
 	it("closes after a mouse drag and drops the click that follows", () => {

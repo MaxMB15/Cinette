@@ -83,6 +83,8 @@ interface Gesture {
 	mode: "pending" | "drag" | "ignore";
 	// The scrollable element the touch started in, if any.
 	scroller: Element | null;
+	// Whether a drag up can grow the sheet, decided when the drag starts.
+	canExpand: boolean;
 	height: number;
 	offset: number;
 	samples: DragSample[];
@@ -90,17 +92,26 @@ interface Gesture {
 	pointerId: number | null;
 }
 
+const scrollsY = (el: Element): boolean => {
+	if (el.scrollHeight <= el.clientHeight) return false;
+	const { overflowY } = getComputedStyle(el);
+	return overflowY === "auto" || overflowY === "scroll";
+};
+
 const findScroller = (target: EventTarget | null, sheet: Element): Element | null => {
 	let el = target instanceof Element ? target : null;
 	while (el && el !== sheet) {
-		const { overflowY } = getComputedStyle(el);
-		if ((overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight) {
-			return el;
-		}
+		if (scrollsY(el)) return el;
 		el = el.parentElement;
 	}
 	return null;
 };
+
+// True when the sheet cuts off some of its content, either by clipping it or
+// in a scrolling list, so growing it shows more.
+const hidesContent = (sheet: Element): boolean =>
+	sheet.scrollHeight > sheet.clientHeight ||
+	Array.from(sheet.querySelectorAll("*")).some(scrollsY);
 
 // A dialog opened from inside the sheet, such as a download's confirm, isn't
 // part of it for dragging.
@@ -141,7 +152,9 @@ const paint = (sheet: HTMLElement, offset: number, expanded: boolean) => {
  *
  * Put `sheetRef` on the sheet, which gets its max height from here, and
  * spread `handleProps` on the handle and header so a mouse can drag them too.
- * The sheet's CSS transition animates the release.
+ * The sheet's CSS transition animates the release. Give scrolling content in
+ * the sheet `overscroll-y-none`, so a pull down from its top can't also
+ * bounce the content.
  */
 export const useSheetDrag = ({
 	onClose,
@@ -171,6 +184,7 @@ export const useSheetDrag = ({
 				startY: y,
 				mode: "pending",
 				scroller,
+				canExpand: false,
 				height: sheet.offsetHeight,
 				offset: 0,
 				samples: [],
@@ -197,16 +211,18 @@ export const useSheetDrag = ({
 					g.mode = "ignore";
 					return false;
 				}
-				// Not a pull down yet. Claiming it would stop the content scrolling
-				// for the rest of the touch.
-				if (dy === 0) return false;
+				// Not clearly a pull down yet. WebKit lets the first touchmove decide
+				// whether the content can scroll for the rest of the touch, so
+				// claiming a small wobble down would stop a scroll that follows it.
+				if (dy < DRAG_SLOP) return false;
 			}
 			if (Math.abs(dy) < DRAG_SLOP) return true;
 			g.mode = "drag";
+			g.canExpand = !g.scroller && !latest.current.expanded && hidesContent(sheet);
 			sheet.style.transition = "none";
 		}
 		const { expanded } = latest.current;
-		g.offset = g.scroller || expanded ? Math.max(0, dy) : dy;
+		g.offset = g.canExpand ? dy : Math.max(0, dy);
 		const now = performance.now();
 		g.samples.push({ y, t: now });
 		while (g.samples.length > 2 && now - g.samples[0].t > VELOCITY_WINDOW_MS) {
