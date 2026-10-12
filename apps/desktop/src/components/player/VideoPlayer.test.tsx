@@ -1,0 +1,2023 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+	type ComponentProps,
+	type ReactNode,
+} from "react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from "react-router-dom";
+import type * as Bridge from "@/lib/tauri";
+import type { useMpv } from "@/hooks/useMpv";
+import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
+import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
+import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
+import type { SubtitlePicker } from "./SubtitlePicker";
+import type {
+	Channel,
+	DownloadRecord,
+	LayoutMode,
+	MpvPlayerState,
+	PlaybackPosition,
+	Platform,
+	SkipSegment,
+} from "@/lib/types";
+import { FullscreenContext } from "@/lib/fullscreen-context";
+import { consumeBrowseState, saveBrowseSearch } from "@/lib/browse-state";
+import { writeSkipInterval, writeSkipSegmentMode } from "@/lib/player-prefs";
+import { makeChannel, makeDownload } from "@/test/channel-fixtures";
+import { makeEpisode, makeMovie, makeNewsChannel, makeOmdb } from "@/test/detail-fixtures";
+import { deferred } from "@/test/deferred";
+import { installPointerEvent } from "@/test/pointer-event";
+import { makeSegment } from "@/test/segments";
+import { PlayerView } from "./VideoPlayer";
+
+type Mpv = ReturnType<typeof useMpv>;
+
+/** What mpv reports with nothing loaded. */
+const idleState = vi.hoisted(
+	() => (): MpvPlayerState => ({
+		isPlaying: false,
+		isPaused: false,
+		currentUrl: null,
+		volume: 100,
+		position: 0,
+		duration: 0,
+		playbackStarted: false,
+		openFailed: false,
+	})
+);
+
+const env = vi.hoisted(() => ({
+	channels: [] as Channel[],
+	downloads: [] as DownloadRecord[],
+	layoutMode: "desktop" as LayoutMode,
+	os: "macos" as Platform,
+}));
+
+const tauri = vi.hoisted(() => ({
+	mpvSetBounds: vi.fn<typeof Bridge.mpvSetBounds>(async () => {}),
+	mpvSetMediaInfo: vi.fn<typeof Bridge.mpvSetMediaInfo>(async () => {}),
+	mpvGetState: vi.fn<typeof Bridge.mpvGetState>(async () => idleState()),
+	mpvSubAdd: vi.fn<typeof Bridge.mpvSubAdd>(async () => {}),
+	mpvSubRemove: vi.fn<typeof Bridge.mpvSubRemove>(async () => {}),
+	mpvSetSubDelay: vi.fn<typeof Bridge.mpvSetSubDelay>(async () => {}),
+	recordPlayStart: vi.fn<typeof Bridge.recordPlayStart>(async () => {}),
+	recordPlayEnd: vi.fn<typeof Bridge.recordPlayEnd>(async () => {}),
+	fetchOmdbData: vi.fn<typeof Bridge.fetchOmdbData>(async () => null),
+	fetchWhatsonData: vi.fn<typeof Bridge.fetchWhatsonData>(async () => null),
+	searchSubtitles: vi.fn<typeof Bridge.searchSubtitles>(async () => null),
+	downloadSubtitle: vi.fn<typeof Bridge.downloadSubtitle>(async () => "/subtitles/chosen.srt"),
+	readSubtitleFile: vi.fn<typeof Bridge.readSubtitleFile>(async () => ""),
+	getPlaybackPosition: vi.fn<typeof Bridge.getPlaybackPosition>(async () => null),
+	savePlaybackPosition: vi.fn<typeof Bridge.savePlaybackPosition>(async () => {}),
+	deletePlaybackPosition: vi.fn<typeof Bridge.deletePlaybackPosition>(async () => {}),
+	handOffProgress: vi.fn<typeof Bridge.handOffProgress>(async () => {}),
+	resolveLocalDownload: vi.fn<typeof Bridge.resolveLocalDownload>(async () => null),
+	enqueueMovieDownload: vi.fn<typeof Bridge.enqueueMovieDownload>(async () => "dl-new"),
+	enqueueEpisodeDownload: vi.fn<typeof Bridge.enqueueEpisodeDownload>(async () => "dl-new"),
+	stopDownload: vi.fn<typeof Bridge.stopDownload>(async () => {}),
+	removeDownload: vi.fn<typeof Bridge.removeDownload>(async () => {}),
+	getSkipSegments: vi.fn<typeof Bridge.getSkipSegments>(async () => []),
+}));
+
+/**
+ * A mock function handles the promises it returns, so a rejection the player
+ * doesn't catch would go unnoticed. This sends each call through a promise of
+ * its own, and Vitest fails the run on one that's left unhandled.
+ */
+const ownPromise = vi.hoisted(
+	() =>
+		<A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+		(...args: A): Promise<R> =>
+			fn(...args).then((v) => v)
+);
+
+/**
+ * Stands in for useMpv. Tests set what mpv reports, as its polls would, and
+ * check what the player asked it to do.
+ */
+const fakeMpv = vi.hoisted(() => {
+	const actions = {
+		load: vi.fn<Mpv["load"]>(async () => {}),
+		reload: vi.fn<Mpv["reload"]>(async () => true),
+		getLastKnownPosition: vi.fn<Mpv["getLastKnownPosition"]>(() => 0),
+		play: vi.fn<Mpv["play"]>(async () => {}),
+		pause: vi.fn<Mpv["pause"]>(async () => {}),
+		stop: vi.fn<Mpv["stop"]>(async () => {}),
+		seek: vi.fn<Mpv["seek"]>(async () => {}),
+		setVolume: vi.fn<Mpv["setVolume"]>(async () => {}),
+		toggleMute: vi.fn<Mpv["toggleMute"]>(async () => {}),
+		refresh: vi.fn<Mpv["refresh"]>(async () => {}),
+	};
+	const { getLastKnownPosition, ...asyncActions } = actions;
+	const player = {
+		getLastKnownPosition,
+		...(Object.fromEntries(
+			Object.entries(asyncActions).map(([name, fn]) => [
+				name,
+				ownPromise(fn as (...a: unknown[]) => Promise<unknown>),
+			])
+		) as typeof asyncActions),
+	};
+	const initial = (): Mpv => ({
+		state: idleState(),
+		error: null,
+		fallbackActive: false,
+		firstFrameReady: false,
+		opening: false,
+		loadId: 0,
+		reconnecting: false,
+		reconnectAttempt: 0,
+		buffering: false,
+		loadFailed: false,
+		openFailed: false,
+		recentlyRecovered: false,
+		...player,
+	});
+	let current = initial();
+	const listeners = new Set<() => void>();
+	return {
+		actions,
+		get: () => current,
+		subscribe: (listener: () => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		reset: () => {
+			current = initial();
+		},
+		set: (patch: Partial<Omit<Mpv, "state">> & { state?: Partial<MpvPlayerState> }) => {
+			current = {
+				...current,
+				...patch,
+				state: patch.state ? { ...current.state, ...patch.state } : current.state,
+			};
+			listeners.forEach((listener) => listener());
+		},
+	};
+});
+
+vi.mock("@/lib/tauri", () =>
+	Object.fromEntries(
+		Object.entries(tauri).map(([name, fn]) => [
+			name,
+			ownPromise(fn as (...a: unknown[]) => Promise<unknown>),
+		])
+	)
+);
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => env.os }));
+
+vi.mock("@/hooks/usePlatform", () => ({
+	usePlatform: () => ({ platform: env.os, layoutMode: env.layoutMode }),
+}));
+
+vi.mock("@/hooks/useChannels", () => ({ useChannels: () => ({ channels: env.channels }) }));
+
+vi.mock("@/hooks/useDownloads", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/hooks/useDownloads")>();
+	return {
+		...actual,
+		useDownloads: () => ({
+			downloads: env.downloads,
+			...actual.groupDownloads(env.downloads),
+		}),
+	};
+});
+
+vi.mock("@/hooks/useMpv", async () => {
+	const { useSyncExternalStore } = await import("react");
+	return { useMpv: () => useSyncExternalStore(fakeMpv.subscribe, fakeMpv.get) };
+});
+
+// The picker and the drawers have tests of their own. These stand-ins show
+// what the player passed them and call back the way they would.
+vi.mock("./SubtitlePicker", () => ({
+	SubtitlePicker: (props: ComponentProps<typeof SubtitlePicker>) => (
+		<div role="dialog" aria-label="Subtitle picker">
+			<p>
+				Looking up {props.imdbId} season {props.season ?? "none"} episode{" "}
+				{props.episode ?? "none"}
+			</p>
+			<input aria-label="Search subtitles" />
+			<button
+				type="button"
+				onClick={() =>
+					props.onSubtitleSelected?.(
+						101,
+						[{ start: 1, end: 4, text: "Mind the lantern" }],
+						{ fileId: 101, languageCode: "en", format: "srt" },
+						1
+					)
+				}
+			>
+				Pick English
+			</button>
+			<button type="button" onClick={() => props.onSubtitleSelected?.(null)}>
+				Pick none
+			</button>
+			<button type="button" onClick={() => props.onDelayChange?.(1.5)}>
+				Delay subtitles
+			</button>
+			<button type="button" onClick={() => props.onSettingsModeChange?.(true)}>
+				Adjust subtitles
+			</button>
+			<button type="button" onClick={props.onClose}>
+				Close subtitles
+			</button>
+		</div>
+	),
+}));
+
+vi.mock("@/components/channels/MovieInfoDrawer", () => ({
+	MovieInfoDrawer: (props: ComponentProps<typeof MovieInfoDrawer>) => (
+		<div role="dialog" aria-label={`About ${props.movie.name}`}>
+			<p>
+				Details {props.prefetchedOmdbData?.imdbId ?? "none"}, guide{" "}
+				{props.prefetchedWhatsonData ? "found" : "none"}
+			</p>
+			<button type="button" onClick={() => props.onPlay({ ...props.movie, url: MIRROR_URL })}>
+				Play the second source
+			</button>
+			<button type="button" onClick={() => props.onPlay(harborLights())}>
+				Play another movie
+			</button>
+			<button type="button" onClick={props.onClose}>
+				Close details
+			</button>
+		</div>
+	),
+}));
+
+vi.mock("@/components/channels/SeriesDetailModal", () => ({
+	SeriesDetailModal: (props: ComponentProps<typeof SeriesDetailModal>) => (
+		<div role="dialog" aria-label={`Episodes of ${props.showTitle}`}>
+			<p>Series card {props.seriesChannelId}</p>
+			{props.episodes.map((ep) => (
+				<button key={ep.id} type="button" onClick={() => props.onPlay(ep)}>
+					Play {ep.id}
+				</button>
+			))}
+			<button type="button" onClick={props.onClose}>
+				Close episodes
+			</button>
+		</div>
+	),
+}));
+
+vi.mock("@/components/channels/LiveInfoDrawer", () => ({
+	LiveInfoDrawer: (props: ComponentProps<typeof LiveInfoDrawer>) => (
+		<div role="dialog" aria-label={`About ${props.channel.name}`}>
+			<button type="button" onClick={props.onClose}>
+				Close details
+			</button>
+		</div>
+	),
+}));
+
+const MOVIE_URL = "https://cdn.example.test/movies/lantern-keeper.mkv";
+const MIRROR_URL = "http://mirror.example.test/movies/lantern-keeper.mkv";
+const MOVIE_KEY = "movie:the lantern keeper";
+const DOWNLOADED_MOVIE = "/downloads/lantern-keeper.mkv";
+const NEWS_URL = "http://live.example.test/news24.ts";
+
+/** The movie most tests play. It has a second source on a mirror. */
+const lanternKeeper = (overrides: Partial<Channel> = {}): Channel =>
+	makeMovie({ name: "The Lantern Keeper", url: MOVIE_URL, sources: [MIRROR_URL], ...overrides });
+
+/** Another movie, opened while the first one plays. */
+const harborLights = (): Channel =>
+	makeMovie({
+		id: "mv2",
+		name: "Harbor Lights",
+		url: "https://cdn.example.test/movies/harbor-lights.mkv",
+	});
+
+/** OMDb details for The Lantern Keeper. */
+const lanternOmdb = () =>
+	makeOmdb({
+		title: "The Lantern Keeper",
+		director: "Ada Marsh",
+		actors: "Tom Reed, Lena Vale",
+		plot: "A keeper guards the last light on a stormy coast.",
+		posterUrl: "https://img.example.test/lantern-keeper.jpg",
+		imdbId: "tt9000001",
+		runtime: "98 min",
+	});
+
+/** OMDb details for the series the episodes belong to. */
+const showOmdb = () =>
+	makeOmdb({
+		title: "Show",
+		director: "Ivy Stone",
+		actors: "Sam Hale, Rita Moss",
+		plot: "Neighbors share a lighthouse.",
+		posterUrl: "https://img.example.test/show.jpg",
+		imdbId: "tt9000002",
+		runtime: "22 min",
+	});
+
+const ep1 = makeEpisode(1, 1, "Pilot");
+const ep2 = makeEpisode(1, 2, "Second");
+const ep3 = makeEpisode(1, 3, "Third");
+/** The first episode again, from another provider. */
+const ep1Mirror = makeEpisode(1, 1, "Pilot", {
+	id: "s1e1-b",
+	url: "http://mirror.example.test/show/s1e1.mkv",
+});
+/** The series card in the channel list. Its id groups the episodes' downloads. */
+const seriesCard = makeChannel({
+	id: "series-show",
+	name: "Show",
+	contentType: "series",
+	seriesTitle: "Show",
+});
+
+/** A resume point as the backend returns it. */
+const saved = (
+	contentKey: string,
+	positionSeconds: number,
+	durationSeconds: number
+): PlaybackPosition => ({ contentKey, positionSeconds, durationSeconds, updatedAt: 0 });
+
+/** Makes the backend remember these resume points and no others. */
+const remember = (...points: PlaybackPosition[]) =>
+	tauri.getPlaybackPosition.mockImplementation(
+		async (key) => points.find((p) => p.contentKey === key) ?? null
+	);
+
+/** What mpv reports while `url` plays. */
+const playing = (currentUrl: string, position: number, duration: number) => ({
+	currentUrl,
+	position,
+	duration,
+	isPlaying: true,
+	isPaused: false,
+});
+
+/** What mpv reports once `url` is paused, or held on its last frame at the end. */
+const paused = (currentUrl: string, position: number, duration: number) => ({
+	currentUrl,
+	position,
+	duration,
+	isPlaying: false,
+	isPaused: true,
+});
+
+/** The addresses mpv was asked to play, in order. */
+const loadedUrls = () => fakeMpv.actions.load.mock.calls.map(([url]) => url);
+
+/** Records each time the player turns full screen on or off. */
+const fullscreenSpy = vi.fn<(on: boolean) => void>();
+
+/** Full screen state the way the app holds it, with every change recorded. */
+const FullscreenHarness = ({ initial, children }: { initial: boolean; children: ReactNode }) => {
+	const [isFullscreen, setIsFullscreen] = useState(initial);
+	const setFullscreen = useCallback((on: boolean) => {
+		fullscreenSpy(on);
+		setIsFullscreen(on);
+	}, []);
+	const value = useMemo(() => ({ isFullscreen, setFullscreen }), [isFullscreen, setFullscreen]);
+	return <FullscreenContext.Provider value={value}>{children}</FullscreenContext.Provider>;
+};
+
+/** Lets a test move around the app the way its links do. */
+const nav: { current: NavigateFunction | null } = { current: null };
+
+/** Hands the router's navigate function to `nav`. */
+const NavHandle = () => {
+	const navigate = useNavigate();
+	useEffect(() => {
+		nav.current = navigate;
+	}, [navigate]);
+	return null;
+};
+
+type NavState = {
+	url?: string;
+	channelName?: string;
+	channel?: Channel;
+	seriesEpisodes?: Channel[];
+} | null;
+
+interface RenderOptions {
+	/** The page the player was opened from, or null when it was the first page. */
+	from?: string | null;
+	fullscreen?: boolean;
+}
+
+/** Opens the player page with `state`, as a link from another page would. */
+const renderPlayer = (state: NavState, { from = "/", fullscreen = false }: RenderOptions = {}) => {
+	const player = { pathname: "/player", state };
+	const entries = from === null ? [player] : [from, player];
+	return render(
+		<FullscreenHarness initial={fullscreen}>
+			<MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+				<NavHandle />
+				<Routes>
+					<Route path="/" element={<p>Channel list</p>} />
+					<Route path="/playlists" element={<p>Playlists</p>} />
+					<Route path="/player" element={<PlayerView />} />
+				</Routes>
+			</MemoryRouter>
+		</FullscreenHarness>
+	);
+};
+
+/** Lets pending lookups and loads settle. */
+const flush = () =>
+	act(async () => {
+		for (let i = 0; i < 30; i++) await Promise.resolve();
+	});
+
+/** Opens `channel` in the player from the channel list and waits for it to start. */
+const openItem = async (
+	channel: Channel,
+	{ episodes, url, ...options }: RenderOptions & { episodes?: Channel[]; url?: string } = {}
+) => {
+	const view = renderPlayer(
+		{ url: url ?? channel.url, channel, seriesEpisodes: episodes },
+		options
+	);
+	await flush();
+	return view;
+};
+
+/** Opens something else while the player is already showing. */
+const goTo = async (state: NavState) => {
+	act(() => {
+		void nav.current?.("/player", { state });
+	});
+	await flush();
+};
+
+/** Leaves the player for another page of the app. */
+const goToPage = async (path: string) => {
+	act(() => {
+		void nav.current?.(path);
+	});
+	await flush();
+};
+
+/** Presses a key wherever focus is. Returns false when the page claimed the key. */
+const press = async (key: string, init: KeyboardEventInit = {}) => {
+	const unclaimed = fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+	await flush();
+	return unclaimed;
+};
+
+/** Reports a new mpv state, as the next poll would. */
+const setMpv = (patch: Parameters<typeof fakeMpv.set>[0]) =>
+	act(async () => {
+		fakeMpv.set(patch);
+	});
+
+/** Sets how many touch points the screen reports. */
+const setTouchPoints = (points: number) =>
+	Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: points });
+
+/** Sets up an iPad or a phone, which has a touch screen. */
+const setUpTouchScreen = (layoutMode: LayoutMode = "tablet") => {
+	env.os = "ios";
+	env.layoutMode = layoutMode;
+	setTouchPoints(5);
+};
+
+/** Hides or shows the page, as switching apps or locking the phone does. */
+const setVisibility = (state: DocumentVisibilityState) =>
+	act(() => {
+		Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+		document.dispatchEvent(new Event("visibilitychange"));
+	});
+
+/** The player itself, which takes the keyboard and the mouse. */
+const playerArea = () => document.querySelector(".player-container") as HTMLElement;
+
+/** The layer over the video that takes taps on a touch screen. */
+const tapLayer = () => document.querySelector(".touch-manipulation") as HTMLElement;
+
+/** The bar along the bottom with the playback buttons. */
+const controlBar = () =>
+	screen.getByRole("button", { name: "Stop" }).closest(".transition-opacity");
+
+/** The positioned box around a subtitle line. */
+const subtitleBox = (text: string) =>
+	screen.getByText(text).parentElement?.parentElement as HTMLElement;
+
+/** A layout box `width` by `height` at the left edge, `top` down the window. */
+const box = (width: number, height: number, top = 0): DOMRect => ({
+	x: 0,
+	y: top,
+	width,
+	height,
+	top,
+	left: 0,
+	right: width,
+	bottom: top + height,
+	toJSON: () => ({}),
+});
+
+/** A finger tap on the video at `clientX`. */
+const tap = (clientX = 0) => {
+	fireEvent.pointerDown(tapLayer(), { clientX, clientY: 300, pointerType: "touch" });
+	fireEvent.pointerUp(tapLayer(), { clientX, clientY: 300, pointerType: "touch" });
+};
+
+/** The resume prompt, if it shows. */
+const resumePrompt = () => screen.queryByRole("dialog", { name: "Resume watching?" });
+
+/** The keyboard shortcut list, if it shows. */
+const shortcutList = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
+
+/** Opens the source menu and plays source `n`, counting from 1. */
+const pickSource = (n: number) => {
+	fireEvent.click(screen.getByRole("button", { name: "Source" }));
+	fireEvent.click(screen.getByRole("menuitemradio", { name: new RegExp(`^Source ${n}`) }));
+};
+
+/** Opens the subtitle picker and picks the English subtitles it offers. */
+const pickEnglishSubtitles = () => {
+	fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+	fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+};
+
+installPointerEvent();
+
+beforeEach(() => {
+	vi.resetAllMocks();
+	localStorage.clear();
+	sessionStorage.clear();
+	fakeMpv.reset();
+	env.channels = [];
+	env.downloads = [];
+	env.layoutMode = "desktop";
+	env.os = "macos";
+	nav.current = null;
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+	Reflect.deleteProperty(navigator, "maxTouchPoints");
+	Reflect.deleteProperty(document, "visibilityState");
+});
+
+describe("opening something to watch", () => {
+	it("starts a live channel from the beginning without looking up a resume point or details", async () => {
+		await openItem(makeNewsChannel());
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(NEWS_URL, undefined);
+		expect(tauri.getPlaybackPosition).not.toHaveBeenCalled();
+		expect(tauri.fetchOmdbData).not.toHaveBeenCalled();
+		expect(tauri.recordPlayStart).toHaveBeenCalledWith("ch1", "News 24", null, "live");
+		expect(screen.getByText("News 24")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+	});
+
+	it("plays a finished download instead of the stream and saves progress under the movie", async () => {
+		tauri.resolveLocalDownload.mockResolvedValue(DOWNLOADED_MOVIE);
+		await openItem(lanternKeeper());
+		expect(tauri.resolveLocalDownload).toHaveBeenCalledWith("mv1");
+		expect(loadedUrls()).toEqual([DOWNLOADED_MOVIE]);
+		await setMpv({ state: paused(DOWNLOADED_MOVIE, 700, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 700, 3600);
+	});
+
+	it("plays the stream when looking for a download fails", async () => {
+		tauri.resolveLocalDownload.mockRejectedValue(new Error("database locked"));
+		await openItem(lanternKeeper());
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, undefined);
+	});
+
+	it("plays the source picked in the channel list and marks it in the source menu", async () => {
+		await openItem(lanternKeeper(), { url: MIRROR_URL });
+		expect(loadedUrls()).toEqual([MIRROR_URL]);
+		fireEvent.click(screen.getByRole("button", { name: "Source" }));
+		expect(screen.getByRole("menuitemradio", { name: /^Source 2/ })).toHaveAttribute(
+			"aria-checked",
+			"true"
+		);
+		expect(screen.getByRole("menuitemradio", { name: /^Source 1/ })).toHaveAttribute(
+			"aria-checked",
+			"false"
+		);
+	});
+
+	it("plays a bare stream address under the name it came with", async () => {
+		const radio = "http://live.example.test/harbor-radio.ts";
+		renderPlayer({ url: radio, channelName: "Harbor Radio" });
+		await flush();
+		expect(fakeMpv.actions.load.mock.calls).toEqual([[radio]]);
+		expect(screen.getByText("Harbor Radio")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Channel info" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+		expect(tauri.recordPlayStart).not.toHaveBeenCalled();
+	});
+
+	it("picks up the movie still playing when the player is opened again from the sidebar", async () => {
+		sessionStorage.setItem("mvp_lastChannel", JSON.stringify(lanternKeeper()));
+		sessionStorage.setItem("mvp_lastLoadedUrl", MOVIE_URL);
+		renderPlayer(null);
+		await flush();
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		await setMpv({ state: paused(MOVIE_URL, 1500, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 1500, 3600);
+	});
+
+	it("keeps the episode list when the player is opened again from the sidebar", async () => {
+		sessionStorage.setItem("mvp_lastChannel", JSON.stringify(ep1));
+		sessionStorage.setItem("mvp_lastSeriesEpisodes", JSON.stringify([ep1, ep2]));
+		renderPlayer(null);
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(ep2.url, undefined);
+	});
+
+	it("shows the empty player when what it remembers can't be read", async () => {
+		sessionStorage.setItem("mvp_lastChannel", "{not json");
+		sessionStorage.setItem("mvp_lastSeriesEpisodes", "[not json");
+		renderPlayer(null);
+		await flush();
+		expect(screen.getByText("Select a channel to start watching")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Next episode" })).not.toBeInTheDocument();
+	});
+
+	it("saves how far the last movie got while it played in the background", async () => {
+		sessionStorage.setItem("mvp_lastChannel", JSON.stringify(lanternKeeper()));
+		sessionStorage.setItem("mvp_lastLoadedUrl", MOVIE_URL);
+		tauri.mpvGetState.mockResolvedValue({
+			...idleState(),
+			...playing(MOVIE_URL, 1234, 3600),
+		});
+		await openItem(harborLights());
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 1234, 3600);
+		expect(tauri.getPlaybackPosition).toHaveBeenCalledWith("movie:harbor lights");
+		expect(loadedUrls()).toEqual([harborLights().url]);
+	});
+
+	it("doesn't save a background position that belongs to another stream", async () => {
+		sessionStorage.setItem("mvp_lastChannel", JSON.stringify(lanternKeeper()));
+		tauri.mpvGetState.mockResolvedValue({
+			...idleState(),
+			...playing("http://elsewhere.example.test/other.mkv", 1234, 3600),
+		});
+		await openItem(harborLights());
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		expect(loadedUrls()).toEqual([harborLights().url]);
+	});
+
+	it("still opens the new movie when mpv can't say what it plays", async () => {
+		sessionStorage.setItem("mvp_lastChannel", JSON.stringify(lanternKeeper()));
+		tauri.mpvGetState.mockRejectedValue(new Error("mpv is not running"));
+		await openItem(harborLights());
+		expect(loadedUrls()).toEqual([harborLights().url]);
+	});
+
+	it("opening another movie from inside the player saves the first and records its end", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 900, 3600);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+		expect(loadedUrls()).toEqual([MOVIE_URL, harborLights().url]);
+		expect(screen.getByText("Harbor Lights")).toBeInTheDocument();
+	});
+
+	it("starts from the beginning when the resume point can't be read", async () => {
+		tauri.getPlaybackPosition.mockRejectedValue(new Error("database locked"));
+		await openItem(lanternKeeper());
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, undefined);
+	});
+
+	it("shows a spinner while the stream opens and offers to try again when it takes too long", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		await openItem(lanternKeeper());
+		await setMpv({ opening: true, loadId: 1 });
+		expect(screen.getByText("Opening stream")).toBeInTheDocument();
+		expect(screen.queryByText("Select a channel to start watching")).not.toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(15_000));
+		expect(screen.getByText("Some servers take a while to respond.")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(30_000));
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("asks for a channel while nothing plays", async () => {
+		renderPlayer(null);
+		await flush();
+		expect(screen.getByText("Select a channel to start watching")).toBeInTheDocument();
+		await setMpv({ state: playing(NEWS_URL, 5, 0) });
+		expect(screen.queryByText("Select a channel to start watching")).not.toBeInTheDocument();
+	});
+
+	it("keeps the page black until the first frame shows, then lets the video through", async () => {
+		const { unmount } = renderPlayer(null);
+		expect(document.body.style.backgroundColor).toBe("black");
+		expect(document.documentElement.style.backgroundColor).toBe("black");
+		await setMpv({ firstFrameReady: true });
+		expect(document.body.style.backgroundColor).toBe("transparent");
+		unmount();
+		expect(document.body.style.backgroundColor).toBe("");
+		expect(document.documentElement.style.backgroundColor).toBe("");
+	});
+
+	it("tells the renderer where the video sits, and again when a stream loads", async () => {
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(800, 450, 40));
+		renderPlayer(null);
+		await flush();
+		expect(tauri.mpvSetBounds.mock.calls).toEqual([[0, 40, 800, 450]]);
+		await setMpv({ state: playing(NEWS_URL, 5, 0) });
+		expect(tauri.mpvSetBounds).toHaveBeenCalledTimes(2);
+	});
+
+	it("shows the movie without details when the details lookup fails", async () => {
+		tauri.fetchOmdbData.mockRejectedValue(new Error("no OMDb key"));
+		await openItem(lanternKeeper());
+		expect(tauri.fetchOmdbData).toHaveBeenCalledWith("mv1", "The Lantern Keeper", "movie");
+		fireEvent.click(screen.getByRole("button", { name: "Channel info" }));
+		expect(screen.getByText("Details none, guide none")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
+	});
+
+	it("drops details that arrive after the viewer moved on to another movie", async () => {
+		const late = deferred<ReturnType<typeof lanternOmdb> | null>();
+		tauri.fetchOmdbData.mockImplementation((id) =>
+			id === "mv1" ? late.promise : Promise.resolve(null)
+		);
+		await openItem(lanternKeeper());
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await act(async () => late.resolve(lanternOmdb()));
+		expect(tauri.fetchWhatsonData).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Channel info" }));
+		expect(screen.getByText("Details none, guide none")).toBeInTheDocument();
+	});
+
+	it("drops guide details that arrive after the viewer moved on to another movie", async () => {
+		const late = deferred<{ imdbId: string; tagline: string } | null>();
+		tauri.fetchOmdbData.mockImplementation(async (id) => (id === "mv1" ? lanternOmdb() : null));
+		tauri.fetchWhatsonData.mockReturnValue(late.promise);
+		await openItem(lanternKeeper());
+		expect(tauri.fetchWhatsonData).toHaveBeenCalledWith("tt9000001", "movie");
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await act(async () =>
+			late.resolve({ imdbId: "tt9000001", tagline: "Keep the light burning." })
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Channel info" }));
+		expect(screen.getByText("Details none, guide none")).toBeInTheDocument();
+	});
+});
+
+describe("resuming", () => {
+	it("offers to resume a movie stopped part way and resumes where it stopped", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		expect(resumePrompt()).toBeInTheDocument();
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Resume from 30:00" }));
+		await flush();
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 1800);
+		// mpv reports the start of the file before the seek lands.
+		await setMpv({ state: paused(MOVIE_URL, 2, 3600) });
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		expect(tauri.deletePlaybackPosition).not.toHaveBeenCalled();
+		await setMpv({ state: paused(MOVIE_URL, 1801, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 1801, 3600);
+	});
+
+	it("forgets the saved spot and plays from the beginning on start over", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Start from the beginning" }));
+		await flush();
+		expect(tauri.deletePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY);
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, undefined);
+	});
+
+	it("goes back to where the movie was opened from when the viewer cancels", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper(), { from: "/playlists" });
+		await press("Escape");
+		expect(screen.getByText("Playlists")).toBeInTheDocument();
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+	});
+
+	it("cancels on Escape wherever focus is", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper(), { from: "/playlists" });
+		act(() => playerArea().focus());
+		await press("Escape");
+		expect(screen.getByText("Playlists")).toBeInTheDocument();
+	});
+
+	it.each([
+		["too little was watched", 20],
+		["the movie was nearly over", 3500],
+	])("doesn't offer to resume when %s", async (_, position) => {
+		remember(saved(MOVIE_KEY, position, 3600));
+		await openItem(lanternKeeper());
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, undefined);
+	});
+
+	it("pauses the episode playing while it asks, and plays it again on cancel", async () => {
+		remember(saved("series:show:s1e2", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 300, 1300) });
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith("series:show:s1e1", 300, 1300);
+		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+		expect(resumePrompt()).toBeInTheDocument();
+		await press("Escape");
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("resumes the next episode where it was stopped", async () => {
+		remember(saved("series:show:s1e2", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await press("n");
+		fireEvent.click(screen.getByRole("button", { name: "Resume from 10:00" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep2.url, 600);
+		expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
+	});
+
+	it("ignores the player's keys while the prompt is up", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		await press("k");
+		await press("f");
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+		expect(fullscreenSpy).not.toHaveBeenCalled();
+		expect(resumePrompt()).toBeInTheDocument();
+	});
+
+	it("plays what was picked last when lookups finish out of order", async () => {
+		const slow = deferred<PlaybackPosition | null>();
+		tauri.getPlaybackPosition.mockImplementation(async (key) =>
+			key === "series:show:s1e3" ? slow.promise : null
+		);
+		await openItem(ep2, { episodes: [ep1, ep2, ep3] });
+		await press("n");
+		await press("p");
+		await act(async () => slow.resolve(null));
+		await flush();
+		expect(loadedUrls()).toEqual([ep2.url, ep1.url]);
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+	});
+});
+
+describe("saving progress", () => {
+	it("saves every few seconds while playing", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const start = new Date("2026-03-01T20:00:00Z").getTime();
+		vi.setSystemTime(start);
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		vi.setSystemTime(start + 4000);
+		await setMpv({ state: playing(MOVIE_URL, 104, 3600) });
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		vi.setSystemTime(start + 5000);
+		await setMpv({ state: playing(MOVIE_URL, 105, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 105, 3600);
+		vi.setSystemTime(start + 6000);
+		await setMpv({ state: playing(MOVIE_URL, 106, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledTimes(1);
+	});
+
+	it("saves as soon as the viewer pauses", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		await setMpv({ state: paused(MOVIE_URL, 100, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 100, 3600);
+	});
+
+	it.each([
+		["the end", 3590],
+		["the first seconds", 20],
+	])("forgets the spot of a movie stopped in %s", async (_, position) => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, position, 3600) });
+		expect(tauri.deletePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY);
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("ignores what mpv reports about another stream", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused("http://elsewhere.example.test/other.mkv", 700, 3600) });
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("saves once, records the end of play and goes to the channel list on stop", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+		expect(tauri.savePlaybackPosition.mock.calls).toEqual([[MOVIE_KEY, 700, 3600]]);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledTimes(1);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+	});
+
+	it("saves and records the end of play when the viewer leaves for another page", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		await goToPage("/playlists");
+		expect(screen.getByText("Playlists")).toBeInTheDocument();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 700, 3600);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+		expect(tauri.handOffProgress).toHaveBeenLastCalledWith({
+			key: MOVIE_KEY,
+			url: MOVIE_URL,
+			pendingStart: null,
+		});
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+	});
+
+	it("hands saving to the app while the page is hidden and takes it back when shown", async () => {
+		await openItem(lanternKeeper());
+		expect(tauri.handOffProgress).toHaveBeenLastCalledWith(null);
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		await setVisibility("hidden");
+		expect(tauri.handOffProgress).toHaveBeenLastCalledWith({
+			key: MOVIE_KEY,
+			url: MOVIE_URL,
+			pendingStart: null,
+		});
+		await setVisibility("visible");
+		expect(tauri.handOffProgress).toHaveBeenLastCalledWith(null);
+		// The position held from before is stale, so leaving doesn't save it over the newer one.
+		await goToPage("/playlists");
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("clears the channel list search after a minute of watching", async () => {
+		saveBrowseSearch("lantern");
+		await openItem(lanternKeeper());
+		for (let position = 0; position <= 60; position += 4) {
+			await setMpv({ state: playing(MOVIE_URL, position, 3600) });
+		}
+		expect(consumeBrowseState().search).toBe("");
+	});
+
+	it.each([
+		["seeking", (position: number) => playing(MOVIE_URL, position * 8, 3600)],
+		["paused", (position: number) => paused(MOVIE_URL, position, 3600)],
+	])("keeps the channel list search when the time was spent %s", async (_, report) => {
+		saveBrowseSearch("lantern");
+		await openItem(lanternKeeper());
+		for (let position = 0; position <= 80; position += 4) {
+			await setMpv({ state: report(position) });
+		}
+		expect(consumeBrowseState().search).toBe("lantern");
+	});
+});
+
+describe("episodes", () => {
+	it("steps through the episodes in order with the keys and the buttons", async () => {
+		await openItem(ep1, { episodes: [ep3, ep1, ep2] });
+		expect(screen.queryByRole("button", { name: "Previous episode" })).not.toBeInTheDocument();
+		await press("n");
+		await press("n");
+		expect(screen.queryByRole("button", { name: "Next episode" })).not.toBeInTheDocument();
+		await press("n");
+		await press("p");
+		fireEvent.click(screen.getByRole("button", { name: "Previous episode" }));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url, ep3.url, ep2.url, ep1.url]);
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+	});
+
+	it("skips another copy of the same episode and offers it as a second source", async () => {
+		await openItem(ep1, { episodes: [ep1, ep1Mirror, ep2] });
+		fireEvent.click(screen.getByRole("button", { name: "Source" }));
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep1Mirror.url, undefined);
+		await press("n");
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep2.url, undefined);
+	});
+
+	it("finds the episodes in the channel list when none came with the episode", async () => {
+		env.channels = [ep2, ep1];
+		await openItem(ep1);
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("knows which episode plays when it was opened from a list with other ids", async () => {
+		const recent = makeEpisode(1, 2, "Second", { id: "recent-s1e2" });
+		await openItem(recent, { episodes: [ep1, ep2, ep3] });
+		expect(screen.getByRole("button", { name: "Previous episode" })).toBeInTheDocument();
+		await press("n");
+		expect(loadedUrls()).toEqual([ep2.url, ep3.url]);
+	});
+
+	it("plays the next episode when one ends", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: paused(ep1.url, 1300, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+		expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
+	});
+
+	it("stays on the last frame when autoplay is off", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		fireEvent.click(screen.getByRole("button", { name: "Autoplay on" }));
+		expect(screen.getByRole("button", { name: "Autoplay off" })).toBeInTheDocument();
+		await setMpv({ state: playing(ep1.url, 1296, 1300) });
+		await setMpv({ state: paused(ep1.url, 1300, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("doesn't go on to the next episode when the viewer pauses part way", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 600, 1300) });
+		await setMpv({ state: paused(ep1.url, 600, 1300) });
+		expect(loadedUrls()).toEqual([ep1.url]);
+	});
+
+	it("doesn't skip a second episode when next is pressed close to the end", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+		await setMpv({ state: playing(ep1.url, 1297, 1300) });
+		await press("n");
+		// Loading episode two stops episode one.
+		await setMpv({
+			state: {
+				isPlaying: false,
+				isPaused: false,
+				currentUrl: ep2.url,
+				position: 0,
+				duration: 0,
+			},
+		});
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+});
+
+describe("switching sources", () => {
+	it("keeps the position and saves progress under the same movie", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 880, 3600) });
+		fakeMpv.actions.getLastKnownPosition.mockReturnValue(900);
+		pickSource(2);
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900);
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 880, 3600);
+		expect(tauri.savePlaybackPosition.mock.invocationCallOrder[0]).toBeLessThan(
+			fakeMpv.actions.load.mock.invocationCallOrder[1]
+		);
+		await setMpv({ state: paused(MIRROR_URL, 950, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenLastCalledWith(MOVIE_KEY, 950, 3600);
+		fireEvent.click(screen.getByRole("button", { name: "Source" }));
+		expect(screen.getByRole("menuitemradio", { name: /^Source 2/ })).toHaveAttribute(
+			"aria-checked",
+			"true"
+		);
+	});
+
+	it("does nothing when the source already playing is picked", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 880, 3600) });
+		pickSource(1);
+		await flush();
+		expect(loadedUrls()).toEqual([MOVIE_URL]);
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("starts a live channel's backup stream from now", async () => {
+		const backup = "http://backup.example.test/news24.ts";
+		await openItem(makeNewsChannel({ sources: [backup] }));
+		pickSource(2);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(backup, undefined);
+		expect(fakeMpv.actions.getLastKnownPosition).not.toHaveBeenCalled();
+	});
+
+	it("isn't undone by a download lookup that finishes afterwards", async () => {
+		const lookup = deferred<string | null>();
+		tauri.resolveLocalDownload.mockReturnValue(lookup.promise);
+		await openItem(lanternKeeper());
+		pickSource(2);
+		await act(async () => lookup.resolve(DOWNLOADED_MOVIE));
+		await flush();
+		expect(fakeMpv.actions.load.mock.calls).toEqual([[MIRROR_URL, undefined]]);
+	});
+});
+
+describe("skipping intros and credits", () => {
+	/** Opens the movie with an intro from 60 to 120 seconds. */
+	const openWithIntro = async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		tauri.getSkipSegments.mockResolvedValue([makeSegment()]);
+		await openItem(lanternKeeper());
+	};
+
+	/** Plays the movie through these positions, one poll each. */
+	const playThrough = async (positions: number[], url = MOVIE_URL, duration = 3600) => {
+		for (const position of positions) await setMpv({ state: playing(url, position, duration) });
+	};
+
+	it("offers a Skip intro button during the intro", async () => {
+		await openWithIntro();
+		await playThrough([30]);
+		expect(tauri.getSkipSegments).toHaveBeenCalledWith("tt9000001", null, null, 3600);
+		expect(screen.queryByRole("button", { name: "Skip intro" })).not.toBeInTheDocument();
+		await playThrough([61]);
+		fireEvent.click(screen.getByRole("button", { name: "Skip intro" }));
+		expect(fakeMpv.actions.seek).toHaveBeenCalledWith(120);
+	});
+
+	it("gives the keys back to the player when the focused skip button goes away", async () => {
+		await openWithIntro();
+		await playThrough([61]);
+		act(() => screen.getByRole("button", { name: "Skip intro" }).focus());
+		await playThrough([121]);
+		expect(screen.queryByRole("button", { name: "Skip intro" })).not.toBeInTheDocument();
+		expect(playerArea()).toHaveFocus();
+		await press("k");
+		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes Enter for the skip only while the button shows", async () => {
+		await openWithIntro();
+		await playThrough([30]);
+		expect(await press("Enter")).toBe(true);
+		expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+		await playThrough([61]);
+		expect(await press("Enter")).toBe(false);
+		expect(fakeMpv.actions.seek).toHaveBeenCalledWith(120);
+	});
+
+	it("skips the intro on its own when set to, and can undo it", async () => {
+		writeSkipSegmentMode("opening", "auto");
+		await openWithIntro();
+		await playThrough([50, 53, 56, 59, 62]);
+		expect(fakeMpv.actions.seek).toHaveBeenCalledWith(118);
+		expect(screen.getByText("Skipped intro", { selector: "span" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(62);
+	});
+
+	it("doesn't look up skip times when skipping is off", async () => {
+		writeSkipSegmentMode("opening", "off");
+		writeSkipSegmentMode("ending", "off");
+		await openWithIntro();
+		await playThrough([30, 61]);
+		expect(tauri.getSkipSegments).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: "Skip intro" })).not.toBeInTheDocument();
+	});
+
+	it("waits to skip on its own while the info drawer is open", async () => {
+		writeSkipSegmentMode("opening", "auto");
+		await openWithIntro();
+		await playThrough([50, 53, 56, 59]);
+		await press("i");
+		await playThrough([62, 63]);
+		expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+		await flush();
+		expect(fakeMpv.actions.seek).toHaveBeenCalledWith(118);
+	});
+
+	describe("at the credits", () => {
+		/** Plays episode one into its credits, which run to the end. */
+		const reachCredits = async () => {
+			writeSkipSegmentMode("ending", "auto");
+			tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+			const credits: SkipSegment = makeSegment({
+				kind: "credits",
+				start: 1240,
+				end: 1300,
+				autoFrom: 1242,
+				autoTo: null,
+			});
+			tauri.getSkipSegments.mockResolvedValue([credits]);
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			await playThrough([1230, 1233, 1236, 1239, 1242], ep1.url, 1300);
+			expect(tauri.getSkipSegments).toHaveBeenCalledWith("tt9000002", 1, 1, 1300);
+		};
+
+		it("counts down to the next episode and plays it", async () => {
+			await reachCredits();
+			fireEvent.animationEnd(screen.getByTestId("countdown-fill"));
+			await flush();
+			expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+		});
+
+		it("stays on the credits when the viewer wants to watch them", async () => {
+			await reachCredits();
+			fireEvent.click(screen.getByRole("button", { name: "Watch credits" }));
+			await flush();
+			expect(screen.queryByTestId("countdown-fill")).not.toBeInTheDocument();
+			expect(loadedUrls()).toEqual([ep1.url]);
+		});
+
+		it("goes to the next episode at once on Enter", async () => {
+			await reachCredits();
+			expect(await press("Enter")).toBe(false);
+			expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+		});
+	});
+});
+
+describe("keyboard shortcuts", () => {
+	it("plays with Space and pauses with K", async () => {
+		await openItem(lanternKeeper());
+		await press(" ");
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+		await press("k");
+		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes full screen with F or a double click", async () => {
+		renderPlayer(null);
+		await flush();
+		await press("f");
+		expect(fullscreenSpy).toHaveBeenLastCalledWith(true);
+		expect(playerArea()).toHaveClass("fixed");
+		fireEvent.doubleClick(screen.getByText("Select a channel to start watching"));
+		expect(fullscreenSpy).toHaveBeenLastCalledWith(false);
+	});
+
+	it("mutes and unmutes with M and says which", async () => {
+		await openItem(lanternKeeper());
+		await press("m");
+		expect(fakeMpv.actions.toggleMute).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Muted")).toBeInTheDocument();
+		await setMpv({ state: { volume: 0 } });
+		await press("m");
+		expect(screen.getByText("Unmuted")).toBeInTheDocument();
+	});
+
+	it("seeks with the arrows and adds up presses in a row", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		await press("ArrowRight");
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+		expect(screen.getByText("+10s")).toBeInTheDocument();
+		await press("ArrowRight");
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(120);
+		expect(screen.getByText("+20s")).toBeInTheDocument();
+		await press("ArrowLeft");
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(90);
+		expect(screen.getByText("−10s")).toBeInTheDocument();
+	});
+
+	it("skips as far as Settings says, and follows a change", async () => {
+		writeSkipInterval("back", 5);
+		writeSkipInterval("forward", 30);
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		expect(screen.getByRole("button", { name: "Skip forward 30 seconds" })).toBeInTheDocument();
+		await press("j");
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(95);
+		act(() => writeSkipInterval("forward", 15));
+		expect(screen.getByRole("button", { name: "Skip forward 15 seconds" })).toBeInTheDocument();
+		await press("L", { shiftKey: true });
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(130);
+	});
+
+	it("jumps to a tenth of the way with the digits and to the start with Home", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		await press("5");
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(1800);
+		expect(screen.getByText("30:00")).toBeInTheDocument();
+		await press("Home");
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(0);
+		expect(screen.getByText("0:00")).toBeInTheDocument();
+	});
+
+	it("doesn't jump in a live channel, which has no length", async () => {
+		await openItem(makeNewsChannel());
+		await setMpv({ state: playing(NEWS_URL, 100, 0) });
+		await press("5");
+		expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+	});
+
+	it("keeps the volume between silent and 150 percent", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: { volume: 148 } });
+		await press("ArrowUp");
+		expect(fakeMpv.actions.setVolume).toHaveBeenLastCalledWith(150);
+		expect(screen.getByText("Volume 150%")).toBeInTheDocument();
+		await setMpv({ state: { volume: 3 } });
+		await press("ArrowDown");
+		expect(fakeMpv.actions.setVolume).toHaveBeenLastCalledWith(0);
+		expect(screen.getByText("Volume 0%")).toBeInTheDocument();
+	});
+
+	it("keeps seeking while an arrow is held but toggles only once for a held key", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		await press("ArrowRight", { repeat: true });
+		expect(fakeMpv.actions.seek).toHaveBeenCalledTimes(1);
+		await press("k", { repeat: true });
+		await press("f", { repeat: true });
+		expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+		expect(fullscreenSpy).not.toHaveBeenCalled();
+	});
+
+	it("leaves shortcuts with Cmd or Ctrl to the system", async () => {
+		await openItem(lanternKeeper());
+		expect(await press("f", { metaKey: true })).toBe(true);
+		expect(await press("k", { ctrlKey: true })).toBe(true);
+		expect(fullscreenSpy).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+	});
+
+	it("lets the viewer type in a text field", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		act(() => screen.getByRole("textbox", { name: "Search subtitles" }).focus());
+		await press("k");
+		await press("f");
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+		expect(fullscreenSpy).not.toHaveBeenCalled();
+	});
+
+	it("leaves Space to a button reached with Tab", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		act(() => screen.getByRole("button", { name: "Stop" }).focus());
+		expect(await press(" ")).toBe(true);
+		expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+	});
+
+	it("moves the subtitles with the arrows while they're being adjusted, without seeking", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
+		expect(subtitleBox("Sample subtitle text").style.left).toBe("50%");
+		await press("ArrowRight");
+		expect(subtitleBox("Sample subtitle text").style.left).toBe("52%");
+		expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+	});
+
+	it("opens and closes the shortcut list with the question mark and Escape", async () => {
+		await openItem(lanternKeeper());
+		await press("?");
+		expect(shortcutList()).toBeInTheDocument();
+		await press("k");
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+		await press("?");
+		expect(shortcutList()).not.toBeInTheDocument();
+		await press("?");
+		await press("Escape");
+		expect(shortcutList()).not.toBeInTheDocument();
+		expect(screen.queryByText("Channel list")).not.toBeInTheDocument();
+	});
+
+	it("opens the shortcut list from its button and closes it with Close or a click outside", async () => {
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+		const list = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+		fireEvent.click(within(list).getByRole("button", { name: "Close" }));
+		expect(shortcutList()).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+		fireEvent.click(
+			screen.getByRole("dialog", { name: "Keyboard shortcuts" }).parentElement as HTMLElement
+		);
+		expect(shortcutList()).not.toBeInTheDocument();
+	});
+
+	it("closes one thing at a time with Escape, then leaves the player", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await press("f");
+		await press("i");
+		await press("s");
+		await press("?");
+		await press("Escape");
+		expect(shortcutList()).not.toBeInTheDocument();
+		expect(fullscreenSpy).toHaveBeenLastCalledWith(true);
+		await press("Escape");
+		expect(fullscreenSpy).toHaveBeenLastCalledWith(false);
+		expect(
+			screen.getByRole("dialog", { name: "About The Lantern Keeper" })
+		).toBeInTheDocument();
+		await press("Escape");
+		expect(
+			screen.queryByRole("dialog", { name: "About The Lantern Keeper" })
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Subtitle picker" })).toBeInTheDocument();
+		await press("Escape");
+		expect(screen.queryByRole("dialog", { name: "Subtitle picker" })).not.toBeInTheDocument();
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		await press("Escape");
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+	});
+
+	it("leaves the keys to a download confirm opened from the controls", async () => {
+		env.downloads = [makeDownload({ id: "dl-7", channelId: "mv1", status: "downloading" })];
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Downloading" }));
+		const confirm = screen.getByRole("dialog", { name: "Stop download?" });
+		fireEvent.keyDown(confirm, { key: "k" });
+		await press("k");
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+		await press("Escape");
+		expect(screen.queryByRole("dialog", { name: "Stop download?" })).not.toBeInTheDocument();
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		expect(tauri.stopDownload).not.toHaveBeenCalled();
+	});
+});
+
+describe("showing and hiding the controls", () => {
+	beforeEach(() => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	});
+
+	it("hides them after a few seconds and brings them back when the mouse moves", async () => {
+		await openItem(lanternKeeper());
+		act(() => vi.advanceTimersByTime(3999));
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.queryByText("The Lantern Keeper")).not.toBeInTheDocument();
+		expect(controlBar()).toHaveClass("opacity-0");
+		fireEvent.mouseMove(playerArea());
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		expect(controlBar()).toHaveClass("opacity-100");
+	});
+
+	it("keeps them up for longer after a click", async () => {
+		await openItem(lanternKeeper());
+		act(() => vi.advanceTimersByTime(3000));
+		fireEvent.click(playerArea());
+		act(() => vi.advanceTimersByTime(3000));
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(1000));
+		expect(screen.queryByText("The Lantern Keeper")).not.toBeInTheDocument();
+	});
+
+	it("skips back with the button on the bar and says how far for a moment", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		fireEvent.click(screen.getByRole("button", { name: "Skip back 10 seconds" }));
+		expect(fakeMpv.actions.seek).toHaveBeenCalledWith(90);
+		expect(screen.getByText("\u221210s")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(900));
+		expect(screen.queryByText("\u221210s")).not.toBeInTheDocument();
+	});
+
+	it("brings them back on a shortcut", async () => {
+		await openItem(lanternKeeper());
+		act(() => vi.advanceTimersByTime(4000));
+		await press("ArrowUp");
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+	});
+
+	describe("on a touch screen", () => {
+		beforeEach(() => setUpTouchScreen());
+
+		it("shows and hides them with a tap in the middle", async () => {
+			await openItem(lanternKeeper());
+			tap();
+			expect(screen.queryByText("The Lantern Keeper")).not.toBeInTheDocument();
+			tap();
+			expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		});
+
+		it("ignores the mouse moves a tap sends but shows them for a real mouse", async () => {
+			await openItem(lanternKeeper());
+			tap();
+			fireEvent.mouseMove(playerArea());
+			fireEvent.pointerMove(playerArea(), { pointerType: "touch" });
+			expect(screen.queryByText("The Lantern Keeper")).not.toBeInTheDocument();
+			fireEvent.pointerMove(playerArea(), { pointerType: "mouse" });
+			expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		});
+
+		it("skips forward on a double tap at the right side without hiding them", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			vi.spyOn(tapLayer(), "getBoundingClientRect").mockReturnValue(box(1000, 600));
+			tap(900);
+			tap(900);
+			expect(fakeMpv.actions.seek).toHaveBeenCalledWith(110);
+			expect(screen.getByText("+10s")).toBeInTheDocument();
+			act(() => vi.advanceTimersByTime(300));
+			expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		});
+	});
+});
+
+describe("full screen and leaving", () => {
+	it("goes in and out of full screen with the button", async () => {
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+		expect(fullscreenSpy).toHaveBeenLastCalledWith(true);
+		fireEvent.click(screen.getByRole("button", { name: "Exit fullscreen" }));
+		expect(fullscreenSpy).toHaveBeenLastCalledWith(false);
+	});
+
+	it("leaves full screen begun in the player when the viewer stops", async () => {
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Fullscreen" }));
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+		expect(fullscreenSpy.mock.calls).toEqual([[true], [false]]);
+	});
+
+	it("keeps a window that was full screen before the player opened", async () => {
+		await openItem(lanternKeeper(), { fullscreen: true });
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+		expect(fullscreenSpy).not.toHaveBeenCalled();
+	});
+
+	it("goes back to the page it came from with Back in the phone layout", async () => {
+		env.layoutMode = "mobile";
+		await openItem(lanternKeeper(), { from: "/playlists" });
+		fireEvent.click(screen.getByRole("button", { name: "Back" }));
+		await flush();
+		expect(screen.getByText("Playlists")).toBeInTheDocument();
+	});
+
+	it("goes to the channel list with Back when the player was the first page", async () => {
+		env.layoutMode = "mobile";
+		await openItem(lanternKeeper(), { from: null });
+		fireEvent.click(screen.getByRole("button", { name: "Back" }));
+		await flush();
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+	});
+
+	it("leaves full screen in a phone layout, which has no full screen button", async () => {
+		setUpTouchScreen("mobile");
+		await openItem(lanternKeeper(), { fullscreen: true });
+		expect(fullscreenSpy).toHaveBeenCalledWith(false);
+		expect(screen.queryByRole("button", { name: "Fullscreen" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Exit fullscreen" })).not.toBeInTheDocument();
+	});
+});
+
+describe("subtitles", () => {
+	it("offers subtitles once the movie's details arrive", async () => {
+		const details = deferred<ReturnType<typeof lanternOmdb> | null>();
+		tauri.fetchOmdbData.mockReturnValue(details.promise);
+		await openItem(lanternKeeper());
+		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
+		await act(async () => details.resolve(lanternOmdb()));
+		expect(screen.getByRole("button", { name: "Subtitles" })).toBeInTheDocument();
+		expect(tauri.fetchWhatsonData).toHaveBeenCalledWith("tt9000001", "movie");
+	});
+
+	it("shows the picked subtitles in time with the video", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(
+			screen.getByText("Looking up tt9000001 season none episode none")
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Pick English" }));
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		expect(screen.queryByRole("dialog", { name: "Subtitle picker" })).not.toBeInTheDocument();
+		await setMpv({ state: playing(MOVIE_URL, 5, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+	});
+
+	it("moves the subtitles earlier or later and tells mpv", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 0.2, 3600) });
+		pickEnglishSubtitles();
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		await waitFor(() => expect(tauri.mpvSetSubDelay).toHaveBeenCalledWith(1.5));
+	});
+
+	it("loads the same language for the next episode", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["nl", "en"],
+			entries: [
+				{ fileId: 201, languageCode: "nl", format: "srt" },
+				{ fileId: 202, languageCode: "en", format: "srt" },
+				{ fileId: 203, languageCode: "en", format: "srt" },
+				{ fileId: 204, languageCode: "en", format: "srt" },
+			],
+		});
+		tauri.readSubtitleFile.mockResolvedValue(
+			"1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n"
+		);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 2);
+		expect(tauri.downloadSubtitle).toHaveBeenCalledWith(203);
+		expect(tauri.downloadSubtitle).not.toHaveBeenCalledWith(202);
+		expect(tauri.mpvSubRemove).toHaveBeenCalledWith(-1);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledWith("/subtitles/chosen.srt");
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+	});
+
+	it("drops the next episode's subtitles when the viewer moves on before they arrive", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		// Episode two has English subtitles and episode three only Dutch ones.
+		tauri.searchSubtitles.mockImplementation(async (_imdbId, _season, episode) => ({
+			languages: ["en", "nl"],
+			entries: [
+				episode === 2
+					? { fileId: 302, languageCode: "en", format: "srt" }
+					: { fileId: 303, languageCode: "nl", format: "srt" },
+			],
+		}));
+		const file = deferred<string>();
+		tauri.readSubtitleFile.mockReturnValue(file.promise);
+		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		expect(tauri.readSubtitleFile).toHaveBeenCalledTimes(1);
+		await press("n");
+		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 3);
+		await act(async () =>
+			file.resolve("1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n")
+		);
+		await setMpv({ state: playing(ep3.url, 2, 1300) });
+		expect(screen.queryByText("The tide is turning")).not.toBeInTheDocument();
+		expect(tauri.downloadSubtitle.mock.calls).toEqual([[302]]);
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+	});
+
+	it("moves the subtitles where they're dragged while they're being adjusted", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(1000, 500));
+		fireEvent.mouseDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
+		fireEvent.mouseMove(document, { clientX: 600, clientY: 390 });
+		expect(subtitleBox("Sample subtitle text").style.left).toBe("60%");
+		expect(subtitleBox("Sample subtitle text").style.top).toBe("78%");
+		fireEvent.mouseUp(document);
+		fireEvent.mouseMove(document, { clientX: 900, clientY: 390 });
+		expect(subtitleBox("Sample subtitle text").style.left).toBe("60%");
+	});
+
+	it("loads none for the next episode after the viewer turned them off", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Pick none" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+		expect(tauri.searchSubtitles).not.toHaveBeenCalled();
+	});
+
+	it("reads the season and episode from the name when the provider leaves them out", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		const episode = makeChannel({
+			id: "ht-205",
+			name: "Harbor Tales S02E05 Storm",
+			url: "https://cdn.example.test/harbor-tales/s2e5.mkv",
+			contentType: "series",
+		});
+		await openItem(episode);
+		expect(tauri.fetchOmdbData).toHaveBeenCalledWith("ht-205", "Harbor Tales", "series");
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Looking up tt9000002 season 2 episode 5")).toBeInTheDocument();
+	});
+
+	it("clears the subtitles when something else is opened", async () => {
+		tauri.fetchOmdbData.mockImplementation(async (id) => (id === "mv1" ? lanternOmdb() : null));
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		expect(screen.queryByRole("dialog", { name: "Subtitle picker" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
+	});
+
+	it("has none for a live channel, so S opens nothing for Escape to close", async () => {
+		await openItem(makeNewsChannel());
+		await press("s");
+		expect(screen.queryByRole("dialog", { name: "Subtitle picker" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Subtitles" })).not.toBeInTheDocument();
+		await press("Escape");
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+	});
+});
+
+describe("info drawers", () => {
+	it("shows a live channel's info from the I key or the button", async () => {
+		await openItem(makeNewsChannel());
+		await press("i");
+		expect(screen.getByRole("dialog", { name: "About News 24" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Close details" }));
+		expect(screen.queryByRole("dialog", { name: "About News 24" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Channel info" }));
+		expect(screen.getByRole("dialog", { name: "About News 24" })).toBeInTheDocument();
+		expect(tauri.fetchOmdbData).not.toHaveBeenCalled();
+	});
+
+	it("passes a movie's details to its drawer so it doesn't look them up again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		tauri.fetchWhatsonData.mockResolvedValue({
+			imdbId: "tt9000001",
+			tagline: "Keep the light burning.",
+		});
+		await openItem(lanternKeeper());
+		await press("i");
+		expect(screen.getByText("Details tt9000001, guide found")).toBeInTheDocument();
+	});
+
+	it("switches to another source of the same movie from its drawer", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.getLastKnownPosition.mockReturnValue(900);
+		await press("i");
+		fireEvent.click(screen.getByRole("button", { name: "Play the second source" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900);
+		expect(
+			screen.queryByRole("dialog", { name: "About The Lantern Keeper" })
+		).not.toBeInTheDocument();
+	});
+
+	it("opens another movie from the drawer", async () => {
+		await openItem(lanternKeeper());
+		await press("i");
+		fireEvent.click(screen.getByRole("button", { name: "Play another movie" }));
+		await flush();
+		expect(tauri.getPlaybackPosition).toHaveBeenLastCalledWith("movie:harbor lights");
+		expect(loadedUrls()).toEqual([MOVIE_URL, harborLights().url]);
+	});
+
+	it("lists a series' episodes and plays another source or another episode from it", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		env.channels = [seriesCard];
+		await openItem(ep1, { episodes: [ep1, ep1Mirror, ep2] });
+		expect(tauri.fetchWhatsonData).toHaveBeenCalledWith("tt9000002", "show");
+		await press("i");
+		expect(screen.getByRole("dialog", { name: "Episodes of Show" })).toBeInTheDocument();
+		expect(screen.getByText("Series card series-show")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Close episodes" }));
+		expect(screen.queryByRole("dialog", { name: "Episodes of Show" })).not.toBeInTheDocument();
+		await press("i");
+		fireEvent.click(screen.getByRole("button", { name: "Play s1e1-b" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep1Mirror.url, undefined);
+		expect(screen.queryByRole("dialog", { name: "Episodes of Show" })).not.toBeInTheDocument();
+		await press("i");
+		fireEvent.click(screen.getByRole("button", { name: "Play s1e2" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep2.url, undefined);
+		expect(screen.queryByRole("dialog", { name: "Episodes of Show" })).not.toBeInTheDocument();
+	});
+
+	it("keeps playing when the episode already playing is picked from the series drawer", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 300, 1300) });
+		await press("i");
+		fireEvent.click(screen.getByRole("button", { name: "Play s1e1" }));
+		await flush();
+		expect(screen.queryByRole("dialog", { name: "Episodes of Show" })).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([ep1.url]);
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("has no info or download for a recording, so I opens nothing for Escape to close", async () => {
+		const recording = makeChannel({
+			id: "rec-1",
+			name: "City News",
+			url: "/recordings/city-news.ts",
+			contentType: "recording",
+		});
+		await openItem(recording);
+		await press("i");
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Channel info" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+		expect(tauri.fetchOmdbData).not.toHaveBeenCalled();
+		await press("Escape");
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+	});
+});
+
+describe("downloading from the player", () => {
+	it("downloads the movie playing", async () => {
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Download" }));
+		expect(tauri.enqueueMovieDownload).toHaveBeenCalledWith("mv1");
+	});
+
+	it("downloads the episode playing under its series", async () => {
+		env.channels = [seriesCard];
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		fireEvent.click(screen.getByRole("button", { name: "Download" }));
+		expect(tauri.enqueueEpisodeDownload).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "s1e1" }),
+			"series-show",
+			"Show"
+		);
+	});
+
+	it("stops a download in progress after asking", async () => {
+		env.downloads = [makeDownload({ id: "dl-7", channelId: "mv1", status: "downloading" })];
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Downloading" }));
+		const confirm = screen.getByRole("dialog", { name: "Stop download?" });
+		fireEvent.click(within(confirm).getByRole("button", { name: "Stop" }));
+		expect(tauri.stopDownload).toHaveBeenCalledWith("dl-7");
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+	});
+
+	it("removes a finished download after asking", async () => {
+		env.downloads = [makeDownload({ id: "dl-7", channelId: "mv1", status: "completed" })];
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Downloaded" }));
+		const confirm = screen.getByRole("dialog", { name: "Remove download?" });
+		fireEvent.click(within(confirm).getByRole("button", { name: "Remove" }));
+		await flush();
+		expect(tauri.removeDownload).toHaveBeenCalledWith("dl-7");
+	});
+});
+
+describe("connection and errors", () => {
+	it("says the player is reconnecting and which attempt it's on", async () => {
+		await openItem(makeNewsChannel());
+		await setMpv({ reconnecting: true, reconnectAttempt: 3 });
+		expect(screen.getByText("Connection lost")).toBeInTheDocument();
+		expect(screen.getByText("Reconnecting to stream (attempt #3)…")).toBeInTheDocument();
+	});
+
+	it("offers a retry when the stream can't be loaded, in place of the play button", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, 600, 3600), loadFailed: true });
+		expect(screen.getByText("Stream unavailable")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Play" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+	});
+
+	it("doesn't call it a connection problem while the stream is still opening", async () => {
+		await openItem(makeNewsChannel());
+		await setMpv({ buffering: true, opening: true });
+		expect(screen.queryByText("Connection issues")).not.toBeInTheDocument();
+		await setMpv({ opening: false });
+		expect(screen.getByText("Connection issues")).toBeInTheDocument();
+	});
+
+	it("says when the connection is back", async () => {
+		await openItem(makeNewsChannel());
+		await setMpv({ recentlyRecovered: true });
+		expect(screen.getByText("Connection restored")).toBeInTheDocument();
+	});
+
+	it("shows an error with setup help on the desktop", async () => {
+		renderPlayer(null);
+		await setMpv({ error: "Could not start mpv" });
+		expect(screen.getByText("Could not start mpv")).toBeInTheDocument();
+		expect(screen.getByText(/Check that libmpv is installed/)).toBeInTheDocument();
+		expect(screen.queryByText("Select a channel to start watching")).not.toBeInTheDocument();
+	});
+
+	it("shows the error without setup help on a phone", async () => {
+		env.os = "android";
+		renderPlayer(null);
+		await setMpv({ error: "Could not start mpv" });
+		expect(screen.getByText("Could not start mpv")).toBeInTheDocument();
+		expect(screen.queryByText(/Check that libmpv is installed/)).not.toBeInTheDocument();
+	});
+
+	it("explains the separate window and leaves out its own controls and skipping", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		tauri.getSkipSegments.mockResolvedValue([makeSegment()]);
+		await openItem(lanternKeeper());
+		await setMpv({ fallbackActive: true, state: playing(MOVIE_URL, 61, 3600) });
+		expect(screen.getByText(/Video is playing in a separate window/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+		expect(tauri.getSkipSegments).not.toHaveBeenCalled();
+	});
+});
+
+describe("when the app's backend fails", () => {
+	it("keeps playing and leaves normally when saving and reporting fail", async () => {
+		const down = new Error("backend unavailable");
+		tauri.mpvSetBounds.mockRejectedValue(down);
+		tauri.recordPlayStart.mockRejectedValue(down);
+		tauri.recordPlayEnd.mockRejectedValue(down);
+		tauri.savePlaybackPosition.mockRejectedValue(down);
+		tauri.deletePlaybackPosition.mockRejectedValue(down);
+		tauri.handOffProgress.mockRejectedValue(down);
+		tauri.fetchWhatsonData.mockRejectedValue(down);
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		fakeMpv.actions.load.mockRejectedValue(down);
+		const radio = "http://live.example.test/harbor-radio.ts";
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, 700, 3600) });
+		await setMpv({ state: paused(MOVIE_URL, 20, 3600) });
+		await setVisibility("hidden");
+		await setVisibility("visible");
+		pickSource(2);
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+		await goTo({ url: radio, channelName: "Harbor Radio" });
+		expect(screen.getByText("Harbor Radio")).toBeInTheDocument();
+		// Leaving with a channel open records the end of it on the way out.
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await goToPage("/playlists");
+		expect(screen.getByText("Playlists")).toBeInTheDocument();
+		expect(loadedUrls()).toEqual([
+			MOVIE_URL,
+			MIRROR_URL,
+			harborLights().url,
+			radio,
+			harborLights().url,
+		]);
+		expect(tauri.recordPlayEnd).toHaveBeenLastCalledWith("mv2", expect.any(Number));
+	});
+
+	it("starts over, retries and stops normally when forgetting, reloading and reporting fail", async () => {
+		const down = new Error("backend unavailable");
+		tauri.deletePlaybackPosition.mockRejectedValue(down);
+		tauri.recordPlayEnd.mockRejectedValue(down);
+		fakeMpv.actions.reload.mockRejectedValue(down);
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Start from the beginning" }));
+		await flush();
+		expect(tauri.deletePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY);
+		await setMpv({ state: paused(MOVIE_URL, 600, 3600), loadFailed: true });
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await flush();
+		expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+	});
+});
+
+describe("phones, tablets and TV boxes", () => {
+	it("tells the lock screen what plays on a phone", async () => {
+		env.os = "ios";
+		const logo = "https://img.example.test/news24.png";
+		await openItem(makeNewsChannel({ logoUrl: logo }));
+		expect(tauri.mpvSetMediaInfo).toHaveBeenLastCalledWith("News 24", true, logo);
+	});
+
+	it("leaves the lock screen alone on the desktop", async () => {
+		await openItem(makeNewsChannel());
+		expect(tauri.mpvSetMediaInfo).not.toHaveBeenCalled();
+	});
+
+	it("leaves out the volume slider and the shortcut list on an iPad", async () => {
+		setUpTouchScreen();
+		await openItem(lanternKeeper());
+		expect(screen.queryByRole("slider", { name: "Volume" })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "Keyboard shortcuts" })
+		).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+	});
+
+	it("keeps the volume slider and the shortcut list on a TV box, which has a remote", async () => {
+		env.os = "android";
+		env.layoutMode = "tv";
+		setTouchPoints(0);
+		await openItem(lanternKeeper());
+		expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+	});
+});
