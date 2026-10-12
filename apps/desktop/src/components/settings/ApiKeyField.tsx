@@ -105,8 +105,7 @@ const SaveLabel = ({ field, name }: { field: ApiKeyState; name: string }) => {
 	const action = !field.value.trim() && (field.saved || field.loadFailed) ? "Remove" : "Save";
 	return (
 		<>
-			{action}
-			<span className="sr-only"> {name} API key</span>
+			{action} <span className="sr-only">{name} API key</span>
 		</>
 	);
 };
@@ -211,7 +210,7 @@ export const ApiKeyField = ({
 						"Testing…"
 					) : (
 						<>
-							Test<span className="sr-only"> {name} API key</span>
+							Test <span className="sr-only">{name} API key</span>
 						</>
 					)}
 				</Button>
