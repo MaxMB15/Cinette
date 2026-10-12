@@ -50,7 +50,12 @@ import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
-import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
+import {
+	resolvePlayerHotkey,
+	isTypingTarget,
+	isKeyboardFocusedControl,
+	repeatsWhenHeld,
+} from "@/lib/hotkeys";
 import { formatSkip, formatTime } from "@/lib/format";
 import {
 	readSkipIntervals,
@@ -954,6 +959,7 @@ export const PlayerView = () => {
 				return;
 			}
 			e.preventDefault();
+			if (e.repeat && !repeatsWhenHeld(action)) return;
 
 			const s = mpv.state;
 			switch (action.type) {
