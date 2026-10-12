@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Max Video Player is now licensed under the GNU General Public License version 3. Its additional terms require modified versions to credit the original on their About screen and to use their own name and icon. Releases up to 0.5.3 stay under the PolyForm Noncommercial License 1.0.0. See NOTICE and TRADEMARKS.md (#75).
 - Pull requests now need the contributor agreement in CLA.md (#75).
+- With no OMDb key set, the app no longer asks whatson-api for ratings, even for titles whose details it saved earlier (#92).
 - Without an OMDb API key, the movie and series info sheets say that a key adds the plot, cast and ratings, and link to the key field in Settings (#96).
 - The channel, movie and series info panes close when you drag them down, and grow to full height when you drag them up (#91).
 - The start screen shows the app icon in place of the blue play badge (#95).
@@ -16,6 +17,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Settings > About shows the copyright and license, with links to the license, additional terms, third-party notices and source code of the version you're running (#75).
 - THIRD_PARTY_NOTICES.md lists the licenses of mpv, FFmpeg and every library bundled in the macOS app. The app now includes it, along with LICENSE, NOTICE and TRADEMARKS.md (#75).
+- M3U playlists can mark an entry as a movie or series with a `tvg-type` attribute, for entries whose URLs don't say which it is (#92).
+- A privacy policy in docs/privacy.md, linked from Settings > About, and a demo playlist of free test streams and Blender films in docs/demo (#92).
 - Skip back and skip forward buttons beside play and pause. Settings > Playback sets how far each one jumps, from 5 to 60 seconds, and the arrow keys, J and L and the lock screen on iPhone and iPad use the same lengths (#90).
 - On phones and tablets, play and pause and the skip buttons sit in the middle of the video. A double-tap on the left or right side skips back or forward, and each further tap there skips again (#90).
 - The player shows a spinner while a stream opens, so a slow server no longer looks like a black screen. If the stream never starts, the player says so and offers Retry (#97).
@@ -25,6 +28,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Closing the player in full screen left the window in full screen, and the player came back in full screen the next time it opened. Closing the player now always leaves full screen (#96).
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- Removing a playlist or provider left its watch history, saved positions, episode lists, guide data and category layout behind. Cached Xtream episode lists hold the provider's login, so the login stayed too (#92).
+- Clear All Caches left cached episode lists, guide data and downloaded subtitles behind (#92).
 - A removed download stayed on the Downloads tab until the app restarted (#100).
 - Removing a download whose file can't be deleted now keeps it in the list and says which file and why. Removing a season or series carries on with the other episodes. Before, the download left the list but its file stayed on disk (#100).
 - Holding a subtitle delay button keeps stepping the delay again (#104).
@@ -34,9 +39,6 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The splash screen and the donation prompt work when the browser storage is blocked, and the splash screen finishes even when a startup step fails (#104).
 - Pressing Enter on a group's pin button pins the group instead of opening it, and Enter on a channel row's favorite button no longer starts the channel (#104).
 - Watch history rows play from the keyboard and show their delete button on focus. Screen readers now find the favorite button on movie and series posters, and name the subtitle picker buttons and the group pin button. Enter or Space steps the subtitle delay (#104).
-
-### Fixed
-
 - Downloads that were running when the app quit now start again at the next launch, and queued downloads start too. Before, each interrupted download held one of the download slots until it was stopped or deleted, and the queue sat idle until another download was added. Quitting the app now stops its downloads. Before, they kept running in the background after the app closed. A download whose ffmpeg can't start now shows as failed, and the next one in line takes its place (#99).
 - Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads. On Linux this needs a D-Bus session bus. Without one, the app logs a warning and a second copy still opens (#99).
 - Two downloads with the same title now save to separate files, numbered like "Dune (2).mkv". Before, they wrote to the same file, and a file already in the folder with that name was replaced (#99).

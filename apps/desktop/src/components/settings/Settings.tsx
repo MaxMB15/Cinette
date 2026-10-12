@@ -331,7 +331,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 	const handleClearCaches = async () => {
 		const confirmed = await ask(
-			"Clear all cached data (OMDB, MDBList, OpenSubtitles, EPG)? This cannot be undone.",
+			"Clear cached movie and series details, guide data, episode lists and downloaded subtitles? This cannot be undone.",
 			{ title: "Clear Caches", kind: "warning" }
 		);
 		if (!confirmed) return;
@@ -598,6 +598,11 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent className="space-y-4">
 						<div>
 							<p className="text-sm font-medium mb-1">OMDB API</p>
+							<p className="mb-2 text-xs text-muted-foreground">
+								Adds details and ratings to movies and series. With a key set, the
+								app sends titles to OMDb and IMDb IDs to whatson-api for more
+								ratings.
+							</p>
 							<div className="flex items-center gap-2">
 								<div className="relative flex-1">
 									<Input
@@ -931,8 +936,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent>
 						<div className="space-y-2">
 							<p className="text-xs text-muted-foreground">
-								Clears all cached metadata (OMDB, MDBList, OpenSubtitles, WhatsonTV,
-								EPG). Channel data and settings are not affected.
+								Clears cached movie and series details, guide data, episode lists
+								and downloaded subtitles. Playlists, favorites, history and settings
+								are not affected.
 							</p>
 							<div className="flex items-center gap-4">
 								<Button variant="destructive" size="sm" onClick={handleClearCaches}>
