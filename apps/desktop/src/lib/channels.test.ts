@@ -3,7 +3,13 @@
 
 import { describe, it, expect } from "vitest";
 import type { Channel, PlayerState } from "./types";
-import { categoriesByCount, channelCountFor, dedupeByTitle, deriveCategories } from "./channels";
+import {
+	categoriesByCount,
+	channelCountFor,
+	dedupeByTitle,
+	deriveCategories,
+	seriesTitleOf,
+} from "./channels";
 
 const makeChannel = (overrides: Partial<Channel> = {}): Channel => {
 	return {
@@ -324,5 +330,24 @@ describe("PlayerState", () => {
 		expect(state.isPlaying).toBe(false);
 		expect(state.isPaused).toBe(true);
 		expect(state.currentUrl).not.toBeNull();
+	});
+});
+
+describe("seriesTitleOf", () => {
+	it("prefers the channel's own series title", () => {
+		expect(seriesTitleOf({ name: "GS 1x01 Pilot", seriesTitle: "Great Show" })).toBe(
+			"Great Show"
+		);
+	});
+
+	it("cuts the name at its season and episode code", () => {
+		expect(seriesTitleOf({ name: "Breaking Bad S01E02 Cat's in the Bag" })).toBe(
+			"Breaking Bad"
+		);
+		expect(seriesTitleOf({ name: "the office s3e10" })).toBe("the office");
+	});
+
+	it("keeps a name without a code whole", () => {
+		expect(seriesTitleOf({ name: "Planet Earth Special" })).toBe("Planet Earth Special");
 	});
 });

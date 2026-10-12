@@ -34,6 +34,19 @@ pub struct WatchHistoryEntry {
     pub last_watched_at: i64,
     pub total_duration_seconds: i64,
     pub play_count: i64,
+    /// The show a series entry belongs to, from [`history_series_title`].
+    /// `None` for live channels and movies.
+    pub series_title: Option<String>,
+}
+
+/// The show a series history entry belongs to. The cached channel's title
+/// wins, then the title parsed from the episode name, then the whole name, so
+/// every episode lands in exactly one show. Grouping and deleting by show both
+/// use this, which keeps the Recently Played row and the database in step.
+fn history_series_title(cached: Option<String>, channel_name: &str) -> String {
+    cached
+        .or_else(|| parse_series_name(channel_name).map(|(title, _, _)| title))
+        .unwrap_or_else(|| channel_name.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -1018,23 +1031,50 @@ impl CacheStore {
 
     /// Return watch history entries ordered by `last_watched_at DESC`, limited to `limit`.
     pub fn get_watch_history(&self, limit: usize) -> Result<Vec<WatchHistoryEntry>, CacheError> {
+        self.query_watch_history(limit, None)
+    }
+
+    /// Like [`Self::get_watch_history`], but only entries of one content type,
+    /// so a busy type can't push the others out of the limit.
+    pub fn get_watch_history_of_type(
+        &self,
+        content_type: &str,
+        limit: usize,
+    ) -> Result<Vec<WatchHistoryEntry>, CacheError> {
+        self.query_watch_history(limit, Some(content_type))
+    }
+
+    fn query_watch_history(
+        &self,
+        limit: usize,
+        content_type: Option<&str>,
+    ) -> Result<Vec<WatchHistoryEntry>, CacheError> {
         let mut stmt = self.conn.prepare(
-            "SELECT channel_id, channel_name, channel_logo, content_type,
-                    first_watched_at, last_watched_at, total_duration_seconds, play_count
-             FROM watch_history
-             ORDER BY last_watched_at DESC
+            "SELECT wh.channel_id, wh.channel_name, wh.channel_logo, wh.content_type,
+                    wh.first_watched_at, wh.last_watched_at, wh.total_duration_seconds,
+                    wh.play_count, c.series_title
+             FROM watch_history wh
+             LEFT JOIN channels c ON c.id = wh.channel_id
+             WHERE ?2 IS NULL OR wh.content_type = ?2
+             ORDER BY wh.last_watched_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
+        let rows = stmt.query_map(params![limit as i64, content_type], |row| {
+            let channel_name: String = row.get(1)?;
+            let content_type: String = row.get(3)?;
+            let cached: Option<String> = row.get(8)?;
+            let series_title =
+                (content_type == "series").then(|| history_series_title(cached, &channel_name));
             Ok(WatchHistoryEntry {
                 channel_id: row.get(0)?,
-                channel_name: row.get(1)?,
+                channel_name,
                 channel_logo: row.get(2)?,
-                content_type: row.get(3)?,
+                content_type,
                 first_watched_at: row.get(4)?,
                 last_watched_at: row.get(5)?,
                 total_duration_seconds: row.get(6)?,
                 play_count: row.get(7)?,
+                series_title,
             })
         })?;
         rows.collect::<SqlResult<Vec<_>>>().map_err(CacheError::Db)
@@ -1045,6 +1085,51 @@ impl CacheStore {
         self.conn.execute(
             "DELETE FROM watch_history WHERE channel_id = ?1",
             params![channel_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete the history of every episode of one show, matched the way
+    /// [`history_series_title`] groups them. This reaches entries older than
+    /// any page the UI has loaded. Returns how many entries were removed.
+    pub fn delete_history_series(&self, series_title: &str) -> Result<usize, CacheError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
+            "SELECT wh.channel_id, wh.channel_name, c.series_title
+             FROM watch_history wh
+             LEFT JOIN channels c ON c.id = wh.channel_id
+             WHERE wh.content_type = 'series'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let (channel_id, channel_name, cached) = row?;
+            if history_series_title(cached, &channel_name) == series_title {
+                ids.push(channel_id);
+            }
+        }
+        drop(stmt);
+        let mut delete = tx.prepare("DELETE FROM watch_history WHERE channel_id = ?1")?;
+        for channel_id in &ids {
+            delete.execute(params![channel_id])?;
+        }
+        drop(delete);
+        tx.commit()?;
+        Ok(ids.len())
+    }
+
+    /// Delete every history entry of one content type. Resume positions are
+    /// kept, as they are when a single entry is deleted.
+    pub fn clear_watch_history_of_type(&self, content_type: &str) -> Result<(), CacheError> {
+        self.conn.execute(
+            "DELETE FROM watch_history WHERE content_type = ?1",
+            params![content_type],
         )?;
         Ok(())
     }
@@ -2041,6 +2126,142 @@ mod tests {
 
         let history = store.get_watch_history(10).unwrap();
         assert!(history.is_empty(), "history must be empty after clear");
+    }
+
+    /// A series episode with an explicit show title.
+    fn make_episode(id: &str, name: &str, series_title: &str) -> Channel {
+        Channel {
+            content_type: "series".into(),
+            series_title: Some(series_title.into()),
+            ..make_channel(id, name, "Series")
+        }
+    }
+
+    #[test]
+    fn test_watch_history_series_title() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
+        // The cached title wins even when the name says something else.
+        store
+            .save_channels("p1", &[make_episode("ep1", "GS 1x01 Pilot", "Great Show")])
+            .unwrap();
+        store
+            .record_play_start("ep1", "GS 1x01 Pilot", None, "series")
+            .unwrap();
+        // Not cached, as with Xtream episodes, so the name is parsed.
+        store
+            .record_play_start(
+                "xt-ep-9-s1-2",
+                "Breaking Bad S01E02 Cat's in the Bag",
+                None,
+                "series",
+            )
+            .unwrap();
+        // Nothing to parse, so the whole name is the show.
+        store
+            .record_play_start("odd", "Odd Special", None, "series")
+            .unwrap();
+        store
+            .record_play_start("ch1", "BBC News", None, "live")
+            .unwrap();
+
+        let history = store.get_watch_history(10).unwrap();
+        let title_of = |id: &str| {
+            history
+                .iter()
+                .find(|e| e.channel_id == id)
+                .unwrap()
+                .series_title
+                .clone()
+        };
+        assert_eq!(title_of("ep1").as_deref(), Some("Great Show"));
+        assert_eq!(title_of("xt-ep-9-s1-2").as_deref(), Some("Breaking Bad"));
+        assert_eq!(title_of("odd").as_deref(), Some("Odd Special"));
+        assert_eq!(title_of("ch1"), None);
+    }
+
+    #[test]
+    fn test_get_watch_history_of_type() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for i in 0..5 {
+            store
+                .record_play_start(&format!("live{i}"), "Live", None, "live")
+                .unwrap();
+        }
+        store
+            .record_play_start("m1", "Movie One", None, "movie")
+            .unwrap();
+        store
+            .record_play_start("m2", "Movie Two", None, "movie")
+            .unwrap();
+
+        // The live entries would fill a shared limit of 5 on their own.
+        let movies = store.get_watch_history_of_type("movie", 5).unwrap();
+        let mut ids: Vec<_> = movies.iter().map(|e| e.channel_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["m1", "m2"]);
+        assert_eq!(store.get_watch_history_of_type("live", 3).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_delete_history_series_reaches_every_episode() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
+        store
+            .save_channels("p1", &[make_episode("ep1", "GS 1x01 Pilot", "Great Show")])
+            .unwrap();
+        store
+            .record_play_start("ep1", "GS 1x01 Pilot", None, "series")
+            .unwrap();
+        // More episodes than the Recently Played row ever loads.
+        for n in 1..=60 {
+            store
+                .record_play_start(
+                    &format!("gs{n}"),
+                    &format!("Great Show S01E{n:02}"),
+                    None,
+                    "series",
+                )
+                .unwrap();
+        }
+        store
+            .record_play_start("bb1", "Breaking Bad S01E01", None, "series")
+            .unwrap();
+        // A live channel named like the show is not an episode of it.
+        store
+            .record_play_start("ch1", "Great Show S01E01", None, "live")
+            .unwrap();
+
+        assert_eq!(store.delete_history_series("Great Show").unwrap(), 61);
+
+        let mut left: Vec<_> = store
+            .get_watch_history(100)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.channel_id)
+            .collect();
+        left.sort_unstable();
+        assert_eq!(left, ["bb1", "ch1"]);
+        assert_eq!(store.delete_history_series("Great Show").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_clear_watch_history_of_type() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .record_play_start("m1", "Movie One", None, "movie")
+            .unwrap();
+        store
+            .record_play_start("ch1", "BBC News", None, "live")
+            .unwrap();
+        store.save_playback_position("m1", 120.0, 5400.0).unwrap();
+
+        store.clear_watch_history_of_type("movie").unwrap();
+
+        let history = store.get_watch_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].channel_id, "ch1");
+        assert!(store.get_playback_position("m1").unwrap().is_some());
     }
 
     #[test]

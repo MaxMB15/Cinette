@@ -45,6 +45,7 @@ import { DownloadButton, type DownloadIconState } from "@/components/downloads/D
 import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
 import { sortEpisodes } from "@/lib/episodes";
+import { seriesTitleOf } from "@/lib/channels";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
 import { formatTime } from "@/lib/format";
 import { addWatchedTime } from "@/lib/browse-state";
@@ -111,8 +112,6 @@ interface PendingResume {
 	wasPlaying: boolean;
 	apply?: () => void;
 }
-
-const showTitle = (name: string): string => name.replace(/\s+S\d{1,3}E\d{1,3}.*/i, "").trim();
 
 /** Extract season/episode numbers from a channel name like "Show S01E05". */
 const parseSeasonEpisode = (name: string): { season?: number; episode?: number } => {
@@ -509,7 +508,7 @@ export const PlayerView = () => {
 		setEnrichedMeta(null);
 
 		const mediaType = activeChannel.contentType === "series" ? "series" : "movie";
-		const titleForOmdb = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
+		const titleForOmdb = seriesTitleOf(activeChannel);
 
 		fetchOmdbData(activeChannel.id, titleForOmdb, mediaType as "movie" | "series")
 			.then((omdbData) => {
@@ -597,10 +596,8 @@ export const PlayerView = () => {
 	// Derive episodes from passed list (Xtream) or local cache (M3U)
 	const localSeriesEpisodes = useMemo(() => {
 		if (!activeChannel || activeChannel.contentType !== "series") return [];
-		const title = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
-		return channels.filter(
-			(ch) => ch.contentType === "series" && (ch.seriesTitle ?? showTitle(ch.name)) === title
-		);
+		const title = seriesTitleOf(activeChannel);
+		return channels.filter((ch) => ch.contentType === "series" && seriesTitleOf(ch) === title);
 	}, [activeChannel, channels]);
 
 	// Series container id used to group download records — matches the series
@@ -608,9 +605,9 @@ export const PlayerView = () => {
 	const seriesContainerId = useMemo(() => {
 		if (!activeChannel) return "";
 		if (activeChannel.contentType !== "series") return activeChannel.id;
-		const title = activeChannel.seriesTitle ?? showTitle(activeChannel.name);
+		const title = seriesTitleOf(activeChannel);
 		const container = channels.find(
-			(ch) => ch.contentType === "series" && (ch.seriesTitle ?? showTitle(ch.name)) === title
+			(ch) => ch.contentType === "series" && seriesTitleOf(ch) === title
 		);
 		return container?.id ?? activeChannel.id;
 	}, [activeChannel, channels]);
@@ -919,7 +916,7 @@ export const PlayerView = () => {
 
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
-	const showTitleForDrawer = activeChannel?.seriesTitle ?? showTitle(activeChannel?.name ?? "");
+	const showTitleForDrawer = activeChannel ? seriesTitleOf(activeChannel) : "";
 
 	// --- Player download control (movies + series episodes only) ---
 	const playerDl = activeChannel ? byChannel.get(activeChannel.id) : undefined;

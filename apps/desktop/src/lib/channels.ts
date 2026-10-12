@@ -56,3 +56,11 @@ export const dedupeByTitle = (channels: Channel[]): Channel[] => {
 	}
 	return Array.from(seen.values());
 };
+
+/**
+ * The show a series episode belongs to. The channel's own seriesTitle wins,
+ * otherwise the name up to its SxxExx code, so "Breaking Bad S01E02 Cat's in
+ * the Bag" belongs to "Breaking Bad".
+ */
+export const seriesTitleOf = (ch: Pick<Channel, "name" | "seriesTitle">): string =>
+	ch.seriesTitle ?? ch.name.replace(/\s+S\d{1,3}E\d{1,3}.*/i, "").trim();
