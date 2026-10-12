@@ -17,6 +17,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Fixed
 
 - Downloads that were running when the app quit now start again at the next launch, and queued downloads start too. Before, each interrupted download held one of the download slots until it was stopped or deleted, and the queue sat idle until another download was added. Quitting the app now stops its downloads. Before, they kept running in the background after the app closed. A download whose ffmpeg can't start now shows as failed, and the next one in line takes its place (#99).
+- Opening the app while it's already running now brings its window to the front. Before, a second copy started, and both could run the same downloads (#99).
 
 ## [0.5.3] - 2026-10-09
 

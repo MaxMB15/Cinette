@@ -34,6 +34,17 @@ fn apply_linux_workarounds() {
     }
 }
 
+/// Bring the main window to the front, for when the app is opened again
+/// while it's running.
+#[cfg(desktop)]
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -49,9 +60,15 @@ pub fn run() {
     apply_linux_workarounds();
 
     let builder = tauri::Builder::default();
+    // A second copy of the app would share the database and start the same
+    // downloads again, so opening the app again shows the open window. This
+    // plugin comes first so the second copy quits before anything else runs.
     // On iOS the App Store handles updates, and there's nothing to relaunch.
     #[cfg(desktop)]
     let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app)
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
