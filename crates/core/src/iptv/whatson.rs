@@ -8,6 +8,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const WHATSON_URL: &str = "https://whatson-api.onrender.com/";
+
 /// The API runs on a host that sleeps when idle, and the first request after a
 /// quiet spell can take most of a minute while it wakes up.
 const WAKE_UP_TIMEOUT: Duration = Duration::from_secs(90);
@@ -204,8 +206,19 @@ pub fn parse_whatson_response(json: serde_json::Value) -> Result<WhatsonData, Wh
 /// Fetch whatson-api data for the given IMDB ID.
 /// `item_type` should be `"movie"` or `"tvshow"`.
 pub async fn fetch_whatson(imdb_id: &str, item_type: &str) -> Result<WhatsonData, WhatsonError> {
-    let response = crate::http::client()
-        .get("https://whatson-api.onrender.com/")
+    fetch_from(crate::http::client(), WHATSON_URL, imdb_id, item_type).await
+}
+
+/// The work of [`fetch_whatson`], taking the client and address so tests can
+/// point it at a local server.
+async fn fetch_from(
+    client: &reqwest::Client,
+    url: &str,
+    imdb_id: &str,
+    item_type: &str,
+) -> Result<WhatsonData, WhatsonError> {
+    let response = client
+        .get(url)
         .query(&[("imdbId", imdb_id), ("item_type", item_type)])
         .timeout(WAKE_UP_TIMEOUT)
         .send()
@@ -228,6 +241,7 @@ pub async fn fetch_whatson(imdb_id: &str, item_type: &str) -> Result<WhatsonData
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
     use serde_json::json;
 
     /// Mimics the real API response: `{"page": 1, "results": [...], ...}`
@@ -440,7 +454,60 @@ mod tests {
     #[test]
     fn http_errors_leave_out_the_request_url() {
         let err = WhatsonError::from(crate::http::error_with_url("unix:/?imdbId=SECRET"));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
+    }
+
+    // --- Lookups against a local server ---
+
+    #[tokio::test]
+    async fn a_lookup_sends_the_id_and_type_and_reads_the_first_result() {
+        let (server, client, requests) =
+            test_server::serve_once_with_client("200 OK", full_movie_response().to_string());
+        let result = fetch_from(&client, &server, "tt0111161", "movie").await;
+        assert_eq!(
+            result.unwrap(),
+            parse_whatson_response(full_movie_response()).unwrap()
+        );
+        let request = requests.try_recv().unwrap();
+        assert!(
+            request.starts_with("GET /?imdbId=tt0111161&item_type=movie HTTP/1.1"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_title_the_api_does_not_have_is_not_found() {
+        let (server, client, _) = test_server::serve_once_with_client("404 Not Found", "");
+        let result = fetch_from(&client, &server, "tt0111161", "movie").await;
+        assert!(matches!(result, Err(WhatsonError::NotFound)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn other_error_statuses_are_api_errors_that_name_them() {
+        for (status, message) in [
+            ("429 Too Many Requests", "Rate limited"),
+            (
+                "500 Internal Server Error",
+                "HTTP 500 Internal Server Error",
+            ),
+        ] {
+            let (server, client, _) = test_server::serve_once_with_client(status, "{}");
+            let result = fetch_from(&client, &server, "tt0111161", "movie").await;
+            assert!(
+                matches!(&result, Err(WhatsonError::Api(m)) if m == message),
+                "{status}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_is_not_json_is_an_http_error() {
+        let (server, client, _) =
+            test_server::serve_once_with_client("200 OK", "<html>waking up</html>");
+        let result = fetch_from(&client, &server, "tt0111161", "movie").await;
+        assert!(
+            matches!(&result, Err(WhatsonError::Http(e)) if e.is_decode()),
+            "{result:?}"
+        );
     }
 }

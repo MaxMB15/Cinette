@@ -66,20 +66,16 @@ pub struct DownloadRecord {
     pub error: Option<String>,
     pub created_at: i64,
     pub finished_at: Option<i64>,
+    /// The user chose Keep, so the retention setting never deletes it.
+    #[serde(default)]
+    pub keep: bool,
+    /// When the downloaded file last started playing. Retention counts from
+    /// this or `finished_at`, whichever is later.
+    #[serde(default)]
+    pub last_played_at: Option<i64>,
 }
 
 impl DownloadRecord {
-    /// Percentage 0–100 when total size is known, else None (indeterminate).
-    pub fn percent(&self) -> Option<u8> {
-        match self.total_bytes {
-            Some(total) if total > 0 => {
-                let pct = (self.downloaded_bytes.saturating_mul(100) / total).clamp(0, 100);
-                Some(pct as u8)
-            }
-            _ => None,
-        }
-    }
-
     /// Whether the download finished and its file is still on disk, so it
     /// can play without the network.
     pub fn has_local_file(&self) -> bool {
@@ -106,27 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn percent_is_none_when_total_unknown() {
-        let mut r = sample();
-        r.total_bytes = None;
-        r.downloaded_bytes = 500;
-        assert_eq!(r.percent(), None);
-    }
-
-    #[test]
-    fn percent_computes_and_clamps() {
-        let mut r = sample();
-        r.total_bytes = Some(1000);
-        r.downloaded_bytes = 620;
-        assert_eq!(r.percent(), Some(62));
-        r.downloaded_bytes = 5000; // overshoot clamps to 100
-        assert_eq!(r.percent(), Some(100));
-    }
-
-    #[test]
     fn a_finished_download_has_a_local_file_while_the_file_exists() {
-        let path =
-            std::env::temp_dir().join(format!("mvp-has-local-file-{}.mkv", std::process::id()));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Movie.mkv");
         std::fs::write(&path, b"video").unwrap();
         let mut r = sample();
         r.status = DownloadStatus::Completed;
@@ -156,6 +134,8 @@ mod tests {
             error: None,
             created_at: 0,
             finished_at: None,
+            keep: false,
+            last_played_at: None,
         }
     }
 }

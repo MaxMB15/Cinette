@@ -15,3 +15,11 @@ export const formatTime = (seconds: number): string => {
 	}
 	return `${m}:${String(s).padStart(2, "0")}`;
 };
+
+/** A count and its noun, like "1 episode" or "1,200 episodes". */
+export const formatCount = (count: number, noun: string, plural = `${noun}s`): string =>
+	`${count.toLocaleString()} ${count === 1 ? noun : plural}`;
+
+/** A skip as the player shows it, like "+10s" or "−30s". The minus is U+2212, not a hyphen. */
+export const formatSkip = (seconds: number): string =>
+	seconds === 0 ? "0s" : `${seconds > 0 ? "+" : "−"}${Math.abs(seconds)}s`;

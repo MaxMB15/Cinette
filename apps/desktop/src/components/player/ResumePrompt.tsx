@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useRef } from "react";
 import { RotateCcw, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { Dialog } from "@/components/ui/dialog";
 import { formatTime } from "@/lib/format";
 
 interface ResumePromptProps {
@@ -26,62 +25,45 @@ export const ResumePrompt = ({
 	onCancel,
 }: ResumePromptProps) => {
 	const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
-	const dialogRef = useRef<HTMLDivElement>(null);
-	useFocusTrap(dialogRef);
 
 	return (
-		<div
-			className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-			onClick={(e) => {
-				if (e.target === e.currentTarget) onCancel();
-			}}
-			onKeyDown={(e) => {
-				if (e.key === "Escape") {
-					e.stopPropagation();
-					onCancel();
-				}
-			}}
+		<Dialog
+			onClose={onCancel}
+			labelledBy="resume-prompt-title"
+			overlayClassName="absolute bg-black/70 backdrop-blur-sm"
+			className="w-full max-w-sm mx-4 rounded-xl border border-white/10 bg-neutral-900/95 p-5 text-white shadow-2xl"
 		>
-			<div
-				ref={dialogRef}
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="resume-prompt-title"
-				tabIndex={-1}
-				className="w-full max-w-sm mx-4 rounded-xl border border-white/10 bg-neutral-900/95 p-5 text-white shadow-2xl"
-			>
-				<h2 id="resume-prompt-title" className="text-base font-semibold">
-					Resume watching?
-				</h2>
-				<p className="mt-1 text-sm text-white/70 truncate" title={title}>
-					{title}
+			<h2 id="resume-prompt-title" className="text-base font-semibold">
+				Resume watching?
+			</h2>
+			<p className="mt-1 text-sm text-white/70 truncate" title={title}>
+				{title}
+			</p>
+
+			<div className="mt-4">
+				<div className="h-1 w-full rounded-full bg-white/15 overflow-hidden">
+					<div className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
+				</div>
+				<p className="mt-1.5 text-xs text-white/50">
+					Stopped at {formatTime(position)}
+					{duration > 0 && ` of ${formatTime(duration)}`}
 				</p>
-
-				<div className="mt-4">
-					<div className="h-1 w-full rounded-full bg-white/15 overflow-hidden">
-						<div className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
-					</div>
-					<p className="mt-1.5 text-xs text-white/50">
-						Stopped at {formatTime(position)}
-						{duration > 0 && ` of ${formatTime(duration)}`}
-					</p>
-				</div>
-
-				<div className="mt-5 flex flex-col gap-2">
-					<Button onClick={onResume} className="w-full justify-center gap-2">
-						<Play className="h-4 w-4" />
-						Resume from {formatTime(position)}
-					</Button>
-					<Button
-						variant="ghost"
-						onClick={onStartOver}
-						className="w-full justify-center gap-2 text-white hover:bg-white/10"
-					>
-						<RotateCcw className="h-4 w-4" />
-						Start from the beginning
-					</Button>
-				</div>
 			</div>
-		</div>
+
+			<div className="mt-5 flex flex-col gap-2">
+				<Button onClick={onResume} className="w-full justify-center gap-2">
+					<Play className="h-4 w-4" />
+					Resume from {formatTime(position)}
+				</Button>
+				<Button
+					variant="ghost"
+					onClick={onStartOver}
+					className="w-full justify-center gap-2 text-white hover:bg-white/10"
+				>
+					<RotateCcw className="h-4 w-4" />
+					Start from the beginning
+				</Button>
+			</div>
+		</Dialog>
 	);
 };

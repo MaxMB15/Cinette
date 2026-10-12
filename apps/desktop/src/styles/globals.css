@@ -36,7 +36,7 @@
 	}
 	html,
 	body {
-		/* Disable WKWebView elastic/bounce scroll — this is an app, not a webpage. */
+		/* Turn off WKWebView's elastic scroll. This is an app, not a web page. */
 		overflow: hidden;
 		overscroll-behavior: none;
 	}
@@ -92,4 +92,22 @@
 .video-surface {
 	background: transparent;
 	-webkit-app-region: no-drag;
+}
+
+/* The bar that fills the Next episode button during its countdown. The
+   component sets the duration, pauses it with the video, and goes on to the
+   next episode when it ends. Scaling keeps it off the layout and paint work. */
+@keyframes countdown-fill {
+	from {
+		transform: scaleX(0);
+	}
+	to {
+		transform: scaleX(1);
+	}
+}
+.countdown-fill {
+	transform-origin: left;
+	animation-name: countdown-fill;
+	animation-timing-function: linear;
+	animation-fill-mode: forwards;
 }

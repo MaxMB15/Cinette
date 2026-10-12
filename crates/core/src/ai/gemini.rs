@@ -390,15 +390,50 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
 }
 
 /// Checks a key by listing models, which is quicker and cheaper than a prompt.
-/// Returns false when Google answers with an error status, and an error only
-/// when the request itself fails.
+/// Returns whether Google takes the key, or an error when the request fails or
+/// the answer says nothing about the key.
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
     match list_models_request(api_key).send().await {
-        Ok(response) => Ok(response.status().is_success()),
+        Ok(response) => {
+            let status = response.status();
+            // Only a 400 needs its body, to tell a bad key from a bad request.
+            let body = if status == reqwest::StatusCode::BAD_REQUEST {
+                response.text().await.unwrap_or_default()
+            } else {
+                String::new()
+            };
+            key_accepted(status, &body)
+        }
         // A key with characters a header can't carry is no real key.
         Err(e) if e.is_builder() => Ok(false),
         Err(e) => Err(request_error(e)),
     }
+}
+
+/// What a models list answer says about the key. Google turns down a key it
+/// doesn't know with a 400 that gives API_KEY_INVALID as the reason, and a key
+/// it won't serve with 401 or 403. A 429 or 402 means it knew the key and is
+/// limiting it or wants payment. Any other answer, such as a 503 or a 400 for
+/// another reason, is about the service or the request and not the key.
+fn key_accepted(status: reqwest::StatusCode, body: &str) -> Result<bool, GeminiError> {
+    use reqwest::StatusCode;
+    match status {
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::PAYMENT_REQUIRED => Ok(true),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Ok(false),
+        StatusCode::BAD_REQUEST if names_invalid_key(body) => Ok(false),
+        _ if status.is_success() => Ok(true),
+        _ => Err(GeminiError::Api(format!("Gemini answered {status}"))),
+    }
+}
+
+/// Whether a Google error body gives API_KEY_INVALID as one of its reasons.
+fn names_invalid_key(body: &str) -> bool {
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    body["error"]["details"]
+        .as_array()
+        .is_some_and(|details| details.iter().any(|d| d["reason"] == "API_KEY_INVALID"))
 }
 
 // Keys are pasted in, often with a trailing newline, and a header can't carry one.
@@ -527,6 +562,45 @@ mod tests {
         assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
     }
 
+    /// Google's answer to a key it doesn't know, trimmed to what matters.
+    const INVALID_KEY_BODY: &str = r#"{"error": {"code": 400,
+        "message": "API key not valid. Please pass a valid API key.",
+        "status": "INVALID_ARGUMENT",
+        "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "API_KEY_INVALID", "domain": "googleapis.com"}]}}"#;
+
+    #[test]
+    fn the_models_list_status_says_whether_the_key_works() {
+        use reqwest::StatusCode;
+        for (code, accepted) in [
+            (200, true),
+            (402, true),
+            (429, true),
+            (401, false),
+            (403, false),
+        ] {
+            let status = StatusCode::from_u16(code).unwrap();
+            assert_eq!(key_accepted(status, "").unwrap(), accepted, "{code}");
+        }
+        for code in [404, 500, 503] {
+            let status = StatusCode::from_u16(code).unwrap();
+            let err = key_accepted(status, "").unwrap_err();
+            assert!(err.to_string().contains(&code.to_string()), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_400_turns_the_key_down_only_when_google_says_the_key_is_invalid() {
+        use reqwest::StatusCode;
+        assert!(!key_accepted(StatusCode::BAD_REQUEST, INVALID_KEY_BODY).unwrap());
+
+        let other_reason = INVALID_KEY_BODY.replace("API_KEY_INVALID", "BAD_REQUEST_BODY");
+        for body in ["", "not json", "{}", other_reason.as_str()] {
+            let err = key_accepted(StatusCode::BAD_REQUEST, body).unwrap_err();
+            assert!(err.to_string().contains("400"), "{body}: {err}");
+        }
+    }
+
     #[tokio::test]
     async fn a_key_no_header_can_carry_is_invalid() {
         // The bad character stops the request before it reaches the network.
@@ -538,8 +612,7 @@ mod tests {
         let err = request_error(crate::http::error_with_url(
             "unix:/v1beta/models?key=SECRET",
         ));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+        crate::http::test_server::assert_hides(&err, "SECRET");
     }
 
     #[test]

@@ -65,3 +65,51 @@ impl Category {
         cats
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_group(group: &str) -> Channel {
+        Channel {
+            group_title: group.into(),
+            ..Channel::default()
+        }
+    }
+
+    #[test]
+    fn categories_count_each_group_in_name_order() {
+        let channels = [
+            in_group("Sports"),
+            in_group("News"),
+            in_group("Kids"),
+            in_group("News"),
+        ];
+        let counts: Vec<(String, usize)> = Category::from_channels(&channels)
+            .into_iter()
+            .map(|c| (c.name, c.channel_count))
+            .collect();
+        assert_eq!(
+            counts,
+            [
+                ("Kids".to_string(), 1),
+                ("News".to_string(), 2),
+                ("Sports".to_string(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn category_ids_differ_within_one_call() {
+        let channels = [in_group("A"), in_group("B"), in_group("C")];
+        let categories = Category::from_channels(&channels);
+        let ids: std::collections::HashSet<&str> =
+            categories.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn no_channels_make_no_categories() {
+        assert!(Category::from_channels(&[]).is_empty());
+    }
+}

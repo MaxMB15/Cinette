@@ -10,18 +10,17 @@ on:
       - "docs/**"
       - ".vscode/**"
       - ".idea/**"
+  # Pull requests always run, even docs-only ones, because the ruleset requires
+  # `test` and `build-macos`. detect-changes skips the platform builds when no
+  # platform files changed, and a skipped job still counts as passing.
   pull_request:
     branches: [main, dev, release-*]
-    paths-ignore:
-      - "**.md"
-      - "LICENSE"
-      - ".github/workflows/release-*.yml"
-      - "docs/**"
-      - ".vscode/**"
-      - ".idea/**"
   # A manual run builds only macOS, signed and notarized when the Apple secrets
   # are set, so signing can be tested without making a release.
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   # Keep a manual run from cancelling, or being cancelled by, a push build.
@@ -30,6 +29,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Test builds keep line numbers for backtraces but drop the rest of the debug
+  # info, which is most of their size in the Rust caches.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   # ── Enforce merge source for PRs targeting main ─────────────────────────
@@ -39,8 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate source branch
+        env:
+          HEAD: ${{ github.head_ref }}
         run: |
-          HEAD="${{ github.head_ref }}"
           if [[ "$HEAD" == "dev" || "$HEAD" == chore-bump-v* || "$HEAD" == chore/release-* || "$HEAD" == chore/sync-main-* ]]; then
             echo "OK: '$HEAD' is allowed to merge into main."
           else
@@ -54,11 +57,15 @@ jobs:
   # On manual runs: macOS only.
   detect-changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # paths-filter lists a pull request's files through the API.
+      pull-requests: read
     outputs:
       linux: ${{ steps.push-all.outputs.linux || steps.filter.outputs.linux }}
       macos: ${{ steps.push-all.outputs.macos || steps.manual.outputs.macos || steps.filter.outputs.macos }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Push — always build both platforms
         id: push-all
@@ -74,57 +81,49 @@ jobs:
 
       - name: PR — detect changed paths
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
+          # The whole plugin crate counts, because a list of its files missed
+          # new ones. Both builds also run when CI itself changes.
           filters: |
-            linux:
-              - 'crates/tauri-plugin-mpv/src/linux.rs'
-              - 'crates/tauri-plugin-mpv/src/renderer.rs'
-              - 'crates/tauri-plugin-mpv/src/commands.rs'
-              - 'crates/tauri-plugin-mpv/src/engine.rs'
-              - 'crates/tauri-plugin-mpv/src/mpv.rs'
-              - 'crates/tauri-plugin-mpv/src/lib.rs'
-              - 'crates/tauri-plugin-mpv/Cargo.toml'
+            shared: &shared
+              - 'crates/tauri-plugin-mpv/**'
               - 'crates/core/**'
               - 'apps/desktop/src-tauri/**'
               - 'apps/desktop/src/**'
-              - 'apps/desktop/package.json'
+              - 'apps/desktop/*'
+              - 'package.json'
+              - 'package-lock.json'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - '.cargo/**'
               - 'scripts/build-libmpv.sh'
-              - 'scripts/bundle-libmpv-linux.sh'
               - 'scripts/fetch-ffmpeg.sh'
+              - '.github/actions/install-frontend-deps/**'
+              - '.github/workflows/build.yml'
+            linux:
+              - *shared
+              - 'scripts/bundle-libmpv-linux.sh'
               - '.github/actions/install-linux-deps/**'
             macos:
-              - 'crates/tauri-plugin-mpv/src/macos.rs'
-              - 'crates/tauri-plugin-mpv/src/renderer.rs'
-              - 'crates/tauri-plugin-mpv/src/commands.rs'
-              - 'crates/tauri-plugin-mpv/src/engine.rs'
-              - 'crates/tauri-plugin-mpv/src/mpv.rs'
-              - 'crates/tauri-plugin-mpv/src/lib.rs'
-              - 'crates/tauri-plugin-mpv/Cargo.toml'
-              - 'crates/core/**'
-              - 'apps/desktop/src-tauri/**'
-              - 'apps/desktop/src/**'
-              - 'apps/desktop/package.json'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'scripts/build-libmpv.sh'
+              - *shared
               - 'scripts/bundle-libmpv.sh'
-              - 'scripts/fetch-ffmpeg.sh'
+              - '.github/actions/macos-signing/**'
 
   # ── Tests (run on every push and PR) ────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # Only branch pushes save. A PR's caches can only be used by that PR, and
@@ -136,23 +135,29 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
 
       - name: Install deps
-        run: npm ci --ignore-scripts || (rm -f package-lock.json && npm install)
+        uses: ./.github/actions/install-frontend-deps
 
       - name: TypeScript type-check
         working-directory: apps/desktop
         run: npx tsc -b --noEmit
 
-      - name: Rust type-check (core only — avoids Tauri GTK deps on Linux)
-        run: cargo check -p mvp-core
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Rust type-check of mvp-core
+        run: cargo check --locked -p mvp-core
 
       - name: Run Rust tests
-        run: cargo test -p mvp-core -- --include-ignored
+        run: cargo test --locked -p mvp-core -- --include-ignored
 
       - name: Run desktop tests with coverage
         working-directory: apps/desktop
@@ -160,33 +165,53 @@ jobs:
 
       - name: Upload coverage artifact
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coverage-report
           path: apps/desktop/coverage/
           retention-days: 1
 
   # ── Coverage badge deploy (push to main only, needs write) ─────────────
+  # The frontend report goes to coverage/ and the Rust report to coverage/rust/.
+  # The Rust report comes from build-linux. If that job made no report, the
+  # frontend report still goes up and the last Rust report stays.
   deploy-coverage:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.test.result == 'success' }}
+    needs: [test, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: coverage-report
           path: coverage
 
-      - name: Generate coverage badge
-        uses: jaywcjlove/coverage-badges-cli@v2.1.0
+      - name: Download the Rust coverage report
+        id: rust
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: rust-coverage-report
+          path: coverage/rust
+
+      - name: Generate frontend coverage badge
+        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
         with:
           source: coverage/coverage-summary.json
           output: coverage/badge.svg
+          label: frontend coverage
+
+      - name: Generate Rust coverage badge
+        if: steps.rust.outcome == 'success'
+        uses: jaywcjlove/coverage-badges-cli@798bfe89ba3cca18919cb0937883f4e06bfb54ee # v2.1.0
+        with:
+          source: coverage/rust/coverage-summary.json
+          output: coverage/rust/badge.svg
+          label: Rust coverage
 
       - name: Deploy coverage to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./coverage
@@ -205,13 +230,15 @@ jobs:
     # secrets and wait for approval. Push and PR builds use no environment.
     environment: ${{ github.event_name == 'workflow_dispatch' && 'macos-signing' || '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # Shared with release.yml, which restores it from main.
@@ -219,20 +246,20 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
 
       - name: Install frontend deps
-        run: npm ci
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Install system deps
         run: |
           # ffmpeg@7 required: mpv 0.40.0 uses FF_PROFILE_* macros removed in ffmpeg 8.x
           brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
           # Make ffmpeg@7 visible to pkg-config (it is keg-only, not linked by default)
-          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Prepare libmpv for bundle
         run: ./scripts/build-libmpv.sh macos
@@ -272,7 +299,7 @@ jobs:
           target/release/bundle/macos/*.app target/release/bundle/dmg/*.dmg
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: MaxVideoPlayer-macOS
           path: |
@@ -286,13 +313,22 @@ jobs:
     needs: [test, detect-changes]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          # cargo-llvm-cov reads the coverage data with LLVM's tools.
+          components: llvm-tools
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-llvm-cov@0.8.7
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
           # Shared with release.yml, which restores it from main.
@@ -300,7 +336,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
@@ -317,23 +353,42 @@ jobs:
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Install frontend deps
-        run: |
-          npm ci || true
-          # npm ci can skip platform-specific optional deps (npm/cli#4828).
-          # Ensure the Tauri CLI native binding for Linux is present.
-          npm ls @tauri-apps/cli-linux-x64-gnu 2>/dev/null || npm install @tauri-apps/cli-linux-x64-gnu
-
-      - name: Rust type-check (plugin + core)
-        run: cargo check -p tauri-plugin-mpv -p mvp-core
+        uses: ./.github/actions/install-frontend-deps
 
       - name: Build frontend
         run: npm run build:desktop
+
+      # The test job covers only mvp-core. The plugin and the app need GTK and
+      # libmpv, which this job installs, so the whole workspace's tests run here
+      # and measure Rust coverage. The figure counts linux.rs and not macos.rs,
+      # since each builds only on its own platform.
+      - name: Run Rust tests with coverage
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --workspace --no-report
+          cargo llvm-cov report --summary-only
+          cargo llvm-cov report --html --output-dir target/rust-coverage
+          cargo llvm-cov report --json --summary-only --output-path target/rust-coverage/summary.json
+          mv target/rust-coverage/html rust-coverage
+          # The badge reads the summary format the frontend report writes,
+          # with the percentage rounded to two places as that one is.
+          jq '{total: {lines: {pct: (.data[0].totals.lines.percent * 100 | round / 100)}}}' \
+            target/rust-coverage/summary.json > rust-coverage/coverage-summary.json
+          echo "Rust line coverage: $(jq .total.lines.pct rust-coverage/coverage-summary.json)%" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Rust coverage artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: rust-coverage-report
+          path: rust-coverage/
+          retention-days: 1
 
       - name: Build Tauri app (Linux)
         run: cd apps/desktop && npx tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: MaxVideoPlayer-Linux
           path: |
@@ -341,3 +396,29 @@ jobs:
             target/release/bundle/rpm/*.rpm
             target/release/bundle/appimage/*.AppImage
           if-no-files-found: warn
+
+  # ── Overall result ──────────────────────────────────────────────────────
+  # One check that sums up the whole run, so a ruleset can require it instead
+  # of each job. A skipped job is fine, but a failed or cancelled one isn't,
+  # including detect-changes, whose failure would otherwise skip the builds.
+  ci-status:
+    if: always()
+    needs:
+      - check-merge-source
+      - detect-changes
+      - test
+      - deploy-coverage
+      - build-macos
+      - build-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the other jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          if jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' <<< "$NEEDS" > /dev/null; then
+            echo "::error::A job failed or was cancelled."
+            exit 1
+          fi

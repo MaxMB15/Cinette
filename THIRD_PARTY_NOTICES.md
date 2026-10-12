@@ -136,6 +136,13 @@ The iOS app gets libmpv, the FFmpeg libraries and the libraries below from relea
 
 `Libshaderc_combined` also contains [glslang](https://github.com/KhronosGroup/glslang) and [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools), each under its own license.
 
+## Skip times
+
+The times the player offers to skip come from two online databases.
+
+- Contains information from [SkipDB](https://skipdb.tv), which is made available here under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+- Intro data provided by [IntroDB](https://introdb.app).
+
 ## Rust crates and npm packages
 
-Max Video Player is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [apps/desktop/package-lock.json](apps/desktop/package-lock.json) list every one, with the exact version.
+Max Video Player is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [package-lock.json](package-lock.json) list every one, with the exact version.

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useId, useRef } from "react";
 import { openUrl } from "@/lib/openUrl";
 import bmcQr from "@/assets/bmc-qr.png";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { Select } from "@/components/ui/select";
 import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform, platformName } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
@@ -18,10 +19,7 @@ import {
 	Smartphone,
 	Tablet,
 	Tv,
-	Eye,
-	EyeOff,
 	CheckCircle,
-	XCircle,
 	Download,
 	RefreshCw,
 	FolderOpen,
@@ -29,7 +27,7 @@ import {
 import {
 	getOmdbApiKey,
 	setOmdbApiKey,
-	fetchOmdbData,
+	testOmdbApiKey,
 	clearWatchHistory,
 	getOpenSubtitlesApiKey,
 	setOpenSubtitlesApiKey,
@@ -42,21 +40,80 @@ import {
 	setDownloadFolder,
 	getDownloadConcurrency,
 	setDownloadConcurrency,
+	countDownloadsDue,
 } from "@/lib/tauri";
+import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { useDownloads } from "@/hooks/useDownloads";
+import { RETENTION_OPTIONS } from "@/lib/retention";
 import {
 	MAX_VOLUME,
+	SKIP_OPTIONS,
 	readDefaultVolume,
 	readHwdecEnabled,
+	readSkipIntervals,
+	readSkipSegmentModes,
+	SKIP_INTERVALS_EVENT,
+	SKIP_SEGMENT_MODES_EVENT,
 	writeDefaultVolume,
 	writeHwdecEnabled,
+	writeSkipInterval,
+	writeSkipSegmentMode,
+	type SkipSegmentMode,
 } from "@/lib/player-prefs";
+import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { ask, open } from "@tauri-apps/plugin-dialog";
+import { useScrollToOmdbKey } from "@/hooks/useScrollToOmdbKey";
+import { rememberHasOmdbKey } from "@/hooks/useHasOmdbKey";
+import { useApiKey, type ApiKeyService } from "@/hooks/useApiKey";
+import { DONATION_LAST_SHOWN_KEY, removeStorage } from "@/lib/storage";
+import { ApiKeyField } from "./ApiKeyField";
 import { LegalNotices } from "./LegalNotices";
 import { DownloadHistoryDialog } from "./DownloadHistory";
 
-type OmdbStatus = "idle" | "valid" | "invalid";
 type SaveStatus = "idle" | "saved" | "error";
 type HistoryStatus = "idle" | "cleared";
+
+const SKIP_CHOICES = SKIP_OPTIONS.map((n) => ({ value: n, label: `${n} seconds` }));
+
+const SKIP_SEGMENT_CHOICES: { value: SkipSegmentMode; label: string }[] = [
+	{ value: "button", label: "Skip button" },
+	{ value: "auto", label: "Automatic" },
+	{ value: "off", label: "Off" },
+];
+
+const SKIPDB_URL = "https://skipdb.tv";
+const INTRODB_URL = "https://introdb.app";
+
+const GEMINI_KEY: ApiKeyService = {
+	load: getGeminiApiKey,
+	save: setGeminiApiKey,
+	test: testGeminiApiKey,
+};
+
+const OMDB_KEY: ApiKeyService = {
+	load: getOmdbApiKey,
+	save: setOmdbApiKey,
+	test: testOmdbApiKey,
+	// Info sheets check this before they offer to open Settings for a key.
+	onSaved: (key) => rememberHasOmdbKey(Boolean(key)),
+};
+
+const OPENSUBTITLES_KEY: ApiKeyService = {
+	load: getOpenSubtitlesApiKey,
+	save: setOpenSubtitlesApiKey,
+	test: testOpenSubtitlesApiKey,
+};
+
+/** How many downloads can run at once. */
+const MIN_CONCURRENCY = 1;
+const MAX_CONCURRENCY = 10;
+
+/** The number typed, rounded and kept from 1 to 10, or null when the field holds no number. */
+const parseConcurrency = (text: string): number | null => {
+	const n = Number.parseFloat(text);
+	if (Number.isNaN(n)) return null;
+	return Math.max(MIN_CONCURRENCY, Math.min(MAX_CONCURRENCY, Math.round(n)));
+};
 
 const DonationReset = () => {
 	const [reset, setReset] = useState(false);
@@ -68,7 +125,7 @@ const DonationReset = () => {
 		[]
 	);
 	const handleReset = () => {
-		localStorage.removeItem("donation-last-shown");
+		removeStorage(DONATION_LAST_SHOWN_KEY);
 		setReset(true);
 		timerRef.current = setTimeout(() => setReset(false), 2000);
 	};
@@ -106,31 +163,20 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		writeDefaultVolume(volume);
 	};
 
-	// OMDB state
-	const [omdbKey, setOmdbKey] = useState("");
-	const [omdbKeyVisible, setOmdbKeyVisible] = useState(false);
-	const [omdbStatus, setOmdbStatus] = useState<OmdbStatus>("idle");
-	const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-	const [saveError, setSaveError] = useState<string | null>(null);
-	const [omdbTesting, setOmdbTesting] = useState(false);
-	const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const skipIntervals = usePlayerPref(readSkipIntervals, SKIP_INTERVALS_EVENT);
+	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
 
-	// OpenSubtitles state
-	const [openSubtitlesKey, setOpenSubtitlesKey] = useState("");
-	const [openSubtitlesKeyVisible, setOpenSubtitlesKeyVisible] = useState(false);
-	const [openSubtitlesSaveStatus, setOpenSubtitlesSaveStatus] = useState<SaveStatus>("idle");
-	const [openSubtitlesTestStatus, setOpenSubtitlesTestStatus] = useState<OmdbStatus>("idle");
-	const [openSubtitlesTesting, setOpenSubtitlesTesting] = useState(false);
-	const [openSubtitlesSaveError, setOpenSubtitlesSaveError] = useState<string | null>(null);
-	const openSubtitlesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	// Gemini state
-	const [geminiKey, setGeminiKey] = useState("");
-	const [geminiKeyVisible, setGeminiKeyVisible] = useState(false);
-	const [geminiSaveStatus, setGeminiSaveStatus] = useState<SaveStatus>("idle");
-	const [geminiTestStatus, setGeminiTestStatus] = useState<OmdbStatus>("idle");
-	const [geminiTesting, setGeminiTesting] = useState(false);
-	const geminiSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const geminiKey = useApiKey(GEMINI_KEY);
+	const omdbKey = useApiKey(OMDB_KEY);
+	const openSubtitlesKey = useApiKey(OPENSUBTITLES_KEY);
+	// The services under OMDb look titles up by the IMDb ID it finds, so they
+	// show once either key is saved. They then stay until Settings closes, so
+	// removing a key doesn't take its field away from under the pointer.
+	const [showOmdbServices, setShowOmdbServices] = useState(false);
+	if (!showOmdbServices && (omdbKey.saved || openSubtitlesKey.saved)) setShowOmdbServices(true);
+	const omdbKeyInputRef = useRef<HTMLInputElement>(null);
+	// The OMDb hint in an info sheet opens Settings at the key field.
+	useScrollToOmdbKey(omdbKeyInputRef);
 
 	// History state
 	const [historyStatus, setHistoryStatus] = useState<HistoryStatus>("idle");
@@ -147,8 +193,24 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	const [folderInput, setFolderInput] = useState("");
 	const [folderStatus, setFolderStatus] = useState<SaveStatus>("idle");
 	const [concurrency, setConcurrency] = useState(3);
+	// What's in the field, which can be blank or out of range while it's edited.
+	const [concurrencyText, setConcurrencyText] = useState("3");
+	const concurrencyId = useId();
+	const concurrencyHintId = useId();
+	// Saves go one at a time. Typing 10 saves 1 on the way, and two saves at
+	// once could land in either order and leave 1 behind.
+	const concurrencySaves = useRef<Promise<void>>(Promise.resolve());
 	const [showDownloadHistory, setShowDownloadHistory] = useState(false);
 	const folderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const { retentionDays, setRetentionDays } = useDownloads();
+	/**
+	 * A shorter retention that would delete downloads at once, waiting on a
+	 * yes. `count` is null when counting failed.
+	 */
+	const [pendingRetention, setPendingRetention] = useState<{
+		days: number | null;
+		count: number | null;
+	} | null>(null);
 
 	useEffect(() => {
 		getVersion()
@@ -157,17 +219,6 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	}, []);
 
 	useEffect(() => {
-		getOmdbApiKey().then((key) => {
-			if (key) setOmdbKey(key);
-		});
-		getOpenSubtitlesApiKey().then((key) => {
-			if (key) setOpenSubtitlesKey(key);
-		});
-		getGeminiApiKey()
-			.then((key) => {
-				if (key) setGeminiKey(key);
-			})
-			.catch(() => {});
 		getDownloadFolder()
 			.then((p) => {
 				setDownloadFolderState(p);
@@ -175,13 +226,13 @@ export const Settings = ({ updateState }: SettingsProps) => {
 			})
 			.catch(() => {});
 		getDownloadConcurrency()
-			.then(setConcurrency)
+			.then((n) => {
+				setConcurrency(n);
+				setConcurrencyText(String(n));
+			})
 			.catch(() => {});
 		return () => {
-			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 			if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
-			if (openSubtitlesSaveTimerRef.current) clearTimeout(openSubtitlesSaveTimerRef.current);
-			if (geminiSaveTimerRef.current) clearTimeout(geminiSaveTimerRef.current);
 			if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);
 			if (folderTimerRef.current) clearTimeout(folderTimerRef.current);
 		};
@@ -197,88 +248,6 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	// The mobile apps have no downloads, and App Store rules don't allow a
 	// donation link.
 	const mobile = isMobilePlatform(platform);
-
-	const handleSaveOmdbKey = async () => {
-		try {
-			await setOmdbApiKey(omdbKey);
-			setSaveStatus("saved");
-			setSaveError(null);
-			setOmdbStatus("idle");
-			if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-			saveTimerRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
-		} catch {
-			setSaveError("Failed to save. Please try again.");
-		}
-	};
-
-	const handleTestOmdbKey = async () => {
-		setOmdbTesting(true);
-		setOmdbStatus("idle");
-		try {
-			const result = await fetchOmdbData("test", "The Matrix", "movie");
-			setOmdbStatus(result ? "valid" : "invalid");
-		} catch {
-			setOmdbStatus("invalid");
-		} finally {
-			setOmdbTesting(false);
-		}
-	};
-
-	const handleSaveOpenSubtitlesKey = async () => {
-		try {
-			await setOpenSubtitlesApiKey(openSubtitlesKey);
-			setOpenSubtitlesSaveStatus("saved");
-			setOpenSubtitlesSaveError(null);
-			setOpenSubtitlesTestStatus("idle");
-			if (openSubtitlesSaveTimerRef.current) clearTimeout(openSubtitlesSaveTimerRef.current);
-			openSubtitlesSaveTimerRef.current = setTimeout(
-				() => setOpenSubtitlesSaveStatus("idle"),
-				2000
-			);
-		} catch {
-			setOpenSubtitlesSaveError("Failed to save. Please try again.");
-		}
-	};
-
-	const handleTestOpenSubtitlesKey = async () => {
-		setOpenSubtitlesTesting(true);
-		setOpenSubtitlesTestStatus("idle");
-		try {
-			const valid = await testOpenSubtitlesApiKey(openSubtitlesKey);
-			setOpenSubtitlesTestStatus(valid ? "valid" : "invalid");
-		} catch {
-			setOpenSubtitlesTestStatus("invalid");
-		} finally {
-			setOpenSubtitlesTesting(false);
-		}
-	};
-
-	const handleGeminiSave = async () => {
-		try {
-			await setGeminiApiKey(geminiKey);
-			setGeminiSaveStatus("saved");
-			setGeminiTestStatus("idle");
-			if (geminiSaveTimerRef.current) clearTimeout(geminiSaveTimerRef.current);
-			geminiSaveTimerRef.current = setTimeout(() => setGeminiSaveStatus("idle"), 2000);
-		} catch {
-			setGeminiSaveStatus("error");
-			if (geminiSaveTimerRef.current) clearTimeout(geminiSaveTimerRef.current);
-			geminiSaveTimerRef.current = setTimeout(() => setGeminiSaveStatus("idle"), 3000);
-		}
-	};
-
-	const handleGeminiTest = async () => {
-		setGeminiTesting(true);
-		setGeminiTestStatus("idle");
-		try {
-			const valid = await testGeminiApiKey(geminiKey);
-			setGeminiTestStatus(valid ? "valid" : "invalid");
-		} catch {
-			setGeminiTestStatus("invalid");
-		} finally {
-			setGeminiTesting(false);
-		}
-	};
 
 	const handleClearHistory = async () => {
 		const confirmed = await ask(
@@ -299,7 +268,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 	const handleClearCaches = async () => {
 		const confirmed = await ask(
-			"Clear all cached data (OMDB, MDBList, OpenSubtitles, EPG)? This cannot be undone.",
+			"Clear cached movie and series details, guide data, episode lists and downloaded subtitles? This cannot be undone.",
 			{ title: "Clear Caches", kind: "warning" }
 		);
 		if (!confirmed) return;
@@ -345,10 +314,41 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		}
 	};
 
-	const handleConcurrencyChange = (n: number) => {
-		const clamped = Math.max(1, Math.min(10, Math.round(n)));
-		setConcurrency(clamped);
-		setDownloadConcurrency(clamped).catch(() => {});
+	const applyConcurrency = (n: number) => {
+		setConcurrencyText(String(n));
+		if (n === concurrency) return;
+		setConcurrency(n);
+		concurrencySaves.current = concurrencySaves.current
+			.then(() => setDownloadConcurrency(n))
+			.catch(() => {});
+	};
+
+	/**
+	 * A number in range applies as it's typed. Anything else waits for the
+	 * field to lose focus or for Enter, so clearing the field to type a new
+	 * number doesn't snap it to 1 first.
+	 */
+	const handleConcurrencyInput = (text: string) => {
+		setConcurrencyText(text);
+		// A blank field reads as 0, which is out of range.
+		const n = Number(text);
+		if (Number.isInteger(n) && n >= MIN_CONCURRENCY && n <= MAX_CONCURRENCY) {
+			applyConcurrency(n);
+		}
+	};
+
+	/** Clamps what was typed, or puts the last setting back when it isn't a number. */
+	const commitConcurrency = () =>
+		applyConcurrency(parseConcurrency(concurrencyText) ?? concurrency);
+
+	/** `value` is a choice from RETENTION_OPTIONS, where 0 means never delete. */
+	const handleRetentionChange = async (value: number) => {
+		const days = value > 0 ? value : null;
+		if (days === retentionDays) return;
+		// When counting fails, ask anyway rather than delete without asking.
+		const count = days === null ? 0 : await countDownloadsDue(days).catch(() => null);
+		if (count === 0) setRetentionDays(days).catch(() => {});
+		else setPendingRetention({ days, count });
 	};
 
 	return (
@@ -414,12 +414,103 @@ export const Settings = ({ updateState }: SettingsProps) => {
 								step={5}
 								onValueChange={handleDefaultVolumeChange}
 								aria-label="Default volume"
+								aria-valuetext={`${defaultVolume}%`}
 							/>
 							<p className="text-xs text-muted-foreground mt-2">
 								Playback starts at this volume. Changes you make in the player last
 								until you quit the app.
 							</p>
 						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Skip back</p>
+								<p className="text-xs text-muted-foreground">
+									How far the skip back button, a double-tap on the left of the
+									video and the left arrow key go back.
+								</p>
+							</div>
+							<Select
+								value={skipIntervals.back}
+								onChange={(n) => writeSkipInterval("back", n)}
+								options={SKIP_CHOICES}
+								className="w-32 shrink-0"
+								aria-label="Skip back"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Skip forward</p>
+								<p className="text-xs text-muted-foreground">
+									How far the skip forward button, a double-tap on the right of
+									the video and the right arrow key go forward.
+								</p>
+							</div>
+							<Select
+								value={skipIntervals.forward}
+								onChange={(n) => writeSkipInterval("forward", n)}
+								options={SKIP_CHOICES}
+								className="w-32 shrink-0"
+								aria-label="Skip forward"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Intros and recaps</p>
+								<p className="text-xs text-muted-foreground">
+									Show a Skip button while one plays, or skip it automatically
+									with a way to undo.
+								</p>
+							</div>
+							<Select
+								value={segmentModes.opening}
+								onChange={(mode) => writeSkipSegmentMode("opening", mode)}
+								options={SKIP_SEGMENT_CHOICES}
+								className="w-36 shrink-0"
+								aria-label="Intros and recaps"
+							/>
+						</div>
+
+						<div className="flex items-center justify-between gap-4">
+							<div>
+								<p className="text-sm font-medium">Credits and previews</p>
+								<p className="text-xs text-muted-foreground">
+									At end credits, Automatic counts down to the next episode while
+									Autoplay is on in the player's controls.
+								</p>
+							</div>
+							<Select
+								value={segmentModes.ending}
+								onChange={(mode) => writeSkipSegmentMode("ending", mode)}
+								options={SKIP_SEGMENT_CHOICES}
+								className="w-36 shrink-0"
+								aria-label="Credits and previews"
+							/>
+						</div>
+
+						<p className="text-xs text-muted-foreground">
+							Skip times need an OMDb key under Integrations, and only some movies and
+							series have them. They come from{" "}
+							<button
+								type="button"
+								onClick={() => openUrl(SKIPDB_URL)}
+								className="text-primary hover:underline"
+							>
+								SkipDB
+							</button>
+							, under the ODbL 1.0, and from{" "}
+							<button
+								type="button"
+								onClick={() => openUrl(INTRODB_URL)}
+								className="text-primary hover:underline"
+							>
+								IntroDB
+							</button>
+							. People add the times by hand, so a few may be off. When the player
+							can't be sure they fit the video, Automatic shows the button instead.
+						</p>
 					</CardContent>
 				</Card>
 
@@ -429,88 +520,16 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						<CardTitle className="text-base">AI</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-4">
-						<div>
-							<p className="text-sm font-medium mb-1">Gemini API Key</p>
-							<p className="text-xs text-muted-foreground mb-2">
-								Used for automatic channel categorization
-							</p>
-							<div className="flex items-center gap-2">
-								<div className="relative flex-1">
-									<Input
-										type={geminiKeyVisible ? "text" : "password"}
-										placeholder="Enter Gemini API key…"
-										value={geminiKey}
-										onChange={(e) => {
-											setGeminiKey(e.target.value);
-											setGeminiTestStatus("idle");
-											setGeminiSaveStatus("idle");
-										}}
-										className="pr-10"
-									/>
-									<button
-										type="button"
-										className="absolute inset-y-0 right-2 flex items-center text-muted-foreground hover:text-foreground"
-										onClick={() => setGeminiKeyVisible((v) => !v)}
-										aria-label={geminiKeyVisible ? "Hide key" : "Show key"}
-									>
-										{geminiKeyVisible ? (
-											<EyeOff className="h-4 w-4" />
-										) : (
-											<Eye className="h-4 w-4" />
-										)}
-									</button>
-								</div>
-								<Button
-									size="sm"
-									variant="secondary"
-									onClick={handleGeminiSave}
-									disabled={!geminiKey.trim()}
-								>
-									{geminiSaveStatus === "saved" ? (
-										<span className="flex items-center gap-1 text-green-500">
-											<CheckCircle className="h-4 w-4" /> Saved
-										</span>
-									) : geminiSaveStatus === "error" ? (
-										<span className="text-destructive">Failed</span>
-									) : (
-										"Save"
-									)}
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									onClick={handleGeminiTest}
-									disabled={!geminiKey.trim() || geminiTesting}
-								>
-									{geminiTesting ? "Testing…" : "Test"}
-								</Button>
-							</div>
-							<div className="mt-2 text-xs">
-								{geminiTestStatus === "valid" && (
-									<span className="flex items-center gap-1 text-green-500">
-										<CheckCircle className="h-3 w-3" /> Valid key
-									</span>
-								)}
-								{geminiTestStatus === "invalid" && (
-									<span className="flex items-center gap-1 text-destructive">
-										<XCircle className="h-3 w-3" /> Invalid key
-									</span>
-								)}
-								{geminiTestStatus === "idle" && !geminiKey && (
-									<span className="text-muted-foreground">
-										Get a key at{" "}
-										<a
-											href="https://aistudio.google.com/apikey"
-											target="_blank"
-											rel="noreferrer"
-											className="underline hover:text-foreground"
-										>
-											aistudio.google.com
-										</a>
-									</span>
-								)}
-							</div>
-						</div>
+						<ApiKeyField
+							name="Gemini"
+							description="Sorts channels into categories for you."
+							field={geminiKey}
+							placeholder="Enter Gemini API key…"
+							getKey={{
+								url: "https://aistudio.google.com/apikey",
+								text: "Get a key at aistudio.google.com",
+							}}
+						/>
 					</CardContent>
 				</Card>
 
@@ -520,191 +539,34 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						<CardTitle className="text-base">Integrations</CardTitle>
 					</CardHeader>
 					<CardContent className="space-y-4">
-						<div>
-							<p className="text-sm font-medium mb-1">OMDB API</p>
-							<div className="flex items-center gap-2">
-								<div className="relative flex-1">
-									<Input
-										type={omdbKeyVisible ? "text" : "password"}
-										placeholder="Enter API key…"
-										value={omdbKey}
-										onChange={(e) => {
-											setOmdbKey(e.target.value);
-											setOmdbStatus("idle");
-											setSaveStatus("idle");
-										}}
-										className="pr-10"
-									/>
-									<button
-										type="button"
-										className="absolute inset-y-0 right-2 flex items-center text-muted-foreground hover:text-foreground"
-										onClick={() => setOmdbKeyVisible((v) => !v)}
-										aria-label={omdbKeyVisible ? "Hide key" : "Show key"}
-									>
-										{omdbKeyVisible ? (
-											<EyeOff className="h-4 w-4" />
-										) : (
-											<Eye className="h-4 w-4" />
-										)}
-									</button>
-								</div>
-								<Button
-									size="sm"
-									variant="secondary"
-									onClick={handleSaveOmdbKey}
-									disabled={!omdbKey.trim()}
-								>
-									{saveStatus === "saved" ? (
-										<span className="flex items-center gap-1 text-green-500">
-											<CheckCircle className="h-4 w-4" /> Saved
-										</span>
-									) : (
-										"Save"
-									)}
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									onClick={handleTestOmdbKey}
-									disabled={!omdbKey.trim() || omdbTesting}
-								>
-									{omdbTesting ? "Testing…" : "Test"}
-								</Button>
-							</div>
+						<ApiKeyField
+							name="OMDb"
+							description="Adds details and ratings to movies and series. With a key set, the app sends titles to OMDb, and IMDb IDs to whatson-api for more ratings and to SkipDB and IntroDB for skip times."
+							field={omdbKey}
+							placeholder="Enter OMDb API key…"
+							getKey={{
+								url: "https://www.omdbapi.com/apikey.aspx",
+								text: "Get a free key at omdbapi.com",
+							}}
+							validNote="Free keys allow 1,000 calls a day."
+							inputRef={omdbKeyInputRef}
+						/>
 
-							{/* Save error */}
-							{saveError && (
-								<p className="mt-1 text-xs text-destructive">{saveError}</p>
-							)}
-
-							{/* Status line */}
-							<div className="mt-2 text-xs">
-								{omdbStatus === "valid" && (
-									<span className="flex items-center gap-1 text-green-500">
-										<CheckCircle className="h-3 w-3" /> Valid key · 1000
-										calls/day limit
-									</span>
-								)}
-								{omdbStatus === "invalid" && (
-									<span className="flex items-center gap-1 text-destructive">
-										<XCircle className="h-3 w-3" /> Invalid key
-									</span>
-								)}
-								{omdbStatus === "idle" && !omdbKey && (
-									<span className="text-muted-foreground">
-										No API key configured.{" "}
-										<a
-											href="https://www.omdbapi.com/apikey.aspx"
-											target="_blank"
-											rel="noreferrer"
-											className="underline hover:text-foreground"
-										>
-											Get a free key at omdbapi.com
-										</a>
-									</span>
-								)}
-							</div>
-						</div>
-
-						{/* Optional enrichment services — only shown when OMDB key is set */}
-						{omdbKey.trim() && (
+						{showOmdbServices && (
 							<div className="border-t border-border pt-4 space-y-4">
 								<p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
-									Optional enrichment (require OMDB key)
+									Uses your OMDb key
 								</p>
-
-								{/* OpenSubtitles section */}
-								<div>
-									<p className="text-sm font-medium mb-1">OpenSubtitles API</p>
-									<div className="flex items-center gap-2">
-										<div className="relative flex-1">
-											<Input
-												type={openSubtitlesKeyVisible ? "text" : "password"}
-												placeholder="Enter API key…"
-												value={openSubtitlesKey}
-												onChange={(e) => {
-													setOpenSubtitlesKey(e.target.value);
-													setOpenSubtitlesTestStatus("idle");
-													setOpenSubtitlesSaveStatus("idle");
-												}}
-												className="pr-10"
-											/>
-											<button
-												type="button"
-												className="absolute inset-y-0 right-2 flex items-center text-muted-foreground hover:text-foreground"
-												onClick={() =>
-													setOpenSubtitlesKeyVisible((v) => !v)
-												}
-												aria-label={
-													openSubtitlesKeyVisible
-														? "Hide key"
-														: "Show key"
-												}
-											>
-												{openSubtitlesKeyVisible ? (
-													<EyeOff className="h-4 w-4" />
-												) : (
-													<Eye className="h-4 w-4" />
-												)}
-											</button>
-										</div>
-										<Button
-											size="sm"
-											variant="secondary"
-											onClick={handleSaveOpenSubtitlesKey}
-											disabled={!openSubtitlesKey.trim()}
-										>
-											{openSubtitlesSaveStatus === "saved" ? (
-												<span className="flex items-center gap-1 text-green-500">
-													<CheckCircle className="h-4 w-4" /> Saved
-												</span>
-											) : (
-												"Save"
-											)}
-										</Button>
-										<Button
-											size="sm"
-											variant="outline"
-											onClick={handleTestOpenSubtitlesKey}
-											disabled={
-												!openSubtitlesKey.trim() || openSubtitlesTesting
-											}
-										>
-											{openSubtitlesTesting ? "Testing…" : "Test"}
-										</Button>
-									</div>
-
-									{openSubtitlesSaveError && (
-										<p className="mt-1 text-xs text-destructive">
-											{openSubtitlesSaveError}
-										</p>
-									)}
-
-									<div className="mt-2 text-xs">
-										{openSubtitlesTestStatus === "valid" && (
-											<span className="flex items-center gap-1 text-green-500">
-												<CheckCircle className="h-3 w-3" /> Valid key
-											</span>
-										)}
-										{openSubtitlesTestStatus === "invalid" && (
-											<span className="flex items-center gap-1 text-destructive">
-												<XCircle className="h-3 w-3" /> Invalid key
-											</span>
-										)}
-									</div>
-
-									<div className="mt-1 text-xs text-muted-foreground">
-										Get an API key at{" "}
-										<a
-											href="https://www.opensubtitles.com/consumers"
-											target="_blank"
-											rel="noreferrer"
-											className="underline hover:text-foreground"
-										>
-											opensubtitles.com
-										</a>
-									</div>
-								</div>
+								<ApiKeyField
+									name="OpenSubtitles"
+									description="Finds subtitles for movies and episodes in the player. The app sends their IMDb IDs to OpenSubtitles."
+									field={openSubtitlesKey}
+									placeholder="Enter OpenSubtitles API key…"
+									getKey={{
+										url: "https://www.opensubtitles.com/consumers",
+										text: "Get a key at opensubtitles.com",
+									}}
+								/>
 							</div>
 						)}
 					</CardContent>
@@ -764,24 +626,50 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 							{/* Concurrency */}
 							<div>
-								<div className="flex items-center justify-between mb-1">
-									<p className="text-sm font-medium">Simultaneous downloads</p>
-									<span className="text-sm text-muted-foreground tabular-nums">
-										{concurrency}
-									</span>
-								</div>
-								<p className="text-xs text-muted-foreground mb-2">
-									How many downloads run at once (1–10).
+								<label
+									htmlFor={concurrencyId}
+									className="mb-1 block text-sm font-medium"
+								>
+									Simultaneous downloads
+								</label>
+								<p
+									id={concurrencyHintId}
+									className="text-xs text-muted-foreground mb-2"
+								>
+									How many downloads run at once, from 1 to 10.
 								</p>
 								<Input
+									id={concurrencyId}
 									type="number"
-									min={1}
-									max={10}
-									value={concurrency}
-									onChange={(e) =>
-										handleConcurrencyChange(Number(e.target.value))
-									}
+									inputMode="numeric"
+									min={MIN_CONCURRENCY}
+									max={MAX_CONCURRENCY}
+									step={1}
+									value={concurrencyText}
+									onChange={(e) => handleConcurrencyInput(e.target.value)}
+									onBlur={commitConcurrency}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") commitConcurrency();
+									}}
+									aria-describedby={concurrencyHintId}
 									className="w-24"
+								/>
+							</div>
+
+							{/* Retention */}
+							<div>
+								<p className="text-sm font-medium mb-1">Delete downloads after</p>
+								<p className="text-xs text-muted-foreground mb-2">
+									The app deletes a finished download this long after it was
+									downloaded or last played. Choose Keep on a download to hold on
+									to it.
+								</p>
+								<Select
+									value={retentionDays ?? 0}
+									onChange={(v) => void handleRetentionChange(v)}
+									options={RETENTION_OPTIONS}
+									aria-label="Delete downloads after"
+									className="w-40"
 								/>
 							</div>
 
@@ -837,8 +725,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent>
 						<div className="space-y-2">
 							<p className="text-xs text-muted-foreground">
-								Clears all cached metadata (OMDB, MDBList, OpenSubtitles, WhatsonTV,
-								EPG). Channel data and settings are not affected.
+								Clears cached movie and series details, guide data, episode lists
+								and downloaded subtitles. Playlists, favorites, history and settings
+								are not affected.
 							</p>
 							<div className="flex items-center gap-4">
 								<Button variant="destructive" size="sm" onClick={handleClearCaches}>
@@ -925,11 +814,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 											"Check for Updates"
 										)}
 									</Button>
-									{!updateState.checking && !updateState.update && (
-										<span className="text-xs text-muted-foreground">
-											You're up to date.
-										</span>
-									)}
+									{/* Always rendered, so screen readers announce the result when it appears. */}
+									<span role="status" className="text-xs">
+										{!updateState.checking &&
+											!updateState.update &&
+											(updateState.checkError ? (
+												<span
+													className="text-destructive"
+													title={updateState.checkError}
+												>
+													Couldn't check for updates.
+												</span>
+											) : (
+												<span className="text-muted-foreground">
+													You're up to date.
+												</span>
+											))}
+									</span>
 								</div>
 
 								{updateState.update && (
@@ -984,6 +885,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 				</Card>
 			</div>
 
+			<ConfirmDialog
+				open={pendingRetention !== null}
+				title="Delete downloads now?"
+				message={
+					pendingRetention?.count == null
+						? "Downloads already past this setting will be deleted now."
+						: pendingRetention.count === 1
+							? "1 download is already past this setting. It will be deleted now."
+							: `${pendingRetention.count} downloads are already past this setting. They will be deleted now.`
+				}
+				confirmLabel="Delete"
+				onConfirm={() => {
+					if (pendingRetention) setRetentionDays(pendingRetention.days).catch(() => {});
+					setPendingRetention(null);
+				}}
+				onCancel={() => setPendingRetention(null)}
+			/>
 			<DownloadHistoryDialog
 				open={showDownloadHistory}
 				onClose={() => setShowDownloadHistory(false)}

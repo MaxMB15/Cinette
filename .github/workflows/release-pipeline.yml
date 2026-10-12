@@ -84,7 +84,7 @@ jobs:
           fi
 
       - name: Checkout repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_AUTOMATION_PAT }}
@@ -185,7 +185,9 @@ jobs:
           fi
 
       - name: Install Rust (for Cargo.lock refresh)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Bump version
         id: ver
@@ -215,8 +217,10 @@ jobs:
           echo "Bumping $CURRENT -> $NEW ($RELEASE_TYPE)"
           python3 scripts/bump-version.py "$NEW"
 
+      # Only the app's own entry changes. generate-lockfile would also move
+      # every dependency to its latest version, untested, in the release.
       - name: Refresh Cargo.lock
-        run: cargo generate-lockfile
+        run: cargo update --workspace
 
       - name: Commit version bump
         env:
@@ -225,7 +229,6 @@ jobs:
           set -euo pipefail
           git add apps/desktop/src-tauri/tauri.conf.json \
                   apps/desktop/src-tauri/Cargo.toml \
-                  apps/desktop/src/components/settings/Settings.tsx \
                   Cargo.lock
           git commit -m "chore: bump version to $NEW"
 

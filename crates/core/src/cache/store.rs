@@ -6,11 +6,14 @@ use crate::iptv::m3u::parse_series_name;
 use crate::iptv::mdblist::MdbListData;
 use crate::iptv::omdb::OmdbData;
 use crate::iptv::opensubtitles::SubtitleSearchResult;
+use crate::iptv::skip_segments::SourceTimes;
 use crate::iptv::whatson::WhatsonData;
 use crate::iptv::xtream;
 use crate::models::channel::Channel;
 use crate::models::playlist::{Provider, ProviderType};
-use rusqlite::{params, params_from_iter, Connection, Result as SqlResult};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Result as SqlResult};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,6 +39,19 @@ pub struct WatchHistoryEntry {
     pub last_watched_at: i64,
     pub total_duration_seconds: i64,
     pub play_count: i64,
+    /// The show a series entry belongs to, from [`history_series_title`].
+    /// `None` for live channels and movies.
+    pub series_title: Option<String>,
+}
+
+/// The show a series history entry belongs to. The cached channel's title
+/// wins, then the title parsed from the episode name, then the whole name, so
+/// every episode lands in exactly one show. Grouping and deleting by show both
+/// use this, which keeps the Recently Played row and the database in step.
+fn history_series_title(cached: Option<String>, channel_name: &str) -> String {
+    cached
+        .or_else(|| parse_series_name(channel_name).map(|(title, _, _)| title))
+        .unwrap_or_else(|| channel_name.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +108,22 @@ pub struct PlaybackPosition {
     pub duration_seconds: f64,
     pub updated_at: i64,
 }
+
+/// A cache table that keeps one JSON value per key, with the time it was saved.
+#[derive(Clone, Copy)]
+struct JsonCache {
+    table: &'static str,
+    /// The name of the key column.
+    key: &'static str,
+}
+
+const OMDB_CACHE: JsonCache = JsonCache { table: "omdb_cache", key: "channel_id" };
+const MDBLIST_CACHE: JsonCache = JsonCache { table: "mdblist_cache", key: "imdb_id" };
+const WHATSON_CACHE: JsonCache = JsonCache { table: "whatson_cache", key: "imdb_id" };
+const OPENSUBTITLES_CACHE: JsonCache = JsonCache { table: "opensubtitles_search_cache", key: "cache_key" };
+const SKIP_SEGMENTS_CACHE: JsonCache = JsonCache { table: "skip_segments_cache", key: "cache_key" };
+
+const JSON_CACHES: [JsonCache; 5] = [OMDB_CACHE, MDBLIST_CACHE, WHATSON_CACHE, OPENSUBTITLES_CACHE, SKIP_SEGMENTS_CACHE];
 
 pub struct CacheStore {
     conn: Connection,
@@ -206,20 +238,6 @@ impl CacheStore {
                 ON epg_programmes(channel_id, start_time);"
         )?;
         self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS omdb_cache (
-                channel_id  TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS mdblist_cache (
-                imdb_id     TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
-        self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS watch_history (
                 id                     INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id             TEXT NOT NULL UNIQUE,
@@ -234,20 +252,16 @@ impl CacheStore {
             CREATE INDEX IF NOT EXISTS idx_history_last_watched
                 ON watch_history(last_watched_at DESC);"
         )?;
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS opensubtitles_search_cache (
-                cache_key   TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS whatson_cache (
-                imdb_id     TEXT PRIMARY KEY,
-                data_json   TEXT NOT NULL,
-                fetched_at  INTEGER NOT NULL
-            );"
-        )?;
+        for cache in JSON_CACHES {
+            self.conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {} (
+                    {}          TEXT PRIMARY KEY,
+                    data_json   TEXT NOT NULL,
+                    fetched_at  INTEGER NOT NULL
+                );",
+                cache.table, cache.key
+            ))?;
+        }
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS group_hierarchy (
                 provider_id TEXT NOT NULL,
@@ -290,12 +304,17 @@ impl CacheStore {
                 avg_rate_bps       INTEGER,
                 error              TEXT,
                 created_at         INTEGER NOT NULL,
-                finished_at        INTEGER
+                finished_at        INTEGER,
+                keep               INTEGER NOT NULL DEFAULT 0,
+                last_played_at     INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_downloads_channel ON downloads(channel_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_series ON downloads(series_channel_id);
             CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);",
         )?;
+        // Columns added after the table first shipped.
+        self.add_column("downloads", "keep INTEGER NOT NULL DEFAULT 0")?;
+        self.add_column("downloads", "last_played_at INTEGER")?;
         // Full episode list per series, cached so the season/episode selector
         // works offline once any episode of the series has been downloaded.
         self.conn.execute_batch(
@@ -398,6 +417,21 @@ impl CacheStore {
         self.conn
             .execute_batch("DROP TABLE temp.channel_id_moves;")?;
         Ok(())
+    }
+
+    /// Add the column `definition` to `table`. A table that has the column
+    /// already is left as it is. Any other error is returned, since queries
+    /// that use the column would fail without it.
+    fn add_column(&self, table: &str, definition: &str) -> Result<(), CacheError> {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {definition};");
+        match self.conn.execute_batch(&sql) {
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+                if msg.starts_with("duplicate column name") =>
+            {
+                Ok(())
+            }
+            result => Ok(result?),
+        }
     }
 
     // --- Providers ---
@@ -503,10 +537,117 @@ impl CacheStore {
         }
     }
 
+    /// Delete a provider and everything stored for it in one transaction: its
+    /// channels and login, guide data, category layout and pins, and the watch
+    /// history, metadata and episode lists of its channels. Saved positions go
+    /// too, unless another provider has the same title. Download records stay,
+    /// along with the files they point to.
     pub fn remove_provider(&self, id: &str) -> Result<(), CacheError> {
-        self.conn.execute("DELETE FROM channels WHERE provider_id = ?1", params![id])?;
+        self.conn.execute_batch("BEGIN")?;
+        match self.remove_provider_inner(id) {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    fn remove_provider_inner(&self, id: &str) -> Result<(), CacheError> {
+        // The load commands give every channel and episode an id that starts
+        // with the provider's id and a dash, so rows keyed by channel id match
+        // on that. Episodes have no row in `channels`, so this also catches
+        // their history.
+        let prefix = format!("{id}-");
+
+        // Positions are keyed by title, so another provider can share one.
+        let mut keys = self.position_keys(id, &prefix, true)?;
+        for key in self.position_keys(id, &prefix, false)? {
+            keys.remove(&key);
+        }
+        {
+            let mut stmt = self
+                .conn
+                .prepare("DELETE FROM playback_positions WHERE content_key = ?1")?;
+            for key in &keys {
+                stmt.execute(params![key])?;
+            }
+        }
+
+        for (table, column) in [
+            ("watch_history", "channel_id"),
+            ("omdb_cache", "channel_id"),
+            ("epg_cache", "channel_id"),
+            ("series_episode_cache", "series_channel_id"),
+        ] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE substr({column}, 1, length(?1)) = ?1"),
+                params![prefix],
+            )?;
+        }
+        for table in [
+            "epg_programmes",
+            "group_hierarchy",
+            "pinned_groups",
+            "channels",
+        ] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE provider_id = ?1"),
+                params![id],
+            )?;
+        }
         self.conn.execute("DELETE FROM providers WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    /// The position keys of the provider's movies and episodes, or with `own`
+    /// false, of every other provider's. Episodes come from the watch history,
+    /// since only the episodes of a playlist are in `channels`.
+    fn position_keys(
+        &self,
+        provider_id: &str,
+        prefix: &str,
+        own: bool,
+    ) -> Result<std::collections::HashSet<String>, CacheError> {
+        let mut keys = std::collections::HashSet::new();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT name, content_type, series_title, season, episode FROM channels
+             WHERE content_type != 'live' AND (provider_id = ?1) = ?2",
+        )?;
+        let rows = stmt.query_map(params![provider_id, own], |row| {
+            Ok(playback_key(
+                &row.get::<_, String>(0)?,
+                &row.get::<_, String>(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?;
+        for key in rows {
+            keys.extend(key?);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT channel_name, content_type FROM watch_history
+             WHERE (substr(channel_id, 1, length(?1)) = ?1) = ?2",
+        )?;
+        let rows = stmt.query_map(params![prefix, own], |row| {
+            Ok(playback_key(
+                &row.get::<_, String>(0)?,
+                &row.get::<_, String>(1)?,
+                None,
+                None,
+                None,
+            ))
+        })?;
+        for key in rows {
+            keys.extend(key?);
+        }
+        Ok(keys)
     }
 
     // --- Channels ---
@@ -938,122 +1079,76 @@ impl CacheStore {
         Ok(())
     }
 
-    // --- OMDB Cache ---
+    // --- Metadata caches ---
 
-    /// Store OMDB data for a channel. Overwrites any existing cached entry.
-    pub fn save_omdb_cache(&self, channel_id: &str, data: &OmdbData) -> Result<(), CacheError> {
+    /// Saves `data` as the cached value for `key`, replacing any older one.
+    fn save_json<T: Serialize + ?Sized>(&self, cache: JsonCache, key: &str, data: &T) -> Result<(), CacheError> {
         let data_json = serde_json::to_string(data)?;
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
-            "INSERT OR REPLACE INTO omdb_cache (channel_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![channel_id, data_json, now],
+            &format!(
+                "INSERT OR REPLACE INTO {} ({}, data_json, fetched_at) VALUES (?1, ?2, ?3)",
+                cache.table, cache.key
+            ),
+            params![key, data_json, now],
         )?;
         Ok(())
+    }
+
+    /// The cached value for `key`, or `None` when there is none or it was saved
+    /// more than `ttl_seconds` ago.
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        cache: JsonCache,
+        key: &str,
+        ttl_seconds: i64,
+    ) -> Result<Option<T>, CacheError> {
+        let row = self
+            .conn
+            .query_row(
+                &format!("SELECT data_json, fetched_at FROM {} WHERE {} = ?1", cache.table, cache.key),
+                params![key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        match row {
+            Some((data_json, fetched_at)) if chrono::Utc::now().timestamp() - fetched_at <= ttl_seconds => {
+                Ok(Some(serde_json::from_str(&data_json)?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Store OMDB data for a channel. Overwrites any existing cached entry.
+    pub fn save_omdb_cache(&self, channel_id: &str, data: &OmdbData) -> Result<(), CacheError> {
+        self.save_json(OMDB_CACHE, channel_id, data)
     }
 
     /// Retrieve cached OMDB data for a channel. Returns `None` if not cached or if the
     /// cached entry is older than `ttl_seconds`.
     pub fn get_omdb_cache(&self, channel_id: &str, ttl_seconds: i64) -> Result<Option<OmdbData>, CacheError> {
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM omdb_cache WHERE channel_id = ?1",
-            params![channel_id],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: OmdbData = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(OMDB_CACHE, channel_id, ttl_seconds)
     }
-
-    // --- MDBList Cache ---
 
     /// Store MDBList data for an IMDB ID. Overwrites any existing cached entry.
     pub fn save_mdblist_cache(&self, imdb_id: &str, data: &MdbListData) -> Result<(), CacheError> {
-        let data_json = serde_json::to_string(data)?;
-        let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO mdblist_cache (imdb_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![imdb_id, data_json, now],
-        )?;
-        Ok(())
+        self.save_json(MDBLIST_CACHE, imdb_id, data)
     }
 
     /// Retrieve cached MDBList data for an IMDB ID. Returns `None` if not cached or stale.
     pub fn get_mdblist_cache(&self, imdb_id: &str, ttl_seconds: i64) -> Result<Option<MdbListData>, CacheError> {
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM mdblist_cache WHERE imdb_id = ?1",
-            params![imdb_id],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: MdbListData = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(MDBLIST_CACHE, imdb_id, ttl_seconds)
     }
-
-    // --- Whatson Cache ---
 
     /// Store whatson-api data for an IMDB ID. Overwrites any existing cached entry.
     pub fn save_whatson_cache(&self, imdb_id: &str, data: &WhatsonData) -> Result<(), CacheError> {
-        let data_json = serde_json::to_string(data)?;
-        let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO whatson_cache (imdb_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![imdb_id, data_json, now],
-        )?;
-        Ok(())
+        self.save_json(WHATSON_CACHE, imdb_id, data)
     }
 
     /// Retrieve cached whatson-api data for an IMDB ID. Returns `None` if not cached or stale.
     pub fn get_whatson_cache(&self, imdb_id: &str, ttl_seconds: i64) -> Result<Option<WhatsonData>, CacheError> {
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM whatson_cache WHERE imdb_id = ?1",
-            params![imdb_id],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: WhatsonData = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(WHATSON_CACHE, imdb_id, ttl_seconds)
     }
-
-    // --- OpenSubtitles Search Cache ---
 
     fn opensubtitles_cache_key(imdb_id: &str, season: Option<u32>, episode: Option<u32>) -> String {
         match (season, episode) {
@@ -1070,14 +1165,7 @@ impl CacheStore {
         episode: Option<u32>,
         data: &SubtitleSearchResult,
     ) -> Result<(), CacheError> {
-        let key = Self::opensubtitles_cache_key(imdb_id, season, episode);
-        let data_json = serde_json::to_string(data)?;
-        let now = chrono::Utc::now().timestamp();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO opensubtitles_search_cache (cache_key, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![key, data_json, now],
-        )?;
-        Ok(())
+        self.save_json(OPENSUBTITLES_CACHE, &Self::opensubtitles_cache_key(imdb_id, season, episode), data)
     }
 
     /// Retrieve cached OpenSubtitles search results. Returns `None` if not cached or stale.
@@ -1088,28 +1176,19 @@ impl CacheStore {
         episode: Option<u32>,
         ttl_seconds: i64,
     ) -> Result<Option<SubtitleSearchResult>, CacheError> {
-        let key = Self::opensubtitles_cache_key(imdb_id, season, episode);
-        let result = self.conn.query_row(
-            "SELECT data_json, fetched_at FROM opensubtitles_search_cache WHERE cache_key = ?1",
-            params![key],
-            |row| {
-                let data_json: String = row.get(0)?;
-                let fetched_at: i64 = row.get(1)?;
-                Ok((data_json, fetched_at))
-            },
-        );
-        match result {
-            Ok((data_json, fetched_at)) => {
-                let now = chrono::Utc::now().timestamp();
-                if now - fetched_at > ttl_seconds {
-                    return Ok(None); // stale
-                }
-                let data: SubtitleSearchResult = serde_json::from_str(&data_json)?;
-                Ok(Some(data))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Db(e)),
-        }
+        self.get_json(OPENSUBTITLES_CACHE, &Self::opensubtitles_cache_key(imdb_id, season, episode), ttl_seconds)
+    }
+
+    /// Store what one database had for a video under `SkipQuery::cache_key`.
+    /// An empty answer is cached too, so a video with none isn't looked up
+    /// again until it expires.
+    pub fn save_skip_segments_cache(&self, key: &str, times: &SourceTimes) -> Result<(), CacheError> {
+        self.save_json(SKIP_SEGMENTS_CACHE, key, times)
+    }
+
+    /// Retrieve what one database had for a video. Returns `None` if not cached or stale.
+    pub fn get_skip_segments_cache(&self, key: &str, ttl_seconds: i64) -> Result<Option<SourceTimes>, CacheError> {
+        self.get_json(SKIP_SEGMENTS_CACHE, key, ttl_seconds)
     }
 
     // --- Watch History ---
@@ -1159,23 +1238,50 @@ impl CacheStore {
 
     /// Return watch history entries ordered by `last_watched_at DESC`, limited to `limit`.
     pub fn get_watch_history(&self, limit: usize) -> Result<Vec<WatchHistoryEntry>, CacheError> {
+        self.query_watch_history(limit, None)
+    }
+
+    /// Like [`Self::get_watch_history`], but only entries of one content type,
+    /// so a busy type can't push the others out of the limit.
+    pub fn get_watch_history_of_type(
+        &self,
+        content_type: &str,
+        limit: usize,
+    ) -> Result<Vec<WatchHistoryEntry>, CacheError> {
+        self.query_watch_history(limit, Some(content_type))
+    }
+
+    fn query_watch_history(
+        &self,
+        limit: usize,
+        content_type: Option<&str>,
+    ) -> Result<Vec<WatchHistoryEntry>, CacheError> {
         let mut stmt = self.conn.prepare(
-            "SELECT channel_id, channel_name, channel_logo, content_type,
-                    first_watched_at, last_watched_at, total_duration_seconds, play_count
-             FROM watch_history
-             ORDER BY last_watched_at DESC
+            "SELECT wh.channel_id, wh.channel_name, wh.channel_logo, wh.content_type,
+                    wh.first_watched_at, wh.last_watched_at, wh.total_duration_seconds,
+                    wh.play_count, c.series_title
+             FROM watch_history wh
+             LEFT JOIN channels c ON c.id = wh.channel_id
+             WHERE ?2 IS NULL OR wh.content_type = ?2
+             ORDER BY wh.last_watched_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
+        let rows = stmt.query_map(params![limit as i64, content_type], |row| {
+            let channel_name: String = row.get(1)?;
+            let content_type: String = row.get(3)?;
+            let cached: Option<String> = row.get(8)?;
+            let series_title =
+                (content_type == "series").then(|| history_series_title(cached, &channel_name));
             Ok(WatchHistoryEntry {
                 channel_id: row.get(0)?,
-                channel_name: row.get(1)?,
+                channel_name,
                 channel_logo: row.get(2)?,
-                content_type: row.get(3)?,
+                content_type,
                 first_watched_at: row.get(4)?,
                 last_watched_at: row.get(5)?,
                 total_duration_seconds: row.get(6)?,
                 play_count: row.get(7)?,
+                series_title,
             })
         })?;
         rows.collect::<SqlResult<Vec<_>>>().map_err(CacheError::Db)
@@ -1186,6 +1292,51 @@ impl CacheStore {
         self.conn.execute(
             "DELETE FROM watch_history WHERE channel_id = ?1",
             params![channel_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete the history of every episode of one show, matched the way
+    /// [`history_series_title`] groups them. This reaches entries older than
+    /// any page the UI has loaded. Returns how many entries were removed.
+    pub fn delete_history_series(&self, series_title: &str) -> Result<usize, CacheError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
+            "SELECT wh.channel_id, wh.channel_name, c.series_title
+             FROM watch_history wh
+             LEFT JOIN channels c ON c.id = wh.channel_id
+             WHERE wh.content_type = 'series'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let (channel_id, channel_name, cached) = row?;
+            if history_series_title(cached, &channel_name) == series_title {
+                ids.push(channel_id);
+            }
+        }
+        drop(stmt);
+        let mut delete = tx.prepare("DELETE FROM watch_history WHERE channel_id = ?1")?;
+        for channel_id in &ids {
+            delete.execute(params![channel_id])?;
+        }
+        drop(delete);
+        tx.commit()?;
+        Ok(ids.len())
+    }
+
+    /// Delete every history entry of one content type. Resume positions are
+    /// kept, as they are when a single entry is deleted.
+    pub fn clear_watch_history_of_type(&self, content_type: &str) -> Result<(), CacheError> {
+        self.conn.execute(
+            "DELETE FROM watch_history WHERE content_type = ?1",
+            params![content_type],
         )?;
         Ok(())
     }
@@ -1254,12 +1405,15 @@ impl CacheStore {
         Ok(())
     }
 
+    /// Clear downloaded metadata, guide data and episode lists. Providers,
+    /// channels, favorites, history and positions stay.
     pub fn clear_all_caches(&self) -> Result<(), CacheError> {
-        self.conn.execute("DELETE FROM omdb_cache", [])?;
-        self.conn.execute("DELETE FROM mdblist_cache", [])?;
-        self.conn.execute("DELETE FROM opensubtitles_search_cache", [])?;
-        self.conn.execute("DELETE FROM whatson_cache", [])?;
+        for cache in JSON_CACHES {
+            self.conn.execute(&format!("DELETE FROM {}", cache.table), [])?;
+        }
         self.conn.execute("DELETE FROM epg_programmes", [])?;
+        self.conn.execute("DELETE FROM epg_cache", [])?;
+        self.conn.execute("DELETE FROM series_episode_cache", [])?;
         Ok(())
     }
 
@@ -1434,6 +1588,10 @@ impl CacheStore {
 
     // --- Downloads ---
 
+    /// Insert a download, or update its progress if the id exists. An update
+    /// leaves `keep` and `last_played_at` alone, since a download task holding
+    /// an older copy of the record would otherwise undo a change the user made
+    /// meanwhile. `set_download_keep` and `mark_download_played` change those.
     pub fn upsert_download(&self, rec: &DownloadRecord) -> Result<(), CacheError> {
         let kind = match rec.kind {
             DownloadKind::Movie => "movie",
@@ -1442,8 +1600,9 @@ impl CacheStore {
         self.conn.execute(
             "INSERT INTO downloads
                 (id, channel_id, title, kind, series_channel_id, status, dest_path,
-                 total_bytes, downloaded_bytes, avg_rate_bps, error, created_at, finished_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                 total_bytes, downloaded_bytes, avg_rate_bps, error, created_at, finished_at,
+                 keep, last_played_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
              ON CONFLICT(id) DO UPDATE SET
                 status=excluded.status,
                 dest_path=excluded.dest_path,
@@ -1456,7 +1615,27 @@ impl CacheStore {
                 rec.id, rec.channel_id, rec.title, kind, rec.series_channel_id,
                 rec.status.as_str(), rec.dest_path, rec.total_bytes, rec.downloaded_bytes,
                 rec.avg_rate_bps, rec.error, rec.created_at, rec.finished_at,
+                rec.keep, rec.last_played_at,
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Set whether the retention setting skips this download. Returns
+    /// whether there was a download `id` to set it on.
+    pub fn set_download_keep(&self, id: &str, keep: bool) -> Result<bool, CacheError> {
+        let changed = self.conn.execute(
+            "UPDATE downloads SET keep = ?2 WHERE id = ?1",
+            params![id, keep],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Record that the downloaded file started playing at `at`.
+    pub fn mark_download_played(&self, id: &str, at: i64) -> Result<(), CacheError> {
+        self.conn.execute(
+            "UPDATE downloads SET last_played_at = ?2 WHERE id = ?1",
+            params![id, at],
         )?;
         Ok(())
     }
@@ -1464,7 +1643,7 @@ impl CacheStore {
     // Column order in SELECT * matches CREATE TABLE:
     // 0=id, 1=channel_id, 2=title, 3=kind, 4=series_channel_id, 5=status,
     // 6=dest_path, 7=total_bytes, 8=downloaded_bytes, 9=avg_rate_bps,
-    // 10=error, 11=created_at, 12=finished_at
+    // 10=error, 11=created_at, 12=finished_at, 13=keep, 14=last_played_at
     fn row_to_download(row: &rusqlite::Row) -> SqlResult<DownloadRecord> {
         let kind_str: String = row.get(3)?;
         let status_str: String = row.get(5)?;
@@ -1486,6 +1665,8 @@ impl CacheStore {
             error: row.get(10)?,
             created_at: row.get(11)?,
             finished_at: row.get(12)?,
+            keep: row.get(13)?,
+            last_played_at: row.get(14)?,
         })
     }
 
@@ -1506,9 +1687,31 @@ impl CacheStore {
         Ok(rows.collect::<SqlResult<Vec<_>>>()?)
     }
 
+    /// The file path of every download, for finding a path no other download
+    /// uses.
+    pub fn list_download_paths(&self) -> Result<Vec<String>, CacheError> {
+        let mut stmt = self.conn.prepare("SELECT dest_path FROM downloads")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<SqlResult<Vec<_>>>()?)
+    }
+
     pub fn delete_download(&self, id: &str) -> Result<(), CacheError> {
         self.conn
             .execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Delete the downloads `ids` together, so an error leaves every one of
+    /// them in place.
+    pub fn delete_downloads(&self, ids: &[String]) -> Result<(), CacheError> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM downloads WHERE id = ?1")?;
+            for id in ids {
+                stmt.execute(params![id])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1573,6 +1776,20 @@ impl CacheStore {
         Ok(rows.collect::<SqlResult<Vec<_>>>()?)
     }
 
+    /// Put downloads that were running when the app last quit back in the
+    /// queue. No ffmpeg is running for them after a restart, but the scheduler
+    /// would still count each one against the concurrency limit. ffmpeg starts
+    /// over and overwrites the partial file, so the progress resets too.
+    /// Returns how many were requeued.
+    pub fn requeue_interrupted_downloads(&self) -> Result<usize, CacheError> {
+        let n = self.conn.execute(
+            "UPDATE downloads SET status = 'queued', downloaded_bytes = 0, avg_rate_bps = NULL
+             WHERE status = 'downloading'",
+            [],
+        )?;
+        Ok(n)
+    }
+
     /// Whether a completed download already exists for a given channel id.
     pub fn completed_download_for_channel(
         &self,
@@ -1628,6 +1845,45 @@ impl CacheStore {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+/// The key that `playbackKey` in the frontend's `lib/playback.ts` saves a
+/// position under. Keep the two in step. Series without a season and episode
+/// are parsed from the name, as `enrich_stale_series` does before the frontend
+/// sees them. None for live channels, which have no position.
+fn playback_key(
+    name: &str,
+    content_type: &str,
+    series_title: Option<String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+) -> Option<String> {
+    if content_type == "live" {
+        return None;
+    }
+    if content_type == "series" {
+        let parsed = match (series_title, season, episode) {
+            (Some(title), Some(season), Some(episode)) => Some((title, season, episode)),
+            _ => parse_series_name(name),
+        };
+        if let Some((title, season, episode)) = parsed {
+            return Some(format!(
+                "series:{}:s{season}e{episode}",
+                normalize_title(&title)
+            ));
+        }
+    }
+    Some(format!("{content_type}:{}", normalize_title(name)))
+}
+
+/// Trim, lowercase and collapse runs of whitespace, like `normalize` in
+/// `lib/playback.ts`.
+fn normalize_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// For series channels loaded from an older cache that has NULL series_title/season/episode,
@@ -1900,29 +2156,6 @@ mod tests {
     }
 
     #[test]
-    fn test_xtream_provider_roundtrip() {
-        let store = CacheStore::open_in_memory().unwrap();
-        let provider = Provider {
-            id: "x1".into(),
-            name: "Xtream Test".into(),
-            provider_type: ProviderType::Xtream,
-            url: "http://xtream.example.com".into(),
-            username: Some("user".into()),
-            password: Some("pass".into()),
-            last_updated: Some("2026-01-01".into()),
-            channel_count: 500,
-            epg_url: None,
-        };
-        store.upsert_provider(&provider).unwrap();
-        let loaded = store.get_providers().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert!(matches!(loaded[0].provider_type, ProviderType::Xtream));
-        assert_eq!(loaded[0].username.as_deref(), Some("user"));
-        assert_eq!(loaded[0].password.as_deref(), Some("pass"));
-        assert_eq!(loaded[0].channel_count, 500);
-    }
-
-    #[test]
     fn test_stale_series_enriched_on_read() {
         // Simulate a channel stored with content_type="series" but NULL series_title/season/episode
         // (as would happen with data cached before those columns were added).
@@ -2184,6 +2417,142 @@ mod tests {
         assert!(history.is_empty(), "history must be empty after clear");
     }
 
+    /// A series episode with an explicit show title.
+    fn make_episode(id: &str, name: &str, series_title: &str) -> Channel {
+        Channel {
+            content_type: "series".into(),
+            series_title: Some(series_title.into()),
+            ..make_channel(id, name, "Series")
+        }
+    }
+
+    #[test]
+    fn test_watch_history_series_title() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
+        // The cached title wins even when the name says something else.
+        store
+            .save_channels("p1", &[make_episode("ep1", "GS 1x01 Pilot", "Great Show")])
+            .unwrap();
+        store
+            .record_play_start("ep1", "GS 1x01 Pilot", None, "series")
+            .unwrap();
+        // Not cached, as with Xtream episodes, so the name is parsed.
+        store
+            .record_play_start(
+                "xt-ep-9-s1-2",
+                "Breaking Bad S01E02 Cat's in the Bag",
+                None,
+                "series",
+            )
+            .unwrap();
+        // Nothing to parse, so the whole name is the show.
+        store
+            .record_play_start("odd", "Odd Special", None, "series")
+            .unwrap();
+        store
+            .record_play_start("ch1", "BBC News", None, "live")
+            .unwrap();
+
+        let history = store.get_watch_history(10).unwrap();
+        let title_of = |id: &str| {
+            history
+                .iter()
+                .find(|e| e.channel_id == id)
+                .unwrap()
+                .series_title
+                .clone()
+        };
+        assert_eq!(title_of("ep1").as_deref(), Some("Great Show"));
+        assert_eq!(title_of("xt-ep-9-s1-2").as_deref(), Some("Breaking Bad"));
+        assert_eq!(title_of("odd").as_deref(), Some("Odd Special"));
+        assert_eq!(title_of("ch1"), None);
+    }
+
+    #[test]
+    fn test_get_watch_history_of_type() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for i in 0..5 {
+            store
+                .record_play_start(&format!("live{i}"), "Live", None, "live")
+                .unwrap();
+        }
+        store
+            .record_play_start("m1", "Movie One", None, "movie")
+            .unwrap();
+        store
+            .record_play_start("m2", "Movie Two", None, "movie")
+            .unwrap();
+
+        // The live entries would fill a shared limit of 5 on their own.
+        let movies = store.get_watch_history_of_type("movie", 5).unwrap();
+        let mut ids: Vec<_> = movies.iter().map(|e| e.channel_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["m1", "m2"]);
+        assert_eq!(store.get_watch_history_of_type("live", 3).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_delete_history_series_reaches_every_episode() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
+        store
+            .save_channels("p1", &[make_episode("ep1", "GS 1x01 Pilot", "Great Show")])
+            .unwrap();
+        store
+            .record_play_start("ep1", "GS 1x01 Pilot", None, "series")
+            .unwrap();
+        // More episodes than the Recently Played row ever loads.
+        for n in 1..=60 {
+            store
+                .record_play_start(
+                    &format!("gs{n}"),
+                    &format!("Great Show S01E{n:02}"),
+                    None,
+                    "series",
+                )
+                .unwrap();
+        }
+        store
+            .record_play_start("bb1", "Breaking Bad S01E01", None, "series")
+            .unwrap();
+        // A live channel named like the show is not an episode of it.
+        store
+            .record_play_start("ch1", "Great Show S01E01", None, "live")
+            .unwrap();
+
+        assert_eq!(store.delete_history_series("Great Show").unwrap(), 61);
+
+        let mut left: Vec<_> = store
+            .get_watch_history(100)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.channel_id)
+            .collect();
+        left.sort_unstable();
+        assert_eq!(left, ["bb1", "ch1"]);
+        assert_eq!(store.delete_history_series("Great Show").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_clear_watch_history_of_type() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .record_play_start("m1", "Movie One", None, "movie")
+            .unwrap();
+        store
+            .record_play_start("ch1", "BBC News", None, "live")
+            .unwrap();
+        store.save_playback_position("m1", 120.0, 5400.0).unwrap();
+
+        store.clear_watch_history_of_type("movie").unwrap();
+
+        let history = store.get_watch_history(10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].channel_id, "ch1");
+        assert!(store.get_playback_position("m1").unwrap().is_some());
+    }
+
     #[test]
     fn test_record_play_end_noop_for_missing_channel() {
         let store = CacheStore::open_in_memory().unwrap();
@@ -2361,6 +2730,69 @@ mod tests {
     }
 
     #[test]
+    fn test_save_and_retrieve_whatson_cache() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let data = WhatsonData { imdb_id: Some("tt0111161".into()), imdb_rating: Some(9.3), ..Default::default() };
+        store.save_whatson_cache("tt0111161", &data).unwrap();
+        assert_eq!(store.get_whatson_cache("tt0111161", 3600).unwrap(), Some(data));
+        assert_eq!(store.get_whatson_cache("tt0111161", -1).unwrap(), None);
+        assert_eq!(store.get_whatson_cache("tt9999999", 3600).unwrap(), None);
+    }
+
+    fn make_skip_times() -> SourceTimes {
+        use crate::iptv::skip_segments::{Fit, SegmentKind, SegmentSource, SkipSegment};
+        SourceTimes {
+            segments: vec![SkipSegment {
+                kind: SegmentKind::Intro,
+                start: 229.0,
+                end: 246.0,
+                source: SegmentSource::IntroDb,
+                fit: Fit::Unchecked,
+                confidence: Some(1.0),
+                offset: None,
+                auto_from: None,
+                auto_to: None,
+            }],
+            post_credits: Some(3480.0),
+        }
+    }
+
+    #[test]
+    fn test_save_and_retrieve_skip_segments_cache() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let times = make_skip_times();
+        store.save_skip_segments_cache("introdb:tt0903747:1:1", &times).unwrap();
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:1", 3600).unwrap(), Some(times));
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:2", 3600).unwrap(), None);
+        assert_eq!(store.get_skip_segments_cache("introdb:tt0903747:1:1", -1).unwrap(), None);
+    }
+
+    #[test]
+    fn test_skip_segments_cache_keeps_an_empty_answer() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.save_skip_segments_cache("skipdb:tt0111161:movie:8520", &SourceTimes::default()).unwrap();
+        assert_eq!(
+            store.get_skip_segments_cache("skipdb:tt0111161:movie:8520", 3600).unwrap(),
+            Some(SourceTimes::default())
+        );
+    }
+
+    #[test]
+    fn test_unreadable_cache_entry_is_an_error() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO skip_segments_cache (cache_key, data_json, fetched_at) VALUES ('k', 'not json', ?1)",
+                params![chrono::Utc::now().timestamp()],
+            )
+            .unwrap();
+        assert!(matches!(store.get_skip_segments_cache("k", 3600), Err(CacheError::Serde(_))));
+        // A stale one is just stale.
+        assert!(matches!(store.get_skip_segments_cache("k", -1), Ok(None)));
+    }
+
+    #[test]
     fn test_group_hierarchy_roundtrip() {
         let store = CacheStore::open_in_memory().unwrap();
         store.save_group_hierarchy("prov1", "live", "US: Sports", Some("United States"), 0, false).unwrap();
@@ -2477,6 +2909,8 @@ mod tests {
             error: None,
             created_at: 100,
             finished_at: None,
+            keep: false,
+            last_played_at: None,
         }
     }
 
@@ -2492,12 +2926,88 @@ mod tests {
     }
 
     #[test]
+    fn keep_and_last_played_survive_progress_updates() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let mut rec = movie_record("d1", "c1");
+        store.upsert_download(&rec).unwrap();
+        assert!(store.set_download_keep("d1", true).unwrap());
+        assert!(!store.set_download_keep("missing", true).unwrap());
+        store.mark_download_played("d1", 500).unwrap();
+
+        // A download task saving its older copy of the record.
+        rec.status = DownloadStatus::Completed;
+        store.upsert_download(&rec).unwrap();
+
+        let got = store.get_download("d1").unwrap().unwrap();
+        assert_eq!(got.status, DownloadStatus::Completed);
+        assert!(got.keep);
+        assert_eq!(got.last_played_at, Some(500));
+
+        store.set_download_keep("d1", false).unwrap();
+        assert!(!store.get_download("d1").unwrap().unwrap().keep);
+    }
+
+    #[test]
+    fn adds_retention_columns_to_an_existing_downloads_table() {
+        // The table as it was before the retention columns.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE downloads (
+                id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, title TEXT NOT NULL,
+                kind TEXT NOT NULL, series_channel_id TEXT, status TEXT NOT NULL,
+                dest_path TEXT NOT NULL, total_bytes INTEGER,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0, avg_rate_bps INTEGER,
+                error TEXT, created_at INTEGER NOT NULL, finished_at INTEGER
+            );
+            INSERT INTO downloads (id, channel_id, title, kind, status, dest_path, created_at)
+            VALUES ('d1', 'c1', 'A Movie', 'movie', 'completed', '/tmp/d1.mkv', 100);",
+        )
+        .unwrap();
+        let store = CacheStore { conn };
+        store.init_tables().unwrap();
+        let got = store.get_download("d1").unwrap().unwrap();
+        assert!(!got.keep);
+        assert_eq!(got.last_played_at, None);
+        // The next launch finds the columns there.
+        store.init_tables().unwrap();
+    }
+
+    #[test]
+    fn adding_a_column_only_ignores_one_that_exists() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let column = "keep INTEGER NOT NULL DEFAULT 0";
+        store.add_column("downloads", column).unwrap();
+        assert!(store.add_column("no_such_table", "x INTEGER").is_err());
+    }
+
+    #[test]
     fn list_downloads_returns_all() {
         let store = CacheStore::open_in_memory().unwrap();
         store.upsert_download(&movie_record("d1", "c1")).unwrap();
         store.upsert_download(&movie_record("d2", "c2")).unwrap();
         let all = store.list_downloads().unwrap();
         assert_eq!(all.len(), 2);
+        let mut paths = store.list_download_paths().unwrap();
+        paths.sort();
+        assert_eq!(paths, vec!["/tmp/d1.mkv.part", "/tmp/d2.mkv.part"]);
+    }
+
+    #[test]
+    fn deletes_several_downloads_at_once() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for id in ["d1", "d2", "d3"] {
+            store.upsert_download(&movie_record(id, id)).unwrap();
+        }
+        store
+            .delete_downloads(&["d1".into(), "d3".into(), "missing".into()])
+            .unwrap();
+        let left: Vec<_> = store
+            .list_downloads()
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(left, vec!["d2"]);
     }
 
     fn episode_record(id: &str, series: &str, status: DownloadStatus) -> DownloadRecord {
@@ -2582,6 +3092,35 @@ mod tests {
         assert!(ids.contains(&"d1"));
         assert!(ids.contains(&"d2"));
         assert!(!ids.contains(&"d3"));
+    }
+
+    #[test]
+    fn requeues_interrupted_downloads() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let mut running = movie_record("d1", "c1");
+        running.status = DownloadStatus::Downloading;
+        running.downloaded_bytes = 4096;
+        running.avg_rate_bps = Some(512);
+        store.upsert_download(&running).unwrap();
+        store.upsert_download(&movie_record("d2", "c2")).unwrap(); // queued
+        let mut done = movie_record("d3", "c3");
+        done.status = DownloadStatus::Completed;
+        done.downloaded_bytes = 8192;
+        store.upsert_download(&done).unwrap();
+
+        assert_eq!(store.requeue_interrupted_downloads().unwrap(), 1);
+
+        let d1 = store.get_download("d1").unwrap().unwrap();
+        assert_eq!(d1.status, DownloadStatus::Queued);
+        assert_eq!(d1.downloaded_bytes, 0);
+        assert_eq!(d1.avg_rate_bps, None);
+        assert_eq!(
+            store.get_download("d2").unwrap().unwrap().status,
+            DownloadStatus::Queued
+        );
+        let d3 = store.get_download("d3").unwrap().unwrap();
+        assert_eq!(d3.status, DownloadStatus::Completed);
+        assert_eq!(d3.downloaded_bytes, 8192);
     }
 
     #[test]
@@ -2672,18 +3211,8 @@ mod tests {
 
     fn channel_at(id: &str, url: &str, content_type: &str) -> Channel {
         Channel {
-            id: id.into(),
-            name: id.into(),
             url: url.into(),
-            content_type: content_type.into(),
-            ..Default::default()
-        }
-    }
-
-    fn xtream_provider(id: &str) -> Provider {
-        Provider {
-            provider_type: ProviderType::Xtream,
-            ..make_provider(id, "Panel")
+            ..vod(id, id, content_type)
         }
     }
 
@@ -2963,6 +3492,852 @@ mod tests {
         assert_eq!(
             ids_and_favorites(&store, "p1"),
             owned(&[("p1-movie-9", true)])
+        );
+    }
+
+    // --- Removing a provider and clearing caches ---
+
+    fn count(store: &CacheStore, sql: &str) -> i64 {
+        store.conn.query_row(sql, [], |row| row.get(0)).unwrap()
+    }
+
+    fn vod(id: &str, name: &str, content_type: &str) -> Channel {
+        let mut ch = make_channel(id, name, "VOD");
+        ch.content_type = content_type.into();
+        ch
+    }
+
+    fn programme(channel_id: &str, provider_id: &str) -> StoredEpgProgram {
+        StoredEpgProgram {
+            channel_id: channel_id.into(),
+            title: "News at six".into(),
+            description: None,
+            start_time: 0,
+            end_time: 3600,
+            category: None,
+            provider_id: provider_id.into(),
+            fetched_at: 0,
+        }
+    }
+
+    /// Store a provider with a live channel, a movie, a series and one of its
+    /// episodes, with something saved in every table that belongs to it.
+    fn fill_provider(store: &CacheStore, id: &str, movie: &str) {
+        store.upsert_provider(&make_provider(id, id)).unwrap();
+        let live = format!("{id}-ch-0");
+        let film = format!("{id}-ch-1");
+        let series = format!("{id}-ch-2");
+        let episode = format!("{id}-ep-9");
+        store
+            .save_channels(
+                id,
+                &[
+                    make_channel(&live, "News", "News"),
+                    vod(&film, movie, "movie"),
+                    vod(&series, "Homeland", "series"),
+                ],
+            )
+            .unwrap();
+        store
+            .record_play_start(&live, "News", None, "live")
+            .unwrap();
+        store
+            .record_play_start(&film, movie, None, "movie")
+            .unwrap();
+        store
+            .record_play_start(&episode, "Homeland S01E02", None, "series")
+            .unwrap();
+        store
+            .save_omdb_cache(&film, &make_omdb_data(movie))
+            .unwrap();
+        store.save_epg_data(&live, "[]").unwrap();
+        store
+            .save_epg_programmes(id, &[programme(&live, id)])
+            .unwrap();
+        store
+            .save_group_hierarchy(id, "live", "News", Some("Info"), 0, true)
+            .unwrap();
+        store.pin_group(id, "live", "News", 0).unwrap();
+        store.save_series_episodes(&series, &[]).unwrap();
+        store
+            .save_playback_position(
+                &playback_key(movie, "movie", None, None, None).unwrap(),
+                600.0,
+                7200.0,
+            )
+            .unwrap();
+        store
+            .save_playback_position("series:homeland:s1e2", 300.0, 3000.0)
+            .unwrap();
+    }
+
+    #[test]
+    fn remove_provider_deletes_everything_saved_for_it() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        fill_provider(&store, "m3u-ab", "Ronin");
+
+        store.remove_provider("m3u-a").unwrap();
+
+        assert!(store.get_provider("m3u-a").unwrap().is_none());
+        for (sql, left) in [
+            ("SELECT COUNT(*) FROM channels", 3),
+            ("SELECT COUNT(*) FROM watch_history", 3),
+            ("SELECT COUNT(*) FROM omdb_cache", 1),
+            ("SELECT COUNT(*) FROM epg_cache", 1),
+            ("SELECT COUNT(*) FROM epg_programmes", 1),
+            ("SELECT COUNT(*) FROM group_hierarchy", 1),
+            ("SELECT COUNT(*) FROM pinned_groups", 1),
+            ("SELECT COUNT(*) FROM series_episode_cache", 1),
+        ] {
+            assert_eq!(count(&store, sql), left, "{sql}");
+        }
+        // Every row left belongs to the other provider, whose id starts the same way.
+        assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM watch_history WHERE channel_id LIKE 'm3u-ab-%'"
+            ),
+            3
+        );
+        assert!(store.get_playback_position("movie:heat").unwrap().is_none());
+        assert!(store
+            .get_playback_position("movie:ronin")
+            .unwrap()
+            .is_some());
+        // Both providers had this episode, so its position stays.
+        assert!(store
+            .get_playback_position("series:homeland:s1e2")
+            .unwrap()
+            .is_some());
+
+        store.remove_provider("m3u-ab").unwrap();
+        assert!(store
+            .get_playback_position("series:homeland:s1e2")
+            .unwrap()
+            .is_none());
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM playback_positions"), 0);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM watch_history"), 0);
+    }
+
+    #[test]
+    fn remove_provider_keeps_downloads() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        store
+            .conn
+            .execute(
+                "INSERT INTO downloads (id, channel_id, title, kind, status, dest_path, created_at)
+                 VALUES ('d1', 'm3u-a-ch-1', 'Heat', 'movie', 'completed', '/tmp/Heat.mp4', 0)",
+                [],
+            )
+            .unwrap();
+
+        store.remove_provider("m3u-a").unwrap();
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM downloads"), 1);
+    }
+
+    #[test]
+    fn clear_all_caches_keeps_providers_history_and_positions() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        store.save_whatson_cache("tt0111161", &WhatsonData::default()).unwrap();
+        store.save_skip_segments_cache("introdb:tt0111161:movie", &make_skip_times()).unwrap();
+
+        store.clear_all_caches().unwrap();
+
+        for table in [
+            "omdb_cache",
+            "mdblist_cache",
+            "whatson_cache",
+            "opensubtitles_search_cache",
+            "skip_segments_cache",
+            "epg_cache",
+            "epg_programmes",
+            "series_episode_cache",
+        ] {
+            assert_eq!(
+                count(&store, &format!("SELECT COUNT(*) FROM {table}")),
+                0,
+                "{table}"
+            );
+        }
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM channels"), 3);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM watch_history"), 3);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM playback_positions"), 2);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM pinned_groups"), 1);
+    }
+
+    #[test]
+    fn playback_key_matches_the_frontend() {
+        assert_eq!(playback_key("News", "live", None, None, None), None);
+        assert_eq!(
+            playback_key("  The   Dark Knight ", "movie", None, None, None).as_deref(),
+            Some("movie:the dark knight")
+        );
+        assert_eq!(
+            playback_key(
+                "Homeland S01E02",
+                "series",
+                Some("Homeland".into()),
+                Some(1),
+                Some(2)
+            )
+            .as_deref(),
+            Some("series:homeland:s1e2")
+        );
+        // History rows only keep the name, which is parsed as on load.
+        assert_eq!(
+            playback_key("Homeland S01E02", "series", None, None, None).as_deref(),
+            Some("series:homeland:s1e2")
+        );
+        // A series row with no episode in its name is keyed by name.
+        assert_eq!(
+            playback_key("Homeland", "series", None, None, None).as_deref(),
+            Some("series:homeland")
+        );
+    }
+
+    // --- Opening the database ---
+
+    #[test]
+    fn open_creates_the_folder_and_keeps_data_between_launches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app data").join("cache.db");
+        CacheStore::open(&path)
+            .unwrap()
+            .upsert_provider(&make_provider("p1", "Home"))
+            .unwrap();
+
+        let reopened = CacheStore::open(&path).unwrap();
+        assert_eq!(reopened.get_provider("p1").unwrap().unwrap().name, "Home");
+    }
+
+    #[test]
+    fn open_fails_on_a_file_that_is_not_a_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.db");
+        std::fs::write(&path, "not a database\n".repeat(100)).unwrap();
+        assert!(matches!(CacheStore::open(&path), Err(CacheError::Db(_))));
+    }
+
+    #[test]
+    fn open_fails_when_the_folder_cannot_be_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("taken");
+        std::fs::write(&file, "").unwrap();
+        assert!(matches!(
+            CacheStore::open(&file.join("cache.db")),
+            Err(CacheError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn opening_fails_when_any_table_cannot_be_created() {
+        // An index that already has a table's name blocks that one table, so
+        // each step of the setup gets its turn to fail.
+        for table in [
+            "providers",
+            "epg_programmes",
+            "watch_history",
+            "omdb_cache",
+            "group_hierarchy",
+            "playback_positions",
+            "pinned_groups",
+            "downloads",
+            "series_episode_cache",
+        ] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE clash (x); CREATE INDEX {table} ON clash (x);"
+            ))
+            .unwrap();
+            let err = CacheStore { conn }.init_tables().unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("already an index named {table}")),
+                "{table}: {err}"
+            );
+        }
+    }
+
+    // --- Providers, channels and the guide ---
+
+    /// Every field of a provider. `Provider` has no `PartialEq`, and its
+    /// `Debug` hides the login.
+    fn as_json(provider: &Provider) -> serde_json::Value {
+        serde_json::to_value(provider).unwrap()
+    }
+
+    fn xtream_provider(id: &str) -> Provider {
+        Provider {
+            provider_type: ProviderType::Xtream,
+            username: Some("user".into()),
+            password: Some("pass".into()),
+            last_updated: Some("2026-01-01T00:00:00Z".into()),
+            channel_count: 12,
+            epg_url: Some("http://epg.example.test/guide.xml".into()),
+            ..make_provider(id, "Xtream")
+        }
+    }
+
+    #[test]
+    fn providers_read_back_every_field() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let provider = xtream_provider("x1");
+        let playlist = make_provider("m1", "Playlist");
+        store.upsert_provider(&provider).unwrap();
+        store.upsert_provider(&playlist).unwrap();
+
+        assert_eq!(
+            as_json(&store.get_provider("x1").unwrap().unwrap()),
+            as_json(&provider)
+        );
+        assert_eq!(
+            as_json(&store.get_provider("m1").unwrap().unwrap()),
+            as_json(&playlist)
+        );
+        assert!(store.get_provider("missing").unwrap().is_none());
+        let mut listed = store.get_providers().unwrap();
+        listed.sort_by(|a, b| a.id.cmp(&b.id));
+        let listed: Vec<_> = listed.iter().map(as_json).collect();
+        assert_eq!(listed, [as_json(&playlist), as_json(&provider)]);
+    }
+
+    #[test]
+    fn update_provider_credentials_changes_the_login_and_keeps_the_rest() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let provider = xtream_provider("x1");
+        store.upsert_provider(&provider).unwrap();
+        store
+            .save_channels("x1", &[make_channel("x1-ch-0", "News", "News")])
+            .unwrap();
+        store
+            .upsert_provider(&make_provider("other", "Other"))
+            .unwrap();
+
+        store
+            .update_provider_credentials(
+                "x1",
+                "Renamed",
+                "http://new.example.test",
+                Some("new user"),
+                None,
+            )
+            .unwrap();
+
+        let expected = Provider {
+            name: "Renamed".into(),
+            url: "http://new.example.test".into(),
+            username: Some("new user".into()),
+            password: None,
+            ..provider
+        };
+        assert_eq!(
+            as_json(&store.get_provider("x1").unwrap().unwrap()),
+            as_json(&expected)
+        );
+        assert_eq!(store.get_channels("x1").unwrap().len(), 1);
+        assert_eq!(store.get_provider("other").unwrap().unwrap().name, "Other");
+    }
+
+    #[test]
+    fn set_provider_epg_url_sets_and_clears_the_guide_address() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "Test")).unwrap();
+        let guide = Some("http://epg.example.test/guide.xml");
+
+        store.set_provider_epg_url("p1", guide).unwrap();
+        assert_eq!(
+            store
+                .get_provider("p1")
+                .unwrap()
+                .unwrap()
+                .epg_url
+                .as_deref(),
+            guide
+        );
+
+        store.set_provider_epg_url("p1", None).unwrap();
+        assert_eq!(store.get_provider("p1").unwrap().unwrap().epg_url, None);
+    }
+
+    #[test]
+    fn a_channel_leads_to_the_provider_that_owns_it() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for id in ["p1", "p2"] {
+            store.upsert_provider(&make_provider(id, id)).unwrap();
+            store
+                .save_channels(id, &[make_channel(&format!("{id}-ch-0"), "News", "News")])
+                .unwrap();
+        }
+
+        let owner = store.get_provider_for_channel("p2-ch-0").unwrap().unwrap();
+        assert_eq!(as_json(&owner), as_json(&make_provider("p2", "p2")));
+        assert!(store.get_provider_for_channel("p3-ch-0").unwrap().is_none());
+        assert_eq!(
+            store.get_channel_by_id("p2-ch-0").unwrap(),
+            Some(make_channel("p2-ch-0", "News", "News"))
+        );
+        assert_eq!(store.get_channel_by_id("p3-ch-0").unwrap(), None);
+    }
+
+    #[test]
+    fn toggling_a_channel_that_is_gone_is_an_error() {
+        let store = CacheStore::open_in_memory().unwrap();
+        assert!(matches!(
+            store.toggle_favorite("missing"),
+            Err(CacheError::Db(rusqlite::Error::QueryReturnedNoRows))
+        ));
+    }
+
+    #[test]
+    fn saved_series_fields_are_kept_and_never_guessed() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "P")).unwrap();
+        // The name says one episode and the fields another. The fields win.
+        let numbered = Channel {
+            series_title: Some("Homeland".into()),
+            season: Some(2),
+            episode: Some(3),
+            ..vod("p1-ch-0", "Homeland S01E01", "series")
+        };
+        // No episode in the name, so there is nothing to fill in.
+        let unnumbered = vod("p1-ch-1", "Homeland", "series");
+        store
+            .save_channels("p1", &[numbered.clone(), unnumbered.clone()])
+            .unwrap();
+
+        assert_eq!(store.get_channels("p1").unwrap(), [unnumbered, numbered]);
+    }
+
+    fn timed(channel_id: &str, title: &str, start_time: i64, end_time: i64) -> StoredEpgProgram {
+        StoredEpgProgram {
+            title: title.into(),
+            start_time,
+            end_time,
+            ..programme(channel_id, "p1")
+        }
+    }
+
+    #[test]
+    fn the_guide_window_covers_every_channel_in_order() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .save_epg_programmes(
+                "p1",
+                &[
+                    timed("cnn.us", "Late", 300, 400),
+                    timed("bbc.uk", "Evening", 100, 200),
+                    timed("cnn.us", "Early", 0, 150),
+                    timed("bbc.uk", "Ended", 0, 100),
+                    timed("bbc.uk", "Later", 400, 500),
+                ],
+            )
+            .unwrap();
+
+        let window: Vec<(String, String)> = store
+            .get_epg_all_channels(100, 400)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.channel_id, p.title))
+            .collect();
+        assert_eq!(
+            window,
+            [
+                ("bbc.uk".to_string(), "Evening".to_string()),
+                ("cnn.us".to_string(), "Early".to_string()),
+                ("cnn.us".to_string(), "Late".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn guide_search_finds_the_next_match_on_each_channel() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "P")).unwrap();
+        let mut bbc = make_channel("p1-ch-0", "BBC One", "UK");
+        bbc.tvg_id = Some("bbc.uk".into());
+        bbc.logo_url = Some("http://img.example.test/bbc.png".into());
+        store.save_channels("p1", &[bbc]).unwrap();
+        let mut world = timed("cnn.us", "World Report", 250, 300);
+        world.description = Some("All the NEWS from abroad".into());
+        store
+            .save_epg_programmes(
+                "p1",
+                &[
+                    timed("bbc.uk", "Old News", 0, 100),
+                    timed("bbc.uk", "Late News", 300, 400),
+                    timed("bbc.uk", "Evening News", 100, 200),
+                    world,
+                    timed("cnn.us", "Cooking", 120, 180),
+                    timed("sky.uk", "News at Ten", 0, 120),
+                ],
+            )
+            .unwrap();
+
+        let found = store.search_epg_programmes("news", 150).unwrap();
+        let summary: Vec<(&str, &str, &str, Option<&str>)> = found
+            .iter()
+            .map(|p| {
+                (
+                    p.channel_id.as_str(),
+                    p.title.as_str(),
+                    p.channel_name.as_str(),
+                    p.channel_logo.as_deref(),
+                )
+            })
+            .collect();
+        // A channel with no match in the list is named by its guide id.
+        assert_eq!(
+            summary,
+            [
+                (
+                    "bbc.uk",
+                    "Evening News",
+                    "BBC One",
+                    Some("http://img.example.test/bbc.png")
+                ),
+                ("cnn.us", "World Report", "cnn.us", None),
+            ]
+        );
+    }
+
+    // --- Group layout and downloads ---
+
+    fn layout(
+        store: &CacheStore,
+        provider_id: &str,
+        content_type: &str,
+    ) -> Vec<(String, Option<String>, i64)> {
+        store
+            .get_group_hierarchy(provider_id, content_type)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.group_name, e.super_category, e.sort_order))
+            .collect()
+    }
+
+    fn group(
+        name: &str,
+        super_category: Option<&str>,
+        sort_order: i64,
+    ) -> (String, Option<String>, i64) {
+        (name.into(), super_category.map(Into::into), sort_order)
+    }
+
+    #[test]
+    fn group_changes_only_touch_the_named_provider_and_type() {
+        let store = CacheStore::open_in_memory().unwrap();
+        for (provider, content_type) in [("p1", "live"), ("p1", "movie"), ("p2", "live")] {
+            store
+                .save_group_hierarchy(provider, content_type, "Sports", Some("US"), 0, false)
+                .unwrap();
+            store
+                .save_group_hierarchy(provider, content_type, "News", Some("US"), 100, false)
+                .unwrap();
+        }
+        store
+            .save_group_hierarchy("p1", "movie", "Kids", Some("Family"), 200, false)
+            .unwrap();
+
+        store
+            .update_group_sort_order("p1", "live", "News", -1)
+            .unwrap();
+        store
+            .rename_super_category("p1", "live", "US", "America")
+            .unwrap();
+        store.delete_super_category("p1", "movie", "US").unwrap();
+
+        assert_eq!(
+            layout(&store, "p1", "live"),
+            [
+                group("News", Some("America"), -1),
+                group("Sports", Some("America"), 0)
+            ]
+        );
+        assert_eq!(
+            layout(&store, "p1", "movie"),
+            [
+                group("Sports", None, 0),
+                group("News", None, 100),
+                group("Kids", Some("Family"), 200)
+            ]
+        );
+        assert_eq!(
+            layout(&store, "p2", "live"),
+            [
+                group("Sports", Some("US"), 0),
+                group("News", Some("US"), 100)
+            ]
+        );
+    }
+
+    #[test]
+    fn replacing_the_layout_drops_overrides_for_groups_that_are_gone() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store
+            .save_group_hierarchy("p1", "live", "Old", Some("Mine"), 0, true)
+            .unwrap();
+        store
+            .replace_group_hierarchy("p1", "live", &[("Sports", Some("US"), 0)])
+            .unwrap();
+        assert_eq!(
+            layout(&store, "p1", "live"),
+            [group("Sports", Some("US"), 0)]
+        );
+    }
+
+    #[test]
+    fn deleting_a_download_leaves_the_others() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_download(&movie_record("d1", "c1")).unwrap();
+        store.upsert_download(&movie_record("d2", "c2")).unwrap();
+
+        store.delete_download("d1").unwrap();
+        store.delete_download("missing").unwrap();
+
+        let ids: Vec<String> = store
+            .list_downloads()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(ids, ["d2"]);
+    }
+
+    #[test]
+    fn finds_the_completed_download_of_a_channel() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let done = DownloadRecord {
+            status: DownloadStatus::Completed,
+            finished_at: Some(200),
+            ..movie_record("d1", "c1")
+        };
+        store.upsert_download(&movie_record("d0", "c1")).unwrap();
+        store.upsert_download(&done).unwrap();
+        store.upsert_download(&movie_record("d2", "c2")).unwrap();
+
+        assert_eq!(
+            store.completed_download_for_channel("c1").unwrap(),
+            Some(done)
+        );
+        assert_eq!(store.completed_download_for_channel("c2").unwrap(), None);
+    }
+
+    // --- Failures ---
+
+    /// The names of the store's own tables.
+    fn table_names(store: &CacheStore) -> Vec<String> {
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap();
+        let names = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<SqlResult<_>>()
+            .unwrap();
+        names
+    }
+
+    /// Every row of every table, to check that a failed write changed nothing.
+    fn snapshot(store: &CacheStore) -> Vec<String> {
+        let mut rows = Vec::new();
+        for table in table_names(store) {
+            let mut stmt = store
+                .conn
+                .prepare(&format!("SELECT * FROM {table}"))
+                .unwrap();
+            let columns = stmt.column_count();
+            let mut query = stmt.query([]).unwrap();
+            while let Some(row) = query.next().unwrap() {
+                let values: Vec<String> = (0..columns)
+                    .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                    .collect();
+                rows.push(format!("{table}: {}", values.join(", ")));
+            }
+        }
+        rows.sort();
+        rows
+    }
+
+    /// Makes every INSERT or DELETE, whichever `event` names, on `table` fail,
+    /// the way a full disk fails a write partway through.
+    fn fail_on(store: &CacheStore, event: &str, table: &str) {
+        store
+            .conn
+            .execute_batch(&format!(
+                "CREATE TRIGGER fail_{event}_{table} BEFORE {event} ON {table}
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+            ))
+            .unwrap();
+    }
+
+    /// Asserts that each call failed with a database error, naming the call
+    /// that didn't.
+    macro_rules! assert_db_errors {
+        ($($call:expr),+ $(,)?) => {$(
+            let result = $call.map(drop);
+            assert!(
+                matches!(result, Err(CacheError::Db(_))),
+                "{}: {result:?}",
+                stringify!($call)
+            );
+        )+};
+    }
+
+    #[test]
+    fn a_refresh_that_fails_partway_keeps_the_old_channels() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "p1", "Heat");
+        store.toggle_favorite("p1-ch-0").unwrap();
+        let before = snapshot(&store);
+        fail_on(&store, "INSERT", "channels");
+        let new = make_channel("p1-ch-5", "New", "News");
+
+        assert_db_errors!(
+            store.save_channels("p1", std::slice::from_ref(&new)),
+            store.upsert_channel("p1", &new),
+        );
+        assert_eq!(snapshot(&store), before);
+
+        // The failed refresh ended its transaction, so the next one can run.
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_INSERT_channels")
+            .unwrap();
+        store.save_channels("p1", &[new]).unwrap();
+        assert_eq!(store.get_channels("p1").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_guide_refresh_that_fails_partway_keeps_the_old_guide() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "p1", "Heat");
+        let before = snapshot(&store);
+        fail_on(&store, "INSERT", "epg_programmes");
+
+        assert_db_errors!(store.save_epg_programmes("p1", &[timed("bbc.uk", "New", 0, 100)]));
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn removing_a_provider_that_fails_partway_removes_nothing() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "m3u-a", "Heat");
+        let before = snapshot(&store);
+        // Positions, history and metadata are deleted before the guide.
+        fail_on(&store, "DELETE", "epg_programmes");
+
+        assert_db_errors!(store.remove_provider("m3u-a"));
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn writes_to_a_read_only_database_fail_and_change_nothing() {
+        let store = CacheStore::open_in_memory().unwrap();
+        fill_provider(&store, "p1", "Heat");
+        store
+            .upsert_provider(&make_provider("empty", "Empty"))
+            .unwrap();
+        store.upsert_download(&movie_record("d1", "c1")).unwrap();
+        // An older attempt at the same channel, for pruning to remove.
+        let older = DownloadRecord {
+            created_at: 50,
+            ..movie_record("d0", "c1")
+        };
+        store.upsert_download(&older).unwrap();
+        let before = snapshot(&store);
+        store.conn.execute_batch("PRAGMA query_only = 1").unwrap();
+
+        assert_db_errors!(
+            store.upsert_provider(&make_provider("p2", "Other")),
+            store.update_provider_credentials("p1", "New", "http://new.example.test", None, None),
+            store.set_provider_epg_url("p1", None),
+            store.remove_provider("p1"),
+            // A provider with nothing saved fails on its own row.
+            store.remove_provider("empty"),
+            store.save_channels("p1", &[]),
+            store.toggle_favorite("p1-ch-0"),
+            store.upsert_channel("p1", &make_channel("p1-ch-9", "New", "News")),
+            store.save_epg_data("p1-ch-0", "[]"),
+            store.save_epg_programmes("p1", &[]),
+            store.save_omdb_cache("p1-ch-1", &make_omdb_data("Heat")),
+            store.record_play_start("p1-ch-0", "News", None, "live"),
+            store.record_play_end("p1-ch-0", 60),
+            store.delete_history_entry("p1-ch-0"),
+            store.delete_history_series("Homeland"),
+            store.clear_watch_history_of_type("live"),
+            store.clear_watch_history(),
+            store.save_playback_position("movie:heat", 1.0, 2.0),
+            store.delete_playback_position("movie:heat"),
+            store.clear_all_caches(),
+            store.update_group_sort_order("p1", "live", "News", 5),
+            store.save_group_hierarchy("p1", "live", "News", None, 5, false),
+            store.replace_group_hierarchy("p1", "live", &[]),
+            store.rename_super_category("p1", "live", "Info", "News"),
+            store.delete_super_category("p1", "live", "Info"),
+            store.pin_group("p1", "live", "Sports", 1),
+            store.unpin_group("p1", "live", "News"),
+            store.upsert_download(&movie_record("d2", "c2")),
+            store.set_download_keep("d1", true),
+            store.mark_download_played("d1", 500),
+            store.delete_download("d1"),
+            store.delete_downloads(&["d1".to_string()]),
+            store.delete_terminal_downloads_for_channel("c1"),
+            store.prune_redundant_downloads(),
+            store.requeue_interrupted_downloads(),
+            store.save_series_episodes("p1-ch-2", &[]),
+        );
+
+        store.conn.execute_batch("PRAGMA query_only = 0").unwrap();
+        assert_eq!(snapshot(&store), before);
+    }
+
+    #[test]
+    fn reads_from_a_damaged_database_are_errors_not_empty_results() {
+        // An empty answer here would look as if the user's data were gone.
+        let store = CacheStore::open_in_memory().unwrap();
+        for table in table_names(&store) {
+            store
+                .conn
+                .execute_batch(&format!("DROP TABLE {table}"))
+                .unwrap();
+        }
+
+        assert_db_errors!(
+            store.get_providers(),
+            store.get_provider("p1"),
+            store.get_provider_for_channel("p1-ch-0"),
+            store.remove_provider("p1"),
+            store.save_channels("p1", &[]),
+            store.get_channels("p1"),
+            store.get_all_channels(),
+            store.get_channel_by_id("p1-ch-0"),
+            store.toggle_favorite("p1-ch-0"),
+            store.get_epg_data("p1-ch-0"),
+            store.get_epg_programmes("bbc.uk", 0, 100),
+            store.get_epg_all_channels(0, 100),
+            store.search_epg_programmes("news", 0),
+            store.get_omdb_cache("p1-ch-1", 3600),
+            store.get_watch_history(10),
+            store.delete_history_series("Homeland"),
+            store.get_playback_position("movie:heat"),
+            store.get_group_hierarchy("p1", "live"),
+            store.replace_group_hierarchy("p1", "live", &[]),
+            store.get_pinned_groups("p1", "live"),
+            store.get_download("d1"),
+            store.list_downloads(),
+            store.list_download_paths(),
+            store.delete_downloads(&["d1".to_string()]),
+            store.prune_redundant_downloads(),
+            store.list_downloads_for_series("s1"),
+            store.list_active_downloads(),
+            store.completed_download_for_channel("c1"),
+            store.get_series_episodes("p1-ch-2"),
         );
     }
 }

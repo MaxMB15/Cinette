@@ -5,28 +5,35 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field } from "@/components/ui/field";
+import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
 import { Loader2, Upload, FileText, Link, X } from "lucide-react";
 import { usePlatform } from "@/hooks/usePlatform";
+import {
+	filenameFromPath,
+	isPlaylistFile,
+	nameFromFilename,
+	PLAYLIST_EXTENSIONS,
+} from "@/lib/file-url";
 import { isMobilePlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ContentDisclaimer } from "./ContentDisclaimer";
+import { XtreamFields } from "./XtreamFields";
 
 type M3uMode = "url" | "file";
+
+const M3U_MODES: SegmentedOption<M3uMode>[] = [
+	{ value: "url", label: "URL", icon: <Link className="h-3.5 w-3.5" /> },
+	{ value: "file", label: "File", icon: <FileText className="h-3.5 w-3.5" /> },
+];
 
 interface AddProviderProps {
 	onAddM3u: (name: string, url: string) => Promise<void>;
 	onAddM3uFile: (name: string, path: string) => Promise<void>;
 	onAddXtream: (name: string, url: string, username: string, password: string) => Promise<void>;
 }
-
-const filenameFromPath = (path: string): string => {
-	const parts = path.replace(/\\/g, "/").split("/");
-	return parts[parts.length - 1] || path;
-};
-
-const nameFromFilename = (filename: string): string => filename.replace(/\.(m3u8?|txt)$/i, "");
 
 export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProviderProps) => {
 	const { layoutMode } = usePlatform();
@@ -47,24 +54,32 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 	const showDragDrop = layoutMode === "desktop" && !isMobilePlatform();
 	const showFileBrowse = layoutMode !== "tv";
 
-	const acceptFileDrop = useCallback(
-		(paths: string[]) => {
-			const m3uPath = paths.find((p) => /\.(m3u8?|txt)$/i.test(p));
-			if (!m3uPath) {
-				setError("Please drop an .m3u or .m3u8 file");
-				return;
-			}
-			setError(null);
-			const fname = filenameFromPath(m3uPath);
-			setFilePath(m3uPath);
+	// A picked or dropped file names the provider unless the user typed a name.
+	const selectFile = useCallback(
+		(path: string) => {
+			const fname = filenameFromPath(path);
+			setFilePath(path);
 			setFileName(fname);
-			setM3uMode("file");
-			setTab("m3u");
+			setError(null);
 			if (!name) {
 				setName(nameFromFilename(fname));
 			}
 		},
 		[name]
+	);
+
+	const acceptFileDrop = useCallback(
+		(paths: string[]) => {
+			const m3uPath = paths.find(isPlaylistFile);
+			if (!m3uPath) {
+				setError("Please drop an .m3u or .m3u8 file");
+				return;
+			}
+			selectFile(m3uPath);
+			setM3uMode("file");
+			setTab("m3u");
+		},
+		[selectFile]
 	);
 
 	useEffect(() => {
@@ -92,26 +107,15 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 				filters: [
 					{
 						name: "M3U Playlist",
-						extensions: ["m3u", "m3u8", "txt"],
+						extensions: PLAYLIST_EXTENSIONS,
 					},
 				],
 			});
-			if (selected) {
-				const path = typeof selected === "string" ? selected : selected;
-				if (path) {
-					const fname = filenameFromPath(path);
-					setFilePath(path);
-					setFileName(fname);
-					setError(null);
-					if (!name) {
-						setName(nameFromFilename(fname));
-					}
-				}
-			}
+			if (selected) selectFile(selected);
 		} catch (e) {
 			setError(String(e));
 		}
-	}, [name]);
+	}, [selectFile]);
 
 	const clearFile = useCallback(() => {
 		setFilePath(null);
@@ -151,10 +155,11 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-lg">Add Provider</CardTitle>
-				<div className="flex gap-2 mt-2">
+				<div role="group" aria-label="Provider type" className="flex gap-2 mt-2">
 					<Button
 						variant={tab === "m3u" ? "default" : "secondary"}
 						size="sm"
+						aria-pressed={tab === "m3u"}
 						onClick={() => setTab("m3u")}
 					>
 						M3U Playlist
@@ -162,6 +167,7 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					<Button
 						variant={tab === "xtream" ? "default" : "secondary"}
 						size="sm"
+						aria-pressed={tab === "xtream"}
 						onClick={() => setTab("xtream")}
 					>
 						Xtream Codes
@@ -170,52 +176,41 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 			</CardHeader>
 			<CardContent>
 				<form onSubmit={handleSubmit} className="flex flex-col gap-3">
-					<Input
-						placeholder="Provider name (optional)"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-					/>
+					<Field label="Provider name" hideLabel>
+						{(id) => (
+							<Input
+								id={id}
+								placeholder="Provider name (optional)"
+								value={name}
+								onChange={(e) => setName(e.target.value)}
+							/>
+						)}
+					</Field>
 
 					{tab === "m3u" && (
 						<>
 							{showFileBrowse && (
-								<div className="flex gap-1 p-1 bg-secondary rounded-lg">
-									<button
-										type="button"
-										onClick={() => setM3uMode("url")}
-										className={cn(
-											"flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium transition-colors",
-											m3uMode === "url"
-												? "bg-background text-foreground shadow-sm"
-												: "text-muted-foreground hover:text-foreground"
-										)}
-									>
-										<Link className="h-3.5 w-3.5" />
-										URL
-									</button>
-									<button
-										type="button"
-										onClick={() => setM3uMode("file")}
-										className={cn(
-											"flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium transition-colors",
-											m3uMode === "file"
-												? "bg-background text-foreground shadow-sm"
-												: "text-muted-foreground hover:text-foreground"
-										)}
-									>
-										<FileText className="h-3.5 w-3.5" />
-										File
-									</button>
-								</div>
+								<SegmentedControl
+									aria-label="Playlist source"
+									value={m3uMode}
+									onChange={setM3uMode}
+									options={M3U_MODES}
+									fill
+								/>
 							)}
 
 							{m3uMode === "url" && (
-								<Input
-									placeholder="M3U playlist URL"
-									value={url}
-									onChange={(e) => setUrl(e.target.value)}
-									required
-								/>
+								<Field label="Playlist URL" hideLabel>
+									{(id) => (
+										<Input
+											id={id}
+											placeholder="M3U playlist URL"
+											value={url}
+											onChange={(e) => setUrl(e.target.value)}
+											required
+										/>
+									)}
+								</Field>
 							)}
 
 							{m3uMode === "file" && (
@@ -237,19 +232,27 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 												size="icon"
 												className="h-7 w-7 shrink-0"
 												onClick={clearFile}
+												aria-label="Clear selected file"
 											>
 												<X className="h-3.5 w-3.5" />
 											</Button>
 										</div>
 									) : (
 										<div
+											role="button"
+											tabIndex={0}
 											className={cn(
-												"flex flex-col items-center justify-center gap-2 p-6 rounded-lg border-2 border-dashed transition-colors cursor-pointer",
+												"flex flex-col items-center justify-center gap-2 p-6 rounded-lg border-2 border-dashed transition-colors cursor-pointer ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
 												isDragOver
 													? "border-primary bg-primary/10"
 													: "border-border hover:border-muted-foreground/50"
 											)}
 											onClick={handleBrowse}
+											onKeyDown={(e) => {
+												if (e.key !== "Enter" && e.key !== " ") return;
+												e.preventDefault();
+												handleBrowse();
+											}}
 										>
 											<Upload
 												className={cn(
@@ -282,30 +285,22 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 					)}
 
 					{tab === "xtream" && (
-						<>
-							<Input
-								placeholder="Server URL (e.g. http://example.com:8080)"
-								value={url}
-								onChange={(e) => setUrl(e.target.value)}
-								required
-							/>
-							<Input
-								placeholder="Username"
-								value={username}
-								onChange={(e) => setUsername(e.target.value)}
-								required
-							/>
-							<Input
-								placeholder="Password"
-								type="password"
-								value={password}
-								onChange={(e) => setPassword(e.target.value)}
-								required
-							/>
-						</>
+						<XtreamFields
+							variant="add"
+							url={url}
+							username={username}
+							password={password}
+							onUrlChange={setUrl}
+							onUsernameChange={setUsername}
+							onPasswordChange={setPassword}
+						/>
 					)}
 
-					{error && <p className="text-sm text-destructive">{error}</p>}
+					{error && (
+						<p role="alert" className="text-sm text-destructive">
+							{error}
+						</p>
+					)}
 
 					<Button type="submit" disabled={!canSubmit}>
 						{loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
