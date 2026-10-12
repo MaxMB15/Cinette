@@ -7,10 +7,9 @@
 # bundle_dmg.sh for the .app, so the release workflow makes them afterwards.
 #
 # On the GitHub-hosted macOS runners, bundle_dmg.sh now and then fails and a
-# rerun passes. Its hdiutil create has no retry of its own, and hdiutil is
+# rerun passes. Of its hdiutil calls, only detach is retried, and hdiutil is
 # known to fail there with "Resource busy". So a failed macOS build runs once
-# more. The second run reuses the compiled app and passes --verbose, which
-# prints the bundler's output if it fails again.
+# more, with --verbose, which prints the bundler's output if it fails again.
 #
 # Usage: ./scripts/build-app.sh
 
@@ -29,8 +28,9 @@ fi
 
 if ! build; then
   echo "::warning::The macOS build failed, so it runs once more."
-  # A failed DMG step can leave its temporary image next to the DMG, where
-  # the notarize and upload steps would pick it up.
-  rm -rf "$ROOT/target/release/bundle/dmg"
+  # bundle_dmg.sh writes its temporary image and the DMG next to the app, and
+  # Tauri moves the DMG to bundle/dmg when it's done. A failed run can leave
+  # either one behind, and hdiutil convert won't write over an existing DMG.
+  rm -f "$ROOT"/target/release/bundle/macos/*.dmg
   build --verbose
 fi
