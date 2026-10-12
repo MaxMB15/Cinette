@@ -15,7 +15,6 @@ import {
 	clearAllCaches,
 	clearWatchHistory,
 	countDownloadsDue,
-	fetchOmdbData,
 	getDownloadConcurrency,
 	getDownloadFolder,
 	getGeminiApiKey,
@@ -27,11 +26,11 @@ import {
 	setOmdbApiKey,
 	setOpenSubtitlesApiKey,
 	testGeminiApiKey,
+	testOmdbApiKey,
 	testOpenSubtitlesApiKey,
 } from "@/lib/tauri";
-import type { LayoutMode, OmdbData, Platform } from "@/lib/types";
+import type { LayoutMode, Platform } from "@/lib/types";
 import { fakeUpdate, makeUpdateState } from "@/test/app-fixtures";
-import { makeOmdb } from "@/test/detail-fixtures";
 import { REPO_URL } from "./LegalNotices";
 import { Settings } from "./Settings";
 
@@ -48,7 +47,7 @@ const downloads = vi.hoisted(() => ({
 vi.mock("@/lib/tauri", () => ({
 	getOmdbApiKey: vi.fn(),
 	setOmdbApiKey: vi.fn(),
-	fetchOmdbData: vi.fn(),
+	testOmdbApiKey: vi.fn(),
 	clearWatchHistory: vi.fn(),
 	getOpenSubtitlesApiKey: vi.fn(),
 	setOpenSubtitlesApiKey: vi.fn(),
@@ -121,26 +120,34 @@ const choose = async (name: string, option: string) => {
 	await click(within(list).getByRole("option", { name: option }));
 };
 
-/** Queries inside the block that a title such as "OMDB API" starts. */
+/** Queries inside the block that a title such as "Download folder" starts. */
 const block = (title: string) => within(screen.getByText(title).parentElement as HTMLElement);
 
-const keyInput = (title: string) => block(title).getByPlaceholderText(/API key…$/);
+/** Queries inside the card headed `title`. */
+const card = (title: string) =>
+	within(
+		screen.getByRole("heading", { name: title }).parentElement?.parentElement as HTMLElement
+	);
+
+type KeyName = "Gemini" | "OMDb" | "OpenSubtitles";
+
+const keyInput = (name: KeyName) => screen.getByLabelText(`${name} API key`);
+
+/** Queries inside the key field for `name`, for the parts that don't say whose they are. */
+const keyField = (name: KeyName) => within(keyInput(name).closest("form") as HTMLElement);
+
+/** A key field's Save, Remove or Test button, while it says which key it's for. */
+const keyButton = (name: KeyName, action: "Save" | "Remove" | "Test") =>
+	screen.getByRole("button", { name: `${action} ${name} API key` });
 
 const folderInput = () => screen.getByPlaceholderText("/path/to/downloads");
+
+const concurrencyInput = () => screen.getByLabelText("Simultaneous downloads");
 
 const advance = (ms: number) => {
 	act(() => {
 		vi.advanceTimersByTime(ms);
 	});
-};
-
-/** A promise the test settles by hand, to look at the page while work is under way. */
-const deferred = <T,>() => {
-	let resolve: (value: T) => void = () => {};
-	const promise = new Promise<T>((r) => {
-		resolve = r;
-	});
-	return { promise, resolve };
 };
 
 beforeEach(() => {
@@ -161,6 +168,9 @@ beforeEach(() => {
 	vi.mocked(setOmdbApiKey).mockResolvedValue(undefined);
 	vi.mocked(setOpenSubtitlesApiKey).mockResolvedValue(undefined);
 	vi.mocked(setGeminiApiKey).mockResolvedValue(undefined);
+	vi.mocked(testOmdbApiKey).mockResolvedValue(true);
+	vi.mocked(testOpenSubtitlesApiKey).mockResolvedValue(true);
+	vi.mocked(testGeminiApiKey).mockResolvedValue(true);
 	vi.mocked(setDownloadFolder).mockResolvedValue(undefined);
 	vi.mocked(setDownloadConcurrency).mockResolvedValue(undefined);
 	vi.mocked(clearWatchHistory).mockResolvedValue(undefined);
@@ -180,27 +190,30 @@ describe("Settings when it opens", () => {
 		vi.mocked(getGeminiApiKey).mockResolvedValue("gemini-test-key");
 		await renderSettings();
 
-		expect(keyInput("OMDB API")).toHaveValue("omdb-test-key");
-		expect(keyInput("OpenSubtitles API")).toHaveValue("subs-test-key");
-		expect(keyInput("Gemini API Key")).toHaveValue("gemini-test-key");
+		expect(keyInput("OMDb")).toHaveValue("omdb-test-key");
+		expect(keyInput("OpenSubtitles")).toHaveValue("subs-test-key");
+		expect(keyInput("Gemini")).toHaveValue("gemini-test-key");
 		expect(folderInput()).toHaveValue("/Users/test/Movies");
-		expect(screen.getByRole("spinbutton")).toHaveValue(4);
+		expect(concurrencyInput()).toHaveValue(4);
 		expect(screen.getByText("Max Video Player v1.2.3")).toBeInTheDocument();
-		expect(screen.queryByText(/No API key configured/)).toBeNull();
+		expect(screen.queryByRole("link", { name: /^Get a/ })).toBeNull();
 		expect(rememberHasOmdbKey).not.toHaveBeenCalled();
 	});
 
-	it("asks for an OMDb key and leaves out the services that need one while none is saved", async () => {
+	it("says where to get each key and leaves out the services that need OMDb while no key is saved", async () => {
 		await renderSettings();
 
-		expect(screen.getByText(/No API key configured/)).toBeInTheDocument();
 		expect(screen.getByRole("link", { name: "Get a free key at omdbapi.com" })).toHaveAttribute(
 			"href",
 			"https://www.omdbapi.com/apikey.aspx"
 		);
-		expect(screen.queryByText("OpenSubtitles API")).toBeNull();
-		expect(block("OMDB API").getByRole("button", { name: "Save" })).toBeDisabled();
-		expect(block("OMDB API").getByRole("button", { name: "Test" })).toBeDisabled();
+		expect(
+			screen.getByRole("link", { name: "Get a key at aistudio.google.com" })
+		).toHaveAttribute("href", "https://aistudio.google.com/apikey");
+		expect(screen.queryByLabelText("OpenSubtitles API key")).toBeNull();
+		expect(screen.queryByText("Uses your OMDb key")).toBeNull();
+		expect(keyButton("OMDb", "Save")).toBeDisabled();
+		expect(keyButton("OMDb", "Test")).toBeDisabled();
 	});
 
 	it("still opens when the version, Gemini key, folder and download count can't be read", async () => {
@@ -211,9 +224,12 @@ describe("Settings when it opens", () => {
 		await renderSettings();
 
 		expect(screen.getByText("Max Video Player")).toBeInTheDocument();
-		expect(keyInput("Gemini API Key")).toHaveValue("");
+		expect(keyInput("Gemini")).toHaveValue("");
+		expect(keyField("Gemini").getByRole("status")).toHaveTextContent(
+			"Couldn't read the saved key"
+		);
 		expect(folderInput()).toHaveValue("");
-		expect(screen.getByRole("spinbutton")).toHaveValue(3);
+		expect(concurrencyInput()).toHaveValue(3);
 	});
 
 	it("links the legal notices to the running version", async () => {
@@ -234,355 +250,146 @@ describe("Settings when it opens", () => {
 		Element.prototype.scrollIntoView = scrollIntoView;
 		await renderSettings({ routeState: OMDB_KEY_FOCUS });
 
-		const input = keyInput("OMDB API");
+		const input = keyInput("OMDb");
 		expect(input).toHaveFocus();
 		expect(scrollIntoView).toHaveBeenCalledOnce();
 		expect(scrollIntoView.mock.contexts[0]).toBe(input);
 	});
 });
 
-describe("Settings OMDb key", () => {
-	it("saves the OMDb key, says so for two seconds and remembers that a key exists", async () => {
-		vi.useFakeTimers();
+// The field itself is tested in ApiKeyField.test.tsx and the saving and
+// checking in useApiKey.test.ts. These check that each field talks to its
+// own service.
+const services = [
+	{ name: "Gemini", load: getGeminiApiKey, save: setGeminiApiKey, test: testGeminiApiKey },
+	{ name: "OMDb", load: getOmdbApiKey, save: setOmdbApiKey, test: testOmdbApiKey },
+	{
+		name: "OpenSubtitles",
+		load: getOpenSubtitlesApiKey,
+		save: setOpenSubtitlesApiKey,
+		test: testOpenSubtitlesApiKey,
+	},
+] as const;
+
+describe.each(services)("Settings $name key", ({ name, load, save, test }) => {
+	const others = services.filter((s) => s.name !== name);
+
+	it("loads, checks and saves the key with its own service", async () => {
+		vi.mocked(load).mockResolvedValue("saved-key");
 		await renderSettings();
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Save" }));
+		expect(keyInput(name)).toHaveValue("saved-key");
 
-		expect(setOmdbApiKey).toHaveBeenCalledExactlyOnceWith("test-key");
-		expect(rememberHasOmdbKey).toHaveBeenCalledExactlyOnceWith(true);
-		expect(block("OMDB API").getByRole("button", { name: "Saved" })).toBeInTheDocument();
+		typeInto(keyInput(name), "new-key");
+		await click(keyButton(name, "Test"));
+		expect(test).toHaveBeenCalledExactlyOnceWith("new-key");
+		expect(keyField(name).getByRole("status")).toHaveTextContent(/^Valid key/);
 
-		advance(1999);
-		expect(block("OMDB API").getByRole("button", { name: "Saved" })).toBeInTheDocument();
-		advance(1);
-		expect(block("OMDB API").getByRole("button", { name: "Save" })).toBeInTheDocument();
+		await click(keyButton(name, "Save"));
+		expect(save).toHaveBeenCalledExactlyOnceWith("new-key");
+		expect(keyField(name).getByRole("button", { name: "Saved" })).toBeInTheDocument();
+
+		for (const other of others) {
+			expect(other.test).not.toHaveBeenCalled();
+			expect(other.save).not.toHaveBeenCalled();
+		}
 	});
 
-	it("says when the OMDb key can't be saved and drops the message after a good save", async () => {
-		vi.mocked(setOmdbApiKey).mockRejectedValueOnce(new Error("disk full"));
+	it("removes the key when the field is cleared and saved", async () => {
+		vi.mocked(load).mockResolvedValue("saved-key");
 		await renderSettings();
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Save" }));
+		typeInto(keyInput(name), "");
+		await click(keyButton(name, "Remove"));
 
-		expect(
-			block("OMDB API").getByText("Failed to save. Please try again.")
-		).toBeInTheDocument();
-		expect(rememberHasOmdbKey).not.toHaveBeenCalled();
-
-		await click(block("OMDB API").getByRole("button", { name: "Save" }));
-		expect(block("OMDB API").queryByText("Failed to save. Please try again.")).toBeNull();
-		expect(block("OMDB API").getByRole("button", { name: "Saved" })).toBeInTheDocument();
+		expect(save).toHaveBeenCalledExactlyOnceWith("");
+		expect(keyField(name).getByRole("button", { name: "Removed" })).toBeInTheDocument();
 	});
 
-	it("calls the OMDb key valid when the lookup finds a movie", async () => {
-		vi.mocked(fetchOmdbData).mockResolvedValue(makeOmdb());
+	it("shows and hides the key without touching the others", async () => {
+		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 		await renderSettings();
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Test" }));
 
-		expect(fetchOmdbData).toHaveBeenCalledOnce();
-		expect(block("OMDB API").getByText("Valid key · 1000 calls/day limit")).toBeInTheDocument();
-		expect(block("OMDB API").queryByText("Invalid key")).toBeNull();
-	});
-
-	it.each([
-		["finds nothing", () => vi.mocked(fetchOmdbData).mockResolvedValue(null)],
-		["fails", () => vi.mocked(fetchOmdbData).mockRejectedValue(new Error("401"))],
-	])("calls the OMDb key invalid when the lookup %s", async (_, arrange) => {
-		arrange();
-		await renderSettings();
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Test" }));
-
-		expect(block("OMDB API").getByText("Invalid key")).toBeInTheDocument();
-		expect(block("OMDB API").getByRole("button", { name: "Test" })).toBeEnabled();
-	});
-
-	it("shows Testing while the OMDb check runs and drops the result when the key changes", async () => {
-		const lookup = deferred<OmdbData | null>();
-		vi.mocked(fetchOmdbData).mockReturnValue(lookup.promise);
-		await renderSettings();
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Test" }));
-
-		expect(block("OMDB API").getByRole("button", { name: "Testing…" })).toBeDisabled();
-
-		await act(async () => lookup.resolve(makeOmdb()));
-		expect(block("OMDB API").getByRole("button", { name: "Test" })).toBeEnabled();
-		expect(block("OMDB API").getByText(/^Valid key/)).toBeInTheDocument();
-
-		typeInto(keyInput("OMDB API"), "other-test-key");
-		expect(block("OMDB API").queryByText(/^Valid key/)).toBeNull();
-	});
-
-	it("drops the last check result once the OMDb key is saved", async () => {
-		vi.mocked(fetchOmdbData).mockResolvedValue(null);
-		await renderSettings();
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Test" }));
-		expect(block("OMDB API").getByText("Invalid key")).toBeInTheDocument();
-
-		await click(block("OMDB API").getByRole("button", { name: "Save" }));
-		expect(block("OMDB API").queryByText("Invalid key")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: `Show ${name} API key` }));
+		expect(keyInput(name)).toHaveAttribute("type", "text");
+		for (const other of others) {
+			expect(keyInput(other.name)).toHaveAttribute("type", "password");
+		}
 	});
 });
 
-describe("Settings key fields", () => {
-	// Each field's name in the test names, and the title its block shows.
-	const fields = [
-		["Gemini", "Gemini API Key"],
-		["OMDb", "OMDB API"],
-		["OpenSubtitles", "OpenSubtitles API"],
-	] as const;
-
-	it.each(fields)("turns off Save and Test while the %s key is blank", async (_name, title) => {
-		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
+describe("Settings OMDb key", () => {
+	it("tells the info sheets when a key is saved or removed", async () => {
 		await renderSettings();
-		typeInto(keyInput(title), "   ");
-		expect(block(title).getByRole("button", { name: "Save" })).toBeDisabled();
-		expect(block(title).getByRole("button", { name: "Test" })).toBeDisabled();
+		typeInto(keyInput("OMDb"), "omdb-test-key");
+		await click(keyButton("OMDb", "Save"));
+		expect(rememberHasOmdbKey).toHaveBeenLastCalledWith(true);
 
-		typeInto(keyInput(title), "test-key");
-		expect(block(title).getByRole("button", { name: "Save" })).toBeEnabled();
-		expect(block(title).getByRole("button", { name: "Test" })).toBeEnabled();
+		typeInto(keyInput("OMDb"), "");
+		await click(keyButton("OMDb", "Remove"));
+		expect(rememberHasOmdbKey).toHaveBeenLastCalledWith(false);
+		expect(rememberHasOmdbKey).toHaveBeenCalledTimes(2);
 	});
 
-	it.each(fields)(
-		"goes back to Save as soon as the saved %s key is edited",
-		async (_name, title) => {
-			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
-			await renderSettings();
-			typeInto(keyInput(title), "test-key");
-			await click(block(title).getByRole("button", { name: "Save" }));
-			expect(block(title).getByRole("button", { name: "Saved" })).toBeInTheDocument();
+	it("says when the key can't be saved and leaves the info sheets alone", async () => {
+		vi.mocked(setOmdbApiKey).mockRejectedValue(new Error("disk full"));
+		await renderSettings();
+		typeInto(keyInput("OMDb"), "omdb-test-key");
+		await click(keyButton("OMDb", "Save"));
 
-			typeInto(keyInput(title), "test-key-2");
-			expect(block(title).getByRole("button", { name: "Save" })).toBeEnabled();
-		}
-	);
+		expect(keyField("OMDb").getByRole("status")).toHaveTextContent(
+			"Couldn't save the key. Try again."
+		);
+		expect(rememberHasOmdbKey).not.toHaveBeenCalled();
+	});
 
-	it.each(fields)(
-		"shows and hides the %s key without touching the others",
-		async (_name, title) => {
-			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
-			await renderSettings();
-			const others = fields.map(([, t]) => t).filter((t) => t !== title);
+	it("mentions the free plan's daily limit next to a valid key", async () => {
+		await renderSettings();
+		typeInto(keyInput("OMDb"), "omdb-test-key");
+		await click(keyButton("OMDb", "Test"));
 
-			expect(keyInput(title)).toHaveAttribute("type", "password");
-			fireEvent.click(block(title).getByRole("button", { name: "Show key" }));
-			expect(keyInput(title)).toHaveAttribute("type", "text");
-			for (const other of others) {
-				expect(keyInput(other)).toHaveAttribute("type", "password");
-			}
-
-			fireEvent.click(block(title).getByRole("button", { name: "Hide key" }));
-			expect(keyInput(title)).toHaveAttribute("type", "password");
-		}
-	);
-
-	it.each(fields)(
-		"keeps Saved up for two full seconds after the %s key is saved again",
-		async (_name, title) => {
-			vi.useFakeTimers();
-			vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
-			await renderSettings();
-			typeInto(keyInput(title), "test-key");
-			await click(block(title).getByRole("button", { name: "Save" }));
-			advance(1500);
-			await click(block(title).getByRole("button", { name: "Saved" }));
-
-			advance(500);
-			expect(block(title).getByRole("button", { name: "Saved" })).toBeInTheDocument();
-			advance(1500);
-			expect(block(title).getByRole("button", { name: "Save" })).toBeInTheDocument();
-		}
-	);
+		expect(keyField("OMDb").getByRole("status")).toHaveTextContent(
+			"Valid key. Free keys allow 1,000 calls a day."
+		);
+	});
 });
 
 describe("Settings OpenSubtitles key", () => {
-	it("appears once an OMDb key is typed and goes away when that key is cleared", async () => {
+	it("appears once an OMDb key is saved, not while one is typed", async () => {
 		await renderSettings();
-		expect(screen.queryByText("OpenSubtitles API")).toBeNull();
+		typeInto(keyInput("OMDb"), "omdb-test-key");
+		expect(screen.queryByLabelText("OpenSubtitles API key")).toBeNull();
 
-		typeInto(keyInput("OMDB API"), "test-key");
-		expect(screen.getByText("OpenSubtitles API")).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "opensubtitles.com" })).toHaveAttribute(
-			"href",
-			"https://www.opensubtitles.com/consumers"
-		);
-
-		typeInto(keyInput("OMDB API"), " ");
-		expect(screen.queryByText("OpenSubtitles API")).toBeNull();
+		await click(keyButton("OMDb", "Save"));
+		expect(keyInput("OpenSubtitles")).toHaveValue("");
+		expect(screen.getByText("Uses your OMDb key")).toBeInTheDocument();
+		expect(
+			screen.getByRole("link", { name: "Get a key at opensubtitles.com" })
+		).toHaveAttribute("href", "https://www.opensubtitles.com/consumers");
 	});
 
-	it("saves the OpenSubtitles key and says so for two seconds", async () => {
-		vi.useFakeTimers();
+	it("shows a saved key while no OMDb key is saved, so it can be removed", async () => {
+		vi.mocked(getOpenSubtitlesApiKey).mockResolvedValue("subs-test-key");
+		await renderSettings();
+		expect(keyInput("OpenSubtitles")).toHaveValue("subs-test-key");
+	});
+
+	it("stays, with focus on its button, when its own key is removed", async () => {
+		vi.mocked(getOpenSubtitlesApiKey).mockResolvedValue("subs-test-key");
+		await renderSettings();
+		typeInto(keyInput("OpenSubtitles"), "");
+		const remove = keyButton("OpenSubtitles", "Remove");
+		remove.focus();
+		await click(remove);
+
+		expect(keyField("OpenSubtitles").getByRole("button", { name: "Removed" })).toHaveFocus();
+	});
+
+	it("stays when the OMDb key is removed", async () => {
 		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 		await renderSettings();
-		const subs = () => block("OpenSubtitles API");
-		expect(subs().getByRole("button", { name: "Save" })).toBeDisabled();
+		typeInto(keyInput("OMDb"), "");
+		await click(keyButton("OMDb", "Remove"));
 
-		typeInto(keyInput("OpenSubtitles API"), "subs-test-key");
-		await click(subs().getByRole("button", { name: "Save" }));
-		expect(setOpenSubtitlesApiKey).toHaveBeenCalledExactlyOnceWith("subs-test-key");
-		expect(setOmdbApiKey).not.toHaveBeenCalled();
-		expect(subs().getByRole("button", { name: "Saved" })).toBeInTheDocument();
-
-		advance(2000);
-		expect(subs().getByRole("button", { name: "Save" })).toBeInTheDocument();
-	});
-
-	it("says when the OpenSubtitles key can't be saved and drops the message after a good save", async () => {
-		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
-		vi.mocked(setOpenSubtitlesApiKey).mockRejectedValueOnce(new Error("disk full"));
-		await renderSettings();
-		const subs = () => block("OpenSubtitles API");
-		typeInto(keyInput("OpenSubtitles API"), "subs-test-key");
-		await click(subs().getByRole("button", { name: "Save" }));
-
-		expect(subs().getByText("Failed to save. Please try again.")).toBeInTheDocument();
-		expect(block("OMDB API").queryByText("Failed to save. Please try again.")).toBeNull();
-
-		await click(subs().getByRole("button", { name: "Save" }));
-		expect(subs().queryByText("Failed to save. Please try again.")).toBeNull();
-		expect(subs().getByRole("button", { name: "Saved" })).toBeInTheDocument();
-	});
-
-	it("tests the typed OpenSubtitles key and says whether it works", async () => {
-		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
-		const check = deferred<boolean>();
-		vi.mocked(testOpenSubtitlesApiKey)
-			.mockReturnValueOnce(check.promise)
-			.mockResolvedValueOnce(false)
-			.mockRejectedValueOnce(new Error("offline"));
-		await renderSettings();
-		const subs = () => block("OpenSubtitles API");
-		typeInto(keyInput("OpenSubtitles API"), "subs-test-key");
-
-		await click(subs().getByRole("button", { name: "Test" }));
-		expect(testOpenSubtitlesApiKey).toHaveBeenCalledWith("subs-test-key");
-		expect(subs().getByRole("button", { name: "Testing…" })).toBeDisabled();
-		await act(async () => check.resolve(true));
-		expect(subs().getByText("Valid key")).toBeInTheDocument();
-
-		await click(subs().getByRole("button", { name: "Test" }));
-		expect(subs().getByText("Invalid key")).toBeInTheDocument();
-		expect(subs().queryByText("Valid key")).toBeNull();
-
-		typeInto(keyInput("OpenSubtitles API"), "subs-test-key-2");
-		expect(subs().queryByText("Invalid key")).toBeNull();
-
-		await click(subs().getByRole("button", { name: "Test" }));
-		expect(testOpenSubtitlesApiKey).toHaveBeenLastCalledWith("subs-test-key-2");
-		expect(subs().getByText("Invalid key")).toBeInTheDocument();
-
-		await click(subs().getByRole("button", { name: "Save" }));
-		expect(subs().queryByText("Invalid key")).toBeNull();
-	});
-});
-
-describe("Settings Gemini key", () => {
-	it("saves the Gemini key and says so for two seconds", async () => {
-		vi.useFakeTimers();
-		await renderSettings();
-		const gemini = () => block("Gemini API Key");
-		expect(gemini().getByRole("button", { name: "Save" })).toBeDisabled();
-		expect(gemini().getByRole("link", { name: "aistudio.google.com" })).toHaveAttribute(
-			"href",
-			"https://aistudio.google.com/apikey"
-		);
-
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key");
-		expect(gemini().queryByRole("link", { name: "aistudio.google.com" })).toBeNull();
-		await click(gemini().getByRole("button", { name: "Save" }));
-
-		expect(setGeminiApiKey).toHaveBeenCalledExactlyOnceWith("gemini-test-key");
-		expect(gemini().getByRole("button", { name: "Saved" })).toBeInTheDocument();
-		advance(2000);
-		expect(gemini().getByRole("button", { name: "Save" })).toBeInTheDocument();
-	});
-
-	it("says Failed for three seconds when the Gemini key can't be saved", async () => {
-		vi.useFakeTimers();
-		vi.mocked(setGeminiApiKey).mockRejectedValue(new Error("disk full"));
-		await renderSettings();
-		const gemini = () => block("Gemini API Key");
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key");
-		await click(gemini().getByRole("button", { name: "Save" }));
-
-		expect(gemini().getByRole("button", { name: "Failed" })).toBeInTheDocument();
-		advance(2999);
-		expect(gemini().getByRole("button", { name: "Failed" })).toBeInTheDocument();
-		advance(1);
-		expect(gemini().getByRole("button", { name: "Save" })).toBeInTheDocument();
-	});
-
-	it("doesn't let an earlier Gemini save cut the next Saved or Failed short", async () => {
-		vi.useFakeTimers();
-		vi.mocked(setGeminiApiKey)
-			.mockResolvedValueOnce(undefined)
-			.mockRejectedValueOnce(new Error("disk full"))
-			.mockResolvedValueOnce(undefined);
-		await renderSettings();
-		const gemini = () => block("Gemini API Key");
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key");
-		await click(gemini().getByRole("button", { name: "Save" }));
-		advance(1000);
-		await click(gemini().getByRole("button", { name: "Saved" }));
-
-		advance(1000);
-		expect(gemini().getByRole("button", { name: "Failed" })).toBeInTheDocument();
-		advance(500);
-		await click(gemini().getByRole("button", { name: "Failed" }));
-		expect(gemini().getByRole("button", { name: "Saved" })).toBeInTheDocument();
-
-		advance(1500);
-		expect(gemini().getByRole("button", { name: "Saved" })).toBeInTheDocument();
-		advance(500);
-		expect(gemini().getByRole("button", { name: "Save" })).toBeInTheDocument();
-	});
-
-	it("goes back to Save as soon as a failed Gemini key is edited", async () => {
-		vi.mocked(setGeminiApiKey).mockRejectedValue(new Error("disk full"));
-		await renderSettings();
-		const gemini = () => block("Gemini API Key");
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key");
-		await click(gemini().getByRole("button", { name: "Save" }));
-		expect(gemini().getByRole("button", { name: "Failed" })).toBeInTheDocument();
-
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key-2");
-		expect(gemini().getByRole("button", { name: "Save" })).toBeEnabled();
-	});
-
-	it("tests the typed Gemini key and says whether it works", async () => {
-		const check = deferred<boolean>();
-		vi.mocked(testGeminiApiKey)
-			.mockReturnValueOnce(check.promise)
-			.mockResolvedValueOnce(false)
-			.mockRejectedValueOnce(new Error("offline"));
-		await renderSettings();
-		const gemini = () => block("Gemini API Key");
-		expect(gemini().getByRole("button", { name: "Test" })).toBeDisabled();
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key");
-
-		await click(gemini().getByRole("button", { name: "Test" }));
-		expect(testGeminiApiKey).toHaveBeenCalledWith("gemini-test-key");
-		expect(gemini().getByRole("button", { name: "Testing…" })).toBeDisabled();
-		await act(async () => check.resolve(true));
-		expect(gemini().getByText("Valid key")).toBeInTheDocument();
-
-		await click(gemini().getByRole("button", { name: "Test" }));
-		expect(gemini().getByText("Invalid key")).toBeInTheDocument();
-
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key-2");
-		expect(gemini().queryByText("Invalid key")).toBeNull();
-
-		await click(gemini().getByRole("button", { name: "Test" }));
-		expect(testGeminiApiKey).toHaveBeenLastCalledWith("gemini-test-key-2");
-		expect(gemini().getByText("Invalid key")).toBeInTheDocument();
-
-		await click(gemini().getByRole("button", { name: "Save" }));
-		expect(gemini().queryByText("Invalid key")).toBeNull();
+		expect(keyInput("OpenSubtitles")).toBeInTheDocument();
 	});
 });
 
@@ -828,24 +635,76 @@ describe("Settings download folder", () => {
 	});
 });
 
-describe("Settings download options", () => {
-	it.each([
-		["5", 5],
-		["25", 10],
-		["0", 1],
-		["2.6", 3],
-	])("saves %s simultaneous downloads as %i", async (typed, saved) => {
+describe("Settings simultaneous downloads", () => {
+	it("explains the field", async () => {
 		await renderSettings();
-		const input = screen.getByRole("spinbutton");
-		await act(async () => {
-			typeInto(input, typed);
-		});
-
-		expect(setDownloadConcurrency).toHaveBeenCalledExactlyOnceWith(saved);
-		expect(input).toHaveValue(saved);
-		expect(block("Simultaneous downloads").getByText(String(saved))).toBeInTheDocument();
+		expect(concurrencyInput()).toHaveAccessibleDescription(
+			"How many downloads run at once, from 1 to 10."
+		);
 	});
 
+	it("saves a whole number from 1 to 10 as it's typed", async () => {
+		await renderSettings();
+		await act(async () => {
+			typeInto(concurrencyInput(), "5");
+		});
+
+		expect(setDownloadConcurrency).toHaveBeenCalledExactlyOnceWith(5);
+		expect(concurrencyInput()).toHaveValue(5);
+	});
+
+	it.each([
+		["25", 10],
+		["0", 1],
+		["-4", 1],
+		["2.6", 3],
+	])("waits until the field is left to save %s as %i", async (typed, saved) => {
+		await renderSettings();
+		typeInto(concurrencyInput(), typed);
+		expect(setDownloadConcurrency).not.toHaveBeenCalled();
+		expect(concurrencyInput()).toHaveValue(Number(typed));
+
+		await act(async () => {
+			fireEvent.blur(concurrencyInput());
+		});
+		expect(setDownloadConcurrency).toHaveBeenCalledExactlyOnceWith(saved);
+		expect(concurrencyInput()).toHaveValue(saved);
+	});
+
+	it("saves what was typed on Enter", async () => {
+		await renderSettings();
+		typeInto(concurrencyInput(), "25");
+		await act(async () => {
+			fireEvent.keyDown(concurrencyInput(), { key: "Enter" });
+		});
+
+		expect(setDownloadConcurrency).toHaveBeenCalledExactlyOnceWith(10);
+		expect(concurrencyInput()).toHaveValue(10);
+	});
+
+	it("lets the field be cleared to type a new number and puts the old one back when it's left blank", async () => {
+		await renderSettings();
+		typeInto(concurrencyInput(), "");
+		expect(concurrencyInput()).toHaveValue(null);
+
+		fireEvent.blur(concurrencyInput());
+		expect(concurrencyInput()).toHaveValue(4);
+		expect(setDownloadConcurrency).not.toHaveBeenCalled();
+	});
+
+	it("doesn't save the number already saved", async () => {
+		await renderSettings();
+		typeInto(concurrencyInput(), "4");
+		fireEvent.keyDown(concurrencyInput(), { key: "Enter" });
+		typeInto(concurrencyInput(), "4.2");
+		fireEvent.blur(concurrencyInput());
+
+		expect(setDownloadConcurrency).not.toHaveBeenCalled();
+		expect(concurrencyInput()).toHaveValue(4);
+	});
+});
+
+describe("Settings download options", () => {
 	it("keeps the page working when saving the download count or retention fails", async () => {
 		vi.mocked(setDownloadConcurrency).mockRejectedValue(new Error("store"));
 		downloads.setRetentionDays.mockRejectedValue(new Error("store"));
@@ -853,9 +712,9 @@ describe("Settings download options", () => {
 		await renderSettings();
 
 		await act(async () => {
-			typeInto(screen.getByRole("spinbutton"), "6");
+			typeInto(concurrencyInput(), "6");
 		});
-		expect(screen.getByRole("spinbutton")).toHaveValue(6);
+		expect(concurrencyInput()).toHaveValue(6);
 
 		await choose("Delete downloads after", "7 days");
 		await choose("Delete downloads after", "14 days");
@@ -1121,13 +980,13 @@ describe("Settings updates", () => {
 	it("leaves out the update check where the app store handles updates", async () => {
 		await renderSettings({ update: makeUpdateState({ supported: false }) });
 		expect(screen.queryByRole("button", { name: "Check for Updates" })).toBeNull();
-		expect(screen.queryByRole("status")).toBeNull();
+		expect(card("About").queryByRole("status")).toBeNull();
 	});
 
 	it("checks for updates on request and says when the app is up to date", async () => {
 		const update = makeUpdateState();
 		await renderSettings({ update });
-		expect(screen.getByRole("status")).toHaveTextContent("You're up to date.");
+		expect(card("About").getByRole("status")).toHaveTextContent("You're up to date.");
 
 		await click(screen.getByRole("button", { name: "Check for Updates" }));
 		expect(update.checkForUpdates).toHaveBeenCalledOnce();
@@ -1136,12 +995,12 @@ describe("Settings updates", () => {
 	it("shows Checking while a check runs and says nothing yet", async () => {
 		await renderSettings({ update: makeUpdateState({ checking: true }) });
 		expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
-		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+		expect(card("About").getByRole("status")).toBeEmptyDOMElement();
 	});
 
 	it("says when the check failed and keeps the reason in a tooltip", async () => {
 		await renderSettings({ update: makeUpdateState({ checkError: "network down" }) });
-		expect(screen.getByRole("status")).toHaveTextContent("Couldn't check for updates.");
+		expect(card("About").getByRole("status")).toHaveTextContent("Couldn't check for updates.");
 		expect(screen.getByText("Couldn't check for updates.")).toHaveAttribute(
 			"title",
 			"network down"
@@ -1157,7 +1016,7 @@ describe("Settings updates", () => {
 
 		expect(screen.getByText("Update available — v2.0.0")).toBeInTheDocument();
 		expect(screen.getByText("Faster startup")).toBeInTheDocument();
-		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+		expect(card("About").getByRole("status")).toBeEmptyDOMElement();
 
 		await click(screen.getByRole("button", { name: "Install Update" }));
 		expect(update.install).toHaveBeenCalledOnce();
@@ -1203,12 +1062,12 @@ describe("Settings when it closes", () => {
 		vi.mocked(ask).mockResolvedValue(true);
 		const { unmount } = await renderSettings();
 
-		typeInto(keyInput("OMDB API"), "test-key");
-		await click(block("OMDB API").getByRole("button", { name: "Save" }));
-		typeInto(keyInput("OpenSubtitles API"), "subs-test-key");
-		await click(block("OpenSubtitles API").getByRole("button", { name: "Save" }));
-		typeInto(keyInput("Gemini API Key"), "gemini-test-key");
-		await click(block("Gemini API Key").getByRole("button", { name: "Save" }));
+		typeInto(keyInput("OMDb"), "omdb-test-key");
+		await click(keyButton("OMDb", "Save"));
+		typeInto(keyInput("OpenSubtitles"), "subs-test-key");
+		await click(keyButton("OpenSubtitles", "Save"));
+		typeInto(keyInput("Gemini"), "gemini-test-key");
+		await click(keyButton("Gemini", "Save"));
 		typeInto(folderInput(), "/Volumes/Media");
 		await click(block("Download folder").getByRole("button", { name: "Save" }));
 		await click(screen.getByRole("button", { name: "Clear All History…" }));

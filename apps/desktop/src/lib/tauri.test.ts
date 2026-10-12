@@ -219,6 +219,7 @@ describe("backend commands", () => {
 			"set_mdblist_api_key",
 			{ key: "k2" },
 		],
+		["testOmdbApiKey", () => tauri.testOmdbApiKey("k1"), "test_omdb_api_key", { key: "k1" }],
 		[
 			"testMdbListApiKey",
 			() => tauri.testMdbListApiKey("k2"),

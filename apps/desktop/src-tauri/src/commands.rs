@@ -9,7 +9,7 @@ use mvp_core::cache::store::{
 use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
-use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
+use mvp_core::iptv::omdb::{fetch_omdb, OmdbData, OmdbError};
 use mvp_core::iptv::opensubtitles::SEARCH_CACHE_TTL_SECS;
 use mvp_core::iptv::skip_segments::{
     fetch_source, resolve, SegmentSource, SkipQuery, SkipSegment, SourceTimes,
@@ -545,22 +545,17 @@ const OMDB_API_KEY: &str = "omdb_api_key";
 /// 30-day TTL in seconds
 const OMDB_CACHE_TTL: i64 = 30 * 24 * 60 * 60;
 
-/// Read the OMDB API key from the persistent Tauri Store.
+/// The saved OMDb API key, or None when there isn't one.
 #[command]
 pub async fn get_omdb_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(OMDB_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    omdb_api_key(&app)
 }
 
 /// The OMDb API key, or None when it isn't set or is blank. Whatson calls
 /// check this too, so a user who hasn't added a key sends nothing to either
 /// service.
 fn omdb_api_key<R: Runtime>(app: &AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(non_empty_key(store.get(OMDB_API_KEY)))
+    saved_key(app, OMDB_STORE_FILE, OMDB_API_KEY)
 }
 
 /// A stored key as a string, or None when it's missing, blank or not a string.
@@ -570,8 +565,21 @@ fn non_empty_key(value: Option<serde_json::Value>) -> Option<String> {
         .filter(|k| !k.is_empty())
 }
 
-/// Saves an API key under `name` in the store file `file`, without the
-/// spaces or line break a paste can bring along.
+/// The saved key under `name` in the store file `file`, or None when there
+/// isn't one.
+fn saved_key<R: Runtime>(app: &AppHandle<R>, file: &str, name: &str) -> Result<Option<String>, String> {
+    let store = app.store(file).map_err(|e| e.to_string())?;
+    Ok(non_empty_key(store.get(name)))
+}
+
+/// A key as typed, without the spaces or line break a paste can bring along,
+/// or None when nothing is left.
+fn trimmed_key(key: &str) -> Option<&str> {
+    Some(key.trim()).filter(|k| !k.is_empty())
+}
+
+/// Saves an API key under `name` in the store file `file`. A blank key
+/// removes the saved one.
 fn save_key<R: Runtime>(
     app: &AppHandle<R>,
     file: &str,
@@ -579,7 +587,12 @@ fn save_key<R: Runtime>(
     key: &str,
 ) -> Result<(), String> {
     let store = app.store(file).map_err(|e| e.to_string())?;
-    store.set(name, serde_json::Value::String(key.trim().to_string()));
+    match trimmed_key(key) {
+        Some(key) => store.set(name, serde_json::Value::String(key.to_string())),
+        None => {
+            store.delete(name);
+        }
+    }
     store.save().map_err(|e| e.to_string())
 }
 
@@ -587,6 +600,24 @@ fn save_key<R: Runtime>(
 #[command]
 pub async fn set_omdb_api_key<R: Runtime>(app: AppHandle<R>, key: String) -> Result<(), String> {
     save_key(&app, OMDB_STORE_FILE, OMDB_API_KEY, &key)
+}
+
+/// Checks an OMDb API key by looking up a well known movie with it. The key
+/// doesn't have to be saved, and the lookup skips the cache.
+#[command]
+pub async fn test_omdb_api_key(key: String) -> Result<bool, String> {
+    omdb_key_accepted(fetch_omdb("The Matrix", "movie", &key).await)
+}
+
+/// Whether OMDb took the key, from the answer to a lookup made with it. OMDb
+/// answers a bad key with "Invalid API key!". Any other error it reports,
+/// such as its daily limit, means it knew the key.
+fn omdb_key_accepted(result: Result<OmdbData, OmdbError>) -> Result<bool, String> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(OmdbError::Api(message)) => Ok(!message.contains("API key")),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Fetch OMDB data for a channel. Checks the DB cache first; fetches from
@@ -647,11 +678,7 @@ const MDBLIST_CACHE_TTL: i64 = 7 * 24 * 60 * 60;
 
 #[command]
 pub async fn get_mdblist_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(MDBLIST_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    saved_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY)
 }
 
 #[command]
@@ -695,13 +722,9 @@ pub async fn fetch_mdblist_data<R: Runtime>(
     }
 
     // 2. Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(MDBLIST_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[MDBList] no API key configured, skipping fetch");
-            return Ok(None);
-        }
+    let Some(api_key) = saved_key(&app, OMDB_STORE_FILE, MDBLIST_API_KEY)? else {
+        tracing::debug!("[MDBList] no API key configured, skipping fetch");
+        return Ok(None);
     };
 
     // 3. Fetch
@@ -858,11 +881,7 @@ const OPENSUBTITLES_API_KEY: &str = "opensubtitles_api_key";
 
 #[command]
 pub async fn get_opensubtitles_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let key = store
-        .get(OPENSUBTITLES_API_KEY)
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    Ok(key)
+    saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)
 }
 
 #[command]
@@ -907,13 +926,9 @@ pub async fn search_subtitles<R: Runtime>(
     }
 
     // 2. Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OPENSUBTITLES_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::debug!("[OpenSubtitles] no API key configured");
-            return Ok(None);
-        }
+    let Some(api_key) = saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)? else {
+        tracing::debug!("[OpenSubtitles] no API key configured");
+        return Ok(None);
     };
 
     // 3. Search
@@ -952,11 +967,8 @@ pub async fn download_subtitle<R: Runtime>(
     file_id: i64,
 ) -> Result<String, String> {
     // Get API key
-    let store = app.store(OMDB_STORE_FILE).map_err(|e| e.to_string())?;
-    let api_key = match store.get(OPENSUBTITLES_API_KEY).and_then(|v| v.as_str().map(|s| s.to_string())) {
-        Some(k) if !k.is_empty() => k,
-        _ => return Err("No OpenSubtitles API key configured".into()),
-    };
+    let api_key = saved_key(&app, OMDB_STORE_FILE, OPENSUBTITLES_API_KEY)?
+        .ok_or("No OpenSubtitles API key configured")?;
 
     let subtitles_dir = subtitles_dir(&app)?;
 
@@ -1252,8 +1264,7 @@ const GEMINI_KEY: &str = "apiKey";
 
 #[command]
 pub async fn get_gemini_api_key<R: Runtime>(app: AppHandle<R>) -> Result<Option<String>, String> {
-    let store = app.store(GEMINI_STORE_FILE).map_err(|e| e.to_string())?;
-    Ok(store.get(GEMINI_KEY).and_then(|v| v.as_str().map(|s| s.to_string())))
+    saved_key(&app, GEMINI_STORE_FILE, GEMINI_KEY)
 }
 
 #[command]
@@ -1815,5 +1826,48 @@ mod tests {
             non_empty_key(Some(json!(" abc123 "))).as_deref(),
             Some("abc123")
         );
+    }
+
+    #[test]
+    fn trimmed_key_drops_spaces_and_blank_keys() {
+        assert_eq!(trimmed_key(" abc123\n"), Some("abc123"));
+        assert_eq!(trimmed_key("abc 123"), Some("abc 123"));
+        assert_eq!(trimmed_key(""), None);
+        assert_eq!(trimmed_key(" \t\n"), None);
+    }
+
+    #[test]
+    fn omdb_key_accepted_tells_a_bad_key_from_other_answers() {
+        let found = OmdbData {
+            title: "The Matrix".into(),
+            year: None,
+            rated: None,
+            runtime: None,
+            genre: None,
+            director: None,
+            actors: None,
+            plot: None,
+            poster_url: None,
+            imdb_rating: None,
+            rotten_tomatoes: None,
+            imdb_id: None,
+            imdb_votes: None,
+        };
+        assert_eq!(omdb_key_accepted(Ok(found)), Ok(true));
+        assert_eq!(
+            omdb_key_accepted(Err(OmdbError::Api("Invalid API key!".into()))),
+            Ok(false)
+        );
+        assert_eq!(
+            omdb_key_accepted(Err(OmdbError::Api("No API key provided.".into()))),
+            Ok(false)
+        );
+        // OMDb only says this to a key it knows.
+        assert_eq!(
+            omdb_key_accepted(Err(OmdbError::Api("Request limit reached!".into()))),
+            Ok(true)
+        );
+        // A reply that can't be read says nothing about the key.
+        assert!(omdb_key_accepted(Err(OmdbError::Parse("not JSON".into()))).is_err());
     }
 }
