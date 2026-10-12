@@ -68,10 +68,11 @@ pub fn ffmpeg_args(url: &str, dest: &str, max_secs: i64) -> Vec<String> {
         "15000000",
         // Connect again when connecting fails with a network error. A stream
         // that drops later ends ffmpeg, and the recording goes on in a new
-        // file. `-reconnect_streamed` would pick the stream up in place, but
-        // ffmpeg's wait between tries starts over whenever any bytes arrive.
-        // A server that answers with a few bytes and closes the connection
-        // would get new connections without a pause until the end.
+        // file. With `-reconnect` on, `-reconnect_streamed` would pick the
+        // stream up in place, but ffmpeg's wait between tries starts over
+        // whenever any bytes arrive. A server that answers with a few bytes
+        // and closes the connection would get new connections without a
+        // pause until the end.
         "-reconnect_on_network_error",
         "1",
         // Report the size of the file every 5 seconds, not twice a second.

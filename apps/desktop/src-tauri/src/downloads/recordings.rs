@@ -1567,8 +1567,8 @@ mod tests {
     }
 
     /// An app recording the live channel "City News" since a minute ago, and
-    /// the recording's id. The stream never sends anything, so the real
-    /// ffmpeg runs until it's killed.
+    /// the recording's id. The stream never sends anything, and the real
+    /// ffmpeg waits 15 seconds for it, longer than a test runs.
     fn app_recording() -> (TestApp, String) {
         let app = TestApp::new();
         let live = Channel {
