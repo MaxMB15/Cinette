@@ -25,8 +25,9 @@ export class TestPointerEvent extends MouseEvent {
  * file or describe block that calls it, then puts the old one back.
  */
 export const installPointerEvent = () => {
-	const saved = window.PointerEvent;
+	let saved: typeof PointerEvent;
 	beforeAll(() => {
+		saved = window.PointerEvent;
 		window.PointerEvent = TestPointerEvent as typeof PointerEvent;
 	});
 	afterAll(() => {

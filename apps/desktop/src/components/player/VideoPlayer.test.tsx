@@ -87,6 +87,18 @@ const tauri = vi.hoisted(() => ({
 }));
 
 /**
+ * A mock function handles the promises it returns, so a rejection the player
+ * doesn't catch would go unnoticed. This sends each call through a promise of
+ * its own, and Vitest fails the run on one that's left unhandled.
+ */
+const ownPromise = vi.hoisted(
+	() =>
+		<A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+		(...args: A): Promise<R> =>
+			fn(...args).then((v) => v)
+);
+
+/**
  * Stands in for useMpv. Tests set what mpv reports, as its polls would, and
  * check what the player asked it to do.
  */
@@ -103,6 +115,16 @@ const fakeMpv = vi.hoisted(() => {
 		toggleMute: vi.fn<Mpv["toggleMute"]>(async () => {}),
 		refresh: vi.fn<Mpv["refresh"]>(async () => {}),
 	};
+	const { getLastKnownPosition, ...asyncActions } = actions;
+	const player = {
+		getLastKnownPosition,
+		...(Object.fromEntries(
+			Object.entries(asyncActions).map(([name, fn]) => [
+				name,
+				ownPromise(fn as (...a: unknown[]) => Promise<unknown>),
+			])
+		) as typeof asyncActions),
+	};
 	const initial = (): Mpv => ({
 		state: idleState(),
 		error: null,
@@ -116,7 +138,7 @@ const fakeMpv = vi.hoisted(() => {
 		loadFailed: false,
 		openFailed: false,
 		recentlyRecovered: false,
-		...actions,
+		...player,
 	});
 	let current = initial();
 	const listeners = new Set<() => void>();
@@ -143,15 +165,11 @@ const fakeMpv = vi.hoisted(() => {
 	};
 });
 
-// A mock function handles the promises it returns, so a rejection the player
-// doesn't catch would go unnoticed. Each call goes through a promise of its
-// own, and Vitest fails the run on one that's left unhandled.
 vi.mock("@/lib/tauri", () =>
 	Object.fromEntries(
 		Object.entries(tauri).map(([name, fn]) => [
 			name,
-			(...args: unknown[]) =>
-				(fn as (...a: unknown[]) => Promise<unknown>)(...args).then((v) => v),
+			ownPromise(fn as (...a: unknown[]) => Promise<unknown>),
 		])
 	)
 );
@@ -1947,6 +1965,26 @@ describe("when the app's backend fails", () => {
 			harborLights().url,
 		]);
 		expect(tauri.recordPlayEnd).toHaveBeenLastCalledWith("mv2", expect.any(Number));
+	});
+
+	it("starts over, retries and stops normally when forgetting, reloading and reporting fail", async () => {
+		const down = new Error("backend unavailable");
+		tauri.deletePlaybackPosition.mockRejectedValue(down);
+		tauri.recordPlayEnd.mockRejectedValue(down);
+		fakeMpv.actions.reload.mockRejectedValue(down);
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Start from the beginning" }));
+		await flush();
+		expect(tauri.deletePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY);
+		await setMpv({ state: paused(MOVIE_URL, 600, 3600), loadFailed: true });
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await flush();
+		expect(fakeMpv.actions.reload).toHaveBeenCalledTimes(1);
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
 	});
 });
 
