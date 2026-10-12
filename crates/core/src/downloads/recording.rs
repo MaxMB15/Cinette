@@ -66,7 +66,12 @@ pub fn ffmpeg_args(url: &str, dest: &str, max_secs: i64) -> Vec<String> {
         // tries again. In microseconds.
         "-rw_timeout",
         "15000000",
-        // Connect again when connecting fails with a network error.
+        // Connect again when connecting fails with a network error. A stream
+        // that drops later ends ffmpeg, and the recording goes on in a new
+        // file. `-reconnect_streamed` would pick the stream up in place, but
+        // ffmpeg's wait between tries starts over whenever any bytes arrive.
+        // A server that answers with a few bytes and closes the connection
+        // would get new connections without a pause until the end.
         "-reconnect_on_network_error",
         "1",
         // Report the size of the file every 5 seconds, not twice a second.
@@ -670,6 +675,10 @@ mod tests {
         assert_eq!(args[pos("-rw_timeout").unwrap() + 1], "15000000");
         assert!(pos("-rw_timeout").unwrap() < input);
         assert_eq!(args[pos("-reconnect_on_network_error").unwrap() + 1], "1");
+        // A server that keeps closing the connection mustn't get flooded
+        // with new ones.
+        assert!(pos("-reconnect_streamed").is_none());
+        assert!(pos("-reconnect_at_eof").is_none());
         assert_eq!(args[pos("-stats_period").unwrap() + 1], "5");
         assert_eq!(args[pos("-t").unwrap() + 1], "3900");
         assert!(pos("-t").unwrap() > input);
