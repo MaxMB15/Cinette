@@ -76,8 +76,8 @@ esac
 # ── Bump version in tauri.conf.json, Cargo.toml, Settings.tsx ────────────────
 python3 "$REPO_ROOT/scripts/bump-version.py" "$NEW"
 
-# ── Refresh workspace lockfile after Cargo.toml version change ────────────────
-( cd "$REPO_ROOT" && cargo generate-lockfile )
+# ── Update the app's own entry in Cargo.lock, leaving dependencies as they are ─
+( cd "$REPO_ROOT" && cargo update --workspace )
 echo "  Updated Cargo.lock"
 
 # ── Commit ───────────────────────────────────────────────────────────────────
