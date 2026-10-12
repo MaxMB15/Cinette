@@ -20,7 +20,8 @@ const SKIPDB_URL: &str = "https://api.skipdb.tv/api/segments";
 const INTRODB_URL: &str = "https://api.introdb.app/segments";
 
 /// Both databases answer in well under a second, so one that takes longer is
-/// down. The other's times are shown without waiting for it.
+/// down. The other's times are shown without waiting for it. It's shorter than
+/// the shared client's limit, so each request sets it.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A segment this close to the end has nothing left to skip to.
@@ -520,14 +521,6 @@ fn auto_to(s: &SkipSegment, duration: f64) -> f64 {
     }
 }
 
-fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent(concat!("MaxVideoPlayer/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .unwrap_or_default()
-}
-
 /// Gets JSON from `url`, or `None` when the server has nothing for it.
 async fn get_json<T: DeserializeOwned>(
     client: &reqwest::Client,
@@ -561,7 +554,7 @@ pub async fn fetch_source(
         SegmentSource::SkipDb => SKIPDB_URL,
         SegmentSource::IntroDb => INTRODB_URL,
     };
-    fetch_from(&client(), url, query, source).await
+    fetch_from(crate::http::client(), url, query, source).await
 }
 
 async fn fetch_from(
@@ -682,6 +675,61 @@ mod tests {
             "post_credits": null
         }))
         .unwrap()
+    }
+
+    mod fetching {
+        use super::*;
+        use crate::http::test_server;
+
+        fn query() -> SkipQuery {
+            SkipQuery::new("tt0903747", Some(1), Some(2), 2820.0).unwrap()
+        }
+
+        async fn fetch(
+            status: &'static str,
+            body: &'static str,
+            source: SegmentSource,
+        ) -> Result<SourceTimes, SkipError> {
+            let url = test_server::serve_once(status, body);
+            fetch_from(&test_server::client(), &url, &query(), source).await
+        }
+
+        #[tokio::test]
+        async fn reads_what_the_database_has() {
+            let times = fetch(
+                "200 OK",
+                r#"{"segments":{"intro":{"start_ms":60000,"end_ms":120000,"match":"exact"}}}"#,
+                SegmentSource::SkipDb,
+            )
+            .await
+            .unwrap();
+            assert_eq!(times.segments.len(), 1);
+            assert_eq!(times.segments[0].kind, SegmentKind::Intro);
+            assert_eq!(times.segments[0].end, 120.0);
+        }
+
+        #[tokio::test]
+        async fn a_video_the_database_lacks_comes_back_empty() {
+            let times = fetch("404 Not Found", "", SegmentSource::IntroDb)
+                .await
+                .unwrap();
+            assert_eq!(times, SourceTimes::default());
+        }
+
+        #[tokio::test]
+        async fn a_server_error_names_the_database() {
+            let result = fetch("503 Service Unavailable", "", SegmentSource::SkipDb).await;
+            assert!(
+                matches!(result, Err(SkipError::Status("SkipDB", 503))),
+                "{result:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_reply_that_isnt_json_is_an_error() {
+            let result = fetch("200 OK", "<html>Busy</html>", SegmentSource::IntroDb).await;
+            assert!(matches!(result, Err(SkipError::Http(_))), "{result:?}");
+        }
     }
 
     mod reading {
