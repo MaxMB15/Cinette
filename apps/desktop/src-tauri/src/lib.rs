@@ -128,6 +128,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    // Metadata and subtitle lookups name the app's version in their user agent.
+    mvp_core::http::set_app_version(env!("CARGO_PKG_VERSION"));
+
     builder
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())

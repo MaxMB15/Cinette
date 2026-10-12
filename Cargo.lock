@@ -2647,6 +2647,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "memmap2",
+ "percent-encoding",
  "quick-xml 0.37.5",
  "rayon",
  "reqwest 0.12.28",

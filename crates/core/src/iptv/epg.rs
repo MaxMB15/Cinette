@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Downloading and reading XMLTV program guides.
+
 use chrono::NaiveDateTime;
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -9,24 +11,47 @@ use thiserror::Error;
 
 use crate::cache::store::StoredEpgProgram;
 
+/// Errors from downloading or reading an XMLTV guide.
 #[derive(Debug, Error)]
 pub enum EpgError {
+    /// The guide is not well formed XML.
     #[error("XML parse error: {0}")]
     Xml(#[from] quick_xml::Error),
+    /// The download failed or the server answered with an error status.
     #[error("network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
+    /// The server answered without any programs, such as an empty body or
+    /// an "account expired" page.
+    #[error("the guide has no programs")]
+    Empty,
+    /// Reading the guide stopped before it finished.
+    #[error("reading the guide failed: {0}")]
+    Interrupted(#[from] tokio::task::JoinError),
 }
 
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for EpgError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
+}
+
+/// One program in the guide.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgProgram {
     pub channel_id: String,
     pub title: String,
     pub description: String,
-    pub start_time: i64,   // Unix timestamp (seconds UTC) — was String
-    pub end_time: i64,     // Unix timestamp (seconds UTC) — was String
+    /// Start as Unix seconds in UTC.
+    pub start_time: i64,
+    /// End as Unix seconds in UTC.
+    pub end_time: i64,
     pub category: Option<String>,
 }
 
+/// A channel as the guide names it. `id` is what playlist entries use to
+/// find their programs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgChannel {
     pub id: String,
@@ -34,6 +59,7 @@ pub struct EpgChannel {
     pub icon_url: Option<String>,
 }
 
+/// Everything read from one XMLTV guide.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpgData {
     pub channels: Vec<EpgChannel>,
@@ -176,7 +202,11 @@ fn parse_epg_time(raw: &str) -> i64 {
 
     // Parse timezone offset like "+0100" → seconds offset
     let tz_offset_secs: i64 = if tz_offset_str.len() == 5 {
-        let sign: i64 = if tz_offset_str.starts_with('-') { -1 } else { 1 };
+        let sign: i64 = if tz_offset_str.starts_with('-') {
+            -1
+        } else {
+            1
+        };
         let hh: i64 = tz_offset_str[1..3].parse().unwrap_or(0);
         let mm: i64 = tz_offset_str[3..5].parse().unwrap_or(0);
         sign * (hh * 3600 + mm * 60)
@@ -189,9 +219,29 @@ fn parse_epg_time(raw: &str) -> i64 {
 }
 
 /// Fetch XMLTV EPG data from a URL and parse it.
+///
+/// An error status from the server comes back as `EpgError::Network`, and a
+/// reply without any programs as `EpgError::Empty`. Parsing runs on a blocking
+/// thread, because a large guide takes seconds to read.
 pub async fn fetch_and_parse_epg(url: &str) -> Result<EpgData, EpgError> {
-    let body = reqwest::get(url).await?.text().await?;
-    parse_epg(&body)
+    fetch_epg(crate::http::download_client(), url).await
+}
+
+async fn fetch_epg(client: &reqwest::Client, url: &str) -> Result<EpgData, EpgError> {
+    // An error page or an empty reply parses as a guide with no programs, and
+    // saving that would wipe the guide the user already has.
+    let body = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let data = tokio::task::spawn_blocking(move || parse_epg(&body)).await??;
+    if data.programs.is_empty() {
+        return Err(EpgError::Empty);
+    }
+    Ok(data)
 }
 
 /// Convert parsed EpgData into StoredEpgPrograms ready for DB insertion.
@@ -202,7 +252,11 @@ pub fn epg_data_to_stored(data: &EpgData, provider_id: &str) -> Vec<StoredEpgPro
         .map(|p| StoredEpgProgram {
             channel_id: p.channel_id.clone(),
             title: p.title.clone(),
-            description: if p.description.is_empty() { None } else { Some(p.description.clone()) },
+            description: if p.description.is_empty() {
+                None
+            } else {
+                Some(p.description.clone())
+            },
             start_time: p.start_time,
             end_time: p.end_time,
             category: p.category.clone(),
@@ -215,6 +269,42 @@ pub fn epg_data_to_stored(data: &EpgData, provider_id: &str) -> Vec<StoredEpgPro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
+
+    #[tokio::test]
+    async fn an_error_page_is_not_saved_as_an_empty_guide() {
+        let url = test_server::serve_once("404 Not Found", "<html><body>Not found</body></html>");
+        let result = fetch_epg(&test_server::client(), &url).await;
+        assert!(matches!(result, Err(EpgError::Network(_))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_reply_without_programs_is_not_saved_as_an_empty_guide() {
+        for body in [
+            "",
+            "<html><body>Account expired</body></html>",
+            r#"{"user_info":{"auth":0}}"#,
+            r#"<tv><channel id="c1"><display-name>One</display-name></channel></tv>"#,
+        ] {
+            let url = test_server::serve_once("200 OK", body);
+            let result = fetch_epg(&test_server::client(), &url).await;
+            assert!(
+                matches!(result, Err(EpgError::Empty)),
+                "{body:?}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_good_response_is_parsed() {
+        let url = test_server::serve_once(
+            "200 OK",
+            r#"<tv><channel id="c1"><display-name>One</display-name></channel><programme start="20260304120000 +0000" stop="20260304130000 +0000" channel="c1"><title>News</title></programme></tv>"#,
+        );
+        let data = fetch_epg(&test_server::client(), &url).await.unwrap();
+        assert_eq!(data.channels.len(), 1);
+        assert_eq!(data.programs.len(), 1);
+    }
 
     #[test]
     fn test_parse_epg() {
@@ -312,8 +402,14 @@ mod tests {
         let data = parse_epg(xml).unwrap();
         assert_eq!(data.programs.len(), 1);
         assert_eq!(data.programs[0].title, "Untitled Show");
-        assert_eq!(data.programs[0].description, "", "missing desc should be empty");
-        assert!(data.programs[0].category.is_none(), "missing category should be None");
+        assert_eq!(
+            data.programs[0].description, "",
+            "missing desc should be empty"
+        );
+        assert!(
+            data.programs[0].category.is_none(),
+            "missing category should be None"
+        );
     }
 
     #[test]
@@ -388,5 +484,14 @@ mod tests {
         assert_eq!(ch_bbc.icon_url.as_deref(), Some("http://bbc.png"));
         let ch_cnn = data.channels.iter().find(|c| c.id == "ch2").unwrap();
         assert!(ch_cnn.icon_url.is_none());
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = EpgError::from(crate::http::error_with_url(
+            "unix:/xmltv.php?username=u&password=SECRET",
+        ));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }

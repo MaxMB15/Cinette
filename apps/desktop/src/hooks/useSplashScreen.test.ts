@@ -28,6 +28,7 @@ const mockRefreshProvider = vi.mocked(tauri.refreshProvider);
 const mockRefreshEpg = vi.mocked(tauri.refreshEpg);
 const mockLoadProviderSettings = vi.mocked(channelsHook.loadProviderSettings);
 const mockGetEpgLastRefresh = vi.mocked(channelsHook.getEpgLastRefresh);
+const mockSetEpgLastRefresh = vi.mocked(channelsHook.setEpgLastRefresh);
 
 const makeUpdateState = (overrides: Partial<UpdateState> = {}): UpdateState => ({
 	update: null,
@@ -137,33 +138,41 @@ describe("useSplashScreen", () => {
 		expect(mockRefreshProvider).toHaveBeenCalledWith("p1");
 	});
 
-	it("calls refreshEpg when epgAutoRefresh=true, epgUrl set, and interval elapsed", async () => {
-		mockUseChannels.mockReturnValue({
-			providers: [
-				{
-					id: "p1",
-					lastUpdated: new Date().toISOString(),
-					epgUrl: "http://epg.example.com/guide.xml",
-				},
-			],
-			initialized: true,
-			autoRefresh: tracker,
-		} as never);
-		mockLoadProviderSettings.mockReturnValue({
-			autoRefresh: false,
-			refreshIntervalHours: 24,
-			epgAutoRefresh: true,
-			epgRefreshIntervalHours: 24,
-		});
-		mockGetEpgLastRefresh.mockReturnValue(0); // never refreshed
-		mockRefreshEpg.mockResolvedValue(undefined);
+	it.each([
+		["a guide", 120],
+		["a guide that came back empty", 0],
+	])(
+		"refreshes %s when the interval has passed, and counts it as refreshed",
+		async (_, saved) => {
+			mockUseChannels.mockReturnValue({
+				providers: [
+					{
+						id: "p1",
+						lastUpdated: new Date().toISOString(),
+						epgUrl: "http://epg.example.com/guide.xml",
+					},
+				],
+				initialized: true,
+				autoRefresh: tracker,
+			} as never);
+			mockLoadProviderSettings.mockReturnValue({
+				autoRefresh: false,
+				refreshIntervalHours: 24,
+				epgAutoRefresh: true,
+				epgRefreshIntervalHours: 24,
+			});
+			mockGetEpgLastRefresh.mockReturnValue(0); // never refreshed
+			mockRefreshEpg.mockResolvedValue(saved);
 
-		const updateState = makeUpdateState();
-		const { result } = renderHook(() => useSplashScreen({ updateState }));
-		await waitFor(() => expect(result.current.allDone).toBe(true));
+			const updateState = makeUpdateState();
+			const { result } = renderHook(() => useSplashScreen({ updateState }));
+			await waitFor(() => expect(result.current.allDone).toBe(true));
 
-		expect(mockRefreshEpg).toHaveBeenCalledWith("p1");
-	});
+			expect(mockRefreshEpg).toHaveBeenCalledWith("p1");
+			expect(mockSetEpgLastRefresh).toHaveBeenCalledWith("p1");
+			expect(result.current.steps.find((s) => s.id === "epg")?.status).toBe("done");
+		}
+	);
 
 	it("finishes with the remaining steps failed when a step throws", async () => {
 		mockUseChannels.mockReturnValue({
@@ -327,7 +336,7 @@ describe("useSplashScreen", () => {
 			epgRefreshIntervalHours: 24,
 		});
 		mockRefreshEpg.mockImplementation((id: string) =>
-			id === "p2" ? Promise.reject(new Error("offline")) : Promise.resolve()
+			id === "p2" ? Promise.reject(new Error("offline")) : Promise.resolve(120)
 		);
 
 		const updateState = makeUpdateState();

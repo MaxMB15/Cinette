@@ -12,11 +12,19 @@ pub enum M3uError {
     #[error("invalid M3U format: missing #EXTM3U header")]
     MissingHeader,
     #[error("network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(#[source] reqwest::Error),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("parse error at line {line}: {message}")]
     Parse { line: usize, message: String },
+}
+
+// Playlist URLs often carry the login, so it is dropped before the error can
+// reach a log or the UI.
+impl From<reqwest::Error> for M3uError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e.without_url())
+    }
 }
 
 /// Parse an M3U playlist from an in-memory string.
@@ -173,43 +181,6 @@ pub fn parse_m3u_reader<R: BufRead>(reader: R) -> Result<Vec<Channel>, M3uError>
     Ok(channels)
 }
 
-/// Fetch an M3U playlist from a URL using streaming HTTP.
-/// Streams the response to a temp file first to avoid holding the whole
-/// response body in memory -- critical for large (100 MB+) playlists.
-pub async fn fetch_and_parse_m3u(url: &str) -> Result<Vec<Channel>, M3uError> {
-    use tokio::io::AsyncWriteExt;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()?;
-
-    let mut response = client.get(url).send().await?.error_for_status()?;
-
-    let tmp_path = std::env::temp_dir().join(format!("mvp_m3u_{}.tmp", std::process::id()));
-
-    let mut file = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(M3uError::Io)?;
-
-    while let Some(chunk) = response.chunk().await? {
-        file.write_all(&chunk).await.map_err(M3uError::Io)?;
-    }
-    file.flush().await.map_err(M3uError::Io)?;
-    drop(file);
-
-    let path = tmp_path.clone();
-    let result = tokio::task::spawn_blocking(move || parse_m3u_file(&path))
-        .await
-        .map_err(|e| M3uError::Parse {
-            line: 0,
-            message: format!("task join error: {e}"),
-        })?;
-
-    let _ = std::fs::remove_file(&tmp_path);
-
-    result
-}
-
 /// Extract the EPG URL from the #EXTM3U header line.
 /// Looks for `x-tvg-url="..."` or `url-tvg="..."` attributes.
 pub fn extract_epg_url(content: &str) -> Option<String> {
@@ -229,48 +200,63 @@ pub struct M3uPlaylist {
 }
 
 /// Fetch an M3U playlist from a URL, parse channels, and extract the EPG URL from the header.
+///
+/// The download goes to a temp file instead of memory, because playlists can be
+/// over 100 MB.
 pub async fn fetch_and_parse_m3u_with_epg(url: &str) -> Result<M3uPlaylist, M3uError> {
-    use tokio::io::AsyncWriteExt;
+    fetch_playlist(crate::http::download_client(), url).await
+}
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()?;
+async fn fetch_playlist(client: &reqwest::Client, url: &str) -> Result<M3uPlaylist, M3uError> {
+    use tokio::io::AsyncWriteExt;
 
     let mut response = client.get(url).send().await?.error_for_status()?;
 
-    let tmp_path = std::env::temp_dir().join(format!("mvp_m3u_epg_{}.tmp", std::process::id()));
-
-    let mut file = tokio::fs::File::create(&tmp_path)
+    let download = TempDownload::new();
+    let mut file = tokio::fs::File::create(&download.0)
         .await
         .map_err(M3uError::Io)?;
-
     while let Some(chunk) = response.chunk().await? {
         file.write_all(&chunk).await.map_err(M3uError::Io)?;
     }
     file.flush().await.map_err(M3uError::Io)?;
     drop(file);
 
-    // Read the header portion to extract the EPG URL without loading the whole file.
-    let epg_url = {
-        use std::io::{BufRead, BufReader};
-        let f = std::fs::File::open(&tmp_path).map_err(M3uError::Io)?;
-        let mut reader = BufReader::new(f);
+    let path = download.0.clone();
+    tokio::task::spawn_blocking(move || {
+        // The EPG URL is on the header line, so only that line is read for it.
         let mut first_line = String::new();
-        reader.read_line(&mut first_line).map_err(M3uError::Io)?;
-        extract_epg_url(&first_line)
-    };
+        std::io::BufReader::new(std::fs::File::open(&path)?).read_line(&mut first_line)?;
+        let epg_url = extract_epg_url(&first_line);
+        let channels = parse_m3u_file(&path)?;
+        Ok(M3uPlaylist { channels, epg_url })
+    })
+    .await
+    .map_err(|e| M3uError::Parse {
+        line: 0,
+        message: format!("task join error: {e}"),
+    })?
+}
 
-    let path = tmp_path.clone();
-    let channels = tokio::task::spawn_blocking(move || parse_m3u_file(&path))
-        .await
-        .map_err(|e| M3uError::Parse {
-            line: 0,
-            message: format!("task join error: {e}"),
-        })??;
+/// A temp file for one playlist download, deleted when it goes out of scope so
+/// a failed download doesn't leave it behind.
+///
+/// Each download gets its own name, because the app refreshes several
+/// providers at once.
+struct TempDownload(std::path::PathBuf);
 
-    let _ = std::fs::remove_file(&tmp_path);
+impl TempDownload {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(std::env::temp_dir().join(format!("mvp_m3u_{}_{n}.tmp", std::process::id())))
+    }
+}
 
-    Ok(M3uPlaylist { channels, epg_url })
+impl Drop for TempDownload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Strip UTF-8 BOM if present (common in Windows-created M3U files).
@@ -502,7 +488,56 @@ fn group_movie_sources(channels: Vec<Channel>) -> Vec<Channel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::test_server;
     use std::io::BufReader;
+
+    #[test]
+    fn http_errors_leave_out_the_playlist_url() {
+        let err = M3uError::from(crate::http::error_with_url(
+            "unix:/get.php?username=u&password=SECRET&type=m3u_plus",
+        ));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn playlists_downloaded_at_once_stay_apart() {
+        let first = test_server::serve_once(
+            "200 OK",
+            "#EXTM3U x-tvg-url=\"http://one.test/epg.xml\"\n#EXTINF:-1,One\nhttp://one.test/1\n",
+        );
+        let second = test_server::serve_once(
+            "200 OK",
+            "#EXTM3U x-tvg-url=\"http://two.test/epg.xml\"\n#EXTINF:-1,Two\nhttp://two.test/2\n",
+        );
+        let client = test_server::client();
+        let (first, second) = tokio::join!(
+            fetch_playlist(&client, &first),
+            fetch_playlist(&client, &second)
+        );
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_eq!(first.channels[0].name, "One");
+        assert_eq!(first.epg_url.as_deref(), Some("http://one.test/epg.xml"));
+        assert_eq!(second.channels[0].name, "Two");
+        assert_eq!(second.epg_url.as_deref(), Some("http://two.test/epg.xml"));
+    }
+
+    #[test]
+    fn a_downloaded_playlist_is_deleted_afterwards() {
+        let download = TempDownload::new();
+        std::fs::write(&download.0, "#EXTM3U").unwrap();
+        let path = download.0.clone();
+        assert_ne!(path, TempDownload::new().0);
+        drop(download);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn an_error_status_is_a_network_error() {
+        let url = test_server::serve_once("404 Not Found", "#EXTM3U");
+        let result = fetch_playlist(&test_server::client(), &url).await;
+        assert!(matches!(result, Err(M3uError::Network(_))), "{result:?}");
+    }
 
     #[test]
     fn test_parse_basic_m3u() {

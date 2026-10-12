@@ -31,6 +31,15 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The dot on the seek bar sometimes sat apart from the end of the colored part, mostly when a video started. It also jumped back for a moment after a seek, and stopped following playback after you moved it with the arrow keys. Clicking the seek bar no longer turns off the player's keyboard shortcuts (#111).
 - Closing the player in full screen left the window in full screen, and the player came back in full screen the next time it opened. Closing the player now leaves full screen, unless the window was already in full screen when the player opened (#96, #113).
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- A failed guide download, or one that comes back empty or as an error page, no longer wipes the TV guide you already had. Refreshing the guide by hand says when it came back empty (#105).
+- Error messages and logs no longer show your API keys, Xtream login or the login in a playlist link (#105).
+- Testing a wrong OpenSubtitles key says the key is invalid instead of showing a request error (#105).
+- Xtream logins that contain &, +, # or ? now load and play. Channels loaded before keep their old links until you refresh the playlist (#105).
+- The Gemini key is sent in a request header instead of the request URL (#105).
+- Spaces or a line break pasted around an API key no longer make the key fail (#105).
+- Online lookups and Xtream logins give up after a timeout instead of waiting forever on a server that stopped responding (#105).
+- Large playlists on a slow connection no longer fail after 10 minutes while they are still downloading (#105).
+- Refreshing two M3U playlists at the same time no longer mixes up their downloads (#105).
 - The player's logs no longer show the login in a stream's link when a channel starts, buffers or reconnects (#106).
 - Removing a playlist or provider left its watch history, saved positions, episode lists, guide data and category layout behind. Cached Xtream episode lists hold the provider's login, so the login stayed too (#92).
 - Clear All Caches left cached episode lists, guide data and downloaded subtitles behind (#92).

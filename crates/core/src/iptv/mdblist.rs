@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+//! Ratings from MDBList, looked up by IMDb id.
+
+use crate::json::number_or_string;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -46,19 +49,30 @@ pub struct MdbListData {
     pub mdblist_score: Option<i32>,
 }
 
+/// Errors from an MDBList lookup.
 #[derive(Debug, Error)]
 pub enum MdbListError {
+    /// The request failed or the server answered with an error status.
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
+    /// MDBList answered but reported an error, such as a bad key.
     #[error("MDBList API error: {0}")]
     Api(String),
+    /// The response was not in the expected shape.
     #[error("Parse error: {0}")]
     Parse(String),
 }
 
+// Request URLs can carry API keys and logins, so they are dropped before the
+// error can reach a log or the UI.
+impl From<reqwest::Error> for MdbListError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.without_url())
+    }
+}
+
 /// Raw top-level MDBList API response (deserialization only).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct MdbListApiResponse {
     // Error shape: { "error": true, "message": "..." }
     error: Option<serde_json::Value>,
@@ -89,29 +103,11 @@ struct MdbListRating {
     votes: Option<serde_json::Value>,
 }
 
-/// Extract an `i32` score from a `serde_json::Value` that may be a number or a numeric string.
-fn value_to_i32(v: &serde_json::Value) -> Option<i32> {
-    match v {
-        serde_json::Value::Number(n) => n.as_f64().map(|f| f as i32),
-        serde_json::Value::String(s) => s.parse::<i32>().ok(),
-        _ => None,
-    }
-}
-
-/// Extract an `f64` rating from a `serde_json::Value` that may be a number or a numeric string.
-fn value_to_f64(v: &serde_json::Value) -> Option<f64> {
-    match v {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::String(s) => s.parse::<f64>().ok(),
-        _ => None,
-    }
-}
-
 /// Parse an MDBList JSON response (as `serde_json::Value`) into `MdbListData`.
 /// Separated from the HTTP call so it can be unit-tested without network access.
 pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, MdbListError> {
-    let resp: MdbListApiResponse = serde_json::from_value(json)
-        .map_err(|e| MdbListError::Parse(e.to_string()))?;
+    let resp: MdbListApiResponse =
+        serde_json::from_value(json).map_err(|e| MdbListError::Parse(e.to_string()))?;
 
     // Detect API-level errors. The error field may be a bool `true` or a string.
     let is_error = match &resp.error {
@@ -121,7 +117,9 @@ pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, Md
         None => false,
     };
     if is_error {
-        let msg = resp.message.unwrap_or_else(|| "Unknown MDBList error".into());
+        let msg = resp
+            .message
+            .unwrap_or_else(|| "Unknown MDBList error".into());
         return Err(MdbListError::Api(msg));
     }
 
@@ -138,19 +136,19 @@ pub fn parse_mdblist_response(json: serde_json::Value) -> Result<MdbListData, Md
         for r in ratings {
             match r.source.as_str() {
                 "metacritic" => {
-                    metacritic_score = r.score.as_ref().and_then(value_to_i32);
-                    metacritic_votes = r.votes.as_ref().and_then(value_to_i32);
+                    metacritic_score = r.score.as_ref().and_then(number_or_string::<i32>);
+                    metacritic_votes = r.votes.as_ref().and_then(number_or_string::<i32>);
                 }
                 "tmdb" => {
-                    tmdb_rating = r.score.as_ref().and_then(value_to_f64);
-                    tmdb_votes = r.votes.as_ref().and_then(value_to_i32);
+                    tmdb_rating = r.score.as_ref().and_then(number_or_string::<f64>);
+                    tmdb_votes = r.votes.as_ref().and_then(number_or_string::<i32>);
                 }
                 "trakt" => {
-                    trakt_rating = r.score.as_ref().and_then(value_to_f64);
-                    trakt_votes = r.votes.as_ref().and_then(value_to_i32);
+                    trakt_rating = r.score.as_ref().and_then(number_or_string::<f64>);
+                    trakt_votes = r.votes.as_ref().and_then(number_or_string::<i32>);
                 }
                 "letterboxd" => {
-                    letterboxd_rating = r.score.as_ref().and_then(value_to_f64);
+                    letterboxd_rating = r.score.as_ref().and_then(number_or_string::<f64>);
                 }
                 _ => {}
             }
@@ -188,10 +186,7 @@ pub async fn fetch_mdblist(
     media_type: &str,
     api_key: &str,
 ) -> Result<MdbListData, MdbListError> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get("https://mdblist.com/api/")
-        .query(&[("apikey", api_key), ("i", imdb_id), ("m", media_type)])
+    let response = lookup_request(imdb_id, media_type, api_key)
         .send()
         .await?
         .json::<serde_json::Value>()
@@ -199,10 +194,30 @@ pub async fn fetch_mdblist(
     parse_mdblist_response(response)
 }
 
+// Keys are pasted in, often with a trailing newline, which MDBList would reject.
+fn lookup_request(imdb_id: &str, media_type: &str, api_key: &str) -> reqwest::RequestBuilder {
+    crate::http::client()
+        .get("https://mdblist.com/api/")
+        .query(&[
+            ("apikey", api_key.trim()),
+            ("i", imdb_id),
+            ("m", media_type),
+        ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spaces_around_the_key_are_ignored() {
+        let request = lookup_request("tt0468569", "movie", " KEY\n")
+            .build()
+            .unwrap();
+        let key = request.url().query_pairs().find(|(k, _)| k == "apikey");
+        assert_eq!(key.unwrap().1, "KEY");
+    }
 
     fn full_response() -> serde_json::Value {
         json!({
@@ -355,5 +370,12 @@ mod tests {
         assert!(data.tmdb_rating.is_none());
         assert!(data.trakt_rating.is_none());
         assert!(data.letterboxd_rating.is_none());
+    }
+
+    #[test]
+    fn http_errors_leave_out_the_request_url() {
+        let err = MdbListError::from(crate::http::error_with_url("unix:/api/?apikey=SECRET"));
+        assert!(!err.to_string().contains("SECRET"), "{err}");
+        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
     }
 }
