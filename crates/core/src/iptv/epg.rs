@@ -193,10 +193,13 @@ fn parse_epg_time(raw: &str) -> i64 {
     let dt_str = parts[0];
     let tz_offset_str = parts.get(1).copied().unwrap_or("+0000");
 
-    if dt_str.len() < 14 {
-        return 0;
-    }
-    let Ok(naive) = NaiveDateTime::parse_from_str(&dt_str[..14], "%Y%m%d%H%M%S") else {
+    // A byte count can land inside a character in a broken guide, so the
+    // slices here go through `get`, which returns None there instead of
+    // panicking.
+    let Some(naive) = dt_str
+        .get(..14)
+        .and_then(|digits| NaiveDateTime::parse_from_str(digits, "%Y%m%d%H%M%S").ok())
+    else {
         return 0;
     };
 
@@ -207,8 +210,9 @@ fn parse_epg_time(raw: &str) -> i64 {
         } else {
             1
         };
-        let hh: i64 = tz_offset_str[1..3].parse().unwrap_or(0);
-        let mm: i64 = tz_offset_str[3..5].parse().unwrap_or(0);
+        let number = |range| tz_offset_str.get(range).and_then(|n: &str| n.parse().ok());
+        let hh: i64 = number(1..3).unwrap_or(0);
+        let mm: i64 = number(3..5).unwrap_or(0);
         sign * (hh * 3600 + mm * 60)
     } else {
         0
@@ -552,6 +556,18 @@ mod tests {
             parse_epg_time("20260304120000 -0500"),
             1772625600 + 5 * 3600
         );
+    }
+
+    #[test]
+    fn a_time_cut_inside_a_letter_reads_as_zero() {
+        // "é" takes two bytes, so the 14th byte falls inside it.
+        assert_eq!(parse_epg_time("2026030412000é"), 0);
+    }
+
+    #[test]
+    fn an_offset_cut_inside_a_letter_is_read_as_utc() {
+        // Five bytes, with "é" across the third and fourth.
+        assert_eq!(parse_epg_time("20260304120000 +0é0"), 1772625600);
     }
 
     #[test]

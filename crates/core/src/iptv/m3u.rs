@@ -30,39 +30,17 @@ impl From<reqwest::Error> for M3uError {
 /// Parse an M3U playlist from an in-memory string.
 /// Good for small/medium playlists. For large files use `parse_m3u_file`.
 pub fn parse_m3u(content: &str) -> Result<Vec<Channel>, M3uError> {
-    let trimmed = strip_bom(content.trim());
-    if !trimmed.starts_with("#EXTM3U") {
+    let content = strip_bom(content.trim_start());
+    if !content.starts_with("#EXTM3U") {
         return Err(M3uError::MissingHeader);
     }
-
-    let lines: Vec<&str> = trimmed.lines().collect();
-    let blocks = collect_blocks_from_lines(&lines);
-
-    let channels: Vec<Channel> = blocks
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, (extinf, url))| parse_extinf_block(idx, extinf, url))
-        .collect();
-
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
-    let mut seen = std::collections::HashSet::<(String, String)>::new();
-    let channels: Vec<Channel> = channels
-        .into_iter()
-        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
-        .collect();
-
-    // Group movies with the same title under a single entry; extra URLs go into sources.
-    let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
-    let channels = group_series_episodes(channels);
-
-    Ok(channels)
+    // The lines are slices of `content`, so none of them is copied.
+    Ok(channels_from_blocks(&pair_blocks(content.lines())))
 }
 
 /// Parse an M3U file from disk using a memory-mapped view of the file.
-/// The OS maps the file into virtual memory without copying it — no per-line
-/// allocations, and parallel block detection runs across all CPU cores.
+/// The OS maps the file into memory instead of copying it, and each line is a
+/// slice of the map.
 pub fn parse_m3u_file(path: &Path) -> Result<Vec<Channel>, M3uError> {
     let file = std::fs::File::open(path)?;
     // SAFETY: the file is read-only and not modified while the map is live.
@@ -70,115 +48,52 @@ pub fn parse_m3u_file(path: &Path) -> Result<Vec<Channel>, M3uError> {
     parse_m3u_bytes(&mmap)
 }
 
-/// Parse M3U from a byte slice (e.g. a memory-mapped file).
-/// Lines are zero-copy &str slices into the input; blocks are found in parallel
-/// via par_windows(2) and parsed in parallel with rayon.
+/// Parse M3U from a byte slice, such as a memory-mapped file.
 fn parse_m3u_bytes(bytes: &[u8]) -> Result<Vec<Channel>, M3uError> {
     let content = std::str::from_utf8(bytes).map_err(|e| M3uError::Parse {
-        line: 0,
+        // Line numbers in errors count from 1, as the reader's do.
+        line: line_number_at(bytes, e.valid_up_to()),
         message: format!("UTF-8 decode error: {e}"),
     })?;
-    let content = strip_bom(content.trim_start());
-    if !content.starts_with("#EXTM3U") {
-        return Err(M3uError::MissingHeader);
-    }
+    parse_m3u(content)
+}
 
-    // Collect lines as &str slices into the mmap — no heap allocation per line.
-    let lines: Vec<&str> = content.lines().collect();
-
-    // Find (extinf, url) pairs in parallel. par_windows(2) examines every
-    // consecutive pair of lines across all rayon threads simultaneously.
-    let blocks: Vec<(&str, &str)> = lines
-        .par_windows(2)
-        .filter_map(|pair| {
-            let a = pair[0].trim();
-            let b = pair[1].trim();
-            if a.starts_with("#EXTINF:") && !b.is_empty() && !b.starts_with('#') {
-                Some((a, b))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let channels: Vec<Channel> = blocks
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, (extinf, url))| parse_extinf_block(idx, extinf, url))
-        .collect();
-
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
-    let mut seen = std::collections::HashSet::<(String, String)>::new();
-    let channels: Vec<Channel> = channels
-        .into_iter()
-        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
-        .collect();
-
-    // Group movies with the same title under a single entry; extra URLs go into sources.
-    let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
-    let channels = group_series_episodes(channels);
-
-    Ok(channels)
+/// The line, counting from 1, that holds the byte at `offset`.
+fn line_number_at(bytes: &[u8], offset: usize) -> usize {
+    bytes[..offset].iter().filter(|&&b| b == b'\n').count() + 1
 }
 
 /// Stream-parse M3U from any `BufRead` source. Collects EXTINF+URL pairs
 /// line-by-line, then parses them in parallel with rayon.
 pub fn parse_m3u_reader<R: BufRead>(reader: R) -> Result<Vec<Channel>, M3uError> {
-    let mut lines_iter = reader.lines();
+    // Line numbers in errors count from 1.
+    let read_error = |index: usize, e: std::io::Error| M3uError::Parse {
+        line: index + 1,
+        message: e.to_string(),
+    };
+    let mut lines = reader.lines().enumerate();
 
-    let first_line = lines_iter
-        .next()
-        .ok_or(M3uError::MissingHeader)?
-        .map_err(|e| M3uError::Parse {
-            line: 0,
-            message: e.to_string(),
-        })?;
-    let first_trimmed = strip_bom(first_line.trim());
-    if !first_trimmed.starts_with("#EXTM3U") {
+    let (_, first_line) = lines.next().ok_or(M3uError::MissingHeader)?;
+    let first_line = first_line.map_err(|e| read_error(0, e))?;
+    if !strip_bom(first_line.trim()).starts_with("#EXTM3U") {
         return Err(M3uError::MissingHeader);
     }
 
-    let mut blocks: Vec<(String, String)> = Vec::new();
-    let mut current_extinf: Option<String> = None;
-
-    for line_result in lines_iter {
-        let line = line_result.map_err(|e| M3uError::Parse {
-            line: blocks.len(),
-            message: e.to_string(),
-        })?;
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("#EXTINF:") {
-            current_extinf = Some(trimmed.to_string());
-        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            if let Some(extinf) = current_extinf.take() {
-                blocks.push((extinf, trimmed.to_string()));
-            }
+    // Reading stops at the first line that fails, and that line's error is
+    // returned instead of the channels.
+    let mut failed = None;
+    let lines = lines.map_while(|(index, line)| match line {
+        Ok(line) => Some(line),
+        Err(e) => {
+            failed = Some(read_error(index, e));
+            None
         }
+    });
+    let blocks = pair_blocks(lines);
+    match failed {
+        Some(err) => Err(err),
+        None => Ok(channels_from_blocks(&blocks)),
     }
-
-    let channels: Vec<Channel> = blocks
-        .par_iter()
-        .enumerate()
-        .filter_map(|(idx, (extinf, url))| parse_extinf_block(idx, extinf, url))
-        .collect();
-
-    // Deduplicate: same content is often listed under multiple group-title categories
-    // (e.g., "Movies Albania" + "Server 4"). Keep first occurrence of each (name, url) pair.
-    let mut seen = std::collections::HashSet::<(String, String)>::new();
-    let channels: Vec<Channel> = channels
-        .into_iter()
-        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
-        .collect();
-
-    // Group movies with the same title under a single entry; extra URLs go into sources.
-    let channels = group_movie_sources(channels);
-    // Group series episodes with the same (series_title, season, episode) similarly.
-    let channels = group_series_episodes(channels);
-
-    Ok(channels)
 }
 
 /// Extract the EPG URL from the #EXTM3U header line.
@@ -264,24 +179,53 @@ fn strip_bom(s: &str) -> &str {
     s.strip_prefix('\u{FEFF}').unwrap_or(s)
 }
 
-fn collect_blocks_from_lines<'a>(lines: &[&'a str]) -> Vec<(&'a str, &'a str)> {
+/// Pairs each `#EXTINF` line with the link that follows it. Lines such as
+/// `#EXTVLCOPT`, `#EXTGRP` and `#KODIPROP` can sit between the two, so an
+/// `#EXTINF` waits for the next line that isn't blank or a `#` line. A second
+/// `#EXTINF:` before any link replaces the first, so an entry with no link is
+/// dropped rather than taking the next entry's link. A link with no `#EXTINF:`
+/// before it is skipped. The lines come back as given, untrimmed.
+fn pair_blocks<T: AsRef<str>>(lines: impl IntoIterator<Item = T>) -> Vec<(T, T)> {
     let mut blocks = Vec::new();
-    let mut i = 1;
-    while i < lines.len() {
-        let line = lines[i].trim();
-        if line.starts_with("#EXTINF:") {
-            if i + 1 < lines.len() {
-                let url_line = lines[i + 1].trim();
-                if !url_line.is_empty() && !url_line.starts_with('#') {
-                    blocks.push((line, url_line));
-                    i += 2;
-                    continue;
-                }
+    let mut extinf = None;
+    for line in lines {
+        let text = line.as_ref().trim();
+        if text.starts_with("#EXTINF:") {
+            extinf = Some(line);
+        } else if !text.is_empty() && !text.starts_with('#') {
+            if let Some(extinf) = extinf.take() {
+                blocks.push((extinf, line));
             }
         }
-        i += 1;
     }
     blocks
+}
+
+/// Parses the `#EXTINF` and link pairs into channels in parallel. Then it
+/// drops repeats and groups the links of each movie and episode.
+fn channels_from_blocks<T: AsRef<str> + Sync>(blocks: &[(T, T)]) -> Vec<Channel> {
+    let channels: Vec<Channel> = blocks
+        .par_iter()
+        .enumerate()
+        .filter_map(|(idx, (extinf, url))| {
+            parse_extinf_block(idx, extinf.as_ref().trim(), url.as_ref().trim())
+        })
+        .collect();
+
+    // Playlists often list the same stream in more than one group, such as a
+    // country's movie group and a server group. Only the first listing of each
+    // name and link stays.
+    let mut seen = std::collections::HashSet::<(String, String)>::new();
+    let channels: Vec<Channel> = channels
+        .into_iter()
+        .filter(|ch| seen.insert((ch.name.clone(), ch.url.clone())))
+        .collect();
+
+    // Movies with the same title become one entry, and the other links become
+    // its sources.
+    let channels = group_movie_sources(channels);
+    // Episodes with the same show, season and episode are grouped the same way.
+    group_series_episodes(channels)
 }
 
 fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> {
@@ -630,28 +574,6 @@ http://stream.example.com/ch2
     }
 
     #[test]
-    fn test_comment_line_after_extinf_skips_channel() {
-        // In the line-pair parser, EXTINF must be immediately followed by a URL.
-        // A comment line between EXTINF and URL breaks the pair — no channel produced.
-        let content =
-            "#EXTM3U\n#EXTINF:-1 group-title=\"Test\",Channel\n#EXTVLCOPT:option\nhttp://url.com\n";
-        let channels = parse_m3u(content).unwrap();
-        assert!(channels.is_empty());
-    }
-
-    #[test]
-    fn test_reader_tolerates_comment_between_extinf_and_url() {
-        // The streaming reader holds current_extinf across comment lines,
-        // so a comment between EXTINF and URL still produces a channel.
-        let content =
-            "#EXTM3U\n#EXTINF:-1 group-title=\"Test\",Channel\n#EXTVLCOPT:option\nhttp://url.com\n";
-        let reader = BufReader::new(content.as_bytes());
-        let channels = parse_m3u_reader(reader).unwrap();
-        assert_eq!(channels.len(), 1);
-        assert_eq!(channels[0].name, "Channel");
-    }
-
-    #[test]
     fn test_crlf_line_endings() {
         let content = "#EXTM3U\r\n#EXTINF:-1 group-title=\"Test\",CRLF Channel\r\nhttp://crlf.com\r\n";
         let channels = parse_m3u(content).unwrap();
@@ -892,32 +814,86 @@ http://stream.example.com/ch2
     }
 
     #[test]
-    fn a_stream_that_is_not_utf8_is_a_parse_error() {
+    fn a_playlist_that_is_not_utf8_is_a_parse_error_on_that_line() {
         let header: &[u8] = b"#EXTM3U \xff\n#EXTINF:-1,One\nhttp://a.test/1\n";
-        for bytes in [header, LATIN1_PLAYLIST] {
-            let result = parse_m3u_reader(bytes);
-            assert!(matches!(result, Err(M3uError::Parse { .. })), "{result:?}");
+        for (bytes, bad_line) in [(header, 1), (LATIN1_PLAYLIST, 2)] {
+            for result in [parse_m3u_reader(bytes), parse_file(bytes)] {
+                assert!(
+                    matches!(result, Err(M3uError::Parse { line, .. }) if line == bad_line),
+                    "{result:?}"
+                );
+            }
         }
+    }
+
+    /// Parses `content` as a string, as a file and as a stream.
+    fn parse_every_way(content: &str) -> [Vec<Channel>; 3] {
+        [
+            parse_m3u(content).unwrap(),
+            parse_file(content.as_bytes()).unwrap(),
+            parse_m3u_reader(content.as_bytes()).unwrap(),
+        ]
+    }
+
+    /// Each channel's name and link, in order.
+    fn names_and_links(channels: &[Channel]) -> Vec<(&str, &str)> {
+        channels
+            .iter()
+            .map(|ch| (ch.name.as_str(), ch.url.as_str()))
+            .collect()
     }
 
     #[test]
     fn an_entry_without_a_link_is_dropped_by_every_parser() {
-        // A broken entry must not take the next entry's link.
+        // A broken entry must not take the next entry's link, even across
+        // option lines.
         let content = "#EXTM3U\n\
             #EXTINF:-1,No Link\n\
+            #EXTVLCOPT:http-user-agent=Player\n\
             #EXTINF:-1,One\nhttp://a.test/1\n\
             #EXTINF:-1,Last";
-        let parsed = [
-            parse_m3u(content).unwrap(),
-            parse_file(content.as_bytes()).unwrap(),
-            parse_m3u_reader(content.as_bytes()).unwrap(),
-        ];
-        for channels in parsed {
+        for channels in parse_every_way(content) {
+            assert_eq!(names_and_links(&channels), [("One", "http://a.test/1")]);
+        }
+    }
+
+    #[test]
+    fn lines_between_an_entry_and_its_link_keep_the_entry() {
+        // Players read these lines as options for the link that follows.
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 group-title=\"News\",One\n\
+            #EXTVLCOPT:http-user-agent=Player\n\
+            #EXTVLCOPT:http-referrer=http://a.test/\n\
+            http://a.test/1\n\
+            #EXTINF:-1,Two\n\
+            #EXTGRP:Sports\n\
+            \n\
+            #KODIPROP:inputstream=inputstream.adaptive\n\
+            http://a.test/2\n";
+        for channels in parse_every_way(content) {
             let entries: Vec<_> = channels
                 .iter()
-                .map(|ch| (ch.name.as_str(), ch.url.as_str()))
+                .map(|ch| (ch.id.as_str(), ch.name.as_str(), ch.url.as_str()))
                 .collect();
-            assert_eq!(entries, [("One", "http://a.test/1")]);
+            assert_eq!(
+                entries,
+                [
+                    ("ch-0", "One", "http://a.test/1"),
+                    ("ch-1", "Two", "http://a.test/2")
+                ]
+            );
+            assert_eq!(channels[0].group_title, "News");
+        }
+    }
+
+    #[test]
+    fn a_link_with_no_entry_before_it_is_skipped_by_every_parser() {
+        let content = "#EXTM3U\n\
+            http://a.test/stray\n\
+            #EXTINF:-1,One\nhttp://a.test/1\n\
+            http://a.test/second-link\n";
+        for channels in parse_every_way(content) {
+            assert_eq!(names_and_links(&channels), [("One", "http://a.test/1")]);
         }
     }
 
