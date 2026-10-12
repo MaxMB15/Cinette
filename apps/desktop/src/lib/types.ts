@@ -54,8 +54,12 @@ export interface PlayerState {
 	volume: number;
 	position: number;
 	duration: number;
-	/** The current load has opened and shown its first frame (or started its
-	 *  audio). Set by the mpv plugin and kept until the next load. */
+}
+
+/** What the mpv plugin reports, which adds how the current load is opening. */
+export interface MpvPlayerState extends PlayerState {
+	/** The current load has opened and shown its first frame or started its
+	 *  audio. Set by the mpv plugin and kept until the next load. */
 	playbackStarted: boolean;
 	/** The current load stopped before it ever started playing. */
 	openFailed: boolean;

@@ -4,6 +4,8 @@
 // Decides when the player shows its "Opening stream" spinner: from the moment
 // a load starts until the stream is actually playing. Some servers take a
 // minute or more to answer, and without it the player is just a black screen.
+// A pause doesn't hide it. mpv goes on opening the stream while paused and
+// shows its first frame when that's ready, which ends the spinner.
 
 export interface StreamOpeningInput {
 	/** `mpvLoad` is still in flight. */
@@ -13,7 +15,6 @@ export interface StreamOpeningInput {
 	playbackStarted: boolean;
 	/** The renderer has drawn the first frame of the current load. */
 	firstFrameReady: boolean;
-	isPaused: boolean;
 	/** `mpvLoad` rejected. The player shows the error instead. */
 	error: string | null;
 	/** The stream failed to open, or the reconnect monitor gave up. */
@@ -27,7 +28,6 @@ export const isOpeningStream = ({
 	currentUrl,
 	playbackStarted,
 	firstFrameReady,
-	isPaused,
 	error,
 	failed,
 	reconnecting,
@@ -37,7 +37,5 @@ export const isOpeningStream = ({
 	// Polled state can still describe the previous stream until the load returns.
 	if (loadPending) return true;
 	if (!currentUrl) return false;
-	if (playbackStarted || firstFrameReady) return false;
-	// A pause before the first frame hides it too.
-	return !isPaused;
+	return !playbackStarted && !firstFrameReady;
 };

@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-	PlayerState,
+	MpvPlayerState,
 	Channel,
 	Provider,
 	EpgProgram,
@@ -50,7 +50,7 @@ export const mpvSeek = (position: number): Promise<void> =>
 export const mpvSetVolume = (volume: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_volume", { volume });
 
-export const mpvGetState = (): Promise<PlayerState> => invoke("plugin:mpv|mpv_get_state");
+export const mpvGetState = (): Promise<MpvPlayerState> => invoke("plugin:mpv|mpv_get_state");
 
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });

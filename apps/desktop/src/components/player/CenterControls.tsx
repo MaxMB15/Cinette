@@ -15,6 +15,9 @@ interface CenterControlsProps {
 	/** How far the skip buttons jump. Leave out when the stream can't seek. */
 	skip?: SkipIntervals;
 	onSkip?: (seconds: number) => void;
+	/** Leaves the buttons out, so the opening spinner or an error has the
+	 *  middle of the video to itself. */
+	hideButtons?: boolean;
 }
 
 /**
@@ -32,6 +35,7 @@ export const CenterControls = ({
 	onPause,
 	skip,
 	onSkip,
+	hideButtons = false,
 }: CenterControlsProps) => {
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
 	const button = cn(
@@ -46,55 +50,57 @@ export const CenterControls = ({
 				visible ? "opacity-100" : "opacity-0"
 			)}
 		>
-			<div className="flex items-center gap-4 drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)] sm:gap-8">
-				{skipButtons && (
+			{!hideButtons && (
+				<div className="flex items-center gap-4 drop-shadow-[0_1px_3px_rgba(0,0,0,0.5)] sm:gap-8">
+					{skipButtons && (
+						<button
+							type="button"
+							onClick={() => skipButtons.onSkip(-skipButtons.skip.back)}
+							aria-label={`Skip back ${skipButtons.skip.back} seconds`}
+							className={cn(button, "h-14 w-14 active:bg-white/20")}
+						>
+							<SkipIcon
+								direction="back"
+								seconds={skipButtons.skip.back}
+								className="h-10 w-10"
+								labelClassName="text-xs"
+							/>
+						</button>
+					)}
+
 					<button
 						type="button"
-						onClick={() => skipButtons.onSkip(-skipButtons.skip.back)}
-						aria-label={`Skip back ${skipButtons.skip.back} seconds`}
-						className={cn(button, "h-14 w-14 active:bg-white/20")}
+						onClick={paused ? onPlay : onPause}
+						aria-label={paused ? "Play" : "Pause"}
+						className={cn(
+							button,
+							"h-16 w-16 bg-black/40 active:bg-white/20 sm:h-20 sm:w-20"
+						)}
 					>
-						<SkipIcon
-							direction="back"
-							seconds={skipButtons.skip.back}
-							className="h-10 w-10"
-							labelClassName="text-xs"
-						/>
+						{paused ? (
+							<Play className="ml-1 h-8 w-8 fill-current sm:h-10 sm:w-10" />
+						) : (
+							<Pause className="h-8 w-8 fill-current sm:h-10 sm:w-10" />
+						)}
 					</button>
-				)}
 
-				<button
-					type="button"
-					onClick={paused ? onPlay : onPause}
-					aria-label={paused ? "Play" : "Pause"}
-					className={cn(
-						button,
-						"h-16 w-16 bg-black/40 active:bg-white/20 sm:h-20 sm:w-20"
+					{skipButtons && (
+						<button
+							type="button"
+							onClick={() => skipButtons.onSkip(skipButtons.skip.forward)}
+							aria-label={`Skip forward ${skipButtons.skip.forward} seconds`}
+							className={cn(button, "h-14 w-14 active:bg-white/20")}
+						>
+							<SkipIcon
+								direction="forward"
+								seconds={skipButtons.skip.forward}
+								className="h-10 w-10"
+								labelClassName="text-xs"
+							/>
+						</button>
 					)}
-				>
-					{paused ? (
-						<Play className="ml-1 h-8 w-8 fill-current sm:h-10 sm:w-10" />
-					) : (
-						<Pause className="h-8 w-8 fill-current sm:h-10 sm:w-10" />
-					)}
-				</button>
-
-				{skipButtons && (
-					<button
-						type="button"
-						onClick={() => skipButtons.onSkip(skipButtons.skip.forward)}
-						aria-label={`Skip forward ${skipButtons.skip.forward} seconds`}
-						className={cn(button, "h-14 w-14 active:bg-white/20")}
-					>
-						<SkipIcon
-							direction="forward"
-							seconds={skipButtons.skip.forward}
-							className="h-10 w-10"
-							labelClassName="text-xs"
-						/>
-					</button>
-				)}
-			</div>
+				</div>
+			)}
 		</div>
 	);
 };

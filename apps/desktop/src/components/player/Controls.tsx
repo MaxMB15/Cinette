@@ -63,6 +63,12 @@ interface ControlsProps {
 	 * the middle of the video, which leaves the bottom bar room for the rest.
 	 */
 	touchLayout?: boolean;
+	/**
+	 * Leaves out play, pause and skip while the stream is opening or has
+	 * failed, when they have nothing to act on. On touch layouts that empties
+	 * the middle row, and on desktop it takes them out of the bar.
+	 */
+	hideCenterControls?: boolean;
 }
 
 export const Controls = ({
@@ -92,6 +98,7 @@ export const Controls = ({
 	skip,
 	onSkip,
 	touchLayout = false,
+	hideCenterControls = false,
 }: ControlsProps) => {
 	const [localPos, setLocalPos] = useState(state.position);
 	const isSeeking = useRef(false);
@@ -131,6 +138,7 @@ export const Controls = ({
 
 	const paused = state.isPaused || !state.isPlaying;
 	const skipButtons = skip && onSkip ? { skip, onSkip } : null;
+	const playbackInBar = !touchLayout && !hideCenterControls;
 
 	return (
 		<>
@@ -142,6 +150,7 @@ export const Controls = ({
 					onPause={onPause}
 					skip={skip}
 					onSkip={onSkip}
+					hideButtons={hideCenterControls}
 				/>
 			)}
 			<div
@@ -184,8 +193,9 @@ export const Controls = ({
 
 					{onInfo && <div className="w-px h-4 bg-white/20 mx-0.5 shrink-0" />}
 
-					{/* Playback controls. The touch layout has them in the middle of the video. */}
-					{!touchLayout && skipButtons && (
+					{/* Playback controls. The touch layout has them in the middle of the
+					    video, and neither layout shows them while the stream can't play. */}
+					{playbackInBar && skipButtons && (
 						<Button
 							variant="ghost"
 							size="icon"
@@ -203,7 +213,7 @@ export const Controls = ({
 						</Button>
 					)}
 
-					{!touchLayout &&
+					{playbackInBar &&
 						(paused ? (
 							<Button
 								variant="ghost"
@@ -226,7 +236,7 @@ export const Controls = ({
 							</Button>
 						))}
 
-					{!touchLayout && skipButtons && (
+					{playbackInBar && skipButtons && (
 						<Button
 							variant="ghost"
 							size="icon"

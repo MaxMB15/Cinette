@@ -527,16 +527,55 @@ describe("useMpv", () => {
 			expect(result.current.opening).toBe(false);
 		});
 
-		it("hides when the user pauses before the first frame", async () => {
+		it("keeps showing when the user pauses before the first frame", async () => {
 			const { result } = renderHook(() => useMpv());
 			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
 			await loadAndWait(result);
-			expect(result.current.opening).toBe(true);
 
 			await act(async () => {
 				await result.current.pause();
 			});
+			// mpv goes on opening the stream while paused.
+			expect(result.current.opening).toBe(true);
+
+			mockMpvGetState.mockResolvedValue(
+				polled({ isPlaying: false, isPaused: true, playbackStarted: true })
+			);
+			await act(async () => {
+				await result.current.refresh();
+			});
 			expect(result.current.opening).toBe(false);
+		});
+
+		it("ignores a first-frame event that arrives while a load is in flight", async () => {
+			let resolveLoad: () => void;
+			mockMpvLoad.mockImplementation(
+				() =>
+					new Promise<void>((r) => {
+						resolveLoad = r;
+					})
+			);
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			let loadPromise: Promise<void>;
+			act(() => {
+				loadPromise = result.current.load("http://live.url");
+			});
+			// A late frame from the stream being replaced.
+			act(() => {
+				mockListenCallbacks.get("mpv://first-frame")!({ payload: null });
+			});
+
+			mockMpvGetState.mockResolvedValue(polled());
+			await act(async () => {
+				resolveLoad!();
+				await loadPromise!;
+			});
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.opening).toBe(true);
 		});
 
 		it("hides when the user stops", async () => {
@@ -639,6 +678,73 @@ describe("useMpv", () => {
 				await result.current.refresh();
 			});
 			expect(result.current.opening).toBe(false);
+		});
+
+		it("reloads the stream the last load asked for, not the one still polled", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			await loadAndWait(result);
+
+			mockMpvLoad.mockRejectedValueOnce(new Error("loadfile: error"));
+			await act(async () => {
+				await result.current.load("http://next.url").catch(() => {});
+			});
+			expect(result.current.state.currentUrl).toBe("http://live.url");
+
+			mockMpvLoad.mockClear();
+			await act(async () => {
+				expect(await result.current.reload()).toBe(true);
+			});
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://next.url", undefined, true);
+		});
+
+		it("reloads from the last known position", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			await loadAndWait(result);
+			mockMpvGetState.mockResolvedValue(polled({ position: 75, playbackStarted: true }));
+			await act(async () => {
+				await result.current.refresh();
+			});
+
+			mockMpvLoad.mockClear();
+			await act(async () => {
+				await result.current.reload();
+			});
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", 75, true);
+		});
+
+		it("doesn't reload while a load is in flight or after a stop", async () => {
+			let resolveLoad: () => void;
+			mockMpvLoad.mockImplementation(
+				() =>
+					new Promise<void>((r) => {
+						resolveLoad = r;
+					})
+			);
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			let loadPromise: Promise<void>;
+			act(() => {
+				loadPromise = result.current.load("http://live.url");
+			});
+			await act(async () => {
+				expect(await result.current.reload()).toBe(false);
+			});
+			expect(mockMpvLoad).toHaveBeenCalledTimes(1);
+			await act(async () => {
+				resolveLoad!();
+				await loadPromise!;
+			});
+
+			await act(async () => {
+				await result.current.stop();
+			});
+			await act(async () => {
+				expect(await result.current.reload()).toBe(false);
+			});
+			expect(mockMpvLoad).toHaveBeenCalledTimes(1);
 		});
 
 		it("counts loads, including a reload of the same URL", async () => {

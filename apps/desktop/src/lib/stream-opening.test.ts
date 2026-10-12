@@ -9,7 +9,6 @@ const OPENING: StreamOpeningInput = {
 	currentUrl: "http://stream.example.com/live.m3u8",
 	playbackStarted: false,
 	firstFrameReady: false,
-	isPaused: false,
 	error: null,
 	failed: false,
 	reconnecting: false,
@@ -31,7 +30,6 @@ describe("isOpeningStream", () => {
 				loadPending: true,
 				playbackStarted: true,
 				firstFrameReady: true,
-				isPaused: true,
 			})
 		).toBe(true);
 	});
@@ -46,10 +44,6 @@ describe("isOpeningStream", () => {
 
 	it("hides when nothing is loaded", () => {
 		expect(isOpeningStream({ ...OPENING, currentUrl: null })).toBe(false);
-	});
-
-	it("hides when the user pauses before the first frame", () => {
-		expect(isOpeningStream({ ...OPENING, isPaused: true })).toBe(false);
 	});
 
 	it("hides when the load fails", () => {

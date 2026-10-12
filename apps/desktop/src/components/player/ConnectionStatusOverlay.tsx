@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { Loader2, RotateCw, WifiOff } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface ConnectionStatusOverlayProps {
 	/** True while the Rust reconnect monitor is actively re-issuing loadfile
@@ -27,6 +28,9 @@ interface ConnectionStatusOverlayProps {
 	recentlyRecovered: boolean;
 	/** Invoked when the user clicks the retry button on the failed state. */
 	onRetry?: () => void;
+	/** Puts the banner below the player's top bar. On phones that bar holds
+	 *  the Back button, which the banner would otherwise cover. */
+	belowTopBar?: boolean;
 }
 
 type Status = "idle" | "buffering" | "reconnecting" | "failed" | "recovered";
@@ -58,6 +62,7 @@ export const ConnectionStatusOverlay = ({
 	openFailed = false,
 	recentlyRecovered,
 	onRetry,
+	belowTopBar = false,
 }: ConnectionStatusOverlayProps) => {
 	const status: Status =
 		loadFailed || openFailed
@@ -137,12 +142,18 @@ export const ConnectionStatusOverlay = ({
 
 	// Inset from both sides and centered with auto margins, so a phone gets
 	// nearly its full width. With left-1/2 the banner could only use half. The
-	// top clears the notch or Dynamic Island.
+	// top clears the notch or Dynamic Island, and the top bar when asked.
 	return (
 		<div
 			role="status"
 			aria-live="polite"
-			className={`absolute left-4 right-4 top-[calc(1.5rem_+_env(safe-area-inset-top))] z-50 mx-auto w-fit max-w-md flex items-center gap-3 rounded-xl border ${config.container} px-4 py-3 shadow-lg backdrop-blur-md`}
+			className={cn(
+				"absolute left-4 right-4 z-50 mx-auto w-fit max-w-md flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg backdrop-blur-md",
+				belowTopBar
+					? "top-[calc(4.5rem_+_env(safe-area-inset-top))]"
+					: "top-[calc(1.5rem_+_env(safe-area-inset-top))]",
+				config.container
+			)}
 		>
 			<div
 				className={`flex h-9 w-9 items-center justify-center rounded-full ${config.iconWrap}`}

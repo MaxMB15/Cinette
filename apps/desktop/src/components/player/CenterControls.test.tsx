@@ -33,6 +33,21 @@ describe("CenterControls", () => {
 		expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
 	});
 
+	it("leaves out every button while the opening spinner or an error shows", () => {
+		render(
+			<CenterControls
+				visible
+				paused={false}
+				onPlay={noop}
+				onPause={noop}
+				skip={{ back: 10, forward: 10 }}
+				onSkip={noop}
+				hideButtons
+			/>
+		);
+		expect(screen.queryAllByRole("button")).toHaveLength(0);
+	});
+
 	it("pauses while playing and plays while paused", () => {
 		const onPlay = vi.fn();
 		const onPause = vi.fn();
