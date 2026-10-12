@@ -353,7 +353,7 @@ pub fn parse_series_name(name: &str) -> Option<(String, u32, u32)> {
                 digit_count += 1;
                 j += 1;
             }
-            if digit_count >= 1 && digit_count <= 3 && j < b.len() && (b[j] == b'E' || b[j] == b'e') {
+            if (1..=3).contains(&digit_count) && j < b.len() && (b[j] == b'E' || b[j] == b'e') {
                 let mut k = j + 1;
                 let mut episode: u32 = 0;
                 let mut ep_digits = 0usize;

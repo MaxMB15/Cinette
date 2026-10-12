@@ -1935,7 +1935,7 @@ impl CacheStore {
                 _ => DownloadKind::Movie,
             },
             series_channel_id: row.get(4)?,
-            status: DownloadStatus::from_str(&status_str).unwrap_or(DownloadStatus::Failed),
+            status: DownloadStatus::parse(&status_str).unwrap_or(DownloadStatus::Failed),
             dest_path: row.get(6)?,
             total_bytes: row.get(7)?,
             downloaded_bytes: row.get(8)?,
@@ -2182,7 +2182,7 @@ fn normalize_title(title: &str) -> String {
 /// For series channels loaded from an older cache that has NULL series_title/season/episode,
 /// re-parse the channel name in memory so the frontend always gets enriched metadata.
 /// Does not modify the database — the next playlist refresh will persist the correct values.
-fn enrich_stale_series(channels: &mut Vec<Channel>) {
+fn enrich_stale_series(channels: &mut [Channel]) {
     for ch in channels.iter_mut() {
         if ch.content_type != "series" {
             continue;
@@ -2393,7 +2393,9 @@ mod tests {
             provider_id: "p1".into(),
             fetched_at: 1700000000,
         };
-        store.save_epg_programmes("p1", &[prog.clone()]).unwrap();
+        store
+            .save_epg_programmes("p1", std::slice::from_ref(&prog))
+            .unwrap();
         let result = store.get_epg_programmes("ch1", 1699999000, 1700010000).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].title, "Morning News");

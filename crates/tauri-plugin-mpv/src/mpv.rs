@@ -66,6 +66,12 @@ pub struct MpvState {
     transition: Mutex<()>,
 }
 
+impl Default for MpvState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MpvState {
     pub fn new() -> Self {
         Self {

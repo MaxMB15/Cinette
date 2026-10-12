@@ -45,7 +45,8 @@ impl DownloadStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// The status that [`Self::as_str`] names, or None for any other text.
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "queued" => Some(DownloadStatus::Queued),
             "downloading" => Some(DownloadStatus::Downloading),
@@ -134,9 +135,9 @@ mod tests {
             DownloadStatus::Recording,
             DownloadStatus::Missed,
         ] {
-            assert_eq!(DownloadStatus::from_str(s.as_str()), Some(s));
+            assert_eq!(DownloadStatus::parse(s.as_str()), Some(s));
         }
-        assert_eq!(DownloadStatus::from_str("bogus"), None);
+        assert_eq!(DownloadStatus::parse("bogus"), None);
     }
 
     #[test]
