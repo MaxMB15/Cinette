@@ -42,23 +42,24 @@ if (typeof document !== "undefined") {
 	document.addEventListener("keydown", startTab, true);
 	document.addEventListener("keyup", endTab, true);
 	document.addEventListener("pointerdown", endTab, true);
+	// The keyup goes elsewhere when the window loses focus with Tab down.
+	window.addEventListener("blur", endTab);
 	// A hot update in development loads this module again.
 	import.meta.hot?.dispose(() => {
 		document.removeEventListener("keydown", startTab, true);
 		document.removeEventListener("keyup", endTab, true);
 		document.removeEventListener("pointerdown", endTab, true);
+		window.removeEventListener("blur", endTab);
 	});
 }
 
 /**
  * Presses that shouldn't move the slider. Radix takes a press from any button,
  * and a Control-click on a Mac opens the context menu, which takes the
- * release. A finger that lands while another is down isn't the primary one.
+ * release.
  */
 const isIgnoredPress = (e: React.PointerEvent): boolean =>
-	e.button !== 0 ||
-	e.isPrimary === false ||
-	(e.ctrlKey && e.pointerType === "mouse" && getPlatform() === "macos");
+	e.button !== 0 || (e.ctrlKey && e.pointerType === "mouse" && getPlatform() === "macos");
 
 /** The pointer pressing the slider, and the element that holds its capture. */
 interface Press {
@@ -75,11 +76,13 @@ interface Press {
  * so the thin bar is easier to grab, without taking more room in the layout.
  *
  * One pointer at a time moves it, and only with the primary button. A
- * right-click, a Control-click on a Mac, a second finger, or a pen while a
- * finger is down doesn't. Moves and releases of any other pointer never
- * reach Radix or the `onPointerUp` and `onLostPointerCapture` handlers. A
- * touch or pen press captures its pointer on its own, so Radix would follow
- * an ignored one otherwise.
+ * right-click, a Control-click on a Mac, or a second finger or a pen while
+ * one is pressing it doesn't. A tap while a thumb rests elsewhere on the
+ * screen still does. Moves and releases of any other pointer never reach
+ * Radix or the `onPointerMove`, `onPointerUp` and `onLostPointerCapture`
+ * handlers, and while nothing presses the slider every pointer counts as
+ * another, so hover moves don't either. A touch or pen press captures its
+ * pointer on its own, so Radix would follow an ignored one otherwise.
  *
  * The focus ring only shows when the thumb was reached with Tab. Focus that
  * comes back to it later, such as from a closed overlay, keeps the source it

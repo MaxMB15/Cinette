@@ -188,6 +188,7 @@ describe("Controls seek bar", () => {
 		act(() => {
 			fireEvent.keyDown(document.activeElement ?? document.body, { key: "Tab" });
 			thumb.focus();
+			fireEvent.keyUp(thumb, { key: "Tab" });
 		});
 	/**
 	 * Moves focus away and gives it back without Tab, the way an overlay such
@@ -487,6 +488,16 @@ describe("Controls seek bar", () => {
 			expect(bar.onSeek).toHaveBeenCalledWith(1350);
 		});
 
+		it("takes a tap while a thumb rests elsewhere on the screen", () => {
+			const bar = renderSeekBar();
+			withWidth(bar.root());
+			// The resting thumb is the primary pointer, so the tap isn't.
+			const tap = { pointerType: "touch", pointerId: 2, isPrimary: false, clientX: 250 };
+			press(bar.track(), tap);
+			release(bar.track(), tap);
+			expect(bar.onSeek).toHaveBeenCalledWith(450);
+		});
+
 		it("ignores a pen while a finger is down, though both are primary", () => {
 			const bar = renderSeekBar();
 			withWidth(bar.root());
@@ -523,6 +534,12 @@ describe("Controls seek bar", () => {
 			expect(bar.valueNow()).toBe(5);
 			release(bar.track(), { clientX: 750 });
 			expect(bar.onSeek).not.toHaveBeenCalled();
+			// The release ended the dropped drag, so the arrows seek again once
+			// Tab brings focus back. The press left it on the thumb.
+			act(() => screen.getByRole("button", { name: "Stop" }).focus());
+			tabTo(bar.thumb());
+			fireEvent.keyDown(bar.thumb(), { key: "ArrowRight" });
+			expect(bar.onSeek).toHaveBeenCalledWith(6);
 		});
 
 		it("starts clean when the bar comes back after going away mid-drag", () => {
