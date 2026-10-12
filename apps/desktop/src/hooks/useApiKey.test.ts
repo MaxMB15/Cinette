@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deferred } from "@/test/deferred";
@@ -21,7 +22,8 @@ const renderKey = async (service: ApiKeyService) => {
 	return view;
 };
 
-type KeyView = Awaited<ReturnType<typeof renderKey>>;
+/** Any rendered hook, whatever props it takes. */
+type KeyView = Pick<Awaited<ReturnType<typeof renderKey>>, "result">;
 
 const type = (view: KeyView, value: string) => {
 	act(() => view.result.current.setValue(value));
@@ -51,6 +53,7 @@ const LATE_LOADS = [
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 describe("useApiKey loading", () => {
@@ -105,6 +108,23 @@ describe("useApiKey loading", () => {
 		type(view, "other-key");
 
 		expect(service.load).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the key from the second load when Strict Mode loads twice", async () => {
+		const first = deferred<string | null>();
+		const second = deferred<string | null>();
+		const service = makeService();
+		service.load.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const view = renderHook(() => useApiKey(service), { wrapper: StrictMode });
+		expect(service.load).toHaveBeenCalledTimes(2);
+
+		await act(async () => second.resolve("saved-key"));
+		await act(async () => first.reject(new Error("store")));
+		expect(view.result.current).toMatchObject({
+			value: "saved-key",
+			saved: "saved-key",
+			loadFailed: false,
+		});
 	});
 
 	it.each(LATE_LOADS)("ignores a load that %s after a save", async (_, settle) => {
@@ -162,6 +182,21 @@ describe("useApiKey loading", () => {
 			});
 		}
 	);
+
+	it("takes the key a new service loads after a save to the old one", async () => {
+		const oldService = makeService();
+		const newService = makeService("other-key");
+		const view = renderHook(({ service }) => useApiKey(service), {
+			initialProps: { service: oldService as ApiKeyService },
+		});
+		await act(async () => {});
+		type(view, "new-key");
+		await save(view);
+
+		view.rerender({ service: newService });
+		await act(async () => {});
+		expect(view.result.current).toMatchObject({ saved: "other-key", dirty: true });
+	});
 
 	it("doesn't count spaces around the saved key as a change", async () => {
 		const view = await renderKey(makeService("saved-key"));
@@ -408,7 +443,8 @@ describe("useApiKey saving", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	it("shows Saved even when reporting the save throws", async () => {
+	it("shows Saved and logs the error when reporting the save throws", async () => {
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 		const service = makeService();
 		service.onSaved.mockImplementation(() => {
 			throw new Error("listener");
@@ -416,11 +452,12 @@ describe("useApiKey saving", () => {
 		const view = await renderKey(service);
 		type(view, "new-key");
 
-		let thrown: unknown;
-		await act(() => view.result.current.save().catch((e: unknown) => void (thrown = e)));
-
-		expect(thrown).toEqual(new Error("listener"));
+		await save(view);
 		expect(view.result.current.saveStatus).toBe("saved");
+		expect(logged).toHaveBeenCalledExactlyOnceWith(
+			"Couldn't report the saved key",
+			new Error("listener")
+		);
 	});
 
 	it("stops the Saved timer when the field goes", async () => {

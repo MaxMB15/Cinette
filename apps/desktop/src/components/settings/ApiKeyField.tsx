@@ -100,8 +100,9 @@ const SaveLabel = ({ field, name }: { field: ApiKeyState; name: string }) => {
 				</span>
 			);
 	}
-	// Clearing the field and saving removes the key, so the button says so.
-	const action = !field.value.trim() && field.saved ? "Remove" : "Save";
+	// Saving a blank field removes the key, so the button says so. A key that
+	// couldn't be read may still be there, so it can be removed too.
+	const action = !field.value.trim() && (field.saved || field.loadFailed) ? "Remove" : "Save";
 	return (
 		<>
 			{action}
@@ -113,7 +114,7 @@ const SaveLabel = ({ field, name }: { field: ApiKeyState; name: string }) => {
 /**
  * A labeled field for an API key, with Save, Test and a show or hide toggle.
  * Enter saves. Save turns into Remove when the field is cleared while a key
- * is saved. The line under the field says how the last save or check went,
+ * is saved, or while the saved key couldn't be read. The line under the field says how the last save or check went,
  * and screen readers hear it as it changes.
  */
 export const ApiKeyField = ({
@@ -187,8 +188,13 @@ export const ApiKeyField = ({
 					size="sm"
 					variant="secondary"
 					aria-disabled={!canSave || field.saveStatus === "saving" || undefined}
-					// Dim, with no hover or pointer, as a disabled button looks.
-					className={canSave ? undefined : "cursor-default opacity-50 hover:bg-secondary"}
+					// Dim, with no hover or pointer, as a disabled button looks. It
+					// brightens while focused from the keyboard so the ring shows.
+					className={
+						canSave
+							? undefined
+							: "cursor-default opacity-50 hover:bg-secondary focus-visible:opacity-100"
+					}
 				>
 					<SaveLabel field={field} name={name} />
 				</Button>

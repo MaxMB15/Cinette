@@ -65,8 +65,9 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 	const generation = useRef(0);
 	const edited = useRef(false);
 	const saving = useRef(false);
-	// Once a save lands, the key that was loading is out of date.
-	const savedOnce = useRef(false);
+	// The service a save last went through. Its key is out of date once it
+	// loads, but a new service's key isn't.
+	const savedFor = useRef<ApiKeyService | null>(null);
 	const alive = useRef(true);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -80,7 +81,7 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		// Each run drops its own load when it ends, so a load from an earlier
 		// run, or from Strict Mode's first one, can't land after a newer one.
 		let current = true;
-		const isStale = () => !current || savedOnce.current;
+		const isStale = () => !current || savedFor.current === service;
 		service
 			.load()
 			.then((key) => {
@@ -119,7 +120,7 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		setSaveStatus("saving");
 		try {
 			await service.save(key);
-			savedOnce.current = true;
+			savedFor.current = service;
 		} catch {
 			if (alive.current) setSaveStatus(generation.current === started ? "error" : "idle");
 			return;
@@ -140,7 +141,13 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 				setSaveStatus("idle");
 			}
 		}
-		service.onSaved?.(key);
+		// The key is saved either way, so a listener that throws doesn't make
+		// the save look failed.
+		try {
+			service.onSaved?.(key);
+		} catch (e) {
+			console.error("Couldn't report the saved key", e);
+		}
 	}, [service, value]);
 
 	const test = useCallback(async () => {

@@ -230,6 +230,8 @@ describe("Settings when it opens", () => {
 		expect(keyField("Gemini").getByRole("status")).toHaveTextContent(
 			"Couldn't read the saved key"
 		);
+		// The key may still be saved, so a blank field offers to remove it.
+		expect(keyButton("Gemini", "Remove")).not.toHaveAttribute("aria-disabled");
 		expect(folderInput()).toHaveValue("");
 		expect(concurrencyInput()).toHaveValue(3);
 	});

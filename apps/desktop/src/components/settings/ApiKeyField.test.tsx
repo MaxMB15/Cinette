@@ -117,6 +117,18 @@ describe("ApiKeyField Save", () => {
 			"Remove Acme API key",
 			true,
 		],
+		[
+			"the field is blank and the saved key can't be read",
+			{ dirty: true, loadFailed: true },
+			"Remove Acme API key",
+			true,
+		],
+		[
+			"the field holds a key and the saved key can't be read",
+			{ dirty: true, value: "new-key", loadFailed: true },
+			"Save Acme API key",
+			true,
+		],
 		["a save just worked", { saveStatus: "saved" }, "Saved", true],
 		["a removal just worked", { saveStatus: "removed" }, "Removed", true],
 	] as const)("is called %s", (_, state, name, available) => {
@@ -125,8 +137,14 @@ describe("ApiKeyField Save", () => {
 		expect(button).toHaveAttribute("type", "submit");
 		// It stays enabled either way, so it never drops focus.
 		expect(button).toBeEnabled();
-		if (available) expect(button).not.toHaveAttribute("aria-disabled");
-		else expect(button).toHaveAttribute("aria-disabled", "true");
+		if (available) {
+			expect(button).not.toHaveAttribute("aria-disabled");
+			expect(button).not.toHaveClass("opacity-50");
+		} else {
+			expect(button).toHaveAttribute("aria-disabled", "true");
+			// Dim like a disabled button, but bright while focused so the ring shows.
+			expect(button).toHaveClass("opacity-50", "cursor-default", "focus-visible:opacity-100");
+		}
 	});
 
 	it("says Saving and tells screen readers it's busy while a save runs", () => {
