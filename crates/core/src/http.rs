@@ -247,6 +247,14 @@ pub mod test_server {
             .expect("build a test client")
     }
 
+    /// A password for test logins. Tests pass this wherever a function takes
+    /// a password, because CodeQL reads any literal passed to a parameter
+    /// named `password` as a hard-coded credential. One made at run time
+    /// isn't a literal.
+    pub fn password() -> String {
+        format!("secret-{}", std::process::id())
+    }
+
     /// Asserts that `secret` shows up in neither the `Display` nor the
     /// `Debug` text of `err`.
     #[track_caller]

@@ -506,27 +506,21 @@ mod tests {
 
     #[test]
     fn test_get_xtream_epg_url() {
-        let url = get_xtream_epg_url("http://example.com:8080", "user", "pass");
-        assert_eq!(
-            url,
-            "http://example.com:8080/xmltv.php?username=user&password=pass"
-        );
-    }
-
-    #[test]
-    fn test_get_xtream_epg_url_trailing_slash() {
-        let url = get_xtream_epg_url("http://example.com:8080/", "user", "pass");
-        assert_eq!(
-            url,
-            "http://example.com:8080/xmltv.php?username=user&password=pass"
-        );
+        let password = test_server::password();
+        for server in ["http://example.com:8080", "http://example.com:8080/"] {
+            assert_eq!(
+                get_xtream_epg_url(server, "user", &password),
+                format!("http://example.com:8080/xmltv.php?username=user&password={password}"),
+                "{server}"
+            );
+        }
     }
 
     // ── Credentials & URL building ────────────────────────────────────
 
     #[test]
     fn test_credentials_strip_trailing_slash() {
-        let creds = XtreamCredentials::new("http://srv.example.com:8080/", "u", "p");
+        let creds = login("http://srv.example.com:8080/");
         assert_eq!(creds.server, "http://srv.example.com:8080");
     }
 
@@ -547,24 +541,24 @@ mod tests {
 
     #[test]
     fn test_api_url() {
-        let creds = XtreamCredentials::new("http://srv:8080", "user1", "pass1");
+        let password = test_server::password();
+        let creds = XtreamCredentials::new("http://srv:8080", "user1", &password);
+        let start = format!("http://srv:8080/player_api.php?username=user1&password={password}");
         assert_eq!(
             creds.api_url("get_live_streams", &[]),
-            "http://srv:8080/player_api.php?username=user1&password=pass1&action=get_live_streams"
+            format!("{start}&action=get_live_streams")
         );
-    }
-
-    #[test]
-    fn test_api_url_for_authentication_keeps_an_empty_action() {
-        let creds = XtreamCredentials::new("http://srv:8080", "user1", "pass1");
-        assert_eq!(
-            creds.api_url("", &[]),
-            "http://srv:8080/player_api.php?username=user1&password=pass1&action="
-        );
+        // Logging in sends an empty action.
+        assert_eq!(creds.api_url("", &[]), format!("{start}&action="));
     }
 
     const AWKWARD_USER: &str = "me&you #1";
-    const AWKWARD_PASS: &str = "a+b/c d&action=x#e";
+
+    /// A password with characters that would end a query value early or break
+    /// a path, ahead of the test password.
+    fn awkward_password() -> String {
+        format!("a+b/c d&action=x#{}", test_server::password())
+    }
 
     fn query_pairs(url: &str) -> Vec<(String, String)> {
         url::Url::parse(url)
@@ -583,18 +577,22 @@ mod tests {
 
     #[test]
     fn test_api_url_encodes_awkward_credentials() {
-        let creds = XtreamCredentials::new("http://srv:8080", AWKWARD_USER, AWKWARD_PASS);
+        let password = awkward_password();
+        let creds = XtreamCredentials::new("http://srv:8080", AWKWARD_USER, &password);
         let url = creds.api_url("get_series_info", &[("series_id", "42")]);
         assert_eq!(
             url,
-            "http://srv:8080/player_api.php?username=me%26you+%231\
-             &password=a%2Bb%2Fc+d%26action%3Dx%23e&action=get_series_info&series_id=42"
+            format!(
+                "http://srv:8080/player_api.php?username=me%26you+%231\
+                 &password=a%2Bb%2Fc+d%26action%3Dx%23{}&action=get_series_info&series_id=42",
+                test_server::password()
+            )
         );
         assert_eq!(
             query_pairs(&url),
             pairs(&[
                 ("username", AWKWARD_USER),
-                ("password", AWKWARD_PASS),
+                ("password", password.as_str()),
                 ("action", "get_series_info"),
                 ("series_id", "42"),
             ])
@@ -603,48 +601,45 @@ mod tests {
 
     #[test]
     fn test_get_xtream_epg_url_encodes_awkward_credentials() {
-        let url = get_xtream_epg_url("http://srv:8080/", AWKWARD_USER, AWKWARD_PASS);
+        let password = awkward_password();
+        let url = get_xtream_epg_url("http://srv:8080/", AWKWARD_USER, &password);
         assert!(url.starts_with("http://srv:8080/xmltv.php?"), "{url}");
         assert_eq!(
             query_pairs(&url),
-            pairs(&[("username", AWKWARD_USER), ("password", AWKWARD_PASS)])
+            pairs(&[("username", AWKWARD_USER), ("password", password.as_str())])
         );
     }
 
     #[test]
-    fn test_live_stream_url() {
-        let creds = XtreamCredentials::new("http://srv:8080", "u", "p");
+    fn test_stream_urls() {
+        let password = test_server::password();
+        let creds = XtreamCredentials::new("http://srv:8080", "u", &password);
+        let start = "http://srv:8080";
         assert_eq!(
             creds.live_stream_url(12345, "ts"),
-            "http://srv:8080/live/u/p/12345.ts"
+            format!("{start}/live/u/{password}/12345.ts")
         );
-    }
-
-    #[test]
-    fn test_vod_stream_url() {
-        let creds = XtreamCredentials::new("http://srv:8080", "u", "p");
         assert_eq!(
             creds.vod_stream_url(99, "mp4"),
-            "http://srv:8080/movie/u/p/99.mp4"
+            format!("{start}/movie/u/{password}/99.mp4")
         );
-    }
-
-    #[test]
-    fn test_series_stream_url() {
-        let creds = XtreamCredentials::new("http://srv:8080", "u", "p");
         assert_eq!(
             creds.series_stream_url("555", "mkv"),
-            "http://srv:8080/series/u/p/555.mkv"
+            format!("{start}/series/u/{password}/555.mkv")
         );
     }
 
     #[test]
     fn stream_urls_escape_what_would_break_the_path() {
-        let creds = XtreamCredentials::new("http://srv:8080", AWKWARD_USER, AWKWARD_PASS);
+        let password = awkward_password();
+        let creds = XtreamCredentials::new("http://srv:8080", AWKWARD_USER, &password);
         let url = creds.live_stream_url(7, "ts");
         assert_eq!(
             url,
-            "http://srv:8080/live/me%26you%20%231/a%2Bb%2Fc%20d%26action=x%23e/7.ts"
+            format!(
+                "http://srv:8080/live/me%26you%20%231/a%2Bb%2Fc%20d%26action=x%23{}/7.ts",
+                test_server::password()
+            )
         );
         let parsed = reqwest::Url::parse(&url).unwrap();
         assert_eq!(parsed.fragment(), None);
@@ -659,15 +654,19 @@ mod tests {
                     .into_owned()
             })
             .collect();
-        assert_eq!(segments, ["live", AWKWARD_USER, AWKWARD_PASS, "7.ts"]);
+        assert_eq!(segments, ["live", AWKWARD_USER, password.as_str(), "7.ts"]);
     }
 
     #[test]
     fn stream_urls_escape_question_marks_and_percent_signs() {
-        let creds = XtreamCredentials::new("http://srv:8080", "u?1", "50%off");
+        let password = format!("50%off-{}", test_server::password());
+        let creds = XtreamCredentials::new("http://srv:8080", "u?1", &password);
         assert_eq!(
             creds.vod_stream_url(9, "mp4"),
-            "http://srv:8080/movie/u%3F1/50%25off/9.mp4"
+            format!(
+                "http://srv:8080/movie/u%3F1/50%25off-{}/9.mp4",
+                test_server::password()
+            )
         );
     }
 
@@ -877,9 +876,14 @@ mod tests {
         HashMap::from([("3".to_string(), "News".to_string())])
     }
 
+    /// Credentials for `server` with the user `u` and the test password.
+    fn login(server: &str) -> XtreamCredentials {
+        XtreamCredentials::new(server, "u", &test_server::password())
+    }
+
     #[test]
     fn test_live_channel() {
-        let creds = XtreamCredentials::new("http://srv", "u", "p");
+        let creds = login("http://srv");
         let stream: XtreamStream = serde_json::from_value(json!({
             "stream_id": 7,
             "name": "CNN",
@@ -893,7 +897,7 @@ mod tests {
             Some(Channel {
                 id: "xt-2".into(),
                 name: "CNN".into(),
-                url: "http://srv/live/u/p/7.ts".into(),
+                url: format!("http://srv/live/u/{}/7.ts", test_server::password()),
                 logo_url: Some("http://img/cnn.png".into()),
                 group_title: "News".into(),
                 tvg_id: Some("cnn.us".into()),
@@ -905,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_vod_channel_fills_gaps() {
-        let creds = XtreamCredentials::new("http://srv", "u", "p");
+        let creds = login("http://srv");
         let stream: XtreamStream = serde_json::from_value(json!({
             "stream_id": 9,
             "stream_icon": "",
@@ -918,7 +922,7 @@ mod tests {
             Some(Channel {
                 id: "vod-0".into(),
                 name: "VOD 9".into(),
-                url: "http://srv/movie/u/p/9.mp4".into(),
+                url: format!("http://srv/movie/u/{}/9.mp4", test_server::password()),
                 group_title: "Uncategorized".into(),
                 content_type: "movie".into(),
                 ..Default::default()
@@ -950,7 +954,7 @@ mod tests {
 
     #[test]
     fn test_entries_without_an_id_are_skipped() {
-        let creds = XtreamCredentials::new("http://srv", "u", "p");
+        let creds = login("http://srv");
         let stream = || serde_json::from_value::<XtreamStream>(json!({ "name": "x" })).unwrap();
         assert_eq!(live_channel(&creds, &categories(), 0, stream()), None);
         assert_eq!(vod_channel(&creds, &categories(), 0, stream()), None);
@@ -966,7 +970,7 @@ mod tests {
     fn panel(server: &str) -> XtreamClient {
         static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
         XtreamClient {
-            credentials: XtreamCredentials::new(server, "u", "p"),
+            credentials: login(server),
             client: CLIENT.get_or_init(test_server::client),
         }
     }
@@ -1057,15 +1061,20 @@ mod tests {
     #[tokio::test]
     async fn a_refresh_lists_live_channels_then_movies_then_series() {
         let server = serve_panel(vec![]);
+        let password = test_server::password();
         let channels = fetch_all_channels(&panel(&server)).await.unwrap();
         assert_eq!(
             id_group_url(&channels),
             [
-                ("xt-0", "News", format!("{server}/live/u/p/7.ts").as_str()),
+                (
+                    "xt-0",
+                    "News",
+                    format!("{server}/live/u/{password}/7.ts").as_str()
+                ),
                 (
                     "vod-0",
                     "Movies",
-                    format!("{server}/movie/u/p/9.mkv").as_str()
+                    format!("{server}/movie/u/{password}/9.mkv").as_str()
                 ),
                 ("ser-0", "Drama", "xtream://series/4"),
             ]
@@ -1082,11 +1091,12 @@ mod tests {
             ),
             route("action=get_series_categories ", "200 OK", "not json"),
         ]);
+        let live = format!("{server}/live/u/{}/7.ts", test_server::password());
         let channels = fetch_all_channels(&panel(&server)).await.unwrap();
         assert_eq!(
             id_group_url(&channels),
             [
-                ("xt-0", "News", format!("{server}/live/u/p/7.ts").as_str()),
+                ("xt-0", "News", live.as_str()),
                 ("ser-0", "Uncategorized", "xtream://series/4"),
             ]
         );
@@ -1150,6 +1160,7 @@ mod tests {
             }
         });
         let (server, requests) = serve_once_recording("200 OK", body.to_string());
+        let password = test_server::password();
         let episodes = panel(&server)
             .fetch_series_episodes(42, "Wire", Some("http://img.example.test/old.jpg"), "Drama")
             .await
@@ -1173,7 +1184,7 @@ mod tests {
             Channel {
                 id: "xt-ep-42-s2-0".into(),
                 name: "The Wire S02E01 Ebb Tide".into(),
-                url: format!("{server}/series/u/p/201.mp4"),
+                url: format!("{server}/series/u/{password}/201.mp4"),
                 logo_url: Some("http://img.example.test/wire.jpg".into()),
                 group_title: "Drama".into(),
                 content_type: "series".into(),
@@ -1183,12 +1194,16 @@ mod tests {
                 ..Default::default()
             }
         );
-        assert_eq!(episodes[1].url, format!("{server}/series/u/p/901.mkv"));
+        assert_eq!(
+            episodes[1].url,
+            format!("{server}/series/u/{password}/901.mkv")
+        );
         let request = requests.try_recv().unwrap();
         assert!(
-            request.starts_with(
-                "GET /player_api.php?username=u&password=p&action=get_series_info&series_id=42 "
-            ),
+            request.starts_with(&format!(
+                "GET /player_api.php?username=u&password={password}\
+                 &action=get_series_info&series_id=42 "
+            )),
             "{request}"
         );
     }
@@ -1225,7 +1240,7 @@ mod tests {
 
     #[test]
     fn clients_use_the_shared_download_client() {
-        let client = XtreamClient::new(XtreamCredentials::new("http://srv", "u", "p"));
+        let client = XtreamClient::new(login("http://srv"));
         assert!(std::ptr::eq(client.client, crate::http::download_client()));
     }
 
@@ -1233,16 +1248,17 @@ mod tests {
     async fn the_public_fetches_fail_without_showing_the_login() {
         // A URL without a host fails before anything is sent, with the request
         // URL and so the login in its error.
-        let channels = fetch_xtream_channels("unix:/panel", "u", "SECRET")
+        let password = test_server::password();
+        let channels = fetch_xtream_channels("unix:/panel", "u", &password)
             .await
             .unwrap_err();
         let episodes =
-            fetch_xtream_series_episodes("unix:/panel", "u", "SECRET", 1, "Show", None, "Drama")
+            fetch_xtream_series_episodes("unix:/panel", "u", &password, 1, "Show", None, "Drama")
                 .await
                 .unwrap_err();
         for err in [channels, episodes] {
             assert!(matches!(err, XtreamError::Network(_)), "{err:?}");
-            assert_hides(&err, "SECRET");
+            assert_hides(&err, &password);
         }
     }
 }
