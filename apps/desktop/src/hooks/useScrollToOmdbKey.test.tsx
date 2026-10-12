@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import { useRef } from "react";
-import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { OMDB_KEY_FOCUS, useScrollToOmdbKey } from "./useScrollToOmdbKey";
 
 const KeyField = () => {

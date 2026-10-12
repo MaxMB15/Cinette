@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Loader2, Tv2, MonitorPlay, Heart, Clapperboard, History, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";

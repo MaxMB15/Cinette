@@ -3,7 +3,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Channel, DownloadRecord, OmdbData, WhatsonData } from "@/lib/types";
 import { makeDownload } from "@/test/channel-fixtures";

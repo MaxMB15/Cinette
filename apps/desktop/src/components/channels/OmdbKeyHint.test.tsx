@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import type { Channel, OmdbData } from "@/lib/types";
 
 const tauri = vi.hoisted(() => ({
