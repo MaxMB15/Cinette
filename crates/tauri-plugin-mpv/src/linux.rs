@@ -972,7 +972,7 @@ fn wayland_egl_display(
 /// window and the allocation as well counted the shadow twice while the two
 /// sizes differed during a layout.
 ///
-/// It's None while `vbox` isn't laid out in the window. Only call it on the
+/// It's None until `vbox` and the window are realized. Only call it on the
 /// GLib main thread.
 fn csd_offset(window: &gtk::ApplicationWindow, vbox: &gtk::Box) -> Option<(i32, i32)> {
     use gtk::prelude::*;
