@@ -107,7 +107,7 @@ export const SubtitlePicker = ({
 		if (!delayHovered) return;
 		const handleKey = (e: KeyboardEvent) => {
 			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-			// A confirm open over the picker keeps its keys.
+			// A modal open over the picker, such as a confirm, keeps its keys.
 			if (hasOpenFocusTrap()) return;
 			e.preventDefault();
 			e.stopPropagation();

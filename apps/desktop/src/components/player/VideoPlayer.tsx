@@ -56,8 +56,9 @@ import {
 	isKeyboardFocusedControl,
 	repeatsWhenHeld,
 } from "@/lib/hotkeys";
-import { hasOpenFocusTrap } from "@/hooks/useFocusTrap";
 import { usePlayerFocus } from "@/hooks/usePlayerFocus";
+import { useSubtitleNudge } from "@/hooks/useSubtitleNudge";
+import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import { formatSkip, formatTime } from "@/lib/format";
 import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
@@ -173,7 +174,7 @@ export const PlayerView = () => {
 	const [selectedSubtitleEntry, setSelectedSubtitleEntry] = useState<SubtitleEntry | null>(null);
 	const [subtitleFontSize, setSubtitleFontSize] = useState(18);
 	const [subtitleFontFamily, setSubtitleFontFamily] = useState("system-ui, sans-serif");
-	const [subtitlePos, setSubtitlePos] = useState({ x: 50, y: 88 });
+	const [subtitlePos, setSubtitlePos] = useState(DEFAULT_SUBTITLE_POSITION);
 	const [subtitleDelay, setSubtitleDelay] = useState(0);
 	const [subtitleEditMode, setSubtitleEditMode] = useState(false);
 	const [autoplay, setAutoplay] = useState(true);
@@ -245,31 +246,7 @@ export const PlayerView = () => {
 	}, [mpv.state.currentUrl]);
 
 	// Arrow keys reposition subtitle overlay when settings pane is open
-	useEffect(() => {
-		if (!subtitleEditMode) return;
-		const handleKey = (e: KeyboardEvent) => {
-			if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
-			// A confirm open over the player keeps its keys.
-			if (hasOpenFocusTrap()) return;
-			e.preventDefault();
-			setSubtitlePos((p) => ({
-				x:
-					e.key === "ArrowLeft"
-						? Math.max(5, p.x - 2)
-						: e.key === "ArrowRight"
-							? Math.min(95, p.x + 2)
-							: p.x,
-				y:
-					e.key === "ArrowUp"
-						? Math.max(3, p.y - 2)
-						: e.key === "ArrowDown"
-							? Math.min(97, p.y + 2)
-							: p.y,
-			}));
-		};
-		window.addEventListener("keydown", handleKey);
-		return () => window.removeEventListener("keydown", handleKey);
-	}, [subtitleEditMode]);
+	useSubtitleNudge(subtitleEditMode, setSubtitlePos);
 
 	// --- Watch progress (resume support) ---
 
@@ -531,7 +508,7 @@ export const PlayerView = () => {
 		setSelectedSubtitleEntry(null);
 		setSubtitleEditMode(false);
 		setSubtitleDelay(0);
-		setSubtitlePos({ x: 50, y: 88 });
+		setSubtitlePos(DEFAULT_SUBTITLE_POSITION);
 
 		if (!activeChannel || activeChannel.contentType === "live") {
 			setEnrichedMeta(null);
