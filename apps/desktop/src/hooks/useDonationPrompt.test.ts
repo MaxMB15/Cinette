@@ -52,4 +52,33 @@ describe("useDonationPrompt", () => {
 		const stored = parseInt(localStorage.getItem(STORAGE_KEY) ?? "0", 10);
 		expect(stored).toBeGreaterThanOrEqual(before);
 	});
+
+	describe("when storage fails", () => {
+		beforeEach(() => {
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+		});
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("still shows the prompt when the timestamp can't be read", () => {
+			vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+				throw new DOMException("blocked", "SecurityError");
+			});
+			const { result } = renderHook(() => useDonationPrompt({ enabled: true }));
+			expect(result.current.shouldShow).toBe(true);
+		});
+
+		it("still closes the prompt when the timestamp can't be saved", () => {
+			vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+				throw new DOMException("full", "QuotaExceededError");
+			});
+			const { result } = renderHook(() => useDonationPrompt({ enabled: true }));
+
+			act(() => result.current.dismiss());
+
+			expect(result.current.shouldShow).toBe(false);
+		});
+	});
 });

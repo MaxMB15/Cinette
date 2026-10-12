@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
 import { CategoryFilter } from "./CategoryFilter";
 import { ChannelCard, COMPACT_ROW_HEIGHT, ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
+import { ChannelLogo } from "./ChannelLogo";
 import { useGroupHierarchy } from "@/hooks/useGroupHierarchy";
 import { RecentlyPlayedRow } from "./RecentlyPlayedRow";
 import { PinnedGroupsRow } from "./PinnedGroupsRow";
@@ -24,7 +25,7 @@ import { NoSearchResults } from "./NoSearchResults";
 import { DownloadsTab } from "./DownloadsTab";
 import { isMobilePlatform } from "@/lib/platform";
 import { usePlatform } from "@/hooks/usePlatform";
-import { getGridMarks, toPct, formatHHMM } from "./EpgTimelineBar";
+import { getGridMarks, toPct, formatHHMM } from "@/lib/epg-window";
 import { useChannels } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
@@ -36,6 +37,8 @@ import {
 } from "@/lib/tauri";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
+import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
+import { nowSeconds } from "@/lib/date";
 import type {
 	Channel,
 	Category,
@@ -72,7 +75,11 @@ const PX_PER_HOUR = 150;
  */
 const RIGHT_BUTTONS_PX = 80;
 
-const showTitle = (name: string): string => name.replace(/\s+S\d{1,3}E\d{1,3}.*/i, "").trim();
+/**
+ * The guide data of a channel that has none. One shared list keeps the prop
+ * the same between renders, so the memoized rows don't re-render for it.
+ */
+const NO_PROGRAMS: EpgProgram[] = [];
 
 const formatEpgTime = (startTime: number, now: number): string => {
 	const diff = startTime - now;
@@ -89,26 +96,6 @@ const formatEpgTime = (startTime: number, now: number): string => {
 	return (
 		d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) +
 		` ${timeStr}`
-	);
-};
-
-const EpgResultLogo = ({ url }: { url?: string }) => {
-	const [imgError, setImgError] = useState(false);
-	const showFallback = !url || imgError;
-
-	return (
-		<div className="h-8 w-8 rounded bg-secondary flex items-center justify-center overflow-hidden shrink-0">
-			{url && !imgError ? (
-				<img
-					src={url}
-					alt=""
-					className="h-full w-full object-contain"
-					loading="lazy"
-					onError={() => setImgError(true)}
-				/>
-			) : null}
-			{showFallback ? <Tv2 className="h-3.5 w-3.5 text-muted-foreground" /> : null}
-		</div>
 	);
 };
 
@@ -206,7 +193,7 @@ export const ChannelList = () => {
 
 	// Compute dynamic EPG display window: now line at 1/3 mark, 100–200 px per hour
 	const { windowStart, windowEnd } = useMemo(() => {
-		const now = Math.floor(Date.now() / 1000);
+		const now = nowSeconds();
 		// containerWidth is content-box width (inside px-3 padding).
 		// Rows inside have no extra padding, so timeline = containerWidth minus the two fixed columns.
 		const effectiveWidth = containerWidth > 0 ? containerWidth : 400;
@@ -247,7 +234,7 @@ export const ChannelList = () => {
 	const seriesShows = useMemo(() => {
 		const seen = new Map<string, Channel>();
 		for (const ch of byType.series) {
-			const title = ch.seriesTitle ?? showTitle(ch.name);
+			const title = seriesTitleOf(ch);
 			const key = seriesKey(title);
 			if (!seen.has(key)) seen.set(key, { ...ch, name: title, sources: [] });
 		}
@@ -261,7 +248,7 @@ export const ChannelList = () => {
 		const map = new Map<string, Channel[]>();
 		for (const ch of byType.series) {
 			if (!ch.url.startsWith("xtream://series/")) continue;
-			const key = seriesKey(ch.seriesTitle ?? showTitle(ch.name));
+			const key = seriesKey(seriesTitleOf(ch));
 			const list = map.get(key);
 			if (list) list.push(ch);
 			else map.set(key, [ch]);
@@ -285,20 +272,7 @@ export const ChannelList = () => {
 		[xtreamSeriesByTitle]
 	);
 
-	const movieTitles = useMemo(() => {
-		const seen = new Map<string, Channel>();
-		for (const ch of byType.movie) {
-			if (!seen.has(ch.name)) {
-				seen.set(ch.name, { ...ch, sources: [...ch.sources] });
-			} else {
-				const existing = seen.get(ch.name)!;
-				existing.sources.push(ch.url);
-				existing.sources.push(...ch.sources);
-				if (!existing.logoUrl && ch.logoUrl) existing.logoUrl = ch.logoUrl;
-			}
-		}
-		return Array.from(seen.values());
-	}, [byType.movie]);
+	const movieTitles = useMemo(() => dedupeByTitle(byType.movie), [byType.movie]);
 
 	const activeChannels = useMemo(() => {
 		if (activeTab === "favorites") return channels.filter((ch) => ch.isFavorite);
@@ -316,14 +290,7 @@ export const ChannelList = () => {
 			activeTab === "downloads"
 		)
 			return [];
-		const counts: Record<string, number> = {};
-		for (const ch of byType[activeTab as "live" | "movie"]) {
-			const key = ch.groupTitle || "";
-			counts[key] = (counts[key] ?? 0) + 1;
-		}
-		return Object.entries(counts)
-			.map(([name, channelCount]) => ({ id: name, name, channelCount }))
-			.sort((a, b) => b.channelCount - a.channelCount);
+		return categoriesByCount(byType[activeTab as "live" | "movie"]);
 	}, [byType, activeTab]);
 
 	const handleTabChange = (tab: Tab) => {
@@ -368,7 +335,7 @@ export const ChannelList = () => {
 	// Fetch EPG for all live channels: 2h past + 4h future = 6h window (generous for wider displays)
 	useEffect(() => {
 		if (activeTab !== "live" || channels.length === 0) return;
-		const now = Math.floor(Date.now() / 1000);
+		const now = nowSeconds();
 		getEpgForLiveChannels(now - 7200, now + 14400)
 			.then((progs) => {
 				const map = new Map<string, EpgProgram[]>();
@@ -389,7 +356,7 @@ export const ChannelList = () => {
 			return;
 		}
 		const timer = setTimeout(() => {
-			const now = Math.floor(Date.now() / 1000);
+			const now = nowSeconds();
 			searchEpgProgrammes(search.trim(), now)
 				.then(setEpgSearchResults)
 				.catch(() => {});
@@ -397,124 +364,65 @@ export const ChannelList = () => {
 		return () => clearTimeout(timer);
 	}, [search, activeTab]);
 
-	const getChannelPrograms = (ch: Channel): EpgProgram[] => {
-		const key = ch.tvgId ?? null;
-		if (!key) return [];
-		return epgMap.get(key) ?? [];
-	};
+	const getChannelPrograms = (ch: Channel): EpgProgram[] =>
+		(ch.tvgId && epgMap.get(ch.tvgId)) || NO_PROGRAMS;
 
-	const handlePlay = useCallback(
-		async (channel: Channel) => {
-			const currentTab = activeTab;
-			if (currentTab === "series") {
-				const showName = channel.seriesTitle ?? showTitle(channel.name);
+	/**
+	 * Opens the episode list for a show. From Downloads, which has to work
+	 * offline, the cached list stands in when the live one can't be had.
+	 */
+	const openSeries = useCallback(
+		async (channel: Channel, cacheFallback: boolean) => {
+			const showName = seriesTitleOf(channel);
+			setSeriesLoading(true);
+			try {
+				let eps: Channel[] = [];
 				if (channel.url.startsWith("xtream://series/")) {
-					setSeriesLoading(true);
 					try {
-						const eps = await fetchXtreamShowEpisodes(showName, channel);
-						setSeriesModalData({
-							showTitle: showName,
-							episodes: eps,
-							seriesChannelId: channel.id,
-						});
+						eps = await fetchXtreamShowEpisodes(showName, channel);
 					} catch (e) {
-						console.error("[Xtream] failed to fetch series episodes:", e);
-					} finally {
-						setSeriesLoading(false);
+						if (!cacheFallback) throw e;
+						console.warn("[ChannelList] live episode fetch failed, using cache:", e);
 					}
 				} else {
-					const eps = byType.series.filter(
-						(ep) => (ep.seriesTitle ?? showTitle(ep.name)) === showName
-					);
-					setSeriesModalData({
-						showTitle: showName,
-						episodes: eps,
-						seriesChannelId: channel.id,
-					});
+					eps = byType.series.filter((ep) => seriesTitleOf(ep) === showName);
 				}
-			} else if (currentTab === "movie" && channel.sources.length > 0) {
+				if (cacheFallback && eps.length === 0) {
+					eps = await getCachedSeriesEpisodes(channel.id);
+				}
+				setSeriesModalData({
+					showTitle: showName,
+					episodes: eps,
+					seriesChannelId: channel.id,
+				});
+			} catch (e) {
+				console.error("[ChannelList] failed to load series episodes:", e);
+			} finally {
+				setSeriesLoading(false);
+			}
+		},
+		[byType.series, fetchXtreamShowEpisodes]
+	);
+
+	// Shows open their episode list and movies with sources open their drawer.
+	// Favorites and Downloads mix types, so there the channel's own type decides.
+	const handlePlay = useCallback(
+		(channel: Channel) => {
+			const mixed = activeTab === "favorites" || activeTab === "downloads";
+			if (activeTab === "series" || (mixed && channel.contentType === "series")) {
+				void openSeries(channel, activeTab === "downloads");
+			} else if (
+				(activeTab === "movie" || (mixed && channel.contentType === "movie")) &&
+				channel.sources.length > 0
+			) {
 				setSelectedMovie(channel);
-			} else if (currentTab === "downloads") {
-				if (channel.contentType === "series") {
-					const showName = channel.seriesTitle ?? showTitle(channel.name);
-					setSeriesLoading(true);
-					try {
-						let eps: Channel[] = [];
-						if (channel.url.startsWith("xtream://series/")) {
-							// Prefer a live fetch; fall back to the offline cache.
-							try {
-								eps = await fetchXtreamShowEpisodes(showName, channel);
-							} catch (e) {
-								console.warn(
-									"[Downloads] live episode fetch failed, using cache:",
-									e
-								);
-							}
-							if (eps.length === 0) eps = await getCachedSeriesEpisodes(channel.id);
-						} else {
-							eps = byType.series.filter(
-								(ep) => (ep.seriesTitle ?? showTitle(ep.name)) === showName
-							);
-							if (eps.length === 0) eps = await getCachedSeriesEpisodes(channel.id);
-						}
-						setSeriesModalData({
-							showTitle: showName,
-							episodes: eps,
-							seriesChannelId: channel.id,
-						});
-					} catch (e) {
-						console.error("[Downloads] failed to load series episodes:", e);
-					} finally {
-						setSeriesLoading(false);
-					}
-				} else if (channel.contentType === "movie" && channel.sources.length > 0) {
-					setSelectedMovie(channel);
-				} else {
-					navigate("/player", {
-						state: { url: channel.url, channelName: channel.name, channel },
-					});
-				}
-			} else if (currentTab === "favorites") {
-				if (channel.contentType === "series") {
-					const showName = channel.seriesTitle ?? showTitle(channel.name);
-					if (channel.url.startsWith("xtream://series/")) {
-						setSeriesLoading(true);
-						try {
-							const eps = await fetchXtreamShowEpisodes(showName, channel);
-							setSeriesModalData({
-								showTitle: showName,
-								episodes: eps,
-								seriesChannelId: channel.id,
-							});
-						} catch (e) {
-							console.error("[Xtream] failed to fetch series episodes:", e);
-						} finally {
-							setSeriesLoading(false);
-						}
-					} else {
-						const eps = byType.series.filter(
-							(ep) => (ep.seriesTitle ?? showTitle(ep.name)) === showName
-						);
-						setSeriesModalData({
-							showTitle: showName,
-							episodes: eps,
-							seriesChannelId: channel.id,
-						});
-					}
-				} else if (channel.contentType === "movie" && channel.sources.length > 0) {
-					setSelectedMovie(channel);
-				} else {
-					navigate("/player", {
-						state: { url: channel.url, channelName: channel.name, channel },
-					});
-				}
 			} else {
 				navigate("/player", {
 					state: { url: channel.url, channelName: channel.name, channel },
 				});
 			}
 		},
-		[activeTab, byType.series, navigate, fetchXtreamShowEpisodes]
+		[activeTab, navigate, openSeries]
 	);
 
 	const handleEpgResultPlay = useCallback(
@@ -535,13 +443,10 @@ export const ChannelList = () => {
 	const handleHistoryPlay = useCallback(
 		(entry: WatchHistoryEntry) => {
 			if (entry.contentType === "series") {
-				// Derive series title: try matching channel by ID first, then regex extraction
-				const ch = byType.series.find((c) => c.id === entry.channelId);
-				const seriesName = ch?.seriesTitle ?? showTitle(entry.channelName);
+				// The history names the show the same way the Recently Played row does.
+				const seriesName = entry.seriesTitle ?? seriesTitleOf({ name: entry.channelName });
 				// Find the series container to handle Xtream lazy-load
-				const seriesContainer = byType.series.find(
-					(s) => (s.seriesTitle ?? showTitle(s.name)) === seriesName
-				);
+				const seriesContainer = byType.series.find((s) => seriesTitleOf(s) === seriesName);
 				const seriesChannelId = seriesContainer?.id ?? entry.channelId;
 				// Play the watched episode directly; if it's no longer listed, fall
 				// back to the series picker.
@@ -571,11 +476,7 @@ export const ChannelList = () => {
 						.catch((e) => console.error("[Xtream] failed to fetch series episodes:", e))
 						.finally(() => setSeriesLoading(false));
 				} else {
-					playOrPick(
-						byType.series.filter(
-							(ep) => (ep.seriesTitle ?? showTitle(ep.name)) === seriesName
-						)
-					);
+					playOrPick(byType.series.filter((ep) => seriesTitleOf(ep) === seriesName));
 				}
 			} else if (entry.contentType === "movie") {
 				const movie = byType.movie.find((ch) => ch.name === entry.channelName);
@@ -648,7 +549,7 @@ export const ChannelList = () => {
 		navState.level === "group" ||
 		activeTab === "favorites" ||
 		activeTab === "history";
-	const nowSec = Math.floor(Date.now() / 1000);
+	const nowSec = nowSeconds();
 
 	// Grid marks for sticky header and background gridlines (uses same window as ChannelCard)
 	const headerGridMarks = useMemo(
@@ -811,7 +712,6 @@ export const ChannelList = () => {
 								<RecentlyPlayedRow
 									contentType={contentType as "live" | "movie" | "series"}
 									onPlay={handleHistoryPlay}
-									channels={channels}
 								/>
 								<PinnedGroupsRow
 									pinnedGroups={hierarchy.pinnedGroups}
@@ -829,18 +729,14 @@ export const ChannelList = () => {
 												groupCount: groups.length,
 												channelCount: groups.reduce(
 													(sum, g) =>
-														sum +
-														(categories.find((c) => c.name === g)
-															?.channelCount ?? 0),
+														sum + channelCountFor(categories, g),
 													0
 												),
 											};
 										})}
 										topLevelGroups={hierarchy.topLevelGroups.map((name) => ({
 											name,
-											channelCount:
-												categories.find((c) => c.name === name)
-													?.channelCount ?? 0,
+											channelCount: channelCountFor(categories, name),
 										}))}
 										onSelectCategory={(name) =>
 											setNavState({ level: "category", name })
@@ -1203,7 +1099,13 @@ export const ChannelList = () => {
 										onClick={() => handleEpgResultPlay(result.channelId)}
 										className="group flex items-center gap-3 w-full px-2 py-2 rounded-lg hover:bg-accent transition-colors text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 									>
-										<EpgResultLogo url={result.channelLogoUrl} />
+										<ChannelLogo
+											url={result.channelLogoUrl}
+											className="h-8 w-8 rounded"
+											fallback={
+												<Tv2 className="h-3.5 w-3.5 text-muted-foreground" />
+											}
+										/>
 
 										<div className="flex-1 min-w-0">
 											<p className="text-sm leading-tight truncate">

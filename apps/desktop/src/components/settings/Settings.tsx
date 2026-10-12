@@ -979,11 +979,23 @@ export const Settings = ({ updateState }: SettingsProps) => {
 											"Check for Updates"
 										)}
 									</Button>
-									{!updateState.checking && !updateState.update && (
-										<span className="text-xs text-muted-foreground">
-											You're up to date.
-										</span>
-									)}
+									{/* Always rendered, so screen readers announce the result when it appears. */}
+									<span role="status" className="text-xs">
+										{!updateState.checking &&
+											!updateState.update &&
+											(updateState.checkError ? (
+												<span
+													className="text-destructive"
+													title={updateState.checkError}
+												>
+													Couldn't check for updates.
+												</span>
+											) : (
+												<span className="text-muted-foreground">
+													You're up to date.
+												</span>
+											))}
+									</span>
 								</div>
 
 								{updateState.update && (

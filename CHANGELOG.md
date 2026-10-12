@@ -24,6 +24,13 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Closing the player in full screen left the window in full screen, and the player came back in full screen the next time it opened. Closing the player now always leaves full screen (#96).
 - A movie or episode that kept playing after you closed the player didn't save where you were, so it resumed from the moment you closed the player (#88).
+- Holding a subtitle delay button keeps stepping the delay again (#104).
+- Settings says when the update check fails, instead of showing the app as up to date (#104).
+- Clear all in recently played clears that row's whole history, and dismissing a show removes every episode you watched, including ones older than the row lists. Each row now loads its own type, so a run of live channels no longer pushes movies and series out of their rows (#104).
+- A provider whose playlist or guide refresh fails waits longer before each new try instead of trying every minute, which for Xtream meant a login a minute. A slow refresh is no longer started a second time while it runs (#104).
+- The splash screen and the donation prompt work when the browser storage is blocked, and the splash screen finishes even when a startup step fails (#104).
+- Pressing Enter on a group's pin button pins the group instead of opening it, and Enter on a channel row's favorite button no longer starts the channel (#104).
+- Watch history rows play from the keyboard and show their delete button on focus. Screen readers now find the favorite button on movie and series posters, and name the subtitle picker buttons and the group pin button. Enter or Space steps the subtitle delay (#104).
 
 ### Fixed
 

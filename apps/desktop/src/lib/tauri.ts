@@ -211,13 +211,30 @@ export const recordPlayStart = (
 export const recordPlayEnd = (channelId: string, durationSeconds: number): Promise<void> =>
 	invoke<void>("record_play_end", { channelId, durationSeconds });
 
-export const getWatchHistory = (limit: number): Promise<WatchHistoryEntry[]> =>
-	invoke<WatchHistoryEntry[]>("get_watch_history", { limit });
+/** The newest `limit` history entries, only those of `contentType` when given. */
+export const getWatchHistory = (
+	limit: number,
+	contentType?: WatchHistoryEntry["contentType"]
+): Promise<WatchHistoryEntry[]> =>
+	invoke<WatchHistoryEntry[]>("get_watch_history", { limit, contentType });
 
 export const deleteHistoryEntry = (channelId: string): Promise<void> =>
 	invoke<void>("delete_history_entry", { channelId });
 
+/**
+ * Deletes the history of every episode of a show, matched by the
+ * `seriesTitle` the history entries carry. Episodes older than any loaded
+ * page go too.
+ */
+export const deleteHistorySeries = (seriesTitle: string): Promise<void> =>
+	invoke<void>("delete_history_series", { seriesTitle });
+
 export const clearWatchHistory = (): Promise<void> => invoke<void>("clear_watch_history");
+
+/** Deletes the history of one content type. Resume positions are kept. */
+export const clearWatchHistoryOfType = (
+	contentType: WatchHistoryEntry["contentType"]
+): Promise<void> => invoke<void>("clear_watch_history_of_type", { contentType });
 
 // --- Playback Position (resume) Commands ---
 

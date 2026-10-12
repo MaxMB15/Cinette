@@ -3,6 +3,8 @@
 
 import { Pin, PinOff, ChevronRight } from "lucide-react";
 import type { Category } from "@/lib/types";
+import { channelCountFor } from "@/lib/channels";
+import { isFromInnerButton } from "@/lib/utils";
 
 interface GroupListProps {
 	groups: string[];
@@ -19,37 +21,36 @@ export const GroupList = ({
 	isPinned,
 	onTogglePin,
 }: GroupListProps) => {
-	const getChannelCount = (groupName: string) =>
-		categories.find((c) => c.name === groupName)?.channelCount ?? 0;
-
 	return (
 		<div className="px-4 pt-2 flex flex-col gap-1">
 			{groups.map((name) => (
+				// The group's name is the button that opens it, and the pin sits
+				// beside it rather than inside, so each is reached on its own. A
+				// click elsewhere on the row opens the group too.
 				<div
 					key={name}
-					role="button"
-					tabIndex={0}
-					className="flex items-center justify-between p-2.5 rounded-lg bg-secondary hover:bg-accent transition-colors cursor-pointer"
-					onClick={() => onSelectGroup(name)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault();
-							onSelectGroup(name);
-						}
+					className="flex items-center justify-between rounded-lg bg-secondary hover:bg-accent transition-colors cursor-pointer"
+					onClick={(e) => {
+						if (!isFromInnerButton(e)) onSelectGroup(name);
 					}}
 				>
-					<div className="flex items-center gap-2">
+					<button
+						type="button"
+						onClick={() => onSelectGroup(name)}
+						className="flex flex-1 min-w-0 items-center gap-2 p-2.5 text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+					>
 						<span className="text-sm">{name}</span>
 						<span className="text-xs text-muted-foreground">
-							{getChannelCount(name)} ch
+							{channelCountFor(categories, name)} ch
 						</span>
-					</div>
-					<div className="flex items-center gap-2">
+					</button>
+					<div className="flex items-center gap-2 pr-2.5">
 						<button
-							onClick={(e) => {
-								e.stopPropagation();
-								onTogglePin(name);
-							}}
+							type="button"
+							// The label stays fixed and aria-pressed says whether it's pinned.
+							aria-label={`Pin ${name}`}
+							aria-pressed={isPinned(name)}
+							onClick={() => onTogglePin(name)}
 							className={`p-1 rounded hover:bg-background transition-colors ${
 								isPinned(name) ? "text-primary" : "text-muted-foreground"
 							}`}

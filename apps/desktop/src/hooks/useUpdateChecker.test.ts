@@ -84,7 +84,7 @@ describe("useUpdateChecker", () => {
 		expect(result.current.update).toBeNull();
 	});
 
-	it("handles check() errors gracefully without setting error state", async () => {
+	it("reports check() errors as checkError, not as an install error", async () => {
 		mockCheck.mockRejectedValue(new Error("network error"));
 
 		const { result } = renderHook(() => useUpdateChecker());
@@ -92,6 +92,19 @@ describe("useUpdateChecker", () => {
 
 		expect(result.current.update).toBeNull();
 		expect(result.current.error).toBeNull();
+		expect(result.current.checkError).toBe("network error");
+	});
+
+	it("clears checkError when a later check succeeds", async () => {
+		mockCheck.mockRejectedValue(new Error("network error"));
+		const { result } = renderHook(() => useUpdateChecker());
+		await waitFor(() => expect(result.current.checkError).toBe("network error"));
+
+		mockCheck.mockResolvedValue(null);
+		await act(async () => {
+			await result.current.checkForUpdates();
+		});
+		expect(result.current.checkError).toBeNull();
 	});
 
 	// ── shared inflight promise ────────────────────────────────────────
