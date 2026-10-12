@@ -10,6 +10,9 @@ import { deferred } from "@/test/deferred";
 import { mpvLoad, mpvStop } from "./tauri";
 import * as tauri from "./tauri";
 import type { Channel } from "./types";
+import commandArguments from "../../src-tauri/src/commands/tests/arguments.json";
+
+const ARGUMENTS_FILE = "src-tauri/src/commands/tests/arguments.json";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -572,6 +575,41 @@ describe("backend commands", () => {
 	it("passes a backend error on to the caller", async () => {
 		invoke.mockRejectedValueOnce("provider not found");
 		await expect(tauri.removeProvider("missing")).rejects.toBe("provider not found");
+	});
+
+	/**
+	 * The backend's tests check each command against the arguments listed in
+	 * `arguments.json`. Holding the wrappers to the same list means a name
+	 * changed on only one side fails a test instead of a call in the app.
+	 * Every wrapper sends its optional arguments too, even when they're
+	 * undefined, so the keys must match the row exactly. That also catches a
+	 * row that still lists an argument the frontend stopped sending.
+	 */
+	const backendArguments: Record<string, { required?: string[]; optional?: string[] }> =
+		commandArguments;
+
+	const backendRows = rows.filter(({ command }) => !command.startsWith("plugin:"));
+
+	it.each(backendRows)(
+		"$name sends $command the arguments the backend tests check",
+		async ({ call, command }) => {
+			await call();
+			const [, sent = {}] = invoke.mock.calls[0];
+			const listed = backendArguments[command];
+			expect(listed, `${command} has no row in ${ARGUMENTS_FILE}`).toBeDefined();
+			const { required = [], optional = [] } = listed;
+			expect(
+				Object.keys(sent).sort(),
+				`the arguments of ${command} in ${ARGUMENTS_FILE}`
+			).toEqual([...required, ...optional].sort());
+		}
+	);
+
+	it("calls every command the backend registers", () => {
+		const called = new Set(backendRows.map(({ command }) => command));
+		expect([...called].sort(), `the commands in ${ARGUMENTS_FILE}`).toEqual(
+			Object.keys(backendArguments).sort()
+		);
 	});
 
 	it("covers every wrapper the bridge exports", () => {

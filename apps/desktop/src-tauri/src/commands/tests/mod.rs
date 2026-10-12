@@ -9,7 +9,9 @@ mod services;
 
 use super::*;
 use crate::test_support::TestApp;
+use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::MutexGuard;
 
 /// The app's cache, for setting up what a test needs and checking what a
@@ -143,136 +145,46 @@ async fn a_new_app_starts_with_no_providers() {
     assert!(get_providers(app.state()).await.unwrap().is_empty());
 }
 
-/// The arguments each command can't run without, by the names the frontend
-/// sends them under. Commands that only take the app or its state are left
-/// out, since a call can't leave anything out.
-const REQUIRED_ARGUMENTS: &[(&str, &[&str])] = &[
-    ("load_m3u_playlist", &["name", "url"]),
-    ("load_m3u_file", &["name", "path"]),
-    (
-        "load_xtream_provider",
-        &["name", "url", "username", "password"],
-    ),
-    ("remove_provider", &["id"]),
-    ("toggle_favorite", &["channelId"]),
-    ("refresh_provider", &["id"]),
-    ("update_provider", &["id", "name", "url"]),
-    ("get_xtream_series_episodes", &["channelId"]),
-    ("refresh_epg", &["providerId"]),
-    (
-        "get_epg_programmes",
-        &["channelId", "rangeStart", "rangeEnd"],
-    ),
-    ("detect_epg_url", &["id"]),
-    ("set_epg_url", &["providerId"]),
-    ("get_epg_for_live_channels", &["rangeStart", "rangeEnd"]),
-    ("search_epg_programmes", &["query", "rangeStart"]),
-    ("set_omdb_api_key", &["key"]),
-    ("test_omdb_api_key", &["key"]),
-    ("set_mdblist_api_key", &["key"]),
-    ("test_mdblist_api_key", &["key"]),
-    ("set_opensubtitles_api_key", &["key"]),
-    ("test_opensubtitles_api_key", &["key"]),
-    ("set_gemini_api_key", &["key"]),
-    ("test_gemini_api_key", &["key"]),
-    ("fetch_omdb_data", &["channelId", "title", "contentType"]),
-    ("fetch_mdblist_data", &["imdbId", "mediaType"]),
-    ("fetch_whatson_data", &["imdbId", "mediaType"]),
-    ("get_skip_segments", &["imdbId", "duration"]),
-    ("search_subtitles", &["imdbId"]),
-    ("download_subtitle", &["fileId"]),
-    (
-        "record_play_start",
-        &["channelId", "channelName", "contentType"],
-    ),
-    ("record_play_end", &["channelId", "durationSeconds"]),
-    ("get_watch_history", &["limit"]),
-    ("delete_history_entry", &["channelId"]),
-    ("delete_history_series", &["seriesTitle"]),
-    ("clear_watch_history_of_type", &["contentType"]),
-    (
-        "save_playback_position",
-        &["contentKey", "positionSeconds", "durationSeconds"],
-    ),
-    ("get_playback_position", &["contentKey"]),
-    ("delete_playback_position", &["contentKey"]),
-    ("read_subtitle_file", &["path"]),
-    ("get_group_hierarchy", &["providerId", "contentType"]),
-    (
-        "reorder_group_hierarchy_entry",
-        &["providerId", "contentType", "groupName", "newSortOrder"],
-    ),
-    (
-        "update_group_hierarchy_entry",
-        &["providerId", "contentType", "groupName", "newSortOrder"],
-    ),
-    ("delete_group_hierarchy", &["providerId", "contentType"]),
-    (
-        "pin_group",
-        &["providerId", "contentType", "groupName", "sortOrder"],
-    ),
-    ("unpin_group", &["providerId", "contentType", "groupName"]),
-    ("get_pinned_groups", &["providerId", "contentType"]),
-    (
-        "categorize_provider",
-        &["providerId", "contentType", "apiKey", "groupsWithSamples"],
-    ),
-    (
-        "fix_uncategorized_groups",
-        &[
-            "providerId",
-            "contentType",
-            "apiKey",
-            "uncategorizedGroups",
-            "existingCategories",
-        ],
-    ),
-    (
-        "rename_super_category",
-        &["providerId", "contentType", "oldName", "newName"],
-    ),
-    (
-        "delete_super_category",
-        &["providerId", "contentType", "categoryName"],
-    ),
-    ("enqueue_movie_download", &["channelId"]),
-    (
-        "enqueue_episode_download",
-        &["episode", "seriesChannelId", "seriesTitle"],
-    ),
-    (
-        "enqueue_episodes_batch",
-        &["episodes", "seriesChannelId", "seriesTitle"],
-    ),
-    ("cache_series_episodes", &["seriesChannelId", "episodes"]),
-    ("get_cached_series_episodes", &["seriesChannelId"]),
-    ("stop_download", &["id"]),
-    ("stop_downloads", &["ids"]),
-    ("remove_download", &["id"]),
-    ("remove_downloads", &["ids"]),
-    ("set_download_keep", &["id", "keep"]),
-    ("set_download_concurrency", &["n"]),
-    ("set_download_folder", &["path"]),
-    ("resolve_local_download", &["channelId"]),
-    ("schedule_recording", &["channelId", "startAt", "endAt"]),
-    ("stop_recording", &["id"]),
-];
+/// The arguments of one command, by the names the frontend sends them under.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Arguments {
+    /// The arguments a call can't leave out.
+    #[serde(default)]
+    required: Vec<String>,
+    /// The arguments a call may leave out, which the frontend sends as `null`
+    /// or not at all.
+    #[serde(default)]
+    optional: Vec<String>,
+}
 
-/// The arguments a call may leave out, which the frontend sends as `null` or
-/// not at all.
-const OPTIONAL_ARGUMENTS: &[(&str, &[&str])] = &[
-    ("update_provider", &["username", "password"]),
-    ("set_epg_url", &["epgUrl"]),
-    ("get_skip_segments", &["season", "episode"]),
-    ("search_subtitles", &["season", "episode"]),
-    ("record_play_start", &["channelLogo"]),
-    ("get_watch_history", &["contentType"]),
-    ("update_group_hierarchy_entry", &["newSuperCategory"]),
-    ("set_download_retention", &["days"]),
-    ("count_downloads_due", &["days"]),
-    ("schedule_recording", &["program"]),
-    ("hand_off_progress", &["item"]),
-];
+/// Every command's arguments, read from `arguments.json`. The frontend's tests
+/// in `src/lib/tauri.test.ts` check its calls against the same file, so a name
+/// changed on only one side fails a test instead of a call in the app.
+fn arguments() -> BTreeMap<String, Arguments> {
+    serde_json::from_str(include_str!("arguments.json")).expect("read arguments.json")
+}
+
+/// A command missing from `arguments.json` would skip the checks below, and a
+/// renamed argument would only show up when the app calls it.
+#[test]
+fn every_registered_command_has_a_row_in_the_argument_table() {
+    let table = arguments();
+    let listed: BTreeSet<&str> = table.keys().map(String::as_str).collect();
+    let registered: BTreeSet<&str> = crate::COMMAND_NAMES.iter().copied().collect();
+
+    let unlisted: Vec<_> = registered.difference(&listed).collect();
+    assert!(
+        unlisted.is_empty(),
+        "commands/tests/arguments.json has no row for {unlisted:?}. \
+         A command that takes no arguments gets an empty row."
+    );
+    let unregistered: Vec<_> = listed.difference(&registered).collect();
+    assert!(
+        unregistered.is_empty(),
+        "commands/tests/arguments.json lists {unregistered:?}, which the app doesn't register"
+    );
+}
 
 /// A value of the right type for an argument, so a call is refused only for
 /// the argument it leaves out.
@@ -294,15 +206,16 @@ fn sample(argument: &str) -> Value {
 #[test]
 fn every_command_names_the_argument_a_call_left_out() {
     let app = TestApp::new();
-    for (command, required) in REQUIRED_ARGUMENTS {
-        for missing in *required {
+    for (command, arguments) in arguments() {
+        let required = &arguments.required;
+        for missing in required {
             let given = required
                 .iter()
                 .filter(|argument| *argument != missing)
-                .map(|argument| (argument.to_string(), sample(argument)))
+                .map(|argument| (argument.clone(), sample(argument)))
                 .collect();
 
-            let refused = app.invoke(command, Value::Object(given));
+            let refused = app.invoke(&command, Value::Object(given));
 
             let reason = format!("command {command} missing required key {missing}");
             let expected = format!("invalid args `{missing}` for command `{command}`: {reason}");
@@ -316,19 +229,16 @@ fn every_command_names_the_argument_a_call_left_out() {
 #[test]
 fn every_command_names_an_optional_argument_of_the_wrong_type() {
     let app = TestApp::new();
-    for (command, optional) in OPTIONAL_ARGUMENTS {
-        let required = REQUIRED_ARGUMENTS
-            .iter()
-            .find(|(name, _)| name == command)
-            .map_or(&[][..], |(_, required)| *required);
-        for wrong in *optional {
-            let mut given: serde_json::Map<String, Value> = required
+    for (command, arguments) in arguments() {
+        for wrong in &arguments.optional {
+            let mut given: serde_json::Map<String, Value> = arguments
+                .required
                 .iter()
-                .map(|argument| (argument.to_string(), sample(argument)))
+                .map(|argument| (argument.clone(), sample(argument)))
                 .collect();
-            given.insert(wrong.to_string(), json!(true));
+            given.insert(wrong.clone(), json!(true));
 
-            let refused = app.invoke(command, Value::Object(given)).unwrap_err();
+            let refused = app.invoke(&command, Value::Object(given)).unwrap_err();
 
             let reason = format!(
                 "invalid args `{wrong}` for command `{command}`: invalid type: boolean `true`"
