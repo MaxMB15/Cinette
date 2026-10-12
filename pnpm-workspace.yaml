@@ -9,9 +9,6 @@ packages:
 catalog:
   typescript: ~6.0.3
 
-# No dependency runs an install script. esbuild's only checks its binary, and
-# it works without that. A new dependency that has an install script stops the
-# install until it's listed here.
-allowBuilds:
-  esbuild: false
+# No dependency runs an install script. A new dependency that has one stops
+# the install until it's listed under allowBuilds.
 strictDepBuilds: true
