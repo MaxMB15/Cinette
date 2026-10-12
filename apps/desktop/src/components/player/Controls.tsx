@@ -12,7 +12,7 @@ import {
 	Info,
 	SkipBack,
 	SkipForward,
-	Subtitles,
+	Captions,
 	Layers,
 	Keyboard,
 	Check,
@@ -473,7 +473,7 @@ export const Controls = ({
 							onClick={onSubtitles}
 							aria-label="Subtitles"
 						>
-							<Subtitles className="h-5 w-5" />
+							<Captions className="h-5 w-5" />
 						</Button>
 					)}
 

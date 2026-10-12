@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState } from "react";
-import { Disc, Play, Trash2 } from "lucide-react";
+import { Disc, Play, Trash } from "lucide-react";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { formatBytes } from "@/lib/format";
@@ -135,7 +135,7 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 											onClick={() => setDeleting(rec)}
 											aria-label={`Delete ${rec.programTitle ?? rec.title}`}
 										>
-											<Trash2 className="h-3.5 w-3.5" />
+											<Trash className="h-3.5 w-3.5" />
 										</RowButton>
 									</>
 								)}

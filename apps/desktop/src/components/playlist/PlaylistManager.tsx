@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useState } from "react";
-import { Trash2, RefreshCw, Settings2 } from "lucide-react";
+import { Trash, RefreshCw, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -129,7 +129,7 @@ export const PlaylistManager = () => {
 												title="Remove"
 												onClick={() => setPendingRemoval(p)}
 											>
-												<Trash2 className="h-3.5 w-3.5" />
+												<Trash className="h-3.5 w-3.5" />
 											</Button>
 										</div>
 									</div>
