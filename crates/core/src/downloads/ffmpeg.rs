@@ -180,4 +180,21 @@ mod tests {
         assert!(fold_progress_line(&mut acc, "progress=end"));
         assert!(acc.done);
     }
+
+    #[test]
+    fn other_progress_lines_change_nothing() {
+        // ffmpeg reports more than size and time, such as the frame count and
+        // speed, and can print a line that is not a key and value.
+        let mut acc = ProgressUpdate::default();
+        for line in [
+            "frame=120",
+            "speed=1.5x",
+            "bitrate=N/A",
+            "",
+            "Press [q] to stop",
+        ] {
+            assert!(!fold_progress_line(&mut acc, line), "{line:?}");
+        }
+        assert_eq!(acc, ProgressUpdate::default());
+    }
 }

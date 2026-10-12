@@ -486,12 +486,83 @@ mod tests {
         assert!(ch_cnn.icon_url.is_none());
     }
 
+    // --- Broken and unusual guides ---
+
+    #[tokio::test]
+    async fn a_guide_that_is_not_well_formed_is_an_xml_error() {
+        let url = test_server::serve_once(
+            "200 OK",
+            r#"<tv><programme channel="c1"><title>News</programme></tv>"#,
+        );
+        let result = fetch_epg(&test_server::client(), &url).await;
+        assert!(matches!(result, Err(EpgError::Xml(_))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_guide_that_cannot_be_fetched_does_not_show_the_login() {
+        let err = fetch_and_parse_epg("unix:/xmltv.php?username=U&password=SECRET")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EpgError::Network(_)), "{err:?}");
+        test_server::assert_hides(&err, "SECRET");
+    }
+
     #[test]
-    fn http_errors_leave_out_the_request_url() {
-        let err = EpgError::from(crate::http::error_with_url(
-            "unix:/xmltv.php?username=u&password=SECRET",
-        ));
-        assert!(!err.to_string().contains("SECRET"), "{err}");
-        assert!(!format!("{err:?}").contains("SECRET"), "{err:?}");
+    fn entries_missing_attributes_are_read_with_blanks() {
+        let data = parse_epg(
+            r#"<tv><channel><display-name>One</display-name><icon/></channel><programme><title>News</title></programme></tv>"#,
+        )
+        .unwrap();
+        assert_eq!(data.channels[0].id, "");
+        assert_eq!(data.channels[0].display_name, "One");
+        assert_eq!(data.channels[0].icon_url, None);
+        let program = &data.programs[0];
+        assert_eq!(program.title, "News");
+        assert_eq!(program.channel_id, "");
+        assert_eq!((program.start_time, program.end_time), (0, 0));
+    }
+
+    #[test]
+    fn text_in_other_program_tags_is_ignored() {
+        let data = parse_epg(
+            r#"<tv><programme channel="c1"><title>Lost</title><sub-title>Pilot</sub-title><episode-num system="onscreen">S01E01</episode-num><desc>Survivors</desc></programme></tv>"#,
+        )
+        .unwrap();
+        let program = &data.programs[0];
+        assert_eq!(program.title, "Lost");
+        assert_eq!(program.description, "Survivors");
+        assert_eq!(program.category, None);
+    }
+
+    #[test]
+    fn a_program_without_a_description_is_stored_without_one() {
+        let data = parse_epg(
+            r#"<tv><programme channel="c1"><title>News</title><desc></desc></programme></tv>"#,
+        )
+        .unwrap();
+        let stored = epg_data_to_stored(&data, "p1");
+        assert_eq!(stored[0].title, "News");
+        assert_eq!(stored[0].description, None);
+    }
+
+    #[test]
+    fn times_behind_utc_are_moved_forward() {
+        // Noon at five hours behind UTC is 17:00 UTC.
+        assert_eq!(
+            parse_epg_time("20260304120000 -0500"),
+            1772625600 + 5 * 3600
+        );
+    }
+
+    #[test]
+    fn a_zone_that_is_not_an_offset_is_read_as_utc() {
+        assert_eq!(parse_epg_time("20260304120000 UTC"), 1772625600);
+    }
+
+    #[test]
+    fn a_time_that_is_not_a_date_is_zero() {
+        for raw in ["2026030412000x +0000", "20261304120000 +0000"] {
+            assert_eq!(parse_epg_time(raw), 0, "{raw:?}");
+        }
     }
 }
