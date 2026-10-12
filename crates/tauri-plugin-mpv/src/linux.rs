@@ -280,11 +280,7 @@ impl PlatformRenderer for LinuxGlRenderer {
             .take()
             .ok_or_else(|| "Renderer has already been attached".to_string())?;
 
-        let first_frame_cb = self
-            .first_frame_cb
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.take());
+        let first_frame_cb = lock_or_recover(&self.first_frame_cb).take();
 
         // Raw pointers aren't Send, so the handle crosses to the GLib main
         // thread as a `usize`, which saves a wrapper with its own
@@ -417,9 +413,7 @@ impl PlatformRenderer for LinuxGlRenderer {
             let (lx, ly, lw, lh) = lock_or_recover(&inner.state).last_frame;
             inner.wayland.subsurface.set_position(lx, ly);
             if lw > 0 && lh > 0 {
-                if let Ok(mut state) = inner.state.lock() {
-                    state.pending_resize = Some((lw, lh));
-                }
+                lock_or_recover(&inner.state).pending_resize = Some((lw, lh));
             }
         } else {
             // Move the subsurface off screen instead of attaching a null
@@ -558,10 +552,10 @@ fn render_frame(inner: &Inner) {
 
     inner.render_ctx.report_swap();
 
-    if let Ok(mut slot) = inner.first_frame_cb.lock() {
-        if let Some(cb) = slot.take() {
-            cb();
-        }
+    // Take the callback out first, so it doesn't run with the lock held.
+    let first_frame_cb = lock_or_recover(&inner.first_frame_cb).take();
+    if let Some(cb) = first_frame_cb {
+        cb();
     }
 }
 
@@ -825,9 +819,7 @@ where
 /// Dispatches the events waiting on the renderer's Wayland queue. Every
 /// handler ignores them, so this only empties the queue.
 fn drain_wayland_queue(inner: &Inner) {
-    let Ok(mut queue) = inner.wayland.queue.lock() else {
-        return;
-    };
+    let mut queue = lock_or_recover(&inner.wayland.queue);
     let mut dummy = WlGlobals;
     let _ = queue.dispatch_pending(&mut dummy);
 }
