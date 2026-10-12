@@ -342,10 +342,11 @@ fn parse_extinf_block(index: usize, extinf: &str, url: &str) -> Option<Channel> 
 }
 
 /// Read a `tvg-type` attribute, which some playlists use to mark movies and
-/// series whose URLs don't say so. Unknown values fall back to the URL.
+/// series whose URLs don't say so. It only ever marks a movie or a series.
+/// `live` and unknown values fall back to the URL, so a provider export that
+/// tags every entry `live` still files `/movie/` and `/series/` URLs as VOD.
 fn content_type_from_attr(value: &str) -> Option<&'static str> {
     match value.to_ascii_lowercase().as_str() {
-        "live" => Some("live"),
         "movie" | "movies" | "vod" => Some("movie"),
         "series" => Some("series"),
         _ => None,
@@ -696,13 +697,25 @@ http://stream.example.com/ch2
             #EXTINF:-1 tvg-type=\"Series\",Open Movies S01E02 Sintel\n\
             https://cdn.example.com/films/sintel-ep.mkv\n\
             #EXTINF:-1 tvg-type=\"live\",News\n\
-            http://host/movie/news.m3u8\n";
+            http://host/live/news.m3u8\n";
         let channels = parse_m3u(content).unwrap();
         assert_eq!(channels[0].content_type, "movie");
         assert_eq!(channels[1].content_type, "series");
         assert_eq!(channels[1].series_title.as_deref(), Some("Open Movies"));
         assert_eq!(channels[1].episode, Some(2));
         assert_eq!(channels[2].content_type, "live");
+    }
+
+    #[test]
+    fn test_tvg_type_live_does_not_beat_vod_urls() {
+        let content = "#EXTM3U\n\
+            #EXTINF:-1 tvg-type=\"live\",Film\n\
+            http://host/movie/1.mp4\n\
+            #EXTINF:-1 tvg-type=\"live\",Show S01E02\n\
+            http://host/series/2.mkv\n";
+        let channels = parse_m3u(content).unwrap();
+        assert_eq!(channels[0].content_type, "movie");
+        assert_eq!(channels[1].content_type, "series");
     }
 
     #[test]
