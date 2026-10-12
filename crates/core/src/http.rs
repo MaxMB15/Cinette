@@ -11,14 +11,18 @@ use std::time::Duration;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Metadata and API calls return small JSON bodies, so anything slower is stuck.
-const API_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// It is the total limit on `client()`. A small request on `download_client()`
+/// can set it with `RequestBuilder::timeout`.
+pub const API_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// XMLTV guides and Xtream catalogues can be tens of megabytes on a slow server,
-/// so downloads get no total limit, only this one on each wait for data.
+/// XMLTV guides, playlists and Xtream stream lists can be tens of megabytes on
+/// a slow server, so downloads get no total limit, only this one on each wait
+/// for data.
 ///
 /// The first wait runs from sending the request to the response headers, so it
 /// also covers the panel building its reply. Large panels can take minutes to
-/// build a full catalogue or guide before they send a byte.
+/// build a full stream list or guide before they send a byte.
 const READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 static USER_AGENT: OnceLock<String> = OnceLock::new();
@@ -57,7 +61,8 @@ pub fn client() -> &'static reqwest::Client {
     })
 }
 
-/// The client for large downloads such as EPG guides and Xtream catalogues.
+/// The client for IPTV panels and large downloads such as EPG guides,
+/// playlists and Xtream stream lists.
 ///
 /// It sends no user agent. Some IPTV panels filter requests by user agent, and
 /// these requests have always gone out without one.
