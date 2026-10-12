@@ -10,6 +10,7 @@ use mvp_core::downloads::model::{DownloadKind, DownloadRecord};
 use mvp_core::iptv::m3u::{fetch_and_parse_m3u_with_epg, parse_m3u_file};
 use mvp_core::iptv::mdblist::MdbListData;
 use mvp_core::iptv::omdb::{fetch_omdb, OmdbData};
+use mvp_core::iptv::skip_segments::{check_segments, fetch_skip_segments, SkipQuery, SkipSegment};
 use mvp_core::iptv::whatson::WhatsonData;
 use mvp_core::iptv::xtream::{fetch_xtream_channels, fetch_xtream_series_episodes, get_xtream_epg_url};
 use mvp_core::models::channel::Channel;
@@ -741,6 +742,61 @@ pub async fn fetch_whatson_data<R: Runtime>(
     }
 
     Ok(Some(data))
+}
+
+// --- Skip Segments ---
+
+/// One day, so times added to the databases show up by the next day.
+const SKIP_SEGMENTS_CACHE_TTL: i64 = 24 * 60 * 60;
+
+/// Times to skip the intro, recap, credits and next-episode preview of a movie,
+/// or of an episode when `season` and `episode` are given, checked against the
+/// `duration` in seconds of the video being played.
+///
+/// The IMDb ID comes from OMDb, so this only goes online once the user has
+/// added an OMDb key, and nothing leaves the device for metadata until then.
+#[command]
+pub async fn get_skip_segments<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    imdb_id: String,
+    season: Option<u32>,
+    episode: Option<u32>,
+    duration: f64,
+) -> Result<Vec<SkipSegment>, String> {
+    let query = SkipQuery { imdb_id, episode: season.zip(episode), duration };
+    let key = query.cache_key();
+
+    // 1. Check cache. A bad entry is only logged, and looked up again.
+    {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        match cache.get_skip_segments_cache(&key, SKIP_SEGMENTS_CACHE_TTL) {
+            Ok(Some(segments)) => return Ok(check_segments(&segments, duration)),
+            Ok(None) => {}
+            Err(e) => tracing::warn!("[Skip] unreadable cache entry for {}: {}", key, e),
+        }
+    }
+
+    // 2. Fetch, if the user has turned on metadata lookups.
+    if omdb_api_key(&app)?.is_none() {
+        tracing::debug!("[Skip] no OMDb API key configured, skipping fetch");
+        return Ok(Vec::new());
+    }
+    tracing::info!("[Skip] fetching skip times for {}", key);
+    let fetched = fetch_skip_segments(&query).await.map_err(|e| {
+        tracing::warn!("[Skip] fetch failed for {}: {}", key, e);
+        e.to_string()
+    })?;
+
+    // 3. Cache, unless a source failed and should be asked again next time.
+    if fetched.complete {
+        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        if let Err(e) = cache.save_skip_segments_cache(&key, &fetched.segments) {
+            tracing::warn!("[Skip] failed to save cache for {}: {}", key, e);
+        }
+    }
+
+    Ok(check_segments(&fetched.segments, duration))
 }
 
 // --- OpenSubtitles Commands ---
