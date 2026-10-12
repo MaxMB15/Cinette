@@ -30,6 +30,10 @@ describe("resolvePlayerHotkey", () => {
 		expect(resolvePlayerHotkey(key(" "))).toEqual({ type: "togglePlay" });
 		expect(resolvePlayerHotkey(key("k"))).toEqual({ type: "togglePlay" });
 	});
+	it("maps Enter to skipping an intro or credits", () => {
+		expect(resolvePlayerHotkey(key("Enter"))).toEqual({ type: "skipSegment" });
+		expect(resolvePlayerHotkey(key("Enter", { metaKey: true }))).toBeNull();
+	});
 	it("maps F and M regardless of case", () => {
 		expect(resolvePlayerHotkey(key("F"))).toEqual({ type: "toggleFullscreen" });
 		expect(resolvePlayerHotkey(key("m"))).toEqual({ type: "toggleMute" });

@@ -11,6 +11,7 @@ import type {
 	OmdbData,
 	MdbListData,
 	WhatsonData,
+	SkipSegment,
 	WatchHistoryEntry,
 	SubtitleSearchResult,
 	GroupHierarchyEntry,
@@ -157,6 +158,21 @@ export const fetchMdbListData = (imdbId: string, mediaType: string): Promise<Mdb
 
 export const fetchWhatsonData = (imdbId: string, mediaType: string): Promise<WhatsonData | null> =>
 	invoke("fetch_whatson_data", { imdbId, mediaType });
+
+// --- Skip Segments ---
+
+/**
+ * The intro, recap, credits and preview of a movie, or of an episode when
+ * `season` and `episode` are set. `duration` is the length of the video being
+ * played, in seconds, which the backend checks the times against. Empty when
+ * no OMDb key is set or nothing is known.
+ */
+export const getSkipSegments = (
+	imdbId: string,
+	season: number | null,
+	episode: number | null,
+	duration: number
+): Promise<SkipSegment[]> => invoke("get_skip_segments", { imdbId, season, episode, duration });
 
 // --- OpenSubtitles Commands ---
 

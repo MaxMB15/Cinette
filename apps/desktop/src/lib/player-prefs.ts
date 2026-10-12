@@ -6,8 +6,9 @@
 // The volume picked in the player lasts until the app quits (sessionStorage),
 // so leaving and reopening the player doesn't reset it. The default volume,
 // hardware decoding and skip lengths are Settings choices and persist across
-// launches (localStorage). Storage can throw (private mode, quota), so every
-// access is guarded and falls back to the built-in defaults.
+// launches (localStorage), as do the skip modes for intros and credits.
+// Storage can throw (private mode, quota), so every access is guarded and
+// falls back to the built-in defaults.
 
 const VOLUME_KEY = "mvp_volume";
 const DEFAULT_VOLUME_KEY = "mvp_default_volume";
@@ -129,5 +130,60 @@ export const writeSkipInterval = (direction: keyof SkipIntervals, seconds: numbe
 			String(seconds)
 		);
 		window.dispatchEvent(new Event(SKIP_INTERVALS_EVENT));
+	} catch {}
+};
+
+/**
+ * What the player does at a part of a movie or episode that can be skipped.
+ * "button" shows a Skip button, "auto" skips on its own with a way to undo,
+ * and "off" does neither.
+ */
+export type SkipSegmentMode = "button" | "auto" | "off";
+
+/** The two groups of skippable parts, each with its own Settings choice. */
+export interface SkipSegmentModes {
+	/** Intros and recaps. */
+	opening: SkipSegmentMode;
+	/** End credits and previews of the next episode. */
+	ending: SkipSegmentMode;
+}
+
+const SKIP_SEGMENT_KEYS: Record<keyof SkipSegmentModes, string> = {
+	opening: "mvp_skip_opening",
+	ending: "mvp_skip_ending",
+};
+const SKIP_SEGMENT_MODES: readonly SkipSegmentMode[] = ["button", "auto", "off"];
+const BUILTIN_SKIP_SEGMENT_MODE: SkipSegmentMode = "button";
+
+/** Window event fired after either skip mode changes. */
+export const SKIP_SEGMENT_MODES_EVENT = "mvp-skip-segment-modes";
+
+const isSkipSegmentMode = (v: unknown): v is SkipSegmentMode =>
+	SKIP_SEGMENT_MODES.includes(v as SkipSegmentMode);
+
+const readSkipSegmentMode = (group: keyof SkipSegmentModes): SkipSegmentMode => {
+	try {
+		const raw = localStorage.getItem(SKIP_SEGMENT_KEYS[group]);
+		return isSkipSegmentMode(raw) ? raw : BUILTIN_SKIP_SEGMENT_MODE;
+	} catch {
+		return BUILTIN_SKIP_SEGMENT_MODE;
+	}
+};
+
+/** How the player handles intros and credits. A Skip button for both unless changed in Settings. */
+export const readSkipSegmentModes = (): SkipSegmentModes => ({
+	opening: readSkipSegmentMode("opening"),
+	ending: readSkipSegmentMode("ending"),
+});
+
+/** Save the mode for one group. Unknown modes are ignored. */
+export const writeSkipSegmentMode = (
+	group: keyof SkipSegmentModes,
+	mode: SkipSegmentMode
+): void => {
+	if (!isSkipSegmentMode(mode)) return;
+	try {
+		localStorage.setItem(SKIP_SEGMENT_KEYS[group], mode);
+		window.dispatchEvent(new Event(SKIP_SEGMENT_MODES_EVENT));
 	} catch {}
 };

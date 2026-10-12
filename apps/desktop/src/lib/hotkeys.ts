@@ -16,6 +16,7 @@ export type PlayerAction =
 	| { type: "toggleSubtitles" }
 	| { type: "toggleInfo" }
 	| { type: "toggleShortcuts" }
+	| { type: "skipSegment" }
 	| { type: "escape" };
 
 /** How far the plain arrow and J/L keys jump when no skip lengths are passed in. */
@@ -88,6 +89,8 @@ export const resolvePlayerHotkey = (
 			return { type: "toggleInfo" };
 		case "?":
 			return { type: "toggleShortcuts" };
+		case "Enter":
+			return { type: "skipSegment" };
 		case "Escape":
 			return { type: "escape" };
 		default:
@@ -115,6 +118,7 @@ export const playerShortcuts = (
 	{ keys: ["N", "P"], label: "Next / previous episode" },
 	{ keys: ["S"], label: "Subtitles" },
 	{ keys: ["I"], label: "Info" },
+	{ keys: ["Enter"], label: "Skip intro, recap or credits" },
 	{ keys: ["?"], label: "Show / hide this list" },
 	{ keys: ["Esc"], label: "Exit fullscreen / close panel / leave player" },
 ];

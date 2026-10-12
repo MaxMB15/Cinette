@@ -9,6 +9,7 @@ import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { VideoTapLayer } from "./VideoTapLayer";
+import { SkipSegmentPrompt } from "./SkipSegmentPrompt";
 import { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -51,10 +52,18 @@ import { sortEpisodes } from "@/lib/episodes";
 import { seriesTitleOf } from "@/lib/channels";
 import { resolvePlayerHotkey, isTypingTarget, isKeyboardFocusedControl } from "@/lib/hotkeys";
 import { formatSkip, formatTime } from "@/lib/format";
-import { readSkipIntervals, SKIP_INTERVALS_EVENT } from "@/lib/player-prefs";
+import {
+	readSkipIntervals,
+	readSkipSegmentModes,
+	SKIP_INTERVALS_EVENT,
+	SKIP_SEGMENT_MODES_EVENT,
+} from "@/lib/player-prefs";
 import { nextSkip, type SkipRun } from "@/lib/skip";
 import { addWatchedTime } from "@/lib/browse-state";
 import { usePlatform } from "@/hooks/usePlatform";
+import { usePlayerPref } from "@/hooks/usePlayerPref";
+import { useSkipSegments } from "@/hooks/useSkipSegments";
+import { useSegmentSkipping } from "@/hooks/useSegmentSkipping";
 import { isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
@@ -799,12 +808,7 @@ export const PlayerView = () => {
 	}, []);
 
 	// --- Skipping ---
-	const [skip, setSkip] = useState(readSkipIntervals);
-	useEffect(() => {
-		const update = () => setSkip(readSkipIntervals());
-		window.addEventListener(SKIP_INTERVALS_EVENT, update);
-		return () => window.removeEventListener(SKIP_INTERVALS_EVENT, update);
-	}, []);
+	const skip = usePlayerPref(readSkipIntervals, SKIP_INTERVALS_EVENT);
 	// Same test as the seek bar, which live channels usually don't get.
 	const seekable = mpv.state.duration > 0;
 
@@ -841,6 +845,36 @@ export const PlayerView = () => {
 		},
 		[mpv]
 	);
+
+	// --- Intros, recaps, credits and previews ---
+	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
+	const segments = useSkipSegments({
+		imdbId: activeImdbId,
+		contentType: activeChannel?.contentType,
+		season: subtitleSeason,
+		episode: subtitleEpisode,
+		// The polled length belongs to the stream mpv reports, which trails
+		// the channel for a moment after switching.
+		url: activeChannel?.url === mpv.state.currentUrl ? mpv.state.currentUrl : null,
+		duration: mpv.state.duration,
+		enabled: segmentModes.opening !== "off" || segmentModes.ending !== "off",
+	});
+	const playNextEpisode = useCallback(() => {
+		const next = nextEpisodeRef.current;
+		if (next) playEpisode(next);
+	}, [playEpisode]);
+	const skipping = useSegmentSkipping({
+		segments,
+		position: mpv.state.position,
+		duration: mpv.state.duration,
+		playing: mpv.state.isPlaying && !mpv.state.isPaused,
+		modes: segmentModes,
+		autoplay,
+		hasNext: nextEpisode !== null,
+		seek: seekTo,
+		onNextEpisode: playNextEpisode,
+	});
+	const skipSegment = skipping.skip;
 
 	const goBack = useCallback(() => {
 		// "default" is the first history entry, so there's nothing to go back to.
@@ -883,8 +917,8 @@ export const PlayerView = () => {
 				return;
 			}
 			if (isTypingTarget(e.target)) return;
-			// Space on a button reached with Tab presses that button.
-			if (e.key === " " && isKeyboardFocusedControl(e.target)) return;
+			// Space or Enter on a button reached with Tab presses that button.
+			if ((e.key === " " || e.key === "Enter") && isKeyboardFocusedControl(e.target)) return;
 			// While the subtitle settings pane is open, arrow keys belong to subtitle
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
@@ -946,6 +980,9 @@ export const PlayerView = () => {
 				case "toggleShortcuts":
 					setShowShortcuts((v) => !v);
 					break;
+				case "skipSegment":
+					skipSegment();
+					break;
 				case "escape":
 					if (showShortcuts) {
 						setShowShortcuts(false);
@@ -989,6 +1026,7 @@ export const PlayerView = () => {
 			skip,
 			skipBy,
 			seekTo,
+			skipSegment,
 		]
 	);
 
@@ -1149,8 +1187,14 @@ export const PlayerView = () => {
 				</div>
 			)}
 
-			{/* Autoplay banner — shown for 3s before next episode starts */}
-			{/* (simple version: no countdown, instant autoplay) */}
+			{!mpv.fallbackActive && !pendingResume && !showShortcuts && (
+				<SkipSegmentPrompt
+					skipping={skipping}
+					controlsVisible={showControls}
+					playing={mpv.state.isPlaying && !mpv.state.isPaused}
+					onPressed={() => containerRef.current?.focus()}
+				/>
+			)}
 
 			{!mpv.fallbackActive && (
 				<Controls
