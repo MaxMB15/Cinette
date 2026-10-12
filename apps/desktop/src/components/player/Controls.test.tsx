@@ -5,6 +5,7 @@ import { describe, it, expect, vi, afterEach, beforeAll, afterAll, onTestFinishe
 import type { ComponentProps } from "react";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
+import { installPointerEvent } from "@/test/pointer-event";
 import { Controls } from "./Controls";
 import type { PlayerState } from "@/lib/types";
 
@@ -411,25 +412,13 @@ describe("Controls seek bar", () => {
 		if (e.pointerType === "touch" || e.pointerType === "pen") captured.add(e.pointerId);
 	};
 	const releaseAfterRelease = (e: PointerEvent) => void captured.delete(e.pointerId);
+	installPointerEvent();
 	const saved = {
-		PointerEvent: window.PointerEvent,
 		setPointerCapture: Element.prototype.setPointerCapture,
 		hasPointerCapture: Element.prototype.hasPointerCapture,
 		releasePointerCapture: Element.prototype.releasePointerCapture,
 	};
 	beforeAll(() => {
-		class TestPointerEvent extends MouseEvent {
-			readonly pointerId: number;
-			readonly pointerType: string;
-			readonly isPrimary: boolean;
-			constructor(type: string, init: PointerEventInit = {}) {
-				super(type, init);
-				this.pointerId = init.pointerId ?? 1;
-				this.pointerType = init.pointerType ?? "mouse";
-				this.isPrimary = init.isPrimary ?? true;
-			}
-		}
-		window.PointerEvent = TestPointerEvent as typeof PointerEvent;
 		Element.prototype.setPointerCapture = (id: number) => void captured.add(id);
 		Element.prototype.hasPointerCapture = (id: number) => captured.has(id);
 		Element.prototype.releasePointerCapture = (id: number) => void captured.delete(id);
@@ -441,7 +430,6 @@ describe("Controls seek bar", () => {
 		window.removeEventListener("pointerdown", captureOnPress, true);
 		window.removeEventListener("pointerup", releaseAfterRelease);
 		window.removeEventListener("pointercancel", releaseAfterRelease);
-		Object.assign(window, { PointerEvent: saved.PointerEvent });
 		Object.assign(Element.prototype, {
 			setPointerCapture: saved.setPointerCapture,
 			hasPointerCapture: saved.hasPointerCapture,

@@ -3,6 +3,7 @@
 
 import { afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import { TestPointerEvent } from "@/test/pointer-event";
 import {
 	CLOSE_DISTANCE,
 	EXPAND_DISTANCE,
@@ -122,13 +123,11 @@ const touch = (target: Element, type: string, y?: number, x = 0) => {
 	return e;
 };
 
-// jsdom has no PointerEvent either, so a mouse event stands in for one.
-const pointer = (target: Element, type: string, y: number, buttons = 1) => {
-	const e = new MouseEvent(type, { bubbles: true, cancelable: true, clientY: y, buttons });
-	Object.defineProperty(e, "pointerId", { value: 1 });
-	Object.defineProperty(e, "pointerType", { value: "mouse" });
-	target.dispatchEvent(e);
-};
+// Sends a mouse pointer event at height `y`.
+const pointer = (target: Element, type: string, y: number, buttons = 1) =>
+	target.dispatchEvent(
+		new TestPointerEvent(type, { bubbles: true, cancelable: true, clientY: y, buttons })
+	);
 
 // Presses the mouse on `target` at the first y and moves through the rest.
 const mouseDrag = (target: Element, ys: number[]) => {
