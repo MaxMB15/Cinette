@@ -33,10 +33,14 @@ fn split_keep(input: &str) -> Vec<&str> {
     parts
 }
 
+/// The first segment of an Xtream stream path that has one, as in
+/// `/live/<user>/<pass>/<id>`.
+const STREAM_KINDS: [&str; 3] = ["movie", "series", "live"];
+
 fn redact_token(token: &str) -> String {
     let mut t = redact_key_values(token);
     // Path-style Xtream credentials: /movie|series|live/<user>/<pass>/<id>
-    for kind in ["movie", "series", "live"] {
+    for kind in STREAM_KINDS {
         if let Some(redacted) = redact_path_creds(&t, kind) {
             t = redacted;
         }
@@ -90,8 +94,14 @@ fn redact_path_creds(token: &str, kind: &str) -> Option<String> {
     let mut segs = rest.splitn(3, '/');
     let _user = segs.next()?;
     let _pass = segs.next()?;
-    let tail = segs.next().unwrap_or("");
-    Some(format!("{}{}***/***/{}", &token[..idx], marker, tail))
+    let head = &token[..idx];
+    // A space in the password ends the token before the `/` that would follow
+    // it. Adding one would hide that from `scrub_urls`, which then can't tell
+    // that the rest of the address comes later in the line.
+    Some(match segs.next() {
+        Some(tail) => format!("{head}{marker}***/***/{tail}"),
+        None => format!("{head}{marker}***/***"),
+    })
 }
 
 /// Prepares a line for a log that outlives the session, such as the iOS
@@ -127,7 +137,8 @@ fn scrub_urls(text: &str) -> String {
             continue;
         }
         let rest_start = sep + 3;
-        let end = rest_start + url_len(&text[rest_start..]);
+        let mut end = rest_start + url_len(&text[rest_start..]);
+        end += rest_of_xtream_path(&text[rest_start..end], &text[end..]);
         out.push_str(&text[copied..rest_start]);
         out.push_str(&scrub_after_scheme(&text[rest_start..end]));
         copied = end;
@@ -145,7 +156,7 @@ fn scrub_urls(text: &str) -> String {
 fn url_len(rest: &str) -> usize {
     let word = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let unencoded = rest[..word]
-        .find(|c: char| "\"<>`{}|\\^".contains(c))
+        .find(|c: char| UNENCODED.contains(c))
         .unwrap_or(word);
     let url = &rest[..unencoded];
     if url.contains(['?', '#']) {
@@ -154,22 +165,101 @@ fn url_len(rest: &str) -> usize {
     trim_trailing_punctuation(url).len()
 }
 
+/// Characters a URL can't hold unencoded, so in free text they end one.
+const UNENCODED: &str = "\"<>`{}|\\^";
+
 /// Drops trailing `.`, `,`, `;`, `:`, `!` and `'`, and a `)` or `]` that has
 /// no partner inside the URL, as in `(see http://host/1.ts).`.
-fn trim_trailing_punctuation(mut url: &str) -> &str {
-    while let Some(last) = url.chars().next_back() {
-        let outside = match last {
-            ')' => url.matches(')').count() > url.matches('(').count(),
-            ']' => url.matches(']').count() > url.matches('[').count(),
-            '.' | ',' | ';' | ':' | '!' | '\'' => true,
-            _ => false,
-        };
-        if !outside {
-            break;
+fn trim_trailing_punctuation(url: &str) -> &str {
+    let bytes = url.as_bytes();
+    let count = |b: u8| bytes.iter().filter(|&&x| x == b).count();
+    // Counted once. Dropping a `)` or `]` leaves one fewer of it, and nothing
+    // here drops a `(` or `[`.
+    let (mut close_paren, open_paren) = (count(b')'), count(b'('));
+    let (mut close_bracket, open_bracket) = (count(b']'), count(b'['));
+    let mut end = bytes.len();
+    while end > 0 {
+        match bytes[end - 1] {
+            b')' if close_paren > open_paren => close_paren -= 1,
+            b']' if close_bracket > open_bracket => close_bracket -= 1,
+            b'.' | b',' | b';' | b':' | b'!' | b'\'' => {}
+            _ => break,
         }
-        url = &url[..url.len() - 1];
+        end -= 1;
     }
-    url
+    // Only ASCII bytes were dropped, so `end` is a char boundary.
+    &url[..end]
+}
+
+/// Xtream addresses run `/<user>/<pass>/<id>`, or `/live/<user>/<pass>/<id>`
+/// and the same with `movie` or `series`. A space in the login, or a
+/// character such as a quote or `<`, ends the address early, as in
+/// `http://host/john/pa"ss/12345.ts`, and would leave the rest of the login in
+/// the line.
+///
+/// `url` is the address as [`url_len`] found it, after `scheme://`, and
+/// `after` is the text that follows it. If the same line goes on to finish
+/// that shape with a stream ID, this returns how much of `after` belongs to
+/// the address, and 0 otherwise. Other text that happens to fit the shape is
+/// hidden along with the address, which errs on the safe side.
+fn rest_of_xtream_path(url: &str, after: &str) -> usize {
+    if after.is_empty() || url.contains(['?', '#']) {
+        return 0;
+    }
+    let Some(path_start) = url.find('/') else {
+        return 0;
+    };
+    let path = &url[path_start + 1..];
+    // The address can stop in the user or the password, so the ID is one or
+    // two segments on.
+    let mut search = 0;
+    for _ in 0..2 {
+        let Some(found) = after[search..].find(['/', '\n', '\r']) else {
+            return 0;
+        };
+        let slash = search + found;
+        if after.as_bytes()[slash] != b'/' {
+            return 0;
+        }
+        if is_xtream_login(&format!("{path}{}", &after[..slash])) {
+            if let Some(id_len) = stream_id_len(&after[slash + 1..]) {
+                return slash + 1 + id_len;
+            }
+        }
+        search = slash + 1;
+    }
+    0
+}
+
+/// `<user>/<pass>`, or `live/<user>/<pass>` and the same with `movie` or
+/// `series`.
+fn is_xtream_login(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+    let fits = match segments.as_slice() {
+        [_, _] => true,
+        [kind, _, _] => STREAM_KINDS.contains(kind),
+        _ => false,
+    };
+    fits && segments.iter().all(|s| !s.is_empty())
+}
+
+/// If `rest` starts with a stream ID that ends an address, the length of the
+/// address from there. That's the ID, or the ID and a query or fragment after
+/// it, which runs to the next whitespace as in [`url_len`].
+fn stream_id_len(rest: &str) -> Option<usize> {
+    let end = rest
+        .find(|c: char| c.is_whitespace() || "/?#".contains(c) || UNENCODED.contains(c))
+        .unwrap_or(rest.len());
+    match rest[end..].chars().next() {
+        Some('/') => None,
+        Some('?' | '#') => {
+            is_stream_id(&rest[..end]).then(|| rest.find(char::is_whitespace).unwrap_or(rest.len()))
+        }
+        _ => {
+            let id = trim_trailing_punctuation(&rest[..end]);
+            is_stream_id(id).then_some(id.len())
+        }
+    }
 }
 
 /// `rest` is everything after `scheme://` up to the end of the URL.
@@ -271,19 +361,31 @@ fn tail(segment: &str) -> Tail<'_> {
     {
         return Tail::Whole;
     }
-    let (stem, ext) = match segment.rsplit_once('.') {
-        Some((stem, ext)) if EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext)) => {
-            (stem, Some(ext))
-        }
-        _ => (segment, None),
-    };
-    let is_id =
-        !stem.is_empty() && stem.len() <= MAX_ID_DIGITS && stem.bytes().all(|b| b.is_ascii_digit());
-    match (is_id, ext) {
+    let (stem, ext) = split_extension(segment);
+    match (is_id(stem), ext) {
         (true, _) => Tail::Whole,
         (false, Some(ext)) => Tail::Extension(ext),
         (false, None) => Tail::Hidden,
     }
+}
+
+/// Splits off an extension in [`EXTENSIONS`], if `segment` has one.
+fn split_extension(segment: &str) -> (&str, Option<&str>) {
+    match segment.rsplit_once('.') {
+        Some((stem, ext)) if EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext)) => {
+            (stem, Some(ext))
+        }
+        _ => (segment, None),
+    }
+}
+
+fn is_id(stem: &str) -> bool {
+    !stem.is_empty() && stem.len() <= MAX_ID_DIGITS && stem.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A stream ID such as `12345`, or one with an extension such as `12345.ts`.
+fn is_stream_id(segment: &str) -> bool {
+    is_id(split_extension(segment).0)
 }
 
 #[cfg(test)]
@@ -373,6 +475,91 @@ mod tests {
             scrub_log_line("(http://host/get.php?username=john&password=a\"b): timed out"),
             "(http://host/get.php?… timed out"
         );
+    }
+
+    #[test]
+    fn scrub_log_line_hides_logins_that_end_the_address() {
+        // A quote, `<` or space in the login ends the address before the
+        // stream ID, and the rest of the login used to stay in the line.
+        for (line, expected) in [
+            (
+                "load url=http://host/john/pa\"ss/12345.ts done",
+                "load url=http://host/…/12345.ts done",
+            ),
+            ("http://host/john/pa<ss/12345.ts", "http://host/…/12345.ts"),
+            (
+                "http://host/john/pa ss/12345.ts failed",
+                "http://host/…/12345.ts failed",
+            ),
+            ("http://host/john/p a\"s s/12345", "http://host/…/12345"),
+            (
+                "http://host:8080/live/john/pa ss/12345.ts failed",
+                "http://host:8080/…/12345.ts failed",
+            ),
+            (
+                "http://host/movie/john/pa ss/777.mkv",
+                "http://host/…/777.mkv",
+            ),
+            // In the user, the ID is two segments on.
+            ("http://host/jo\"hn/pass/12345", "http://host/…/12345"),
+            (
+                "http://host/live/jo hn/pass/12345.m3u8",
+                "http://host/…/12345.m3u8",
+            ),
+            ("(http://host/john/pa\"ss/42.ts).", "(http://host/…/42.ts)."),
+            (
+                "http://host/john/pa\"ss/12345.ts?token=abc next",
+                "http://host/…/12345.ts?… next",
+            ),
+        ] {
+            assert_eq!(scrub_log_line(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn scrub_looks_for_the_rest_of_a_login_only_where_it_can_be() {
+        // On the next line.
+        assert_eq!(
+            scrub_urls("http://host/john/pa\n5/10 done"),
+            "http://host/…\n5/10 done"
+        );
+        // After an address that already ends in an ID.
+        assert_eq!(
+            scrub_urls("http://host/john/pass/1.ts \"x/2\""),
+            "http://host/…/1.ts \"x/2\""
+        );
+        // When what follows isn't a login and an ID.
+        assert_eq!(
+            scrub_urls("http://host/a/b/c \"x/1\""),
+            "http://host/… \"x/1\""
+        );
+        assert_eq!(
+            scrub_urls("http://host/a/b see c/notes"),
+            "http://host/… see c/notes"
+        );
+        assert_eq!(
+            scrub_urls("http://a/u/p then https://b/1.ts"),
+            "http://a/… then https://b/1.ts"
+        );
+    }
+
+    #[test]
+    fn redact_credentials_adds_no_slash_after_a_cut_password() {
+        assert_eq!(
+            redact_credentials("http://host/live/john/pa ss/1.ts"),
+            "http://host/live/***/*** ss/1.ts"
+        );
+    }
+
+    #[test]
+    fn scrub_trims_a_long_run_of_brackets_quickly() {
+        // Each `)` dropped used to mean counting all the others again.
+        let closing = |n: usize| ")".repeat(n);
+        let line = format!("(http://host/1.ts{}", closing(20_000));
+        assert!(scrub_urls(&line) == line);
+        // Half of them close brackets inside the address and stay with it.
+        let line = format!("http://host/{}1{}", "(".repeat(10_000), closing(20_000));
+        assert!(scrub_urls(&line) == format!("http://host/…{}", closing(10_000)));
     }
 
     #[test]
