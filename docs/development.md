@@ -7,7 +7,7 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 ## Prerequisites
 
 - [Rust](https://rustup.rs) (stable)
-- [Node.js](https://nodejs.org) 22.12 or later
+- [Node.js](https://nodejs.org) 24, or 22.12 or a later 22.x release
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
