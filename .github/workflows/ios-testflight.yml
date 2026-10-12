@@ -94,7 +94,7 @@ jobs:
           cache: npm
 
       - name: Install frontend deps
-        run: npm ci
+        uses: ./.github/actions/install-frontend-deps
 
       # The upload always needs the App Store Connect API key. Signing uses the
       # Apple Distribution certificate and App Store profile when they're set.
