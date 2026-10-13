@@ -1,8 +1,27 @@
 # lint-staged runs with --no-stash so it never adds to or drops from the git
 # stash, which other worktrees share. It still hides the unstaged parts of
-# partially staged files while the tasks run, and puts them back afterwards,
-# even when a task fails. If it can't, it says so and leaves them in a patch
-# under the git directory's lint-staged folder.
-pnpm exec lint-staged --no-stash
+# partially staged files in a patch while the tasks run, and puts them back
+# afterwards, even when a task fails. A git error or a killed run can leave
+# the patch behind without saying where, so this hook looks for one before
+# and after the run.
+dir=$(git rev-parse --git-path lint-staged)
+left=$(find "$dir" -name unstaged.patch 2>/dev/null || true)
+
+if [ -n "$left" ]; then
+	echo "pre-commit: an earlier run stopped before restoring unstaged changes." >&2
+	echo "They are saved in:" >&2
+	echo "$left" >&2
+	echo "Apply each with git apply --3way <patch>, then delete its folder." >&2
+	exit 1
+fi
+
+if ! pnpm exec lint-staged --no-stash; then
+	left=$(find "$dir" -name unstaged.patch 2>/dev/null || true)
+	if [ -n "$left" ]; then
+		echo "pre-commit: unstaged changes weren't restored. They are saved in:" >&2
+		echo "$left" >&2
+	fi
+	exit 1
+fi
 
 pnpm test
