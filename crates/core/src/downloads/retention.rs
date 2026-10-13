@@ -74,6 +74,8 @@ mod tests {
     fn counts_from_when_the_download_finished() {
         let rec = finished("a", 1_000);
         assert_eq!(delete_at(&rec, Some(7)), Some(1_000 + 7 * DAY_SECS));
+        // A day is 24 hours.
+        assert_eq!(delete_at(&rec, Some(1)), Some(87_400));
     }
 
     #[test]

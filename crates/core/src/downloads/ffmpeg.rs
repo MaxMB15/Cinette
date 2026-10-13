@@ -172,6 +172,14 @@ mod tests {
     }
 
     #[test]
+    fn mov_container_gets_faststart_and_mov_muxer() {
+        let args = build_ffmpeg_args("http://h/movie/u/p/1.mov", "/tmp/1.mov.part", "mov");
+        let joined = args.join(" ");
+        assert!(joined.contains("-movflags +faststart"));
+        assert!(joined.contains("-f mov"));
+    }
+
+    #[test]
     fn extracts_container_from_part_path() {
         assert_eq!(container_from_part_path("/dl/Show/S01E01.mkv.part"), "mkv");
         assert_eq!(container_from_part_path("/dl/Movie.mp4.part"), "mp4");
@@ -179,12 +187,17 @@ mod tests {
         assert_eq!(container_from_part_path("/dl/Movie.ts"), "ts");
         // No extension → default.
         assert_eq!(container_from_part_path("/dl/noext.part"), "mkv");
+        // A dot in a folder name or at the end of the name isn't one.
+        assert_eq!(container_from_part_path("/dl/Mr. Robot/E01.part"), "mkv");
+        assert_eq!(container_from_part_path("/dl/Movie..part"), "mkv");
     }
 
     #[test]
     fn maps_containers_to_muxers() {
         assert_eq!(muxer_for_container("mkv"), "matroska");
         assert_eq!(muxer_for_container("mp4"), "mp4");
+        assert_eq!(muxer_for_container("mov"), "mov");
+        assert_eq!(muxer_for_container("avi"), "avi");
         assert_eq!(muxer_for_container("ts"), "mpegts");
         assert_eq!(muxer_for_container("webm"), "webm");
         assert_eq!(muxer_for_container("unknown"), "matroska");
