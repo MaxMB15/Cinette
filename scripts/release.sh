@@ -110,7 +110,10 @@ if [[ -n "$LEFT_OUT" ]]; then
   printf '%s\n' "$LEFT_OUT" | sed 's/^/    /'
   # The check before the prompts showed these files matched HEAD.
   git checkout HEAD -- "${BUMPED[@]}"
-  echo "  Nothing was committed, and the version files are back as they were."
+  # The others had no unstaged changes before the bump, so the index still
+  # holds them. Putting them back makes a re-run stop here again.
+  printf '%s\n' "$LEFT_OUT" | git --literal-pathspecs restore --pathspec-from-file=-
+  echo "  Nothing was committed, and every file the bump changed is back as it was."
   echo ""
   exit 1
 fi
