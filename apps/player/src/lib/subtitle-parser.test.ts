@@ -67,4 +67,70 @@ describe("parseSrt", () => {
 		const srt = `1\n00:00:03,000 --> 00:00:01,000\nBackwards\n\n`;
 		expect(parseSrt(srt)).toHaveLength(0);
 	});
+
+	it("skips a cue that ends when it starts", () => {
+		const srt = `1\n00:00:02,000 --> 00:00:02,000\nNo time on screen\n\n`;
+		expect(parseSrt(srt)).toHaveLength(0);
+	});
+
+	it("reads the hours and minutes of a timestamp", () => {
+		const srt = `1\n01:02:03,450 --> 01:02:05,000\nLate in the film\n\n`;
+		const [cue] = parseSrt(srt);
+		expect(cue.start).toBeCloseTo(3723.45);
+		expect(cue.end).toBeCloseTo(3725);
+	});
+
+	it("skips a block whose start or end can't be read", () => {
+		const srt =
+			`1\n00:00:xx,000 --> 00:00:02,000\nBad start\n\n` +
+			`2\n00:00:03,000 --> 00:00:yy,000\nBad end\n\n` +
+			`3\n00:00:05,000 --> 00:00:06,000\nGood\n\n`;
+		expect(parseSrt(srt).map((c) => c.text)).toEqual(["Good"]);
+	});
+
+	it("skips a timing line with more than one arrow", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000 --> 00:00:03,000\nConfused\n\n`;
+		expect(parseSrt(srt)).toHaveLength(0);
+	});
+
+	it("parses a block that has no cue number", () => {
+		const srt = `00:00:01,000 --> 00:00:02,000\nNo number\n\n`;
+		expect(parseSrt(srt)).toEqual([{ start: 1, end: 2, text: "No number" }]);
+	});
+
+	it("trims the spaces around each line of text", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n  Line one  \n <i>Line two</i> \n\n`;
+		expect(parseSrt(srt)[0].text).toBe("Line one\nLine two");
+	});
+
+	it("drops lines that are empty once the tags and spaces are gone", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<i></i>\n   \nSpoken line\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("Spoken line");
+	});
+
+	it("skips a cue with no text left once the tags are gone", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<font color="#ffffff"></font>\n\n`;
+		expect(parseSrt(srt)).toHaveLength(0);
+	});
+
+	it.each([
+		{ name: "Windows", eol: "\r\n" },
+		{ name: "classic Mac", eol: "\r" },
+	])("reads files with $name line endings", ({ eol }) => {
+		const srt = [
+			"1",
+			"00:00:01,000 --> 00:00:02,000",
+			"First line",
+			"Second line",
+			"",
+			"2",
+			"00:00:03,000 --> 00:00:04,000",
+			"Next cue",
+			"",
+		].join(eol);
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "First line\nSecond line" },
+			{ start: 3, end: 4, text: "Next cue" },
+		]);
+	});
 });
