@@ -615,6 +615,7 @@ fn quitting_before_the_downloads_are_set_up_does_nothing() {
 }
 
 /// Save the Xtream provider `id`, so its channels' ids name it.
+#[cfg(desktop)]
 fn add_provider(app: &TestApp, id: &str) {
     use mvp_core::models::playlist::{Provider, ProviderType};
     let state = app.state();
@@ -633,6 +634,7 @@ fn add_provider(app: &TestApp, id: &str) {
     cache.upsert_provider(&provider).unwrap();
 }
 
+#[cfg(desktop)]
 #[test]
 fn a_download_put_back_for_a_recording_waits_until_it_ends() {
     let app = TestApp::new();

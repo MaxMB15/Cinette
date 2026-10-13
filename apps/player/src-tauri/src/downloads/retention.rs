@@ -179,6 +179,11 @@ mod tests {
         assert!(download(&app, "a").is_none());
     }
 
+    #[test]
+    fn the_app_checks_every_hour() {
+        assert_eq!(CHECK_INTERVAL, Duration::from_secs(3600));
+    }
+
     /// The app's own checks start an hour after launch, so a download that
     /// came due while the app was closed isn't gone as soon as it opens.
     #[test]
