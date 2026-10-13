@@ -4,19 +4,12 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-interface ScrollAreaProps extends React.HTMLAttributes<HTMLDivElement> {}
+interface ScrollAreaProps extends React.ComponentProps<"div"> {}
 
-const ScrollArea = React.forwardRef<HTMLDivElement, ScrollAreaProps>(
-	({ className, children, ...props }, ref) => (
-		<div
-			ref={ref}
-			className={cn("relative overflow-auto scrollbar-hide", className)}
-			{...props}
-		>
-			{children}
-		</div>
-	)
+const ScrollArea = ({ className, children, ...props }: ScrollAreaProps) => (
+	<div className={cn("relative overflow-auto scrollbar-hide", className)} {...props}>
+		{children}
+	</div>
 );
-ScrollArea.displayName = "ScrollArea";
 
 export { ScrollArea };

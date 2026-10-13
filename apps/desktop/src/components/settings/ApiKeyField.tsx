@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useId, useState, type FormEvent, type ReactNode, type Ref } from "react";
+import { useId, useState, type ReactNode, type Ref, type SubmitEvent } from "react";
 import { CircleAlert, CircleCheckBig, CircleX, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -133,7 +133,7 @@ export const ApiKeyField = ({
 	// Pressing Saved or Removed saves again, which restarts its timer.
 	const canSave = field.dirty || field.saveStatus === "saved" || field.saveStatus === "removed";
 
-	const handleSubmit = (e: FormEvent) => {
+	const handleSubmit = (e: SubmitEvent) => {
 		e.preventDefault();
 		if (canSave) void field.save();
 	};

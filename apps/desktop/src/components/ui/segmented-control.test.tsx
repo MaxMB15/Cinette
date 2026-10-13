@@ -41,7 +41,7 @@ describe("SegmentedControl", () => {
 	});
 
 	it("does not submit the form it sits in", () => {
-		const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+		const onSubmit = vi.fn((e: React.SubmitEvent) => e.preventDefault());
 		render(
 			<form onSubmit={onSubmit}>
 				<SegmentedControl value={false} onChange={vi.fn()} options={OPTIONS} />
