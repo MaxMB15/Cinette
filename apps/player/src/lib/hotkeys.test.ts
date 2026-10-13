@@ -96,6 +96,41 @@ describe("resolvePlayerHotkey", () => {
 	it("returns null for unbound keys", () => {
 		expect(resolvePlayerHotkey(key("z"))).toBeNull();
 	});
+
+	it.each([
+		{ k: "K", action: { type: "togglePlay" } },
+		{ k: "f", action: { type: "toggleFullscreen" } },
+		{ k: "M", action: { type: "toggleMute" } },
+		{ k: "J", action: { type: "seekBy", seconds: -SEEK_SHORT } },
+		{ k: "L", action: { type: "seekBy", seconds: SEEK_SHORT } },
+		{ k: "n", action: { type: "nextEpisode" } },
+		{ k: "N", action: { type: "nextEpisode" } },
+		{ k: "p", action: { type: "prevEpisode" } },
+		{ k: "P", action: { type: "prevEpisode" } },
+		{ k: "s", action: { type: "toggleSubtitles" } },
+		{ k: "S", action: { type: "toggleSubtitles" } },
+		{ k: "i", action: { type: "toggleInfo" } },
+		{ k: "I", action: { type: "toggleInfo" } },
+		{ k: "?", action: { type: "toggleShortcuts" } },
+		{ k: "Home", action: { type: "seekToPercent", percent: 0 } },
+		{ k: "Escape", action: { type: "escape" } },
+	])("maps $k to $action.type", ({ k, action }) => {
+		expect(resolvePlayerHotkey(key(k))).toEqual(action);
+	});
+
+	it("maps every digit to its tenth of the runtime", () => {
+		for (let d = 0; d <= 9; d++) {
+			expect(resolvePlayerHotkey(key(String(d)))).toEqual({
+				type: "seekToPercent",
+				percent: d * 10,
+			});
+		}
+	});
+
+	it("leaves function keys alone even though their names end in a digit", () => {
+		expect(resolvePlayerHotkey(key("F1"))).toBeNull();
+		expect(resolvePlayerHotkey(key("F10"))).toBeNull();
+	});
 });
 
 describe("repeatsWhenHeld", () => {
@@ -141,6 +176,81 @@ describe("playerShortcuts", () => {
 			"Seek 15s back / 30s forward",
 			"Seek 15s back / 30s forward",
 		]);
+	});
+
+	it("gives Shift the long seek whatever the skip lengths are", () => {
+		const shiftLabels = playerShortcuts({ back: 5, forward: 15 })
+			.filter(({ keys }) => keys[0].startsWith("Shift"))
+			.map(({ label }) => label);
+		expect(shiftLabels).toEqual([
+			`Seek ${SEEK_LONG}s back / forward`,
+			`Seek ${SEEK_LONG}s back / forward`,
+		]);
+	});
+
+	/** The key presses each name in the overlay stands for. */
+	const presses: Record<string, ReturnType<typeof key>[]> = {
+		Space: [key(" ")],
+		K: [key("k"), key("K")],
+		F: [key("f"), key("F")],
+		M: [key("m"), key("M")],
+		"←": [key("ArrowLeft")],
+		"→": [key("ArrowRight")],
+		J: [key("j"), key("J")],
+		L: [key("l"), key("L")],
+		"Shift ←": [key("ArrowLeft", { shiftKey: true })],
+		"Shift →": [key("ArrowRight", { shiftKey: true })],
+		"Shift J": [key("J", { shiftKey: true })],
+		"Shift L": [key("L", { shiftKey: true })],
+		"0–9": Array.from({ length: 10 }, (_, d) => key(String(d))),
+		Home: [key("Home")],
+		"↑": [key("ArrowUp")],
+		"↓": [key("ArrowDown")],
+		N: [key("n"), key("N")],
+		P: [key("p"), key("P")],
+		S: [key("s"), key("S")],
+		I: [key("i"), key("I")],
+		Enter: [key("Enter")],
+		"?": [key("?")],
+		Esc: [key("Escape")],
+	};
+
+	it("labels every entry and names only keys the player handles", () => {
+		for (const { keys, label } of playerShortcuts()) {
+			expect(label).not.toBe("");
+			expect(keys.length).toBeGreaterThan(0);
+			for (const name of keys) {
+				expect(presses[name], name).toBeDefined();
+				for (const press of presses[name]) {
+					expect(resolvePlayerHotkey(press), name).not.toBeNull();
+				}
+			}
+		}
+	});
+
+	it("lists a key for every player action", () => {
+		const listed = new Set(
+			playerShortcuts()
+				.flatMap(({ keys }) => keys.flatMap((name) => presses[name] ?? []))
+				.map((press) => resolvePlayerHotkey(press)?.type)
+		);
+		expect([...listed].sort()).toEqual(
+			[
+				"escape",
+				"nextEpisode",
+				"prevEpisode",
+				"seekBy",
+				"seekToPercent",
+				"skipSegment",
+				"toggleFullscreen",
+				"toggleInfo",
+				"toggleMute",
+				"togglePlay",
+				"toggleShortcuts",
+				"toggleSubtitles",
+				"volumeBy",
+			].sort()
+		);
 	});
 });
 
@@ -197,6 +307,55 @@ describe("isKeyboardFocusedControl", () => {
 		document.body.appendChild(button);
 		vi.spyOn(button, "matches").mockReturnValue(false);
 		expect(isKeyboardFocusedControl(button)).toBe(false);
+	});
+
+	/** An element whose `:focus-visible` match is set by the test. */
+	const focusVisible = (el: HTMLElement) => {
+		document.body.appendChild(el);
+		const matches = vi.spyOn(el, "matches").mockReturnValue(true);
+		return { el, matches };
+	};
+
+	const withRole = (role: string) => {
+		const el = document.createElement("div");
+		el.setAttribute("role", role);
+		return el;
+	};
+
+	it.each([
+		"button",
+		"link",
+		"checkbox",
+		"switch",
+		"tab",
+		"menuitem",
+		"menuitemcheckbox",
+		"menuitemradio",
+	])("treats an element with role %s as a control", (role) => {
+		expect(isKeyboardFocusedControl(focusVisible(withRole(role)).el)).toBe(true);
+	});
+
+	it("treats a link as a control", () => {
+		expect(isKeyboardFocusedControl(focusVisible(document.createElement("a")).el)).toBe(true);
+	});
+
+	it("leaves Space to the player on other elements, even when focus shows", () => {
+		for (const el of [
+			document.createElement("div"),
+			document.createElement("span"),
+			withRole("slider"),
+			withRole("textbox"),
+		]) {
+			expect(isKeyboardFocusedControl(focusVisible(el).el)).toBe(false);
+		}
+	});
+
+	it("follows the browser's own :focus-visible match", () => {
+		const button = document.createElement("button");
+		document.body.appendChild(button);
+		expect(isKeyboardFocusedControl(button)).toBe(false);
+		button.focus();
+		expect(isKeyboardFocusedControl(button)).toBe(true);
 	});
 });
 
