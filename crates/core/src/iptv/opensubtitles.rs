@@ -719,4 +719,33 @@ mod tests {
             "{result:?}"
         );
     }
+
+    #[test]
+    fn a_search_stays_fresh_for_a_day() {
+        assert_eq!(SEARCH_CACHE_TTL_SECS, 86_400);
+    }
+
+    #[tokio::test]
+    async fn a_search_with_a_key_no_header_can_carry_fails_without_showing_it() {
+        // The bad character stops the request before it reaches the network.
+        let err = search_subtitles("tt0113277", None, None, "SEC\nRET")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, OpenSubtitlesError::Http(e) if e.is_builder()),
+            "{err:?}"
+        );
+        test_server::assert_hides(&err, "RET");
+    }
+
+    #[tokio::test]
+    async fn a_download_finds_a_subtitle_already_on_disk() {
+        let dest = tempfile::tempdir().unwrap();
+        let saved = dest.path().join("7.srt");
+        std::fs::write(&saved, "1\n").unwrap();
+        // The file on disk means no request goes out. A key no header can
+        // carry stops one if that changes.
+        let path = download_subtitle(7, "SEC\nRET", dest.path()).await.unwrap();
+        assert_eq!(path, saved);
+    }
 }
