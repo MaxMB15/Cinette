@@ -1023,7 +1023,10 @@ fn modified_at(path: &str) -> Option<i64> {
 #[cfg(all(test, desktop))]
 mod tests {
     use super::*;
-    use crate::downloads::test_support::{self, add_channel, stalls};
+    use crate::downloads::test_support::{
+        self, add_channel, missing_url, process_runs, stalls, video_url, wait_until, DownloadEvent,
+        Events,
+    };
     use crate::test_support::{poison, TestApp};
     use chrono::NaiveDate;
     use mvp_core::models::playlist::{Provider, ProviderType};
@@ -1190,6 +1193,8 @@ mod tests {
         let news = schedule(&cache, "xt-1-xt-0", 100, 1_000, None, 50).unwrap();
         let elsewhere = schedule(&cache, "xt-2-xt-1", 100, 1_000, None, 50).unwrap();
         let sports = schedule(&cache, "xt-1-xt-1", 900, 2_000, None, 50).unwrap();
+        // One that hasn't started has no connection to give up.
+        schedule(&cache, "xt-1-xt-0", 1_500, 2_500, None, 50).unwrap();
         claim(&cache, &news.id, dir.path(), 120, local(20, 0)).unwrap();
         claim(&cache, &elsewhere.id, dir.path(), 120, local(20, 0)).unwrap();
 
@@ -1477,14 +1482,15 @@ mod tests {
         let file = dir.path().join("a.ts");
         let id = running_with_file(&cache, &file, b"");
         let mut tries = HashMap::from([(id.clone(), 3)]);
-        let detail = "Server returned 404 Not Found";
-        let next = settle_at(&cache, &id, Exit::Failed, Some(detail), 200, &mut tries);
+        // It started at 100, so it ran for two and a half minutes.
+        let detail = "Connection reset by peer";
+        let next = settle_at(&cache, &id, Exit::Failed, Some(detail), 250, &mut tries);
         assert_eq!(next, None);
         let done = get(&cache, &id);
         assert_eq!(done.status, DownloadStatus::Failed);
         assert_eq!(
             done.error.as_deref(),
-            Some(format!("The provider couldn't find the channel.\n{detail}").as_str())
+            Some(format!("The connection to the provider failed.\n{detail}").as_str())
         );
         assert!(!file.exists());
         assert!(tries.is_empty());
@@ -1605,15 +1611,16 @@ mod tests {
         assert_eq!((done.status, done.error), (DownloadStatus::Completed, None));
     }
 
-    /// An app recording the live channel "City News" since a minute ago, and
-    /// the recording's id. The stream never sends anything, and the real
-    /// ffmpeg waits 15 seconds for it, longer than a test runs.
-    fn app_recording() -> (TestApp, String) {
+    /// An app with the live channel "City News", which plays `url`, and a
+    /// recording of it from a minute ago to half an hour from now that no
+    /// check has started yet. Returns the app and the recording's id.
+    fn app_scheduled(url: &str) -> (TestApp, String) {
         let app = TestApp::new();
-        let live = Channel {
-            url: stalls().into(),
-            ..channel("n1", "City News", "live")
-        };
+        // The URL goes in on a line of its own. cargo-mutants deletes the
+        // fields of a struct update even in tests, and without this URL
+        // ffmpeg would look up the fixture's made-up host.
+        let mut live = channel("n1", "City News", "live");
+        live.url = url.into();
         add_channel(&app, &live);
         let now = manager::now_secs();
         let rec = {
@@ -1621,10 +1628,18 @@ mod tests {
             let cache = state.cache.lock().unwrap();
             schedule(&cache, "n1", now - 60, now + 1_800, None, now).unwrap()
         };
-        run_check(&app.handle());
-        assert_eq!(download_of(&app, &rec.id).status, DownloadStatus::Recording);
-        assert_eq!(stopping(&app, &rec.id), Some(false));
         (app, rec.id)
+    }
+
+    /// An app recording the live channel "City News" since a minute ago, and
+    /// the recording's id. The stream never sends anything, and the real
+    /// ffmpeg waits 15 seconds for it, longer than a test runs.
+    fn app_recording() -> (TestApp, String) {
+        let (app, id) = app_scheduled(stalls());
+        run_check(&app.handle());
+        assert_eq!(download_of(&app, &id).status, DownloadStatus::Recording);
+        assert_eq!(stopping(&app, &id), Some(false));
+        (app, id)
     }
 
     fn download_of(app: &TestApp, id: &str) -> DownloadRecord {
@@ -1664,5 +1679,398 @@ mod tests {
 
         state.cache.clear_poison();
         assert_eq!(download_of(&app, &id).status, DownloadStatus::Recording);
+    }
+
+    /// Kill process `pid` at once, as when ffmpeg crashes.
+    fn kill(pid: u32) {
+        let killed = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+    }
+
+    /// The process id of the ffmpeg recording `id`.
+    fn pid_of(app: &TestApp, id: &str) -> u32 {
+        let handle = app.handle();
+        let recorder = handle.state::<Recorder>();
+        let running = recorder.running();
+        running[id].child.pid()
+    }
+
+    /// The app's recordings other than `id`.
+    fn others(app: &TestApp, id: &str) -> Vec<DownloadRecord> {
+        let state = app.state();
+        let cache = state.cache.lock().unwrap();
+        let recordings = cache.list_recordings().unwrap();
+        recordings.into_iter().filter(|r| r.id != id).collect()
+    }
+
+    /// Waits for the app to send a record of recording `id` that's no longer
+    /// recording, and returns it.
+    fn settled(events: &Events, id: &str) -> DownloadRecord {
+        let mut found = None;
+        wait_until("the recording settles", || {
+            found = events
+                .progress(id)
+                .into_iter()
+                .find(|r| r.status != DownloadStatus::Recording);
+            found.is_some()
+        });
+        found.unwrap()
+    }
+
+    #[test]
+    fn the_check_thread_sleeps_for_the_time_it_was_given() {
+        let recorder = Recorder::default();
+        let started = Instant::now();
+        recorder.sleep(Duration::from_millis(200));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+    }
+
+    #[test]
+    fn checking_soon_wakes_the_check_thread() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        let waker = handle.clone();
+        let woke = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            check_soon(&waker);
+        });
+        let started = Instant::now();
+        handle.state::<Recorder>().sleep(Duration::from_secs(10));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        woke.join().unwrap();
+
+        // A wake counts once, so the next sleep lasts.
+        let started = Instant::now();
+        handle.state::<Recorder>().sleep(Duration::from_millis(200));
+        assert!(started.elapsed() >= Duration::from_millis(200));
+    }
+
+    #[test]
+    fn the_check_thread_starts_a_recording_when_it_comes_due() {
+        let (app, id) = app_scheduled(stalls());
+        let started = Instant::now();
+        start(&app.handle(), Some(manager::now_secs()));
+        // The thread checks a second after it starts, not half a minute
+        // later.
+        while stopping(&app, &id).is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "the check thread didn't start the recording"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(download_of(&app, &id).status, DownloadStatus::Recording);
+    }
+
+    #[test]
+    fn launch_counts_the_recordings_it_settled() {
+        let cache = cache();
+        let dir = tempfile::tempdir().unwrap();
+        running_with_file(&cache, &dir.path().join("a.ts"), b"video");
+        running_with_file(&cache, &dir.path().join("b.ts"), b"video");
+        assert_eq!(recover(&cache), Ok(2));
+        assert_eq!(recover(&cache), Ok(0));
+    }
+
+    #[test]
+    fn a_cut_off_recording_finished_when_its_file_was_last_written() {
+        let cache = cache();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.ts");
+        let id = running_with_file(&cache, &file, b"video");
+        let written = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(written)
+            .unwrap();
+
+        recover_records(&cache, 2_000_000_000, || "rec-rest".to_string()).unwrap();
+        assert_eq!(get(&cache, &id).finished_at, Some(1_000_000_000));
+    }
+
+    #[test]
+    fn a_recording_that_comes_due_as_the_app_quits_waits_for_the_next_launch() {
+        let (app, id) = app_scheduled(stalls());
+        app.downloads().exiting.store(true, Ordering::SeqCst);
+
+        begin(&app.handle(), &id);
+
+        let waiting = download_of(&app, &id);
+        assert_eq!(waiting.status, DownloadStatus::Scheduled);
+        assert!(waiting.dest_path.is_empty());
+        assert_eq!(stopping(&app, &id), None);
+    }
+
+    #[test]
+    fn a_recording_with_no_connection_to_take_over_starts_at_once() {
+        let (app, id) = app_scheduled(stalls());
+        let started = Instant::now();
+        run_check(&app.handle());
+        assert!(started.elapsed() < HANDOVER_PAUSE);
+        assert_eq!(stopping(&app, &id), Some(false));
+    }
+
+    #[test]
+    fn a_recording_stopped_while_its_provider_lets_go_never_begins() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        {
+            let state = app.state();
+            let cache = state.cache.lock().unwrap();
+            cache.upsert_provider(&provider("xt-1")).unwrap();
+        }
+        let live = Channel {
+            url: stalls().into(),
+            ..channel("xt-1-xt-0", "City News", "live")
+        };
+        add_channel(&app, &live);
+        let movie = test_support::movie("xt-1-vod-0", "Dune (2021)", stalls());
+        add_channel(&app, &movie);
+        let download = manager::enqueue_record(
+            &handle,
+            "xt-1-vod-0",
+            "Dune (2021)",
+            stalls(),
+            DownloadKind::Movie,
+            None,
+            None,
+        )
+        .unwrap();
+        manager::pump(&handle).unwrap();
+        assert_eq!(
+            download_of(&app, &download).status,
+            DownloadStatus::Downloading
+        );
+        let now = manager::now_secs();
+        let rec = {
+            let state = app.state();
+            let cache = state.cache.lock().unwrap();
+            schedule(&cache, "xt-1-xt-0", now - 60, now + 1_800, None, now).unwrap()
+        };
+        let events = Events::watch(&app);
+
+        // The user stops the recording while it waits for its provider's
+        // download to let go.
+        let stopper = {
+            let handle = handle.clone();
+            let rec = rec.id.clone();
+            std::thread::spawn(move || {
+                wait_until("the check claims the recording", || {
+                    let state = handle.state::<AppState>();
+                    let cache = state.cache.lock().unwrap();
+                    let claimed = cache.get_download(&rec).unwrap().unwrap();
+                    claimed.status == DownloadStatus::Recording
+                });
+                manager::stop_one(&handle, &rec).unwrap();
+            })
+        };
+        let started = Instant::now();
+        run_check(&handle);
+        stopper.join().unwrap();
+
+        // The download went back in the queue, and the recording waited for
+        // the provider to see its connection close.
+        assert!(events
+            .progress(&download)
+            .iter()
+            .any(|r| r.status == DownloadStatus::Queued));
+        assert!(started.elapsed() >= HANDOVER_PAUSE);
+        assert!(test_support::download(&app, &rec.id).is_none());
+        assert!(events
+            .sent()
+            .contains(&DownloadEvent::Removed(rec.id.clone())));
+        assert_eq!(stopping(&app, &rec.id), None);
+        // The download goes on.
+        assert_eq!(
+            download_of(&app, &download).status,
+            DownloadStatus::Downloading
+        );
+    }
+
+    #[test]
+    fn a_live_stream_that_ends_early_is_tried_again_in_a_new_file() {
+        let (app, id) = app_scheduled(&video_url("news"));
+        let end = download_of(&app, &id).end_at;
+        let events = Events::watch(&app);
+        run_check(&app.handle());
+
+        let done = settled(&events, &id);
+        assert_eq!(done.status, DownloadStatus::Completed);
+        assert_eq!(done.error.as_deref(), Some(STREAM_STOPPED));
+        assert!(done.downloaded_bytes > 0);
+        // The size went out while it recorded.
+        assert!(events
+            .progress(&id)
+            .iter()
+            .any(|r| r.status == DownloadStatus::Recording && r.downloaded_bytes > 0));
+        assert_eq!(stopping(&app, &id), None);
+
+        let rest = others(&app, &id);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].status, DownloadStatus::Scheduled);
+        assert!(rest[0].start_at > done.finished_at);
+        assert_eq!(rest[0].end_at, end);
+        assert_eq!(events.progress(&rest[0].id), vec![rest[0].clone()]);
+    }
+
+    #[test]
+    fn a_channel_the_provider_cant_find_fails_without_trying_again() {
+        let (app, id) = app_scheduled(&missing_url("news"));
+        let events = Events::watch(&app);
+        run_check(&app.handle());
+
+        let failed = settled(&events, &id);
+        assert_eq!(failed.status, DownloadStatus::Failed);
+        let error = failed.error.unwrap();
+        assert!(
+            error.starts_with("The provider couldn't find the channel.\n"),
+            "{error}"
+        );
+        assert!(error.contains("404"), "{error}");
+        assert!(others(&app, &id).is_empty());
+    }
+
+    #[test]
+    fn ffmpeg_at_its_length_limit_leaves_the_rest_to_a_new_file() {
+        let (app, id) = app_recording();
+        let handle = app.handle();
+        let rec = download_of(&app, &id);
+        let pid = pid_of(&app, &id);
+        // A merge moved the end past the limit ffmpeg was given, and ffmpeg
+        // got there.
+        handle
+            .state::<Recorder>()
+            .running()
+            .get_mut(&id)
+            .unwrap()
+            .limit_at = manager::now_secs();
+        std::fs::write(&rec.dest_path, b"video").unwrap();
+        let events = Events::watch(&app);
+        kill(pid);
+
+        let done = settled(&events, &id);
+        assert_eq!(done.status, DownloadStatus::Completed);
+        assert_eq!(done.error, None);
+        let rest = others(&app, &id);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].status, DownloadStatus::Scheduled);
+        assert_eq!(rest[0].start_at, done.finished_at);
+        assert_eq!(rest[0].end_at, rec.end_at);
+    }
+
+    #[test]
+    fn a_handover_waits_for_the_recordings_asked_to_stop() {
+        let (app, id) = app_recording();
+        let handle = app.handle();
+        let ids = [id.clone()];
+        assert!(!wait_for_stops(&handle, &[]));
+        // One that wasn't asked to stop has nothing to hand over.
+        assert!(!wait_for_stops(&handle, &ids));
+
+        let events = Events::watch(&app);
+        assert!(ask_to_stop(&handle, &id));
+        // This ffmpeg ignores the request while it waits for the stream, so
+        // it's killed a moment later, well inside the grace period.
+        let pid = pid_of(&app, &id);
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            kill(pid);
+        });
+        let started = Instant::now();
+        assert!(wait_for_stops(&handle, &ids));
+        assert!(started.elapsed() < STOP_GRACE);
+        assert_eq!(stopping(&app, &id), None);
+        killer.join().unwrap();
+
+        // It stopped before it recorded anything.
+        let done = settled(&events, &id);
+        assert_eq!(done.status, DownloadStatus::Failed);
+        assert_eq!(done.error.as_deref(), Some(NOTHING_RECORDED));
+        assert!(others(&app, &id).is_empty());
+    }
+
+    #[test]
+    fn quitting_gives_recordings_a_moment_then_leaves_them_for_the_next_launch() {
+        let (app, id) = app_recording();
+        let pid = pid_of(&app, &id);
+        let started = Instant::now();
+
+        stop_all_for_exit(&app.handle());
+
+        assert!(app.downloads().exiting.load(Ordering::SeqCst));
+        // This ffmpeg ignores the request to stop, so quitting waits the
+        // whole grace period, then kills it.
+        assert!(started.elapsed() >= EXIT_GRACE);
+        assert_eq!(stopping(&app, &id), None);
+        wait_until("the recording's ffmpeg ends", || !process_runs(pid));
+        assert_eq!(download_of(&app, &id).status, DownloadStatus::Recording);
+    }
+
+    #[test]
+    fn quitting_with_nothing_recording_doesnt_wait() {
+        let app = TestApp::new();
+        let started = Instant::now();
+        stop_all_for_exit(&app.handle());
+        assert!(app.downloads().exiting.load(Ordering::SeqCst));
+        assert!(started.elapsed() < EXIT_GRACE);
+    }
+
+    #[test]
+    fn a_recording_due_on_a_channel_that_records_extends_it() {
+        let (app, id) = app_recording();
+        let now = manager::now_secs();
+        let next = {
+            let state = app.state();
+            let cache = state.cache.lock().unwrap();
+            schedule(&cache, "n1", now - 10, now + 3_600, None, now).unwrap()
+        };
+        let events = Events::watch(&app);
+
+        run_check(&app.handle());
+
+        assert_eq!(download_of(&app, &id).end_at, Some(now + 3_600));
+        assert!(test_support::download(&app, &next.id).is_none());
+        assert!(events.sent().contains(&DownloadEvent::Removed(next.id)));
+        let handle = app.handle();
+        assert_eq!(handle.state::<Recorder>().running().len(), 1);
+    }
+
+    #[test]
+    fn a_recording_whose_time_passed_is_missed() {
+        let (app, id) = app_scheduled(stalls());
+        let now = manager::now_secs();
+        manager::update_record(&app.handle(), &id, |r| {
+            r.start_at = Some(now - 3_600);
+            r.end_at = Some(now - 1_800);
+        });
+        let events = Events::watch(&app);
+
+        run_check(&app.handle());
+
+        let missed = download_of(&app, &id);
+        assert_eq!(missed.status, DownloadStatus::Missed);
+        assert_eq!(missed.error.as_deref(), Some(NOT_RUNNING));
+        assert_eq!(events.progress(&id), vec![missed]);
+    }
+
+    #[test]
+    fn a_recording_at_its_end_asks_its_ffmpeg_to_stop() {
+        let (app, id) = app_recording();
+        let now = manager::now_secs();
+        manager::update_record(&app.handle(), &id, |r| r.end_at = Some(now - 1));
+        let events = Events::watch(&app);
+
+        run_check(&app.handle());
+
+        assert_eq!(stopping(&app, &id), Some(true));
+        // It stays recording until ffmpeg closes the file.
+        let ending = download_of(&app, &id);
+        assert_eq!(ending.status, DownloadStatus::Recording);
+        assert_eq!(events.progress(&id), vec![ending]);
     }
 }
