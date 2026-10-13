@@ -614,6 +614,121 @@ fn quitting_before_the_downloads_are_set_up_does_nothing() {
     assert!(app.try_state::<DownloadManager>().is_none());
 }
 
+/// Save the Xtream provider `id`, so its channels' ids name it.
+fn add_provider(app: &TestApp, id: &str) {
+    use mvp_core::models::playlist::{Provider, ProviderType};
+    let state = app.state();
+    let cache = state.cache.lock().unwrap();
+    let provider = Provider {
+        id: id.into(),
+        name: "Example TV".into(),
+        provider_type: ProviderType::Xtream,
+        url: "http://example.test".into(),
+        username: Some("user".into()),
+        password: Some("pass".into()),
+        last_updated: None,
+        channel_count: 0,
+        epg_url: None,
+    };
+    cache.upsert_provider(&provider).unwrap();
+}
+
+#[test]
+fn a_download_put_back_for_a_recording_waits_until_it_ends() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    add_provider(&app, "xt-1");
+    let id = enqueue(&app, "xt-1-vod-0", "Dune (2021)", stalls());
+    pump(&handle).unwrap();
+    let pid = app.downloads().running()[&id].child.pid();
+    update_record(&handle, &id, |r| {
+        r.downloaded_bytes = 5_000;
+        r.avg_rate_bps = Some(1_000);
+    });
+    // A recording of a live channel from the same provider starts.
+    add_download(
+        &app,
+        &DownloadRecord {
+            kind: DownloadKind::Recording,
+            source_channel_id: Some("xt-1-xt-0".into()),
+            ..record("rec", DownloadStatus::Recording, "")
+        },
+    );
+    let events = Events::watch(&app);
+
+    requeue(&handle, &id);
+    let queued = download(&app, &id).unwrap();
+    assert_eq!(queued.status, DownloadStatus::Queued);
+    assert_eq!(queued.downloaded_bytes, 0);
+    assert_eq!(queued.avg_rate_bps, None);
+    assert_eq!(queued.error, None);
+    assert!(!is_running(&app, &id));
+    assert_eq!(events.progress(&id)[0], queued);
+    wait_until("the download's ffmpeg ends", || !process_runs(pid));
+
+    // The end of its ffmpeg starts the queue again, and the download keeps
+    // waiting while the recording runs.
+    wait_until("the ended ffmpeg is dealt with", || {
+        events.progress(&id).len() >= 2
+    });
+    pump(&handle).unwrap();
+    assert_eq!(download(&app, &id), Some(queued));
+    assert!(!is_running(&app, &id));
+}
+
+/// Take download `id`'s ffmpeg out of the app's hands without stopping it,
+/// as a stop or a new start that lands while it's running does.
+fn let_go(app: &TestApp, id: &str) -> RunningChildHandle {
+    app.downloads().running().remove(id).unwrap()
+}
+
+#[test]
+fn an_old_ffmpeg_that_ends_leaves_the_new_run_of_its_download_alone() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    let id = enqueue(&app, "c1", "Dune (2021)", stalls());
+    pump(&handle).unwrap();
+    let old = let_go(&app, &id);
+    update_record(&handle, &id, |r| r.status = DownloadStatus::Queued);
+    pump(&handle).unwrap();
+    let new_pid = app.downloads().running()[&id].child.pid();
+    // ffmpeg writes nothing while it waits for input, so stand in for the
+    // part the new run would have written.
+    let part = download(&app, &id).unwrap().dest_path;
+    std::fs::write(&part, b"partial").unwrap();
+    let events = Events::watch(&app);
+
+    old.child.kill().unwrap();
+    wait_until("the old ffmpeg's end is dealt with", || {
+        !events.progress(&id).is_empty()
+    });
+    let rec = download(&app, &id).unwrap();
+    assert_eq!(rec.status, DownloadStatus::Downloading);
+    assert_eq!(rec.error, None);
+    assert!(Path::new(&part).exists());
+    assert_eq!(app.downloads().running()[&id].child.pid(), new_pid);
+}
+
+#[test]
+fn a_stopped_download_loses_a_partial_file_its_ffmpeg_made_after_the_stop() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    let id = enqueue(&app, "c1", "Dune (2021)", stalls());
+    pump(&handle).unwrap();
+    let old = let_go(&app, &id);
+    stop_one(&handle, &id).unwrap();
+    let part = download(&app, &id).unwrap().dest_path;
+    std::fs::write(&part, b"partial").unwrap();
+    let events = Events::watch(&app);
+
+    old.child.kill().unwrap();
+    wait_until("the stopped ffmpeg's end is dealt with", || {
+        !events.progress(&id).is_empty()
+    });
+    assert!(!Path::new(&part).exists());
+    assert_eq!(status(&app, &id), DownloadStatus::Cancelled);
+}
+
 #[test]
 fn a_download_whose_channel_changed_fails_and_the_next_one_starts() {
     let app = TestApp::new();
