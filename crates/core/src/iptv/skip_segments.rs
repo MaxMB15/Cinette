@@ -1065,6 +1065,7 @@ mod tests {
             assert_eq!(credits(exact(), 3450.0, 3500.0), 3450.0);
             // A scene outside the credits leaves them alone.
             assert_eq!(credits(exact(), 3300.0, 3500.0), 3500.0);
+            assert_eq!(credits(exact(), 3400.0, 3500.0), 3500.0);
             assert_eq!(credits(exact(), 3500.0, 3500.0), 3500.0);
             // SkipDB moved its credits ten seconds earlier for a shorter
             // video, so the scene may have moved as well.
@@ -1126,6 +1127,9 @@ mod tests {
             let credits =
                 |end: f64| check(vec![segment(SegmentKind::Credits, 3400.0, end)], 3500.0);
             assert_eq!(credits(3510.0)[0].end, 3500.0);
+            // Fifteen seconds past the end is the most that's let through.
+            assert_eq!(credits(3515.0)[0].end, 3500.0);
+            assert!(credits(3515.5).is_empty());
             assert!(credits(3600.0).is_empty());
             // Unless SkipDB says the video is that much shorter.
             let longer = shifted(SegmentKind::Credits, 3400.0, 3520.0, -12.0);
@@ -1165,6 +1169,17 @@ mod tests {
             // An exact match that stops just short of the end runs to it.
             let exact = segment(SegmentKind::Credits, 3434.0, 3498.0);
             assert_eq!(check(vec![exact], 3500.0)[0].end, 3500.0);
+        }
+
+        #[test]
+        fn runs_moved_credits_to_the_end_of_a_shorter_video() {
+            // SkipDB's copy is ten seconds longer, and it moved the credits
+            // ten seconds earlier. They stop three seconds short of the end.
+            let credits = shifted(SegmentKind::Credits, 3400.0, 3487.0, -10.0);
+            assert_eq!(check(vec![credits], 3490.0)[0].end, 3490.0);
+            // Moved credits that stop well short of the end don't.
+            let early = shifted(SegmentKind::Credits, 3400.0, 3480.0, -10.0);
+            assert_eq!(check(vec![early], 3490.0)[0].end, 3480.0);
         }
 
         #[test]
