@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Settings for cargo-mutants. See "Mutation testing" in docs/development.md.
+
+# The loopback server in mvp-core's http.rs only runs in tests. Changing it
+# tests the tests, not the app.
+exclude_re = ["test_server::"]

@@ -15,9 +15,7 @@ on:
       - "crates/core/**"
       - ".github/workflows/mutants.yml"
       - "scripts/mutants-summary.py"
-  # TEMPORARY: runs the first full baseline. Remove before opening the PR.
-  push:
-    branches: [ci/mutation-testing]
+      - ".cargo/mutants.toml"
   # The whole crate once a week. Schedules run from the default branch, main,
   # so the jobs check out dev to test the newest code.
   schedule:
