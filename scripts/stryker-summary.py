@@ -14,6 +14,10 @@ had no test to run. A timeout usually means the change made a loop run
 forever, which a user would notice too. Mutants that didn't compile, or that
 crashed the test runner, don't count. That's the same score Stryker prints.
 
+A survived mutant that ran no tests gets a note under the table. A mutant that
+stops its module from loading does that, and so does every covered mutant when
+Stryker's test name pattern stops matching Vitest's test names.
+
 Usage:
   python3 scripts/stryker-summary.py [--title TITLE] MUTATION_JSON
 """
@@ -92,11 +96,12 @@ def main(argv: list[str]) -> int:
     if not path.exists():
         print(f"## {args.title}\n\nNo report at `{args.report}`.")
         return 0
-    report = json.loads(path.read_text())
+    report = json.loads(path.read_text(encoding="utf-8"))
 
     counts: dict[str, int] = defaultdict(int)
     survived: dict[str, list[str]] = defaultdict(list)
     uncovered: dict[str, list[str]] = defaultdict(list)
+    no_tests = 0
     for name, file in report["files"].items():
         mutants = sorted(
             file["mutants"],
@@ -107,6 +112,8 @@ def main(argv: list[str]) -> int:
             counts[status] += 1
             if status not in ("Survived", "NoCoverage"):
                 continue
+            if status == "Survived" and mutant.get("testsCompleted") == 0:
+                no_tests += 1
             start = mutant["location"]["start"]
             before = one_line(original(file["source"], mutant["location"]))
             after = one_line(mutant.get("replacement", ""))
@@ -129,6 +136,14 @@ def main(argv: list[str]) -> int:
         f"| {counts['Killed']} | {counts['Survived']} | {counts['NoCoverage']}"
         f" | {counts['Timeout']} | {errors} | {score} |",
     ]
+    if no_tests:
+        out += [
+            "",
+            f"{no_tests} of the survived mutants ran no tests. A mutant that stops its module"
+            " from loading does that. If most of them did, check that"
+            " `apps/player/vitest.stryker.config.ts` still makes Stryker's test name"
+            " pattern match Vitest's test names.",
+        ]
     out += mutant_list("Survived", survived)
     out += mutant_list("No coverage", uncovered)
     print("\n".join(out))

@@ -3,7 +3,8 @@
 
 //! Platform-agnostic libmpv instance management.
 //! Options (vo, hwdec, ao) are passed in by the caller. The only platform code
-//! here is `configure_audio`, which Linux needs after mpv starts.
+//! here is in `configure_audio`, which Linux needs after mpv starts, and in
+//! `loaded_libmpv`, which finds the libmpv file on Linux.
 
 use crate::loadfile::{loadfile, resume_option};
 use crate::log_url::origin_for_log;
@@ -11,6 +12,7 @@ use crate::reconnect::ended_early;
 use libmpv2::Mpv;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Once;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -97,10 +99,18 @@ impl MpvEngine {
             }
             Ok(())
         })
-        .map_err(|e| match failed {
-            Some(k) => format!("mpv init: option {k}: {e}"),
-            None => format!("mpv init: {e}"),
+        .map_err(|e| {
+            // A libmpv other than the one the app expects often fails here
+            // first, on an option it doesn't know, so name the file.
+            let from = loaded_libmpv()
+                .map(|path| format!(", libmpv {path:?}"))
+                .unwrap_or_default();
+            match failed {
+                Some(k) => format!("mpv init: option {k}: {e}{from}"),
+                None => format!("mpv init: {e}{from}"),
+            }
         })?;
+        log_build(&mpv);
         self.mpv = Some(mpv);
         Ok(self.mpv.as_mut().unwrap())
     }
@@ -230,13 +240,18 @@ impl MpvEngine {
         // could open a device, for example with no sound server running, so
         // the message names both causes.
         if current_ao.is_empty() || current_ao == "<unset>" {
+            let at = loaded_libmpv()
+                .map(|path| format!(" at {path:?}"))
+                .unwrap_or_default();
             tracing::error!(
                 "[MPV] no audio output opened. Either no sound server or device \
                  is available, or libmpv was built without audio drivers. On \
-                 Linux, check that PipeWire or PulseAudio is running. If you \
-                 built libmpv yourself, install libpulse-dev, libasound2-dev \
-                 and libpipewire-0.3-dev and run ./scripts/build-libmpv.sh linux \
-                 again."
+                 Linux, check that PipeWire or PulseAudio is running. If mpv's \
+                 own log says \"Audio output pulse not found\", and the same \
+                 for pipewire and alsa, the loaded libmpv{at} was built without \
+                 them. If you built libmpv yourself, install libpulse-dev, \
+                 libasound2-dev and libpipewire-0.3-dev and run \
+                 ./scripts/build-libmpv.sh linux again."
             );
             return;
         }
@@ -428,12 +443,60 @@ fn open_status(started: bool, seeking: Option<bool>, idle_active: Option<bool>) 
     (started, !started && idle_active == Some(true))
 }
 
+/// Logs mpv's version and, on Linux, the libmpv file that was loaded, so a
+/// "no sound" report shows which build ran. The library can't change while
+/// the app runs, so this logs once per process.
+fn log_build(mpv: &Mpv) {
+    static LOGGED: Once = Once::new();
+    LOGGED.call_once(|| {
+        let version = mpv
+            .get_property::<String>("mpv-version")
+            .unwrap_or_else(|_| "<unset>".to_string());
+        match loaded_libmpv() {
+            Some(path) => tracing::info!("[MPV] mpv-version={version:?} libmpv={path:?}"),
+            None => tracing::info!("[MPV] mpv-version={version:?}"),
+        }
+    });
+}
+
+/// The libmpv file this process loaded, read from `/proc/self/maps`.
+#[cfg(target_os = "linux")]
+fn loaded_libmpv() -> Option<String> {
+    // Any mapped file can have a name that isn't UTF-8, and that mustn't
+    // hide libmpv.
+    let maps = std::fs::read("/proc/self/maps").ok()?;
+    libmpv_in_maps(&String::from_utf8_lossy(&maps)).map(str::to_string)
+}
+
+/// Only Linux reports the loaded libmpv file.
+#[cfg(not(target_os = "linux"))]
+fn loaded_libmpv() -> Option<String> {
+    None
+}
+
+/// The path of the first mapped file whose name starts with `libmpv.so`, in
+/// the text of `/proc/<pid>/maps`.
+///
+/// Each line has five fields separated by single spaces, then padding and
+/// the path. The path can hold spaces of its own.
+#[cfg(any(target_os = "linux", test))]
+fn libmpv_in_maps(maps: &str) -> Option<&str> {
+    maps.lines()
+        .filter_map(|line| line.splitn(6, ' ').nth(5))
+        .map(str::trim_start)
+        .find(|path| {
+            path.rsplit('/')
+                .next()
+                .is_some_and(|name| name.starts_with("libmpv.so"))
+        })
+}
+
 #[cfg(test)]
 mod playback_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{open_status, PlayerState};
+    use super::{libmpv_in_maps, open_status, PlayerState};
 
     #[test]
     fn a_logged_state_hides_the_login_in_the_url() {
@@ -486,5 +549,73 @@ mod tests {
         assert_eq!(json["playbackStarted"], true);
         assert_eq!(json["openFailed"], true);
         assert_eq!(json["reachedEnd"], true);
+    }
+
+    #[test]
+    fn libmpv_in_maps_finds_libmpv_among_other_mappings() {
+        let maps = "\
+55d0c0a00000-55d0c0a21000 r--p 00000000 08:02 1048602                    /usr/bin/max-video-player
+55d0c2b00000-55d0c2b21000 rw-p 00000000 00:00 0                          [heap]
+7f2c49e00000-7f2c49e80000 r--p 00000000 08:02 1311234                    /usr/lib/x86_64-linux-gnu/libmpv.so.2.3.0
+7f2c49e80000-7f2c4a000000 r-xp 00080000 08:02 1311234                    /usr/lib/x86_64-linux-gnu/libmpv.so.2.3.0
+7f2c4a000000-7f2c4a021000 rw-p 00000000 00:00 0
+";
+        assert_eq!(
+            libmpv_in_maps(maps),
+            Some("/usr/lib/x86_64-linux-gnu/libmpv.so.2.3.0")
+        );
+    }
+
+    #[test]
+    fn libmpv_in_maps_keeps_spaces_in_the_path() {
+        let maps = "\
+7f2c49e00000-7f2c49e80000 r--p 00000000 08:02 1311234                    /opt/Max Video/libs/libmpv.so.2
+";
+        assert_eq!(
+            libmpv_in_maps(maps),
+            Some("/opt/Max Video/libs/libmpv.so.2")
+        );
+    }
+
+    #[test]
+    fn libmpv_in_maps_finds_nothing_without_libmpv() {
+        let maps = "\
+55d0c0a00000-55d0c0a21000 r--p 00000000 08:02 1048602                    /usr/bin/max-video-player
+7f2c4a200000-7f2c4a228000 r--p 00000000 08:02 1310001                    /usr/lib/x86_64-linux-gnu/libc.so.6
+7f2c4a000000-7f2c4a021000 rw-p 00000000 00:00 0
+7ffd1c9f0000-7ffd1c9f2000 r-xp 00000000 00:00 0                          [vdso]
+";
+        assert_eq!(libmpv_in_maps(maps), None);
+        assert_eq!(libmpv_in_maps(""), None);
+    }
+
+    #[test]
+    fn libmpv_in_maps_skips_lookalike_names() {
+        let maps = "\
+7f2c49e00000-7f2c49e80000 r--p 00000000 08:02 1311234                    /usr/lib/libmpv-helper.so
+7f2c49e80000-7f2c4a000000 r--p 00000000 08:02 1311235                    /usr/lib/notlibmpv.so.2
+7f2c4a000000-7f2c4a021000 r--p 00000000 08:02 1311236                    /opt/libmpv.so.d/libfoo.so
+";
+        assert_eq!(libmpv_in_maps(maps), None);
+    }
+
+    #[test]
+    fn libmpv_in_maps_reads_anonymous_and_deleted_mappings() {
+        // The kernel ends the line of an anonymous mapping with a space, and
+        // adds " (deleted)" to a file that was deleted or replaced on disk.
+        let maps = concat!(
+            "7f2c4a000000-7f2c4a021000 rw-p 00000000 00:00 0 \n",
+            "7f2c49e00000-7f2c49e80000 r-xp 00000000 08:02 1311234                    /usr/lib/libmpv.so.2 (deleted)\n",
+        );
+        assert_eq!(libmpv_in_maps(maps), Some("/usr/lib/libmpv.so.2 (deleted)"));
+    }
+
+    /// The test binary links libmpv, so its own maps list it.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn loaded_libmpv_finds_the_linked_library() {
+        let path = super::loaded_libmpv().expect("libmpv in /proc/self/maps");
+        let name = path.rsplit('/').next().unwrap_or_default();
+        assert!(name.starts_with("libmpv.so"), "{path}");
     }
 }

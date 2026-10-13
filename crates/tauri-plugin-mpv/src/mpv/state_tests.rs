@@ -351,6 +351,14 @@ fn play_and_pause_take_no_inhibit_without_a_stream() {
     assert!(!state.idle_inhibitor.is_active());
 }
 
+#[test]
+fn seeking_needs_a_stream() {
+    let state = MpvState::new();
+    let missing = Err("no mpv instance".to_string());
+    assert_eq!(state.seek(30.0), missing);
+    assert_eq!(state.seek_relative(-10.0), missing);
+}
+
 /// The inhibit is a power assertion on macOS. On Linux it goes over the
 /// desktop's session bus, which CI doesn't have and a developer's machine
 /// would really act on, so these checks only run on macOS.
