@@ -30,6 +30,36 @@ describe("parseSrt", () => {
 		expect(parseSrt(srt)[0].text).toBe("I <3 you");
 	});
 
+	it("keeps the rest of a line after a < with no > after it", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<i>Hi</i> <3 <3\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("Hi <3 <3");
+	});
+
+	it("keeps a <> with nothing in it", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\nLeft <> right\n<><i>Hi</i>\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("Left <> right\n<>Hi");
+	});
+
+	it("strips tags that sit next to each other", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<b><i>Both</i></b>\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("Both");
+	});
+
+	it("strips a tag with a < inside it", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\nx <<i>y\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("x y");
+	});
+
+	it("keeps a long run of < with no > quickly", () => {
+		// A pattern that backtracks over the run would take seconds here.
+		const line = "<".repeat(200_000) + "Hi";
+		const started = performance.now();
+		expect(parseSrt(`00:00:01,000 --> 00:00:02,000\n${line}\n`)).toEqual([
+			{ start: 1, end: 2, text: line },
+		]);
+		expect(performance.now() - started).toBeLessThan(1000);
+	});
+
 	it("joins multi-line text with newline", () => {
 		const srt = `1\n00:00:01,000 --> 00:00:04,000\nLine one\nLine two\n\n`;
 		const cues = parseSrt(srt);

@@ -73,20 +73,30 @@ const parseTiming = (
 };
 
 /**
- * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
+ * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from a line of subtitle
+ * text. A tag runs from a "<" to the first ">" after it, with something
+ * between them. A "<" with no ">" after it stays, as in "I <3 you", and so
+ * does "<>".
  *
- * React shows the result as plain text, never as HTML. With this pattern a
- * second pass never finds anything, but CodeQL's incomplete sanitization check
- * only accepts a replacement that repeats until nothing changes, so keep the loop.
+ * React shows the result as plain text, never as HTML. This reads the line
+ * once. The pattern /<[^>]+>/g it replaces backtracked over a long run of "<"
+ * with no ">", and took seconds on a line of 100,000.
  */
 const stripTags = (text: string): string => {
-	let stripped = text;
-	let previous: string;
-	do {
-		previous = stripped;
-		stripped = stripped.replace(/<[^>]+>/g, "");
-	} while (stripped !== previous);
-	return stripped.trim();
+	let stripped = "";
+	let from = 0;
+	let open = text.indexOf("<");
+	while (open !== -1) {
+		const close = text.indexOf(">", open + 1);
+		// With no ">" left, no later "<" starts a tag either.
+		if (close === -1) break;
+		if (close > open + 1) {
+			stripped += text.slice(from, open);
+			from = close + 1;
+		}
+		open = text.indexOf("<", close + 1);
+	}
+	return (stripped + text.slice(from)).trim();
 };
 
 /**
