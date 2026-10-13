@@ -173,7 +173,7 @@ describe("parseSrt", () => {
 	it("keeps a line of text with an arrow in it", () => {
 		const srt =
 			`1\n00:00:01,000 --> 00:00:02,000\nGo --> there\n3 cats --> home\n` +
-			`Meet at 10:30 --> the station\nLeave at 10:30, go --> left\n10:30 is too late\n\n` +
+			`Meet at 10:30 --> the station\nMoved from 10:30, now --> 11:15, sorry\n10:30 is too late\n\n` +
 			`2\n  00:00:03,000 --> 00:00:04,000\n<!-- note -->Hi\n`;
 		expect(parseSrt(srt)).toEqual([
 			{
@@ -181,7 +181,7 @@ describe("parseSrt", () => {
 				end: 2,
 				text:
 					"Go --> there\n3 cats --> home\nMeet at 10:30 --> the station\n" +
-					"Leave at 10:30, go --> left\n10:30 is too late",
+					"Moved from 10:30, now --> 11:15, sorry\n10:30 is too late",
 			},
 			{ start: 3, end: 4, text: "Hi" },
 		]);
@@ -196,6 +196,23 @@ describe("parseSrt", () => {
 		]);
 	});
 
+	it("keeps a line that starts like a time and has no time after its arrow", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n10:30, go --> left\n` +
+			`10:30: Arrival --> platform 3\n16:9, 4:3 --> crop\n-10:30, then --> go\n` +
+			`12:00, lunch --> 1 hour\nB\n\n2\n00:00:03,000 --> 00:00:04,000\nC\n`;
+		expect(parseSrt(srt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text:
+					"A\n10:30, go --> left\n10:30: Arrival --> platform 3\n16:9, 4:3 --> crop\n" +
+					"-10:30, then --> go\n12:00, lunch --> 1 hour\nB",
+			},
+			{ start: 3, end: 4, text: "C" },
+		]);
+	});
+
 	it("keeps a line that starts like a time but has no arrow", () => {
 		const srt = `1\n00:00:01,000 --> 00:00:02,000\n12:30, not yet\n00:00:03 is late\n`;
 		expect(parseSrt(srt)).toEqual([
@@ -203,9 +220,21 @@ describe("parseSrt", () => {
 		]);
 	});
 
-	it("reads a timing line with a minus sign before its start", () => {
+	it("reads a timing line with a minus sign before a time", () => {
 		const srt =
-			`1\n00:00:01,000 --> 00:00:02,000\nA\n\n` + `2\n-00:00:03,000 --> 00:00:04,000\nB\n\n`;
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n\n` +
+			`2\n-00:00:03,000 --> 00:00:04,000\nB\n\n` +
+			`3\n00:00:05,000 --> -00:00:06,000\nC\n\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 3, end: 4, text: "B" },
+			{ start: 5, end: 6, text: "C" },
+		]);
+	});
+
+	it("reads a timing line with no spaces or extra spaces around its arrow", () => {
+		const srt =
+			`1\n00:00:01,000-->00:00:02,000\nA\n\n` + `2\n00:00:03,000  -->   00:00:04,000\nB\n`;
 		expect(parseSrt(srt)).toEqual([
 			{ start: 1, end: 2, text: "A" },
 			{ start: 3, end: 4, text: "B" },
@@ -225,8 +254,14 @@ describe("parseSrt", () => {
 		const srt =
 			`00:00:01,000 --> 00:00:02,000\nCount to 3\n` +
 			`00:00:03,000 --> 00:00:04,000\n3 cats\n` +
-			`00:00:05,000 --> 00:00:06,000\nLast\n`;
-		expect(parseSrt(srt).map((c) => c.text)).toEqual(["Count to 3", "3 cats", "Last"]);
+			`00:00:05,000 --> 00:00:06,000\nHello\n3 cats\n` +
+			`00:00:07,000 --> 00:00:08,000\nLast\n`;
+		expect(parseSrt(srt).map((c) => c.text)).toEqual([
+			"Count to 3",
+			"3 cats",
+			"Hello\n3 cats",
+			"Last",
+		]);
 	});
 
 	it("keeps a number that isn't right before a timing line", () => {
@@ -280,6 +315,19 @@ describe("parseSrt", () => {
 		expect(parseSrt(vtt).map((c) => c.text)).toEqual(["3", "1984", "1"]);
 	});
 
+	it.each([
+		{ name: "a line of spaces", gap: "  \n" },
+		{ name: "no line", gap: "" },
+	])("drops the next WebVTT cue's name after $name in place of an empty one", ({ gap }) => {
+		const vtt =
+			`WEBVTT\n\n1\n00:01.000 --> 00:02.000\nHello\n${gap}` +
+			`2\n00:03.000 --> 00:04.000\nWorld\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "Hello" },
+			{ start: 3, end: 4, text: "World" },
+		]);
+	});
+
 	it("ends a WebVTT cue at an empty line in a file with only carriage returns", () => {
 		const vtt =
 			"WEBVTT\r\r00:01.000 --> 00:04.000\rHello\r\rNOTE Not shown\r\r" +
@@ -291,16 +339,16 @@ describe("parseSrt", () => {
 	});
 
 	it.each([
-		{ name: "an SRT", content: "\uFEFF00:00:01,000 --> 00:00:02,000\nHello\n" },
+		{ name: "an SRT file", content: "\uFEFF00:00:01,000 --> 00:00:02,000\nHello\n" },
 		{
-			name: "an SRT with blank lines first",
+			name: "an SRT file with blank lines first",
 			content: "\uFEFF\n\n1\n00:00:01,000 --> 00:00:02,000\nHello\n",
 		},
 		{
-			name: "a WebVTT",
+			name: "a WebVTT file",
 			content: "\uFEFFWEBVTT\n\n00:01.000 --> 00:02.000\nHello\n\nNOTE Not shown\n",
 		},
-	])("reads $name file that starts with a byte order mark", ({ content }) => {
+	])("reads $name that starts with a byte order mark", ({ content }) => {
 		expect(parseSrt(content)).toEqual([{ start: 1, end: 2, text: "Hello" }]);
 	});
 
@@ -377,7 +425,7 @@ describe("parseSrt", () => {
 
 	it.each([
 		{ name: "a file with line feeds", end: "\n" },
-		{ name: "a file without them", end: "" },
+		{ name: "a file without line feeds", end: "" },
 	])("reads a long run of carriage returns in $name quickly", ({ end }) => {
 		// A pattern that backtracks over the run would take seconds here.
 		const srt = "00:00:01,000 --> 00:00:02,000" + "\r".repeat(200_000) + "Hi" + end;

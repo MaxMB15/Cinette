@@ -27,13 +27,15 @@ const parseTiming = (line: string): { start: number; end: number } | null => {
 };
 
 /**
- * Whether a line starts like a time and has an arrow. Like a time, it starts
- * with a number and a colon, then digits or spaces up to another colon, a
- * comma or a period. Other lines with an arrow, such as "3, 2, 1 --> go!" or
- * "10:00 --> 11:00", are text.
+ * Whether a line looks like a timing line. After any spaces and a minus sign,
+ * it starts with a number and a colon, then digits or spaces up to another
+ * colon, a comma or a period. After its arrow and any spaces, it has a number
+ * and one of those marks, with a minus sign first or not. Other lines with an
+ * arrow, such as "3, 2, 1 --> go!", "10:00 --> 11:00" or "10:30, go --> left",
+ * are text.
  */
 const isTimingLine = (line: string): boolean =>
-	/^\s*-?\d+:[\d\s]*[:.,]/.test(line) && line.includes("-->");
+	/^\s*-?\d+:[\d\s]*[:.,]/.test(line) && /-->\s*-?\d+[:.,]/.test(line);
 
 /**
  * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
@@ -83,7 +85,12 @@ export const parseSrt = (content: string): SubtitleCue[] => {
 		// blank lines between them.
 		let last = body.length - 1;
 		while (body[last]?.trim() === "") last--;
-		const numbered = !webvtt && next < lines.length && /^\s*\d+\s*$/.test(body[last]);
+		// A WebVTT cue that's only a number has an empty line after it. When
+		// there's none, the number is the next cue's name, as in SRT.
+		const numbered =
+			(!webvtt || !body.includes("")) &&
+			next < lines.length &&
+			/^\s*\d+\s*$/.test(body[last]);
 		const stop = numbered ? last : last + 1;
 		const kept = body.slice(0, stop);
 		// An empty line keeps a WebVTT note, or the name of the next cue, out
