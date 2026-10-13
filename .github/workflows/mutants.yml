@@ -194,9 +194,34 @@ jobs:
                 | range($n) | {package: $p, shard: ., shards: $n}]}')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  # The app's tests run the real ffmpeg sidecar. This job downloads it once for
+  # all of the app's shards, so its host sees one download a run, not eight.
+  sidecar:
+    needs: plan
+    if: contains(needs.plan.outputs.matrix, 'max-video-player')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+
+      - name: Fetch the ffmpeg sidecar
+        run: ./scripts/fetch-ffmpeg.sh linux
+
+      - name: Upload the sidecar
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffmpeg-sidecar
+          path: apps/player/src-tauri/binaries/
+          retention-days: 1
+
+  # A run without the app skips the sidecar job, which would skip this one too
+  # without the check here.
   full:
     name: full (${{ matrix.package }}, ${{ matrix.shard }})
-    needs: plan
+    needs: [plan, sidecar]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.sidecar.result != 'failure' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -231,11 +256,19 @@ jobs:
         if: matrix.package == 'max-video-player'
         uses: ./.github/actions/setup-frontend
 
-      - name: Build the frontend and fetch the ffmpeg sidecar
+      - name: Download the ffmpeg sidecar
+        if: matrix.package == 'max-video-player'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-sidecar
+          path: apps/player/src-tauri/binaries
+
+      # An artifact doesn't keep the sidecar's executable bit.
+      - name: Build the frontend
         if: matrix.package == 'max-video-player'
         run: |
+          chmod +x apps/player/src-tauri/binaries/*
           pnpm run build:desktop
-          ./scripts/fetch-ffmpeg.sh linux
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
