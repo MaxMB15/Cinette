@@ -7,6 +7,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_CONF="$REPO_ROOT/apps/desktop/src-tauri/tauri.conf.json"
 CARGO_TOML="$REPO_ROOT/apps/desktop/src-tauri/Cargo.toml"
+IOS_PROJECT="$REPO_ROOT/apps/desktop/src-tauri/gen/apple/project.yml"
+IOS_PLIST="$REPO_ROOT/apps/desktop/src-tauri/gen/apple/max-video-player_iOS/Info.plist"
+# The files the version bump changes. The release commit holds these and no others.
+BUMPED=("$TAURI_CONF" "$CARGO_TOML" "$IOS_PROJECT" "$IOS_PLIST" "$REPO_ROOT/Cargo.lock")
 
 # ── Git-flow branch guard ─────────────────────────────────────────────────────
 cd "$REPO_ROOT"
@@ -37,6 +41,20 @@ if [[ "$LOCAL" != "$REMOTE" ]]; then
   echo ""
   exit 1
 fi
+
+# The release commit takes these files whole, so a local edit to one would go
+# in with it. Builds and XcodeGen often rewrite the iOS ones.
+if ! git diff --quiet HEAD -- "${BUMPED[@]}"; then
+  echo ""
+  echo "  ERROR: these files have local changes that the release commit would include:"
+  git diff --name-only HEAD -- "${BUMPED[@]}" | sed 's/^/    /'
+  echo "  Commit or undo them first."
+  echo ""
+  exit 1
+fi
+# Other local edits stay out of the release. Remember them so the check after
+# the bump can tell them apart from files the bump changed.
+DIRTY_BEFORE=$(git diff --name-only)
 
 # ── Read current version from tauri.conf.json ────────────────────────────────
 CURRENT=$(python3 -c "import json,sys; print(json.load(open('$TAURI_CONF'))['version'])")
@@ -72,7 +90,7 @@ case "$CONFIRM" in
   *) echo "Aborted."; exit 0 ;;
 esac
 
-# ── Bump version in tauri.conf.json and Cargo.toml ───────────────────────────
+# ── Bump the version in Tauri, Cargo and the iOS project ─────────────────────
 python3 "$REPO_ROOT/scripts/bump-version.py" "$NEW"
 
 # ── Update the app's own entry in Cargo.lock, leaving dependencies as they are ─
@@ -81,8 +99,26 @@ echo "  Updated Cargo.lock"
 
 # ── Commit ───────────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-git add "$TAURI_CONF" "$CARGO_TOML" Cargo.lock
-git commit -m "chore: bump version to $NEW"
+git add "${BUMPED[@]}"
+# Stop if the bump changed a file that BUMPED leaves out.
+# comm must compare in the same order sort used, whatever the user's locale.
+LEFT_OUT=$(LC_ALL=C comm -13 <(printf '%s\n' "$DIRTY_BEFORE" | LC_ALL=C sort) \
+                             <(git diff --name-only | LC_ALL=C sort))
+if [[ -n "$LEFT_OUT" ]]; then
+  echo ""
+  echo "  ERROR: the version bump changed files that aren't staged:"
+  printf '%s\n' "$LEFT_OUT" | sed 's/^/    /'
+  # The check before the prompts showed these files matched HEAD.
+  git checkout HEAD -- "${BUMPED[@]}"
+  # The others had no unstaged changes before the bump, so the index still
+  # holds them. Putting them back makes a re-run stop here again.
+  printf '%s\n' "$LEFT_OUT" | git --literal-pathspecs restore --pathspec-from-file=-
+  echo "  Nothing was committed, and every file the bump changed is back as it was."
+  echo ""
+  exit 1
+fi
+# Naming the files keeps anything else that was already staged out of the commit.
+git commit -m "chore: bump version to $NEW" -- "${BUMPED[@]}"
 echo "  Committed version bump"
 
 # ── Tag ──────────────────────────────────────────────────────────────────────

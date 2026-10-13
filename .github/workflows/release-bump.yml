@@ -141,7 +141,15 @@ jobs:
           git checkout -b "$BRANCH"
           git add apps/desktop/src-tauri/tauri.conf.json \
                   apps/desktop/src-tauri/Cargo.toml \
+                  apps/desktop/src-tauri/gen/apple/project.yml \
+                  apps/desktop/src-tauri/gen/apple/max-video-player_iOS/Info.plist \
                   Cargo.lock
+          # Stop if the bump changed a file the list above leaves out.
+          if ! git diff --quiet; then
+            echo "::error::The version bump changed files that aren't staged:"
+            git diff --name-only
+            exit 1
+          fi
           git commit -m "chore: bump version to $NEW"
 
           # Earlier runs may have left the same branch on the remote; a plain push then fails (non-fast-forward).
