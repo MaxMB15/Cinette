@@ -340,6 +340,17 @@ pub fn build_fix_uncategorized_prompt(
 ///
 /// The request asks for a JSON reply, so text that doesn't parse is an error.
 pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Value, GeminiError> {
+    call_from(crate::http::client(), API_BASE, api_key, prompt).await
+}
+
+/// The work of [`call_gemini`], taking the client and address so tests can
+/// point it at a local server.
+async fn call_from(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+    prompt: &str,
+) -> Result<serde_json::Value, GeminiError> {
     let body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }],
         "generationConfig": {
@@ -352,11 +363,14 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
     // the debug level. The desktop app turns that level on for mvp-core.
     tracing::debug!(prompt = %prompt, "Gemini prompt");
 
-    let response = generate_request(api_key, &body).send().await.map_err(|e| {
-        let err = request_error(e);
-        tracing::error!(error = %err, "Gemini API request failed");
-        err
-    })?;
+    let response = generate_request(client, api_base, api_key, &body)
+        .send()
+        .await
+        .map_err(|e| {
+            let err = request_error(e);
+            tracing::error!(error = %err, "Gemini API request failed");
+            err
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -393,7 +407,17 @@ pub async fn call_gemini(api_key: &str, prompt: &str) -> Result<serde_json::Valu
 /// Returns whether Google takes the key, or an error when the request fails or
 /// the answer says nothing about the key.
 pub async fn test_gemini_key(api_key: &str) -> Result<bool, GeminiError> {
-    match list_models_request(api_key).send().await {
+    test_key_from(crate::http::client(), API_BASE, api_key).await
+}
+
+/// The work of [`test_gemini_key`], taking the client and address so tests
+/// can point it at a local server.
+async fn test_key_from(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+) -> Result<bool, GeminiError> {
+    match list_models_request(client, api_base, api_key).send().await {
         Ok(response) => {
             let status = response.status();
             // Only a 400 needs its body, to tell a bad key from a bad request.
@@ -437,17 +461,26 @@ fn names_invalid_key(body: &str) -> bool {
 }
 
 // Keys are pasted in, often with a trailing newline, and a header can't carry one.
-fn generate_request(api_key: &str, body: &serde_json::Value) -> reqwest::RequestBuilder {
-    crate::http::client()
-        .post(format!("{API_BASE}/models/{MODEL}:generateContent"))
+fn generate_request(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> reqwest::RequestBuilder {
+    client
+        .post(format!("{api_base}/models/{MODEL}:generateContent"))
         .header(API_KEY_HEADER, api_key.trim())
         .json(body)
         .timeout(GENERATE_TIMEOUT)
 }
 
-fn list_models_request(api_key: &str) -> reqwest::RequestBuilder {
-    crate::http::client()
-        .get(format!("{API_BASE}/models"))
+fn list_models_request(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+) -> reqwest::RequestBuilder {
+    client
+        .get(format!("{api_base}/models"))
         .header(API_KEY_HEADER, api_key.trim())
 }
 
@@ -509,6 +542,57 @@ mod tests {
         assert!(result.ungrouped.contains(&"News".to_string()));
     }
 
+    /// The group names and sort orders of a result, in order.
+    fn orders(result: &CategorizationResult) -> Vec<(&str, i64)> {
+        result
+            .hierarchy
+            .iter()
+            .map(|h| (h.group_name.as_str(), h.sort_order))
+            .collect()
+    }
+
+    #[test]
+    fn hierarchical_groups_are_spaced_a_hundred_apart_across_categories() {
+        let json = serde_json::json!({
+            "type": "hierarchical",
+            "categories": [
+                { "name": "Sports", "groups": ["Football", "Tennis"] },
+                { "name": "News", "groups": ["World"] }
+            ]
+        });
+        let result =
+            parse_categorization_response(&json, &["Football", "Tennis", "World"]).unwrap();
+        assert_eq!(
+            orders(&result),
+            [("Football", 0), ("Tennis", 100), ("World", 200)]
+        );
+    }
+
+    #[test]
+    fn flat_groups_are_spaced_a_hundred_apart() {
+        let json = serde_json::json!({
+            "type": "flat",
+            "groups": ["Sports", "Invented", "News", "Kids"]
+        });
+        let result = parse_categorization_response(&json, &["Sports", "News", "Kids"]).unwrap();
+        assert_eq!(
+            orders(&result),
+            [("Sports", 0), ("News", 100), ("Kids", 200)]
+        );
+    }
+
+    #[test]
+    fn flat_ungrouped_keeps_only_known_groups_not_placed_yet() {
+        let json = serde_json::json!({
+            "type": "flat",
+            "groups": ["Sports"],
+            "ungrouped": ["Misc", "Invented", "Sports", "Misc"]
+        });
+        let result = parse_categorization_response(&json, &["Sports", "News", "Misc"]).unwrap();
+        assert_eq!(orders(&result), [("Sports", 0)]);
+        assert_eq!(result.ungrouped, ["Misc", "News"]);
+    }
+
     #[test]
     fn test_build_categorization_prompt_with_groups() {
         let groups_with_samples = vec![
@@ -521,6 +605,24 @@ mod tests {
         assert!(prompt.contains("ESPN HD"));
         assert!(prompt.contains(r#""type": "hierarchical""#));
         assert!(prompt.contains("You MUST assign EVERY group to a category"));
+    }
+
+    #[test]
+    fn the_no_groups_prompt_lists_the_titles_and_asks_for_groups() {
+        let prompt = build_categorization_prompt_no_groups("movies", &["Title One", "Title Two"]);
+        assert!(
+            prompt.starts_with(
+                "Organize these IPTV content titles into navigable groups.\n\
+                 Content type: movies\n\n\
+                 Content titles (sample):\n\
+                 - Title One\n\
+                 - Title Two\n\nRules:\n"
+            ),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Create logical genre/theme groups from the titles"));
+        assert!(prompt.contains(r#"{"type": "hierarchical", "categories": [{"name": "...", "groups": ["..."]}], "ungrouped": []}"#));
+        assert!(prompt.contains(r#"{"type": "flat", "groups": ["..."], "ungrouped": []}"#));
     }
 
     #[test]
@@ -558,7 +660,9 @@ mod tests {
 
     #[test]
     fn a_pasted_key_loses_its_surrounding_whitespace() {
-        let list = list_models_request("  SECRET\n").build().unwrap();
+        let list = list_models_request(crate::http::client(), API_BASE, "  SECRET\n")
+            .build()
+            .unwrap();
         assert_eq!(list.headers()[API_KEY_HEADER], "SECRET");
     }
 
@@ -617,7 +721,8 @@ mod tests {
 
     #[test]
     fn the_api_key_goes_in_a_header() {
-        let generate = generate_request("SECRET", &serde_json::json!({}))
+        let client = crate::http::client();
+        let generate = generate_request(client, API_BASE, "SECRET", &serde_json::json!({}))
             .build()
             .unwrap();
         assert_eq!(
@@ -627,7 +732,9 @@ mod tests {
         assert_eq!(generate.headers()[API_KEY_HEADER], "SECRET");
         assert_eq!(generate.timeout(), Some(&GENERATE_TIMEOUT));
 
-        let list = list_models_request("SECRET").build().unwrap();
+        let list = list_models_request(client, API_BASE, "SECRET")
+            .build()
+            .unwrap();
         assert_eq!(
             list.url().as_str(),
             "https://generativelanguage.googleapis.com/v1beta/models"
@@ -643,5 +750,143 @@ mod tests {
             GeminiError::InvalidResponse("x".into()).to_string(),
             "Invalid response: x"
         );
+    }
+
+    mod requests {
+        use super::*;
+        use crate::http::test_server::{self, header};
+
+        /// A generateContent answer whose text is `text`.
+        fn answer(text: &str) -> String {
+            serde_json::json!({
+                "candidates": [{ "content": { "parts": [{ "text": text }] } }]
+            })
+            .to_string()
+        }
+
+        /// The JSON body of a recorded request.
+        fn body_of(request: &str) -> serde_json::Value {
+            let (_, body) = request.split_once("\r\n\r\n").unwrap();
+            serde_json::from_str(body).unwrap()
+        }
+
+        /// Calls Gemini on a server that answers once with `status` and `body`.
+        async fn call(
+            status: &str,
+            body: impl Into<String>,
+        ) -> Result<serde_json::Value, GeminiError> {
+            let (url, client, _) = test_server::serve_once_with_client(status, body);
+            call_from(&client, &url, "test-key", "prompt").await
+        }
+
+        /// Tests a key on a server that answers once with `status` and `body`.
+        async fn test_key(status: &str, body: &str) -> Result<bool, GeminiError> {
+            let (url, client, _) = test_server::serve_once_with_client(status, body);
+            test_key_from(&client, &url, "test-key").await
+        }
+
+        #[tokio::test]
+        async fn a_prompt_is_posted_with_the_key_in_a_header() {
+            let (url, client, requests) =
+                test_server::serve_once_with_client("200 OK", answer(r#"{"type": "flat"}"#));
+            let reply = call_from(&client, &url, "  test-key\n", "Sort these").await;
+            assert_eq!(reply.unwrap(), serde_json::json!({ "type": "flat" }));
+
+            let request = requests.try_recv().unwrap();
+            let line = request.lines().next().unwrap();
+            assert_eq!(
+                line,
+                "POST /models/gemini-3-flash-preview:generateContent HTTP/1.1"
+            );
+            assert_eq!(header(&request, API_KEY_HEADER), Some("test-key"));
+            assert_eq!(
+                body_of(&request),
+                serde_json::json!({
+                    "contents": [{ "parts": [{ "text": "Sort these" }] }],
+                    "generationConfig": { "responseMimeType": "application/json" }
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn an_error_status_is_an_api_error_with_the_body() {
+            let err = call("503 Service Unavailable", "overloaded")
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, GeminiError::Api(m) if m == "HTTP 503 Service Unavailable: overloaded"),
+                "{err:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_reply_that_is_not_json_is_a_parse_error() {
+            let err = call("200 OK", "not json").await.unwrap_err();
+            assert!(matches!(err, GeminiError::Parse(_)), "{err:?}");
+        }
+
+        #[tokio::test]
+        async fn a_reply_without_text_is_a_parse_error() {
+            let err = call("200 OK", r#"{"candidates": []}"#).await.unwrap_err();
+            assert!(
+                matches!(&err, GeminiError::Parse(m) if m == "no text in response"),
+                "{err:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn text_that_is_not_json_is_a_parse_error() {
+            let err = call("200 OK", answer("Here are your groups"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, GeminiError::Parse(m) if m.starts_with("LLM returned invalid JSON")),
+                "{err:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_key_no_header_can_carry_fails_the_call_without_showing_it() {
+            // The bad character stops the request before it reaches the network.
+            let err = call_gemini("SEC\nRET", "prompt").await.unwrap_err();
+            assert!(matches!(err, GeminiError::Api(_)), "{err:?}");
+            test_server::assert_hides(&err, "RET");
+        }
+
+        #[tokio::test]
+        async fn a_key_is_tested_by_listing_models() {
+            let (url, client, requests) = test_server::serve_once_with_client("200 OK", "{}");
+            assert!(test_key_from(&client, &url, "  test-key\n").await.unwrap());
+
+            let request = requests.try_recv().unwrap();
+            assert_eq!(request.lines().next(), Some("GET /models HTTP/1.1"));
+            assert_eq!(header(&request, API_KEY_HEADER), Some("test-key"));
+        }
+
+        #[tokio::test]
+        async fn a_400_naming_an_invalid_key_turns_the_key_down() {
+            assert!(!test_key("400 Bad Request", INVALID_KEY_BODY).await.unwrap());
+        }
+
+        #[tokio::test]
+        async fn a_403_turns_the_key_down() {
+            assert!(!test_key("403 Forbidden", "").await.unwrap());
+        }
+
+        #[tokio::test]
+        async fn a_503_says_nothing_about_the_key() {
+            let err = test_key("503 Service Unavailable", "").await.unwrap_err();
+            assert!(err.to_string().contains("503"), "{err}");
+        }
+
+        #[tokio::test]
+        async fn a_failed_connection_is_an_error_not_a_bad_key() {
+            let url = test_server::refused_url();
+            let err = test_key_from(&test_server::client(), &url, "test-key")
+                .await
+                .unwrap_err();
+            assert!(matches!(err, GeminiError::Api(_)), "{err:?}");
+            test_server::assert_hides(&err, &url);
+        }
     }
 }
