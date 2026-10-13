@@ -503,7 +503,7 @@ pub struct EpgSearchResultDto {
 }
 
 /// Fetch the EPG programmes in a time range for the channels with these guide
-/// ids, or for every channel when there are none.
+/// ids, or for every channel when `channel_ids` is left out.
 /// Returns a flat list; the frontend groups by channelId to build per-channel strips.
 #[command]
 pub async fn get_epg_for_live_channels(
