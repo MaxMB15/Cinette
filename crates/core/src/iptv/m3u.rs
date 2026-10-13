@@ -972,4 +972,43 @@ http://stream.example.com/ch2
         assert_eq!(parse_series_name("S01E02"), None);
         assert_eq!(parse_series_name("Doctor Who S01Extras"), None);
     }
+
+    #[test]
+    fn an_episode_code_is_s_then_a_number_then_e_then_a_number() {
+        for name in ["Example Show S01E02", "example show s01e02", "Example Show S1e2"] {
+            assert!(has_episode_code(name), "{name:?}");
+        }
+        for name in [
+            // A number and an E without an S before them.
+            "Room 12E3",
+            "Example Show SE02",
+            "Example Show S01",
+            "Example Show S01E",
+            "Example Show S01Extras",
+            // Something other than an E after the season.
+            "Example S2 24/7",
+        ] {
+            assert!(!has_episode_code(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn series_names_read_long_seasons_and_lower_case_codes() {
+        assert_eq!(
+            parse_series_name("Example Show S12E03"),
+            Some(("Example Show".to_string(), 12, 3))
+        );
+        assert_eq!(
+            parse_series_name("example show s02e10 finale"),
+            Some(("example show".to_string(), 2, 10))
+        );
+    }
+
+    #[test]
+    fn series_names_without_a_whole_episode_code_have_no_episode() {
+        // A season of four digits reads as a year, not a season.
+        for name in ["Example Show S01", "Example S2 24/7", "Example Show S2024E01"] {
+            assert_eq!(parse_series_name(name), None, "{name:?}");
+        }
+    }
 }
