@@ -118,8 +118,10 @@ fn extract_rotten_tomatoes(ratings: Option<Vec<OmdbRating>>) -> Option<String> {
 fn strip_trailing_year(title: &str) -> Option<&str> {
     let trimmed = title.trim_end();
     if trimmed.len() >= 7 {
+        // `get` gives None when the byte `rest` falls inside a letter, as it
+        // can in a title written in another script.
         let rest = trimmed.len() - 7; // " (XXXX)".len() == 7
-        let suffix = &trimmed[rest..];
+        let suffix = trimmed.get(rest..)?;
         if suffix.starts_with(" (") && suffix.ends_with(')') {
             let year_part = &suffix[2..6];
             if year_part.chars().all(|c| c.is_ascii_digit()) {
@@ -304,6 +306,17 @@ mod tests {
     fn a_year_needs_a_bracket_on_each_side() {
         assert_eq!(strip_trailing_year("Example Film [2010)"), None);
         assert_eq!(strip_trailing_year("Example Film (2010]"), None);
+    }
+
+    #[test]
+    fn titles_in_other_scripts_are_read_without_a_panic() {
+        // These letters take two or three bytes each, so the seventh byte from
+        // the end falls inside one.
+        for title in ["Пример", "例の番組"] {
+            assert_eq!(strip_trailing_year(title), None, "{title}");
+            let with_year = format!("{title} (2010)");
+            assert_eq!(strip_trailing_year(&with_year), Some(title));
+        }
     }
 
     #[test]

@@ -4,6 +4,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Movie and series details from OMDb didn't load for many titles written in other alphabets, such as Russian, Greek, Arabic or Japanese ones. Checking the title for a year at its end stopped with an error partway through a letter.
+
 ## [0.6.1] - 2026-10-13
 
 ### Changed
