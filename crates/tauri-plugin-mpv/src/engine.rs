@@ -241,7 +241,7 @@ impl MpvEngine {
         // the message names both causes.
         if current_ao.is_empty() || current_ao == "<unset>" {
             let at = loaded_libmpv()
-                .map(|path| format!(" at {path}"))
+                .map(|path| format!(" at {path:?}"))
                 .unwrap_or_default();
             tracing::error!(
                 "[MPV] no audio output opened. Either no sound server or device \
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn libmpv_in_maps_reads_anonymous_and_deleted_mappings() {
         // The kernel ends the line of an anonymous mapping with a space, and
-        // adds " (deleted)" to a file that was replaced on disk.
+        // adds " (deleted)" to a file that was deleted or replaced on disk.
         let maps = concat!(
             "7f2c4a000000-7f2c4a021000 rw-p 00000000 00:00 0 \n",
             "7f2c49e00000-7f2c49e80000 r-xp 00000000 08:02 1311234                    /usr/lib/libmpv.so.2 (deleted)\n",
