@@ -27,7 +27,8 @@ permissions:
   contents: read
 
 # The event is part of the group, so the weekly start job doesn't cancel a
-# manual run on main.
+# manual run on main. The run it starts on dev does cancel an older manual run
+# there, since both test the same branch.
 concurrency:
   group: mutants-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
@@ -151,10 +152,14 @@ jobs:
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
+      # Each shard writes to a folder named after it, so the report can
+      # download them all into one place.
       - name: Test shard ${{ matrix.shard }} of the mutants
         run: |
+          mkdir -p results/mutants-shard-${{ matrix.shard }}
           code=0
-          cargo mutants --in-place -p mvp-core --shard ${{ matrix.shard }}/4 --output shard || code=$?
+          cargo mutants --in-place -p mvp-core --shard ${{ matrix.shard }}/4 \
+            --output results/mutants-shard-${{ matrix.shard }} || code=$?
           if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
             exit "$code"
           fi
@@ -167,8 +172,8 @@ jobs:
         with:
           name: mutants-shard-${{ matrix.shard }}
           path: |
-            shard/mutants.out/
-            !shard/mutants.out/log/
+            results/
+            !results/*/mutants.out/log/
           retention-days: 30
 
   report:
@@ -181,15 +186,19 @@ jobs:
         with:
           sparse-checkout: scripts
 
+      # Each artifact holds one mutants-shard-N folder. Merging them gives the
+      # same layout however many shards uploaded, where a lone artifact would
+      # otherwise land in shards/ itself.
       - name: Download the shards
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: mutants-shard-*
           path: shards
+          merge-multiple: true
 
       # Each shard is named, so one that uploaded nothing shows up in the
       # summary under "No results in" instead of dropping out of the totals.
       - name: Write the summary
         run: |
-          python3 scripts/mutants-summary.py shards/mutants-shard-0 shards/mutants-shard-1 \
-            shards/mutants-shard-2 shards/mutants-shard-3 >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/mutants-summary.py shards/mutants-shard-{0,1,2,3}/mutants.out \
+            >> "$GITHUB_STEP_SUMMARY"

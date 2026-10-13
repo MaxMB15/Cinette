@@ -8,5 +8,5 @@
 exclude_re = ["test_server::"]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
-# leaves out what git ignores, like node_modules, libs and target.
+# leaves out what git ignores, like node_modules and libs.
 gitignore = true
