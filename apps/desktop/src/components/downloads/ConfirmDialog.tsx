@@ -52,7 +52,7 @@ export const ConfirmDialog = ({
 		<Dialog
 			onClose={onCancel ?? onConfirm}
 			labelledBy={titleId}
-			// Above the full screen player, which sits at z-[9999].
+			// Above the full screen player, which sits at z-9999.
 			overlayClassName="z-10000"
 			className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl"
 		>
