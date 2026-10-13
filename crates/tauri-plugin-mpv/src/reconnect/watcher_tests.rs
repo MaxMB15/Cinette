@@ -66,6 +66,14 @@ fn names(events: &[(&'static str, serde_json::Value)]) -> Vec<&'static str> {
     events.iter().map(|(name, _)| *name).collect()
 }
 
+/// A watcher whose stream already failed once. Its next reload waits a
+/// second, so `on_signal` only schedules it and nothing is fetched.
+fn failed_once(app: &TestApp, player: &Mpv) -> Watcher<MockRuntime> {
+    let mut watcher = watcher(app, player, UNUSED_URL);
+    watcher.attempt = 1;
+    watcher
+}
+
 #[test]
 fn reloads_a_dropped_stream_where_it_stopped() {
     // The connection drops six seconds in, the first reload gets a 404 and
@@ -104,6 +112,26 @@ fn reloads_a_dropped_stream_where_it_stopped() {
 
     player.command("quit", &[]).unwrap();
     running.wait_for_exit();
+}
+
+#[test]
+fn spawn_starts_a_watcher_for_the_stream() {
+    let server = Server::start(wav(20), vec![Reply::CutAfter(after_seconds(6))]);
+    let url = server.url();
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_RECONNECTING]);
+    let player = player(&[SPEED]);
+    let kill = Arc::new(AtomicBool::new(false));
+    let client = player.create_client(None).expect("create a client");
+    spawn(client, url.clone(), app.handle(), kill.clone());
+
+    loadfile(&player, &url, None).unwrap();
+    assert_eq!(
+        events.wait_for(EVENT_RECONNECTING),
+        json!({ "url": url, "attempt": 1 })
+    );
+    kill.store(true, Ordering::Release);
+    player.command("quit", &[]).unwrap();
 }
 
 #[test]
@@ -249,7 +277,7 @@ fn the_end_of_a_whole_file_is_not_a_failure() {
     let path = media.file("tone.wav", &wav(10));
     let app = TestApp::new();
     let player = player(&[SPEED]);
-    let watcher = watcher(&app, &player, &path);
+    let mut watcher = watcher(&app, &player, &path);
 
     loadfile(&player, &path, Some("start=9")).unwrap();
     wait_until("the end of the file", || {
@@ -257,6 +285,8 @@ fn the_end_of_a_whole_file_is_not_a_failure() {
     });
     assert!(!watcher.is_premature_eof());
     assert_eq!(watcher.end_file_trigger(mpv_end_file_reason::Eof), None);
+    assert!(watcher.on_signal(Signal::EofReached(true)).is_continue());
+    assert_eq!(watcher.next_retry_at, None);
 }
 
 #[test]
@@ -326,4 +356,110 @@ fn a_reload_mpv_refuses_waits_like_the_next_attempt() {
     let retry_at = watcher.next_retry_at.expect("another reload is scheduled");
     assert!(retry_at >= before + retry_delay(3) && retry_at <= after + retry_delay(3));
     assert_eq!(watcher.recovery_baseline, None);
+}
+
+#[test]
+fn an_end_of_file_error_arms_a_retry() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_RECONNECTING]);
+    let player = player(&[]);
+    let mut watcher = failed_once(&app, &player);
+
+    let ended = Signal::EndFile(mpv_end_file_reason::Error);
+    assert!(watcher.on_signal(ended).is_continue());
+    assert!(watcher.next_retry_at.is_some());
+    assert_eq!(
+        events.payloads(EVENT_RECONNECTING),
+        [json!({ "url": UNUSED_URL, "attempt": 2 })]
+    );
+}
+
+#[test]
+fn one_failure_arms_one_retry_however_mpv_reports_it() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_RECONNECTING]);
+    let player = player(&[]);
+    let mut watcher = failed_once(&app, &player);
+    watcher.last_known_pos = Some(5.0);
+
+    // Nothing is loaded, so the end counts as early, as on a live stream.
+    for signal in [
+        Signal::EofReached(true),
+        Signal::EofReached(true),
+        Signal::EndFile(mpv_end_file_reason::Error),
+        Signal::IdleActive(true),
+    ] {
+        assert!(watcher.on_signal(signal).is_continue());
+    }
+    assert_eq!(
+        events.payloads(EVENT_RECONNECTING),
+        [json!({ "url": UNUSED_URL, "attempt": 2 })]
+    );
+}
+
+#[test]
+fn going_idle_is_a_failure_only_after_playback() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_RECONNECTING]);
+    let player = player(&[]);
+    let mut watcher = failed_once(&app, &player);
+
+    // mpv starts out idle, before the stream has played.
+    assert!(watcher.on_signal(Signal::IdleActive(true)).is_continue());
+    assert!(events.all().is_empty());
+
+    watcher.last_known_pos = Some(5.0);
+    assert!(watcher.on_signal(Signal::IdleActive(true)).is_continue());
+    assert_eq!(
+        events.payloads(EVENT_RECONNECTING),
+        [json!({ "url": UNUSED_URL, "attempt": 2 })]
+    );
+}
+
+#[test]
+fn playback_counts_once_it_passes_the_first_second() {
+    let app = TestApp::new();
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, UNUSED_URL);
+
+    for (pos, played) in [(None, false), (Some(1.0), false), (Some(1.5), true)] {
+        watcher.last_known_pos = pos;
+        assert_eq!(watcher.had_playback(), played, "at {pos:?}");
+    }
+}
+
+#[test]
+fn the_last_attempt_still_reloads() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_RECONNECTING, EVENT_LOAD_FAILED]);
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, UNUSED_URL);
+    watcher.attempt = MAX_ATTEMPTS - 1;
+
+    assert!(watcher.arm_retry("test").is_continue());
+    assert!(watcher.arm_retry("test").is_break());
+    assert_eq!(
+        events.all(),
+        [
+            (
+                EVENT_RECONNECTING,
+                json!({ "url": UNUSED_URL, "attempt": MAX_ATTEMPTS })
+            ),
+            (EVENT_LOAD_FAILED, json!({ "url": UNUSED_URL })),
+        ]
+    );
+}
+
+#[test]
+fn a_retry_waits_out_its_backoff() {
+    let app = TestApp::new();
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, UNUSED_URL);
+    watcher.attempt = 2;
+
+    let before = Instant::now();
+    assert!(watcher.arm_retry("test").is_continue());
+    let after = Instant::now();
+    let retry_at = watcher.next_retry_at.expect("a reload is scheduled");
+    assert!(retry_at >= before + retry_delay(3) && retry_at <= after + retry_delay(3));
 }
