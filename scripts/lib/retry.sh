@@ -10,7 +10,7 @@
 #
 # Usage: retry <attempts> <delay> <command> [args...]
 retry() {
-  local attempts=$1 delay=$2 attempt wait status
+  local attempts=$1 delay=$2 attempt wait status=1
   shift 2
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     if "$@"; then
