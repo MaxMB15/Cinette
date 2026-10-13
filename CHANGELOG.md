@@ -4,6 +4,14 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The Gemini key in Settings now says what the app sends to Google Gemini. When you use an AI action in Manage Categories, it sends your group and category names and a few channel names from each group (#256).
+
+### Fixed
+
+- On macOS, the player kept the video view and its graphics context from every channel it played, so memory use grew each time you switched channels. It now frees them (#251).
+
 ## [0.6.1] - 2026-10-13
 
 ### Changed

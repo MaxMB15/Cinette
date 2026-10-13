@@ -502,7 +502,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<CardContent className="space-y-4">
 						<ApiKeyField
 							name="Gemini"
-							description="Sorts channels into categories for you."
+							description="Sorts channels into categories for you. When you use an AI action in Manage Categories, the app sends your group and category names, and a few channel names from each group, to Google Gemini."
 							field={geminiKey}
 							placeholder="Enter Gemini API key…"
 							getKey={{
