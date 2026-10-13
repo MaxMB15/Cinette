@@ -107,12 +107,15 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants
+          shared-key: mutants-all
           save-if: false
 
       - name: Install system libraries
         if: steps.changes.outputs.system == 'true'
-        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+        run: |
+          # $APT_PACKAGES is a list of names, so it's split on purpose.
+          # shellcheck disable=SC2086
+          sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
 
       - name: Set up the frontend
         if: steps.changes.outputs.app == 'true'
@@ -227,7 +230,8 @@ jobs:
 
   # A run without the app skips the sidecar job, which would skip this one too
   # without the check here. When the sidecar fails, the app's shards fail at
-  # its download and the other crates still run.
+  # its download, their first step after the checkout, and the other crates
+  # still run.
   full:
     name: full (${{ matrix.package }}, ${{ matrix.shard }})
     needs: [plan, sidecar]
@@ -246,6 +250,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Download the ffmpeg sidecar
+        if: matrix.package == 'max-video-player'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-sidecar
+          path: apps/player/src-tauri/binaries
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -258,23 +269,19 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants
+          shared-key: mutants-all
           save-if: ${{ github.ref == 'refs/heads/dev' && matrix.package == 'max-video-player' && matrix.shard == 0 }}
 
       - name: Install system libraries
         if: matrix.package != 'mvp-core'
-        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+        run: |
+          # $APT_PACKAGES is a list of names, so it's split on purpose.
+          # shellcheck disable=SC2086
+          sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
 
       - name: Set up the frontend
         if: matrix.package == 'max-video-player'
         uses: ./.github/actions/setup-frontend
-
-      - name: Download the ffmpeg sidecar
-        if: matrix.package == 'max-video-player'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ffmpeg-sidecar
-          path: apps/player/src-tauri/binaries
 
       # An artifact doesn't keep the sidecar's executable bit.
       - name: Build the frontend

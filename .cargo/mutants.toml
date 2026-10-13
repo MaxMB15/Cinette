@@ -46,7 +46,10 @@ exclude_re = [
     # These ask the real service whether a key works. Settings calls them
     # when the user tests a key. The Gemini and OpenSubtitles ones stay in,
     # since a key that can't go in a header fails before anything is sent.
+    # Gemini answers false for that key, so only the real service could
+    # catch a change that always answers false.
     'replace (test_omdb_api_key|test_mdblist_api_key) ',
+    'replace test_gemini_api_key -> Result<bool, String> with Ok\(false\)',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's
