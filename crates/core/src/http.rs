@@ -404,6 +404,41 @@ mod tests {
         assert_ne!(user_agent(), "MaxVideoPlayer/9.9.9");
     }
 
+    /// Set for a copy of the test binary that runs a single test, so nothing
+    /// has read the user agent before that test starts.
+    const RUN_ALONE: &str = "MVP_CORE_TEST_RUN_ALONE";
+
+    #[test]
+    fn app_version_can_be_set_before_any_client_exists() {
+        const NAME: &str = "http::tests::app_version_can_be_set_before_any_client_exists";
+        if std::env::var_os(RUN_ALONE).is_some() {
+            assert!(set_app_version("7.7.7"));
+            assert_eq!(user_agent(), "MaxVideoPlayer/7.7.7");
+            assert!(!set_app_version("8.8.8"));
+            return;
+        }
+        // Other tests in this process may have built a client already, so
+        // the test runs again in a process of its own.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--test-threads=1"])
+            .env(RUN_ALONE, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}{stderr}");
+        assert!(stdout.contains("1 passed"), "{stdout}");
+    }
+
+    #[tokio::test]
+    async fn built_clients_keep_the_builders_settings() {
+        let (url, requests) = test_server::serve_once_recording("200 OK", "");
+        let client = build(reqwest::Client::builder().no_proxy().user_agent("probe/1"));
+        client.get(url).send().await.unwrap();
+        let request = requests.try_recv().unwrap();
+        assert_eq!(test_server::header(&request, "user-agent"), Some("probe/1"));
+    }
+
     async fn get(url: String) -> (u16, String) {
         let response = test_server::client().get(url).send().await.unwrap();
         (response.status().as_u16(), response.text().await.unwrap())
