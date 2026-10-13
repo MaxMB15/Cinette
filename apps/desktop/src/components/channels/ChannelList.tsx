@@ -360,20 +360,27 @@ export const ChannelList = () => {
 			.catch(() => {});
 	}, [activeTab, channels.length]);
 
-	// Debounced EPG programme search (300ms — backend round trip)
+	// Debounced EPG programme search, 300ms since it's a backend round trip.
+	// Only the live tab searches the guide.
+	const epgQuery = activeTab === "live" ? search.trim() : "";
+	// Clearing the search drops the results while rendering, so they don't
+	// show for a frame after the box empties.
+	if (!epgQuery && epgSearchResults.length > 0) setEpgSearchResults([]);
 	useEffect(() => {
-		if (!search.trim() || activeTab !== "live") {
-			setEpgSearchResults([]);
-			return;
-		}
+		if (!epgQuery) return;
+		let current = true;
 		const timer = setTimeout(() => {
-			const now = nowSeconds();
-			searchEpgProgrammes(search.trim(), now)
-				.then(setEpgSearchResults)
+			searchEpgProgrammes(epgQuery, nowSeconds())
+				.then((results) => {
+					if (current) setEpgSearchResults(results);
+				})
 				.catch(() => {});
 		}, 300);
-		return () => clearTimeout(timer);
-	}, [search, activeTab]);
+		return () => {
+			current = false;
+			clearTimeout(timer);
+		};
+	}, [epgQuery]);
 
 	const getChannelPrograms = (ch: Channel): EpgProgram[] =>
 		(ch.tvgId && epgMap.get(ch.tvgId)) || NO_PROGRAMS;
@@ -550,6 +557,11 @@ export const ChannelList = () => {
 			? 0
 			: Math.ceil(filtered.length / columnsPerRow);
 
+	// The compiler can't memoize what TanStack Virtual returns, so it skips this
+	// whole component. That's the right call, and the app doesn't run the
+	// compiler yet, but it also means the compiler rules don't check anything
+	// else in ChannelList. To check it, rename useVirtualizer for one lint run.
+	// eslint-disable-next-line react-hooks/incompatible-library -- see above
 	const virtualizer = useVirtualizer({
 		count: rowCount,
 		getScrollElement: () => parentRef.current,

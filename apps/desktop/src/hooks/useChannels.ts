@@ -19,6 +19,7 @@ import {
 } from "@/lib/refresh-schedule";
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
+import { useLatestRef } from "@/hooks/useLatestRef";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -255,15 +256,8 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	}, [refreshProviders, refreshChannels]);
 
 	// Keep providers ref current so interval can read it without re-registering
-	const providersRef = useRef<Provider[]>([]);
-	useEffect(() => {
-		providersRef.current = providers;
-	}, [providers]);
-
-	const refreshProviderRef = useRef(refreshProvider);
-	useEffect(() => {
-		refreshProviderRef.current = refreshProvider;
-	}, [refreshProvider]);
+	const providersRef = useLatestRef(providers);
+	const refreshProviderRef = useLatestRef(refreshProvider);
 
 	// The splash screen runs its startup refreshes through this tracker too, so
 	// the poll skips one the splash started that is still running.
@@ -291,7 +285,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		tick(); // fire immediately on mount
 		const id = setInterval(tick, 60_000);
 		return () => clearInterval(id);
-	}, [autoRefresh]);
+	}, [autoRefresh, providersRef, refreshProviderRef]);
 
 	return {
 		channels,

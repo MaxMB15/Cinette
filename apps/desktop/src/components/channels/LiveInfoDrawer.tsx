@@ -18,6 +18,8 @@ import { EpgTimelineBar, WINDOW_PAST, WINDOW_FUTURE } from "./EpgTimelineBar";
 // Recording runs ffmpeg on the computer, so phones and tablets don't offer it.
 const RECORDING_SUPPORTED = !isMobilePlatform();
 
+const NO_PROGRAMMES: EpgProgram[] = [];
+
 interface LiveInfoDrawerProps {
 	channel: Channel;
 	onClose: () => void;
@@ -33,8 +35,14 @@ const formatDuration = (startTime: number, endTime: number): string => {
 
 export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	const [visible, setVisible] = useState(false);
-	const [programmes, setProgrammes] = useState<EpgProgram[]>([]);
-	const [loading, setLoading] = useState(true);
+	const epgId = channel.tvgId ?? channel.id;
+	// The schedule is kept with the guide id it's for, so a new channel shows
+	// the spinner until its own schedule arrives.
+	const [schedule, setSchedule] = useState<{ epgId: string; programmes: EpgProgram[] } | null>(
+		null
+	);
+	const loading = schedule?.epgId !== epgId;
+	const programmes = schedule && !loading ? schedule.programmes : NO_PROGRAMMES;
 	const now = useNow();
 	const [selectedProg, setSelectedProg] = useState<EpgProgram | null>(null);
 	const currentRowRef = useRef<HTMLLIElement | null>(null);
@@ -59,29 +67,22 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 		const nowSec = Math.floor(Date.now() / 1000);
 		const rangeStart = nowSec - 12 * 3600;
 		const rangeEnd = nowSec + 12 * 3600;
-		const channelId = channel.tvgId ?? channel.id;
 
-		setLoading(true);
-		getEpgProgrammes(channelId, rangeStart, rangeEnd)
+		getEpgProgrammes(epgId, rangeStart, rangeEnd)
 			.then((data) => {
-				if (!cancelled) {
-					setProgrammes(data);
-					const current = data.find((p) => p.startTime <= nowSec && p.endTime > nowSec);
-					setSelectedProg(current ?? null);
-					setLoading(false);
-				}
+				if (cancelled) return;
+				setSchedule({ epgId, programmes: data });
+				const current = data.find((p) => p.startTime <= nowSec && p.endTime > nowSec);
+				setSelectedProg(current ?? null);
 			})
 			.catch(() => {
-				if (!cancelled) {
-					setProgrammes([]);
-					setLoading(false);
-				}
+				if (!cancelled) setSchedule({ epgId, programmes: [] });
 			});
 
 		return () => {
 			cancelled = true;
 		};
-	}, [channel.tvgId, channel.id]);
+	}, [epgId]);
 
 	// Auto-scroll to current programme after programmes load
 	useEffect(() => {

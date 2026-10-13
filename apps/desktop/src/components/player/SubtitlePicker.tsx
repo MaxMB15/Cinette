@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Check, LoaderCircle, X, Settings, ArrowLeft } from "lucide-react";
 import {
 	searchSubtitles,
@@ -119,6 +119,13 @@ export const SubtitlePicker = ({
 	}, [delayHovered, subtitleDelay, onDelayChange]);
 
 	// ── Stop a hold the buttons never hear end ──────────────────────────────
+	const clearHoldTimer = useCallback(() => {
+		if (holdTimerRef.current !== null) {
+			clearTimeout(holdTimerRef.current);
+			holdTimerRef.current = null;
+		}
+	}, []);
+
 	// A release outside the window, or switching apps mid-hold, sends the button
 	// no mouseup, so the window's mouseup and blur end the hold too.
 	useEffect(() => {
@@ -129,7 +136,7 @@ export const SubtitlePicker = ({
 			window.removeEventListener("blur", clearHoldTimer);
 			clearHoldTimer();
 		};
-	}, []);
+	}, [clearHoldTimer]);
 
 	// ── Search on mount ─────────────────────────────────────────────────────
 	useEffect(() => {
@@ -178,44 +185,37 @@ export const SubtitlePicker = ({
 	};
 
 	// ─── Hold-to-accelerate delay buttons ──────────────────────────────────
-	const clearHoldTimer = () => {
-		if (holdTimerRef.current !== null) {
-			clearTimeout(holdTimerRef.current);
-			holdTimerRef.current = null;
-		}
-	};
-
 	const stepDelay = (delta: number) => {
 		const next = Math.round((delayRef.current + delta) * 10) / 10;
 		delayRef.current = next;
 		onDelayChange?.(next);
 	};
 
-	const scheduleNextStep = () => {
-		const elapsed = Date.now() - holdStartRef.current;
+	/** Waits for the next step of a hold that started `elapsed` ms ago. */
+	const scheduleNextStep = (elapsed: number) => {
 		const step = getDelayStep(elapsed);
 		const interval = getDelayInterval(elapsed);
 		holdTimerRef.current = setTimeout(() => {
 			stepDelay(holdDirectionRef.current * step);
-			scheduleNextStep();
+			scheduleNextStep(Date.now() - holdStartRef.current);
 		}, interval);
 	};
 
-	const startHold = (direction: 1 | -1) => (e: React.MouseEvent) => {
+	const startHold = (e: React.MouseEvent, direction: 1 | -1) => {
 		// Only the main button holds. A right click opens the menu and never sends mouseup.
 		if (e.button !== 0) return;
 		clearHoldTimer();
 		holdDirectionRef.current = direction;
 		holdStartRef.current = Date.now();
 		stepDelay(direction * getDelayStep(0));
-		scheduleNextStep();
+		scheduleNextStep(0);
 	};
 
 	const stopHold = () => clearHoldTimer();
 
 	// A mouse press already stepped in startHold. A click with no pointer press
 	// behind it comes from Enter, Space or a screen reader, so step once here.
-	const stepOnKeyboardClick = (direction: 1 | -1) => (e: React.MouseEvent) => {
+	const stepOnKeyboardClick = (e: React.MouseEvent, direction: 1 | -1) => {
 		if (e.detail === 0) stepDelay(direction * getDelayStep(0));
 	};
 
@@ -305,10 +305,10 @@ export const SubtitlePicker = ({
 							<div className="flex items-center gap-2">
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={startHold(-1)}
+									onMouseDown={(e) => startHold(e, -1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
-									onClick={stepOnKeyboardClick(-1)}
+									onClick={(e) => stepOnKeyboardClick(e, -1)}
 									aria-label="Decrease subtitle delay"
 								>
 									−
@@ -318,10 +318,10 @@ export const SubtitlePicker = ({
 								</span>
 								<button
 									className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-xs select-none"
-									onMouseDown={startHold(1)}
+									onMouseDown={(e) => startHold(e, 1)}
 									onMouseUp={stopHold}
 									onMouseLeave={stopHold}
-									onClick={stepOnKeyboardClick(1)}
+									onClick={(e) => stepOnKeyboardClick(e, 1)}
 									aria-label="Increase subtitle delay"
 								>
 									+

@@ -11,19 +11,26 @@ interface UpdateBannerProps {
 }
 
 export const UpdateBanner = ({ state, hidden }: UpdateBannerProps) => {
-	const { update, installing, progress, error, packageInstall, dismiss, install } = state;
+	if (!state.update || hidden) return null;
+	return <UpdateCard state={state} update={state.update} />;
+};
+
+/** The banner itself. It mounts each time it shows, so it can fade in. */
+const UpdateCard = ({
+	state,
+	update,
+}: {
+	state: UpdateState;
+	update: NonNullable<UpdateState["update"]>;
+}) => {
+	const { installing, progress, error, packageInstall, dismiss, install } = state;
 	const [visible, setVisible] = useState(false);
 
+	// Start hidden for one frame so the transition has a state to run from.
 	useEffect(() => {
-		if (!update || hidden) {
-			setVisible(false);
-			return;
-		}
 		const id = requestAnimationFrame(() => setVisible(true));
 		return () => cancelAnimationFrame(id);
-	}, [update, hidden]);
-
-	if (!update || hidden) return null;
+	}, []);
 
 	return (
 		<div

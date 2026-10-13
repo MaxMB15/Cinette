@@ -80,9 +80,7 @@ export const DownloadsProvider = ({ children }: { children: ReactNode }) => {
 	const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
 	const [retentionDays, setRetentionState] = useState<number | null>(null);
 
-	const refresh = useCallback(async () => {
-		setDownloads(await listDownloads());
-	}, []);
+	const refresh = useCallback(() => listDownloads().then(setDownloads), []);
 
 	const setRetentionDays = useCallback(async (days: number | null) => {
 		const deleted = await setDownloadRetention(days);

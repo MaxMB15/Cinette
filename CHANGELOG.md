@@ -12,6 +12,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Some programs in the TV guide had no title or description. One with a bare `&` or an HTML entity such as `&nbsp;` came out blank, and so did one wrapped in CDATA. These now show, with an HTML entity left as written. A channel whose guide ID has an `&`, which the guide writes as `&amp;`, showed no programs at all (#220).
 - With autoplay on, pausing an episode in its last 5 seconds started the next one. Pressing Next episode there and then cancelling its resume prompt left the episode paused. The player now goes on to the next episode only when it sees one play to its end (#218).
+- Removing an entry from the History tab loaded the whole list again, so a spinner took its place and the list scrolled back to the top. Now only that entry goes (#230).
+- On the Live tab, clearing the search just after typing could leave programs from the guide search showing above the channels (#230).
 
 ## [0.6.0] - 2026-10-12
 

@@ -9,6 +9,7 @@ import {
 	useState,
 	type PointerEvent as ReactPointerEvent,
 } from "react";
+import { useLatestRef } from "@/hooks/useLatestRef";
 
 /** Height cap of a sheet when it opens, and after a drag up expands it. */
 const SHEET_HEIGHT = "85vh";
@@ -179,10 +180,7 @@ export const useSheetDrag = ({
 	const sheetRef = useRef<HTMLDivElement>(null);
 	const gestureRef = useRef<Gesture | null>(null);
 	const [expanded, setExpanded] = useState(false);
-	const latest = useRef({ onClose, enabled, expanded });
-	useEffect(() => {
-		latest.current = { onClose, enabled, expanded };
-	});
+	const latestRef = useLatestRef({ onClose, enabled, expanded });
 
 	useLayoutEffect(() => {
 		if (sheetRef.current) paint(sheetRef.current, 0, expanded);
@@ -191,7 +189,7 @@ export const useSheetDrag = ({
 	const begin = useCallback(
 		(x: number, y: number, scroller: Element | null, pointerId: number | null) => {
 			const sheet = sheetRef.current;
-			if (!sheet || !latest.current.enabled) return;
+			if (!sheet || !latestRef.current.enabled) return;
 			gestureRef.current = {
 				startX: x,
 				startY: y,
@@ -205,76 +203,82 @@ export const useSheetDrag = ({
 				pointerId,
 			};
 		},
-		[]
+		[latestRef]
 	);
 
 	// True while the move belongs to the sheet, so the page shouldn't scroll.
-	const move = useCallback((x: number, y: number): boolean => {
-		const g = gestureRef.current;
-		const sheet = sheetRef.current;
-		if (!g || !sheet || g.mode === "ignore") return false;
-		const dx = x - g.startX;
-		const dy = y - g.startY;
-		if (g.mode === "pending") {
-			if (Math.abs(dx) > Math.abs(dy)) {
-				if (Math.abs(dx) >= DRAG_SLOP) g.mode = "ignore";
-				return false;
+	const move = useCallback(
+		(x: number, y: number): boolean => {
+			const g = gestureRef.current;
+			const sheet = sheetRef.current;
+			if (!g || !sheet || g.mode === "ignore") return false;
+			const dx = x - g.startX;
+			const dy = y - g.startY;
+			if (g.mode === "pending") {
+				if (Math.abs(dx) > Math.abs(dy)) {
+					if (Math.abs(dx) >= DRAG_SLOP) g.mode = "ignore";
+					return false;
+				}
+				if (g.scroller && (dy < 0 || g.scroller.scrollTop > 0)) {
+					g.mode = "ignore";
+					return false;
+				}
+				// Not clearly a drag yet, so the move stays with the browser. WebKit lets
+				// the first touchmove decide whether anything under the finger can scroll
+				// for the rest of the touch, so claiming a small wobble would stop a list
+				// or a row that scrolls sideways from scrolling after it.
+				if (Math.abs(dy) < DRAG_SLOP) return false;
+				g.mode = "drag";
+				g.canExpand = !g.scroller && !latestRef.current.expanded && hidesContent(sheet);
+				// The browser may already own this touch for scrolling, and then
+				// preventDefault can't stop the list. Locking it keeps the list still
+				// if the finger goes back up while the sheet follows.
+				if (g.scroller) g.unlockScroller = lockScroll(g.scroller);
+				sheet.style.transition = "none";
 			}
-			if (g.scroller && (dy < 0 || g.scroller.scrollTop > 0)) {
-				g.mode = "ignore";
-				return false;
+			const { expanded } = latestRef.current;
+			g.offset = g.canExpand ? dy : Math.max(0, dy);
+			const now = performance.now();
+			g.samples.push({ y, t: now });
+			while (g.samples.length > 2 && now - g.samples[0].t > VELOCITY_WINDOW_MS) {
+				g.samples.shift();
 			}
-			// Not clearly a drag yet, so the move stays with the browser. WebKit lets
-			// the first touchmove decide whether anything under the finger can scroll
-			// for the rest of the touch, so claiming a small wobble would stop a list
-			// or a row that scrolls sideways from scrolling after it.
-			if (Math.abs(dy) < DRAG_SLOP) return false;
-			g.mode = "drag";
-			g.canExpand = !g.scroller && !latest.current.expanded && hidesContent(sheet);
-			// The browser may already own this touch for scrolling, and then
-			// preventDefault can't stop the list. Locking it keeps the list still
-			// if the finger goes back up while the sheet follows.
-			if (g.scroller) g.unlockScroller = lockScroll(g.scroller);
-			sheet.style.transition = "none";
-		}
-		const { expanded } = latest.current;
-		g.offset = g.canExpand ? dy : Math.max(0, dy);
-		const now = performance.now();
-		g.samples.push({ y, t: now });
-		while (g.samples.length > 2 && now - g.samples[0].t > VELOCITY_WINDOW_MS) {
-			g.samples.shift();
-		}
-		paint(sheet, g.offset, expanded);
-		return true;
-	}, []);
+			paint(sheet, g.offset, expanded);
+			return true;
+		},
+		[latestRef]
+	);
 
 	// True when the gesture was a drag, so the tap under the finger should be dropped.
-	const end = useCallback((cancelled: boolean): boolean => {
-		const g = gestureRef.current;
-		const sheet = sheetRef.current;
-		gestureRef.current = null;
-		if (!g || !sheet) return false;
-		g.unlockScroller();
-		if (g.mode !== "drag") return false;
-		const { expanded, onClose } = latest.current;
-		const action = cancelled
-			? "settle"
-			: sheetReleaseAction({
-					offset: g.offset,
-					velocity: releaseVelocity(g.samples, performance.now()),
-					height: g.height,
-					expanded,
-				});
-		sheet.style.transition = "";
-		if (action === "close") {
-			sheet.style.transform = "translateY(100%)";
-			onClose();
-		} else {
-			paint(sheet, 0, expanded || action === "expand");
-			if (action === "expand") setExpanded(true);
-		}
-		return true;
-	}, []);
+	const end = useCallback(
+		(cancelled: boolean): boolean => {
+			const g = gestureRef.current;
+			const sheet = sheetRef.current;
+			gestureRef.current = null;
+			if (!g || !sheet) return false;
+			g.unlockScroller();
+			if (g.mode !== "drag") return false;
+			const { expanded, onClose } = latestRef.current;
+			const action = cancelled
+				? "settle"
+				: sheetReleaseAction({
+						offset: g.offset,
+						velocity: releaseVelocity(g.samples, performance.now()),
+						height: g.height,
+						expanded,
+					});
+			sheet.style.transition = "";
+			if (action === "close") {
+				sheet.style.transform = "translateY(100%)";
+				onClose();
+			} else {
+				paint(sheet, 0, expanded || action === "expand");
+				if (action === "expand") setExpanded(true);
+			}
+			return true;
+		},
+		[latestRef]
+	);
 
 	// Touch listeners go on the element because React's touchmove is passive,
 	// and only a non-passive listener can stop the content scrolling.
