@@ -1,9 +1,53 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7. */
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Only the page and the frontend source hold class names. Left to itself,
+   Tailwind would also read src-tauri and everything else under the app. */
+@import "tailwindcss" source(none);
+@source "../../index.html";
+@source "../**/*.{ts,tsx}";
+
+/* index.html sets class="dark" on <html>, so dark: always applies. */
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+	/* The system font, as in Tailwind 3. Tailwind 4.3 lists named fonts first,
+	   so Linux would show Roboto or Arial in place of the desktop's font. */
+	--font-sans:
+		ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+		"Segoe UI Symbol", "Noto Color Emoji";
+
+	--color-border: hsl(var(--border));
+	--color-input: hsl(var(--input));
+	--color-ring: hsl(var(--ring));
+	--color-background: hsl(var(--background));
+	--color-foreground: hsl(var(--foreground));
+
+	--color-primary: hsl(var(--primary));
+	--color-primary-foreground: hsl(var(--primary-foreground));
+
+	--color-secondary: hsl(var(--secondary));
+	--color-secondary-foreground: hsl(var(--secondary-foreground));
+
+	--color-destructive: hsl(var(--destructive));
+	--color-destructive-foreground: hsl(var(--destructive-foreground));
+
+	--color-muted: hsl(var(--muted));
+	--color-muted-foreground: hsl(var(--muted-foreground));
+
+	--color-accent: hsl(var(--accent));
+	--color-accent-foreground: hsl(var(--accent-foreground));
+
+	--color-card: hsl(var(--card));
+	--color-card-foreground: hsl(var(--card-foreground));
+
+	--color-popover: hsl(var(--popover));
+	--color-popover-foreground: hsl(var(--popover-foreground));
+
+	--radius-lg: var(--radius);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-sm: calc(var(--radius) - 4px);
+}
 
 @layer base {
 	:root {
@@ -34,6 +78,12 @@
 	* {
 		@apply border-border;
 	}
+	/* Tailwind 4 leaves buttons with the browser's default cursor. Keep the
+	   pointer that Tailwind 3 gave them. */
+	button:not(:disabled),
+	[role="button"]:not(:disabled) {
+		cursor: pointer;
+	}
 	html,
 	body {
 		/* Turn off WKWebView's elastic scroll. This is an app, not a web page. */
@@ -54,38 +104,37 @@
 }
 
 /* Hide scrollbar but allow scrolling */
-.scrollbar-hide {
+@utility scrollbar-hide {
 	-ms-overflow-style: none;
 	scrollbar-width: none;
-}
-.scrollbar-hide::-webkit-scrollbar {
-	display: none;
+	&::-webkit-scrollbar {
+		display: none;
+	}
 }
 
 /* Room for the notch, status bar and home indicator on iOS. All four are 0
    on desktop. */
-@layer utilities {
-	.pt-safe {
-		padding-top: env(safe-area-inset-top);
-	}
-	.pb-safe {
-		padding-bottom: env(safe-area-inset-bottom);
-	}
-	.pl-safe {
-		padding-left: env(safe-area-inset-left);
-	}
-	.pr-safe {
-		padding-right: env(safe-area-inset-right);
-	}
-	/* Paints the top, bottom and right insets black and leaves the middle
-	   transparent. The player page is transparent so the video shows through,
-	   and iOS fills transparent insets with a light color. */
-	.safe-insets-black {
-		background:
-			linear-gradient(#000, #000) top / 100% env(safe-area-inset-top) no-repeat,
-			linear-gradient(#000, #000) bottom / 100% env(safe-area-inset-bottom) no-repeat,
-			linear-gradient(#000, #000) right / env(safe-area-inset-right) 100% no-repeat;
-	}
+@utility pt-safe {
+	padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+	padding-bottom: env(safe-area-inset-bottom);
+}
+@utility pl-safe {
+	padding-left: env(safe-area-inset-left);
+}
+@utility pr-safe {
+	padding-right: env(safe-area-inset-right);
+}
+
+/* Paints the top, bottom and right insets black and leaves the middle
+   transparent. The player page is transparent so the video shows through,
+   and iOS fills transparent insets with a light color. */
+@utility safe-insets-black {
+	background:
+		linear-gradient(#000, #000) top / 100% env(safe-area-inset-top) no-repeat,
+		linear-gradient(#000, #000) bottom / 100% env(safe-area-inset-bottom) no-repeat,
+		linear-gradient(#000, #000) right / env(safe-area-inset-right) 100% no-repeat;
 }
 
 /* Transparent video area for MPV rendering beneath */

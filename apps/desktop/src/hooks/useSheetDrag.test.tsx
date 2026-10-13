@@ -180,7 +180,7 @@ describe("useSheetDrag", () => {
 		const end = drag(getByText("Header"), [0, 40, 80, 130]);
 		expect(onClose).toHaveBeenCalledOnce();
 		expect(end.defaultPrevented).toBe(true);
-		expect(getByTestId("sheet").style.transform).toBe("translateY(100%)");
+		expect(getByTestId("sheet").style.translate).toBe("0 100%");
 	});
 
 	it("springs back after a short drag that stops", () => {
@@ -188,7 +188,7 @@ describe("useSheetDrag", () => {
 		const { getByTestId, getByText } = render(<Sheet onClose={onClose} />);
 		drag(getByText("Header"), [0, 10, 20, 30, 30, 30, 30, 30, 30, 30, 30, 30]);
 		expect(onClose).not.toHaveBeenCalled();
-		expect(getByTestId("sheet").style.transform).toBe("");
+		expect(getByTestId("sheet").style.translate).toBe("");
 	});
 
 	it("leaves a tap alone", () => {
@@ -209,7 +209,7 @@ describe("useSheetDrag", () => {
 		touch(list, "touchend");
 		expect(move.defaultPrevented).toBe(false);
 		expect(onClose).not.toHaveBeenCalled();
-		expect(getByTestId("sheet").style.transform).toBe("");
+		expect(getByTestId("sheet").style.translate).toBe("");
 	});
 
 	it("pulls the sheet down from content scrolled to the top", () => {
@@ -267,7 +267,7 @@ describe("useSheetDrag", () => {
 		expect(wobble.defaultPrevented).toBe(false);
 		expect(up.defaultPrevented).toBe(false);
 		expect(onClose).not.toHaveBeenCalled();
-		expect(getByTestId("sheet").style.transform).toBe("");
+		expect(getByTestId("sheet").style.translate).toBe("");
 	});
 
 	it("claims a pull down from the top of the list once it passes the slop", () => {
@@ -291,7 +291,7 @@ describe("useSheetDrag", () => {
 		touch(header, "touchcancel");
 		expect(small.defaultPrevented).toBe(false);
 		expect(pull.defaultPrevented).toBe(true);
-		expect(getByTestId("sheet").style.transform).toBe("");
+		expect(getByTestId("sheet").style.translate).toBe("");
 	});
 
 	it("lets a row scroll sideways after a move that starts nearly straight down", () => {
@@ -305,7 +305,7 @@ describe("useSheetDrag", () => {
 		expect(first.defaultPrevented).toBe(false);
 		expect(sideways.defaultPrevented).toBe(false);
 		expect(down.defaultPrevented).toBe(false);
-		expect(getByTestId("sheet").style.transform).toBe("");
+		expect(getByTestId("sheet").style.translate).toBe("");
 	});
 
 	it("holds the list still while the sheet follows a pull down", () => {
@@ -319,7 +319,7 @@ describe("useSheetDrag", () => {
 		expect(list.style.overflowY).toBe("hidden");
 		// Back up towards where it started. The sheet follows and the list can't scroll.
 		touch(list, "touchmove", 110);
-		expect(sheet.style.transform).toBe("translateY(10px)");
+		expect(sheet.style.translate).toBe("0 10px");
 		expect(list.style.overflowY).toBe("hidden");
 		act(() => {
 			touch(list, "touchend");
@@ -349,6 +349,6 @@ describe("useSheetDrag", () => {
 			touch(getByText("Confirm"), "touchend");
 		});
 		expect(onClose).not.toHaveBeenCalled();
-		expect(getByTestId("sheet").style.transform).toBe("");
+		expect(getByTestId("sheet").style.translate).toBe("");
 	});
 });

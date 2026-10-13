@@ -37,7 +37,7 @@ export const GroupList = ({
 					<button
 						type="button"
 						onClick={() => onSelectGroup(name)}
-						className="flex flex-1 min-w-0 items-center gap-2 p-2.5 text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+						className="flex flex-1 min-w-0 items-center gap-2 p-2.5 text-left rounded-lg focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 					>
 						<span className="text-sm">{name}</span>
 						<span className="text-xs text-muted-foreground">

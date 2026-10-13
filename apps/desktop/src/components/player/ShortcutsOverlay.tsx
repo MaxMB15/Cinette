@@ -20,7 +20,7 @@ export const ShortcutsOverlay = ({ skip, onClose }: ShortcutsOverlayProps) => {
 
 	return (
 		<div
-			className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+			className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-xs"
 			onClick={(e) => {
 				if (e.target === e.currentTarget) onClose();
 			}}
@@ -56,7 +56,7 @@ export const ShortcutsOverlay = ({ skip, onClose }: ShortcutsOverlayProps) => {
 								{keys.map((k) => (
 									<kbd
 										key={k}
-										className="min-w-[1.75rem] rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-center text-xs font-mono text-white"
+										className="min-w-7 rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-center text-xs font-mono text-white"
 									>
 										{k}
 									</kbd>

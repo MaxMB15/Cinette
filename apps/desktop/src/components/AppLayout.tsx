@@ -107,7 +107,7 @@ const Sidebar = ({ hidden }: { hidden: boolean }) => (
 const TabBar = ({ hidden }: { hidden: boolean }) => (
 	<nav
 		className={cn(
-			"flex items-center justify-around border-t border-border bg-card/80 backdrop-blur-sm pb-safe pl-safe pr-safe shrink-0",
+			"flex items-center justify-around border-t border-border bg-card/80 backdrop-blur-xs pb-safe pl-safe pr-safe shrink-0",
 			hidden && "hidden"
 		)}
 	>
@@ -139,7 +139,7 @@ const TvLayout = () => {
 						to={to}
 						className={({ isActive }) =>
 							cn(
-								"flex flex-col items-center justify-center w-16 h-16 rounded-xl text-muted-foreground transition-colors focus:outline-none focus:ring-2 focus:ring-primary",
+								"flex flex-col items-center justify-center w-16 h-16 rounded-xl text-muted-foreground transition-colors focus:outline-hidden focus:ring-2 focus:ring-primary",
 								isActive
 									? "bg-primary/10 text-primary"
 									: "hover:bg-accent hover:text-accent-foreground"

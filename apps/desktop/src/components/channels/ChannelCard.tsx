@@ -42,7 +42,7 @@ const FavoriteButton = ({
 		type="button"
 		onClick={onToggle}
 		className={cn(
-			"flex items-center justify-center shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+			"flex items-center justify-center shrink-0 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
 			className
 		)}
 		aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
@@ -102,7 +102,7 @@ const RowCardView = ({
 			<button
 				type="button"
 				onClick={() => onPlay(channel)}
-				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0 text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+				className="flex items-center gap-2 px-2 py-1.5 shrink-0 min-w-0 text-left rounded-lg focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 				style={{ width: `${ROW_CARD_LEFT_WIDTH}px` }}
 			>
 				<ChannelLogo
@@ -192,7 +192,7 @@ const CompactRowCard = ({
 			<button
 				type="button"
 				onClick={() => onPlay(channel)}
-				className="flex items-center gap-3 flex-1 min-w-0 h-full text-left rounded-lg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+				className="flex items-center gap-3 flex-1 min-w-0 h-full text-left rounded-lg focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 			>
 				<ChannelLogo
 					url={channel.logoUrl}
@@ -264,9 +264,9 @@ const PosterCard = ({
 		<div className="group flex flex-col text-left relative">
 			<button
 				onClick={() => onPlay(channel)}
-				className="focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-lg w-full"
+				className="focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring rounded-lg w-full"
 			>
-				<div className="relative w-full aspect-[2/1] rounded-lg overflow-hidden mb-1.5 border border-border/40">
+				<div className="relative w-full aspect-2/1 rounded-lg overflow-hidden mb-1.5 border border-border/40">
 					{!showFallback ? (
 						<img
 							src={channel.logoUrl}
@@ -276,7 +276,7 @@ const PosterCard = ({
 							onError={markImgFailed}
 						/>
 					) : (
-						<div className="h-full w-full bg-gradient-to-br from-secondary via-secondary/80 to-secondary/50 flex flex-col items-center justify-center gap-1">
+						<div className="h-full w-full bg-linear-to-br from-secondary via-secondary/80 to-secondary/50 flex flex-col items-center justify-center gap-1">
 							<Film className="h-5 w-5 text-muted-foreground/25" />
 							<span className="text-[9px] font-medium text-muted-foreground/30 uppercase tracking-wider">
 								No poster
@@ -302,8 +302,8 @@ const PosterCard = ({
 			    control or a progress bar nested inside a button on its own. The
 			    extra pixel keeps each one inside the poster's border. */}
 			{!isSeries && dl && isActiveDownload(dl) && (
-				<div className="pointer-events-none absolute inset-x-0 top-0 aspect-[2/1] flex items-end p-px rounded-lg overflow-hidden">
-					<div className="w-full px-1.5 pb-1 pt-3 bg-gradient-to-t from-black/90 to-transparent">
+				<div className="pointer-events-none absolute inset-x-0 top-0 aspect-2/1 flex items-end p-px rounded-lg overflow-hidden">
+					<div className="w-full px-1.5 pb-1 pt-3 bg-linear-to-t from-black/90 to-transparent">
 						<DownloadProgressBar download={dl} />
 					</div>
 				</div>

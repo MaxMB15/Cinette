@@ -75,7 +75,7 @@ const IntervalSelect = ({ id, value, onChange, options }: IntervalSelectProps) =
 		id={id}
 		value={value}
 		onChange={(e) => onChange(Number(e.target.value))}
-		className="w-full bg-secondary text-sm rounded-lg px-3 py-2 border border-transparent focus:outline-none focus:border-primary appearance-none cursor-pointer"
+		className="w-full bg-secondary text-sm rounded-lg px-3 py-2 border border-transparent focus:outline-hidden focus:border-primary appearance-none cursor-pointer"
 	>
 		{options.map((opt) => (
 			<option key={opt.hours} value={opt.hours}>
@@ -202,7 +202,7 @@ export const ProviderSettingsModal = ({
 			// Closing mid-save would drop a save error, so the modal stays until it's done.
 			onClose={save.busy ? () => {} : onClose}
 			labelledBy={titleId}
-			overlayClassName="backdrop-blur-sm"
+			overlayClassName="backdrop-blur-xs"
 			className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col max-h-[90vh]"
 		>
 			{/* Header */}

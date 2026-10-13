@@ -101,7 +101,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 		<div className="fixed inset-0 z-50">
 			{/* Backdrop */}
 			<div
-				className={`absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
+				className={`absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ${
 					visible ? "opacity-100" : "opacity-0"
 				}`}
 				onClick={handleClose}
@@ -110,7 +110,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 			{/* Drawer */}
 			<div
 				ref={sheetRef}
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[translate,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>

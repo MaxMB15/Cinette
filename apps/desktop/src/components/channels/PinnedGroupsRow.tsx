@@ -47,7 +47,7 @@ export const PinnedGroupsRow = ({
 							</button>
 							<button
 								onClick={() => onUnpin(pin.groupName)}
-								className={`px-1.5 py-1.5 rounded-r-lg border border-l-0 text-xs opacity-0 group-hover:opacity-100 hover:text-destructive transition-all ${
+								className={`px-1.5 py-1.5 rounded-r-lg border border-l-0 text-xs opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 hover:text-destructive transition-all ${
 									selectedGroup === pin.groupName
 										? "border-primary bg-primary text-primary-foreground"
 										: "border-border bg-secondary hover:bg-accent"
