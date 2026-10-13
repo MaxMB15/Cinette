@@ -69,6 +69,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       # Lists the crates with a changed Rust file. Without one there's nothing
       # to mutate, so the job skips the cache, the installs and the build. The
@@ -86,8 +87,6 @@ jobs:
           changed apps/player/src-tauri && packages="$packages -p max-video-player"
           {
             echo "packages=$packages"
-            # The last crate listed has the most to build.
-            echo "cache=${packages##* -p }"
             echo "rust=$([ -n "$packages" ] && echo true || echo false)"
             echo "system=$(grep -qE 'tauri-plugin-mpv|max-video-player' <<< "$packages" && echo true || echo false)"
             echo "app=$(grep -q max-video-player <<< "$packages" && echo true || echo false)"
@@ -102,13 +101,13 @@ jobs:
         with:
           toolchain: stable
 
-      # Restores what the weekly run on dev saved for that crate.
+      # Restores what the weekly run on dev saved.
       - name: Rust cache
         if: steps.changes.outputs.rust == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants-${{ steps.changes.outputs.cache }}
+          shared-key: mutants
           save-if: false
 
       - name: Install system libraries
@@ -208,6 +207,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts
+          persist-credentials: false
+
+      # fetch-ffmpeg.sh asks rustc for the target name.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
       - name: Fetch the ffmpeg sidecar
         run: ./scripts/fetch-ffmpeg.sh linux
@@ -220,11 +226,12 @@ jobs:
           retention-days: 1
 
   # A run without the app skips the sidecar job, which would skip this one too
-  # without the check here.
+  # without the check here. When the sidecar fails, the app's shards fail at
+  # its download and the other crates still run.
   full:
     name: full (${{ matrix.package }}, ${{ matrix.shard }})
     needs: [plan, sidecar]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.sidecar.result != 'failure' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
@@ -236,20 +243,23 @@ jobs:
       SHARDS: ${{ matrix.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
 
-      # Only a run on dev saves, from the first shard of each crate, since a
-      # crate's shards build the same thing.
+      # The repo's caches are close to GitHub's 10 GB limit, so the crates
+      # share one. Only a run on dev saves it, from the app's first shard. The
+      # app builds most of what the plugin and mvp-core build.
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants-${{ matrix.package }}
-          save-if: ${{ github.ref == 'refs/heads/dev' && matrix.shard == 0 }}
+          shared-key: mutants
+          save-if: ${{ github.ref == 'refs/heads/dev' && matrix.package == 'max-video-player' && matrix.shard == 0 }}
 
       - name: Install system libraries
         if: matrix.package != 'mvp-core'
@@ -311,6 +321,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts
+          persist-credentials: false
 
       # Each artifact holds one mutants-<crate>-shard-N folder. Merging them
       # gives the same layout however many shards uploaded, where a lone

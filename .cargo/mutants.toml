@@ -16,7 +16,7 @@ exclude_re = [
     'tauri-plugin-mpv/src/gl_render\.rs:',
     # The plugin's Linux renderer draws into a Wayland subsurface through GTK
     # and EGL, which the tests can't open. Its pure helpers stay in.
-    'tauri-plugin-mpv/src/linux\.rs:.*(<impl (Drop|PlatformRenderer) for |\b(egl|gl_proc_address|DecorationWatch::\w+|LinuxGlRenderer::software_gl|request_render|follow_decorations|render_frame|recreate_egl_surface|build_wayland\w*|gl_renderer_name|wayland_egl_display|csd_offset|run_on_glib_main|drain_wayland_queue|mpv_uses_wayland)\b)',
+    'tauri-plugin-mpv/src/linux\.rs:.*(<impl (Drop|PlatformRenderer) for |(replace|in) egl\b|\b(gl_proc_address|DecorationWatch::\w+|LinuxGlRenderer::software_gl|request_render|follow_decorations|render_frame|recreate_egl_surface|build_wayland\w*|gl_renderer_name|wayland_egl_display|csd_offset|run_on_glib_main|drain_wayland_queue|mpv_uses_wayland)\b)',
     # Keeping the display awake goes through IOKit on macOS and D-Bus on
     # Linux. A test would change the machine's own sleep settings.
     'tauri-plugin-mpv/src/idle_inhibit\.rs:.*\b(IdleInhibitor::platform_\w+|cfstring|dbus_\w+)\b',
@@ -35,7 +35,8 @@ exclude_re = [
     'tauri-plugin-mpv/src/loadfile\.rs:.*replace \| with \^ in client_api_version',
     # Helpers in a test module that only builds on some platforms, such as
     # #[cfg(all(test, desktop))]. cargo-mutants only skips a plain
-    # #[cfg(test)].
+    # #[cfg(test)]. It doesn't apply this to a deleted struct field, so one
+    # such mutant in the app's recordings tests still runs.
     '\btests::',
     # The app's entry point builds the whole Tauri app and opens its window.
     'src-tauri/src/lib\.rs:.*\b(run|show_main_window)\b',
@@ -43,8 +44,9 @@ exclude_re = [
     # iOS logger only builds for iOS.
     'src-tauri/src/logging\.rs:.*\b(init\b|log_panics\b|ios::)',
     # These ask the real service whether a key works. Settings calls them
-    # when the user tests a key.
-    'replace (test_omdb_api_key|test_mdblist_api_key|test_gemini_api_key) ',
+    # when the user tests a key. The Gemini and OpenSubtitles ones stay in,
+    # since a key that can't go in a header fails before anything is sent.
+    'replace (test_omdb_api_key|test_mdblist_api_key) ',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's

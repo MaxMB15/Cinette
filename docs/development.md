@@ -189,6 +189,9 @@ git diff --merge-base origin/dev -- crates apps/player/src-tauri > target/rust.d
 cargo mutants -p mvp-core --in-diff target/rust.diff
 ```
 
+That tests the changes in `mvp-core`. The diff has every crate's changes, so add
+`-p tauri-plugin-mpv` or `-p max-video-player` to test theirs, with the setup below.
+
 The results go to `mutants.out/`, which git ignores. `missed.txt` lists the changes
 no test caught, and `diff/` holds each change as a patch. Testing a whole crate takes
 hours on one machine, and `--shard 0/4` through `--shard 3/4` split it into four runs.
@@ -204,8 +207,12 @@ change behind, so commit your work first.
 reach. That's the loopback server the tests use, the functions that call a real web
 service, code that Linux doesn't build, such as the plugin's macOS and iOS renderers,
 the app's entry point and logging setup, and code that needs a window, a Wayland
-display or D-Bus. Each entry says why. To test the macOS renderer on a Mac, add
-`--no-config`.
+display or D-Bus. Each entry says why. To test the macOS renderer on a Mac, leave the
+config out and name the file, since the other exclusions go with the config.
+
+```bash
+cargo mutants --no-config --gitignore true -f crates/tauri-plugin-mpv/src/macos.rs
+```
 
 CI tests the lines a pull request changes in each crate, and every crate on `dev` each
 Monday, in four shards for `mvp-core` and the plugin and eight for the app. A missed
