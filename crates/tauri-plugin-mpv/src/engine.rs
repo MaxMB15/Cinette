@@ -352,11 +352,14 @@ impl MpvEngine {
     }
 
     /// Set subtitle vertical position (0 = top, 100 = bottom). Default is 100.
+    ///
+    /// mpv 0.37 made `sub-pos` a float, and older versions turn a float down.
+    /// Every version takes a whole number, so the position is rounded.
     pub fn set_sub_pos(&self, pos: f64) -> Result<(), String> {
         self.mpv
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?
-            .set_property("sub-pos", pos.clamp(0.0, 150.0))
+            .set_property("sub-pos", pos.clamp(0.0, 150.0).round() as i64)
             .map_err(|e| e.to_string())
     }
 

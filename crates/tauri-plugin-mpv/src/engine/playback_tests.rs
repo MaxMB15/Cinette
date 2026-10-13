@@ -216,7 +216,7 @@ fn keeps_the_volume_inside_the_player_range() {
 #[test]
 fn keeps_the_subtitle_position_on_screen_and_sets_the_delay() {
     let engine = engine(&[]);
-    for (asked, set) in [(80.0, 80.0), (200.0, 150.0), (-5.0, 0.0)] {
+    for (asked, set) in [(80.0, 80.0), (72.6, 73.0), (200.0, 150.0), (-5.0, 0.0)] {
         engine.set_sub_pos(asked).unwrap();
         let pos = mpv(&engine).get_property::<f64>("sub-pos").unwrap();
         assert_eq!(pos, set, "asked for {asked}");
