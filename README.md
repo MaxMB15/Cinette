@@ -66,11 +66,15 @@ chmod +x MaxVideoPlayer_amd64.AppImage
 ./MaxVideoPlayer_amd64.AppImage
 ```
 
-**Debian and Ubuntu.** `sudo apt install ./MaxVideoPlayer_amd64.deb` installs the app and the libraries it needs, including libmpv.
+The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian 13 and current Fedora releases have.
+
+**Debian and Ubuntu.** `sudo apt install ./MaxVideoPlayer_amd64.deb` installs the app and the libraries it needs, including libmpv. It needs Debian 12, Ubuntu 24.04 or a later release.
 
 **Fedora.** `sudo dnf install ./MaxVideoPlayer_x86_64.rpm`
 
-Both packages need WebKitGTK 2.40 or later. Ubuntu 22.04 and Debian 12 have a newer one once their updates are installed, and current Fedora releases ship one. If yours is older, `apt` and `dnf` update it along with the app. The AppImage includes its own.
+Both packages need WebKitGTK 2.40 or later, which all of these releases have once their updates are installed. If yours is older, `apt` and `dnf` update it along with the app.
+
+Ubuntu 22.04 isn't supported. Its libmpv is too old for the app, and its glibc is too old for the AppImage.
 
 ## Features
 

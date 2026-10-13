@@ -44,8 +44,9 @@ sudo apt-get install -y \
   patchelf
 ```
 
-The system `libmpv-dev` is enough for development. To build libmpv from source
-instead, as the AppImage does:
+The system `libmpv-dev` is enough for development on Debian 12, Ubuntu 24.04 and
+later. Ubuntu 22.04 has mpv 0.34, which the app can't use. To build libmpv from
+source instead, as the AppImage does:
 
 ```bash
 sudo apt-get install meson ninja-build \
@@ -158,15 +159,22 @@ may only run on your macOS version; release builds run on a macOS 15 runner.
 
 On Linux, `scripts/bundle-libmpv-linux.sh` copies `libmpv.so` and its dependencies
 into the AppImage. The `.deb` and `.rpm` declare libmpv as a package dependency
-instead.
+instead. The app links against `libmpv.so.2`, which the `libmpv2` package has on
+Debian 12, Ubuntu 24.04 and later, and `mpv-libs` has on Fedora. Ubuntu 22.04 only
+has `libmpv1`, with mpv 0.34's `libmpv.so.1`, so the `.deb` doesn't install there.
 
 The `.deb` and `.rpm` also require WebKitGTK 2.40 or later, the first version that
 supports all the CSS in the app's styles. Tailwind 4's breakpoints like `sm:` use
 range media queries such as `(width >= 40rem)`, which WebKitGTK 2.38 ignores, and
 2.40 is also the first to turn on `@property` and the `lh` unit. Tauri copies each `rpm.depends`
 entry into the package as a bare name, so the `.rpm` gives the version inside an
-RPM boolean dependency, `(webkit2gtk4.1 >= 2.40)`. The AppImage bundles the
-WebKitGTK of the machine that built it.
+RPM boolean dependency, `(webkit2gtk4.1 >= 2.40)`.
+
+The AppImage bundles libmpv, WebKitGTK and most of the libraries they use from the
+machine that built it, which is Ubuntu 24.04 for releases. It leaves out glibc and
+`libstdc++`, which come from the user's system. The bundled libraries need glibc
+2.38 and the `libstdc++` of GCC 13.2 (`GLIBCXX_3.4.32`), so the AppImage doesn't
+start on Ubuntu 22.04 or Debian 12.
 
 The output lands in `target/release/bundle/`. To sign the macOS build with a
 Developer ID, see [macos-signing.md](macos-signing.md).

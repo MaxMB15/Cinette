@@ -73,7 +73,7 @@
 		"linux": {
 			"deb": {
 				"depends": [
-					"libmpv2 | libmpv1",
+					"libmpv2",
 					"libegl1",
 					"libgtk-3-0",
 					"libwebkit2gtk-4.1-0 (>= 2.40)",
