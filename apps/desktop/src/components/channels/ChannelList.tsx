@@ -356,8 +356,9 @@ export const ChannelList = () => {
 		activeTab === "live" ||
 		(activeTab === "favorites" && byType.live.some((ch) => ch.isFavorite && ch.tvgId));
 
-	// Load the guide for all live channels when its range moves, each time a
-	// tab that shows it opens, and when the channels change.
+	// Load the guide for all live channels when its range moves, when the tab
+	// starts showing it, and when the channels change. Going between Live and
+	// Favorites keeps what's loaded.
 	useEffect(() => {
 		if (!showsGuide || channels.length === 0 || !guideRange) return;
 		// A load for an older range can finish after the current one.
