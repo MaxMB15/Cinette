@@ -27,6 +27,11 @@ describe("layoutModeFor", () => {
 		expect(layoutModeFor("ios", view(1376, 1032, 1032))).toBe("desktop");
 	});
 
+	it("switches an iPad to the desktop layout at exactly 1024 wide", () => {
+		expect(layoutModeFor("ios", view(1024, 768, 768))).toBe("desktop");
+		expect(layoutModeFor("ios", view(1023, 768, 768))).toBe("tablet");
+	});
+
 	it("gives a narrow iPad Split View pane the phone layout", () => {
 		expect(layoutModeFor("ios", view(375, 1032, 1032))).toBe("mobile");
 	});
@@ -34,6 +39,15 @@ describe("layoutModeFor", () => {
 	it("uses the tv layout for large Android screens", () => {
 		expect(layoutModeFor("android", view(1920, 1080, 1080))).toBe("tv");
 		expect(layoutModeFor("android", view(412, 915, 412))).toBe("mobile");
+	});
+
+	it("gives a Fire Stick at 960 by 540 the tv layout", () => {
+		expect(layoutModeFor("android", view(960, 540, 540))).toBe("tv");
+	});
+
+	it("needs both a wide and a tall enough Android screen for the tv layout", () => {
+		expect(layoutModeFor("android", view(959, 540, 540))).toBe("mobile");
+		expect(layoutModeFor("android", view(1920, 539, 539))).toBe("mobile");
 	});
 
 	it("always uses the desktop layout on desktop platforms", () => {
@@ -59,8 +73,11 @@ describe("getPlatform", () => {
 		expect(getPlatform()).toBe("macos");
 	});
 
-	it("falls back to macos for a platform the app doesn't support", () => {
-		vi.mocked(osPlatform).mockReturnValue("freebsd");
+	it.each([
+		{ what: "a platform the app doesn't support", name: "freebsd" },
+		{ what: "an empty platform name", name: "" },
+	])("falls back to macos for $what", ({ name }) => {
+		vi.mocked(osPlatform).mockReturnValue(name as ReturnType<typeof osPlatform>);
 		expect(getPlatform()).toBe("macos");
 	});
 });

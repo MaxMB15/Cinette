@@ -118,11 +118,38 @@ describe("FullscreenProvider", () => {
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
 	});
 
+	it("lets the read after its own change lapse once the provider is gone", async () => {
+		await renderToggle();
+		vi.useFakeTimers();
+		onTestFinished(() => {
+			vi.useRealTimers();
+		});
+		fireEvent.click(screen.getByText("fullscreen=false"));
+		cleanup();
+		fakeWindow.isFullscreen.mockClear();
+		await vi.advanceTimersByTimeAsync(RECHECK_MS);
+		expect(fakeWindow.isFullscreen).not.toHaveBeenCalled();
+	});
+
 	it("stops following the window when it closes", async () => {
 		await renderToggle();
 		expect(fakeWindow.resizeListeners()).toBe(1);
 		cleanup();
 		await settle();
 		expect(fakeWindow.resizeListeners()).toBe(0);
+	});
+});
+
+describe("useFullscreen", () => {
+	afterEach(() => {
+		cleanup();
+		resetFakeWindow();
+	});
+
+	it("reports windowed and ignores changes outside a provider", () => {
+		render(<Toggle />);
+		fireEvent.click(screen.getByText("fullscreen=false"));
+		expect(screen.getByText("fullscreen=false")).toBeTruthy();
+		expect(fakeWindow.setFullscreen).not.toHaveBeenCalled();
 	});
 });
