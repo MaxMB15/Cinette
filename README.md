@@ -4,7 +4,7 @@
 
 # Max Video Player
 
-A fast desktop IPTV player for macOS and Linux.<br>
+A fast, private IPTV player for macOS and Linux.<br>
 Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app.
 
 [![Latest release](https://img.shields.io/github/v/release/MaxMB15/MaxVideoPlayer?label=release)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest)
@@ -21,6 +21,14 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 <img src="docs/images/channels.jpg" alt="The live TV tab: recently played channels, category filters, and a programme guide timeline for each channel">
 
 </div>
+
+## Why Max Video Player
+
+**It's fast.** The app is built in Rust with [Tauri](https://tauri.app), which uses the web view your system already has instead of shipping its own copy of Chromium the way Electron apps do. Video plays through [mpv](https://mpv.io) with your computer's hardware decoder, and mpv draws it itself instead of handing it to the web page that holds the controls. Playlists and programme guides are parsed in Rust and saved in a local database, and the app only downloads them again when they're due on the schedule you set. The channel list only draws the rows you can see, however long the playlist is.
+
+**It collects nothing.** There are no accounts, ads, analytics or telemetry, and the developer gets no data from the app. Your playlists, logins, favorites and history stay on your computer. You don't have to take that on trust. All of the code is here for anyone to read, every release is built from it by GitHub Actions, and the [privacy policy](docs/privacy.md) lists each service the app talks to and what it sends.
+
+**You set it up your way.** Choose how often each provider and its guide refresh. Pin, rename, reorder and create categories. Pick whether intros, recaps and credits are skipped automatically, with a button or not at all, and how far the back and forward buttons jump. Set the default volume and hardware decoding, where downloads go, how many run at once and how long they're kept, and how early recordings start and how late they run.
 
 ## Download
 
@@ -106,7 +114,7 @@ Ubuntu 22.04 and releases based on it, such as Linux Mint 21 and Pop!_OS 22.04, 
 - Record a live channel now, a program from the guide or any time range (macOS and Linux)
 - Plot, cast and ratings for movies and series from OMDb
 - Optional category sorting with Google Gemini
-- Automatic updates, checked at launch and every two hours
+- Automatic updates
 
 OpenSubtitles, OMDb and Gemini each need a free API key, which you add in Settings. Skip times need the OMDb key too.
 
