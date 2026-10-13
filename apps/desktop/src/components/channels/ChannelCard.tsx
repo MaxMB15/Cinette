@@ -64,6 +64,11 @@ interface ChannelCardProps {
 	onToggleFavorite?: (channel: Channel) => void;
 	/** Programs in the EPG display window for this channel. */
 	epgPrograms?: EpgProgram[];
+	/**
+	 * The guide is still loading, so a row with no programs yet doesn't say
+	 * there's no guide.
+	 */
+	guidePending?: boolean;
 	/** Dynamic window start (Unix seconds). Falls back to now − 1h. */
 	windowStart?: number;
 	/** Dynamic window end (Unix seconds). Falls back to now + 2h. */
@@ -75,6 +80,7 @@ const RowCardView = ({
 	onPlay,
 	onToggleFavorite,
 	epgPrograms,
+	guidePending,
 	windowStart,
 	windowEnd,
 }: {
@@ -82,6 +88,7 @@ const RowCardView = ({
 	onPlay: (ch: Channel) => void;
 	onToggleFavorite?: (ch: Channel) => void;
 	epgPrograms?: EpgProgram[];
+	guidePending?: boolean;
 	windowStart?: number;
 	windowEnd?: number;
 }) => {
@@ -132,9 +139,11 @@ const RowCardView = ({
 					/>
 				) : (
 					<div className="h-9 rounded-md border border-border/15 flex items-center justify-center bg-secondary/10">
-						<span className="text-[8px] text-muted-foreground/25 select-none">
-							no epg
-						</span>
+						{!guidePending && (
+							<span className="text-[8px] text-muted-foreground/25 select-none">
+								no epg
+							</span>
+						)}
 					</div>
 				)}
 			</div>
@@ -339,6 +348,7 @@ const ChannelCardView = ({
 	variant = "row",
 	onToggleFavorite,
 	epgPrograms,
+	guidePending,
 	windowStart,
 	windowEnd,
 }: ChannelCardProps) => {
@@ -360,6 +370,7 @@ const ChannelCardView = ({
 			onPlay={onPlay}
 			onToggleFavorite={onToggleFavorite}
 			epgPrograms={epgPrograms}
+			guidePending={guidePending}
 			windowStart={windowStart}
 			windowEnd={windowEnd}
 		/>

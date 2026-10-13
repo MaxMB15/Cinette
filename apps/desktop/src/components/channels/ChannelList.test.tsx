@@ -16,6 +16,7 @@ import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/brows
 import { formatHHMM } from "@/lib/epg-window";
 import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixtures";
 import { deferred } from "@/test/deferred";
+import { answerFrom } from "@/test/guide-answers";
 import { ChannelList } from "./ChannelList";
 
 const state = vi.hoisted(() => ({
@@ -553,7 +554,12 @@ describe("ChannelList live rows", () => {
 		tauri.getEpgForLiveChannels.mockResolvedValue(programs);
 		await renderList();
 
-		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(NOW - 2 * 3600, NOW + 5 * 3600);
+		// With no list of guide ids, it loads every channel's programs.
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			undefined
+		);
 		const newsRow = screen.getByText("News 24").closest(".group") as HTMLElement;
 		expect(within(newsRow).getByTitle("Morning Briefing")).toBeInTheDocument();
 		expect(within(newsRow).getByTitle("Market Watch")).toBeInTheDocument();
@@ -568,6 +574,20 @@ describe("ChannelList live rows", () => {
 		await renderList();
 		expect(screen.getByText("3 channels")).toBeInTheDocument();
 		expect(screen.getAllByText("no epg")).toHaveLength(3);
+	});
+
+	it("says a row has no guide only once the guide has loaded", async () => {
+		const load = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels.mockReturnValueOnce(load.promise);
+		await renderList();
+		const row = (name: string) =>
+			within(screen.getByText(name).closest(".group") as HTMLElement);
+
+		expect(row("News 24").queryByText("no epg")).toBeNull();
+		// Weather Now has no guide id, so there's nothing to wait for.
+		expect(row("Weather Now").getByText("no epg")).toBeInTheDocument();
+		await act(async () => load.resolve([]));
+		expect(row("News 24").getByText("no epg")).toBeInTheDocument();
 	});
 
 	it("loads no guide on the other tabs", async () => {
@@ -661,7 +681,8 @@ describe("ChannelList live rows", () => {
 		// guide loads one more hour ahead than that.
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
 			NOW - 3 * 3600,
-			NOW + 6 * 3600
+			NOW + 6 * 3600,
+			undefined
 		);
 	});
 
@@ -693,7 +714,11 @@ describe("ChannelList live rows", () => {
 
 		act(() => vi.advanceTimersByTime(30_000));
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
-		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
+			NOW + 3600,
+			NOW + 9 * 3600,
+			undefined
+		);
 	});
 
 	it("doesn't load the guide again when it gets narrower", async () => {
@@ -1345,6 +1370,23 @@ describe("ChannelList series", () => {
 });
 
 describe("ChannelList favorites tab", () => {
+	const sportGuide = { ...sport, tvgId: "sport.tv" };
+	const arts = makeChannel({
+		id: "arts",
+		name: "Arts Channel",
+		url: "http://live.example.test/arts",
+		groupTitle: "Culture",
+		tvgId: "arts.tv",
+		isFavorite: true,
+	});
+	const guide: EpgProgram[] = [
+		{ channelId: "arts.tv", title: "Gallery Hour", startTime: NOW, endTime: NOW + 3600 },
+		{ channelId: "news.tv", title: "Morning Briefing", startTime: NOW, endTime: NOW + 3600 },
+		{ channelId: "sport.tv", title: "Match Day", startTime: NOW, endTime: NOW + 3600 },
+	];
+
+	const row = (name: string) => within(screen.getByText(name).closest(".group") as HTMLElement);
+
 	it("groups favorites by type", async () => {
 		saveBrowseTab("favorites");
 		await renderList();
@@ -1419,9 +1461,296 @@ describe("ChannelList favorites tab", () => {
 		saveBrowseTab("favorites");
 		await renderList();
 
-		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledOnce();
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			["news.tv"]
+		);
 		const newsRow = screen.getByText("News 24").closest(".group") as HTMLElement;
 		expect(within(newsRow).getByTitle("Morning Briefing")).toBeInTheDocument();
+	});
+
+	it("loads the guide only for the live favorites that have a guide id", async () => {
+		freezeClock();
+		const newsHd = makeChannel({
+			id: "news-hd",
+			name: "News 24 HD",
+			url: "http://live.example.test/news-hd",
+			tvgId: "news.tv",
+			isFavorite: true,
+		});
+		state.channels = [
+			{ ...news, isFavorite: true },
+			weather,
+			sportGuide,
+			arts,
+			newsHd,
+			{ ...arrival, tvgId: "film.tv" },
+		];
+		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
+		saveBrowseTab("favorites");
+		await renderList();
+
+		// Weather Now has no guide id, Sport One isn't a favorite, Arrival isn't
+		// live, and News 24 HD has the same guide as News 24.
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			["arts.tv", "news.tv"]
+		);
+		expect(row("Arts Channel").getByTitle("Gallery Hour")).toBeInTheDocument();
+		expect(row("News 24 HD").getByTitle("Morning Briefing")).toBeInTheDocument();
+	});
+
+	it("loads only a new favorite's guide while the tab is open", async () => {
+		freezeClock();
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
+		saveBrowseTab("favorites");
+		const { rerender } = await renderList();
+
+		state.channels = [
+			{ ...news, isFavorite: true },
+			weather,
+			{ ...sportGuide, isFavorite: true },
+		];
+		rerender(<ChannelList />);
+		await flush();
+
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			["sport.tv"]
+		);
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+	});
+
+	it("loads nothing when a favorite goes while the tab is open", async () => {
+		freezeClock();
+		state.channels = [
+			{ ...news, isFavorite: true },
+			weather,
+			{ ...sportGuide, isFavorite: true },
+		];
+		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
+		saveBrowseTab("favorites");
+		const { rerender } = await renderList();
+
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		rerender(<ChannelList />);
+		await flush();
+
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			["news.tv", "sport.tv"]
+		);
+		expect(screen.queryByText("Sport One")).toBeNull();
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+	});
+
+	it("keeps the Live tab's guide for Favorites and back", async () => {
+		freezeClock();
+		state.channels = [news, weather, sportGuide];
+		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
+		const { rerender } = await renderList();
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			undefined
+		);
+
+		// The Live tab loaded every channel's guide, so a new favorite already
+		// has its own.
+		state.channels = [news, weather, { ...sportGuide, isFavorite: true }];
+		rerender(<ChannelList />);
+		await openTab("Favorites");
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+		await openTab("Live");
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledOnce();
+	});
+
+	it("loads every channel's guide once when Live comes back before that load finishes", async () => {
+		freezeClock();
+		const all = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels
+			.mockReturnValueOnce(all.promise)
+			.mockImplementation(answerFrom(guide));
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		await renderList();
+		await openTab("Favorites");
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		await openTab("Live");
+
+		// Sport One waits for the load Live started first.
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").queryByText("no epg")).toBeNull();
+		await act(async () => all.resolve(guide));
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+
+		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
+			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
+		]);
+	});
+
+	it("says a favorite has no guide only once its own guide has loaded", async () => {
+		freezeClock();
+		const load = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels.mockReturnValueOnce(load.promise);
+		state.channels = [
+			{ ...news, isFavorite: true },
+			{ ...sportGuide, isFavorite: true },
+		];
+		saveBrowseTab("favorites");
+		await renderList();
+
+		expect(row("News 24").queryByText("no epg")).toBeNull();
+		expect(row("Sport One").queryByText("no epg")).toBeNull();
+		await act(async () => load.resolve(guide.filter((p) => p.channelId === "news.tv")));
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").getByText("no epg")).toBeInTheDocument();
+	});
+
+	it("keeps the favorites' programs and waits for the rest when Live opens after Favorites", async () => {
+		freezeClock();
+		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		saveBrowseTab("favorites");
+		await renderList();
+		const all = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels.mockReturnValueOnce(all.promise);
+		await openTab("Live");
+
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").queryByText("no epg")).toBeNull();
+		await act(async () => all.resolve(guide));
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+	});
+
+	it("keeps showing every row's programs while Live loads a later window", async () => {
+		driveClock();
+		const allDay = (channelId: string, title: string): EpgProgram => ({
+			channelId,
+			title,
+			startTime: NOW - 3600,
+			endTime: NOW + 8 * 3600,
+		});
+		tauri.getEpgForLiveChannels.mockImplementation(
+			answerFrom([allDay("news.tv", "Morning Briefing"), allDay("sport.tv", "Match Day")])
+		);
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		await renderList();
+		await openTab("Favorites");
+
+		// The clock carries the window past the guide, and Favorites loads only
+		// its own channels for the new one.
+		vi.setSystemTime((NOW + 3 * 3600) * 1000);
+		act(() => vi.advanceTimersByTime(30_000));
+		await flush();
+		const later = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels.mockReturnValueOnce(later.promise);
+		await openTab("Live");
+
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+		await act(async () => later.resolve([allDay("sport.tv", "Late Match")]));
+		expect(row("Sport One").getByTitle("Late Match")).toBeInTheDocument();
+		// What every channel's load found replaces the whole guide.
+		expect(row("News 24").getByText("no epg")).toBeInTheDocument();
+
+		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
+			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW + 3600, NOW + 9 * 3600, ["news.tv"]],
+			[NOW + 3600, NOW + 9 * 3600, undefined],
+		]);
+	});
+
+	it("loads only the favorites' guide when the clock carries the window past it", async () => {
+		driveClock();
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		saveBrowseTab("favorites");
+		await renderList();
+
+		// The guide loaded up to 5 hours after NOW, and a narrow window gets there
+		// 3 hours after NOW.
+		vi.setSystemTime((NOW + 3 * 3600) * 1000);
+		act(() => vi.advanceTimersByTime(30_000));
+
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600, [
+			"news.tv",
+		]);
+	});
+
+	it("loads the favorites' guide again after the playlist reloads", async () => {
+		freezeClock();
+		state.channels = [{ ...news, isFavorite: true }, weather];
+		saveBrowseTab("favorites");
+		const { rerender } = await renderList();
+
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		rerender(<ChannelList />);
+		await flush();
+
+		const favoritesGuide = [NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]];
+		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
+			favoritesGuide,
+			favoritesGuide,
+		]);
+	});
+
+	it("waits for the guide on Live after a tab without one", async () => {
+		freezeClock();
+		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide, arrival];
+		saveBrowseTab("favorites");
+		await renderList();
+		await openTab("Movies");
+		const all = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels.mockReturnValueOnce(all.promise);
+		await openTab("Live");
+
+		expect(row("News 24").queryByText("no epg")).toBeNull();
+		expect(row("Sport One").queryByText("no epg")).toBeNull();
+		await act(async () => all.resolve(guide));
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+
+		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
+			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
+			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+		]);
+	});
+
+	it("loads only a new favorite's guide while the others are still loading", async () => {
+		freezeClock();
+		const first = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels
+			.mockReturnValueOnce(first.promise)
+			.mockImplementation(answerFrom(guide));
+		state.channels = [{ ...news, isFavorite: true }, weather, sportGuide];
+		saveBrowseTab("favorites");
+		const { rerender } = await renderList();
+
+		state.channels = [
+			{ ...news, isFavorite: true },
+			weather,
+			{ ...sportGuide, isFavorite: true },
+		];
+		rerender(<ChannelList />);
+		await flush();
+		await act(async () => first.resolve(guide.filter((p) => p.channelId === "news.tv")));
+
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
+		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
+			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
+			[NOW - 2 * 3600, NOW + 5 * 3600, ["sport.tv"]],
+		]);
 	});
 
 	it("loads no guide when no live favorite has one", async () => {
@@ -1437,6 +1766,7 @@ describe("ChannelList favorites tab", () => {
 		await renderList();
 		expect(tab("Favorites")).toHaveTextContent(/^Favorites0$/);
 		expect(screen.getByText("No favorites yet — tap ♡ on any channel")).toBeInTheDocument();
+		expect(tauri.getEpgForLiveChannels).not.toHaveBeenCalled();
 	});
 
 	it("says when the search matches no favorite", async () => {

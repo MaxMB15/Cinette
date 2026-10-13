@@ -189,9 +189,9 @@ describe("backend commands", () => {
 		],
 		[
 			"getEpgForLiveChannels",
-			() => tauri.getEpgForLiveChannels(100, 200),
+			() => tauri.getEpgForLiveChannels(100, 200, ["news.tv"]),
 			"get_epg_for_live_channels",
-			{ rangeStart: 100, rangeEnd: 200 },
+			{ rangeStart: 100, rangeEnd: 200, channelIds: ["news.tv"] },
 		],
 		[
 			"searchEpgProgrammes",

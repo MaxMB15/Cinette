@@ -9,6 +9,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
 - Some colors are a little more vivid, such as the green checks on the start screen and the Live, Movie and Series badges (#236).
 - The Linux .deb and .rpm now require WebKitGTK 2.40 or later, which the app's styles need. If yours is older, `apt` or `dnf` updates it along with the app (#242).
+- The Favorites tab loads the TV guide for its own live channels, not for every channel in the playlist, so it has far less to load on a large playlist. While the guide loads, a channel still waiting for its programs shows an empty bar rather than "no epg" (#243).
 
 ### Fixed
 

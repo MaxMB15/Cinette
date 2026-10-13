@@ -332,6 +332,16 @@ describe("ChannelCard row variant", () => {
 		expect(onPlay).toHaveBeenCalledWith(channel);
 	});
 
+	it("leaves an empty timeline blank while the guide loads", () => {
+		const { rerender } = render(
+			<ChannelCard channel={channel} onPlay={vi.fn()} guidePending />
+		);
+		expect(screen.queryByText("no epg")).toBeNull();
+
+		rerender(<ChannelCard channel={channel} onPlay={vi.fn()} guidePending={false} />);
+		expect(screen.getByText("no epg")).toBeInTheDocument();
+	});
+
 	it("keeps the play and favorite buttons apart for screen readers", () => {
 		render(<ChannelCard channel={channel} onPlay={vi.fn()} onToggleFavorite={vi.fn()} />);
 		const play = screen.getByRole("button", { name: /News 24/ });
