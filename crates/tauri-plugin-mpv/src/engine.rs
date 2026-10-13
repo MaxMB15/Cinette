@@ -343,13 +343,16 @@ impl MpvEngine {
         } else {
             path.to_string()
         };
+        // Set first, so mpv never draws a frame of a track the overlay draws.
+        if let Err(e) = mpv.set_property("sub-visibility", visible) {
+            tracing::warn!("[MPV] sub-visibility={} failed: {}", visible, e);
+        }
         tracing::info!("[MPV] sub-add: {}", origin_for_log(&uri));
         mpv.command("sub-add", &[&uri, "select"])
             .map_err(|e| {
                 tracing::warn!("[MPV] sub-add failed: {}", e);
                 e.to_string()
             })?;
-        let _ = mpv.set_property("sub-visibility", visible);
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }

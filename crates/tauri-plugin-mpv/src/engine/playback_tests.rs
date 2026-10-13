@@ -278,7 +278,14 @@ fn adds_and_removes_subtitle_tracks() {
     assert_eq!(tracks(&engine), 1);
 
     assert!(engine.sub_remove(99).is_err());
+
+    // mpv sets whether it draws subtitles before it adds the track, so a
+    // track the overlay draws never shows for a frame. A failed add still
+    // sets it.
     assert!(engine.sub_add(&media.missing("gone.srt"), true).is_err());
+    assert!(visible(&engine));
+    assert!(engine.sub_add(&media.missing("gone.srt"), false).is_err());
+    assert!(!visible(&engine));
     assert_eq!(tracks(&engine), 1);
 }
 

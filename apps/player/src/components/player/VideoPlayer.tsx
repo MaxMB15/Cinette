@@ -237,6 +237,9 @@ export const PlayerView = () => {
 	// Incremented each time an episode navigation should trigger subtitle auto-load.
 	// Using state (not a ref) so the effect dependency is tracked by React.
 	const [autoLoadTrigger, setAutoLoadTrigger] = useState(0);
+	// The last trigger whose load finished, so the page knows when it closes
+	// whether one was still running.
+	const [autoLoadFinished, setAutoLoadFinished] = useState(0);
 
 	const navState = location.state as {
 		url?: string;
@@ -554,10 +557,14 @@ export const PlayerView = () => {
 
 	// A new item starts with no subtitles. Resetting them while rendering keeps
 	// the old item's from showing with it for a frame. The item that played on
-	// while the page was closed gets back the subtitles it had.
+	// while the page was closed gets back the subtitles it had, as long as mpv
+	// still plays what it played then.
 	const channelChanged = useChanged(activeChannel?.id);
 	if (channelChanged) {
-		const kept = keptSubtitles?.channelId === activeChannel?.id ? keptSubtitles : null;
+		const kept =
+			keptSubtitles?.channelId === activeChannel?.id && keptSubtitles?.url === loadedUrl
+				? keptSubtitles
+				: null;
 		setKeptSubtitles(null);
 		setShowSubtitlePicker(false);
 		setSelectedSubtitleId(kept?.fileId ?? null);
@@ -570,6 +577,8 @@ export const PlayerView = () => {
 			setSubtitleFontSize(kept.fontSize);
 			setSubtitleFontFamily(kept.fontFamily);
 			setSubtitlePreference(kept.preference);
+			// The next episode's subtitles were still loading, so load them again.
+			if (kept.autoLoad) setAutoLoadTrigger((t) => t + 1);
 		}
 	}
 
@@ -578,6 +587,7 @@ export const PlayerView = () => {
 	const subtitleSessionRef = useLatestRef<SubtitleSession | null>(
 		activeChannel && {
 			channelId: activeChannel.id,
+			url: loadedUrl,
 			fileId: selectedSubtitleId,
 			entry: selectedSubtitleEntry,
 			cues: subtitleCues,
@@ -586,10 +596,19 @@ export const PlayerView = () => {
 			fontSize: subtitleFontSize,
 			fontFamily: subtitleFontFamily,
 			preference: subtitlePreference,
+			autoLoad:
+				autoLoadTrigger > autoLoadFinished &&
+				subtitlePreference !== null &&
+				selectedSubtitleId === null,
 		}
 	);
 	useEffect(
-		() => () => saveSubtitleSession(stoppedRef.current ? null : subtitleSessionRef.current),
+		() => () => {
+			if (stoppedRef.current) saveSubtitleSession(null);
+			// A page that never started an item, as when the viewer cancels the
+			// resume prompt, leaves the subtitles of the one that plays on.
+			else if (subtitleSessionRef.current) saveSubtitleSession(subtitleSessionRef.current);
+		},
 		[subtitleSessionRef]
 	);
 
@@ -656,7 +675,10 @@ export const PlayerView = () => {
 				setSubtitleCues(cues);
 				setSelectedSubtitleEntry(entry);
 			})
-			.catch(() => {}); // silent — subtitle is best-effort
+			.catch(() => {}) // silent — subtitle is best-effort
+			.finally(() => {
+				if (!cancelled) setAutoLoadFinished(autoLoadTrigger);
+			});
 
 		return () => {
 			cancelled = true;
@@ -1277,6 +1299,7 @@ export const PlayerView = () => {
 						setShowSubtitlePicker(false);
 						setSubtitleEditMode(false);
 					}}
+					isCurrent={() => activeChannelRef.current?.id === activeChannel?.id}
 					onSubtitleSelected={(id, cues, entry, rankInLanguage) => {
 						setSelectedSubtitleId(id);
 						setSubtitleCues(cues ?? []);

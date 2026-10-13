@@ -30,6 +30,11 @@ interface SubtitlePickerProps {
 	season?: number;
 	episode?: number;
 	onClose: () => void;
+	/**
+	 * False once the player has moved on to another item. A subtitle that
+	 * finishes downloading after that is dropped.
+	 */
+	isCurrent?: () => boolean;
 	onSubtitleSelected?: (
 		fileId: number | null,
 		cues?: SubtitleCue[],
@@ -53,6 +58,7 @@ export const SubtitlePicker = ({
 	season,
 	episode,
 	onClose,
+	isCurrent = () => true,
 	onSubtitleSelected,
 	currentSelectedId = null,
 	currentSelectedEntry = null,
@@ -163,6 +169,7 @@ export const SubtitlePicker = ({
 			// mpv also reads a file that isn't UTF-8, and draws any file the
 			// overlay can't read. A file that neither can read is an error.
 			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
+			if (!isCurrent()) return;
 			const added = mpvSubAdd(localPath, cues.length > 0);
 			if (cues.length > 0) added.catch(() => {});
 			else await added;

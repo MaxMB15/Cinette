@@ -6,6 +6,7 @@ import { readSubtitleSession, saveSubtitleSession, type SubtitleSession } from "
 
 const session = (): SubtitleSession => ({
 	channelId: "mv1",
+	url: "https://cdn.example.test/movies/lantern-keeper.mkv",
 	fileId: 101,
 	entry: { fileId: 101, languageCode: "en", format: "srt" },
 	cues: [{ start: 1, end: 4, text: "Mind the lantern" }],
@@ -14,6 +15,7 @@ const session = (): SubtitleSession => ({
 	fontSize: 24,
 	fontFamily: "Georgia, serif",
 	preference: { languageCode: "en", rankInLanguage: 1 },
+	autoLoad: false,
 });
 
 describe("subtitle session", () => {

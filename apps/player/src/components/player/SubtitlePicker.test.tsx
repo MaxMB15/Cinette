@@ -396,6 +396,27 @@ describe("SubtitlePicker search and selection", () => {
 		expect(entryButton("Sintel.NL")).toBeEnabled();
 	});
 
+	it("drops a subtitle that finishes loading after the player moves on", async () => {
+		let finish!: (path: string) => void;
+		tauri.downloadSubtitle.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			})
+		);
+		let current = true;
+		const { onSubtitleSelected, onClose } = renderPicker({ isCurrent: () => current });
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.2010.720p"));
+		await act(async () => {});
+		current = false;
+		await act(async () => finish("/subs/11.srt"));
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
 	it("asks for another subtitle when one can't be loaded", async () => {
 		const failure = new Error("download failed");
 		tauri.downloadSubtitle.mockRejectedValue(failure);

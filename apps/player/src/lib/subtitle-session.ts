@@ -21,6 +21,8 @@ export interface SubtitlePreference {
 export interface SubtitleSession {
 	/** The item the subtitles were shown over. */
 	channelId: string;
+	/** The URL mpv was playing for it, or null while it hadn't started. */
+	url: string | null;
 	/** The subtitle file picked, or null for none. */
 	fileId: number | null;
 	entry: SubtitleEntry | null;
@@ -31,6 +33,8 @@ export interface SubtitleSession {
 	fontSize: number;
 	fontFamily: string;
 	preference: SubtitlePreference | null;
+	/** Whether the next episode's subtitles were still loading. */
+	autoLoad: boolean;
 }
 
 /** The subtitles saved when the player page last closed, or null. */
