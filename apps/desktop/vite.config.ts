@@ -15,6 +15,12 @@ export default defineConfig(async () => ({
 			"@": path.resolve(import.meta.dirname, "./src"),
 		},
 	},
+	build: {
+		// The app loads its scripts from disk, not over a network, so a large
+		// chunk costs little. The main chunk is about 630 kB, so a big jump in
+		// size still warns.
+		chunkSizeWarningLimit: 1000,
+	},
 	clearScreen: false,
 	server: {
 		port: 1420,
