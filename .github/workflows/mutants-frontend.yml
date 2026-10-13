@@ -10,7 +10,8 @@
 name: Frontend mutation testing
 
 on:
-  # Only the lines a pull request changes.
+  # The lines a pull request changes, or all of src/lib when it changes the
+  # Stryker setup.
   pull_request:
     branches: [dev]
     paths:
