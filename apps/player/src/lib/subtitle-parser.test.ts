@@ -110,9 +110,11 @@ describe("parseSrt", () => {
 	it("reads a WebVTT time only with a period before the milliseconds", () => {
 		const vtt =
 			`WEBVTT\n\n00:01.000 --> 00:02.000\nA\n` +
-			`00:03,000 --> 00:04.000\n00:00:05.000 --> 00:00:06,000\n`;
+			`00:03,000 --> 00:04.000\n00:00:05.000 --> 00:00:06,000\n\n` +
+			`00:07,000 --> 00:08.000\nB\n\n00:09.000 --> 00:10.000\nC\n`;
 		expect(parseSrt(vtt)).toEqual([
 			{ start: 1, end: 2, text: "A\n00:03,000 --> 00:04.000\n00:00:05.000 --> 00:00:06,000" },
+			{ start: 9, end: 10, text: "C" },
 		]);
 	});
 
@@ -225,6 +227,32 @@ describe("parseSrt", () => {
 			`1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n` +
 			`2\n\n \n00:00:03,000 --> 00:00:04,000\nSecond\n`;
 		expect(parseSrt(srt).map((c) => c.text)).toEqual(["First", "Second"]);
+	});
+
+	it("drops a cue number with a sign before it, as FFmpeg does", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n+2\n00:00:03,000 --> 00:00:04,000\nB\n` +
+			`-0\n00:00:05,000 --> 00:00:06,000\nC\n\v\f+4\f\n00:00:07,000 --> 00:00:08,000\n+5\n` +
+			`00:00:09,000 --> 00:00:10,000\nE\n0\n00:00:11,000 --> 00:00:12,000\nF\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 3, end: 4, text: "B" },
+			{ start: 5, end: 6, text: "C" },
+			{ start: 9, end: 10, text: "E" },
+			{ start: 11, end: 12, text: "F" },
+		]);
+	});
+
+	it("keeps a number below 0, or after a no-break space, as text", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n-2\n00:00:03,000 --> 00:00:04,000\nB\n` +
+			`\u00a03\n00:00:05,000 --> 00:00:06,000\nC\n+ 4\n00:00:07,000 --> 00:00:08,000\nD\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "A\n-2" },
+			{ start: 3, end: 4, text: "B\n3" },
+			{ start: 5, end: 6, text: "C\n+ 4" },
+			{ start: 7, end: 8, text: "D" },
+		]);
 	});
 
 	it("keeps a line of text with an arrow in it", () => {
@@ -402,6 +430,41 @@ describe("parseSrt", () => {
 	it("reads a WebVTT setting after a tab", () => {
 		const vtt = `WEBVTT\n\n00:01.000 --> 00:02.000\tline:90%\nLow\n`;
 		expect(parseSrt(vtt)).toEqual([{ start: 1, end: 2, text: "Low" }]);
+	});
+
+	it("reads a WebVTT timing line with text before its arrow, as FFmpeg does", () => {
+		const vtt =
+			`WEBVTT\n\n00:01.000x --> 00:02.000\nA\n01:00.000 and counting\n\n` +
+			`00:03.000 garbage --> 00:04.000\nB\n\n00:05.000\u00a0--> 00:06.000\nC\n\n` +
+			`00:07.000 <--> 00:08.000\nD\n\n00:09.000 ---> 00:10.000\nE\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "A\n01:00.000 and counting" },
+			{ start: 3, end: 4, text: "B" },
+			{ start: 5, end: 6, text: "C" },
+			{ start: 7, end: 8, text: "D" },
+			{ start: 9, end: 10, text: "E" },
+		]);
+	});
+
+	it("reads the end time of a WebVTT timing line after its first arrow", () => {
+		const vtt =
+			`WEBVTT\n\n00:01.000 --> 00:02.000 --> 00:09.000\nA\n\n` +
+			`00:03.000 --> x --> 00:04.000\nB\n\n00:05.000 --> 00:06.000\nC\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 5, end: 6, text: "C" },
+		]);
+	});
+
+	it("skips a WebVTT cue whose timing line can't be read and shows the cues after it", () => {
+		const vtt =
+			`WEBVTT\n\n00:01.000 --> 00:02.000\nA\n\nx00:03.000 --> 00:04.000\nB\n\n` +
+			`00:05.000 -->\u00a000:06.000\nC\n\n00:07.000 -- > 00:08.000\nD\n\n` +
+			`00:09.000 --> 00:10.000\nE\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 9, end: 10, text: "E" },
+		]);
 	});
 
 	it("reads a file as WebVTT only when it starts with WEBVTT", () => {

@@ -3,7 +3,7 @@
 
 import type { SubtitleCue } from "./types";
 
-/** Spaces or tabs, which C's sscanf skips before a number and around the arrow. */
+/** Spaces, tabs, vertical tabs or form feeds, which C's sscanf skips before a number. */
 const SPACES = /[ \t\v\f]*/.source;
 /** A number as sscanf reads it with %d, after any spaces, with a sign or not. */
 const NUMBER = `${SPACES}${/[-+]?\d+/.source}`;
@@ -13,15 +13,23 @@ const SRT_TIME = `${NUMBER}:${NUMBER}:${NUMBER}[,.]${NUMBER}`;
 const VTT_TIME = `${NUMBER}:(?:${NUMBER}:)?${NUMBER}\\.${NUMBER}`;
 
 /**
- * A timing line as FFmpeg reads it. Spaces can come before each number and
- * around the arrow, but not before a colon, a comma or a period. FFmpeg reads
- * the start and end time and ignores the rest of the line, which can hold
- * position values such as "X1:100", WebVTT settings such as "align:start", or
- * another arrow.
+ * An SRT timing line as FFmpeg reads it. Spaces can come before each number
+ * and around the arrow, but not before a colon, a comma or a period. FFmpeg
+ * reads the start and end time and ignores the rest of the line, which can
+ * hold position values such as "X1:100", or another arrow.
  */
-const timingLine = (time: string): RegExp => new RegExp(`^(${time})${SPACES}-->(${time})`);
-const SRT_TIMING = timingLine(SRT_TIME);
-const VTT_TIMING = timingLine(VTT_TIME);
+const SRT_TIMING = new RegExp(`^(${SRT_TIME})${SPACES}-->(${SRT_TIME})`);
+/** The time a WebVTT timing line starts with. */
+const VTT_START = new RegExp(`^${VTT_TIME}`);
+/**
+ * The time right after the first arrow in a WebVTT timing line. FFmpeg looks
+ * for that arrow anywhere after the start time, and ignores the rest of the
+ * line, which can hold settings such as "align:start".
+ */
+const VTT_END = new RegExp(`^${/(?:(?!-->)[^])*-->/.source}(${VTT_TIME})`);
+
+/** A cue number as FFmpeg reads it with C's strtol, which takes a sign. */
+const CUE_NUMBER = new RegExp(`^${SPACES}([-+]?\\d+)\\s*$`);
 
 /**
  * Read a time into seconds. Like FFmpeg, it reads the milliseconds as a whole
@@ -36,8 +44,14 @@ const parseTimestamp = (time: string): number => {
 
 /** The start and end of a timing line, or null when the line is text. */
 const parseTiming = (line: string, webvtt: boolean): { start: number; end: number } | null => {
-	const times = (webvtt ? VTT_TIMING : SRT_TIMING).exec(line);
-	return times && { start: parseTimestamp(times[1]), end: parseTimestamp(times[2]) };
+	if (!webvtt) {
+		const times = SRT_TIMING.exec(line);
+		return times && { start: parseTimestamp(times[1]), end: parseTimestamp(times[2]) };
+	}
+	const start = VTT_START.exec(line);
+	if (!start) return null;
+	const end = VTT_END.exec(line);
+	return end && { start: parseTimestamp(start[0]), end: parseTimestamp(end[1]) };
 };
 
 /**
@@ -69,7 +83,8 @@ const stripTags = (text: string): string => {
  * can read is text, even with an arrow in it. WebVTT doesn't allow an empty
  * line inside a cue, so there a cue also ends at one. That empty line comes
  * before the next cue's name, and the name sits right on its timing line, so a
- * WebVTT cue that's only a number keeps it.
+ * WebVTT cue that's only a number keeps it. FFmpeg stops reading a WebVTT file
+ * at a timing line it can't read, and here the cues after it still show.
  */
 export const parseSrt = (content: string): SubtitleCue[] => {
 	// FFmpeg skips a byte order mark at the start of the file.
@@ -96,10 +111,11 @@ export const parseSrt = (content: string): SubtitleCue[] => {
 		// In WebVTT, the next cue's name sits right on its timing line. A cue
 		// that's only a number, like a countdown, has an empty line or a line
 		// of spaces after it, so it keeps its number.
+		// FFmpeg reads a cue number of 0 or more. One below 0 is text.
 		const numbered =
 			(!webvtt || last === body.length - 1) &&
 			next < lines.length &&
-			/^\s*\d+\s*$/.test(body[last]);
+			Number(CUE_NUMBER.exec(body[last])?.[1]) >= 0;
 		const stop = numbered ? last : last + 1;
 		const kept = body.slice(0, stop);
 		// An empty line keeps a WebVTT note, or the name of the next cue, out
