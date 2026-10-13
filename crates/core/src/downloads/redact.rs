@@ -280,24 +280,27 @@ fn rest_of_xtream_path(url: &str, after: &str) -> usize {
     };
     let path = &url[path_start + 1..];
     // The address can stop in the user or the password, so the ID is one or
-    // two segments on.
+    // two segments on. Both can fit, as in `live/al ice/9876/1.ts`, where
+    // `al ice/9876` looks like a user and an ID. The longer match hides the
+    // password.
     let mut search = 0;
+    let mut longest = 0;
     for _ in 0..2 {
         let Some(found) = after[search..].find(['/', '\n', '\r']) else {
-            return 0;
+            break;
         };
         let slash = search + found;
         if after.as_bytes()[slash] != b'/' {
-            return 0;
+            break;
         }
         if is_xtream_login(&format!("{path}{}", &after[..slash]))
             && let Some(id_len) = stream_id_len(&after[slash + 1..])
         {
-            return slash + 1 + id_len;
+            longest = slash + 1 + id_len;
         }
         search = slash + 1;
     }
-    0
+    longest
 }
 
 /// `<user>/<pass>`, or `live/<user>/<pass>` and the same with the other
@@ -315,8 +318,9 @@ fn is_xtream_login(path: &str) -> bool {
 /// If `rest` starts with a stream ID that ends a login, the length of the
 /// address from there. That's the ID, or the ID and a query or fragment after
 /// it, which runs to the next whitespace as in [`url_len`]. A number followed
-/// by `/` counts too, as the minutes do in a catch-up address. The rest of the
-/// address after it holds no login.
+/// by `/` counts too, as the minutes do in a catch-up address. An all-digit
+/// password fits this as well, which is why [`rest_of_xtream_path`] keeps
+/// looking one segment further.
 fn stream_id_len(rest: &str) -> Option<usize> {
     let end = rest
         .find(|c: char| c.is_whitespace() || "/?#".contains(c) || UNENCODED.contains(c))
@@ -735,6 +739,23 @@ mod tests {
     }
 
     #[test]
+    fn scrub_log_line_hides_an_all_digit_password_after_a_split_user() {
+        // `al ice/9876` alone looks like a user and a stream ID, so the
+        // address must run on to the real ID.
+        for line in [
+            "load http://host/live/al ice/9876/12345.ts failed",
+            "load http://host/movie/al ice/9876/12345.mkv failed",
+            "load http://host/series/al\tice/9876/12345.mp4 failed",
+            "load http://host/timeshift/al ice/9876/60/2026-10-12:20-00/9.ts failed",
+        ] {
+            let out = scrub_log_line(line);
+            assert!(!out.contains("9876"), "{line:?} -> {out:?}");
+            assert!(!out.contains("ice"), "{line:?} -> {out:?}");
+            assert!(out.ends_with(" failed"), "{line:?} -> {out:?}");
+        }
+    }
+
+    #[test]
     fn scrub_log_line_hides_logins_with_any_odd_character() {
         // The app encodes these characters, but an M3U playlist can hold them
         // as they are.
@@ -747,13 +768,17 @@ mod tests {
             "{login}/12345.m3u8?x=1",
         ];
         for c in " \t?#\"'()[]<>{}|\\^`.,;:!&=@%+*$~".chars() {
-            for login in [format!("al{c}ice/hunter2"), format!("alice/hun{c}ter2")] {
+            for login in [
+                format!("al{c}ice/hunter2"),
+                format!("alice/hun{c}ter2"),
+                format!("al{c}ice/9876"),
+            ] {
                 for shape in shapes {
                     let path = shape.replace("{login}", &login);
                     for (before, after) in [("load url=", " failed"), ("(", ")."), ("", "")] {
                         let line = format!("{before}http://host:8080/{path}{after}");
                         let out = scrub_log_line(&line);
-                        for part in ["al", "ice", "hun", "ter2"] {
+                        for part in ["al", "ice", "hun", "ter2", "9876"] {
                             assert!(!out.contains(part), "{line:?} -> {out:?}");
                         }
                     }
