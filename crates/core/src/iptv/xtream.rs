@@ -1111,6 +1111,32 @@ mod tests {
     }
 
     #[test]
+    fn a_series_listed_twice_adds_the_category_to_its_second_id() {
+        let series = |category_id: &str| -> XtreamSeries {
+            serde_json::from_value(json!({ "series_id": 5, "category_id": category_id })).unwrap()
+        };
+        let channels = channels_from(vec![series("3"), series("12")], |s| {
+            series_channel(&categories(), s)
+        });
+        assert_eq!(ids(&channels), ["series-5", "series-5-c12"]);
+    }
+
+    #[test]
+    fn a_movie_keeps_its_poster() {
+        let creds = login("http://srv");
+        let stream: XtreamStream = serde_json::from_value(json!({
+            "stream_id": 9,
+            "stream_icon": "http://example.com/poster.jpg"
+        }))
+        .unwrap();
+        let channel = vod_channel(&creds, &categories(), stream).unwrap();
+        assert_eq!(
+            channel.logo_url.as_deref(),
+            Some("http://example.com/poster.jpg")
+        );
+    }
+
+    #[test]
     fn a_listing_keeps_its_id_when_other_channels_move() {
         let creds = login("http://srv");
         let to_channel = |s: XtreamStream| live_channel(&creds, &categories(), s);
