@@ -8,7 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
 - Some colors are a little more vivid, such as the green checks on the start screen and the Live, Movie and Series badges (#236).
-- The Linux .deb and .rpm packages now require WebKitGTK 2.40 or later. Older versions miss some of the app's styles since the move to Tailwind 4. Ubuntu 22.04 and Debian 12 have a newer one with their updates, and `apt` or `dnf` updates it along with the app if yours is older (#242).
+- The Linux .deb and .rpm now require WebKitGTK 2.40 or later, which the app's styles need. If yours is older, `apt` or `dnf` updates it along with the app (#242).
 
 ### Fixed
 
