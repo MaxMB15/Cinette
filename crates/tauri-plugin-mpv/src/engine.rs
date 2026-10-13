@@ -3,7 +3,7 @@
 
 //! Platform-agnostic libmpv instance management.
 //! Options (vo, hwdec, ao) are passed in by the caller. The only platform code
-//! here is `configure_audio`, which Linux needs after mpv starts, and
+//! here is in `configure_audio`, which Linux needs after mpv starts, and in
 //! `loaded_libmpv`, which finds the libmpv file on Linux.
 
 use crate::loadfile::{loadfile, resume_option};
@@ -99,9 +99,16 @@ impl MpvEngine {
             }
             Ok(())
         })
-        .map_err(|e| match failed {
-            Some(k) => format!("mpv init: option {k}: {e}"),
-            None => format!("mpv init: {e}"),
+        .map_err(|e| {
+            // A libmpv other than the one the app expects often fails here
+            // first, on an option it doesn't know, so name the file.
+            let from = loaded_libmpv()
+                .map(|path| format!(", libmpv {path:?}"))
+                .unwrap_or_default();
+            match failed {
+                Some(k) => format!("mpv init: option {k}: {e}{from}"),
+                None => format!("mpv init: {e}{from}"),
+            }
         })?;
         log_build(&mpv);
         self.mpv = Some(mpv);
@@ -238,11 +245,11 @@ impl MpvEngine {
                 .unwrap_or_default();
             tracing::error!(
                 "[MPV] no audio output opened. Either no sound server or device \
-                 is available, or libmpv was built without audio drivers. If \
-                 mpv's own log says \"Audio output pulse not found\", and the \
-                 same for pipewire and alsa, the loaded libmpv{at} was built \
-                 without them. On Linux, check that PipeWire or PulseAudio is \
-                 running. If you built libmpv yourself, install libpulse-dev, \
+                 is available, or libmpv was built without audio drivers. On \
+                 Linux, check that PipeWire or PulseAudio is running. If mpv's \
+                 own log says \"Audio output pulse not found\", and the same \
+                 for pipewire and alsa, the loaded libmpv{at} was built without \
+                 them. If you built libmpv yourself, install libpulse-dev, \
                  libasound2-dev and libpipewire-0.3-dev and run \
                  ./scripts/build-libmpv.sh linux again."
             );
@@ -446,8 +453,8 @@ fn log_build(mpv: &Mpv) {
             .get_property::<String>("mpv-version")
             .unwrap_or_else(|_| "<unset>".to_string());
         match loaded_libmpv() {
-            Some(path) => tracing::info!("[MPV] mpv-version={version} libmpv={path}"),
-            None => tracing::info!("[MPV] mpv-version={version}"),
+            Some(path) => tracing::info!("[MPV] mpv-version={version:?} libmpv={path:?}"),
+            None => tracing::info!("[MPV] mpv-version={version:?}"),
         }
     });
 }
@@ -455,8 +462,10 @@ fn log_build(mpv: &Mpv) {
 /// The libmpv file this process loaded, read from `/proc/self/maps`.
 #[cfg(target_os = "linux")]
 fn loaded_libmpv() -> Option<String> {
-    let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
-    libmpv_in_maps(&maps).map(str::to_string)
+    // Any mapped file can have a name that isn't UTF-8, and that mustn't
+    // hide libmpv.
+    let maps = std::fs::read("/proc/self/maps").ok()?;
+    libmpv_in_maps(&String::from_utf8_lossy(&maps)).map(str::to_string)
 }
 
 /// Only Linux reports the loaded libmpv file.
@@ -588,5 +597,25 @@ mod tests {
 7f2c4a000000-7f2c4a021000 r--p 00000000 08:02 1311236                    /opt/libmpv.so.d/libfoo.so
 ";
         assert_eq!(libmpv_in_maps(maps), None);
+    }
+
+    #[test]
+    fn libmpv_in_maps_reads_anonymous_and_deleted_mappings() {
+        // The kernel ends the line of an anonymous mapping with a space, and
+        // adds " (deleted)" to a file that was replaced on disk.
+        let maps = concat!(
+            "7f2c4a000000-7f2c4a021000 rw-p 00000000 00:00 0 \n",
+            "7f2c49e00000-7f2c49e80000 r-xp 00000000 08:02 1311234                    /usr/lib/libmpv.so.2 (deleted)\n",
+        );
+        assert_eq!(libmpv_in_maps(maps), Some("/usr/lib/libmpv.so.2 (deleted)"));
+    }
+
+    /// The test binary links libmpv, so its own maps list it.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn loaded_libmpv_finds_the_linked_library() {
+        let path = super::loaded_libmpv().expect("libmpv in /proc/self/maps");
+        let name = path.rsplit('/').next().unwrap_or_default();
+        assert!(name.starts_with("libmpv.so"), "{path}");
     }
 }
