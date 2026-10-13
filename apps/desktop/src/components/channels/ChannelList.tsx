@@ -723,7 +723,7 @@ export const ChannelList = () => {
 						activeTab !== "downloads" && (
 							<button
 								onClick={() => setShowFavoritesOnly((v) => !v)}
-								className={`h-8 w-8 flex items-center justify-center rounded-md ml-1 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+								className={`h-8 w-8 flex items-center justify-center rounded-md ml-1 transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring ${
 									showFavoritesOnly
 										? "text-red-500 bg-red-500/10"
 										: "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -742,7 +742,7 @@ export const ChannelList = () => {
 						!isMobilePlatform() && (
 							<button
 								onClick={() => setShowDownloadsOnly((v) => !v)}
-								className={`h-8 w-8 flex items-center justify-center rounded-md ml-1 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+								className={`h-8 w-8 flex items-center justify-center rounded-md ml-1 transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring ${
 									showDownloadsOnly
 										? "text-blue-400 bg-blue-400/10"
 										: "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -949,7 +949,7 @@ export const ChannelList = () => {
 
 			{/* Series loading overlay */}
 			{showSeriesLoading && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs">
 					<div className="flex items-center gap-3 bg-card rounded-2xl px-6 py-4 shadow-2xl">
 						<LoaderCircle className="h-5 w-5 animate-spin text-primary" />
 						<span className="text-sm font-medium">Loading episodes…</span>
@@ -1150,7 +1150,7 @@ export const ChannelList = () => {
 									<button
 										key={`${result.channelId}-${i}`}
 										onClick={() => handleEpgResultPlay(result.channelId)}
-										className="group flex items-center gap-3 w-full px-2 py-2 rounded-lg hover:bg-accent transition-colors text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+										className="group flex items-center gap-3 w-full px-2 py-2 rounded-lg hover:bg-accent transition-colors text-left focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 									>
 										<ChannelLogo
 											url={result.channelLogoUrl}

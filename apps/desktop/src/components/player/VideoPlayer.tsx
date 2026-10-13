@@ -1074,8 +1074,8 @@ export const PlayerView = () => {
 			ref={containerRef}
 			className={
 				isFullscreen
-					? "player-container fixed inset-0 z-[9999] bg-transparent focus:outline-none"
-					: "player-container relative h-full w-full bg-transparent focus:outline-none"
+					? "player-container fixed inset-0 z-9999 bg-transparent focus:outline-hidden"
+					: "player-container relative h-full w-full bg-transparent focus:outline-hidden"
 			}
 			onMouseMove={touchDevice ? undefined : handleMouseMove}
 			onPointerMove={touchDevice ? handlePointerMove : undefined}
@@ -1084,7 +1084,7 @@ export const PlayerView = () => {
 			tabIndex={0}
 		>
 			{mpv.fallbackActive && (
-				<div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg border border-yellow-500/40 bg-yellow-950/80 px-4 py-2 text-yellow-200 text-sm shadow-lg backdrop-blur-sm max-w-xl">
+				<div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg border border-yellow-500/40 bg-yellow-950/80 px-4 py-2 text-yellow-200 text-sm shadow-lg backdrop-blur-xs max-w-xl">
 					<span>⚠</span>
 					<span>
 						Video is playing in a separate window with native controls (embedded
@@ -1142,7 +1142,7 @@ export const PlayerView = () => {
 			)}
 
 			{(activeChannelName || showBack) && showControls && (
-				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-gradient-to-b from-black/60 to-transparent p-4 pt-[calc(1rem_+_env(safe-area-inset-top))] pl-[calc(1rem_+_env(safe-area-inset-left))] pr-[calc(1rem_+_env(safe-area-inset-right))]">
+				<div className="absolute top-0 left-0 right-0 flex items-center gap-1 bg-linear-to-b from-black/60 to-transparent p-4 pt-[calc(1rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
 					{showBack && (
 						<button
 							type="button"

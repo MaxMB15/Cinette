@@ -107,7 +107,7 @@ export const EpgTimelineBar = ({
 							}
 							title={prog.title}
 							className={[
-								"absolute top-0 bottom-0 border-r border-white/8 z-[1] overflow-hidden",
+								"absolute top-0 bottom-0 border-r border-white/8 z-1 overflow-hidden",
 								"before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-white/18 before:pointer-events-none",
 								onSelect
 									? "cursor-pointer transition-all duration-100"
@@ -156,7 +156,7 @@ export const EpgTimelineBar = ({
 				{gridMarks.map((t) => (
 					<div
 						key={t}
-						className={`absolute top-0 bottom-0 w-px pointer-events-none z-[2] ${
+						className={`absolute top-0 bottom-0 w-px pointer-events-none z-2 ${
 							t % 3600 === 0 ? "bg-white/18" : "bg-white/8"
 						}`}
 						style={{ left: `${pct(t).toFixed(3)}%` }}
@@ -165,7 +165,7 @@ export const EpgTimelineBar = ({
 
 				{/* "Now" marker — on top of everything */}
 				<div
-					className="absolute top-0 bottom-0 w-0.5 bg-red-400/85 z-[3] pointer-events-none"
+					className="absolute top-0 bottom-0 w-0.5 bg-red-400/85 z-3 pointer-events-none"
 					style={{ left: `${nowPct.toFixed(3)}%` }}
 				/>
 			</div>

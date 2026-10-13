@@ -26,7 +26,7 @@ interface ConfirmDialogProps {
 }
 
 const BUTTON =
-	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * Asks before an action, or gives a notice with a single button. It renders
@@ -52,8 +52,8 @@ export const ConfirmDialog = ({
 		<Dialog
 			onClose={onCancel ?? onConfirm}
 			labelledBy={titleId}
-			// Above the full screen player, which sits at z-[9999].
-			overlayClassName="z-[10000]"
+			// Above the full screen player, which sits at z-9999.
+			overlayClassName="z-10000"
 			className="bg-card border border-border rounded-lg p-5 w-[320px] shadow-xl"
 		>
 			<div
@@ -67,7 +67,7 @@ export const ConfirmDialog = ({
 				<h3 id={titleId} className="text-sm font-semibold mb-1.5">
 					{title}
 				</h3>
-				<p className="text-xs text-muted-foreground mb-4 max-h-[50vh] overflow-y-auto whitespace-pre-line break-words">
+				<p className="text-xs text-muted-foreground mb-4 max-h-[50vh] overflow-y-auto whitespace-pre-line wrap-break-word">
 					{message}
 				</p>
 				{children && <div className="mb-4">{children}</div>}

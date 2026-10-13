@@ -226,7 +226,7 @@ export const SubtitlePicker = ({
 	};
 
 	const panelClass =
-		"rounded-xl bg-black/90 backdrop-blur-sm border border-white/10 shadow-2xl text-white text-sm";
+		"rounded-xl bg-black/90 backdrop-blur-xs border border-white/10 shadow-2xl text-white text-sm";
 
 	// ─── Render ─────────────────────────────────────────────────────────────
 	return (
@@ -235,7 +235,7 @@ export const SubtitlePicker = ({
 			{/* ── Settings panel (floats to the left of the list) ── */}
 			{showSettings && (
 				<div className={cn(panelClass, "w-64 max-h-[60vh] overflow-y-auto")}>
-					<div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 sticky top-0 bg-black/90 backdrop-blur-sm">
+					<div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 sticky top-0 bg-black/90 backdrop-blur-xs">
 						<span className="font-semibold text-xs tracking-wide uppercase text-white/70">
 							Subtitle Settings
 						</span>
@@ -257,7 +257,7 @@ export const SubtitlePicker = ({
 							<select
 								value={subtitleFontFamily}
 								onChange={(e) => onFontFamilyChange?.(e.target.value)}
-								className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-white/30"
+								className="w-full bg-white/10 border border-white/10 rounded px-2 py-1 text-xs text-white focus:outline-hidden focus:border-white/30"
 							>
 								{FONT_FAMILIES.map((f) => (
 									<option key={f.value} value={f.value} className="bg-black">
@@ -349,7 +349,7 @@ export const SubtitlePicker = ({
 			{/* ── Main subtitle list panel ── */}
 			<div className={cn(panelClass, "w-80 max-h-[60vh] overflow-y-auto")}>
 				{/* Header */}
-				<div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 sticky top-0 bg-black/90 backdrop-blur-sm z-10">
+				<div className="flex items-center justify-between px-3 py-2.5 border-b border-white/10 sticky top-0 bg-black/90 backdrop-blur-xs z-10">
 					<span className="font-semibold text-xs tracking-wide uppercase text-white/70">
 						Subtitles
 					</span>

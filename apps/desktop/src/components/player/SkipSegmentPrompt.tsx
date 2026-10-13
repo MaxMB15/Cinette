@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 /** The look of the prompt's buttons, which sit over the video. */
 const BUTTON =
-	"pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-md bg-black/70 px-4 text-sm font-medium text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-sm transition-colors hover:bg-black/85 active:bg-black/85 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70";
+	"pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-md bg-black/70 px-4 text-sm font-medium text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-xs transition-colors hover:bg-black/85 active:bg-black/85 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white/70";
 
 /** Why times made for a video of another length may be off. */
 const MISMATCH_HINT = "This video's length doesn't match the one these times were made for.";
@@ -109,12 +109,12 @@ export const SkipSegmentPrompt = ({
 		);
 	} else if (notice) {
 		content = (
-			<div className="pointer-events-auto flex items-stretch overflow-hidden rounded-md bg-black/70 text-sm text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-sm">
+			<div className="pointer-events-auto flex items-stretch overflow-hidden rounded-md bg-black/70 text-sm text-white shadow-lg ring-1 ring-inset ring-white/25 backdrop-blur-xs">
 				<span className="flex items-center pl-4 pr-3">{notice.label}</span>
 				<button
 					type="button"
 					onClick={press(skipping.undo)}
-					className="inline-flex min-h-11 items-center gap-1.5 border-l border-white/20 px-3 font-medium hover:bg-white/15 active:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/70"
+					className="inline-flex min-h-11 items-center gap-1.5 border-l border-white/20 px-3 font-medium hover:bg-white/15 active:bg-white/15 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/70"
 				>
 					<Undo2 className="h-4 w-4" aria-hidden />
 					Undo
@@ -167,8 +167,8 @@ export const SkipSegmentPrompt = ({
 			}}
 			onBlur={handleBlur}
 			className={cn(
-				"pointer-events-none absolute bottom-[calc(1.5rem_+_env(safe-area-inset-bottom))] right-[calc(1rem_+_env(safe-area-inset-right))] z-10 flex flex-col items-end transition-transform duration-300 ease-out motion-reduce:transition-none",
-				controlsVisible && "-translate-y-[6.5rem]",
+				"pointer-events-none absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[calc(1rem+env(safe-area-inset-right))] z-10 flex flex-col items-end transition-transform duration-300 ease-out motion-reduce:transition-none",
+				controlsVisible && "-translate-y-26",
 				held && "invisible"
 			)}
 		>

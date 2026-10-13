@@ -109,7 +109,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 							className="relative min-w-[160px] max-w-[180px] bg-secondary rounded-lg p-2.5 text-left hover:bg-accent transition-colors group shrink-0"
 						>
 							<button
-								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity p-0.5"
+								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 transition-opacity p-0.5"
 								onClick={() => void dismiss(card)}
 								aria-label={`Dismiss ${card.displayName}`}
 							>

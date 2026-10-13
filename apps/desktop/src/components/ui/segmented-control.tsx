@@ -52,7 +52,7 @@ export const SegmentedControl = <T extends string | number | boolean>({
 							? "flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3"
 							: "px-3 py-1",
 						selected
-							? "bg-background text-foreground shadow-sm"
+							? "bg-background text-foreground shadow-xs"
 							: "text-muted-foreground hover:text-foreground"
 					)}
 				>

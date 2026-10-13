@@ -109,7 +109,7 @@ export const ConnectionStatusOverlay = ({
 				<button
 					type="button"
 					onClick={onRetry}
-					className="inline-flex items-center gap-1.5 rounded-md bg-red-500/20 px-2.5 py-1.5 text-xs font-medium text-red-100 ring-1 ring-inset ring-red-400/30 transition hover:bg-red-500/30 focus:outline-none focus:ring-2 focus:ring-red-400/60"
+					className="inline-flex items-center gap-1.5 rounded-md bg-red-500/20 px-2.5 py-1.5 text-xs font-medium text-red-100 ring-1 ring-inset ring-red-400/30 transition hover:bg-red-500/30 focus:outline-hidden focus:ring-2 focus:ring-red-400/60"
 				>
 					<RotateCw className="h-3.5 w-3.5" />
 					Retry
@@ -150,8 +150,8 @@ export const ConnectionStatusOverlay = ({
 			className={cn(
 				"absolute left-4 right-4 z-50 mx-auto w-fit max-w-md flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg backdrop-blur-md",
 				belowTopBar
-					? "top-[calc(4.5rem_+_env(safe-area-inset-top))]"
-					: "top-[calc(1.5rem_+_env(safe-area-inset-top))]",
+					? "top-[calc(4.5rem+env(safe-area-inset-top))]"
+					: "top-[calc(1.5rem+env(safe-area-inset-top))]",
 				config.container
 			)}
 		>

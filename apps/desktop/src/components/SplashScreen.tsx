@@ -128,14 +128,14 @@ const LeftPanel = ({
 							{update.body ?? "A new version is ready to install."}
 						</p>
 						{installing && installProgress !== null && (
-							<div className="mt-2 h-1 w-full rounded-full bg-secondary overflow-hidden">
+							<div className="h-1 w-full rounded-full bg-secondary overflow-hidden">
 								<div
 									className="h-full bg-primary transition-all duration-200"
 									style={{ width: `${installProgress}%` }}
 								/>
 							</div>
 						)}
-						{error && <p className="mt-1.5 text-xs text-destructive">{error}</p>}
+						{error && <p className="text-xs text-destructive">{error}</p>}
 					</div>
 				)}
 

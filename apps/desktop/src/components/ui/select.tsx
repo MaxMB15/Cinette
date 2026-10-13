@@ -50,7 +50,7 @@ export const Select = <T extends string | number>({
 				aria-expanded={open}
 				aria-haspopup="listbox"
 				onClick={() => setOpen((o) => !o)}
-				className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-secondary px-3 py-2.5 text-sm text-foreground transition-colors hover:bg-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+				className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-secondary px-3 py-2.5 text-sm text-foreground transition-colors hover:bg-accent focus:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 			>
 				<span className="truncate">{selected?.label ?? placeholder ?? "Select…"}</span>
 				<ChevronDown
