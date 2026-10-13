@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { DONATION_LAST_SHOWN_KEY, readStorage, writeStorage } from "@/lib/storage";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -23,17 +23,15 @@ const shouldShowNow = (): boolean => {
 };
 
 export const useDonationPrompt = ({ enabled }: UseDonationPromptOptions): DonationPromptState => {
-	const [shouldShow, setShouldShow] = useState(false);
-
-	// Re-evaluate whenever enabled flips to true (i.e. splash just dismissed)
-	useEffect(() => {
-		if (enabled) setShouldShow(shouldShowNow());
-	}, [enabled]);
+	// Whether it's time is read once, as the app starts. The prompt then waits
+	// for `enabled`, which turns on when the splash screen goes.
+	const [due] = useState(shouldShowNow);
+	const [dismissed, setDismissed] = useState(false);
 
 	const dismiss = useCallback(() => {
 		writeStorage(DONATION_LAST_SHOWN_KEY, String(Date.now()));
-		setShouldShow(false);
+		setDismissed(true);
 	}, []);
 
-	return { shouldShow, dismiss };
+	return { shouldShow: enabled && due && !dismissed, dismiss };
 };

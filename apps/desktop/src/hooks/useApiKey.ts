@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useChanged } from "@/hooks/useChanged";
 
 /** Where a save is up to. "saved" and "removed" show for a moment, then go back to idle. */
 export type KeySaveStatus = "idle" | "saving" | "saved" | "removed" | "error";
@@ -78,13 +79,17 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		timer.current = null;
 	};
 
+	// Results for another service don't belong to this one. A save or check
+	// still on its way clears its own status when it lands.
+	const serviceChanged = useChanged(service);
+	if (serviceChanged) {
+		setSaveStatus((status) => (status === "saving" ? status : "idle"));
+		setTestStatus((status) => (status === "testing" ? status : "idle"));
+	}
+
 	useEffect(() => {
 		shown.current = service;
 		savedFor.current = null;
-		// Results for another service don't belong to this one. A save or check
-		// still on its way clears its own status when it lands.
-		setSaveStatus((status) => (status === "saving" ? status : "idle"));
-		setTestStatus((status) => (status === "testing" ? status : "idle"));
 		// Each run drops its own load when it ends, so a load from an earlier
 		// run, or from Strict Mode's first one, can't land after a newer one.
 		let current = true;

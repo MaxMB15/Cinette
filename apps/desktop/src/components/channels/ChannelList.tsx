@@ -550,6 +550,10 @@ export const ChannelList = () => {
 			? 0
 			: Math.ceil(filtered.length / columnsPerRow);
 
+	// The compiler can't memoize what TanStack Virtual returns, so it leaves this
+	// component as it is. That's the right call, and the app doesn't run the
+	// compiler yet.
+	// eslint-disable-next-line react-hooks/incompatible-library -- see above
 	const virtualizer = useVirtualizer({
 		count: rowCount,
 		getScrollElement: () => parentRef.current,

@@ -22,6 +22,15 @@ describe("useDonationPrompt", () => {
 		expect(result.current.shouldShow).toBe(false);
 	});
 
+	it("waits for enabled before showing", () => {
+		const { result, rerender } = renderHook(({ enabled }) => useDonationPrompt({ enabled }), {
+			initialProps: { enabled: false },
+		});
+		expect(result.current.shouldShow).toBe(false);
+		rerender({ enabled: true });
+		expect(result.current.shouldShow).toBe(true);
+	});
+
 	it("shows on first launch (no stored key)", () => {
 		const { result } = renderHook(() => useDonationPrompt({ enabled: true }));
 		expect(result.current.shouldShow).toBe(true);

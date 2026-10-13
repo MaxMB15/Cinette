@@ -16,14 +16,15 @@ import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
+import { useLatestRef } from "@/hooks/useLatestRef";
+import { useChanged } from "@/hooks/useChanged";
+import { useMediaDetails } from "@/hooks/useMediaDetails";
 import { useChannels } from "@/hooks/useChannels";
 import {
 	mpvSetBounds,
 	mpvSetMediaInfo,
 	recordPlayStart,
 	recordPlayEnd,
-	fetchOmdbData,
-	fetchWhatsonData,
 	searchSubtitles,
 	downloadSubtitle,
 	readSubtitleFile,
@@ -42,7 +43,7 @@ import {
 	removeDownload,
 } from "@/lib/tauri";
 import { parseSrt } from "@/lib/subtitle-parser";
-import type { Channel, OmdbData, WhatsonData, SubtitleCue, SubtitleEntry } from "@/lib/types";
+import type { Channel, SubtitleCue, SubtitleEntry } from "@/lib/types";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
@@ -161,11 +162,6 @@ const parseSeasonEpisode = (name: string): { season?: number; episode?: number }
 	return {};
 };
 
-interface EnrichedMeta {
-	omdbData: OmdbData | null;
-	whatsonData: WhatsonData | null;
-}
-
 /** Used in place of Settings while the skip prompt can't show. */
 const SKIPPING_OFF: SkipSegmentModes = { opening: "off", ending: "off" };
 
@@ -194,7 +190,6 @@ export const PlayerView = () => {
 	// controls for its remote.
 	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
 	const fullscreenButton = hasFullscreenButton(touchDevice, layoutMode);
-	const [enrichedMeta, setEnrichedMeta] = useState<EnrichedMeta | null>(null);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
 	const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
@@ -211,10 +206,8 @@ export const PlayerView = () => {
 	const [osdText, setOsdText] = useState<{ text: string; id: number } | null>(null);
 	const osdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	const mpvStateRef = useRef(mpv.state);
-	mpvStateRef.current = mpv.state;
-	const activeChannelRef = useRef(activeChannel);
-	activeChannelRef.current = activeChannel;
+	const mpvStateRef = useLatestRef(mpv.state);
+	const activeChannelRef = useLatestRef(activeChannel);
 	const playStartTimeRef = useRef<number | null>(null);
 	const progressRef = useRef<PlaybackProgress>(EMPTY_PROGRESS);
 	// The URL mpv was last asked to play. For a download it's the file's path
@@ -235,8 +228,7 @@ export const PlayerView = () => {
 		rankInLanguage: number;
 	} | null>(null);
 	// Refs used by the auto-load effect to avoid stale closures.
-	const subtitlePreferenceRef = useRef(subtitlePreference);
-	subtitlePreferenceRef.current = subtitlePreference;
+	const subtitlePreferenceRef = useLatestRef(subtitlePreference);
 	// Incremented each time an episode navigation should trigger subtitle auto-load.
 	// Using state (not a ref) so the effect dependency is tracked by React.
 	const [autoLoadTrigger, setAutoLoadTrigger] = useState(0);
@@ -360,13 +352,19 @@ export const PlayerView = () => {
 		if (advanced > 0 && advanced <= MAX_WATCH_STEP_SECONDS) addWatchedTime(advanced * 1000);
 	}, [mpv.state]);
 
+	/** Saves how long the current item played, once per start. */
+	const recordEnd = useCallback(() => {
+		const ch = activeChannelRef.current;
+		const startedAt = playStartTimeRef.current;
+		if (!ch || startedAt === null) return;
+		playStartTimeRef.current = null;
+		recordPlayEnd(ch.id, Math.floor((Date.now() - startedAt) / 1000)).catch(() => {});
+	}, [activeChannelRef]);
+
 	/** Actually start playing `ch` (optionally from `startPos`), replacing whatever is playing. */
 	const commitPlayback = useCallback(
 		(ch: Channel, startPos?: number, apply?: () => void) => {
-			if (activeChannelRef.current && playStartTimeRef.current !== null) {
-				const elapsed = Math.floor((Date.now() - playStartTimeRef.current) / 1000);
-				recordPlayEnd(activeChannelRef.current.id, elapsed).catch(() => {});
-			}
+			recordEnd();
 			playStartTimeRef.current = Date.now();
 			recordPlayStart(ch.id, ch.name, ch.logoUrl ?? null, ch.contentType).catch(() => {});
 
@@ -392,7 +390,7 @@ export const PlayerView = () => {
 			setActiveChannel(ch);
 			apply?.();
 		},
-		[mpv, rememberLoadedUrl]
+		[mpv, rememberLoadedUrl, recordEnd]
 	);
 
 	/**
@@ -424,7 +422,7 @@ export const PlayerView = () => {
 			}
 			commitPlayback(ch, undefined, apply);
 		},
-		[mpv, flushProgress, commitPlayback]
+		[mpv, mpvStateRef, flushProgress, commitPlayback]
 	);
 
 	const resolveResume = useCallback(
@@ -474,9 +472,14 @@ export const PlayerView = () => {
 		} catch {}
 	};
 
+	// The player's handler for arriving on its page. It takes what to play from
+	// the router, or from sessionStorage when the page opens without it, and
+	// starts mpv. The sidebar's Player link runs it again on a player that's
+	// already mounted, so starting values for the state wouldn't cover it.
 	useEffect(() => {
 		if (navState?.url) {
 			if (navState.seriesEpisodes?.length) {
+				// eslint-disable-next-line react-hooks/set-state-in-effect -- applies the navigation, see above
 				setSeriesEpisodes(navState.seriesEpisodes);
 			}
 			const navChannel = navState.channel;
@@ -538,8 +541,10 @@ export const PlayerView = () => {
 		}
 	}, [seriesEpisodes]);
 
-	// Pre-fetch enriched metadata when activeChannel changes to a movie or series
-	useEffect(() => {
+	// A new item starts with no subtitles. Resetting them while rendering keeps
+	// the old item's from showing with it for a frame.
+	const channelChanged = useChanged(activeChannel?.id);
+	if (channelChanged) {
 		setShowSubtitlePicker(false);
 		setSelectedSubtitleId(null);
 		setSubtitleCues([]);
@@ -547,50 +552,24 @@ export const PlayerView = () => {
 		setSubtitleEditMode(false);
 		setSubtitleDelay(0);
 		setSubtitlePos(DEFAULT_SUBTITLE_POSITION);
+	}
 
-		// Only movies and series have details to look up. A recording is live TV.
-		if (
-			!activeChannel ||
-			(activeChannel.contentType !== "movie" && activeChannel.contentType !== "series")
-		) {
-			setEnrichedMeta(null);
-			return;
-		}
+	// Load the details up front for a movie or series, so the info sheet opens
+	// with them and subtitles can search by IMDb id. A recording is live TV.
+	const mediaKind =
+		activeChannel?.contentType === "movie" || activeChannel?.contentType === "series"
+			? activeChannel.contentType
+			: null;
+	const mediaDetails = useMediaDetails(
+		activeChannel && mediaKind
+			? { id: activeChannel.id, title: seriesTitleOf(activeChannel), kind: mediaKind }
+			: null
+	);
+	// The sheets load their own until OMDb has answered here.
+	const prefetchedOmdbData = mediaDetails.loading ? undefined : mediaDetails.omdbData;
+	const prefetchedWhatsonData = mediaDetails.loading ? undefined : mediaDetails.whatsonData;
 
-		let cancelled = false;
-		setEnrichedMeta(null);
-
-		const mediaType = activeChannel.contentType === "series" ? "series" : "movie";
-		const titleForOmdb = seriesTitleOf(activeChannel);
-
-		fetchOmdbData(activeChannel.id, titleForOmdb, mediaType as "movie" | "series")
-			.then((omdbData) => {
-				if (cancelled) return;
-				setEnrichedMeta({ omdbData, whatsonData: null });
-
-				if (omdbData?.imdbId) {
-					const whatsonMediaType =
-						activeChannel.contentType === "series" ? "show" : "movie";
-					fetchWhatsonData(omdbData.imdbId, whatsonMediaType)
-						.then((whatsonData) => {
-							if (cancelled) return;
-							setEnrichedMeta({ omdbData, whatsonData });
-						})
-						.catch(() => {});
-				}
-			})
-			.catch(() => {
-				if (cancelled) return;
-				setEnrichedMeta({ omdbData: null, whatsonData: null });
-			});
-
-		return () => {
-			cancelled = true;
-		};
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on ID only to avoid re-fetching when channel object ref changes
-	}, [activeChannel?.id]);
-
-	const activeImdbId = enrichedMeta?.omdbData?.imdbId ?? null;
+	const activeImdbId = mediaDetails.omdbData?.imdbId ?? null;
 	// A recording has no info drawer.
 	const hasInfo = !!activeChannel && activeChannel.contentType !== "recording";
 	const canShowSubtitles =
@@ -605,14 +584,12 @@ export const PlayerView = () => {
 	const subtitleEpisode = activeChannel?.episode ?? parsedEpisode;
 
 	// Refs so the auto-load effect can read fresh values without stale closures.
-	const subtitleSeasonRef = useRef(subtitleSeason);
-	subtitleSeasonRef.current = subtitleSeason;
-	const subtitleEpisodeRef = useRef(subtitleEpisode);
-	subtitleEpisodeRef.current = subtitleEpisode;
+	const subtitleSeasonRef = useLatestRef(subtitleSeason);
+	const subtitleEpisodeRef = useLatestRef(subtitleEpisode);
 
 	// Auto-load: fires when playEpisode increments autoLoadTrigger, then waits for
 	// activeImdbId to resolve. Using a trigger counter avoids the cancellation bug
-	// where setEnrichedMeta(null) → activeImdbId → null mid-flight would kill the search.
+	// where a new item's activeImdbId goes null mid-flight and kills the search.
 	useEffect(() => {
 		if (autoLoadTrigger === 0) return; // no episode navigation yet
 		if (!activeImdbId) return; // OMDB still in-flight; re-run when it resolves
@@ -644,7 +621,13 @@ export const PlayerView = () => {
 		return () => {
 			cancelled = true;
 		};
-	}, [autoLoadTrigger, activeImdbId]);
+	}, [
+		autoLoadTrigger,
+		activeImdbId,
+		subtitlePreferenceRef,
+		subtitleSeasonRef,
+		subtitleEpisodeRef,
+	]);
 
 	// --- Series episode navigation ---
 
@@ -723,7 +706,7 @@ export const PlayerView = () => {
 			mpv.load(url, startPos).catch(() => {});
 			setActiveChannel({ ...ch, url, sourceList: availableSources });
 		},
-		[mpv, flushProgress, availableSources, rememberLoadedUrl]
+		[mpv, activeChannelRef, flushProgress, availableSources, rememberLoadedUrl]
 	);
 
 	const playEpisode = useCallback(
@@ -742,23 +725,13 @@ export const PlayerView = () => {
 		[startPlayback]
 	);
 
+	// On unmount, record end of play
+	useEffect(() => recordEnd, [recordEnd]);
+
 	// --- Autoplay next episode ---
 	// Use refs to avoid stale closures while keeping the effect dependency minimal
-	const nextEpisodeRef = useRef(nextEpisode);
-	nextEpisodeRef.current = nextEpisode;
-	// On unmount, record end of play
-	useEffect(() => {
-		return () => {
-			if (activeChannelRef.current && playStartTimeRef.current !== null) {
-				const elapsed = Math.floor((Date.now() - playStartTimeRef.current) / 1000);
-				recordPlayEnd(activeChannelRef.current.id, elapsed).catch(() => {});
-				playStartTimeRef.current = null;
-			}
-		};
-	}, []);
-
-	const autoplayRef = useRef(autoplay);
-	autoplayRef.current = autoplay;
+	const nextEpisodeRef = useLatestRef(nextEpisode);
+	const autoplayRef = useLatestRef(autoplay);
 
 	// Advance when the episode reaches its end, not when it stops near it. A
 	// pause in the last seconds, or the resume prompt pausing the player, leaves
@@ -793,7 +766,7 @@ export const PlayerView = () => {
 			const next = nextEpisodeRef.current;
 			if (next) playEpisode(next);
 		}
-	}, [mpv.state, loadedUrl, playEpisode]);
+	}, [mpv.state, loadedUrl, playEpisode, autoplayRef, activeChannelRef, nextEpisodeRef]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few
@@ -835,7 +808,7 @@ export const PlayerView = () => {
 			mpv.seek(run.target);
 			return run.total;
 		},
-		[mpv]
+		[mpv, mpvStateRef]
 	);
 	// The tap layer keeps its clicks from the player, so a double-tap skip
 	// restarts the hide timer here, as a press on a skip button does. Hidden
@@ -873,7 +846,7 @@ export const PlayerView = () => {
 	const playNextEpisode = useCallback(() => {
 		const next = nextEpisodeRef.current;
 		if (next) playEpisode(next);
-	}, [playEpisode]);
+	}, [playEpisode, nextEpisodeRef]);
 	// Something open over the prompt holds it, so the player doesn't skip
 	// where the notice and its Undo can't be seen.
 	const skipHeld = showShortcuts || !!pendingResume || showSubtitlePicker || showInfoDrawer;
@@ -1053,15 +1026,11 @@ export const PlayerView = () => {
 	);
 
 	const handleStop = useCallback(() => {
-		if (activeChannelRef.current && playStartTimeRef.current !== null) {
-			const elapsed = Math.floor((Date.now() - playStartTimeRef.current) / 1000);
-			recordPlayEnd(activeChannelRef.current.id, elapsed).catch(() => {});
-			playStartTimeRef.current = null;
-		}
+		recordEnd();
 		flushProgress();
 		mpv.stop();
 		navigate("/");
-	}, [mpv, navigate, flushProgress]);
+	}, [mpv, navigate, flushProgress, recordEnd]);
 
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
@@ -1326,8 +1295,8 @@ export const PlayerView = () => {
 							playEpisode(ch);
 						}
 					}}
-					prefetchedOmdbData={enrichedMeta?.omdbData}
-					prefetchedWhatsonData={enrichedMeta?.whatsonData}
+					prefetchedOmdbData={prefetchedOmdbData}
+					prefetchedWhatsonData={prefetchedWhatsonData}
 				/>
 			)}
 
@@ -1344,8 +1313,8 @@ export const PlayerView = () => {
 							startPlayback(ch, "player");
 						}
 					}}
-					prefetchedOmdbData={enrichedMeta?.omdbData}
-					prefetchedWhatsonData={enrichedMeta?.whatsonData}
+					prefetchedOmdbData={prefetchedOmdbData}
+					prefetchedWhatsonData={prefetchedWhatsonData}
 				/>
 			)}
 

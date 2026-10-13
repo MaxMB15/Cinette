@@ -25,12 +25,6 @@ export default defineConfig(
 			globals: { ...globals.browser },
 		},
 		rules: {
-			// These React Compiler checks came with react-hooks 7. They warn until
-			// the code they flag is fixed, then go back to the plugin's error.
-			"react-hooks/immutability": "warn",
-			"react-hooks/purity": "warn",
-			"react-hooks/refs": "warn",
-			"react-hooks/set-state-in-effect": "warn",
 			"func-style": ["error", "expression"],
 			"react/no-unescaped-entities": "off",
 			"no-empty": ["error", { allowEmptyCatch: true }],

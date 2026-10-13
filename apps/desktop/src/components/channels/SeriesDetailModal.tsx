@@ -13,8 +13,6 @@ import {
 } from "lucide-react";
 import type { Channel, OmdbData, WhatsonData, DownloadRecord } from "@/lib/types";
 import {
-	fetchOmdbData,
-	fetchWhatsonData,
 	enqueueEpisodeDownload,
 	enqueueEpisodesBatch,
 	stopDownload,
@@ -29,7 +27,7 @@ import { dedupeEpisodes } from "@/lib/episodes";
 import { formatCount } from "@/lib/format";
 import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { useDownloads, aggregateForSeries } from "@/hooks/useDownloads";
-import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
+import { useSheetDetails } from "@/hooks/useMediaDetails";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
@@ -96,50 +94,18 @@ export const SeriesDetailModal = ({
 	} | null>(null);
 	const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
 	const [sourceEp, setSourceEp] = useState<Channel | null>(null);
-	const [omdbData, setOmdbData] = useState<OmdbData | null>(prefetchedOmdbData ?? null);
-	const [omdbLoading, setOmdbLoading] = useState(prefetchedOmdbData === undefined);
-	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
-		prefetchedWhatsonData ?? null
-	);
-	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, omdbLoading);
-
 	const firstEp = episodes[0];
+	const { omdbData, whatsonData, omdbLoading, hasOmdbKey, infoLoading } = useSheetDetails(
+		firstEp ? { id: firstEp.id, title: showTitle, kind: "series" } : null,
+		prefetchedOmdbData,
+		prefetchedWhatsonData
+	);
 	const showLogoUrl = firstEp?.logoUrl;
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
 		return () => cancelAnimationFrame(id);
 	}, []);
-
-	// Sync when prefetched Whatson data arrives after drawer opens
-	useEffect(() => {
-		if (prefetchedWhatsonData !== undefined) {
-			setWhatsonData(prefetchedWhatsonData ?? null);
-		}
-	}, [prefetchedWhatsonData]);
-
-	useEffect(() => {
-		if (prefetchedOmdbData !== undefined) return;
-		if (!firstEp) {
-			setOmdbLoading(false);
-			return;
-		}
-		setOmdbLoading(true);
-		setOmdbData(null);
-		setWhatsonData(null);
-		fetchOmdbData(firstEp.id, showTitle, "series")
-			.then((data) => {
-				setOmdbData(data);
-				// Also fetch Whatson if we got an imdb_id
-				if (data?.imdbId) {
-					fetchWhatsonData(data.imdbId, "show")
-						.then(setWhatsonData)
-						.catch(() => {});
-				}
-			})
-			.catch(() => {})
-			.finally(() => setOmdbLoading(false));
-	}, [firstEp, prefetchedOmdbData, showTitle]);
 
 	const handleClose = () => {
 		setVisible(false);

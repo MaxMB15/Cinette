@@ -16,6 +16,7 @@ import {
 import { readHwdecEnabled, readVolumePreference, writeVolumePreference } from "@/lib/player-prefs";
 import { isOpeningStream } from "@/lib/stream-opening";
 import { createChangeTracker } from "@/lib/change-tracker";
+import { useLatestRef } from "@/hooks/useLatestRef";
 
 const DEFAULT_STATE: MpvPlayerState = {
 	isPlaying: false,
@@ -219,12 +220,6 @@ export const useMpv = () => {
 			.catch(() => {});
 	}, []);
 
-	// Refs that mirror state so the `online` listener (registered once)
-	// reads the latest values without re-binding on every poll.
-	const loadFailedRef = useRef(false);
-	const openFailedRef = useRef(false);
-	const reconnectingRef = useRef(false);
-	const currentUrlRef = useRef<string | null>(null);
 	// The URL the last load asked for. The polled state still names the
 	// previous stream while a load runs, and keeps naming it if the load
 	// fails, so a retry reads this first.
@@ -239,18 +234,12 @@ export const useMpv = () => {
 	// The stream stopped before it ever played, for example because the server
 	// answered with an error. Reconnect and retries-exhausted states outrank it.
 	const openFailed = state.openFailed && !reconnecting && !loadFailed;
-	useEffect(() => {
-		loadFailedRef.current = loadFailed;
-	}, [loadFailed]);
-	useEffect(() => {
-		openFailedRef.current = openFailed;
-	}, [openFailed]);
-	useEffect(() => {
-		reconnectingRef.current = reconnecting;
-	}, [reconnecting]);
-	useEffect(() => {
-		currentUrlRef.current = state.currentUrl;
-	}, [state.currentUrl]);
+	// Refs that mirror state so the `online` listener (registered once)
+	// reads the latest values without re-binding on every poll.
+	const loadFailedRef = useLatestRef(loadFailed);
+	const openFailedRef = useLatestRef(openFailed);
+	const reconnectingRef = useLatestRef(reconnecting);
+	const currentUrlRef = useLatestRef(state.currentUrl);
 	useEffect(() => {
 		if (state.position > 1.0) {
 			lastKnownPositionRef.current = state.position;
@@ -343,7 +332,7 @@ export const useMpv = () => {
 		const resumeAt = lastKnownPositionRef.current;
 		await load(url, resumeAt > 1.0 ? resumeAt : undefined);
 		return true;
-	}, [load]);
+	}, [load, currentUrlRef]);
 
 	// Auto-recover when the OS reports the network came back online while
 	// we're either parked in `loadFailed` OR actively `reconnecting`. The
@@ -376,7 +365,7 @@ export const useMpv = () => {
 		};
 		window.addEventListener("online", handleOnline);
 		return () => window.removeEventListener("online", handleOnline);
-	}, [reload, flashRecovered]);
+	}, [reload, flashRecovered, loadFailedRef, openFailedRef, reconnectingRef]);
 
 	const play = useCallback(async () => {
 		console.log("[useMpv] play called");
@@ -463,29 +452,30 @@ export const useMpv = () => {
 	// only ever takes ON forward progress, so it survives the retry window.
 	const getLastKnownPosition = useCallback(() => lastKnownPositionRef.current, []);
 
-	const refresh = useCallback(async () => {
+	const refresh = useCallback(() => {
 		const seekMark = seeks.mark();
 		const volumeMark = volumeChanges.mark();
-		try {
-			const s = await mpvGetState();
-			console.debug("[useMpv] poll state:", JSON.stringify(s));
-			// A poll that lands mid-load may describe the previous stream (or
-			// none at all). Keep the reset state until the load returns.
-			if (loadingRef.current) return;
-			setState((prev) => ({
-				isPlaying: s.isPlaying,
-				isPaused: s.isPaused,
-				currentUrl: s.currentUrl,
-				volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
-				position: seeks.isStale(seekMark) ? prev.position : s.position,
-				duration: s.duration,
-				playbackStarted: s.playbackStarted,
-				openFailed: s.openFailed,
-				reachedEnd: s.reachedEnd,
-			}));
-		} catch (e) {
-			console.warn("[useMpv] poll failed:", e);
-		}
+		return mpvGetState()
+			.then((s) => {
+				console.debug("[useMpv] poll state:", JSON.stringify(s));
+				// A poll that lands mid-load may describe the previous stream (or
+				// none at all). Keep the reset state until the load returns.
+				if (loadingRef.current) return;
+				setState((prev) => ({
+					isPlaying: s.isPlaying,
+					isPaused: s.isPaused,
+					currentUrl: s.currentUrl,
+					volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
+					position: seeks.isStale(seekMark) ? prev.position : s.position,
+					duration: s.duration,
+					playbackStarted: s.playbackStarted,
+					openFailed: s.openFailed,
+					reachedEnd: s.reachedEnd,
+				}));
+			})
+			.catch((e) => {
+				console.warn("[useMpv] poll failed:", e);
+			});
 	}, [seeks, volumeChanges]);
 
 	useEffect(() => {

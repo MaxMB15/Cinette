@@ -5,18 +5,12 @@ import { useState, useEffect } from "react";
 import { X, Play, Clapperboard, LoaderCircle } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import type { Channel, OmdbData, WhatsonData } from "@/lib/types";
-import {
-	fetchOmdbData,
-	fetchWhatsonData,
-	enqueueMovieDownload,
-	stopDownload,
-	removeDownload,
-} from "@/lib/tauri";
+import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { channelSources, withSource, describeSource } from "@/lib/sources";
 import { downloadIconState } from "@/lib/download-status";
 import { RatingsRow } from "@/components/ui/ratings-row";
 import { useDownloads } from "@/hooks/useDownloads";
-import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
+import { useSheetDetails } from "@/hooks/useMediaDetails";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
 import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { RetentionNote } from "@/components/downloads/RetentionNote";
@@ -43,45 +37,20 @@ export const MovieInfoDrawer = ({
 	const [selectedSourceIdx, setSelectedSourceIdx] = useState(() =>
 		Math.max(0, channelSources(movie).indexOf(movie.url))
 	);
-	const [omdbData, setOmdbData] = useState<OmdbData | null>(prefetchedOmdbData ?? null);
-	const [omdbLoading, setOmdbLoading] = useState(prefetchedOmdbData === undefined);
-	const [whatsonData, setWhatsonData] = useState<WhatsonData | null>(
-		prefetchedWhatsonData ?? null
+	const { omdbData, whatsonData, omdbLoading, hasOmdbKey, infoLoading } = useSheetDetails(
+		{
+			id: movie.id,
+			title: movie.name,
+			kind: movie.contentType === "series" ? "series" : "movie",
+		},
+		prefetchedOmdbData,
+		prefetchedWhatsonData
 	);
-	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, omdbLoading);
 
 	useEffect(() => {
 		const id = requestAnimationFrame(() => setVisible(true));
 		return () => cancelAnimationFrame(id);
 	}, []);
-
-	// Sync when prefetched Whatson data arrives after drawer opens
-	useEffect(() => {
-		if (prefetchedWhatsonData !== undefined) {
-			setWhatsonData(prefetchedWhatsonData ?? null);
-		}
-	}, [prefetchedWhatsonData]);
-
-	useEffect(() => {
-		if (prefetchedOmdbData !== undefined) return;
-		if (!movie) return;
-		setOmdbLoading(true);
-		setOmdbData(null);
-		setWhatsonData(null);
-		fetchOmdbData(movie.id, movie.name, "movie")
-			.then((data) => {
-				setOmdbData(data);
-				// Also fetch Whatson if we got an imdb_id
-				if (data?.imdbId) {
-					const mediaType = movie.contentType === "series" ? "show" : "movie";
-					fetchWhatsonData(data.imdbId, mediaType)
-						.then(setWhatsonData)
-						.catch(() => {});
-				}
-			})
-			.catch(() => {})
-			.finally(() => setOmdbLoading(false));
-	}, [movie, prefetchedOmdbData]);
 
 	const { byChannel } = useDownloads();
 	const dl = byChannel.get(movie.id);

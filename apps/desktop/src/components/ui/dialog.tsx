@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { isTopFocusTrap, useFocusTrap } from "@/hooks/useFocusTrap";
+import { useLatestRef } from "@/hooks/useLatestRef";
 import { cn } from "@/lib/utils";
 
 type DialogName = { labelledBy: string; label?: never } | { label: string; labelledBy?: never };
@@ -33,10 +34,7 @@ export const Dialog = ({
 	const dialogRef = useRef<HTMLDivElement>(null);
 	useFocusTrap(dialogRef);
 
-	const onCloseRef = useRef(onClose);
-	useEffect(() => {
-		onCloseRef.current = onClose;
-	});
+	const onCloseRef = useLatestRef(onClose);
 
 	// Escape pressed while focus is outside the dialog, such as on the page
 	// after the focused control went away. It runs before the page's own
@@ -52,7 +50,7 @@ export const Dialog = ({
 		};
 		document.addEventListener("keydown", handleKey, true);
 		return () => document.removeEventListener("keydown", handleKey, true);
-	}, []);
+	}, [onCloseRef]);
 
 	return (
 		<div

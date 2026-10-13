@@ -18,18 +18,16 @@ export const useGroupHierarchy = (providerId: string | null, contentType: string
 
 	const load = useCallback(async () => {
 		if (!providerId) return;
-		try {
-			const [h, p] = await Promise.all([
-				getGroupHierarchy(providerId, contentType),
-				getPinnedGroups(providerId, contentType),
-			]);
-			setEntries(h);
-			setPinnedGroups(p);
-		} catch (err) {
-			console.error("Failed to load group hierarchy:", err);
-		} finally {
-			setLoaded(true);
-		}
+		return Promise.all([
+			getGroupHierarchy(providerId, contentType),
+			getPinnedGroups(providerId, contentType),
+		])
+			.then(([h, p]) => {
+				setEntries(h);
+				setPinnedGroups(p);
+			})
+			.catch((err) => console.error("Failed to load group hierarchy:", err))
+			.finally(() => setLoaded(true));
 	}, [providerId, contentType]);
 
 	useEffect(() => {
