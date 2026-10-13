@@ -31,6 +31,22 @@ describe("useDonationPrompt", () => {
 		expect(result.current.shouldShow).toBe(true);
 	});
 
+	it("follows enabled until it's dismissed", () => {
+		const { result, rerender } = renderHook(({ enabled }) => useDonationPrompt({ enabled }), {
+			initialProps: { enabled: true },
+		});
+		expect(result.current.shouldShow).toBe(true);
+		rerender({ enabled: false });
+		expect(result.current.shouldShow).toBe(false);
+		rerender({ enabled: true });
+		expect(result.current.shouldShow).toBe(true);
+
+		act(() => result.current.dismiss());
+		rerender({ enabled: false });
+		rerender({ enabled: true });
+		expect(result.current.shouldShow).toBe(false);
+	});
+
 	it("shows on first launch (no stored key)", () => {
 		const { result } = renderHook(() => useDonationPrompt({ enabled: true }));
 		expect(result.current.shouldShow).toBe(true);

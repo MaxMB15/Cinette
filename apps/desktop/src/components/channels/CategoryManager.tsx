@@ -120,7 +120,7 @@ export const CategoryManager = ({
 						const dbCatNames = new Set(superCategoryNames(h));
 						setEmptyCategories((prev) => prev.filter((c) => !dbCatNames.has(c)));
 					} else {
-						// No hierarchy yet — show all provider groups as uncategorized
+						// No hierarchy yet, so show all provider groups as uncategorized
 						setEntries(
 							groupTitles(channels, contentType).map((g, i) => ({
 								providerId,
