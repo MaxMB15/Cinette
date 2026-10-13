@@ -14,6 +14,13 @@ export default defineConfig({
 	},
 	test: {
 		environment: "jsdom",
+		// Each worker loads jsdom's code once, and every test file still gets a
+		// new VM context with its own window, so files stay isolated and the
+		// suite runs about a third faster. Node's built-in modules, and the
+		// globals Vitest copies in from Node such as structuredClone, fetch,
+		// Buffer and AbortController, come from another realm. An `instanceof`
+		// or toStrictEqual check on what they return can fail.
+		pool: "vmThreads",
 		setupFiles: ["./src/test/polyfills.ts", "./src/test/setup.ts"],
 		include: ["src/**/*.{test,spec}.{ts,tsx}"],
 		globals: false,
