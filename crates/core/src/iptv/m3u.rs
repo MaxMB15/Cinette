@@ -1016,11 +1016,15 @@ http://stream.example.com/ch2
     }
 
     #[test]
-    fn series_names_with_numbers_too_big_for_an_episode_have_no_episode() {
-        assert_eq!(
-            parse_series_name("Example Show S01E4294967295"),
-            Some(("Example Show".to_string(), 1, u32::MAX))
-        );
+    fn series_codes_with_numbers_too_big_to_hold_are_skipped() {
+        // The limit is on the value, not on the number of digits.
+        for name in ["Example Show S01E4294967295", "Example Show S01E00004294967295"] {
+            assert_eq!(
+                parse_series_name(name),
+                Some(("Example Show".to_string(), 1, u32::MAX)),
+                "{name:?}"
+            );
+        }
         for name in [
             "Example Show S01E4294967296",
             "Example Show S01E12345678901",
