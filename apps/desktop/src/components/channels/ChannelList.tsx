@@ -166,49 +166,31 @@ export const ChannelList = () => {
 
 	// Container width → dynamic EPG window + grid column calculation
 	const [containerWidth, setContainerWidth] = useState(0);
-	/** Root div ref — always in DOM; drives ResizeObserver for dynamic EPG window. */
-	const rootRef = useRef<HTMLDivElement>(null);
 	/** Virtualizer scroll ref — kept for TanStack Virtual scroll element. */
 	const parentRef = useRef<HTMLDivElement>(null);
 
-	const measureRoot = useCallback(() => {
-		const el = rootRef.current;
-		if (el) setContainerWidth(el.clientWidth);
+	/**
+	 * Ref callback for the root div. While the channels load, or when there are
+	 * none, the list shows something else without that div, so this measures
+	 * whenever the div mounts and then follows its size.
+	 */
+	const measureRoot = useCallback((el: HTMLDivElement | null) => {
+		if (!el) return;
+		setContainerWidth(el.clientWidth);
+		const observer = new ResizeObserver(([entry]) =>
+			setContainerWidth(entry.contentRect.width)
+		);
+		observer.observe(el);
+		return () => observer.disconnect();
 	}, []);
-
-	// Measure container width: ResizeObserver on root + window resize fallback
-	useEffect(() => {
-		measureRoot();
-		// Re-measure after layout settles (fonts, flex, etc.)
-		const rafId = requestAnimationFrame(measureRoot);
-
-		const el = rootRef.current;
-		const obs = el
-			? new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width))
-			: null;
-		if (el && obs) obs.observe(el);
-		window.addEventListener("resize", measureRoot);
-
-		return () => {
-			cancelAnimationFrame(rafId);
-			obs?.disconnect();
-			window.removeEventListener("resize", measureRoot);
-		};
-	}, [measureRoot]);
-
-	// Re-measure when switching tabs (the grid area may have a different width)
-	useEffect(() => {
-		measureRoot();
-	}, [activeTab, measureRoot]);
 
 	// Compute dynamic EPG display window: now line at 1/3 mark, 100–200 px per hour
 	const { windowStart, windowEnd } = useMemo(() => {
 		const now = nowSeconds();
-		// containerWidth is content-box width (inside px-3 padding).
-		// Rows inside have no extra padding, so timeline = containerWidth minus the two fixed columns.
+		// containerWidth is the whole component's width. The scroll container
+		// inside has px-3 (12px) on each side, and each row has two fixed
+		// columns, so the timeline gets what's left.
 		const effectiveWidth = containerWidth > 0 ? containerWidth : 400;
-		// rootRef measures the full component width; the scroll container inside has px-3 (12px)
-		// padding on each side, so subtract 24px to get the actual content width.
 		const timelinePx = Math.max(
 			200,
 			effectiveWidth - 24 - ROW_CARD_LEFT_WIDTH - RIGHT_BUTTONS_PX
@@ -632,7 +614,7 @@ export const ChannelList = () => {
 	const timelineLeft = ROW_CARD_LEFT_WIDTH;
 
 	return (
-		<div ref={rootRef} className="flex flex-col h-full">
+		<div ref={measureRoot} className="flex flex-col h-full">
 			{/* Tab bar. The tabs scroll sideways when they don't fit; on phones the
 			    search and filters move to a row of their own below them. */}
 			<div
