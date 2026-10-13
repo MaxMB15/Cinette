@@ -2373,6 +2373,18 @@ mod tests {
     }
 
     #[test]
+    fn get_all_channels_marks_favorites() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.upsert_provider(&make_provider("p1", "P")).unwrap();
+        store.save_channels("p1", &[make_channel("ch1", "A", "G"), make_channel("ch2", "B", "G")]).unwrap();
+        store.toggle_favorite("ch1").unwrap();
+
+        let favorites: Vec<(String, bool)> =
+            store.get_all_channels().unwrap().into_iter().map(|c| (c.id, c.is_favorite)).collect();
+        assert_eq!(favorites, [("ch1".to_string(), true), ("ch2".to_string(), false)]);
+    }
+
+    #[test]
     fn test_get_channels_only_returns_own_provider() {
         let store = CacheStore::open_in_memory().unwrap();
         store.upsert_provider(&make_provider("p1", "P1")).unwrap();
@@ -2531,6 +2543,31 @@ mod tests {
         assert_eq!(channels[0].episode, Some(7));
     }
 
+    #[test]
+    fn a_series_missing_any_one_value_is_parsed_again() {
+        let partial = [
+            (None, Some(9), Some(9)),
+            (Some("Old Title"), None, Some(9)),
+            (Some("Old Title"), Some(9), None),
+        ];
+        for (title, season, episode) in partial {
+            let mut channels = [Channel {
+                content_type: "series".into(),
+                series_title: title.map(String::from),
+                season,
+                episode,
+                ..make_channel("ep1", "Example Show S03E04", "Shows")
+            }];
+            enrich_stale_series(&mut channels);
+            let ch = &channels[0];
+            assert_eq!(
+                (ch.series_title.as_deref(), ch.season, ch.episode),
+                (Some("Example Show"), Some(3), Some(4)),
+                "{title:?} {season:?} {episode:?}"
+            );
+        }
+    }
+
     fn make_omdb_data(title: &str) -> OmdbData {
         OmdbData {
             title: title.into(),
@@ -2585,6 +2622,17 @@ mod tests {
         // Use TTL of -1 so the entry is always considered stale
         let result = store.get_omdb_cache("ch1", -1).unwrap();
         assert!(result.is_none(), "stale cache entry should return None");
+    }
+
+    #[test]
+    fn a_cache_entry_is_used_until_it_is_older_than_the_ttl() {
+        let store = CacheStore::open_in_memory().unwrap();
+        store.save_omdb_cache("ch1", &make_omdb_data("Example Film")).unwrap();
+        // Move the fetch two hours into the past.
+        store.conn.execute("UPDATE omdb_cache SET fetched_at = fetched_at - 7200", []).unwrap();
+
+        assert!(store.get_omdb_cache("ch1", 3 * 3600).unwrap().is_some());
+        assert!(store.get_omdb_cache("ch1", 3600).unwrap().is_none());
     }
 
     #[test]
@@ -3439,6 +3487,20 @@ mod tests {
 
         let s1 = store.list_downloads_for_series("S1").unwrap();
         assert_eq!(s1.len(), 2);
+    }
+
+    #[test]
+    fn each_kind_of_download_reads_back_as_saved() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let records = [
+            movie_record("m1", "m1"),
+            episode_record("e1", "S1", DownloadStatus::Completed),
+            recording_record("r1", "live-1", DownloadStatus::Scheduled),
+        ];
+        for record in records {
+            store.upsert_download(&record).unwrap();
+            assert_eq!(store.get_download(&record.id).unwrap(), Some(record));
+        }
     }
 
     #[test]
@@ -4522,6 +4584,19 @@ mod tests {
         assert_eq!(
             playback_key("Homeland", "series", None, None, None).as_deref(),
             Some("series:homeland")
+        );
+    }
+
+    #[test]
+    fn a_stored_season_and_episode_win_over_the_name() {
+        assert_eq!(
+            playback_key("Pilot", "series", Some("Example Show".into()), Some(1), Some(1)).as_deref(),
+            Some("series:example show:s1e1")
+        );
+        assert_eq!(
+            playback_key("Example Show S09E09", "series", Some("Example Show".into()), Some(2), Some(5))
+                .as_deref(),
+            Some("series:example show:s2e5")
         );
     }
 

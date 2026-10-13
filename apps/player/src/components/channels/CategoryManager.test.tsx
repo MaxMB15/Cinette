@@ -76,12 +76,12 @@ const onHierarchyChanged = vi.fn();
 /** Lets the hierarchy load, and any handler waiting on the mocks, finish. */
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
-const renderManager = async (saved: GroupHierarchyEntry[] = hierarchy) => {
+const renderManager = async (saved: GroupHierarchyEntry[] = hierarchy, contentType = "movie") => {
 	vi.mocked(getGroupHierarchy).mockResolvedValue(saved);
 	render(
 		<CategoryManager
 			providerId="p1"
-			contentType="movie"
+			contentType={contentType}
 			channels={channels}
 			onClose={onClose}
 			onHierarchyChanged={onHierarchyChanged}
@@ -383,6 +383,19 @@ describe("CategoryManager moving a group", () => {
 });
 
 describe("CategoryManager with Gemini", () => {
+	it.each([
+		["live", "channel names"],
+		["movie", "movie titles"],
+		["series", "series titles"],
+	])("says what the AI actions send for %s", async (contentType, names) => {
+		await renderManager(hierarchy, contentType);
+		expect(
+			screen.getByText(
+				`AI actions send your group and category names, and a few ${names} from each group, to Google Gemini.`
+			)
+		).toBeInTheDocument();
+	});
+
 	it("asks for a key before sorting anything", async () => {
 		vi.mocked(getGeminiApiKey).mockResolvedValue(null);
 		await renderManager();

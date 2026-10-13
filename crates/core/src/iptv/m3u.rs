@@ -350,20 +350,23 @@ pub fn parse_series_name(name: &str) -> Option<(String, u32, u32)> {
             let mut season: u32 = 0;
             let mut digit_count = 0usize;
             while j < b.len() && b[j].is_ascii_digit() {
-                season = season * 10 + (b[j] - b'0') as u32;
+                // More than three digits isn't a season, so saturating is enough.
+                season = season.saturating_mul(10).saturating_add((b[j] - b'0') as u32);
                 digit_count += 1;
                 j += 1;
             }
             if (1..=3).contains(&digit_count) && j < b.len() && (b[j] == b'E' || b[j] == b'e') {
                 let mut k = j + 1;
-                let mut episode: u32 = 0;
+                // None once the number no longer fits.
+                let mut episode = Some(0u32);
                 let mut ep_digits = 0usize;
                 while k < b.len() && b[k].is_ascii_digit() {
-                    episode = episode * 10 + (b[k] - b'0') as u32;
+                    episode = episode
+                        .and_then(|e| e.checked_mul(10)?.checked_add((b[k] - b'0') as u32));
                     ep_digits += 1;
                     k += 1;
                 }
-                if ep_digits >= 1 {
+                if ep_digits >= 1 && let Some(episode) = episode {
                     let title = name[..s_pos].trim().to_string();
                     if !title.is_empty() {
                         return Some((title, season, episode));
@@ -971,5 +974,68 @@ http://stream.example.com/ch2
     fn a_code_without_a_show_or_an_episode_number_is_not_an_episode() {
         assert_eq!(parse_series_name("S01E02"), None);
         assert_eq!(parse_series_name("Doctor Who S01Extras"), None);
+    }
+
+    #[test]
+    fn an_episode_code_is_s_then_a_number_then_e_then_a_number() {
+        for name in ["Example Show S01E02", "example show s01e02", "Example Show S1e2"] {
+            assert!(has_episode_code(name), "{name:?}");
+        }
+        for name in [
+            // A number and an E without an S before them.
+            "Room 12E3",
+            "Example Show SE02",
+            "Example Show S01",
+            "Example Show S01E",
+            "Example Show S01Extras",
+            // Something other than an E after the season.
+            "Example S2 24/7",
+        ] {
+            assert!(!has_episode_code(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn series_names_read_long_seasons_and_lower_case_codes() {
+        assert_eq!(
+            parse_series_name("Example Show S12E03"),
+            Some(("Example Show".to_string(), 12, 3))
+        );
+        assert_eq!(
+            parse_series_name("example show s02e10 finale"),
+            Some(("example show".to_string(), 2, 10))
+        );
+    }
+
+    #[test]
+    fn series_names_without_a_whole_episode_code_have_no_episode() {
+        // A season of four digits reads as a year, not a season.
+        for name in ["Example Show S01", "Example S2 24/7", "Example Show S2024E01"] {
+            assert_eq!(parse_series_name(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn series_codes_with_numbers_too_big_to_hold_are_skipped() {
+        // The limit is on the value, not on the number of digits.
+        for name in ["Example Show S01E4294967295", "Example Show S01E00004294967295"] {
+            assert_eq!(
+                parse_series_name(name),
+                Some(("Example Show".to_string(), 1, u32::MAX)),
+                "{name:?}"
+            );
+        }
+        for name in [
+            "Example Show S01E4294967296",
+            "Example Show S01E12345678901",
+            "Example S12345678901",
+        ] {
+            assert_eq!(parse_series_name(name), None, "{name:?}");
+        }
+        // A later code still counts.
+        assert_eq!(
+            parse_series_name("Example S01E99999999999 S01E02"),
+            Some(("Example S01E99999999999".to_string(), 1, 2))
+        );
     }
 }

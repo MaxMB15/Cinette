@@ -661,6 +661,53 @@ mod tests {
     }
 
     #[test]
+    fn offsets_with_minutes_are_read() {
+        // Noon at an hour and a half ahead of UTC is 10:30 UTC.
+        assert_eq!(parse_epg_time("20260304120000 +0130"), 1772625600 - 90 * 60);
+        // Noon at three and a half hours behind UTC is 15:30 UTC.
+        assert_eq!(
+            parse_epg_time("20260304120000 -0330"),
+            1772625600 + 210 * 60
+        );
+    }
+
+    #[test]
+    fn only_an_icon_sets_the_channel_logo() {
+        let data = parse_epg(
+            r#"<tv><channel id="c1"><display-name>One</display-name><icon src="http://example.com/one.png"/><image src="http://example.com/banner.png"/><url/></channel></tv>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            data.channels[0].icon_url.as_deref(),
+            Some("http://example.com/one.png")
+        );
+    }
+
+    #[test]
+    fn a_field_tag_in_the_wrong_place_does_not_hide_the_field_inside_it() {
+        // A program's tags only count inside a program, and `display-name`
+        // only inside a channel. Valid XMLTV never nests them like this, but
+        // nesting is the only place a misplaced tag shows, because the next
+        // channel or program clears whatever it wrote.
+        let data = parse_epg(
+            r#"<tv>
+  <channel id="c1"><title><display-name>One</display-name></title></channel>
+  <channel id="c2"><desc><display-name>Two</display-name></desc></channel>
+  <channel id="c3"><category><display-name>Three</display-name></category></channel>
+  <programme channel="c1"><display-name><title>News</title></display-name></programme>
+</tv>"#,
+        )
+        .unwrap();
+        let names: Vec<&str> = data
+            .channels
+            .iter()
+            .map(|c| c.display_name.as_str())
+            .collect();
+        assert_eq!(names, ["One", "Two", "Three"]);
+        assert_eq!(data.programs[0].title, "News");
+    }
+
+    #[test]
     fn times_behind_utc_are_moved_forward() {
         // Noon at five hours behind UTC is 17:00 UTC.
         assert_eq!(

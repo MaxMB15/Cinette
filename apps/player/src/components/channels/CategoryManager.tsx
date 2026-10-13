@@ -40,6 +40,12 @@ const SAMPLES_PER_GROUP = 5;
 const SAMPLES_PER_CANDIDATE = 3;
 // Each category owns a block of sort orders, so its groups stay together in their own order.
 const CATEGORY_SORT_BLOCK = 1000;
+// What to call the names Gemini gets from each group, by content type.
+const SAMPLE_NAMES: Record<string, string> = {
+	live: "channel names",
+	movie: "movie titles",
+	series: "series titles",
+};
 
 interface GroupChipProps {
 	name: string;
@@ -645,7 +651,8 @@ export const CategoryManager = ({
 						</button>
 					</div>
 					<p className="text-xs text-muted-foreground mb-2">
-						AI will look at all other groups and move ones that belong in this category.
+						Google Gemini looks at the other groups and moves the ones that belong in
+						this category.
 					</p>
 					<div className="flex gap-2">
 						<Button
@@ -677,10 +684,16 @@ export const CategoryManager = ({
 			)}
 
 			{/* Footer */}
-			<div className="px-4 py-2.5 border-t border-border text-[10px] text-muted-foreground">
-				Click a group to move it &middot;{" "}
-				<span className="bg-primary/20 text-primary px-1 rounded text-[9px]">user</span> =
-				manually placed (preserved on re-categorize)
+			<div className="px-4 py-2.5 border-t border-border text-[10px] text-muted-foreground space-y-0.5">
+				<p>
+					Click a group to move it &middot;{" "}
+					<span className="bg-primary/20 text-primary px-1 rounded text-[9px]">user</span>{" "}
+					= manually placed (preserved on re-categorize)
+				</p>
+				<p>
+					AI actions send your group and category names, and a few{" "}
+					{SAMPLE_NAMES[contentType] ?? "names"} from each group, to Google Gemini.
+				</p>
 			</div>
 		</div>
 	);
