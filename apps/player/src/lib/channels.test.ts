@@ -171,6 +171,17 @@ describe("dedupeByTitle", () => {
 		expect(result[0].logoUrl).toBe("http://logo.png");
 	});
 
+	it("keeps the first entry's logo", () => {
+		const film = (id: string, logoUrl?: string) =>
+			makeChannel({ id, name: "The Matrix", logoUrl, contentType: "movie" });
+		const result = dedupeByTitle([
+			film("m-1", "http://example.test/first.png"),
+			film("m-2", "http://example.test/second.png"),
+			film("m-3"),
+		]);
+		expect(result[0].logoUrl).toBe("http://example.test/first.png");
+	});
+
 	it("merges sources from all entries", () => {
 		const ch1 = makeChannel({
 			id: "m-1",
@@ -349,5 +360,10 @@ describe("seriesTitleOf", () => {
 
 	it("keeps a name without a code whole", () => {
 		expect(seriesTitleOf({ name: "Planet Earth Special" })).toBe("Planet Earth Special");
+	});
+
+	it("trims the spaces around the title", () => {
+		expect(seriesTitleOf({ name: "  Breaking Bad S01E02" })).toBe("Breaking Bad");
+		expect(seriesTitleOf({ name: " Planet Earth Special  " })).toBe("Planet Earth Special");
 	});
 });

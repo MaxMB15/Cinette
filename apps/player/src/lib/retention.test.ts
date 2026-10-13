@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { deleteAt, deleteLabel, summarize } from "./retention";
+import { RETENTION_OPTIONS, deleteAt, deleteLabel, summarize } from "./retention";
 import type { DownloadRecord } from "./types";
 
 const DAY = 24 * 60 * 60;
@@ -24,6 +24,18 @@ const finished = (overrides: Partial<DownloadRecord> = {}): DownloadRecord => ({
 	keep: false,
 	lastPlayedAt: null,
 	...overrides,
+});
+
+describe("RETENTION_OPTIONS", () => {
+	it("offers never, then 7, 14, 30 and 90 days", () => {
+		expect(RETENTION_OPTIONS.map((o) => o.value)).toEqual([0, 7, 14, 30, 90]);
+	});
+
+	it("labels each choice with its number of days", () => {
+		for (const { value, label } of RETENTION_OPTIONS) {
+			expect(label).toBe(value === 0 ? "Never" : `${value} days`);
+		}
+	});
 });
 
 describe("deleteAt", () => {

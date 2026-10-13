@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
 	DEFAULT_MARGINS,
-	NO_GUIDE_LENGTH,
+	MARGIN_OPTIONS,
 	dayLabel,
 	errorSummary,
 	formatAt,
@@ -63,6 +63,57 @@ describe("margins", () => {
 		localStorage.setItem("mvp_recording_end_late", "-3");
 		expect(readMargins()).toEqual(DEFAULT_MARGINS);
 	});
+
+	it("keep each margin under its own key, so an update keeps the user's choice", () => {
+		localStorage.setItem("mvp_recording_start_early", "10");
+		localStorage.setItem("mvp_recording_end_late", "30");
+		expect(readMargins()).toEqual({ before: 10, after: 30 });
+		writeMargins({ before: 1, after: 15 });
+		expect(localStorage.getItem("mvp_recording_start_early")).toBe("1");
+		expect(localStorage.getItem("mvp_recording_end_late")).toBe("15");
+	});
+
+	it("go up to an hour", () => {
+		localStorage.setItem("mvp_recording_start_early", "60");
+		localStorage.setItem("mvp_recording_end_late", "61");
+		expect(readMargins()).toEqual({ before: 60, after: DEFAULT_MARGINS.after });
+		writeMargins({ before: 90, after: -4 });
+		expect(readMargins()).toEqual({ before: 60, after: 0 });
+	});
+
+	it("fall back to the defaults when storage is blocked", () => {
+		const blocked = () => {
+			throw new DOMException("blocked", "SecurityError");
+		};
+		const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+		try {
+			expect(() => writeMargins({ before: 10, after: 30 })).not.toThrow();
+			expect(readMargins()).toEqual(DEFAULT_MARGINS);
+		} finally {
+			getItem.mockRestore();
+			setItem.mockRestore();
+		}
+	});
+
+	it("offer choices from none to half an hour, each of which is kept", () => {
+		expect(MARGIN_OPTIONS.map((o) => o.label)).toEqual([
+			"None",
+			"1 minute",
+			"2 minutes",
+			"5 minutes",
+			"10 minutes",
+			"15 minutes",
+			"30 minutes",
+		]);
+		const values = MARGIN_OPTIONS.map((o) => o.value);
+		expect(values).toContain(DEFAULT_MARGINS.before);
+		expect(values).toContain(DEFAULT_MARGINS.after);
+		for (const value of values) {
+			writeMargins({ before: value, after: value });
+			expect(readMargins()).toEqual({ before: value, after: value });
+		}
+	});
 });
 
 describe("recording windows", () => {
@@ -80,11 +131,20 @@ describe("recording windows", () => {
 	it("record now runs an hour without a guide", () => {
 		expect(recordNowWindow(now, null, DEFAULT_MARGINS)).toEqual({
 			startAt: now,
-			endAt: now + NO_GUIDE_LENGTH,
+			endAt: now + 60 * MIN,
 			program: null,
 		});
 		const over = prog(now - 60 * MIN, now - MIN);
-		expect(recordNowWindow(now, over, DEFAULT_MARGINS).endAt).toBe(now + NO_GUIDE_LENGTH);
+		expect(recordNowWindow(now, over, DEFAULT_MARGINS).endAt).toBe(now + 60 * MIN);
+	});
+
+	it("record now treats a program that ends this second as over", () => {
+		const ending = prog(now - 60 * MIN, now);
+		expect(recordNowWindow(now, ending, DEFAULT_MARGINS)).toEqual({
+			startAt: now,
+			endAt: now + 60 * MIN,
+			program: null,
+		});
 	});
 
 	it("a program gets the margins on both sides", () => {
@@ -126,6 +186,21 @@ describe("recording windows", () => {
 		expect(parseLocalDateTime("2026-01-05T24:00")).toBeNull();
 		expect(parseLocalDateTime("2026-1-5T7:09")).toBeNull();
 	});
+
+	it("reads the last minute of a day but not a 60th minute", () => {
+		expect(parseLocalDateTime("2026-01-05T23:59")).toBe(local(2026, 1, 5, 23, 59));
+		expect(parseLocalDateTime("2026-01-05T10:60")).toBeNull();
+	});
+
+	it("reads only a whole value in the input's format", () => {
+		expect(parseLocalDateTime("2026-01-05T07:09:30")).toBeNull();
+		expect(parseLocalDateTime("12026-01-05T07:09")).toBeNull();
+		expect(parseLocalDateTime("2026-01-05T07:09 ")).toBeNull();
+	});
+
+	it("doesn't read a year before 100 as one in the 1900s", () => {
+		expect(parseLocalDateTime("0099-01-05T07:09")).toBeNull();
+	});
 });
 
 describe("overlaps", () => {
@@ -137,6 +212,10 @@ describe("overlaps", () => {
 		const done = rec({ id: "c", status: "completed" });
 		const movie = rec({ id: "d", kind: "movie" });
 		expect(overlapping(window, [running, later, done, movie])).toEqual([running]);
+	});
+
+	it("skips a recording that has no start time", () => {
+		expect(overlapping(window, [rec({ startAt: null })])).toEqual([]);
 	});
 
 	it("says recordings of one channel become one, even after the channel's id moved", () => {
@@ -154,6 +233,18 @@ describe("overlaps", () => {
 		expect(overlapWarning(window, channel, [other, { ...other, id: "x" }], PROVIDERS)).toMatch(
 			/^It overlaps 2 other recordings from the same provider\./
 		);
+	});
+
+	it("gives both warnings when both apply", () => {
+		const other = rec({ id: "b", sourceChannelId: "xt-1-xt-7", title: "Sports One" });
+		expect(overlapWarning(window, channel, [rec(), other], PROVIDERS)).toBe(
+			"It overlaps a recording of this channel, so the two become one recording. It overlaps a recording of Sports One from the same provider. Many providers allow one stream at a time, so one of them may fail."
+		);
+	});
+
+	it("leaves out a recording that doesn't know its channel", () => {
+		const unknown = rec({ sourceChannelId: null, title: "Sports One" });
+		expect(overlapWarning(window, channel, [unknown], PROVIDERS)).toBeNull();
 	});
 
 	it("leaves out recordings from other providers", () => {
@@ -175,6 +266,11 @@ describe("finding a channel's recordings", () => {
 		expect(providerOf("m3u-2-ch-0", PROVIDERS)).toBeUndefined();
 	});
 
+	it("picks the longest provider id whatever the order", () => {
+		expect(providerOf("xt-1-2-xt-0", ["xt-1", "xt-1-2"])).toBe("xt-1-2");
+		expect(providerOf("xt-1-2-xt-0", ["xt-1-2", "xt-1"])).toBe("xt-1-2");
+	});
+
 	it("matches a recording by its channel's name within one provider", () => {
 		expect(isRecordingOf(rec(), channel, PROVIDERS)).toBe(true);
 		// A refresh gave the channel another id.
@@ -188,6 +284,13 @@ describe("finding a channel's recordings", () => {
 		// Without a known provider the ids have to match.
 		expect(isRecordingOf(rec({ sourceChannelId: "zz-xt-0" }), channel, PROVIDERS)).toBe(false);
 		expect(isRecordingOf(rec({ kind: "movie" }), channel, PROVIDERS)).toBe(false);
+		expect(isRecordingOf(rec({ sourceChannelId: null }), channel, PROVIDERS)).toBe(false);
+	});
+
+	it("matches by id alone on a channel whose provider isn't known", () => {
+		const m3u = { id: "m3u-9-ch-0", name: "City News" };
+		expect(isRecordingOf(rec({ sourceChannelId: "m3u-9-ch-0" }), m3u, PROVIDERS)).toBe(true);
+		expect(isRecordingOf(rec({ sourceChannelId: "m3u-9-ch-4" }), m3u, PROVIDERS)).toBe(false);
 	});
 
 	it("a program is covered by a recording of its channel that spans it", () => {
@@ -197,6 +300,18 @@ describe("finding a channel's recordings", () => {
 		expect(
 			recordingOfProgram([{ ...scheduled, status: "missed" }], prog(1_000, 2_000), 0)
 		).toBeUndefined();
+	});
+
+	it("a recording without margins covers its program", () => {
+		const exact = rec({ startAt: 1_000, endAt: 2_000 });
+		expect(recordingOfProgram([exact], prog(1_000, 2_000), 0)).toBe(exact);
+	});
+
+	it("a recording that starts after the program does not cover it", () => {
+		const late = rec({ startAt: 1_200, endAt: 2_300 });
+		expect(recordingOfProgram([late], prog(1_000, 2_000), 0)).toBeUndefined();
+		const unknown = rec({ startAt: null, endAt: 2_300 });
+		expect(recordingOfProgram([unknown], prog(1_000, 2_000), 0)).toBeUndefined();
 	});
 
 	it("a recording started late still covers the program on air", () => {
@@ -219,6 +334,12 @@ describe("describing recordings", () => {
 		expect(recordingProgress(r, 500)).toBe(0);
 		expect(recordingProgress(r, 9_000)).toBe(1);
 		expect(recordingProgress(rec({ startAt: null }), 1_500)).toBe(0);
+		expect(recordingProgress(rec({ endAt: null }), 1_500)).toBe(0);
+	});
+
+	it("a recording with no length has no progress", () => {
+		const r = rec({ status: "recording", startAt: 1_000, endAt: 1_000 });
+		expect(recordingProgress(r, 1_500)).toBe(0);
 	});
 
 	it("sorts running, then waiting by start, then the rest newest first", () => {
@@ -244,6 +365,20 @@ describe("describing recordings", () => {
 		expect(dayLabel(local(2026, 10, 13, 0, 30), now)).toBe("Tomorrow");
 		expect(dayLabel(local(2026, 10, 11, 20), now)).toBe("Yesterday");
 		expect(dayLabel(local(2026, 10, 20, 20), now)).not.toMatch(/Today|Tomorrow|Yesterday/);
+	});
+
+	it("names the weekday, day and month of a date further away", () => {
+		const now = local(2026, 10, 12, 9);
+		const at = local(2026, 10, 20, 20);
+		const label = dayLabel(at, now);
+		expect(label).toBe(
+			new Date(at * 1000).toLocaleDateString([], {
+				weekday: "short",
+				day: "numeric",
+				month: "short",
+			})
+		);
+		expect(label).not.toContain("2026");
 	});
 
 	it("names the end's day when a recording runs past midnight", () => {
@@ -278,6 +413,14 @@ describe("describing recordings", () => {
 		expect(recordingStatus(rec({ status: "failed" }), now)).toBe("Failed");
 	});
 
+	it("says a running recording without an end is recording", () => {
+		expect(recordingStatus(rec({ status: "recording", endAt: null }), 1_500)).toBe("Recording");
+	});
+
+	it("says nothing for a status a recording doesn't have", () => {
+		expect(recordingStatus(rec({ status: "queued" }), 1_500)).toBe("");
+	});
+
 	it("colors a recording that ended early or is trying again amber", () => {
 		expect(recordingStatusColor(rec())).toBe("text-blue-400");
 		expect(recordingStatusColor(rec({ error: "x" }))).toBe("text-amber-500");
@@ -285,6 +428,14 @@ describe("describing recordings", () => {
 			"text-amber-500"
 		);
 		expect(recordingStatusColor(rec({ status: "completed" }))).toBe("text-muted-foreground");
+	});
+
+	it("colors running and failed recordings red and missed ones amber", () => {
+		expect(recordingStatusColor(rec({ status: "recording" }))).toBe("text-red-400");
+		expect(recordingStatusColor(rec({ status: "failed" }))).toBe("text-red-400");
+		expect(recordingStatusColor(rec({ status: "missed" }))).toBe("text-amber-500");
+		expect(recordingStatusColor(rec({ status: "recording", error: "x" }))).toBe("text-red-400");
+		expect(recordingStatusColor(rec({ status: "failed", error: "x" }))).toBe("text-red-400");
 	});
 
 	it("keeps the plain words of an error and leaves ffmpeg's for the tooltip", () => {
@@ -306,12 +457,22 @@ describe("describing recordings", () => {
 		});
 		expect(recordingName(done)).toBe("City News 2026-10-12 20.00");
 		expect(recordingName(rec())).toBe("City News");
-		expect(recordingChannel(done)).toMatchObject({
+		expect(recordingChannel(done)).toEqual({
 			id: "rec-1",
 			name: "City News 2026-10-12 20.00",
 			url: "/downloads/recordings/City News 2026-10-12 20.00.ts",
+			groupTitle: "Recordings",
+			isFavorite: false,
 			contentType: "recording",
 			sources: [],
 		});
+	});
+
+	it("drops only the file's extension from the name", () => {
+		const done = rec({
+			status: "completed",
+			destPath: "/downloads/recordings/News.ts Live 2026-10-12 20.00.TS",
+		});
+		expect(recordingName(done)).toBe("News.ts Live 2026-10-12 20.00");
 	});
 });

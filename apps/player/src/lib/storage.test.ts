@@ -63,4 +63,22 @@ describe("storage helpers", () => {
 		expect(() => removeStorage("k")).not.toThrow();
 		expect(console.warn).toHaveBeenCalledOnce();
 	});
+
+	it("names the key and passes on the error in each warning", () => {
+		const blocked = new DOMException("blocked", "SecurityError");
+		const fail = () => {
+			throw blocked;
+		};
+		vi.spyOn(Storage.prototype, "getItem").mockImplementation(fail);
+		vi.spyOn(Storage.prototype, "setItem").mockImplementation(fail);
+		vi.spyOn(Storage.prototype, "removeItem").mockImplementation(fail);
+		readStorage("splash-shown", "session");
+		writeStorage("donation-last-shown", "1");
+		removeStorage("donation-last-shown");
+		expect(vi.mocked(console.warn).mock.calls).toEqual([
+			[expect.stringContaining("could not read splash-shown"), blocked],
+			[expect.stringContaining("could not write donation-last-shown"), blocked],
+			[expect.stringContaining("could not remove donation-last-shown"), blocked],
+		]);
+	});
 });
