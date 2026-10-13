@@ -34,7 +34,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
             echo "Release v${VERSION} already exists; skipping create."
           else
@@ -132,13 +132,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           # productName contains spaces ("Max Video Player"), so the bundler emits
           # "Max Video Player.app" / "Max Video Player_<v>_aarch64.dmg". Release
           # assets keep the space-free "MaxVideoPlayer" prefix so download URLs
           # and latest.json stay stable.
-          PRODUCT_NAME=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['productName'])")
+          PRODUCT_NAME=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['productName'])")
           echo "PRODUCT_NAME=$PRODUCT_NAME" >> "$GITHUB_ENV"
 
           BUNDLE_DIR="target/release/bundle/macos"
@@ -239,7 +239,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
           BUNDLE_DIR="target/release/bundle"
@@ -333,7 +333,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
 
           MACOS_SIG=""
           if [[ -f sigs/macos-updater-sig/MaxVideoPlayer.app.tar.gz.sig ]]; then

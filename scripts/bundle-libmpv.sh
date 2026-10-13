@@ -101,7 +101,7 @@ done
 # Homebrew bottles target the macOS version of the machine that builds them, so
 # a newer runner quietly raises the real minimum (v0.5.0 needed macOS 26.4 while
 # declaring 10.15). Check everything we ship against minimumSystemVersion.
-TAURI_CONF="$WORKSPACE_ROOT/apps/desktop/src-tauri/tauri.conf.json"
+TAURI_CONF="$WORKSPACE_ROOT/apps/player/src-tauri/tauri.conf.json"
 MIN_MACOS=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["bundle"]["macOS"]["minimumSystemVersion"])' "$TAURI_CONF")
 
 minos_of() {
@@ -133,7 +133,7 @@ if [[ -f "$TESSERACT" ]]; then
 fi
 
 too_new=""
-for f in "$BINARY" "$LIBS_BUNDLE"/*.dylib "$WORKSPACE_ROOT"/apps/desktop/src-tauri/binaries/max-video-player-ffmpeg-*; do
+for f in "$BINARY" "$LIBS_BUNDLE"/*.dylib "$WORKSPACE_ROOT"/apps/player/src-tauri/binaries/max-video-player-ffmpeg-*; do
   [[ -f "$f" ]] || continue
   minos=$(minos_of "$f")
   [[ -n "$minos" ]] || continue

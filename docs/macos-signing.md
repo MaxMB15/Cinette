@@ -175,5 +175,5 @@ With the certificate in your login keychain:
 export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 # Optional, to notarize as well:
 export APPLE_API_KEY=ABC123DEFG APPLE_API_ISSUER=... APPLE_API_KEY_PATH=~/keys/AuthKey_ABC123DEFG.p8
-cd apps/desktop && pnpm tauri build
+cd apps/player && pnpm tauri build
 ```

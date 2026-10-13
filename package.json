@@ -8,15 +8,15 @@
 		"prepare": "husky",
 		"format": "prettier --write \"apps/**/*.{ts,tsx,js,jsx,json,css,md}\"",
 		"format:check": "prettier --check \"apps/**/*.{ts,tsx,js,jsx,json,css,md}\"",
-		"lint": "eslint apps/desktop/src",
-		"lint:fix": "eslint apps/desktop/src --fix",
-		"dev:desktop": "pnpm --filter ./apps/desktop tauri dev",
-		"dev:desktop:web": "pnpm --filter ./apps/desktop dev",
-		"build:desktop": "pnpm --filter ./apps/desktop build",
-		"tauri:desktop": "pnpm --filter ./apps/desktop tauri",
-		"test": "cargo test -p mvp-core && pnpm --filter ./apps/desktop test",
+		"lint": "eslint apps/player/src",
+		"lint:fix": "eslint apps/player/src --fix",
+		"dev:desktop": "pnpm --filter ./apps/player tauri dev",
+		"dev:desktop:web": "pnpm --filter ./apps/player dev",
+		"build:desktop": "pnpm --filter ./apps/player build",
+		"tauri:desktop": "pnpm --filter ./apps/player tauri",
+		"test": "cargo test -p mvp-core && pnpm --filter ./apps/player test",
 		"test:core": "cargo test -p mvp-core",
-		"test:desktop": "pnpm --filter ./apps/desktop test"
+		"test:desktop": "pnpm --filter ./apps/player test"
 	},
 	"lint-staged": {
 		"apps/**/*.{ts,tsx,js,jsx,json,css,md}": [

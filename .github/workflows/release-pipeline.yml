@@ -195,7 +195,7 @@ jobs:
           RELEASE_TYPE: ${{ inputs.release_type }}
         run: |
           set -euo pipefail
-          CURRENT=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          CURRENT=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           export CURRENT
           NEW=$(python3 - <<'PY'
           import os
@@ -227,10 +227,10 @@ jobs:
           NEW: ${{ steps.ver.outputs.new }}
         run: |
           set -euo pipefail
-          git add apps/desktop/src-tauri/tauri.conf.json \
-                  apps/desktop/src-tauri/Cargo.toml \
-                  apps/desktop/src-tauri/gen/apple/project.yml \
-                  apps/desktop/src-tauri/gen/apple/max-video-player_iOS/Info.plist \
+          git add apps/player/src-tauri/tauri.conf.json \
+                  apps/player/src-tauri/Cargo.toml \
+                  apps/player/src-tauri/gen/apple/project.yml \
+                  apps/player/src-tauri/gen/apple/max-video-player_iOS/Info.plist \
                   Cargo.lock
           # Stop if the bump changed a file the list above leaves out.
           if ! git diff --quiet; then

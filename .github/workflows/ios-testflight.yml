@@ -143,7 +143,7 @@ jobs:
       # --build-number would append a fourth to the app version. The run
       # number goes up with every run, which TestFlight needs.
       - name: Build for the App Store
-        working-directory: apps/desktop
+        working-directory: apps/player
         run: >-
           pnpm tauri ios build --target aarch64 --export-method app-store-connect --ci
           --config '{"bundle":{"iOS":{"bundleVersion":"${{ github.run_number }}"}}}'
@@ -154,7 +154,7 @@ jobs:
           API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           set -euo pipefail
-          ipa=$(find apps/desktop/src-tauri/gen/apple/build -name '*.ipa' -print -quit)
+          ipa=$(find apps/player/src-tauri/gen/apple/build -name '*.ipa' -print -quit)
           if [[ -z "$ipa" ]]; then
             echo "::error::The build didn't produce an .ipa."
             exit 1

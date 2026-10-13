@@ -4,11 +4,11 @@
 
 """
 Bump the app version in:
-  - apps/desktop/src-tauri/tauri.conf.json
-  - apps/desktop/src-tauri/Cargo.toml (the [package] version line)
-  - apps/desktop/src-tauri/gen/apple/project.yml (CFBundleShortVersionString
+  - apps/player/src-tauri/tauri.conf.json
+  - apps/player/src-tauri/Cargo.toml (the [package] version line)
+  - apps/player/src-tauri/gen/apple/project.yml (CFBundleShortVersionString
     and CFBundleVersion)
-  - apps/desktop/src-tauri/gen/apple/max-video-player_iOS/Info.plist (the same
+  - apps/player/src-tauri/gen/apple/max-video-player_iOS/Info.plist (the same
     two keys)
 
 A Tauri iOS build writes the version from tauri.conf.json into Info.plist, and
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import NamedTuple, NoReturn
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC_TAURI = ROOT / "apps/desktop/src-tauri"
+SRC_TAURI = ROOT / "apps/player/src-tauri"
 APPLE = SRC_TAURI / "gen/apple"
 
 # ASCII digits only, without leading zeros.

@@ -124,7 +124,7 @@ are in Settings → Environments → `macos-signing`.
 The updater key pair is created once:
 
 ```bash
-cd apps/desktop && pnpm tauri signer generate -w ~/.tauri/maxvideoplayer.key
+cd apps/player && pnpm tauri signer generate -w ~/.tauri/maxvideoplayer.key
 ```
 
 The public key goes in `plugins.updater.pubkey` in `tauri.conf.json`. Keep the

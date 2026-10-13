@@ -71,7 +71,7 @@ it exists. Fetch it once:
 ./scripts/fetch-ffmpeg.sh
 ```
 
-It downloads a static ffmpeg to `apps/desktop/src-tauri/binaries/` as
+It downloads a static ffmpeg to `apps/player/src-tauri/binaries/` as
 `max-video-player-ffmpeg-<target>`, where the target is your Rust target triple. The
 Linux packages install it in `/usr/bin`, so it has its own name rather than `ffmpeg`.
 If your `binaries/` folder still has an older `ffmpeg-<target>`, run the script again.
@@ -111,7 +111,7 @@ each version the error names, as `name@version`, to `minimumReleaseAgeExclude` o
 that pull request's branch.
 
 If you installed the packages with npm before the switch to pnpm, delete
-`node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
+`node_modules` and `apps/player/node_modules` before the first `pnpm install`.
 pnpm doesn't remove the packages that npm put at the top level of
 `node_modules`, and they can hide a missing dependency that CI then catches.
 
@@ -127,8 +127,8 @@ cargo check               # the whole Rust workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-For a frontend coverage report, run `pnpm --filter ./apps/desktop test:coverage`
-and open `apps/desktop/coverage/index.html`.
+For a frontend coverage report, run `pnpm --filter ./apps/player test:coverage`
+and open `apps/player/coverage/index.html`.
 
 Rust coverage needs [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and
 LLVM's tools. Install them once:
@@ -146,7 +146,7 @@ cargo llvm-cov --workspace --open
 
 The plugin and app tests load libmpv, so set the library path from the setup steps
 above first. The app's tests also need the [ffmpeg sidecar](#the-ffmpeg-sidecar)
-and a built frontend in `apps/desktop/dist`, which `pnpm build:desktop` makes.
+and a built frontend in `apps/player/dist`, which `pnpm build:desktop` makes.
 The Rust figure depends on the platform, because `macos.rs` and `linux.rs` in the
 mpv plugin each build only on their own system.
 
@@ -166,7 +166,7 @@ lint-staged, then runs the tests.
 ## Production build
 
 ```bash
-cd apps/desktop && pnpm tauri build
+cd apps/player && pnpm tauri build
 ```
 
 On macOS, `scripts/bundle-libmpv.sh` runs as Tauri's `beforeBundleCommand`. It copies
@@ -202,7 +202,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 - TypeScript and React use arrow functions everywhere, never `function`
   declarations. `export default function` is the one exception.
 - Prettier formats `apps/**`; run `pnpm format`.
-- All `invoke()` calls to the Rust backend live in `apps/desktop/src/lib/tauri.ts`.
+- All `invoke()` calls to the Rust backend live in `apps/player/src/lib/tauri.ts`.
 - On macOS, AppKit and OpenGL calls must run on the main thread. See
   [architecture.md](architecture.md#macos).
 
