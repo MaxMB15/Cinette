@@ -54,7 +54,7 @@ if ! git diff --quiet HEAD -- "${BUMPED[@]}"; then
 fi
 # Other local edits stay out of the release. Remember them so the check after
 # the bump can tell them apart from files the bump changed.
-DIRTY_BEFORE=$(git diff --name-only HEAD)
+DIRTY_BEFORE=$(git diff --name-only)
 
 # ── Read current version from tauri.conf.json ────────────────────────────────
 CURRENT=$(python3 -c "import json,sys; print(json.load(open('$TAURI_CONF'))['version'])")
@@ -101,13 +101,16 @@ echo "  Updated Cargo.lock"
 cd "$REPO_ROOT"
 git add "${BUMPED[@]}"
 # Stop if the bump changed a file that BUMPED leaves out.
-LEFT_OUT=$(comm -13 <(printf '%s\n' "$DIRTY_BEFORE" | LC_ALL=C sort) \
-                    <(git diff --name-only | LC_ALL=C sort))
+# comm must compare in the same order sort used, whatever the user's locale.
+LEFT_OUT=$(LC_ALL=C comm -13 <(printf '%s\n' "$DIRTY_BEFORE" | LC_ALL=C sort) \
+                             <(git diff --name-only | LC_ALL=C sort))
 if [[ -n "$LEFT_OUT" ]]; then
   echo ""
   echo "  ERROR: the version bump changed files that aren't staged:"
   printf '%s\n' "$LEFT_OUT" | sed 's/^/    /'
-  echo "  Nothing was committed."
+  # The check before the prompts showed these files matched HEAD.
+  git checkout HEAD -- "${BUMPED[@]}"
+  echo "  Nothing was committed, and the version files are back as they were."
   echo ""
   exit 1
 fi
