@@ -10,7 +10,8 @@
 		"tauri": "tauri",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"test:coverage": "vitest run --coverage"
+		"test:coverage": "vitest run --coverage",
+		"test:mutation": "stryker run"
 	},
 	"dependencies": {
 		"@radix-ui/react-slider": "^1.4.7",
@@ -30,6 +31,8 @@
 		"tailwind-merge": "^3.7.0"
 	},
 	"devDependencies": {
+		"@stryker-mutator/core": "10.0.0",
+		"@stryker-mutator/vitest-runner": "10.0.0",
 		"@tailwindcss/vite": "^4.3.3",
 		"@tauri-apps/cli": "^2.12.1",
 		"@testing-library/dom": "^10.4.2",
