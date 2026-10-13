@@ -132,8 +132,8 @@ impl MpvEngine {
     /// the reconnect / auto-recovery paths). For non-seekable inputs mpv
     /// silently ignores `start=`, so it's always safe to pass through.
     ///
-    /// The reconnect watcher's retries send the same command through
-    /// `crate::loadfile`, which also fits it to the loaded mpv version.
+    /// This and the reconnect watcher's retries both go through
+    /// `crate::loadfile`, which picks the form the loaded mpv accepts.
     pub fn loadfile(&self, url: &str, start_pos: Option<f64>) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
         let resume_opt = resume_option(start_pos);

@@ -72,7 +72,7 @@ The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian 13 and curren
 
 **Fedora.** `sudo dnf install ./MaxVideoPlayer_x86_64.rpm`
 
-Both packages need WebKitGTK 2.40 or later, which all of these releases have. If yours is older, `apt` and `dnf` update it along with the app.
+Both packages need WebKitGTK 2.40 or later, which all of these releases have.
 
 Ubuntu 22.04 and releases based on it, such as Linux Mint 21 and Pop!_OS 22.04, aren't supported. Their libmpv is too old for the app, and their glibc is too old for the AppImage.
 
