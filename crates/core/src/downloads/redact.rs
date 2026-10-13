@@ -463,6 +463,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_keep_keeps_each_separator_and_no_empty_parts() {
+        assert_eq!(
+            split_keep(" alice  hunter2\t"),
+            [" ", "alice", " ", " ", "hunter2", "\t"]
+        );
+        assert!(split_keep("").is_empty());
+    }
+
+    #[test]
     fn redacts_path_credentials() {
         let url = "http://host:8080/movie/john/s3cret/12345.mkv";
         let out = redact_credentials(url);
@@ -702,6 +711,58 @@ mod tests {
     }
 
     #[test]
+    fn scrub_log_line_hides_a_query_after_a_login_that_ends_the_address() {
+        // The query after the ID runs to the next whitespace, as it does when
+        // the address holds it.
+        for (line, expected) in [
+            (
+                "http://host/alice/hun ter2/12345.ts?token=abc next",
+                "http://host/…/12345.ts?… next",
+            ),
+            (
+                "http://host/alice/hun ter2/12345.ts?auth=hunter2 next",
+                "http://host/…/12345.ts?… next",
+            ),
+            (
+                "http://host/alice/hun ter2/12345#t=hunter2 next",
+                "http://host/…/12345#… next",
+            ),
+        ] {
+            let out = scrub_log_line(line);
+            assert_eq!(out, expected, "{line}");
+            assert!(!out.contains("ter2"), "{out}");
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_hides_logins_with_any_odd_character() {
+        // The app encodes these characters, but an M3U playlist can hold them
+        // as they are.
+        let shapes = [
+            "{login}/12345.ts",
+            "live/{login}/12345.ts",
+            "movie/{login}/777.mkv",
+            "series/{login}/4242.mp4",
+            "timeshift/{login}/60/2026-10-12:20-00/9.ts",
+            "{login}/12345.m3u8?x=1",
+        ];
+        for c in " \t?#\"'()[]<>{}|\\^`.,;:!&=@%+*$~".chars() {
+            for login in [format!("al{c}ice/hunter2"), format!("alice/hun{c}ter2")] {
+                for shape in shapes {
+                    let path = shape.replace("{login}", &login);
+                    for (before, after) in [("load url=", " failed"), ("(", ")."), ("", "")] {
+                        let line = format!("{before}http://host:8080/{path}{after}");
+                        let out = scrub_log_line(&line);
+                        for part in ["al", "ice", "hun", "ter2"] {
+                            assert!(!out.contains(part), "{line:?} -> {out:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scrub_looks_for_the_rest_of_a_login_only_where_it_can_be() {
         // On the next line.
         assert_eq!(
@@ -733,6 +794,18 @@ mod tests {
         assert_eq!(
             redact_credentials("http://host/live/john/pa ss/1.ts"),
             "http://host/live/***/*** ss/1.ts"
+        );
+    }
+
+    #[test]
+    fn scrub_drops_only_the_brackets_that_close_outside_the_address() {
+        assert_eq!(
+            scrub_urls("[see http://host/1.ts]"),
+            "[see http://host/1.ts]"
+        );
+        assert_eq!(
+            scrub_urls("[http://host/wiki/Foo_[bar]]"),
+            "[http://host/…]"
         );
     }
 
