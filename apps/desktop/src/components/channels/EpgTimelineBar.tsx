@@ -179,7 +179,7 @@ export const EpgTimelineBar = ({
 						return (
 							<span
 								key={t}
-								className={`absolute -translate-x-1/2 tabular-nums select-none ${
+								className={`absolute -translate-x-1/2 whitespace-nowrap tabular-nums select-none ${
 									t % 3600 === 0
 										? "text-[9px] text-muted-foreground/65 font-medium"
 										: "text-[8px] text-muted-foreground/40"

@@ -124,6 +124,25 @@ describe("EpgTimelineBar", () => {
 		expect(screen.queryByText(formatHHMM(T + 5400))).toBeNull();
 	});
 
+	it("keeps each time label on one line", () => {
+		// Near the right edge, a label has less room than its text, and a 12-hour
+		// time like "06:30 AM" would wrap there.
+		render(
+			<EpgTimelineBar
+				programmes={programmes}
+				now={now}
+				windowStart={windowStart}
+				windowEnd={windowEnd}
+				showLabels
+			/>
+		);
+		for (const halfHours of [1, 2, 3, 4, 5]) {
+			expect(screen.getByText(formatHHMM(T + halfHours * 1800))).toHaveClass(
+				"whitespace-nowrap"
+			);
+		}
+	});
+
 	it("has no time labels unless asked", () => {
 		render(
 			<EpgTimelineBar

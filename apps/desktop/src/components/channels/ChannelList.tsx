@@ -921,7 +921,7 @@ export const ChannelList = () => {
 							return (
 								<span
 									key={t}
-									className={`absolute -translate-x-1/2 tabular-nums select-none ${
+									className={`absolute -translate-x-1/2 whitespace-nowrap tabular-nums select-none ${
 										isHour
 											? "text-[9px] text-muted-foreground/75 font-medium"
 											: "text-[8px] text-muted-foreground/40"

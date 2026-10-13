@@ -285,7 +285,7 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 
 											{/* Time */}
 											<span
-												className={`text-xs tabular-nums shrink-0 w-12 ${
+												className={`text-xs tabular-nums shrink-0 min-w-12 whitespace-nowrap ${
 													isPast && !isCurrent
 														? "text-muted-foreground/60"
 														: "text-muted-foreground"

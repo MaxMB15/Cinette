@@ -588,6 +588,18 @@ describe("ChannelList live rows", () => {
 		expect(screen.getByText("▾")).toBeInTheDocument();
 	});
 
+	it("keeps each time on the axis on one line", async () => {
+		freezeClock();
+		await renderList();
+		// Near the right edge, the last label has less room than its text, and a
+		// 12-hour time like "06:30 AM" would wrap there.
+		for (const minutes of [30, 60, 90, 120, 150]) {
+			expect(screen.getByText(formatHHMM(NOW - 3600 + minutes * 60))).toHaveClass(
+				"whitespace-nowrap"
+			);
+		}
+	});
+
 	it("has no time axis on the poster tabs", async () => {
 		freezeClock();
 		saveBrowseTab("movie");

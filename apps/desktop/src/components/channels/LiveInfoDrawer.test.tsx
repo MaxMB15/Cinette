@@ -143,6 +143,18 @@ describe("LiveInfoDrawer", () => {
 		}
 	});
 
+	it("keeps each start time on one line", async () => {
+		// A 12-hour time like "02:15 AM" is wider than the 48 px a 24-hour time
+		// needs, so the column grows to fit it instead of having a fixed width.
+		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+		await flush();
+		for (const prog of [breakfast, midday, film, evening]) {
+			const time = within(row(prog.title)).getByText(formatHHMM(prog.startTime));
+			expect(time).toHaveClass("min-w-12", "whitespace-nowrap");
+			expect(time).not.toHaveClass("w-12");
+		}
+	});
+
 	it("marks the programme on now and ticks off the ones that ended", async () => {
 		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
 		await flush();
