@@ -19,6 +19,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - On a window wide enough for more than 6 hours of TV guide, programs near its left and right edges were missing. The guide now loads everything it shows (#235).
 - The TV guide now shows the lines it was meant to have. The channel list has a faint line at every half hour beside its hour lines, and each channel's programs have lines at every hour and half hour and a thin light edge along the top (#236).
 - On phones and tablets, the remove buttons in Recently played, History and the pinned groups only showed on hover, which a touch screen doesn't have. They're always shown there now. The unpin button on a pinned group also shows when you reach it with the Tab key, like the other two (#236).
+- While the Channels page stayed open, the TV guide stayed on the hours from when the page opened, until you resized the window or left the page. After a while it showed programs that had already ended, and the red line for now only moved when something else on the page changed. The guide now moves along with the clock and loads more programs as it goes (#237).
+- The Favorites tab showed no TV guide for its live channels until you'd opened the Live tab. It now loads the guide itself (#237).
 
 ## [0.6.0] - 2026-10-12
 
