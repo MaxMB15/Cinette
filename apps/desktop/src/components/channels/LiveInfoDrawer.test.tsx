@@ -143,6 +143,16 @@ describe("LiveInfoDrawer", () => {
 		}
 	});
 
+	it("keeps each start time on one line", async () => {
+		// A 12-hour time like "02:15 AM" is wider than the 24-hour ones the
+		// column was sized for.
+		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+		await flush();
+		expect(within(row(midday.title)).getByText(formatHHMM(midday.startTime))).toHaveClass(
+			"whitespace-nowrap"
+		);
+	});
+
 	it("marks the programme on now and ticks off the ones that ended", async () => {
 		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
 		await flush();
