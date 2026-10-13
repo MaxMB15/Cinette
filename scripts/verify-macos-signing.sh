@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/retry.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/retry.sh"
+
 notarized=false
 if [[ "${1:-}" == "--notarized" ]]; then
   notarized=true
@@ -71,10 +74,12 @@ fi
 echo "All $count binaries in $(basename "$app") are signed by team $team with a timestamp."
 
 if $notarized; then
-  xcrun stapler validate "$app"
+  # stapler validate looks the ticket up on Apple's server, so a dropped
+  # connection fails it.
+  retry 5 20 xcrun stapler validate "$app"
   spctl --assess --type execute --verbose=2 "$app"
   if [[ -n "$dmg" ]]; then
-    xcrun stapler validate "$dmg"
+    retry 5 20 xcrun stapler validate "$dmg"
     spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
   fi
 fi

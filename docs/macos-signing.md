@@ -29,6 +29,8 @@ When the secrets are set, the macOS release job:
 5. Checks that every binary in the app is signed by the same team with a timestamp,
    that executables use the hardened runtime, and that Gatekeeper accepts the app and
    the DMG ([`scripts/verify-macos-signing.sh`](../scripts/verify-macos-signing.sh)).
+   Checking a stapled ticket also asks Apple's server, so that check gets the same
+   retries.
 
 The secrets live in the `macos-signing` environment, which needs a reviewer's
 approval and only accepts `main`, `dev` and `v*` tags. Each release and each manual
