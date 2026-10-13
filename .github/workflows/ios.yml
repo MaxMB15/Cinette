@@ -8,7 +8,7 @@ on:
     paths:
       - "apps/player/**"
       - "crates/**"
-      - ".cargo/**"
+      - ".cargo/config*"
       - ".github/actions/setup-frontend/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -21,7 +21,7 @@ on:
     paths:
       - "apps/player/**"
       - "crates/**"
-      - ".cargo/**"
+      - ".cargo/config*"
       - ".github/actions/setup-frontend/**"
       - "Cargo.toml"
       - "Cargo.lock"
