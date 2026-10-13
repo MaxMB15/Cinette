@@ -2187,12 +2187,12 @@ fn enrich_stale_series(channels: &mut [Channel]) {
         if ch.content_type != "series" {
             continue;
         }
-        if ch.series_title.is_none() || ch.season.is_none() || ch.episode.is_none() {
-            if let Some((title, season, episode)) = parse_series_name(&ch.name) {
-                ch.series_title = Some(title);
-                ch.season = Some(season);
-                ch.episode = Some(episode);
-            }
+        if (ch.series_title.is_none() || ch.season.is_none() || ch.episode.is_none())
+            && let Some((title, season, episode)) = parse_series_name(&ch.name)
+        {
+            ch.series_title = Some(title);
+            ch.season = Some(season);
+            ch.episode = Some(episode);
         }
     }
 }
@@ -4941,12 +4941,10 @@ mod tests {
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
             )
             .unwrap();
-        let names = stmt
-            .query_map([], |row| row.get(0))
+        stmt.query_map([], |row| row.get(0))
             .unwrap()
             .collect::<SqlResult<_>>()
-            .unwrap();
-        names
+            .unwrap()
     }
 
     /// Every row of every table, to check that a failed write changed nothing.

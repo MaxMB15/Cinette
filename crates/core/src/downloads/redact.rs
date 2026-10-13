@@ -290,10 +290,10 @@ fn rest_of_xtream_path(url: &str, after: &str) -> usize {
         if after.as_bytes()[slash] != b'/' {
             return 0;
         }
-        if is_xtream_login(&format!("{path}{}", &after[..slash])) {
-            if let Some(id_len) = stream_id_len(&after[slash + 1..]) {
-                return slash + 1 + id_len;
-            }
+        if is_xtream_login(&format!("{path}{}", &after[..slash]))
+            && let Some(id_len) = stream_id_len(&after[slash + 1..])
+        {
+            return slash + 1 + id_len;
         }
         search = slash + 1;
     }
