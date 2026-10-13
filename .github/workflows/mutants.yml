@@ -86,6 +86,8 @@ jobs:
           changed apps/player/src-tauri && packages="$packages -p max-video-player"
           {
             echo "packages=$packages"
+            # The last crate listed has the most to build.
+            echo "cache=${packages##* -p }"
             echo "rust=$([ -n "$packages" ] && echo true || echo false)"
             echo "system=$(grep -qE 'tauri-plugin-mpv|max-video-player' <<< "$packages" && echo true || echo false)"
             echo "app=$(grep -q max-video-player <<< "$packages" && echo true || echo false)"
@@ -100,12 +102,13 @@ jobs:
         with:
           toolchain: stable
 
+      # Restores what the weekly run on dev saved for that crate.
       - name: Rust cache
         if: steps.changes.outputs.rust == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants-diff
+          shared-key: mutants-${{ steps.changes.outputs.cache }}
           save-if: false
 
       - name: Install system libraries
