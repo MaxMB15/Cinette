@@ -39,9 +39,10 @@ permissions:
 
 # The event is part of the group, so the weekly start job doesn't cancel a
 # manual run on main. The run it starts on dev does cancel an older manual run
-# there, since both test the same branch.
+# of every crate there, since both test the same branch. A manual run of one
+# crate only cancels an older run of the same crate.
 concurrency:
-  group: mutants-${{ github.event_name }}-${{ github.ref }}
+  group: mutants-${{ github.event_name }}-${{ github.ref }}-${{ inputs.package }}
   cancel-in-progress: true
 
 env:
