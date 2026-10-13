@@ -110,10 +110,17 @@ old, its CI install fails. Re-run the job once that version is three days old, o
 each version the error names, as `name@version`, to `minimumReleaseAgeExclude` on
 that pull request's branch.
 
-If you installed the packages with npm before the switch to pnpm, delete
-`node_modules` and `apps/player/node_modules` before the first `pnpm install`.
-pnpm doesn't remove the packages that npm put at the top level of
-`node_modules`, and they can hide a missing dependency that CI then catches.
+If you installed the packages with npm before the switch to pnpm, delete the
+top-level `node_modules` before the first `pnpm install`. pnpm doesn't remove the
+packages that npm put there, and they can hide a missing dependency that CI then
+catches.
+
+The app lived in `apps/desktop` before it moved to `apps/player`. A checkout from
+before the move keeps the files git ignores in `apps/desktop`, such as
+`node_modules`, `dist` and the ffmpeg sidecar. Move `apps/desktop/src-tauri/binaries`
+to `apps/player/src-tauri/` or run `./scripts/fetch-ffmpeg.sh` again, then delete
+`apps/desktop` and run `pnpm install`. `.gitignore` lists the old folder, so git
+won't offer to add what's left in it.
 
 ## Tests and checks
 

@@ -12,6 +12,10 @@ apps/player/src-tauri/gen/*
 !apps/player/src-tauri/gen/apple/
 apps/player/src-tauri/target/
 
+# The app's folder before it moved to apps/player. Older checkouts keep their
+# ignored files in it until it's deleted.
+/apps/desktop/
+
 # IDE
 .vscode/
 .idea/
