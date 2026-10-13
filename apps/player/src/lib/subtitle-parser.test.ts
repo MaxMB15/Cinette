@@ -60,6 +60,17 @@ describe("parseSrt", () => {
 		expect(performance.now() - started).toBeLessThan(1000);
 	});
 
+	it("keeps a long run of < after a tag quickly", () => {
+		// A walk that looks for a > from every < in the run would take seconds
+		// here, and a pattern that backtracks over it far longer.
+		const run = "<".repeat(1_000_000);
+		const started = performance.now();
+		expect(parseSrt(`00:00:01,000 --> 00:00:02,000\n<i>Hi</i> ${run}\n`)).toEqual([
+			{ start: 1, end: 2, text: `Hi ${run}` },
+		]);
+		expect(performance.now() - started).toBeLessThan(1000);
+	});
+
 	it("joins multi-line text with newline", () => {
 		const srt = `1\n00:00:01,000 --> 00:00:04,000\nLine one\nLine two\n\n`;
 		const cues = parseSrt(srt);
