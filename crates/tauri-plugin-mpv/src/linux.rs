@@ -169,12 +169,11 @@ struct SessionState {
 }
 
 impl SessionState {
-    /// Where the subsurface goes, relative to the window surface.
-    fn position(&self) -> (i32, i32) {
-        (
-            self.frame.0 + self.csd_offset.0,
-            self.frame.1 + self.csd_offset.1,
-        )
+    /// Where the subsurface goes, relative to the window surface, for a
+    /// state's `frame` and `csd_offset`. It takes the two fields rather than
+    /// the state, so tests can call it without an EGL display.
+    fn position(frame: (i32, i32, i32, i32), csd_offset: (i32, i32)) -> (i32, i32) {
+        (frame.0 + csd_offset.0, frame.1 + csd_offset.1)
     }
 }
 
@@ -463,7 +462,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         {
             let mut state = lock_or_recover(&inner.state);
             state.frame = (x as i32, y as i32, wi, hi);
-            let (ax, ay) = state.position();
+            let (ax, ay) = SessionState::position(state.frame, state.csd_offset);
             // Only a new size needs a new EGL surface. The frontend also
             // calls this when the video moves without resizing, and
             // recreating the surface then would flash a black frame.
@@ -495,7 +494,7 @@ impl PlatformRenderer for LinuxGlRenderer {
         inner.video_active.store(visible, Ordering::Release);
 
         if visible {
-            let (x, y) = state.position();
+            let (x, y) = SessionState::position(state.frame, state.csd_offset);
             inner.wayland.subsurface.set_position(x, y);
             let (_, _, w, h) = state.frame;
             if w > 0 && h > 0 {
@@ -602,7 +601,7 @@ fn follow_decorations(inner: &Inner, offset: (i32, i32)) {
     if state.frame.2 < 1 || !inner.video_active.load(Ordering::Acquire) {
         return;
     }
-    let (x, y) = state.position();
+    let (x, y) = SessionState::position(state.frame, state.csd_offset);
     inner.wayland.subsurface.set_position(x, y);
     inner.wayland.child_surface.commit();
     let _ = inner.wayland.conn.flush();
@@ -1114,7 +1113,7 @@ fn wayland_in_env(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_software_gl, wayland_in_env};
+    use super::{is_software_gl, wayland_in_env, SessionState};
     use std::ffi::OsString;
     use std::path::Path;
 
@@ -1210,5 +1209,13 @@ mod tests {
         assert!(!is_software_gl("NVIDIA GeForce RTX 3060/PCIe/SSE2"));
         // virgl draws on the host GPU.
         assert!(!is_software_gl("virgl (NVIDIA GeForce RTX 3060)"));
+    }
+
+    #[test]
+    fn the_video_moves_with_the_page_on_the_window_surface() {
+        let frame = (10, 20, 640, 360);
+        assert_eq!(SessionState::position(frame, (0, 0)), (10, 20));
+        // GTK's shadow and title bar push the page right and down.
+        assert_eq!(SessionState::position(frame, (3, 40)), (13, 60));
     }
 }
