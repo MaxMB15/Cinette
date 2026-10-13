@@ -296,7 +296,7 @@ fn rest_of_xtream_path(url: &str, after: &str) -> usize {
         if is_xtream_login(&format!("{path}{}", &after[..slash]))
             && let Some(id_len) = stream_id_len(&after[slash + 1..])
         {
-            longest = slash + 1 + id_len;
+            longest = longest.max(slash + 1 + id_len);
         }
         search = slash + 1;
     }
@@ -752,6 +752,23 @@ mod tests {
             assert!(!out.contains("9876"), "{line:?} -> {out:?}");
             assert!(!out.contains("ice"), "{line:?} -> {out:?}");
             assert!(out.ends_with(" failed"), "{line:?} -> {out:?}");
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_keeps_the_longer_of_two_logins() {
+        // The first ID runs on past `?` to the next space, and the second
+        // stops at a `/`. Keeping the second would show the rest.
+        for line in [
+            "load http://host/timeshift/al ice/12?x/60/2026-10-12:20-00/9.ts?auth=s3cret failed",
+            "load http://host/live/al ice/9876?x/12/s3cret failed",
+            "{\"url\":\"http://host/live/al ice/12?x/345.ts\",\"sig\":\"s3cret\"}",
+            "load http://host/movie/hun ter2/12345.mkv?sig=ab/12/s3cret failed",
+        ] {
+            let out = scrub_log_line(line);
+            assert!(!out.contains("s3cret"), "{line:?} -> {out:?}");
+            assert!(!out.contains("ice"), "{line:?} -> {out:?}");
+            assert!(!out.contains("ter2"), "{line:?} -> {out:?}");
         }
     }
 
