@@ -3,25 +3,44 @@
 # partially staged files in a patch while the tasks run, and puts them back
 # afterwards, even when a task fails. A git error or a killed run can leave
 # the patch behind without saying where, so this hook looks for one before
-# and after the run.
+# and after the run. lint-staged 16 kept its patch in another place and left
+# it there after a failed task. A worktree that hasn't run pnpm install since
+# 17 came in still has 16, so the hook looks in both places.
+top=$(git rev-parse --show-toplevel)
 dir=$(git rev-parse --path-format=absolute --git-path lint-staged)
-left=$(find "$dir" -name unstaged.patch 2>/dev/null || true)
+old=$(git rev-parse --path-format=absolute --git-path lint-staged_unstaged.patch)
 
+leftover() {
+	find "$dir" -name unstaged.patch 2>/dev/null || true
+	if [ -e "$old" ]; then
+		printf '%s\n' "$old"
+	fi
+}
+
+# git apply skips files outside the folder it runs in, so the command it
+# prints runs from the top of the worktree wherever it's pasted.
+explain() {
+	echo "Put them back with" >&2
+	printf '%s\n' "$1" | while IFS= read -r patch; do
+		printf "  git -C '%s' apply -v --whitespace=nowarn --recount --unidiff-zero '%s'\n" \
+			"$top" "$patch" >&2
+	done
+	echo "If git status shows a conflict, the patch is already in that file, so" >&2
+	echo "resolve the conflict instead. Check git diff, then delete the patch." >&2
+}
+
+left=$(leftover)
 if [ -n "$left" ]; then
 	echo "pre-commit: an earlier run stopped before restoring unstaged changes." >&2
-	echo "They are saved in:" >&2
-	echo "$left" >&2
-	echo "Put each one back with" >&2
-	echo "git apply --whitespace=nowarn --recount --unidiff-zero <patch>" >&2
-	echo "and then delete its folder." >&2
+	explain "$left"
 	exit 1
 fi
 
 if ! pnpm exec lint-staged --no-stash; then
-	left=$(find "$dir" -name unstaged.patch 2>/dev/null || true)
+	left=$(leftover)
 	if [ -n "$left" ]; then
-		echo "pre-commit: unstaged changes weren't restored. They are saved in:" >&2
-		echo "$left" >&2
+		echo "pre-commit: unstaged changes weren't restored." >&2
+		explain "$left"
 	fi
 	exit 1
 fi
