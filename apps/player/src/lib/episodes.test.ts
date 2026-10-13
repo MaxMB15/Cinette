@@ -32,6 +32,42 @@ describe("dedupeEpisodes", () => {
 		expect(result[0].url).toBe("http://a/a.mkv");
 		expect(result[0].sources).toEqual(["http://b/1.mkv"]);
 	});
+
+	it("folds copies of an episode whose names differ", () => {
+		const other = { ...ep("b", 1, 1, "http://b/1.mkv"), name: "Show - 1x01" };
+		const result = dedupeEpisodes([ep("a", 1, 1), other, ep("c", 1, 2)]);
+		expect(result.map((e) => e.id)).toEqual(["a", "c"]);
+	});
+
+	it("keeps unnumbered episodes apart when their names differ", () => {
+		const extra = (id: string, name: string): Channel => ({
+			...ep(id, 1, 1),
+			name,
+			episode: undefined,
+		});
+		const result = dedupeEpisodes([
+			extra("a", "Show Behind the Scenes"),
+			extra("b", "Show Bloopers"),
+		]);
+		expect(result.map((e) => e.id)).toEqual(["a", "b"]);
+	});
+
+	it("takes the logo of a later copy when the first has none", () => {
+		const later = { ...ep("b", 1, 1, "http://b/1.mkv"), logoUrl: "http://example.test/b.png" };
+		expect(dedupeEpisodes([ep("a", 1, 1), later])[0].logoUrl).toBe("http://example.test/b.png");
+	});
+
+	it("keeps the first copy's logo", () => {
+		const first = { ...ep("a", 1, 1), logoUrl: "http://example.test/a.png" };
+		const withLogo = {
+			...ep("b", 1, 1, "http://b/1.mkv"),
+			logoUrl: "http://example.test/b.png",
+		};
+		const without = ep("c", 1, 1, "http://c/1.mkv");
+		expect(dedupeEpisodes([first, withLogo, without])[0].logoUrl).toBe(
+			"http://example.test/a.png"
+		);
+	});
 });
 
 describe("findEpisode", () => {
@@ -52,5 +88,20 @@ describe("findEpisode", () => {
 	it("returns null when the episode isn't listed", () => {
 		expect(findEpisode(list, "stale-id", "Show (2011) S03E01 Title")).toBeNull();
 		expect(findEpisode(list, "stale-id", "No episode number")).toBeNull();
+	});
+
+	it.each([
+		{ what: "no season or episode number", season: undefined, episode: undefined },
+		{ what: "a season but no episode number", season: 1, episode: undefined },
+		{ what: "an episode number but no season", season: undefined, episode: 3 },
+	])("returns the entry with that id as listed when it has $what", ({ season, episode }) => {
+		const extra = (id: string, name: string): Channel => ({
+			...ep(id, 1, 1),
+			name,
+			season,
+			episode,
+		});
+		const extras = [extra("x1", "Show Making Of"), extra("x2", "Show Deleted Scenes")];
+		expect(findEpisode(extras, "x2", "Show Deleted Scenes")).toEqual(extras[1]);
 	});
 });
