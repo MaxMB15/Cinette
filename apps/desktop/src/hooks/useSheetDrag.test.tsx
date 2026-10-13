@@ -339,6 +339,19 @@ describe("useSheetDrag", () => {
 		expect(onClose).toHaveBeenCalledOnce();
 	});
 
+	it("lets a later click through when none followed the mouse drag", async () => {
+		const onClose = vi.fn();
+		const { getByText } = render(<Sheet onClose={onClose} />);
+		const header = getByText("Header");
+		mouseDrag(header, [0, 40, 80, 130]);
+		// The click a drag causes comes in the same task, so wait for the next one.
+		await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+		act(() => {
+			header.click();
+		});
+		expect(onClose).toHaveBeenCalledTimes(2);
+	});
+
 	it("doesn't drag from a dialog opened in the header", () => {
 		const onClose = vi.fn();
 		const { getByTestId, getByText } = render(<Sheet onClose={onClose} />);

@@ -164,51 +164,36 @@ export const ChannelList = () => {
 	// EPG search: one result per channel (earliest matching program)
 	const [epgSearchResults, setEpgSearchResults] = useState<EpgSearchResult[]>([]);
 
-	// Container width → dynamic EPG window + grid column calculation
-	const [containerWidth, setContainerWidth] = useState(0);
-	/** Root div ref — always in DOM; drives ResizeObserver for dynamic EPG window. */
-	const rootRef = useRef<HTMLDivElement>(null);
+	// Container width → dynamic EPG window + grid column calculation. null
+	// until the root div has been measured.
+	const [containerWidth, setContainerWidth] = useState<number | null>(null);
 	/** Virtualizer scroll ref — kept for TanStack Virtual scroll element. */
 	const parentRef = useRef<HTMLDivElement>(null);
 
-	const measureRoot = useCallback(() => {
-		const el = rootRef.current;
-		if (el) setContainerWidth(el.clientWidth);
+	/**
+	 * Ref callback for the root div. While the channels load, or before any
+	 * arrive, the list shows a spinner or a message in its place and the div
+	 * loses this ref. This measures the div each time it gets the ref back,
+	 * then follows its size.
+	 */
+	const measureRoot = useCallback((el: HTMLDivElement | null) => {
+		if (!el) return;
+		setContainerWidth(el.clientWidth);
+		const observer = new ResizeObserver(([entry]) =>
+			setContainerWidth(entry.contentRect.width)
+		);
+		observer.observe(el);
+		return () => observer.disconnect();
 	}, []);
 
-	// Measure container width: ResizeObserver on root + window resize fallback
-	useEffect(() => {
-		measureRoot();
-		// Re-measure after layout settles (fonts, flex, etc.)
-		const rafId = requestAnimationFrame(measureRoot);
-
-		const el = rootRef.current;
-		const obs = el
-			? new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width))
-			: null;
-		if (el && obs) obs.observe(el);
-		window.addEventListener("resize", measureRoot);
-
-		return () => {
-			cancelAnimationFrame(rafId);
-			obs?.disconnect();
-			window.removeEventListener("resize", measureRoot);
-		};
-	}, [measureRoot]);
-
-	// Re-measure when switching tabs (the grid area may have a different width)
-	useEffect(() => {
-		measureRoot();
-	}, [activeTab, measureRoot]);
-
-	// Compute dynamic EPG display window: now line at 1/3 mark, 100–200 px per hour
+	// The guide's window, PX_PER_HOUR wide per hour and never under 3 hours,
+	// with a third of it before now.
 	const { windowStart, windowEnd } = useMemo(() => {
 		const now = nowSeconds();
-		// containerWidth is content-box width (inside px-3 padding).
-		// Rows inside have no extra padding, so timeline = containerWidth minus the two fixed columns.
-		const effectiveWidth = containerWidth > 0 ? containerWidth : 400;
-		// rootRef measures the full component width; the scroll container inside has px-3 (12px)
-		// padding on each side, so subtract 24px to get the actual content width.
+		// containerWidth is the whole component's width. The scroll container
+		// inside has px-3, 12px on each side, and each row has two fixed
+		// columns, so the timeline gets what's left.
+		const effectiveWidth = containerWidth || 400;
 		const timelinePx = Math.max(
 			200,
 			effectiveWidth - 24 - ROW_CARD_LEFT_WIDTH - RIGHT_BUTTONS_PX
@@ -343,12 +328,21 @@ export const ChannelList = () => {
 		bySeries,
 	]);
 
-	// Fetch EPG for all live channels: 2h past + 4h future = 6h window (generous for wider displays)
+	// Load the guide for all live channels, at least 2 hours back and 4 ahead,
+	// and the whole window when the list is wide enough to show more. Whole
+	// hours, so resizing only loads it again when the window passes one. It
+	// waits for the first measurement so a wide list doesn't load twice.
+	const measured = containerWidth !== null;
+	const epgHoursBack = Math.max(2, Math.ceil(windowTotal / 3 / 3600));
+	const epgHoursAhead = Math.max(4, Math.ceil((windowTotal * 2) / 3 / 3600));
 	useEffect(() => {
-		if (activeTab !== "live" || channels.length === 0) return;
+		if (activeTab !== "live" || channels.length === 0 || !measured) return;
 		const now = nowSeconds();
-		getEpgForLiveChannels(now - 7200, now + 14400)
+		// A load for an older width can finish after the current one.
+		let stale = false;
+		getEpgForLiveChannels(now - epgHoursBack * 3600, now + epgHoursAhead * 3600)
 			.then((progs) => {
+				if (stale) return;
 				const map = new Map<string, EpgProgram[]>();
 				for (const p of progs) {
 					const list = map.get(p.channelId) ?? [];
@@ -358,7 +352,10 @@ export const ChannelList = () => {
 				setEpgMap(map);
 			})
 			.catch(() => {});
-	}, [activeTab, channels.length]);
+		return () => {
+			stale = true;
+		};
+	}, [activeTab, channels.length, measured, epgHoursBack, epgHoursAhead]);
 
 	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.
@@ -539,7 +536,7 @@ export const ChannelList = () => {
 
 	const isGrid = activeTab !== "live";
 	// Dynamic grid columns: fit as many ~180 px-wide cards as possible, stretch via 1fr.
-	const gridWidth = (containerWidth > 0 ? containerWidth : 800) - 24; // minus px-3 padding
+	const gridWidth = (containerWidth || 800) - 24; // minus px-3 padding
 	const GAP_PX = 12;
 	const MIN_CARD_W = 180;
 	const columnsPerRow = isGrid
@@ -632,7 +629,7 @@ export const ChannelList = () => {
 	const timelineLeft = ROW_CARD_LEFT_WIDTH;
 
 	return (
-		<div ref={rootRef} className="flex flex-col h-full">
+		<div ref={measureRoot} className="flex flex-col h-full">
 			{/* Tab bar. The tabs scroll sideways when they don't fit; on phones the
 			    search and filters move to a row of their own below them. */}
 			<div

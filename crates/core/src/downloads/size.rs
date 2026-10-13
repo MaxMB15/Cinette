@@ -28,10 +28,10 @@ pub fn media_size(url: &str, status: StatusCode, headers: &HeaderMap) -> Option<
     if !status.is_success() || is_list_url(url) {
         return None;
     }
-    if let Some(content_type) = headers.get(CONTENT_TYPE) {
-        if is_text_type(content_type.to_str().unwrap_or_default()) {
-            return None;
-        }
+    if let Some(content_type) = headers.get(CONTENT_TYPE)
+        && is_text_type(content_type.to_str().unwrap_or_default())
+    {
+        return None;
     }
     let length: i64 = headers
         .get(CONTENT_LENGTH)?

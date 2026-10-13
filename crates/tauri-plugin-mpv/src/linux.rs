@@ -570,10 +570,10 @@ impl Drop for LinuxGlRenderer {
 /// keep the render context alive after mpv is destroyed.
 fn request_render(weak: Weak<Inner>) {
     gtk::glib::idle_add_once(move || {
-        if let Some(alive) = weak.upgrade() {
-            if alive.valid.load(Ordering::Acquire) {
-                render_frame(&alive);
-            }
+        if let Some(alive) = weak.upgrade()
+            && alive.valid.load(Ordering::Acquire)
+        {
+            render_frame(&alive);
         }
     });
 }

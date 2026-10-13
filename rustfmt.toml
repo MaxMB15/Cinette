@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Keep formatting as it was before the move to edition 2024. The 2024 style
+# would reorder imports and rewrap code across the whole workspace.
+style_edition = "2021"

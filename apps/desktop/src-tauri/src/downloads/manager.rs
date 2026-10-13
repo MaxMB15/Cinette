@@ -689,11 +689,8 @@ pub(crate) fn update_record<R: Runtime>(
 
 fn current_status<R: Runtime>(app: &AppHandle<R>, id: &str) -> Option<DownloadStatus> {
     let app_state = app.state::<AppState>();
-    let status = {
-        let cache = app_state.cache.lock().ok()?;
-        cache.get_download(id).ok().flatten().map(|r| r.status)
-    };
-    status
+    let cache = app_state.cache.lock().ok()?;
+    cache.get_download(id).ok().flatten().map(|r| r.status)
 }
 
 /// What deleting a download does when its file is already gone.
@@ -813,10 +810,8 @@ pub(crate) fn set_keep(
     let found = cache
         .set_download_keep(id, keep)
         .map_err(|e| e.to_string())?;
-    if !found {
-        if let Some(pending) = deleting.ids().get_mut(id) {
-            *pending = Some(keep);
-        }
+    if !found && let Some(pending) = deleting.ids().get_mut(id) {
+        *pending = Some(keep);
     }
     Ok(())
 }

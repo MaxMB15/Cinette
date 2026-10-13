@@ -1,10 +1,15 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/core",
     "crates/tauri-plugin-mpv",
     "apps/desktop/src-tauri",
 ]
+
+[workspace.package]
+# The oldest Rust that builds the app. The Tauri crates need 1.90, and
+# resolver 3 picks dependency versions that build on it.
+rust-version = "1.90"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
