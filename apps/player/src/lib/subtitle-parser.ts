@@ -19,14 +19,10 @@ const VTT_TIME = `${NUMBER}:(?:${NUMBER}:)?${NUMBER}\\.${NUMBER}`;
  * hold position values such as "X1:100", or another arrow.
  */
 const SRT_TIMING = new RegExp(`^(${SRT_TIME})${SPACES}-->(${SRT_TIME})`);
-/** The time a WebVTT timing line starts with. */
-const VTT_START = new RegExp(`^${VTT_TIME}`);
-/**
- * The time right after the first arrow in a WebVTT timing line. FFmpeg looks
- * for that arrow anywhere after the start time, and ignores the rest of the
- * line, which can hold settings such as "align:start".
- */
-const VTT_END = new RegExp(`^${/(?:(?!-->)[^])*-->/.source}(${VTT_TIME})`);
+/** A WebVTT time at the start of a string. */
+const VTT_TIME_FIRST = new RegExp(`^${VTT_TIME}`);
+/** Only the spaces sscanf skips, or nothing. */
+const ONLY_SPACES = new RegExp(`^${SPACES}$`);
 
 /** A cue number as FFmpeg reads it with C's strtol, which takes a sign. */
 const CUE_NUMBER = new RegExp(`^${SPACES}([-+]?\\d+)\\s*$`);
@@ -42,16 +38,38 @@ const parseTimestamp = (time: string): number => {
 	return parts.slice(0, -1).reduce((total, part) => total * 60 + part, 0) + ms / 1000;
 };
 
-/** The start and end of a timing line, or null when the line is text. */
-const parseTiming = (line: string, webvtt: boolean): { start: number; end: number } | null => {
+/**
+ * Whether a WebVTT line is where FFmpeg looks for a timing line, first in its
+ * block or right after the cue's name.
+ */
+const startsBlock = (lines: string[], at: number): boolean =>
+	lines[at - 1] === "" || (lines[at - 2] === "" && !lines[at - 1].includes("-->"));
+
+/**
+ * The start and end of a timing line, or null when the line is text. `loose`
+ * is true where FFmpeg reads a WebVTT timing line.
+ */
+const parseTiming = (
+	line: string,
+	webvtt: boolean,
+	loose: boolean
+): { start: number; end: number } | null => {
 	if (!webvtt) {
 		const times = SRT_TIMING.exec(line);
 		return times && { start: parseTimestamp(times[1]), end: parseTimestamp(times[2]) };
 	}
-	const start = VTT_START.exec(line);
-	if (!start) return null;
-	const end = VTT_END.exec(line);
-	return end && { start: parseTimestamp(start[0]), end: parseTimestamp(end[1]) };
+	// FFmpeg reads the end time right after the first arrow, which can come
+	// anywhere after the start time. It ignores the rest of the line, which can
+	// hold settings such as "align:start".
+	const start = VTT_TIME_FIRST.exec(line);
+	const arrow = line.indexOf("-->");
+	if (!start || arrow < 0) return null;
+	// FFmpeg reads the rest of a cue as text. Here a timing line in it starts
+	// a new cue, as in SRT, so only spaces can come before its arrow, and a
+	// text line like "1:30.5 in --> 2:00.0 out" stays text.
+	if (!loose && !ONLY_SPACES.test(line.slice(start[0].length, arrow))) return null;
+	const end = VTT_TIME_FIRST.exec(line.slice(arrow + 3));
+	return end && { start: parseTimestamp(start[0]), end: parseTimestamp(end[0]) };
 };
 
 /**
@@ -84,7 +102,7 @@ const stripTags = (text: string): string => {
  * line inside a cue, so there a cue also ends at one. That empty line comes
  * before the next cue's name, and the name sits right on its timing line, so a
  * WebVTT cue that's only a number keeps it. FFmpeg stops reading a WebVTT file
- * at a timing line it can't read, and here the cues after it still show.
+ * at a block it can't read, and here the cues after it still show.
  */
 export const parseSrt = (content: string): SubtitleCue[] => {
 	// FFmpeg skips a byte order mark at the start of the file.
@@ -96,7 +114,7 @@ export const parseSrt = (content: string): SubtitleCue[] => {
 	const lines = file.includes("\n") ? file.split(/\r+\n?|\n/) : file.split("\r");
 	const webvtt = lines[0].startsWith("WEBVTT");
 	const timings = lines.flatMap((line, at) => {
-		const timing = parseTiming(line, webvtt);
+		const timing = parseTiming(line, webvtt, startsBlock(lines, at));
 		return timing ? [{ at, ...timing }] : [];
 	});
 	const cues: SubtitleCue[] = [];

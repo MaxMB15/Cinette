@@ -446,6 +446,36 @@ describe("parseSrt", () => {
 		]);
 	});
 
+	it("reads a WebVTT timing line with text before its arrow after the cue's name", () => {
+		const vtt =
+			`WEBVTT\n\nfirst\n00:01.000 x --> 00:02.000\nA\n\n` +
+			`2\n00:03.000 garbage --> 00:04.000\nB\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 3, end: 4, text: "B" },
+		]);
+	});
+
+	it("keeps a WebVTT text line with text before its arrow as text, as FFmpeg does", () => {
+		const vtt =
+			`WEBVTT\n\n00:01.000 --> 00:02.000\n00:30.000 go --> 00:40.000\nA\n` +
+			`1:30.5 in --> 2:00.0 out\n00:05.000 go --> 00:05.000\nmore\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text: "00:30.000 go --> 00:40.000\nA\n1:30.5 in --> 2:00.0 out\n00:05.000 go --> 00:05.000\nmore",
+			},
+		]);
+	});
+
+	it("keeps a WebVTT text line that's only a time as text", () => {
+		const vtt = `WEBVTT\n\n00:01.000 --> 00:02.000\nLap\n100:00.000\nTotal\n  1:00.000\nEnd\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "Lap\n100:00.000\nTotal\n1:00.000\nEnd" },
+		]);
+	});
+
 	it("reads the end time of a WebVTT timing line after its first arrow", () => {
 		const vtt =
 			`WEBVTT\n\n00:01.000 --> 00:02.000 --> 00:09.000\nA\n\n` +
