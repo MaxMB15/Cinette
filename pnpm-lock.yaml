@@ -48,7 +48,7 @@ importers:
         specifier: ^8.71.1
         version: 8.71.2(eslint@10.11.0(jiti@2.7.0))(typescript@6.0.3)
 
-  apps/desktop:
+  apps/player:
     dependencies:
       '@radix-ui/react-slider':
         specifier: ^1.4.7

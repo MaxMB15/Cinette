@@ -58,7 +58,7 @@ jobs:
       - name: Read version and push tag
         run: |
           set -euo pipefail
-          VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           TAG="v${VERSION}"
 
           git fetch origin --tags
@@ -83,6 +83,6 @@ jobs:
 
       - name: Summary
         run: |
-          VERSION=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           echo "### Tag v${VERSION} pushed" >> "$GITHUB_STEP_SUMMARY"
           echo "The **release** workflow should build and publish the draft release." >> "$GITHUB_STEP_SUMMARY"

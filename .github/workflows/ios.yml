@@ -6,7 +6,7 @@ on:
   push:
     branches: [main, dev]
     paths:
-      - "apps/desktop/**"
+      - "apps/player/**"
       - "crates/**"
       - ".cargo/**"
       - ".github/actions/setup-frontend/**"
@@ -19,7 +19,7 @@ on:
   pull_request:
     branches: [main, dev]
     paths:
-      - "apps/desktop/**"
+      - "apps/player/**"
       - "crates/**"
       - ".cargo/**"
       - ".github/actions/setup-frontend/**"
@@ -73,12 +73,12 @@ jobs:
       # Builds the frontend, the Rust library and the Xcode project, which
       # pulls MPVKit through Swift Package Manager.
       - name: Build for the simulator
-        working-directory: apps/desktop
+        working-directory: apps/player
         run: pnpm tauri ios build --debug --target aarch64-sim --ci
 
       - name: Check the app bundle
         run: |
-          APP="apps/desktop/src-tauri/gen/apple/build/arm64-sim/Max Video Player.app"
+          APP="apps/player/src-tauri/gen/apple/build/arm64-sim/Max Video Player.app"
           test -d "$APP"
           plutil -p "$APP/Info.plist" | grep -E 'CFBundleIdentifier|MinimumOSVersion|CFBundleShortVersionString'
 

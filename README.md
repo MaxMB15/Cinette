@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="apps/desktop/src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Max Video Player icon">
+<img src="apps/player/src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Max Video Player icon">
 
 # Max Video Player
 

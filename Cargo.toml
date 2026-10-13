@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/tauri-plugin-mpv",
-    "apps/desktop/src-tauri",
+    "apps/player/src-tauri",
 ]
 
 [workspace.dependencies]

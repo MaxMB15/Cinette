@@ -1,7 +1,7 @@
 # iOS and iPadOS
 
 The iPhone and iPad app is the desktop app built with Tauri's mobile tooling. It
-lives in `apps/desktop` and shares the React frontend and the Rust crates. Video plays
+lives in `apps/player` and shares the React frontend and the Rust crates. Video plays
 through libmpv from [MPVKit](https://github.com/mpvkit/MPVKit) release
 `1.1.0-n9.0.2`, so live `.ts` channels, HLS and `.mkv` files all play the same way
 they do on desktop. The app needs iOS or iPadOS 17.5 and ships through TestFlight and
@@ -37,7 +37,7 @@ downloads MPVKit on the first build.
 To build for the simulator and start the app:
 
 ```bash
-cd apps/desktop
+cd apps/player
 pnpm tauri ios build --debug --target aarch64-sim
 
 xcrun simctl boot "iPhone 17 Pro"    # skip if a simulator is already running
@@ -60,7 +60,7 @@ On the device, turn on Developer Mode in Settings → Privacy & Security, and co
 it to the Mac with a cable. Then build, install and start the app:
 
 ```bash
-cd apps/desktop
+cd apps/player
 pnpm tauri ios build --debug --target aarch64 --export-method debugging
 
 xcrun devicectl list devices    # note the device's identifier
@@ -96,7 +96,7 @@ To have the frontend reload as you edit it, run the dev server instead:
 1. Start it and open the project in Xcode:
 
    ```bash
-   cd apps/desktop
+   cd apps/player
    pnpm tauri ios dev --open --host
    ```
 
@@ -108,7 +108,7 @@ The phone and the Mac have to be on the same network for this one.
 
 ## The Xcode project
 
-`apps/desktop/src-tauri/gen/apple` is checked in. XcodeGen generates
+`apps/player/src-tauri/gen/apple` is checked in. XcodeGen generates
 `max-video-player.xcodeproj` from `project.yml`, which sets the MPVKit version, the
 Info.plist keys and the linked frameworks. Keep MPVKit on its LGPL product. The App
 Store build can't contain anyone else's GPL code.
@@ -116,7 +116,7 @@ Store build can't contain anyone else's GPL code.
 After you edit `project.yml`:
 
 ```bash
-cd apps/desktop/src-tauri/gen/apple
+cd apps/player/src-tauri/gen/apple
 rm -rf Externals    # the next build recreates it
 xcodegen generate --spec project.yml
 git diff
@@ -164,7 +164,7 @@ upload, add the category it names.
 
 App Transport Security only covers URLSession and the web view. mpv and `reqwest`
 open their own connections, so streams and API calls over plain HTTP aren't affected.
-`apps/desktop/src-tauri/Info.ios.plist` turns on `NSAllowsArbitraryLoadsInWebContent`,
+`apps/player/src-tauri/Info.ios.plist` turns on `NSAllowsArbitraryLoadsInWebContent`,
 so channel logos served over HTTP still load, and `NSAllowsLocalNetworking`, which
 lets the web view reach local addresses. It sets `NSAllowsArbitraryLoads` to `false`
 on purpose. The Tauri CLI merges this file over the macOS `Info.plist`, which allows

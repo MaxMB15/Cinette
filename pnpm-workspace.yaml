@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 packages:
-  - apps/desktop
+  - apps/player
 
 # Versions that more than one package.json uses. ESLint runs from the root and
 # parses with TypeScript, so it gets the same TypeScript as the app.
