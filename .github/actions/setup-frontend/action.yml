@@ -17,9 +17,10 @@ runs:
         node-version: 24
         cache: pnpm
 
-    # Not --ignore-scripts: it also skips the check for dependencies with
-    # install scripts that pnpm-workspace.yaml doesn't list. The repo's own
-    # prepare script still runs, and HUSKY=0 makes it skip the Git hooks.
+    # Not passing --ignore-scripts keeps the check for dependencies with install
+    # scripts that pnpm-workspace.yaml doesn't list, since that flag skips it too.
+    # It also means the repo's own prepare script runs. HUSKY=0 makes that script
+    # skip installing the Git hooks.
     - name: Install packages
       shell: bash
       env:

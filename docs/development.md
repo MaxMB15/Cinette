@@ -93,8 +93,8 @@ the install stops until the package is listed under `allowBuilds` in
 
 If you installed the packages with npm before the switch to pnpm, delete
 `node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
-pnpm leaves the packages npm put at the top in place, and they can hide a missing
-dependency that CI then catches.
+pnpm doesn't remove the packages that npm put at the top level of
+`node_modules`, and they can hide a missing dependency that CI then catches.
 
 ## Tests and checks
 
