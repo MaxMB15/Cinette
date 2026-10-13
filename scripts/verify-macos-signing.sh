@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-# shellcheck source=lib/retry.sh
+# shellcheck source=SCRIPTDIR/lib/retry.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/retry.sh"
 
 notarized=false
