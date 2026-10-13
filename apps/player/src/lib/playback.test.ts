@@ -53,6 +53,19 @@ describe("playbackKey", () => {
 			"series:show special"
 		);
 	});
+	it.each([
+		{ what: "only a season", season: 2, episode: undefined },
+		{ what: "only an episode number", season: undefined, episode: 4 },
+	])("keys a series item with $what by its name", ({ season, episode }) => {
+		expect(
+			playbackKey(ch({ contentType: "series", name: "Show Extra", season, episode }))
+		).toBe("series:show extra");
+	});
+	it("keys a movie by its name even when it has season and episode numbers", () => {
+		expect(playbackKey(ch({ name: "Show S01E02", season: 1, episode: 2 }))).toBe(
+			"movie:show s01e02"
+		);
+	});
 });
 
 describe("isFinished", () => {
@@ -65,6 +78,9 @@ describe("isFinished", () => {
 	});
 	it("is true within the last 30 seconds", () => {
 		expect(isFinished(100, 125)).toBe(true);
+	});
+	it("is false with exactly 30 seconds left of a short item", () => {
+		expect(isFinished(70, 100)).toBe(false);
 	});
 });
 
