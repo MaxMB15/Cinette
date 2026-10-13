@@ -173,9 +173,9 @@ lint-staged, then runs the tests.
 ### Mutation testing
 
 Coverage shows which lines the tests run, not whether the tests check what those
-lines do. [cargo-mutants](https://mutants.rs) looks for that gap in `mvp-core`. It
-makes one small change at a time, such as returning a default value or turning `<`
-into `<=`, and runs the core tests against each change. A change that every test
+lines do. [cargo-mutants](https://mutants.rs) looks for that gap in the Rust crates.
+It makes one small change at a time, such as returning a default value or turning `<`
+into `<=`, and runs the crate's tests against each change. A change that every test
 still passes is missed, and points at code that no test checks.
 
 Install cargo-mutants once, at the version CI uses, then test the lines you changed
@@ -185,21 +185,33 @@ it, so `git add` it first.
 ```bash
 cargo install cargo-mutants --version 27.1.0 --locked
 mkdir -p target
-git diff --merge-base origin/dev -- crates/core > target/core.diff
-cargo mutants -p mvp-core --in-diff target/core.diff
+git diff --merge-base origin/dev -- crates apps/player/src-tauri > target/rust.diff
+cargo mutants -p mvp-core --in-diff target/rust.diff
 ```
 
 The results go to `mutants.out/`, which git ignores. `missed.txt` lists the changes
-no test caught, and `diff/` holds each change as a patch. Testing the whole crate
-takes hours on one machine. `--shard 0/4` through `--shard 3/4` split it into four
-runs. [`.cargo/mutants.toml`](../.cargo/mutants.toml) leaves out the loopback server
-that the tests use, and keeps the files git ignores out of the copy that cargo-mutants
-builds in.
+no test caught, and `diff/` holds each change as a patch. Testing a whole crate takes
+hours on one machine, and `--shard 0/4` through `--shard 3/4` split it into four runs.
 
-CI tests the lines a pull request changes in `crates/core`, and the whole crate on
-`dev` every Monday. A missed change doesn't fail either run. Only an error does, such
-as a build that breaks. The pull request job's summary, and the weekly run's report
-job, list the missed changes by file.
+The plugin, `-p tauri-plugin-mpv`, and the app, `-p max-video-player`, need what their
+tests need. That's libmpv on the library path, and for the app the built frontend in
+`apps/player/dist` and the ffmpeg sidecar. Git ignores both, so they stay out of the
+copy that cargo-mutants builds in. Test the app with `--in-place`, which changes your
+own files one at a time and puts each back. A run that's stopped partway can leave a
+change behind, so commit your work first.
+
+[`.cargo/mutants.toml`](../.cargo/mutants.toml) leaves out code the tests can't
+reach. That's the loopback server the tests use, the functions that call a real web
+service, code that Linux doesn't build, such as the plugin's macOS and iOS renderers,
+the app's entry point and logging setup, and code that needs a window, a Wayland
+display or D-Bus. Each entry says why. To test the macOS renderer on a Mac, add
+`--no-config`.
+
+CI tests the lines a pull request changes in each crate, and every crate on `dev` each
+Monday, in four shards for `mvp-core` and the plugin and eight for the app. A missed
+change doesn't fail either run. Only an error does, such as a build that breaks. The
+pull request job's summary, and the weekly run's report job, list the missed changes
+by file.
 
 ## Production build
 
@@ -258,7 +270,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
-| [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch `crates/core`, Mondays, manual runs | Runs cargo-mutants on `mvp-core`. A pull request tests only the lines it changes. A manual run tests the whole crate in four shards and adds up the results. Every Monday, the schedule starts one on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
+| [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch the Rust crates, Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A pull request tests only the lines it changes, in the crates it changes. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

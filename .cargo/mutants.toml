@@ -11,6 +11,45 @@ exclude_re = [
     # that the tests run against the loopback server. A test of the wrapper
     # itself would have to call the real service.
     "replace (fetch_source|fetch_whatson|fetch_mdblist) ",
+    # mpv's OpenGL render context, which the macOS and Linux renderers share,
+    # needs a real OpenGL context.
+    'tauri-plugin-mpv/src/gl_render\.rs:',
+    # The plugin's Linux renderer draws into a Wayland subsurface through GTK
+    # and EGL, which the tests can't open. Its pure helpers stay in.
+    'tauri-plugin-mpv/src/linux\.rs:.*(<impl (Drop|PlatformRenderer) for |\b(egl|gl_proc_address|DecorationWatch::\w+|LinuxGlRenderer::software_gl|request_render|follow_decorations|render_frame|recreate_egl_surface|build_wayland\w*|gl_renderer_name|wayland_egl_display|csd_offset|run_on_glib_main|drain_wayland_queue|mpv_uses_wayland)\b)',
+    # Keeping the display awake goes through IOKit on macOS and D-Bus on
+    # Linux. A test would change the machine's own sleep settings.
+    'tauri-plugin-mpv/src/idle_inhibit\.rs:.*\b(IdleInhibitor::platform_\w+|cfstring|dbus_\w+)\b',
+    # Loading a stream opens a video view, or mpv's own window, which needs a
+    # real window. Tests call load_with with a fake renderer instead.
+    'tauri-plugin-mpv/src/mpv\.rs:.*\bMpvState::(load|load_impl)\b',
+    'tauri-plugin-mpv/src/commands\.rs:.*\bmpv_load\b',
+    # Only iOS has a lock screen. Elsewhere these do nothing.
+    'tauri-plugin-mpv/src/mpv\.rs:.*\bMpvState::(set_media_info|set_skip_intervals)\b',
+    'tauri-plugin-mpv/src/commands\.rs:.*\bmpv_set_(media_info|skip_intervals)\b',
+    # This sets the process's locale once. Test processes already run in the
+    # C locale, so a test can't tell whether it ran.
+    'tauri-plugin-mpv/src/lib\.rs:.*\bensure_c_locale\b',
+    # The major and minor version use separate bits, so | and ^ give the same
+    # number.
+    'tauri-plugin-mpv/src/loadfile\.rs:.*replace \| with \^ in client_api_version',
+    # Helpers in a test module that only builds on some platforms, such as
+    # #[cfg(all(test, desktop))]. cargo-mutants only skips a plain
+    # #[cfg(test)].
+    '\btests::',
+    # The app's entry point builds the whole Tauri app and opens its window.
+    'src-tauri/src/lib\.rs:.*\b(run|show_main_window)\b',
+    # Logging sets the process's one tracing subscriber and panic hook. The
+    # iOS logger only builds for iOS.
+    'src-tauri/src/logging\.rs:.*\b(init\b|log_panics\b|ios::)',
+    # These ask the real service whether a key works. Settings calls them
+    # when the user tests a key.
+    'replace (test_omdb_api_key|test_mdblist_api_key|test_gemini_api_key) ',
+    # Only differs on iOS, which the mutation runs don't build.
+    'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
+    # Starts caffeinate or systemd-inhibit, which would change the machine's
+    # own sleep settings. The tests check the command it runs.
+    'src-tauri/src/downloads/keep_awake\.rs:.*\bhold_while_running\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
@@ -22,4 +61,6 @@ gitignore = true
 exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
+    # It only calls the library's run.
+    "apps/player/src-tauri/src/main.rs",
 ]
