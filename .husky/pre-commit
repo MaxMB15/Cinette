@@ -4,14 +4,16 @@
 # afterwards, even when a task fails. A git error or a killed run can leave
 # the patch behind without saying where, so this hook looks for one before
 # and after the run.
-dir=$(git rev-parse --git-path lint-staged)
+dir=$(git rev-parse --path-format=absolute --git-path lint-staged)
 left=$(find "$dir" -name unstaged.patch 2>/dev/null || true)
 
 if [ -n "$left" ]; then
 	echo "pre-commit: an earlier run stopped before restoring unstaged changes." >&2
 	echo "They are saved in:" >&2
 	echo "$left" >&2
-	echo "Apply each with git apply --3way <patch>, then delete its folder." >&2
+	echo "Put each one back with" >&2
+	echo "git apply --whitespace=nowarn --recount --unidiff-zero <patch>" >&2
+	echo "and then delete its folder." >&2
 	exit 1
 fi
 
