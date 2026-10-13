@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Mutation testing for mvp-core with cargo-mutants. It makes small changes to
+# the code, like flipping a comparison or returning a default, and runs the
+# tests against each one. A change that no test notices points at code the
+# tests run but don't check. This workflow only reports and fails no build.
+name: Mutation testing
+
+on:
+  # Only the lines a pull request changes.
+  pull_request:
+    branches: [dev]
+    paths:
+      - "crates/core/**"
+      - ".github/workflows/mutants.yml"
+      - "scripts/mutants-summary.py"
+  # TEMPORARY: runs the first full baseline. Remove before opening the PR.
+  push:
+    branches: [ci/mutation-testing]
+  # The whole crate once a week. Schedules run from the default branch, main,
+  # so the jobs check out dev to test the newest code.
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A mutant only needs a pass or a fail, so the test builds skip debug info.
+  CARGO_PROFILE_DEV_DEBUG: none
+  CARGO_MUTANTS_VERSION: 27.1.0
+
+jobs:
+  diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # A pull request checks out its merge into dev. The first parent is dev,
+      # so the diff against it is what the pull request changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          shared-key: mutants
+          save-if: false
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
+
+      # cargo-mutants exits with 2 when a mutant survives and 3 when one times
+      # out. Those are results for the summary, so only other codes fail.
+      # --in-place mutates the checkout itself, which reuses the cached build.
+      - name: Test mutants in the changed lines
+        run: |
+          git diff HEAD^1 HEAD -- crates/core > pr.diff
+          code=0
+          cargo mutants --in-place -p mvp-core --in-diff pr.diff || code=$?
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
+            exit "$code"
+          fi
+
+      - name: Write the summary
+        if: ${{ !cancelled() }}
+        run: python3 scripts/mutants-summary.py mutants.out >> "$GITHUB_STEP_SUMMARY"
+
+  full:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      # Only the weekly run saves, from one shard, since the shards build the
+      # same thing. Caches made on main can be restored by every branch.
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          shared-key: mutants
+          save-if: ${{ github.event_name == 'schedule' && matrix.shard == 0 }}
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
+
+      - name: Test shard ${{ matrix.shard }} of the mutants
+        run: |
+          code=0
+          cargo mutants --in-place -p mvp-core --shard ${{ matrix.shard }}/4 --output shard || code=$?
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
+            exit "$code"
+          fi
+
+      # The logs hold each mutant's build and test output, which is most of
+      # the size. diff/ still shows what each mutant changed.
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: |
+            shard/mutants.out/
+            !shard/mutants.out/log/
+          retention-days: 30
+
+  report:
+    needs: full
+    if: ${{ !cancelled() && needs.full.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          sparse-checkout: scripts
+
+      - name: Download the shards
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: mutants-shard-*
+          path: shards
+
+      - name: Write the summary
+        run: python3 scripts/mutants-summary.py shards/mutants-shard-* >> "$GITHUB_STEP_SUMMARY"
