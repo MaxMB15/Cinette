@@ -6,10 +6,6 @@ license = "GPL-3.0-only"
 description = "Tauri v2 plugin for MPV video playback"
 links = "tauri-plugin-mpv"
 
-[lints.rust]
-# objc crate's msg_send! uses cfg(feature = "cargo-clippy") - expect it to avoid warnings
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
-
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -21,10 +17,25 @@ libmpv2-sys = "4"
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.27"
-objc = "0.2"
-dispatch = "0.2"
+dispatch2 = "0.3"
 libc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSGraphics",
+    "NSOpenGL",
+    "NSOpenGLView",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSEnumerator",
+    "NSGeometry",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 khronos-egl = { version = "6", features = ["dynamic"] }

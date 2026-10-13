@@ -11,36 +11,46 @@
 //! because without a CGL drawable `makeCurrentContext` does nothing and mpv
 //! returns Unsupported.
 //!
-//! Every NSView and OpenGL call has to run on the main thread, through
-//! `dispatch::Queue::main()`.
+//! Every NSView and OpenGL call has to run on the main thread. The AppKit
+//! objects and the render state sit in `MainThreadBound`, which only hands
+//! them out for a `MainThreadMarker`. `run_on_main` and `on_main_async` run
+//! work on the main thread and supply the marker.
 
-// The cocoa crate's NSOpenGL bindings are deprecated in favor of objc2.
+// Apple deprecated NSOpenGL in favor of Metal, and objc2-app-kit marks those
+// bindings deprecated to match.
 #![allow(deprecated)]
 
 use crate::gl_render::GlRenderContext;
 use crate::options::shared_options;
 use crate::renderer::PlatformRenderer;
-use cocoa::appkit::{NSOpenGLPixelFormat, NSOpenGLView, NSView};
-use cocoa::base::nil;
-use cocoa::foundation::{NSAutoreleasePool, NSRect};
-use dispatch::Queue;
+use dispatch2::{run_on_main, DispatchQueue, MainThreadBound};
 use libmpv2::{render::mpv_render_update, Mpv};
+use objc2::rc::Retained;
+use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSOpenGLContext, NSOpenGLPFAAccelerated, NSOpenGLPFADoubleBuffer, NSOpenGLPFAOpenGLProfile,
+    NSOpenGLPixelFormat, NSOpenGLPixelFormatAttribute, NSOpenGLProfileVersion3_2Core, NSOpenGLView,
+    NSView, NSWindowOrderingMode,
+};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::cell::Cell;
 use std::ffi::{c_char, c_void, CString};
+use std::ptr::NonNull;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex, Weak,
 };
 use tauri::{AppHandle, Manager, Runtime};
 
-/// Carries a value that isn't `Send` across a dispatch queue boundary.
-///
-/// Only use it for values that the main thread alone touches.
-struct UnsafeSend<T>(T);
-unsafe impl<T> Send for UnsafeSend<T> {}
-
-/// Raw value of `NSOpenGLProfileVersion3_2Core`, which cocoa 0.26 doesn't always export.
-const NS_OPENGL_PROFILE_VERSION_3_2_CORE: u32 = 0x3200;
+/// Runs `f` on the main thread without waiting for it. `run_on_main` is the
+/// version that waits.
+fn on_main_async<F: FnOnce(MainThreadMarker) + Send + 'static>(f: F) {
+    DispatchQueue::main().exec_async(move || {
+        // SAFETY: the main queue only runs its work on the main thread.
+        f(unsafe { MainThreadMarker::new_unchecked() });
+    });
+}
 
 /// Resolves an OpenGL function pointer for libmpv.
 ///
@@ -59,46 +69,50 @@ fn gl_get_proc_address(name: *const c_char) -> *mut c_void {
     unsafe { libc::dlsym(lib as *mut c_void, name) }
 }
 
-/// Render state that the update callback reaches through a raw pointer.
-///
-/// It lives in a `Box` so its address doesn't move, and only the main thread
-/// touches it.
+/// The libmpv side of `gl_get_proc_address`.
+fn get_proc_address(_ctx: &*mut c_void, name: &str) -> *mut c_void {
+    match CString::new(name) {
+        Ok(c) => gl_get_proc_address(c.as_ptr()),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// The AppKit objects one renderer creates and uses.
+struct Views {
+    /// The window's content view, which also holds the web view.
+    content_view: Retained<NSView>,
+    gl_view: Retained<NSOpenGLView>,
+    /// The context `gl_view` created and owns.
+    gl_context: Retained<NSOpenGLContext>,
+}
+
+/// Render state for one attached mpv core. It only lives on the main thread.
 struct RenderInner {
     ctx: GlRenderContext,
-    gl_view: *mut c_void,
-    gl_context: *mut c_void,
+    gl_view: Retained<NSOpenGLView>,
+    gl_context: Retained<NSOpenGLContext>,
     /// Called once when the first frame is rendered, then cleared.
-    first_frame_cb: Option<Box<dyn FnOnce() + Send>>,
+    first_frame_cb: Cell<Option<Box<dyn FnOnce() + Send>>>,
     /// Shared with `MacosGlRenderer::set_visible`. Rendering skips the GPU
     /// calls while it is false.
     video_active: Arc<AtomicBool>,
 }
 
-unsafe impl Send for RenderInner {}
-
 /// Embeds libmpv video in the Tauri window with an NSOpenGLView and OpenGL
 /// Core 3.2.
-///
-/// The Obj-C pointer fields are only used inside `dispatch::Queue::main()`
-/// closures, so AppKit only sees them on the main thread. `valid` stops
-/// queued callbacks from running after `detach`.
 pub struct MacosGlRenderer {
-    gl_view: *mut c_void,
-    gl_context: *mut c_void,
-    content_view: *mut c_void,
-    valid: Arc<AtomicBool>,
-    /// Boxed so the address the update callback holds stays valid.
-    render_inner: Option<Box<RenderInner>>,
+    /// The view and its context. `detach` takes them, so `None` means the
+    /// renderer is detached.
+    views: Option<Arc<MainThreadBound<Views>>>,
+    /// Set by `attach`.
+    render: Option<Arc<MainThreadBound<RenderInner>>>,
     /// Runs once on the first rendered frame. `attach` moves it into
     /// `RenderInner`.
-    first_frame_cb: Option<Box<dyn FnOnce() + Send>>,
+    first_frame_cb: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Whether to render at all. `set_visible` toggles it. It starts true
     /// because the player page is showing when playback starts.
     video_active: Arc<AtomicBool>,
 }
-
-unsafe impl Send for MacosGlRenderer {}
-unsafe impl Sync for MacosGlRenderer {}
 
 impl MacosGlRenderer {
     /// Create NSOpenGLView on the main thread and add it below the Tauri WKWebView.
@@ -112,182 +126,149 @@ impl MacosGlRenderer {
             .map_err(|e| format!("window handle: {:?}", e))?
             .as_raw();
 
-        let ns_view_ptr = match raw {
-            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
+        // A raw pointer isn't Send, so the view crosses to the main thread
+        // as an address.
+        let content_view_addr = match raw {
+            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as usize,
             _ => return Err("Expected AppKit window handle".to_string()),
         };
 
-        let ns_view_addr = ns_view_ptr as usize;
-        Queue::main().exec_sync(move || unsafe { Self::build_on_main(ns_view_addr as *mut c_void) })
+        let views = run_on_main(move |mtm| {
+            // SAFETY: the handle points at the content view of the `main`
+            // window. `window` doesn't keep that view alive. This relies on
+            // the main window staying open for as long as the app runs,
+            // since closing it quits the app.
+            let content_view = unsafe { Retained::retain(content_view_addr as *mut NSView) }
+                .ok_or("AppKit window handle has no view")?;
+            build_views(content_view, mtm).map(|views| MainThreadBound::new(views, mtm))
+        })?;
+
+        Ok(Self {
+            views: Some(Arc::new(views)),
+            render: None,
+            first_frame_cb: Mutex::new(None),
+            video_active: Arc::new(AtomicBool::new(true)),
+        })
     }
+}
 
-    /// Builds the OpenGL view and context and puts the view below the webview.
-    ///
-    /// # Safety
-    ///
-    /// Call it on the main thread with a pointer to the window's live
-    /// content view.
-    unsafe fn build_on_main(content_view_ptr: *mut c_void) -> Result<Self, String> {
-        // SAFETY: the caller keeps the contract above.
-        unsafe {
-            let _pool = NSAutoreleasePool::new(nil);
-            let content_view = content_view_ptr as *mut objc::runtime::Object;
-            let bounds: NSRect = NSView::bounds(content_view);
+/// Builds the OpenGL view and context and puts the view below the web view.
+fn build_views(content_view: Retained<NSView>, mtm: MainThreadMarker) -> Result<Views, String> {
+    // libmpv built from source with -Dgl=enabled rejects the legacy profile.
+    let attrs: [NSOpenGLPixelFormatAttribute; 5] = [
+        NSOpenGLPFAOpenGLProfile,
+        NSOpenGLProfileVersion3_2Core,
+        NSOpenGLPFADoubleBuffer,
+        NSOpenGLPFAAccelerated,
+        0,
+    ];
+    // SAFETY: `attrs` is a zero-terminated attribute list that outlives the
+    // call, and AppKit only reads it.
+    let pixel_format = unsafe {
+        NSOpenGLPixelFormat::initWithAttributes(
+            NSOpenGLPixelFormat::alloc(),
+            NonNull::from(&attrs).cast(),
+        )
+    }
+    .ok_or("NSOpenGLPixelFormat (Core 3.2) init failed, check OpenGL availability")?;
 
-            // libmpv built from source with -Dgl=enabled rejects the legacy profile.
-            let attrs: [u32; 5] = [
-                cocoa::appkit::NSOpenGLPFAOpenGLProfile as u32,
-                NS_OPENGL_PROFILE_VERSION_3_2_CORE,
-                cocoa::appkit::NSOpenGLPFADoubleBuffer as u32,
-                cocoa::appkit::NSOpenGLPFAAccelerated as u32,
-                0,
-            ];
-            let pixel_format = NSOpenGLPixelFormat::alloc(nil);
-            let pixel_format = NSOpenGLPixelFormat::initWithAttributes_(pixel_format, &attrs);
-            if pixel_format == nil {
-                return Err(
-                    "NSOpenGLPixelFormat (Core 3.2) init failed, check OpenGL availability"
-                        .to_string(),
-                );
-            }
+    // Use the context the view creates and owns rather than allocating a
+    // separate NSOpenGLContext.
+    let gl_view = NSOpenGLView::initWithFrame_pixelFormat(
+        NSOpenGLView::alloc(mtm),
+        content_view.bounds(),
+        Some(&pixel_format),
+    )
+    .ok_or("NSOpenGLView initWithFrame:pixelFormat: failed")?;
+    let gl_context = gl_view
+        .openGLContext()
+        .ok_or("NSOpenGLView returned nil openGLContext")?;
 
-            // Use the context the view creates and owns rather than allocating a
-            // separate NSOpenGLContext.
-            let gl_view = NSOpenGLView::alloc(nil);
-            let gl_view = NSOpenGLView::initWithFrame_pixelFormat_(gl_view, bounds, pixel_format);
-            if gl_view == nil {
-                return Err("NSOpenGLView initWithFrame:pixelFormat: failed".to_string());
-            }
+    log_view_tree(&content_view);
 
-            let gl_context: *mut objc::runtime::Object = msg_send![gl_view, openGLContext];
-            if gl_context.is_null() {
-                return Err("NSOpenGLView returned nil openGLContext".to_string());
-            }
+    // The web view needs no drawsBackground call here. wry turns it off
+    // itself because tauri.conf.json makes the window transparent.
 
-            // Logs the view tree at debug level, to show where the WKWebView sits.
-            {
-                let class_ns: *mut objc::runtime::Object = msg_send![content_view, className];
-                let class_ptr: *const c_char = msg_send![class_ns, UTF8String];
-                let cv_name = if class_ptr.is_null() {
-                    "?"
-                } else {
-                    std::ffi::CStr::from_ptr(class_ptr).to_str().unwrap_or("?")
-                };
-                tracing::debug!("[macOS renderer] content_view class = {cv_name}");
+    // Below with no relative view puts the GL view under every other
+    // subview, the WKWebView included.
+    content_view.addSubview_positioned_relativeTo(&gl_view, NSWindowOrderingMode::Below, None);
 
-                let subs: *mut objc::runtime::Object = msg_send![content_view, subviews];
-                let n: usize = msg_send![subs, count];
-                tracing::debug!("[macOS renderer] content_view has {n} direct subviews");
-                for i in 0..n {
-                    let sv: *mut objc::runtime::Object = msg_send![subs, objectAtIndex: i];
-                    let sv_class_ns: *mut objc::runtime::Object = msg_send![sv, className];
-                    let sv_ptr: *const c_char = msg_send![sv_class_ns, UTF8String];
-                    let sv_name = if sv_ptr.is_null() {
-                        "?"
-                    } else {
-                        std::ffi::CStr::from_ptr(sv_ptr).to_str().unwrap_or("?")
-                    };
-                    let sub_subs: *mut objc::runtime::Object = msg_send![sv, subviews];
-                    let sub_count: usize = msg_send![sub_subs, count];
-                    tracing::debug!(
-                        "[macOS renderer]   subview[{i}] = {sv_name} ({sub_count} children)"
-                    );
-                }
-            }
+    tracing::info!("[macOS renderer] NSOpenGLView created (Core 3.2 profile)");
+    Ok(Views {
+        content_view,
+        gl_view,
+        gl_context,
+    })
+}
 
-            // The web view needs no drawsBackground call here. wry turns it off
-            // itself because tauri.conf.json makes the window transparent.
-
-            // -1 is NSWindowBelow, which puts the GL view under the WKWebView.
-            let _: () = msg_send![
-                content_view,
-                addSubview: gl_view
-                positioned: -1i64
-                relativeTo: nil
-            ];
-
-            tracing::info!("[macOS renderer] NSOpenGLView created (Core 3.2 profile)");
-            Ok(Self {
-                gl_view: gl_view as *mut c_void,
-                gl_context: gl_context as *mut c_void,
-                content_view: content_view as *mut c_void,
-                valid: Arc::new(AtomicBool::new(true)),
-                render_inner: None,
-                first_frame_cb: None,
-                video_active: Arc::new(AtomicBool::new(true)),
-            })
-        }
+/// Logs the view tree at debug level, to show where the WKWebView sits.
+fn log_view_tree(content_view: &NSView) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    let class_name = |view: &NSView| view.class().name().to_string_lossy().into_owned();
+    tracing::debug!(
+        "[macOS renderer] content_view class = {}",
+        class_name(content_view)
+    );
+    let subviews = content_view.subviews();
+    tracing::debug!(
+        "[macOS renderer] content_view has {} direct subviews",
+        subviews.count()
+    );
+    for (i, subview) in subviews.iter().enumerate() {
+        tracing::debug!(
+            "[macOS renderer]   subview[{i}] = {} ({} children)",
+            class_name(&subview),
+            subview.subviews().count()
+        );
     }
 }
 
 impl PlatformRenderer for MacosGlRenderer {
     fn attach(&mut self, mpv: &mut Mpv) -> Result<(), String> {
-        let gl_view = self.gl_view;
-        let gl_context = self.gl_context;
+        let views = self.views.clone().ok_or("attach called after detach")?;
+        let first_frame_cb = self
+            .first_frame_cb
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+        let video_active = self.video_active.clone();
+        let mpv: &Mpv = mpv;
 
-        // OpenGL setup has to run on the main thread. The render context isn't
-        // Send, so it comes back wrapped in UnsafeSend.
-        let gl_view_ptr = gl_view as usize;
-        let gl_context_ptr = gl_context as usize;
-        // The closure has to be 'static, so `mpv` crosses to the main thread
-        // as an address.
-        let mpv_addr = &*mpv as *const Mpv as usize;
+        // OpenGL setup has to run on the main thread with the context
+        // current.
+        let render = run_on_main(move |mtm| -> Result<_, String> {
+            let Views {
+                gl_view,
+                gl_context,
+                ..
+            } = views.get(mtm);
 
-        let result: UnsafeSend<Result<GlRenderContext, String>> =
-            Queue::main().exec_sync(move || -> UnsafeSend<Result<GlRenderContext, String>> {
-                let view = gl_view_ptr as *mut objc::runtime::Object;
-                let ctx = gl_context_ptr as *mut objc::runtime::Object;
-                // SAFETY: exec_sync blocks until the closure finishes and
-                // `mpv` stays borrowed for the whole call.
-                let mpv = unsafe { &*(mpv_addr as *const Mpv) };
+            // Without the CGL drawable that prepareOpenGL sets up,
+            // makeCurrentContext does nothing and mpv_render_context_create
+            // returns Unsupported.
+            gl_view.prepareOpenGL();
+            let view: &NSView = gl_view;
+            gl_context.setView(Some(view), mtm);
+            gl_context.makeCurrentContext();
 
-                unsafe {
-                    // Without the CGL drawable that prepareOpenGL sets up,
-                    // makeCurrentContext does nothing and
-                    // mpv_render_context_create returns Unsupported.
-                    let _: () = msg_send![view, prepareOpenGL];
+            // SAFETY: `detach` drops the render state on the main thread
+            // before it returns, and `MpvState` detaches the renderer
+            // before it stops the engine, so the context goes before mpv.
+            let ctx = unsafe { GlRenderContext::new(mpv, get_proc_address) }?;
 
-                    cocoa::appkit::NSOpenGLContext::setView_(ctx, view);
-                    cocoa::appkit::NSOpenGLContext::makeCurrentContext(ctx);
-                }
+            let inner = RenderInner {
+                ctx,
+                gl_view: gl_view.clone(),
+                gl_context: gl_context.clone(),
+                first_frame_cb: Cell::new(first_frame_cb),
+                video_active,
+            };
+            Ok(inner.into_shared(mtm))
+        })?;
 
-                fn get_proc_address(_ctx: &*mut c_void, name: &str) -> *mut c_void {
-                    match CString::new(name) {
-                        Ok(c) => gl_get_proc_address(c.as_ptr()),
-                        Err(_) => std::ptr::null_mut(),
-                    }
-                }
-
-                // SAFETY: `detach` drops the render state on the main thread
-                // before it returns, and `MpvState` detaches the renderer
-                // before it stops the engine, so the context goes before mpv.
-                UnsafeSend(unsafe { GlRenderContext::new(mpv, get_proc_address) })
-            });
-        let render_ctx = result.0?;
-
-        // Boxed so the address the update callback holds doesn't move.
-        let mut inner = Box::new(RenderInner {
-            ctx: render_ctx,
-            gl_view,
-            gl_context,
-            first_frame_cb: self.first_frame_cb.take(),
-            video_active: self.video_active.clone(),
-        });
-
-        let inner_ptr = &*inner as *const RenderInner as usize;
-        let valid = self.valid.clone();
-
-        inner.ctx.set_update_callback(move || {
-            let v = valid.clone();
-            Queue::main().exec_async(move || {
-                if !v.load(Ordering::Acquire) {
-                    return;
-                }
-                unsafe { render_frame(inner_ptr) };
-            });
-        });
-
-        self.render_inner = Some(inner);
+        self.render = Some(render);
         tracing::info!("[macOS renderer] render context attached");
         Ok(())
     }
@@ -297,25 +278,25 @@ impl PlatformRenderer for MacosGlRenderer {
         // ResizeObserver. Calling setFrame: here too races with it and makes x
         // jump between 0 and the sidebar width on each resize. The GL context
         // only needs `update` to pick up the new drawable size.
-        let gl_context_ptr = self.gl_context as usize;
-        Queue::main().exec_async(move || unsafe {
-            let ctx = gl_context_ptr as *mut objc::runtime::Object;
-            let _: () = msg_send![ctx, update];
-        });
+        let Some(views) = self.views.clone() else {
+            return;
+        };
+        on_main_async(move |mtm| views.get(mtm).gl_context.update(mtm));
     }
 
     fn set_frame(&mut self, x: f64, y: f64, w: f64, h: f64) {
-        let gl_view_ptr = self.gl_view as usize;
-        let gl_context_ptr = self.gl_context as usize;
-        let content_view_ptr = self.content_view as usize;
-        Queue::main().exec_async(move || unsafe {
-            let view = gl_view_ptr as *mut objc::runtime::Object;
-            let ctx = gl_context_ptr as *mut objc::runtime::Object;
-            let parent = content_view_ptr as *mut objc::runtime::Object;
+        let Some(views) = self.views.clone() else {
+            return;
+        };
+        on_main_async(move |mtm| {
+            let Views {
+                content_view: parent,
+                gl_view,
+                gl_context,
+            } = views.get(mtm);
             // CSS pixels and AppKit points are the same unit. AppKit puts the
             // origin at the bottom left unless the view is flipped.
-            let is_flipped: bool = msg_send![parent, isFlipped];
-            let appkit_y = if is_flipped {
+            let appkit_y = if parent.isFlipped() {
                 y
             } else {
                 // A transparent window with decorations gets fullSizeContentView
@@ -324,23 +305,14 @@ impl PlatformRenderer for MacosGlRenderer {
                 // from below the titlebar. contentLayoutRect is that same area,
                 // so measuring from its height keeps the GL view from sitting
                 // one titlebar height too high.
-                let window: *mut objc::runtime::Object = msg_send![parent, window];
-                let ref_height: f64 = if !window.is_null() {
-                    let layout_rect: NSRect = msg_send![window, contentLayoutRect];
-                    layout_rect.size.height
-                } else {
-                    let bounds: NSRect = NSView::bounds(parent);
-                    bounds.size.height
+                let ref_height = match parent.window() {
+                    Some(window) => window.contentLayoutRect().size.height,
+                    None => parent.bounds().size.height,
                 };
                 ref_height - y - h
             };
-            use cocoa::foundation::NSPoint;
-            let frame = NSRect::new(
-                NSPoint::new(x, appkit_y),
-                cocoa::foundation::NSSize::new(w, h),
-            );
-            let _: () = msg_send![view, setFrame: frame];
-            let _: () = msg_send![ctx, update];
+            gl_view.setFrame(NSRect::new(NSPoint::new(x, appkit_y), NSSize::new(w, h)));
+            gl_context.update(mtm);
         });
     }
 
@@ -350,50 +322,49 @@ impl PlatformRenderer for MacosGlRenderer {
         // playing because CoreAudio doesn't depend on the render context.
         self.video_active.store(visible, Ordering::Release);
 
-        let gl_view_ptr = self.gl_view as usize;
-        if gl_view_ptr == 0 {
+        let Some(views) = self.views.clone() else {
             return;
-        }
-        Queue::main().exec_async(move || unsafe {
-            let view = gl_view_ptr as *mut objc::runtime::Object;
-            let hidden: bool = !visible;
-            let _: () = msg_send![view, setHidden: hidden];
-        });
+        };
+        on_main_async(move |mtm| views.get(mtm).gl_view.setHidden(!visible));
     }
 
     fn set_first_frame_callback(&mut self, cb: Box<dyn FnOnce() + Send>) {
-        self.first_frame_cb = Some(cb);
+        *self
+            .first_frame_cb
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner()) = Some(cb);
     }
 
     fn detach(&mut self) {
-        // Queued callbacks check this and return before the render state is
-        // freed.
-        self.valid.store(false, Ordering::Release);
+        // `attach` only sets `render` once `views` exists.
+        let Some(views) = self.views.take() else {
+            return;
+        };
+        let render = self.render.take();
 
-        let gl_view_ptr = self.gl_view as usize;
-        let gl_context_ptr = self.gl_context as usize;
-
-        // Queued render_frame closures hold a pointer into this Box, so it is
-        // only dropped on the main thread below.
-        let render_inner = self.render_inner.take();
-
-        // exec_sync runs after every render_frame closure already queued, and
-        // those return early now that `valid` is false. mpv_render_context_free
-        // calls GL functions like glDeleteFramebuffers, so the context has to
-        // be current when the render state drops.
-        Queue::main().exec_sync(move || unsafe {
-            if gl_context_ptr != 0 {
-                let ctx = gl_context_ptr as *mut objc::runtime::Object;
-                cocoa::appkit::NSOpenGLContext::makeCurrentContext(ctx);
-            }
-            drop(render_inner);
-            if gl_view_ptr != 0 {
-                let view = gl_view_ptr as *mut objc::runtime::Object;
-                let _: () = msg_send![view, removeFromSuperview];
-            }
+        // mpv_render_context_free calls GL functions like
+        // glDeleteFramebuffers, so the context has to be current when the
+        // render state drops. Frames still queued on the main thread find the
+        // render state gone and return.
+        run_on_main(move |mtm| {
+            let Views {
+                gl_view,
+                gl_context,
+                ..
+            } = views.get(mtm);
+            gl_context.makeCurrentContext();
+            // A queued frame only holds the render state while it runs, and
+            // the main thread runs one thing at a time, so this is the last
+            // reference and the render context is freed right here.
+            debug_assert!(render.as_ref().is_none_or(|r| Arc::strong_count(r) == 1));
+            drop(render);
+            // The view and its context are freed once the last queued call
+            // that holds them has run, so the main thread mustn't keep
+            // pointing at the context.
+            NSOpenGLContext::clearCurrentContext();
+            gl_view.removeFromSuperview();
         });
 
-        self.gl_view = std::ptr::null_mut();
         tracing::info!("[macOS renderer] detached");
     }
 }
@@ -404,66 +375,73 @@ impl Drop for MacosGlRenderer {
     }
 }
 
-/// Renders one frame. The update callback calls it on the main thread.
-///
-/// # Safety
-///
-/// The caller checks `valid` first, and `inner_ptr` must point at the
-/// `RenderInner` that `MacosGlRenderer` still owns.
-unsafe fn render_frame(inner_ptr: usize) {
-    // SAFETY: the caller keeps the contract above.
-    unsafe {
-        static FRAME_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let inner = &mut *(inner_ptr as *mut RenderInner);
+impl RenderInner {
+    /// Moves the render state behind an `Arc` and points mpv's update
+    /// callback at it.
+    ///
+    /// The callback holds a weak reference, so a frame queued after `detach`
+    /// finds the state gone and the state can't keep itself alive.
+    fn into_shared(mut self, mtm: MainThreadMarker) -> Arc<MainThreadBound<Self>> {
+        Arc::new_cyclic(|weak: &Weak<MainThreadBound<Self>>| {
+            let weak = weak.clone();
+            // mpv calls this on its own threads, so it only queues the frame
+            // for the main thread.
+            self.ctx.set_update_callback(move || {
+                let weak = weak.clone();
+                on_main_async(move |mtm| {
+                    if let Some(render) = weak.upgrade() {
+                        render.get(mtm).render_frame(mtm);
+                    }
+                });
+            });
+            MainThreadBound::new(self, mtm)
+        })
+    }
+
+    /// Renders one frame. The update callback queues it on the main thread.
+    fn render_frame(&self, mtm: MainThreadMarker) {
+        static FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 
         // set_visible(false) clears this while the player page is hidden. mpv
         // still calls back so its state stays current, but nothing is drawn.
-        if !inner.video_active.load(Ordering::Acquire) {
+        if !self.video_active.load(Ordering::Acquire) {
             return;
         }
 
-        let view = inner.gl_view as *mut objc::runtime::Object;
-        let ctx = inner.gl_context as *mut objc::runtime::Object;
-        // A raw pointer, so `inner` can still be borrowed mutably for first_frame_cb.
-        let rc = &inner.ctx as *const GlRenderContext;
+        let view: &NSView = &self.gl_view;
+        self.gl_context.setView(Some(view), mtm);
+        self.gl_context.makeCurrentContext();
 
-        cocoa::appkit::NSOpenGLContext::setView_(ctx, view);
-        cocoa::appkit::NSOpenGLContext::makeCurrentContext(ctx);
-
-        let bounds: NSRect = NSView::bounds(view);
-        let window: *mut objc::runtime::Object = msg_send![view, window];
-        let scale: f64 = if window.is_null() {
-            1.0
-        } else {
-            msg_send![window, backingScaleFactor]
-        };
+        let bounds = view.bounds();
+        let scale = view
+            .window()
+            .map_or(1.0, |window| window.backingScaleFactor());
         let w = (bounds.size.width * scale) as i32;
         let h = (bounds.size.height * scale) as i32;
         if w < 1 || h < 1 {
             return;
         }
 
-        let rc: &GlRenderContext = &*rc;
-        match rc.update() {
+        match self.ctx.update() {
             Ok(flags) => {
                 if flags & mpv_render_update::Frame != 0 {
                     // FBO 0 is the default framebuffer. GL's Y axis points up, so
                     // flip it.
-                    if let Err(e) = rc.render::<*mut c_void>(0, w, h, true) {
+                    if let Err(e) = self.ctx.render::<*mut c_void>(0, w, h, true) {
                         tracing::trace!("[macOS renderer] render error: {}", e);
                         return;
                     }
                     // mpv also calls back for updates that aren't frames. Flushing
                     // then would show whatever is left in the back buffer.
-                    cocoa::appkit::NSOpenGLContext::flushBuffer(ctx);
-                    rc.report_swap();
+                    self.gl_context.flushBuffer();
+                    self.ctx.report_swap();
                     let n = FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
                     if n < 5 || n.is_multiple_of(60) {
                         tracing::debug!("[macOS renderer] frame presented (#{n})");
                     }
                     // Lets the frontend switch the web view from opaque to
                     // transparent.
-                    if let Some(cb) = inner.first_frame_cb.take() {
+                    if let Some(cb) = self.first_frame_cb.take() {
                         cb();
                     }
                 }
