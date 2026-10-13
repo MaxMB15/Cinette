@@ -1110,6 +1110,7 @@ async fn an_installer_that_cannot_be_started_is_an_error() {
 
 /// A release whose latest.json lists the Debian package at `deb_url` and the
 /// RPM package at `rpm_url`.
+#[cfg(unix)]
 fn release_with_both(deb_url: &str, rpm_url: &str) -> String {
     let latest = json!({
         "version": "9.9.9",
@@ -1131,7 +1132,8 @@ async fn a_deb_install_is_updated_with_the_newest_deb() {
     let app = TestApp::new();
     let pkexec = StandIn::new("exit 0");
     let deb = test_server::serve_once("200 OK", "deb contents");
-    let latest = release_with_both(&deb, "http://example.test/never-fetched.rpm");
+    let rpm = format!("{}/never-fetched.rpm", test_server::refused_url());
+    let latest = release_with_both(&deb, &rpm);
 
     let updated = update_package(&app.handle(), "deb", &latest, pkexec.elevated()).await;
 
@@ -1150,7 +1152,8 @@ async fn an_rpm_install_is_updated_with_the_newest_rpm() {
     let app = TestApp::new();
     let pkexec = StandIn::new("exit 0");
     let rpm = test_server::serve_once("200 OK", "rpm contents");
-    let latest = release_with_both("http://example.test/never-fetched.deb", &rpm);
+    let deb = format!("{}/never-fetched.deb", test_server::refused_url());
+    let latest = release_with_both(&deb, &rpm);
 
     let updated = update_package(&app.handle(), "rpm", &latest, pkexec.elevated()).await;
 

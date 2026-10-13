@@ -354,7 +354,13 @@ mod tests {
         let started = Instant::now();
 
         let saving = hand_off(app.handle(), Some(item(None)), interval).unwrap();
-        saving.join().unwrap();
+        // Joined on a thread of its own, so a thread that never stops fails
+        // the test rather than hanging it.
+        let (done, joined) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(saving.join().is_ok());
+        });
+        assert_eq!(joined.recv_timeout(Duration::from_secs(10)), Ok(true));
 
         assert!(started.elapsed() >= interval * (MAX_MISSES - 1));
     }
