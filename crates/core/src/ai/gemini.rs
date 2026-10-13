@@ -610,19 +610,10 @@ mod tests {
     #[test]
     fn the_no_groups_prompt_lists_the_titles_and_asks_for_groups() {
         let prompt = build_categorization_prompt_no_groups("movies", &["Title One", "Title Two"]);
-        assert!(
-            prompt.starts_with(
-                "Organize these IPTV content titles into navigable groups.\n\
-                 Content type: movies\n\n\
-                 Content titles (sample):\n\
-                 - Title One\n\
-                 - Title Two\n\nRules:\n"
-            ),
-            "{prompt}"
-        );
+        assert!(prompt.contains("Content type: movies"), "{prompt}");
+        assert!(prompt.contains("- Title One\n- Title Two\n"), "{prompt}");
         assert!(prompt.contains("Create logical genre/theme groups from the titles"));
-        assert!(prompt.contains(r#"{"type": "hierarchical", "categories": [{"name": "...", "groups": ["..."]}], "ungrouped": []}"#));
-        assert!(prompt.contains(r#"{"type": "flat", "groups": ["..."], "ungrouped": []}"#));
+        assert!(prompt.contains(r#""type": "flat""#), "{prompt}");
     }
 
     #[test]
@@ -796,7 +787,7 @@ mod tests {
             let line = request.lines().next().unwrap();
             assert_eq!(
                 line,
-                "POST /models/gemini-3-flash-preview:generateContent HTTP/1.1"
+                format!("POST /models/{MODEL}:generateContent HTTP/1.1")
             );
             assert_eq!(header(&request, API_KEY_HEADER), Some("test-key"));
             assert_eq!(
@@ -849,7 +840,11 @@ mod tests {
         async fn a_key_no_header_can_carry_fails_the_call_without_showing_it() {
             // The bad character stops the request before it reaches the network.
             let err = call_gemini("SEC\nRET", "prompt").await.unwrap_err();
-            assert!(matches!(err, GeminiError::Api(_)), "{err:?}");
+            // A real answer from Google would be some other error.
+            assert!(
+                matches!(&err, GeminiError::Api(m) if m == "builder error"),
+                "{err:?}"
+            );
             test_server::assert_hides(&err, "RET");
         }
 

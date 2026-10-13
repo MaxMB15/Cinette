@@ -743,7 +743,8 @@ mod tests {
         let dest = tempfile::tempdir().unwrap();
         let saved = dest.path().join("7.srt");
         std::fs::write(&saved, "1\n").unwrap();
-        // A key no header can carry keeps the request off the network.
+        // The file on disk means no request goes out. A key no header can
+        // carry stops one if that changes.
         let path = download_subtitle(7, "SEC\nRET", dest.path()).await.unwrap();
         assert_eq!(path, saved);
     }

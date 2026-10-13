@@ -1063,7 +1063,7 @@ mod tests {
             };
             let exact = || segment(SegmentKind::Credits, 3400.0, 3500.0);
             assert_eq!(credits(exact(), 3450.0, 3500.0), 3450.0);
-            // A scene outside the credits leaves them alone.
+            // A scene at or outside the credits' edges leaves them alone.
             assert_eq!(credits(exact(), 3300.0, 3500.0), 3500.0);
             assert_eq!(credits(exact(), 3400.0, 3500.0), 3500.0);
             assert_eq!(credits(exact(), 3500.0, 3500.0), 3500.0);
