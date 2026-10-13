@@ -70,6 +70,8 @@ chmod +x MaxVideoPlayer_amd64.AppImage
 
 **Fedora.** `sudo dnf install ./MaxVideoPlayer_x86_64.rpm`
 
+Both packages need WebKitGTK 2.40 or later. Ubuntu 22.04 and Debian 12 have a newer one once their updates are installed, and current Fedora releases ship one. If yours is older, `apt` and `dnf` update it along with the app. The AppImage includes its own.
+
 ## Features
 
 **Your playlists**

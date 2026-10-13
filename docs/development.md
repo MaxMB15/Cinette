@@ -160,6 +160,14 @@ On Linux, `scripts/bundle-libmpv-linux.sh` copies `libmpv.so` and its dependenci
 into the AppImage. The `.deb` and `.rpm` declare libmpv as a package dependency
 instead.
 
+The `.deb` and `.rpm` also require WebKitGTK 2.40 or later, the first version that
+supports all the CSS in the app's styles. Tailwind 4's breakpoints like `sm:` use
+range media queries such as `(width >= 40rem)`, which WebKitGTK 2.38 ignores, and
+2.40 is also the first to turn on `@property` and the `lh` unit. Tauri copies each `rpm.depends`
+entry into the package as a bare name, so the `.rpm` gives the version inside an
+RPM boolean dependency, `(webkit2gtk4.1 >= 2.40)`. The AppImage bundles the
+WebKitGTK of the machine that built it.
+
 The output lands in `target/release/bundle/`. To sign the macOS build with a
 Developer ID, see [macos-signing.md](macos-signing.md).
 
