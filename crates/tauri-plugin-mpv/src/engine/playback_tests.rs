@@ -85,6 +85,9 @@ fn every_command_needs_a_player() {
     assert_eq!(state.volume, 100.0);
     assert!(!state.is_playing && !state.is_paused);
     assert!(!state.playback_started && !state.open_failed);
+    // Nothing has played, so the audio check waits for a later poll.
+    assert_eq!(state.position, 0.0);
+    assert!(!engine.audio_logged_playing);
 }
 
 #[test]
@@ -332,6 +335,29 @@ fn leaves_audio_off_when_no_audio_output_is_open() {
         2
     );
     assert_eq!(mpv(&engine).get_property::<String>("aid").unwrap(), "no");
+}
+
+#[test]
+fn turns_audio_back_on_when_an_output_is_open() {
+    let media = MediaDir::new();
+    let audio = media.file("tone.wav", &wav(4));
+    // The filter graph sends the file's audio track to the output itself, so
+    // an output is open while `aid` reads `no`. That is the state the engine
+    // repairs. Setting `aid` writes the option, which is where the test sees
+    // the engine's choice.
+    let mut engine = engine(&[("lavfi-complex", "[aid1] anull [ao]")]);
+    start(&mut engine, &audio, None);
+    let player = mpv(&engine);
+    player.set_property("options/aid", "no").unwrap();
+    assert_eq!(player.get_property::<String>("aid").unwrap(), "no");
+    assert_eq!(player.get_property::<String>("current-ao").unwrap(), "null");
+    assert_eq!(player.get_property::<i64>("track-list/count").unwrap(), 1);
+
+    engine.ensure_audio_selected();
+    assert_eq!(
+        player.get_property::<String>("options/aid").unwrap(),
+        "auto"
+    );
 }
 
 /// Linux sets the audio properties after mpv starts, since some builds

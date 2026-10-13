@@ -13,10 +13,14 @@ A timeout usually means the change made a loop run forever, which a user would
 notice too. Unviable mutants didn't compile, so they don't count.
 
 Usage:
-  python3 scripts/mutants-summary.py MUTANTS_OUT [MUTANTS_OUT ...]
+  python3 scripts/mutants-summary.py [--title TITLE] MUTANTS_OUT [MUTANTS_OUT ...]
+
+TITLE is the heading, "Mutation testing" by default. A run that tests several
+crates writes one section for each.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections import defaultdict
@@ -72,15 +76,18 @@ def mutant_list(title: str, mutants: list[str]) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
-        print(__doc__.strip(), file=sys.stderr)
-        return 1
+    parser = argparse.ArgumentParser(
+        description="Summarize cargo-mutants results as Markdown.",
+    )
+    parser.add_argument("--title", default="Mutation testing")
+    parser.add_argument("folders", nargs="+", metavar="MUTANTS_OUT")
+    args = parser.parse_args(argv)
 
     totals = dict.fromkeys(COUNTS, 0)
     missed: list[str] = []
     timeouts: list[str] = []
     absent: list[str] = []
-    for arg in argv:
+    for arg in args.folders:
         folder = Path(arg)
         outcomes = folder / "outcomes.json"
         if not outcomes.exists():
@@ -97,7 +104,7 @@ def main(argv: list[str]) -> int:
     score = f"{100 * detected / built:.1f}%" if built else "n/a"
 
     out = [
-        "## Mutation testing",
+        f"## {args.title}",
         "",
         "| Caught | Missed | Timed out | Unviable | Score |",
         "| ---: | ---: | ---: | ---: | ---: |",
