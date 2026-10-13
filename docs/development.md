@@ -220,6 +220,26 @@ change doesn't fail either run. Only an error does, such as a build that breaks.
 pull request job's summary, and the weekly run's report job, list the missed changes
 by file.
 
+[StrykerJS](https://stryker-mutator.io) does the same for the frontend helpers in
+`apps/player/src/lib`. It changes one thing at a time, such as a condition or a
+string, and runs only the Vitest tests that reached that code in a first run without
+changes. Testing all of `src/lib` takes about 15 minutes on a 10-core Mac. From
+`apps/player`, test it all or name the lines you changed:
+
+```bash
+pnpm test:mutation
+pnpm exec stryker run --mutate "src/lib/format.ts:20-31"
+```
+
+`--mutate` takes file names, each with an optional range of lines after a colon. It
+replaces the list in `stryker.config.mjs`, so leave out the test files. The reports go
+to `apps/player/reports/mutation/`, which git ignores, and `index.html` there shows
+each change in its file. `vitest.stryker.config.ts` works around a bug in Stryker's
+Vitest runner, and its comment says when it can go.
+
+CI runs Stryker on the lines a pull request changes in `src/lib`, and on all of it on
+`dev` each Monday. A change that survives doesn't fail either run.
+
 ## Production build
 
 ```bash
@@ -278,6 +298,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
 | [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch the Rust crates, Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A pull request tests only the lines it changes, in the crates it changes. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
+| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or Vitest setup or their versions. Every Monday, the schedule starts a run on `dev`. A surviving change is reported and fails nothing. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

@@ -16,7 +16,8 @@
 		"tauri:desktop": "pnpm --filter ./apps/player tauri",
 		"test": "cargo test -p mvp-core && pnpm --filter ./apps/player test",
 		"test:core": "cargo test -p mvp-core",
-		"test:desktop": "pnpm --filter ./apps/player test"
+		"test:desktop": "pnpm --filter ./apps/player test",
+		"test:desktop:mutation": "pnpm --filter ./apps/player test:mutation"
 	},
 	"lint-staged": {
 		"apps/**/*.{ts,tsx,js,jsx,json,css,md}": [
