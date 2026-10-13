@@ -12,9 +12,21 @@ const parseTimestamp = (ts: string): number => {
 	return h * 3600 + m * 60 + s;
 };
 
-/** Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text. */
+/**
+ * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
+ *
+ * React shows the result as plain text, never as HTML. With this pattern a
+ * second pass never finds anything, but CodeQL's incomplete sanitization check
+ * only accepts a replacement that repeats until nothing changes, so keep the loop.
+ */
 const stripTags = (text: string): string => {
-	return text.replace(/<[^>]+>/g, "").trim();
+	let stripped = text;
+	let previous: string;
+	do {
+		previous = stripped;
+		stripped = stripped.replace(/<[^>]+>/g, "");
+	} while (stripped !== previous);
+	return stripped.trim();
 };
 
 /** Parse SRT file content into an array of SubtitleCue objects. */
