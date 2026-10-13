@@ -114,6 +114,8 @@ mod tests {
     /// Runs `start_queued` against a list where a started item turns
     /// `Downloading` and an item in `broken` fails. With `mark_failed` a
     /// failure leaves the active list, as when its record turns `Failed`.
+    /// The list can be read 10 times, so a run that would never end fails
+    /// instead.
     fn run(
         ids: &[&str],
         limit: usize,
@@ -126,9 +128,16 @@ mod tests {
                 .collect::<Items>(),
         );
         let mut attempts = Vec::new();
+        let mut reads = 0;
         let result = start_queued(
             limit,
-            || Ok(items.borrow().clone()),
+            || {
+                reads += 1;
+                if reads > 10 {
+                    return Err("the list was read too many times".into());
+                }
+                Ok(items.borrow().clone())
+            },
             |id| {
                 attempts.push(id.to_string());
                 let mut items = items.borrow_mut();

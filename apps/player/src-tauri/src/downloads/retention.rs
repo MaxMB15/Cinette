@@ -103,7 +103,7 @@ fn playing_file<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::downloads::test_support::{add_download, download, finished, wait_until};
-    use crate::test_support::{poison, TestApp};
+    use crate::test_support::{poison, Logged, TestApp};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -120,21 +120,35 @@ mod tests {
         (app, file)
     }
 
+    /// Runs one check and returns what it logged.
+    fn check_and_log(app: &TestApp) -> String {
+        let logged = Logged::default();
+        let _logging = logged.start();
+        check(&app.handle());
+        logged.text()
+    }
+
     #[test]
     fn a_check_deletes_what_is_due() {
         let (app, file) = app_with_a_due_download();
-        check(&app.handle());
+        let log = check_and_log(&app);
         assert!(download(&app, "a").is_none());
         assert!(!file.exists());
+        assert!(
+            log.contains("Deleted 1 download(s) past the retention setting"),
+            "{log}"
+        );
     }
 
     #[test]
     fn a_check_with_nothing_due_deletes_nothing() {
         let (app, file) = app_with_a_due_download();
         app.downloads().set_retention_days(None);
-        check(&app.handle());
+        let log = check_and_log(&app);
         assert_eq!(download(&app, "a"), Some(finished("a", &file)));
         assert!(file.exists());
+        // A check that did nothing has nothing to say.
+        assert_eq!(log, "");
     }
 
     #[test]
@@ -142,9 +156,10 @@ mod tests {
         let (app, file) = app_with_a_due_download();
         let state = app.state();
         poison(&state.cache);
-        check(&app.handle());
+        let log = check_and_log(&app);
         state.cache.clear_poison();
         assert!(download(&app, "a").is_some() && file.exists());
+        assert!(log.contains("Retention check failed"), "{log}");
 
         check(&app.handle());
         assert!(download(&app, "a").is_none());
@@ -155,12 +170,28 @@ mod tests {
         let (app, file) = app_with_a_due_download();
         let manager = app.downloads();
         poison(&manager.retention_days);
-        check(&app.handle());
+        let log = check_and_log(&app);
         manager.retention_days.clear_poison();
         assert!(download(&app, "a").is_some() && file.exists());
+        assert!(log.contains("Retention check panicked"), "{log}");
 
         check(&app.handle());
         assert!(download(&app, "a").is_none());
+    }
+
+    #[test]
+    fn the_app_checks_every_hour() {
+        assert_eq!(CHECK_INTERVAL, Duration::from_secs(3600));
+    }
+
+    /// The app's own checks start an hour after launch, so a download that
+    /// came due while the app was closed isn't gone as soon as it opens.
+    #[test]
+    fn the_app_waits_before_its_first_check() {
+        let (app, file) = app_with_a_due_download();
+        start(&app.handle());
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(download(&app, "a").is_some() && file.exists());
     }
 
     #[test]
