@@ -374,6 +374,7 @@ impl MpvState {
         start_pos: Option<f64>,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
+        use tauri::Emitter;
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
             engine.create(&[])?;
@@ -381,6 +382,13 @@ impl MpvState {
             engine.set_current_url(url);
             engine.create_event_client().ok()
         };
+        // mpv plays in a window of its own here, which the frontend can't
+        // draw subtitles over.
+        self.fallback_active.store(true, Ordering::Release);
+        let _ = app.emit(
+            "mpv://render-fallback",
+            serde_json::json!({ "reason": "no embedded renderer on this platform" }),
+        );
         self.spawn_reconnect_monitor(event_client, url, app);
         Ok(())
     }

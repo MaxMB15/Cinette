@@ -160,10 +160,12 @@ export const SubtitlePicker = ({
 		try {
 			await mpvSubRemove(-1).catch(() => {});
 			const localPath = await downloadSubtitle(entry.fileId);
-			const content = await readSubtitleFile(localPath);
-			const cues = parseSrt(content);
-			// mpv draws a file the overlay can't read.
-			mpvSubAdd(localPath, cues.length > 0).catch(() => {});
+			// mpv also reads a file that isn't UTF-8, and draws any file the
+			// overlay can't read. A file that neither can read is an error.
+			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
+			const added = mpvSubAdd(localPath, cues.length > 0);
+			if (cues.length > 0) added.catch(() => {});
+			else await added;
 			setSelectedFileId(entry.fileId);
 			// Compute rank within this language group for auto-selection on next episode.
 			const langGroup = grouped.find((g) => g.lang === entry.languageCode);

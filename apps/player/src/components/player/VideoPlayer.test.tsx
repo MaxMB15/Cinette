@@ -226,6 +226,12 @@ vi.mock("./SubtitlePicker", () => ({
 			<button type="button" onClick={() => props.onDelayChange?.(1.5)}>
 				Delay subtitles
 			</button>
+			<button type="button" onClick={() => props.onFontSizeChange?.(26)}>
+				Bigger subtitles
+			</button>
+			<button type="button" onClick={() => props.onFontFamilyChange?.("Georgia, serif")}>
+				Serif subtitles
+			</button>
 			<button type="button" onClick={() => props.onSettingsModeChange?.(true)}>
 				Adjust subtitles
 			</button>
@@ -1848,7 +1854,155 @@ describe("subtitles", () => {
 		await setMpv({ state: playing(ep3.url, 2, 1300) });
 		expect(screen.queryByText("The tide is turning")).not.toBeInTheDocument();
 		expect(tauri.downloadSubtitle.mock.calls).toEqual([[302]]);
+		// mpv plays episode three now, so it doesn't get episode two's file.
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+	});
+
+	it("lets mpv draw the next episode's subtitles when the file isn't UTF-8", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		tauri.readSubtitleFile.mockRejectedValue(new Error("stream did not contain valid UTF-8"));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+	});
+
+	it("shows the subtitles as they were when the player is opened again from the sidebar", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Adjust subtitles" }));
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(1000, 500));
+		fireEvent.mouseDown(subtitleBox("Sample subtitle text"), { clientX: 500, clientY: 440 });
+		fireEvent.mouseMove(document, { clientX: 600, clientY: 390 });
+		fireEvent.mouseUp(document);
+		fireEvent.click(screen.getByRole("button", { name: "Delay subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Bigger subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Serif subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+
+		await goToPage("/player");
+		// The delay of 1.5 seconds shows the line from 1 to 4 seconds at 0.2.
+		await setMpv({ state: playing(MOVIE_URL, 0.2, 3600) });
+		expect(screen.getByText("Mind the lantern").parentElement).toHaveStyle({
+			fontSize: "26px",
+			fontFamily: "Georgia, serif",
+		});
+		expect(subtitleBox("Mind the lantern").style.left).toBe("60%");
+		expect(subtitleBox("Mind the lantern").style.top).toBe("78%");
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+	});
+
+	it("keeps the language for the next episode when the player is opened again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		await goToPage("/player");
+		await press("n");
+		await flush();
+		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(202);
+	});
+
+	it.each([
+		["the Stop button", () => fireEvent.click(screen.getByRole("button", { name: "Stop" }))],
+		["Escape", () => press("Escape")],
+	])("forgets the subtitles once %s stops playback", async (_how, stop) => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await stop();
+		await flush();
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+	});
+
+	it("starts with no subtitles when the same movie is opened again from a list", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+	});
+
+	describe("kept from when the player page was last open", () => {
+		/** Saves subtitles for `channelId`, as the player does when its page closes. */
+		const keepSubtitles = (channelId: string) =>
+			sessionStorage.setItem(
+				"mvp_lastSubtitles",
+				JSON.stringify({
+					channelId,
+					fileId: 301,
+					entry: { fileId: 301, languageCode: "en", format: "srt" },
+					cues: [{ start: 1, end: 4, text: "Kept from before" }],
+					delay: 0,
+					position: { x: 50, y: 88 },
+					fontSize: 18,
+					fontFamily: "system-ui, sans-serif",
+					preference: null,
+				})
+			);
+
+		it("shows them over the item that played on", async () => {
+			tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+			sessionStorage.setItem("mvp_lastChannel", JSON.stringify(ep1));
+			sessionStorage.setItem("mvp_lastSeriesEpisodes", JSON.stringify([ep1, ep2]));
+			keepSubtitles(ep1.id);
+			renderPlayer(null);
+			await flush();
+			await setMpv({ state: playing(ep1.url, 2, 1300) });
+			expect(screen.getByText("Kept from before")).toBeInTheDocument();
+		});
+
+		it("shows them only once, not when the viewer comes back to the episode", async () => {
+			tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+			sessionStorage.setItem("mvp_lastChannel", JSON.stringify(ep1));
+			sessionStorage.setItem("mvp_lastSeriesEpisodes", JSON.stringify([ep1, ep2]));
+			keepSubtitles(ep1.id);
+			renderPlayer(null);
+			await flush();
+			await press("n");
+			await press("p");
+			await setMpv({ state: playing(ep1.url, 2, 1300) });
+			expect(loadedUrls()).toEqual([ep2.url, ep1.url]);
+			expect(screen.queryByText("Kept from before")).not.toBeInTheDocument();
+		});
+
+		it("leaves them out over another item", async () => {
+			tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+			sessionStorage.setItem("mvp_lastChannel", JSON.stringify(ep2));
+			keepSubtitles(ep1.id);
+			renderPlayer(null);
+			await flush();
+			await setMpv({ state: playing(ep2.url, 2, 1300) });
+			expect(screen.getByText(ep2.name)).toBeInTheDocument();
+			expect(screen.queryByText("Kept from before")).not.toBeInTheDocument();
+		});
 	});
 
 	it("moves the subtitles where they're dragged while they're being adjusted", async () => {

@@ -324,6 +324,56 @@ describe("SubtitlePicker search and selection", () => {
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false);
 	});
 
+	it("lets the player draw a subtitle file that isn't UTF-8", async () => {
+		tauri.readSubtitleFile.mockRejectedValue(new Error("stream did not contain valid UTF-8"));
+		const { onSubtitleSelected, onClose } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, [], dutch, 0)
+		);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false);
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(screen.queryByText("Failed to load subtitle. Try another.")).not.toBeInTheDocument();
+	});
+
+	it("asks for another subtitle when neither it nor the player can read the file", async () => {
+		const failure = new Error("Can not open external file");
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		tauri.mpvSubAdd.mockRejectedValue(failure);
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const { onSubtitleSelected, onClose } = renderPicker();
+			await screen.findByText("en (2)");
+
+			fireEvent.click(entryButton("Sintel.NL"));
+			expect(
+				await screen.findByText("Failed to load subtitle. Try another.")
+			).toBeInTheDocument();
+			expect(consoleError).toHaveBeenCalledWith(
+				"[SubtitlePicker] subtitle load error:",
+				failure
+			);
+			expect(onSubtitleSelected).not.toHaveBeenCalled();
+			expect(onClose).not.toHaveBeenCalled();
+		} finally {
+			consoleError.mockRestore();
+		}
+	});
+
+	it("shows subtitles it can read even when the player can't add them", async () => {
+		tauri.mpvSubAdd.mockRejectedValue(new Error("no mpv instance"));
+		const { onSubtitleSelected } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, CUES, dutch, 0)
+		);
+		expect(screen.queryByText("Failed to load subtitle. Try another.")).not.toBeInTheDocument();
+	});
+
 	it("shows a spinner on the subtitle loading and holds the others until it's done", async () => {
 		let finish!: (path: string) => void;
 		tauri.downloadSubtitle.mockReturnValue(

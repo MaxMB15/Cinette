@@ -63,6 +63,12 @@ import {
 import { usePlayerFocus } from "@/hooks/usePlayerFocus";
 import { useSubtitleNudge } from "@/hooks/useSubtitleNudge";
 import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
+import {
+	readSubtitleSession,
+	saveSubtitleSession,
+	type SubtitlePreference,
+	type SubtitleSession,
+} from "@/lib/subtitle-session";
 import { formatSkip, formatTime } from "@/lib/format";
 import {
 	readSkipIntervals,
@@ -220,13 +226,12 @@ export const PlayerView = () => {
 	// Guards against out-of-order resolution when items are opened in quick succession.
 	const startRequestRef = useRef(0);
 	const loadRequestRef = useRef(0);
+	// Set when the viewer stops playback, which also forgets the subtitles.
+	const stoppedRef = useRef(false);
 
 	// Remembers which language + rank-within-language the user last picked so the
 	// same subtitle can be auto-selected when navigating to the next episode.
-	const [subtitlePreference, setSubtitlePreference] = useState<{
-		languageCode: string;
-		rankInLanguage: number;
-	} | null>(null);
+	const [subtitlePreference, setSubtitlePreference] = useState<SubtitlePreference | null>(null);
 	// Refs used by the auto-load effect to avoid stale closures.
 	const subtitlePreferenceRef = useLatestRef(subtitlePreference);
 	// Incremented each time an episode navigation should trigger subtitle auto-load.
@@ -239,6 +244,11 @@ export const PlayerView = () => {
 		channel?: Channel;
 		seriesEpisodes?: Channel[];
 	} | null;
+	// Opened without a new item, the page shows the one that played on while
+	// it was closed, and the subtitles it had then.
+	const [keptSubtitles, setKeptSubtitles] = useState(() =>
+		navState?.url ? null : readSubtitleSession()
+	);
 
 	// useLayoutEffect ensures the background is set BEFORE the browser paints,
 	// preventing a transparent flash when navigating to the player page.
@@ -543,17 +553,45 @@ export const PlayerView = () => {
 	}, [seriesEpisodes]);
 
 	// A new item starts with no subtitles. Resetting them while rendering keeps
-	// the old item's from showing with it for a frame.
+	// the old item's from showing with it for a frame. The item that played on
+	// while the page was closed gets back the subtitles it had.
 	const channelChanged = useChanged(activeChannel?.id);
 	if (channelChanged) {
+		const kept = keptSubtitles?.channelId === activeChannel?.id ? keptSubtitles : null;
+		setKeptSubtitles(null);
 		setShowSubtitlePicker(false);
-		setSelectedSubtitleId(null);
-		setSubtitleCues([]);
-		setSelectedSubtitleEntry(null);
+		setSelectedSubtitleId(kept?.fileId ?? null);
+		setSubtitleCues(kept?.cues ?? []);
+		setSelectedSubtitleEntry(kept?.entry ?? null);
 		setSubtitleEditMode(false);
-		setSubtitleDelay(0);
-		setSubtitlePos(DEFAULT_SUBTITLE_POSITION);
+		setSubtitleDelay(kept?.delay ?? 0);
+		setSubtitlePos(kept?.position ?? DEFAULT_SUBTITLE_POSITION);
+		if (kept) {
+			setSubtitleFontSize(kept.fontSize);
+			setSubtitleFontFamily(kept.fontFamily);
+			setSubtitlePreference(kept.preference);
+		}
 	}
+
+	// mpv doesn't draw the subtitles the overlay draws, so keep them for when
+	// this page opens again while the item plays on.
+	const subtitleSessionRef = useLatestRef<SubtitleSession | null>(
+		activeChannel && {
+			channelId: activeChannel.id,
+			fileId: selectedSubtitleId,
+			entry: selectedSubtitleEntry,
+			cues: subtitleCues,
+			delay: subtitleDelay,
+			position: subtitlePos,
+			fontSize: subtitleFontSize,
+			fontFamily: subtitleFontFamily,
+			preference: subtitlePreference,
+		}
+	);
+	useEffect(
+		() => () => saveSubtitleSession(stoppedRef.current ? null : subtitleSessionRef.current),
+		[subtitleSessionRef]
+	);
 
 	// Load the details up front for a movie or series, so the info sheet opens
 	// with them and subtitles can search by IMDb id. A recording is live TV.
@@ -609,11 +647,11 @@ export const PlayerView = () => {
 				const entry = langEntries[Math.min(pref.rankInLanguage, langEntries.length - 1)];
 				await mpvSubRemove(-1).catch(() => {});
 				const localPath = await downloadSubtitle(entry.fileId);
-				const content = await readSubtitleFile(localPath);
-				const cues = parseSrt(content);
-				// mpv draws a file the overlay can't read.
-				mpvSubAdd(localPath, cues.length > 0).catch(() => {});
+				// mpv also reads a file that isn't UTF-8, and draws any file the
+				// overlay can't read.
+				const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 				if (cancelled) return;
+				mpvSubAdd(localPath, cues.length > 0).catch(() => {});
 				setSelectedSubtitleId(entry.fileId);
 				setSubtitleCues(cues);
 				setSelectedSubtitleEntry(entry);
@@ -995,6 +1033,7 @@ export const PlayerView = () => {
 						// Note: playStartTimeRef is NOT nulled here intentionally.
 						// The unmount cleanup records the elapsed time when the route changes.
 						flushProgress();
+						stoppedRef.current = true;
 						mpv.stop();
 						navigate("/");
 					}
@@ -1030,6 +1069,7 @@ export const PlayerView = () => {
 	const handleStop = useCallback(() => {
 		recordEnd();
 		flushProgress();
+		stoppedRef.current = true;
 		mpv.stop();
 		navigate("/");
 	}, [mpv, navigate, flushProgress, recordEnd]);
