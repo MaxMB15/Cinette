@@ -102,9 +102,11 @@ mpv's own controls instead.
 `MacosGlRenderer` adds an `NSOpenGLView` with an OpenGL 3.2 Core context below the
 webview and gives libmpv an OpenGL render context for it. Decoding uses VideoToolbox.
 
-Every AppKit and OpenGL call has to run on the main thread, through
-`dispatch::Queue::main().exec_sync()` or `exec_async()`. Raw pointers cross the
-dispatch boundary as `usize` to satisfy `Send`.
+Every AppKit and OpenGL call has to run on the main thread. The renderer uses the
+objc2 bindings and keeps its AppKit objects and render state in dispatch2's
+`MainThreadBound`, which only hands them out with a `MainThreadMarker`.
+`run_on_main()` runs work on the main thread and waits for it. A small
+`on_main_async()` helper queues work without waiting.
 
 Homebrew's libmpv only supports Vulkan, so the build uses libmpv compiled from source
 with OpenGL enabled (`scripts/build-libmpv.sh`).
