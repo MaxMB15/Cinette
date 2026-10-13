@@ -1323,7 +1323,8 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_that_ran_five_minutes_gets_all_its_tries_again() {
+    fn retry_reset_is_five_minutes() {
+        // The app gives a stream that ran this long all its tries again.
         assert_eq!(RETRY_RESET_SECS, 300);
     }
 

@@ -11,7 +11,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Fixed
 
 - On macOS, the player kept the video view and its graphics context from every channel it played, so memory use grew each time you switched channels. It now frees them (#251).
-- A log line or a recording's error could still show part of an Xtream login in a few cases. That happened when the password had a `?` or `#` and later a space, when a catch-up address had a space in the password, or when the user name or the password was empty. Logs and errors now hide the whole login in these cases too (#258).
+- On iPhone and iPad, the app's log could still show part of an Xtream login from a stream's link. That happened when the password had a `?` or `#` and then a space, or when a catch-up link had a space in the password. An error from a download or a recording could also show the password when the link had no user name, or the user name when it had no password. In these cases the log and the errors now hide the whole login (#258).
 
 ## [0.6.1] - 2026-10-13
 
