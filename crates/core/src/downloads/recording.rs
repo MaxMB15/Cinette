@@ -709,6 +709,18 @@ mod tests {
     }
 
     #[test]
+    fn only_scheduled_recordings_extend_the_backstop() {
+        let first = rec("first", "c1", DownloadStatus::Recording, 0, 1_000);
+        let records = vec![
+            first.clone(),
+            rec("done", "c1", DownloadStatus::Completed, 1_000, 5_000),
+            rec("cancelled", "c1", DownloadStatus::Cancelled, 900, 6_000),
+            rec("failed", "c1", DownloadStatus::Failed, 1_000, 7_000),
+        ];
+        assert_eq!(backstop_secs(&records, &first, &[], 100), 900 + 300);
+    }
+
+    #[test]
     fn checks_the_window() {
         assert!(check_window(100, 200, 50).is_ok());
         // Started already but not over, as with Record now.
@@ -716,6 +728,16 @@ mod tests {
         assert!(check_window(200, 200, 50).is_err());
         assert!(check_window(100, 200, 200).is_err());
         assert!(check_window(0, MAX_LENGTH_SECS + 1, 0).is_err());
+    }
+
+    #[test]
+    fn a_recording_can_be_exactly_twelve_hours_long() {
+        let now = 1_791_800_000;
+        assert_eq!(check_window(now, now + 12 * 3_600, now), Ok(()));
+        assert_eq!(
+            check_window(now, now + 12 * 3_600 + 1, now),
+            Err("A recording can be up to 12 hours long.")
+        );
     }
 
     #[test]
@@ -751,6 +773,15 @@ mod tests {
         assert_eq!((r.program_start, r.program_end), (None, None));
         // Without them the program is the whole window.
         assert_eq!((core_start(&r), core_end(&r)), (100, 200));
+
+        // A program that ends as it starts has no length to go by either.
+        let empty = GuideProgram {
+            title: "Evening news".into(),
+            start: 150,
+            end: 150,
+        };
+        let r = new_scheduled("rec-2", &source, Some(empty), 100, 200, 50);
+        assert_eq!((r.program_start, r.program_end), (None, None));
     }
 
     #[test]
@@ -779,7 +810,12 @@ mod tests {
         old.downloaded_bytes = 5_000;
         old.program_title = Some("Evening news".into());
         old.error = Some("The connection to the provider failed.".into());
+        old.avg_rate_bps = Some(250_000);
+        old.finished_at = Some(390);
+        old.keep = true;
+        old.last_played_at = Some(395);
         let rest = rest_of(&old, "rec-2", 430, 400);
+        assert_eq!(rest.id, "rec-2");
         assert_eq!(rest.channel_id, "rec-2");
         assert_eq!(rest.status, DownloadStatus::Scheduled);
         assert_eq!((rest.start_at, rest.end_at), (Some(430), Some(1_000)));
@@ -787,6 +823,10 @@ mod tests {
         assert_eq!(rest.downloaded_bytes, 0);
         assert!(rest.dest_path.is_empty());
         assert!(rest.error.is_none());
+        assert_eq!(rest.avg_rate_bps, None);
+        assert_eq!(rest.finished_at, None);
+        assert!(!rest.keep);
+        assert_eq!(rest.last_played_at, None);
         assert_eq!(rest.source_channel_id.as_deref(), Some("c1"));
         assert_eq!(rest.program_title.as_deref(), Some("Evening news"));
     }
@@ -900,6 +940,18 @@ mod tests {
             Plan {
                 actions: vec![Action::Start("due".into())],
                 next_check: Some(300),
+            }
+        );
+    }
+
+    #[test]
+    fn starts_a_recording_at_its_start_time() {
+        let records = vec![rec("due", "c1", DownloadStatus::Scheduled, 200, 500)];
+        assert_eq!(
+            plan(&records, &[], 200),
+            Plan {
+                actions: vec![Action::Start("due".into())],
+                next_check: Some(500),
             }
         );
     }
@@ -1117,6 +1169,42 @@ mod tests {
     }
 
     #[test]
+    fn hands_over_from_a_recording_still_on_not_one_that_should_have_stopped() {
+        // The check comes late. `old` should have stopped at 1 880, when
+        // `match` began, so `weather` hands its connection over.
+        let records = vec![
+            rec("old", "p1-ch-1", DownloadStatus::Recording, 0, 1_880),
+            program(
+                "weather",
+                "p1-ch-3",
+                "Weather",
+                DownloadStatus::Recording,
+                1_000,
+                2_000,
+            ),
+            program(
+                "match",
+                "p1-ch-2",
+                "Sports One",
+                DownloadStatus::Scheduled,
+                2_000,
+                5_000,
+            ),
+        ];
+        assert_eq!(
+            plan(&records, &providers(), 2_000),
+            Plan {
+                actions: vec![
+                    Action::Stop("weather".into()),
+                    Action::Stop("old".into()),
+                    Action::Start("match".into()),
+                ],
+                next_check: Some(5_120),
+            }
+        );
+    }
+
+    #[test]
     fn skips_a_program_that_is_already_over_when_both_are_due_at_launch() {
         let records = vec![
             program(
@@ -1232,6 +1320,11 @@ mod tests {
         assert_eq!(retry_at(&r, 3, 1_000), None);
         // Less than a minute would be left by then.
         assert_eq!(retry_at(&r, 0, 9_920), None);
+    }
+
+    #[test]
+    fn a_stream_that_ran_five_minutes_gets_all_its_tries_again() {
+        assert_eq!(RETRY_RESET_SECS, 300);
     }
 
     #[test]
