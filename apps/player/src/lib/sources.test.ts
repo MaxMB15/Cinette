@@ -51,6 +51,9 @@ describe("describeSource", () => {
 	it("omits the extension when there is none", () => {
 		expect(describeSource("http://host.tv/live/stream")).toBe("host.tv");
 	});
+	it("takes the extension from the file name, not a folder", () => {
+		expect(describeSource("http://example.test/v1.20/live/stream")).toBe("example.test");
+	});
 	it("returns null for invalid urls", () => {
 		expect(describeSource("not a url")).toBeNull();
 	});

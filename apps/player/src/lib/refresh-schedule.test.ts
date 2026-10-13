@@ -159,6 +159,23 @@ describe("createRefreshTracker", () => {
 		vi.mocked(console.error).mockRestore();
 	});
 
+	it("logs the key, the wait before the next try and the error", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { tracker, advance } = setup();
+		const down = new Error("server down");
+
+		tracker.run("playlist:p1", () => Promise.reject(down));
+		await settle();
+		advance(RETRY_FIRST_DELAY_MS);
+		tracker.run("playlist:p1", () => Promise.reject(down));
+		await settle();
+		expect(error.mock.calls).toEqual([
+			["[refresh] playlist:p1 failed, trying again in 5 min:", down],
+			["[refresh] playlist:p1 failed, trying again in 10 min:", down],
+		]);
+		error.mockRestore();
+	});
+
 	it("waits longer after each failure before trying again", async () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 		const { tracker, advance } = setup();

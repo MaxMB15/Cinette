@@ -52,6 +52,21 @@ describe("browse-state", () => {
 		expect(consumeBrowseState().search).toBe("matrix");
 	});
 
+	it("restores the state saved before the page reloaded", () => {
+		sessionStorage.setItem(
+			"mvp_browseState",
+			JSON.stringify({ tab: "series", search: "show" })
+		);
+		expect(consumeBrowseState()).toEqual({ tab: "series", search: "show" });
+	});
+
+	it("doesn't take time off for a negative amount", () => {
+		saveBrowseSearch("matrix");
+		addWatchedTime(SEARCH_RESET_AFTER_MS);
+		addWatchedTime(-1);
+		expect(consumeBrowseState().search).toBe("");
+	});
+
 	it("ignores non-positive amounts", () => {
 		saveBrowseSearch("matrix");
 		addWatchedTime(0);
