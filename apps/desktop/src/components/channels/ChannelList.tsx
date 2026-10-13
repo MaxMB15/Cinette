@@ -350,10 +350,16 @@ export const ChannelList = () => {
 		setGuideRange(guideRangeFor(now, windowStart, windowEnd));
 	}
 
-	// Load the guide for all live channels when its range moves, and each time
-	// the Live tab opens or the channels change.
+	// The Live tab shows the guide, and so does the Favorites tab for a live
+	// favorite that has a guide id.
+	const showsGuide =
+		activeTab === "live" ||
+		(activeTab === "favorites" && byType.live.some((ch) => ch.isFavorite && ch.tvgId));
+
+	// Load the guide for all live channels when its range moves, each time a
+	// tab that shows it opens, and when the channels change.
 	useEffect(() => {
-		if (activeTab !== "live" || channels.length === 0 || !guideRange) return;
+		if (!showsGuide || channels.length === 0 || !guideRange) return;
 		// A load for an older range can finish after the current one.
 		let stale = false;
 		getEpgForLiveChannels(guideRange.from, guideRange.to)
@@ -371,7 +377,7 @@ export const ChannelList = () => {
 		return () => {
 			stale = true;
 		};
-	}, [activeTab, channels.length, guideRange]);
+	}, [showsGuide, channels.length, guideRange]);
 
 	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.

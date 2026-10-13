@@ -273,11 +273,12 @@ const pinned = (groupName: string): PinnedGroup => ({
 	sortOrder: 0,
 });
 
-/** 10:00 local time on a Wednesday, far from any daylight saving change. */
-const NOW = Math.floor(new Date(2026, 5, 10, 10, 0, 0).getTime() / 1000);
-
-/** The start of NOW's hour. The guide loads whole hours from there. */
-const NOW_HOUR = Math.floor(NOW / 3600) * 3600;
+/**
+ * 10:00 local time on a Wednesday, far from any daylight saving change, moved
+ * back to the start of its UTC hour. The guide's hours and half hours are UTC
+ * ones, so in a timezone a half or quarter hour off it's 9:30 or 9:45 there.
+ */
+const NOW = Math.floor(new Date(2026, 5, 10, 10, 0, 0).getTime() / 3_600_000) * 3600;
 
 const freezeClock = () => {
 	vi.useFakeTimers({ toFake: ["Date"] });
@@ -552,10 +553,7 @@ describe("ChannelList live rows", () => {
 		tauri.getEpgForLiveChannels.mockResolvedValue(programs);
 		await renderList();
 
-		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(
-			NOW_HOUR - 2 * 3600,
-			NOW_HOUR + 5 * 3600
-		);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(NOW - 2 * 3600, NOW + 5 * 3600);
 		const newsRow = screen.getByText("News 24").closest(".group") as HTMLElement;
 		expect(within(newsRow).getByTitle("Morning Briefing")).toBeInTheDocument();
 		expect(within(newsRow).getByTitle("Market Watch")).toBeInTheDocument();
@@ -650,8 +648,8 @@ describe("ChannelList live rows", () => {
 		// About 6.1 hours fit, a little more than 2 back and 4 ahead, and the
 		// guide loads one more hour ahead than that.
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
-			NOW_HOUR - 3 * 3600,
-			NOW_HOUR + 6 * 3600
+			NOW - 3 * 3600,
+			NOW + 6 * 3600
 		);
 	});
 
@@ -673,9 +671,9 @@ describe("ChannelList live rows", () => {
 	it("loads more of the guide once the clock carries the window past it", async () => {
 		driveClock();
 		await renderList();
-		// The guide loaded up to 5 hours after NOW_HOUR, and a narrow window
-		// ends 2 hours after now, so it reaches there 3 hours after NOW_HOUR.
-		const reachesEnd = NOW_HOUR + 3 * 3600;
+		// The guide loaded up to 5 hours after NOW, and a narrow window ends 2
+		// hours after now, so it reaches there 3 hours after NOW.
+		const reachesEnd = NOW + 3 * 3600;
 		vi.setSystemTime((reachesEnd - 30) * 1000);
 
 		act(() => vi.advanceTimersByTime(30_000));
@@ -683,10 +681,7 @@ describe("ChannelList live rows", () => {
 
 		act(() => vi.advanceTimersByTime(30_000));
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
-		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
-			NOW_HOUR + 3600,
-			NOW_HOUR + 9 * 3600
-		);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600);
 	});
 
 	it("doesn't load the guide again when it gets narrower", async () => {
@@ -1396,6 +1391,32 @@ describe("ChannelList favorites tab", () => {
 		fireEvent.click(screen.getByText("harbor lights"));
 		await screen.findByRole("dialog");
 		expect(tauri.getXtreamSeriesEpisodes.mock.calls).toEqual([["xs-2"], ["xs-1"]]);
+	});
+
+	it("shows the guide on its live favorites", async () => {
+		freezeClock();
+		state.channels = [{ ...news, isFavorite: true }, weather];
+		tauri.getEpgForLiveChannels.mockResolvedValue([
+			{
+				channelId: "news.tv",
+				title: "Morning Briefing",
+				startTime: NOW,
+				endTime: NOW + 3600,
+			},
+		]);
+		saveBrowseTab("favorites");
+		await renderList();
+
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledOnce();
+		const newsRow = screen.getByText("News 24").closest(".group") as HTMLElement;
+		expect(within(newsRow).getByTitle("Morning Briefing")).toBeInTheDocument();
+	});
+
+	it("loads no guide when no live favorite has one", async () => {
+		saveBrowseTab("favorites");
+		await renderList();
+		expect(screen.getByText("Weather Now")).toBeInTheDocument();
+		expect(tauri.getEpgForLiveChannels).not.toHaveBeenCalled();
 	});
 
 	it("suggests adding favorites when there are none", async () => {
