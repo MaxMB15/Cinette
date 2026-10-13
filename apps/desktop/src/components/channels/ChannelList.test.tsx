@@ -15,6 +15,7 @@ import type {
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { formatHHMM } from "@/lib/epg-window";
 import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixtures";
+import { deferred } from "@/test/deferred";
 import { ChannelList } from "./ChannelList";
 
 const state = vi.hoisted(() => ({
@@ -314,6 +315,43 @@ const typeSearch = (text: string) => fireEvent.change(searchBox(), { target: { v
 const playedWith = () => state.navigate.mock.lastCall;
 
 /**
+ * Swaps in a ResizeObserver the test drives, since the one in src/test/setup.ts
+ * never reports a size. Returns the elements being watched and a function that
+ * gives one of them a new width.
+ */
+const watchResizes = () => {
+	const watching = new Map<Element, ResizeObserverCallback>();
+	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			private targets: Element[] = [];
+			constructor(private callback: ResizeObserverCallback) {}
+			observe(target: Element) {
+				this.targets.push(target);
+				watching.set(target, this.callback);
+			}
+			unobserve(target: Element) {
+				if (watching.get(target) === this.callback) watching.delete(target);
+			}
+			disconnect() {
+				for (const target of this.targets) this.unobserve(target);
+				this.targets = [];
+			}
+		}
+	);
+	const resize = (target: Element, width: number) =>
+		act(() => {
+			const callback = watching.get(target);
+			expect(callback).toBeDefined();
+			callback!(
+				[{ target, contentRect: { width } } as ResizeObserverEntry],
+				{} as ResizeObserver
+			);
+		});
+	return { watching, resize };
+};
+
+/**
  * jsdom does no layout, so every element measures 0 by 0 and the virtualizer
  * would render no rows at all. A 600 px tall scroll area makes it render the
  * rows that fit, the way a real window would.
@@ -548,45 +586,91 @@ describe("ChannelList live rows", () => {
 		expect(screen.queryByText(formatHHMM(NOW))).toBeNull();
 	});
 
-	it("shows more of the guide when the window gets wider", async () => {
+	it("shows more of the guide when it gets wider", async () => {
 		freezeClock();
-		await renderList();
+		const { resize } = watchResizes();
+		const { container } = await renderList();
 		const earlier = formatHHMM(NOW - 5400);
 		expect(screen.queryByText(earlier)).toBeNull();
 
-		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
-		fireEvent(window, new Event("resize"));
+		resize(container.firstElementChild!, 1200);
 
 		// About six hours now fit, two of them before now.
 		expect(screen.getByText(earlier)).toBeInTheDocument();
 	});
 
-	it("follows its own width when the layout around it changes", async () => {
+	it("measures and follows its width once the channels arrive at startup", async () => {
 		freezeClock();
-		const observers: { target: Element; callback: ResizeObserverCallback }[] = [];
-		vi.stubGlobal(
-			"ResizeObserver",
-			class {
-				constructor(private callback: ResizeObserverCallback) {}
-				observe(target: Element) {
-					observers.push({ target, callback: this.callback });
-				}
-				unobserve() {}
-				disconnect() {}
-			}
+		const { resize } = watchResizes();
+		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
+		state.channels = [];
+		const { container, rerender } = await renderList();
+
+		state.channels = library;
+		rerender(<ChannelList />);
+		const earlier = formatHHMM(NOW - 5400);
+		expect(screen.getByText(earlier)).toBeInTheDocument();
+
+		resize(container.firstElementChild!, 400);
+		expect(screen.queryByText(earlier)).toBeNull();
+	});
+
+	it("measures and follows its width once a playlist that was loading arrives", async () => {
+		freezeClock();
+		const { resize } = watchResizes();
+		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
+		state.loading = true;
+		const { container, rerender } = await renderList();
+
+		state.loading = false;
+		rerender(<ChannelList />);
+		const earlier = formatHHMM(NOW - 5400);
+		expect(screen.getByText(earlier)).toBeInTheDocument();
+
+		resize(container.firstElementChild!, 400);
+		expect(screen.queryByText(earlier)).toBeNull();
+	});
+
+	it("loads the guide for all of a wide window, once", async () => {
+		freezeClock();
+		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
+		await renderList();
+		// About 6.1 hours fit, a little more than 2 back and 4 ahead.
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
+			NOW - 3 * 3600,
+			NOW + 5 * 3600
 		);
+	});
+
+	it("keeps the guide for the current width when a load for an older one finishes last", async () => {
+		freezeClock();
+		const { resize } = watchResizes();
+		const guide = (title: string): EpgProgram[] => [
+			{ channelId: "news.tv", title, startTime: NOW, endTime: NOW + 3600 },
+		];
+		const narrow = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels
+			.mockReturnValueOnce(narrow.promise)
+			.mockResolvedValueOnce(guide("Market Watch"));
 		const { container } = await renderList();
-		const root = observers.find((o) => o.target === container.firstElementChild);
-		expect(root).toBeDefined();
 
-		act(() => {
-			root!.callback(
-				[{ contentRect: { width: 1200 } } as ResizeObserverEntry],
-				{} as ResizeObserver
-			);
-		});
+		resize(container.firstElementChild!, 1200);
+		await flush();
+		await act(async () => narrow.resolve(guide("Morning Briefing")));
 
-		expect(screen.getByText(formatHHMM(NOW - 5400))).toBeInTheDocument();
+		expect(screen.getByTitle("Market Watch")).toBeInTheDocument();
+		expect(screen.queryByTitle("Morning Briefing")).toBeNull();
+	});
+
+	it("stops watching its size when it unmounts", async () => {
+		const { watching } = watchResizes();
+		const { container, unmount } = await renderList();
+		const root = container.firstElementChild!;
+		expect(watching.has(root)).toBe(true);
+
+		unmount();
+
+		expect(watching.has(root)).toBe(false);
 	});
 });
 
@@ -1460,11 +1544,12 @@ describe("ChannelList virtual list", () => {
 	});
 
 	it("puts as many posters in a row as fit the width", async () => {
+		const { resize } = watchResizes();
 		state.channels = Array.from({ length: 9 }, (_, i) =>
 			makeChannel({ id: `m${i + 1}`, name: `Movie ${i + 1}`, contentType: "movie" })
 		);
 		saveBrowseTab("movie");
-		await renderList();
+		const { container } = await renderList();
 
 		const rowOf = (name: string) => screen.getByText(name).closest(".grid") as HTMLElement;
 		const titles = (row: HTMLElement) =>
@@ -1475,8 +1560,7 @@ describe("ChannelList virtual list", () => {
 		expect(rowOf("Movie 1").style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
 		expect(titles(rowOf("Movie 9"))).toEqual(["Movie 9"]);
 
-		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
-		fireEvent(window, new Event("resize"));
+		resize(container.firstElementChild!, 1200);
 
 		expect(titles(rowOf("Movie 1"))).toEqual([
 			"Movie 1",
