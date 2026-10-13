@@ -3,13 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
-import {
-	getPlatform,
-	isMobilePlatform,
-	layoutModeFor,
-	platformName,
-	type Viewport,
-} from "./platform";
+import { getPlatform, isMobilePlatform, layoutModeFor, type Viewport } from "./platform";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
@@ -77,13 +71,5 @@ describe("isMobilePlatform", () => {
 		expect(isMobilePlatform("android")).toBe(true);
 		expect(isMobilePlatform("macos")).toBe(false);
 		expect(isMobilePlatform("linux")).toBe(false);
-	});
-});
-
-describe("platformName", () => {
-	it("spells platform names the usual way", () => {
-		expect(platformName("ios")).toBe("iOS");
-		expect(platformName("macos")).toBe("macOS");
-		expect(platformName("linux")).toBe("Linux");
 	});
 });

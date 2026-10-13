@@ -23,6 +23,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The Favorites tab showed no TV guide for its live channels until you'd opened the Live tab. It now loads the guide itself (#237).
 - With a 12-hour clock, some times in the TV guide wrapped onto two lines, with the AM or PM under the time. That happened to every start time in the schedule in the player's info drawer, and to the time labels near the right edge of a guide timeline. They stay on one line now (#238).
 
+### Removed
+
+- The Platform card in Settings, which showed the platform and the layout (#239).
+
 ## [0.6.0] - 2026-10-12
 
 ### Changed
