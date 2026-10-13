@@ -3,9 +3,15 @@
 
 # Settings for cargo-mutants. See "Mutation testing" in docs/development.md.
 
-# The loopback server in mvp-core's http.rs only runs in tests. Changing it
-# tests the tests, not the app.
-exclude_re = ["test_server::"]
+exclude_re = [
+    # The loopback server in mvp-core's http.rs only runs in tests. Changing it
+    # tests the tests, not the app.
+    "test_server::",
+    # These only pass the real address and the shared client to a fetch_from
+    # that the tests run against the loopback server. A test of the wrapper
+    # itself would have to call the real service.
+    "replace (fetch_source|fetch_whatson|fetch_mdblist) ",
+]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
 # leaves out what git ignores, like node_modules and libs.
