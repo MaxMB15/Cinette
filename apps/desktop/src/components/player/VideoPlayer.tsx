@@ -474,8 +474,9 @@ export const PlayerView = () => {
 
 	// The player's handler for arriving on its page. It takes what to play from
 	// the router, or from sessionStorage when the page opens without it, and
-	// starts mpv. The sidebar's Player link runs it again on a player that's
-	// already mounted, so starting values for the state wouldn't cover it.
+	// starts mpv. It runs again when the router's URL changes on a mounted
+	// player, as when the sidebar's Player link is clicked on the player page,
+	// so starting values for the state wouldn't cover it.
 	useEffect(() => {
 		if (navState?.url) {
 			if (navState.seriesEpisodes?.length) {
