@@ -80,17 +80,65 @@ describe("parseSrt", () => {
 		expect(cue.end).toBeCloseTo(3725);
 	});
 
-	it("skips a block whose start or end can't be read", () => {
+	it("keeps a timing line whose start or end can't be read as text, as FFmpeg does", () => {
 		const srt =
-			`1\n00:00:xx,000 --> 00:00:02,000\nBad start\n\n` +
-			`2\n00:00:03,000 --> 00:00:yy,000\nBad end\n\n` +
-			`3\n00:00:05,000 --> 00:00:06,000\nGood\n\n`;
-		expect(parseSrt(srt).map((c) => c.text)).toEqual(["Good"]);
+			`1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n` +
+			`2\n00:00:xx,000 --> 00:00:04,000\nBad start\n\n` +
+			`3\n00:00:05,000 --> 00:00:yy,000\nBad end\n\n` +
+			`4\n00:00:07,000 --> 00:00:08,000\nGood\n`;
+		expect(parseSrt(srt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text:
+					"First\n2\n00:00:xx,000 --> 00:00:04,000\nBad start\n" +
+					"3\n00:00:05,000 --> 00:00:yy,000\nBad end",
+			},
+			{ start: 7, end: 8, text: "Good" },
+		]);
 	});
 
-	it("reads a time without hours as minutes and seconds", () => {
-		const srt = `1\n00:01,000 --> 01:02,500\nNo hours\n\n`;
-		expect(parseSrt(srt)).toEqual([{ start: 1, end: 62.5, text: "No hours" }]);
+	it("reads a time without hours in WebVTT only", () => {
+		const srt = `1\n00:00:00,500 --> 00:00:00,900\nA\n\n2\n00:01,000 --> 01:02,500\nB\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 0.5, end: 0.9, text: "A\n2\n00:01,000 --> 01:02,500\nB" },
+		]);
+		const vtt = `WEBVTT\n\n00:01.000 --> 01:02.500\nNo hours\n`;
+		expect(parseSrt(vtt)).toEqual([{ start: 1, end: 62.5, text: "No hours" }]);
+	});
+
+	it("reads a WebVTT time only with a period before the milliseconds", () => {
+		const vtt =
+			`WEBVTT\n\n00:01.000 --> 00:02.000\nA\n` +
+			`00:03,000 --> 00:04.000\n00:00:05.000 --> 00:00:06,000\n`;
+		expect(parseSrt(vtt)).toEqual([
+			{ start: 1, end: 2, text: "A\n00:03,000 --> 00:04.000\n00:00:05.000 --> 00:00:06,000" },
+		]);
+	});
+
+	it("reads the milliseconds as a whole number, as FFmpeg does", () => {
+		const srt =
+			`1\n00:00:01,5 --> 00:00:02,25\nShort\n\n` +
+			`2\n00:00:03,0005 --> 00:00:04,1500\nLong\n`;
+		const cues = parseSrt(srt);
+		expect(cues.map((c) => c.text)).toEqual(["Short", "Long"]);
+		expect(cues[0].start).toBeCloseTo(1.005, 6);
+		expect(cues[0].end).toBeCloseTo(2.025, 6);
+		expect(cues[1].start).toBeCloseTo(3.005, 6);
+		expect(cues[1].end).toBeCloseTo(5.5, 6);
+	});
+
+	it("keeps a timing line with no milliseconds as text", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n` +
+			`00:00:03 --> 00:00:04\n00:00:05,000 --> 00:00:06\n00:00:07 --> 00:00:08,000\n`;
+		expect(parseSrt(srt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text: "A\n00:00:03 --> 00:00:04\n00:00:05,000 --> 00:00:06\n00:00:07 --> 00:00:08,000",
+			},
+		]);
 	});
 
 	it("reads a WebVTT file", () => {
@@ -103,13 +151,22 @@ describe("parseSrt", () => {
 		]);
 	});
 
-	it("skips a block whose timestamp has one part or four", () => {
+	it("keeps a timing line with a time of one part or four as text", () => {
 		const srt =
-			`1\n00:00:01,000 --> 02,000\nOne part\n\n` +
-			`1\n00:00:00:03,000 --> 00:00:04,000\nExtra start\n\n` +
-			`2\n00:00:05,000 --> 00:00:00:06,000\nExtra end\n\n` +
-			`3\n00:00:07,000 --> 00:00:08,000\nGood\n\n`;
-		expect(parseSrt(srt).map((c) => c.text)).toEqual(["Good"]);
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n` +
+			`02,000 --> 00:00:03,000\n00:00:03,000 --> 04,000\n` +
+			`00:00:00:05,000 --> 00:00:06,000\n00:00:07,000 --> 00:00:00:08,000\n\n` +
+			`2\n00:00:09,000 --> 00:00:10,000\nB\n`;
+		expect(parseSrt(srt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text:
+					"A\n02,000 --> 00:00:03,000\n00:00:03,000 --> 04,000\n" +
+					"00:00:00:05,000 --> 00:00:06,000\n00:00:07,000 --> 00:00:00:08,000",
+			},
+			{ start: 9, end: 10, text: "B" },
+		]);
 	});
 
 	it("keeps two cues apart across lines of spaces and tabs", () => {
@@ -201,6 +258,7 @@ describe("parseSrt", () => {
 			`1\n00:00:01,000 --> 00:00:02,000\nA\n10:30, go --> left\n` +
 			`10:30: Arrival --> platform 3\n16:9, 4:3 --> crop\n-10:30, then --> go\n` +
 			`12:00, lunch --> 1 hour\n12:00, then --> 3, 2, 1\n4:3, 16:9 --> 2.39:1\n` +
+			`12:00. Meeting --> 13:00 lunch\n9:30, 10:15 --> 11:00, 11:45\n` +
 			`00:00:03,000 --> 02,000\nB\n\n2\n00:00:03,000 --> 00:00:04,000\nC\n`;
 		expect(parseSrt(srt)).toEqual([
 			{
@@ -209,7 +267,8 @@ describe("parseSrt", () => {
 				text:
 					"A\n10:30, go --> left\n10:30: Arrival --> platform 3\n16:9, 4:3 --> crop\n" +
 					"-10:30, then --> go\n12:00, lunch --> 1 hour\n12:00, then --> 3, 2, 1\n" +
-					"4:3, 16:9 --> 2.39:1\n00:00:03,000 --> 02,000\nB",
+					"4:3, 16:9 --> 2.39:1\n12:00. Meeting --> 13:00 lunch\n" +
+					"9:30, 10:15 --> 11:00, 11:45\n00:00:03,000 --> 02,000\nB",
 			},
 			{ start: 3, end: 4, text: "C" },
 		]);
@@ -280,26 +339,74 @@ describe("parseSrt", () => {
 		]);
 	});
 
-	it("ends a cue at a timing line that can't be read", () => {
+	it("reads a timing line with spaces after a colon, a comma or a period", () => {
 		const srt =
-			`1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n` +
-			`2\n00:00:xx,000 --> 00:00:04,000\nBad\n\n` +
-			`3\n00:00:05,000 --> 00:00:06,000\nGood\n`;
-		expect(parseSrt(srt).map((c) => c.text)).toEqual(["First", "Good"]);
+			`1\n00:00:05,000 --> 00:01: 06,000\nA\n\n` +
+			`2\n00:02:07,000 --> 00: 02:08,000\nB\n\n` +
+			`3\n00:02:09, 000 --> 00:02:10. 500\nC\n\n` +
+			`4\n00: 02: 11,000 --> \t00:\t02:\t12,000\nD\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 5, end: 66, text: "A" },
+			{ start: 127, end: 128, text: "B" },
+			{ start: 129, end: 130.5, text: "C" },
+			{ start: 131, end: 132, text: "D" },
+		]);
 	});
 
-	it("skips a timing line with a blank part in a time", () => {
+	it("reads a timing line with a vertical tab or a form feed before a number", () => {
 		const srt =
-			`1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n` +
-			`2\n00: :03,000 --> 00:00:04,000\nSpace for minutes\n\n` +
-			`3\n00:00:05,000 --> 00:01: 06,000\nGap in the end\n\n` +
-			`4\n00:00:07,000 --> 00:00:08,000\nGood\n`;
-		expect(parseSrt(srt).map((c) => c.text)).toEqual(["First", "Good"]);
+			`1\n\v00:00:01,000 -->\f00:\v00:02,\f000\nA\n\n` +
+			`2\n00:00:03,000\v-->\f00:00:04,000\nB\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 3, end: 4, text: "B" },
+		]);
+	});
+
+	it("keeps a timing line with a space before a colon, a comma or a period as text", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n` +
+			`00 :00:03,000 --> 00:00:04,000\n00:00:05 ,000 --> 00:00:06,000\n` +
+			`00:00:07,000 --> 00:00 :08,000\n00:00:09,000 --> 00:00:10 .000\n` +
+			`00: :11,000 --> 00:00:12,000\n\n` +
+			`2\n00:00:13,000 --> 00:00:14,000\nB\n`;
+		expect(parseSrt(srt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text:
+					"A\n00 :00:03,000 --> 00:00:04,000\n00:00:05 ,000 --> 00:00:06,000\n" +
+					"00:00:07,000 --> 00:00 :08,000\n00:00:09,000 --> 00:00:10 .000\n" +
+					"00: :11,000 --> 00:00:12,000",
+			},
+			{ start: 13, end: 14, text: "B" },
+		]);
+	});
+
+	it("keeps a timing line with a no-break space or a byte order mark in it as text", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n` +
+			`\u00a000:00:03,000 --> 00:00:04,000\n00:00:05,000\u00a0--> 00:00:06,000\n` +
+			`00:00:07,000 -->\u00a000:00:08,000\n\uFEFF00:00:09,000 --> 00:00:10,000\n`;
+		expect(parseSrt(srt)).toEqual([
+			{
+				start: 1,
+				end: 2,
+				text:
+					"A\n00:00:03,000 --> 00:00:04,000\n00:00:05,000\u00a0--> 00:00:06,000\n" +
+					"00:00:07,000 -->\u00a000:00:08,000\n00:00:09,000 --> 00:00:10,000",
+			},
+		]);
 	});
 
 	it("reads a WebVTT setting after a tab", () => {
 		const vtt = `WEBVTT\n\n00:01.000 --> 00:02.000\tline:90%\nLow\n`;
 		expect(parseSrt(vtt)).toEqual([{ start: 1, end: 2, text: "Low" }]);
+	});
+
+	it("reads a file as WebVTT only when it starts with WEBVTT", () => {
+		const vtt = ` WEBVTT\n\n00:01.000 --> 00:02.000\nA\n`;
+		expect(parseSrt(vtt)).toEqual([]);
 	});
 
 	it("ends a WebVTT cue at its first empty line", () => {
@@ -370,9 +477,9 @@ describe("parseSrt", () => {
 		expect(parseSrt(srt)).toEqual([{ start: 1, end: 2, text: "Placed" }]);
 	});
 
-	it("skips a timing line with more than one arrow", () => {
+	it("reads the first two times of a timing line with more than one arrow", () => {
 		const srt = `1\n00:00:01,000 --> 00:00:02,000 --> 00:00:03,000\nConfused\n\n`;
-		expect(parseSrt(srt)).toHaveLength(0);
+		expect(parseSrt(srt)).toEqual([{ start: 1, end: 2, text: "Confused" }]);
 	});
 
 	it("parses a block that has no cue number", () => {
@@ -422,7 +529,7 @@ describe("parseSrt", () => {
 	});
 
 	it.each(lineEndings)("reads WebVTT files with $name line endings", ({ eol }) => {
-		const vtt = ["WEBVTT", "", ...twoCues.map((line) => line.replace(",", "."))].join(eol);
+		const vtt = ["WEBVTT", "", ...twoCues.map((line) => line.replaceAll(",", "."))].join(eol);
 		expect(parseSrt(vtt)).toEqual(twoCuesRead);
 	});
 
