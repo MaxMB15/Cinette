@@ -27,6 +27,7 @@
 //! `RECOVERY_CONFIRM_ADVANCE_SECS` past where playback restarted. After
 //! `MAX_ATTEMPTS` the watcher sends `mpv://load-failed` and exits.
 
+use crate::loadfile::{loadfile, resume_option};
 use crate::log_url::origin_for_log;
 use libmpv2::{
     events::{Event, PropertyData},
@@ -461,13 +462,7 @@ impl<R: Runtime> Watcher<R> {
         );
         // A client shares the player core, so this replaces the main
         // player's file and the renderer stays attached.
-        let result = match &resume_arg {
-            Some(opts) => self
-                .client
-                .command("loadfile", &[&self.url, "replace", "0", opts]),
-            None => self.client.command("loadfile", &[&self.url, "replace"]),
-        };
-        if let Err(e) = result {
+        if let Err(e) = loadfile(&self.client, &self.url, resume_arg.as_deref()) {
             tracing::warn!("[MPV reconnect] loadfile re-issue failed: {e}");
             // A failed command isn't a new attempt, so wait as long as the
             // next attempt would.
@@ -499,14 +494,6 @@ pub(crate) fn ended_early(pos: Option<f64>, duration: Option<f64>) -> bool {
 
 fn recovery_confirmed(baseline: f64, pos: f64) -> bool {
     pos.is_finite() && pos >= baseline + RECOVERY_CONFIRM_ADVANCE_SECS
-}
-
-/// The per-file `loadfile` option that resumes from the last position, once
-/// playback has passed the first second.
-fn resume_option(last_known_pos: Option<f64>) -> Option<String> {
-    last_known_pos
-        .filter(|p| *p > 1.0)
-        .map(|p| format!("start=+{p:.3}"))
 }
 
 #[cfg(test)]
@@ -555,17 +542,6 @@ mod tests {
         assert!(recovery_confirmed(10.0, 11.0));
         assert!(!recovery_confirmed(10.0, f64::NAN));
         assert!(!recovery_confirmed(10.0, f64::INFINITY));
-    }
-
-    #[test]
-    fn resume_starts_after_the_first_second() {
-        assert_eq!(resume_option(None), None);
-        assert_eq!(resume_option(Some(1.0)), None);
-        assert_eq!(resume_option(Some(1.5)).as_deref(), Some("start=+1.500"));
-        assert_eq!(
-            resume_option(Some(754.12345)).as_deref(),
-            Some("start=+754.123")
-        );
     }
 
     #[test]

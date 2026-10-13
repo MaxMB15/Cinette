@@ -16,6 +16,8 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tauri = { version = "2", features = [] }
 libmpv2 = { version = "6", features = ["render"] }
+# For `mpv_client_api_version`, which libmpv2 doesn't expose. See loadfile.rs.
+libmpv2-sys = "4"
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -4516,6 +4516,7 @@ dependencies = [
  "khronos-egl",
  "libc",
  "libmpv2",
+ "libmpv2-sys",
  "objc",
  "raw-window-handle",
  "reqwest",

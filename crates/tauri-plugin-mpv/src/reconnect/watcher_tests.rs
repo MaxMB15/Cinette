@@ -5,6 +5,7 @@
 //! that cut out, stall or fail the way real servers do.
 
 use super::*;
+use crate::loadfile::loadfile;
 use crate::test_support::{
     after_seconds, player, wait_until, wav, MediaDir, Reply, Server, TestApp,
 };
@@ -79,7 +80,7 @@ fn reloads_a_dropped_stream_where_it_stopped() {
     let player = player(&[SPEED]);
     let running = Running::start(watcher(&app, &player, &url));
 
-    player.command("loadfile", &[&url, "replace"]).unwrap();
+    loadfile(&player, &url, None).unwrap();
     events.wait_for(EVENT_RECONNECTED);
     // mpv runs out of data a little before the cut, at about four and a half
     // seconds. Starting over would put this near one second.
@@ -112,7 +113,7 @@ fn gives_up_once_the_attempts_run_out() {
     let app = TestApp::new();
     let events = app.record(&[EVENT_RECONNECTING, EVENT_LOAD_FAILED]);
     let player = player(&[SPEED]);
-    player.command("loadfile", &[&url, "replace"]).unwrap();
+    loadfile(&player, &url, None).unwrap();
     wait_until("the stream to drop", || {
         player.get_property::<bool>("eof-reached").unwrap_or(false)
     });
@@ -141,7 +142,7 @@ fn reports_a_stall_until_the_cache_refills() {
     let player = player(&[SPEED]);
     let running = Running::start(watcher(&app, &player, &url));
 
-    player.command("loadfile", &[&url, "replace"]).unwrap();
+    loadfile(&player, &url, None).unwrap();
     // mpv only pauses for the cache once playback has started.
     wait_until("playback to start", || {
         player
@@ -250,9 +251,7 @@ fn the_end_of_a_whole_file_is_not_a_failure() {
     let player = player(&[SPEED]);
     let watcher = watcher(&app, &player, &path);
 
-    player
-        .command("loadfile", &[&path, "replace", "0", "start=9"])
-        .unwrap();
+    loadfile(&player, &path, Some("start=9")).unwrap();
     wait_until("the end of the file", || {
         player.get_property::<bool>("eof-reached").unwrap_or(false)
     });

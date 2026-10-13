@@ -24,6 +24,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The Favorites tab showed no TV guide for its live channels until you'd opened the Live tab. It now loads the guide itself (#237).
 - With a 12-hour clock, some times in the TV guide wrapped onto two lines, with the AM or PM under the time. That happened to every start time in the schedule in the player's info drawer, and to the time labels near the right edge of a guide timeline. They stay on one line now (#238).
 - The Linux .deb installed on Ubuntu 22.04, and then the app wouldn't start because 22.04's libmpv is too old for it. The .deb now requires the newer libmpv that Debian 12 and Ubuntu 24.04 have, so it won't install on 22.04 (#242).
+- With the Linux .deb on Debian 12 or Ubuntu 24.04, whose libmpv is older than mpv 0.38, resuming a movie or episode where you left off failed with an error. So did reconnecting after a stream dropped, and the Retry button once a stream had played for more than a second. They now work with these older versions of mpv too.
 
 ### Removed
 
