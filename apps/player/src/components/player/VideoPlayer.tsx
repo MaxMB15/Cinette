@@ -228,6 +228,9 @@ export const PlayerView = () => {
 	const loadRequestRef = useRef(0);
 	// Set when the viewer stops playback, which also forgets the subtitles.
 	const stoppedRef = useRef(false);
+	// False once the page closes. A subtitle picked before then is dropped,
+	// since the subtitles the page saved when it closed come back with it.
+	const openRef = useRef(false);
 
 	// Remembers which language + rank-within-language the user last picked so the
 	// same subtitle can be auto-selected when navigating to the next episode.
@@ -514,6 +517,9 @@ export const PlayerView = () => {
 			if (saved) {
 				try {
 					const ch: Channel = JSON.parse(saved);
+					// The page can already be open, as over a resume prompt for
+					// another item, and then it read no subtitles when it opened.
+					if (ch.id !== activeChannel?.id) setKeptSubtitles(readSubtitleSession());
 					setActiveChannel(ch);
 					setActiveChannelName(ch.name);
 					progressRef.current = progressFor(
@@ -557,8 +563,8 @@ export const PlayerView = () => {
 
 	// A new item starts with no subtitles. Resetting them while rendering keeps
 	// the old item's from showing with it for a frame. The item that played on
-	// while the page was closed gets back the subtitles it had, as long as mpv
-	// still plays what it played then.
+	// while the page was closed gets back the subtitles it had, as long as the
+	// player hasn't loaded anything else for it since.
 	const channelChanged = useChanged(activeChannel?.id);
 	if (channelChanged) {
 		const kept =
@@ -602,6 +608,12 @@ export const PlayerView = () => {
 				selectedSubtitleId === null,
 		}
 	);
+	useEffect(() => {
+		openRef.current = true;
+		return () => {
+			openRef.current = false;
+		};
+	}, []);
 	useEffect(
 		() => () => {
 			if (stoppedRef.current) saveSubtitleSession(null);
@@ -1299,7 +1311,9 @@ export const PlayerView = () => {
 						setShowSubtitlePicker(false);
 						setSubtitleEditMode(false);
 					}}
-					isCurrent={() => activeChannelRef.current?.id === activeChannel?.id}
+					isCurrent={() =>
+						openRef.current && activeChannelRef.current?.id === activeChannel?.id
+					}
 					onSubtitleSelected={(id, cues, entry, rankInLanguage) => {
 						setSelectedSubtitleId(id);
 						setSubtitleCues(cues ?? []);

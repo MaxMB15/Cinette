@@ -2036,6 +2036,76 @@ describe("subtitles", () => {
 		expect(picker.isCurrent?.()).toBe(false);
 	});
 
+	it("tells the subtitle picker once the player page closes", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		expect(picker.isCurrent?.()).toBe(true);
+		await goToPage("/");
+		expect(picker.isCurrent?.()).toBe(false);
+	});
+
+	it("keeps the subtitles when the sidebar's Player link is clicked over a resume prompt for another item", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		remember(saved("movie:harbor lights", 1800, 3600));
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(resumePrompt()).toBeInTheDocument();
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		expect(loadedUrls()).toEqual([MOVIE_URL]);
+	});
+
+	it("doesn't load the next episode's subtitles again over ones picked while they loaded", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		tauri.readSubtitleFile.mockReturnValue(new Promise(() => {}));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		expect(tauri.readSubtitleFile).toHaveBeenCalledTimes(1);
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+
+		await goToPage("/player");
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(202);
+	});
+
+	it("doesn't look again for next-episode subtitles it didn't find", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["fr"],
+			entries: [{ fileId: 203, languageCode: "fr", format: "srt" }],
+		});
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.searchSubtitles).toHaveBeenCalledTimes(1);
+		await goToPage("/");
+
+		await goToPage("/player");
+		await flush();
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByText(ep2.name)).toBeInTheDocument();
+		expect(tauri.searchSubtitles).toHaveBeenCalledTimes(1);
+	});
+
 	describe("kept from when the player page was last open", () => {
 		/**
 		 * Saves subtitles for `channelId` while mpv plays `url`, as the player

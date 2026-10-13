@@ -8,13 +8,13 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
 - The log now says which mpv version the app runs and, on Linux, which libmpv file it loaded. On Linux, the error the player shows when mpv fails to start names that file too, since a libmpv from somewhere else is the usual cause (#260).
-- When you pick subtitles, mpv no longer draws its own copy under the ones the app draws, so only the subtitles you can move and resize show over the video. mpv still draws them when it plays in a window of its own, as on Linux with X11, since the app can't draw over that window. It also still draws a subtitle file the app can't read at all, such as one that isn't UTF-8. When you leave the player while a video plays on and come back to it from the sidebar, the subtitles come back with the place, size, font and delay you gave them, and subtitles that were still loading for the next episode finish loading. Subtitles you pick just before the next episode starts no longer show over it (#269).
 
 ### Fixed
 
 - On macOS, the player kept the video view and its graphics context from every channel it played, so memory use grew each time you switched channels. It now frees them (#251).
 - With an OMDb key set, the info for many movies and series with titles in another writing system, such as Russian, Greek, Arabic or Japanese, and for some titles with accented letters, stayed on "Loading info…". It now finishes loading (#259).
 - On iPhone and iPad, the app's log could still show part of an Xtream login from a stream's link. That happened when the user name or the password had a `?` or `#` and then a space, or when a catch-up link had a space in the password. An error from a download or a recording could also show the password when the link had no user name, or the user name when it had no password. In these cases the log and the errors now hide the whole login (#258).
+- When you pick subtitles, mpv no longer draws its own copy under the ones the app draws, so only the subtitles you can move and resize show over the video. mpv still draws them when it plays in a window of its own, as on Linux with X11, since the app can't draw over that window. It also still draws a subtitle file the app can't read at all, such as one that isn't UTF-8. When you leave the player while a video plays on and come back to it from the sidebar, the subtitles come back with the place, size, font and delay you gave them, and subtitles that were still loading for the next episode finish loading. Subtitles you pick just before the next episode starts no longer show over it (#269).
 
 ## [0.6.1] - 2026-10-13
 

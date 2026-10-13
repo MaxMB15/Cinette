@@ -21,7 +21,7 @@ export interface SubtitlePreference {
 export interface SubtitleSession {
 	/** The item the subtitles were shown over. */
 	channelId: string;
-	/** The URL mpv was playing for it, or null while it hadn't started. */
+	/** The URL the player last loaded for it, or null while it hadn't started. */
 	url: string | null;
 	/** The subtitle file picked, or null for none. */
 	fileId: number | null;
