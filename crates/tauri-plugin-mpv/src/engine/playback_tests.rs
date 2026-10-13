@@ -65,7 +65,7 @@ fn every_command_needs_a_player() {
     assert_eq!(engine.seek_relative(-5.0), missing);
     assert_eq!(engine.set_video_enabled(false), missing);
     assert_eq!(engine.set_volume(50.0), missing);
-    assert_eq!(engine.sub_add("/subs/en.srt"), missing);
+    assert_eq!(engine.sub_add("/subs/en.srt", true), missing);
     assert_eq!(engine.sub_remove(-1), missing);
     assert_eq!(engine.set_sub_pos(90.0), missing);
     assert_eq!(engine.set_sub_delay(0.5), missing);
@@ -256,17 +256,20 @@ fn adds_and_removes_subtitle_tracks() {
     start(&mut engine, &path, None);
     let tracks = |engine: &MpvEngine| mpv(engine).get_property::<i64>("track-list/count").unwrap();
     let selected = |engine: &MpvEngine| mpv(engine).get_property::<String>("sid").unwrap();
+    let visible = |engine: &MpvEngine| mpv(engine).get_property::<bool>("sub-visibility").unwrap();
 
     // An absolute path is passed on as a file URL.
-    engine.sub_add(&subtitles).unwrap();
+    engine.sub_add(&subtitles, true).unwrap();
     assert_eq!(tracks(&engine), 2);
     assert_eq!(selected(&engine), "1");
-    assert!(mpv(&engine).get_property::<bool>("sub-visibility").unwrap());
+    assert!(visible(&engine));
 
     // Anything else, such as subtitles held in memory, goes through as is.
-    engine.sub_add(&format!("memory://{SRT}")).unwrap();
+    // A track mpv shouldn't draw is still selected.
+    engine.sub_add(&format!("memory://{SRT}"), false).unwrap();
     assert_eq!(tracks(&engine), 3);
     assert_eq!(selected(&engine), "2");
+    assert!(!visible(&engine));
 
     // -1 removes the selected track and an id removes that one.
     engine.sub_remove(-1).unwrap();
@@ -275,7 +278,7 @@ fn adds_and_removes_subtitle_tracks() {
     assert_eq!(tracks(&engine), 1);
 
     assert!(engine.sub_remove(99).is_err());
-    assert!(engine.sub_add(&media.missing("gone.srt")).is_err());
+    assert!(engine.sub_add(&media.missing("gone.srt"), true).is_err());
     assert_eq!(tracks(&engine), 1);
 }
 

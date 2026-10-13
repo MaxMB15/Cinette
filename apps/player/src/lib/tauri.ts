@@ -216,8 +216,12 @@ export const downloadSubtitle = (fileId: number): Promise<string> =>
 export const readSubtitleFile = (path: string): Promise<string> =>
 	invoke("read_subtitle_file", { path });
 
-export const mpvSubAdd = (path: string): Promise<void> =>
-	invoke("plugin:mpv|mpv_sub_add", { path });
+/**
+ * Adds a subtitle file to the player. `overlay` is whether the app draws the
+ * subtitles itself. mpv then only draws them in its fallback window.
+ */
+export const mpvSubAdd = (path: string, overlay: boolean): Promise<void> =>
+	invoke("plugin:mpv|mpv_sub_add", { path, overlay });
 
 export const mpvSubRemove = (id: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_sub_remove", { id });

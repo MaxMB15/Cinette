@@ -37,7 +37,7 @@ fn playback_commands_fail_with_nothing_loaded() {
     assert_eq!(block_on(mpv_seek(h(), s(), 30.0)), failed);
     assert_eq!(block_on(mpv_set_volume(h(), s(), 50.0)), failed);
     assert_eq!(
-        block_on(mpv_sub_add(h(), s(), "/subs/en.srt".into())),
+        block_on(mpv_sub_add(h(), s(), "/subs/en.srt".into(), true)),
         failed
     );
     assert_eq!(block_on(mpv_sub_remove(h(), s(), -1)), failed);
@@ -95,7 +95,7 @@ mod with_a_stream {
         block_on(mpv_play(h(), s())).unwrap();
         assert!(get_state(&app).is_playing);
 
-        block_on(mpv_sub_add(h(), s(), subtitles)).unwrap();
+        block_on(mpv_sub_add(h(), s(), subtitles, true)).unwrap();
         block_on(mpv_set_sub_pos(80.0, s())).unwrap();
         block_on(mpv_set_sub_delay(-0.5, s())).unwrap();
         block_on(mpv_sub_remove(h(), s(), -1)).unwrap();

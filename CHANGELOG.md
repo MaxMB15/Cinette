@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
 - The log now says which mpv version the app runs and, on Linux, which libmpv file it loaded. On Linux, the error the player shows when mpv fails to start names that file too, since a libmpv from somewhere else is the usual cause (#260).
+- When you pick subtitles, mpv no longer draws its own copy under the ones the app draws, so only the subtitles you can move and resize show over the video. mpv still draws them when it plays in a window of its own, as on Linux with X11, since the app can't draw over that window. It also still draws a subtitle file the app can't read (#269).
 
 ### Fixed
 

@@ -333,8 +333,9 @@ impl MpvEngine {
             .map_err(|e| e.to_string())
     }
 
-    /// Add a subtitle track from a local file path.
-    pub fn sub_add(&self, path: &str) -> Result<(), String> {
+    /// Add a subtitle track from a local file path and select it. mpv only
+    /// draws it when `visible` is true.
+    pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
         // Convert to file:// URI so MPV path resolution is unambiguous for local files
         let uri = if path.starts_with('/') {
@@ -348,8 +349,8 @@ impl MpvEngine {
                 tracing::warn!("[MPV] sub-add failed: {}", e);
                 e.to_string()
             })?;
-        let _ = mpv.set_property("sub-visibility", true);
-        tracing::info!("[MPV] sub-add: complete, sub-visibility set");
+        let _ = mpv.set_property("sub-visibility", visible);
+        tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }
 

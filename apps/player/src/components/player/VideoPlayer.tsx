@@ -609,9 +609,10 @@ export const PlayerView = () => {
 				const entry = langEntries[Math.min(pref.rankInLanguage, langEntries.length - 1)];
 				await mpvSubRemove(-1).catch(() => {});
 				const localPath = await downloadSubtitle(entry.fileId);
-				mpvSubAdd(localPath).catch(() => {});
 				const content = await readSubtitleFile(localPath);
 				const cues = parseSrt(content);
+				// mpv draws a file the overlay can't read.
+				mpvSubAdd(localPath, cues.length > 0).catch(() => {});
 				if (cancelled) return;
 				setSelectedSubtitleId(entry.fileId);
 				setSubtitleCues(cues);

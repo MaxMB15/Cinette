@@ -1799,10 +1799,27 @@ describe("subtitles", () => {
 		expect(tauri.downloadSubtitle).toHaveBeenCalledWith(203);
 		expect(tauri.downloadSubtitle).not.toHaveBeenCalledWith(202);
 		expect(tauri.mpvSubRemove).toHaveBeenCalledWith(-1);
-		expect(tauri.mpvSubAdd).toHaveBeenCalledWith("/subtitles/chosen.srt");
+		// The overlay draws the subtitles, so mpv doesn't.
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", true);
 		await setMpv({ state: playing(ep2.url, 2, 1300) });
 		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+	});
+
+	it("lets mpv draw the next episode's subtitles when the overlay can't read them", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "ass" }],
+		});
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: The tide\n");
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.downloadSubtitle).toHaveBeenCalledWith(202);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
 	});
 
 	it("drops the next episode's subtitles when the viewer moves on before they arrive", async () => {

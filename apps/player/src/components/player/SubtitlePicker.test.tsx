@@ -22,7 +22,7 @@ const tauri = vi.hoisted(() => ({
 		>(),
 	downloadSubtitle: vi.fn<(fileId: number) => Promise<string>>(),
 	readSubtitleFile: vi.fn<(path: string) => Promise<string>>(),
-	mpvSubAdd: vi.fn<(path: string) => Promise<void>>(),
+	mpvSubAdd: vi.fn<(path: string, overlay: boolean) => Promise<void>>(),
 	mpvSubRemove: vi.fn<(id: number) => Promise<void>>(),
 }));
 
@@ -293,7 +293,8 @@ describe("SubtitlePicker search and selection", () => {
 		expect(tauri.mpvSubRemove.mock.invocationCallOrder[0]).toBeLessThan(
 			tauri.downloadSubtitle.mock.invocationCallOrder[0]
 		);
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt");
+		// The overlay draws the subtitles, so mpv doesn't.
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt", true);
 		expect(tauri.readSubtitleFile).toHaveBeenCalledExactlyOnceWith("/subs/12.srt");
 		// Second in its language, which the player uses to pick one for the next episode.
 		expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(12, CUES, unnamed, 1);
@@ -309,6 +310,18 @@ describe("SubtitlePicker search and selection", () => {
 		await waitFor(() =>
 			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, CUES, dutch, 0)
 		);
+	});
+
+	it("lets the player draw a subtitle the overlay can't read", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		const { onSubtitleSelected } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, [], dutch, 0)
+		);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false);
 	});
 
 	it("shows a spinner on the subtitle loading and holds the others until it's done", async () => {
