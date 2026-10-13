@@ -25,7 +25,7 @@ describe("parseSrt", () => {
 		expect(parseSrt(srt)[0].text).toBe("Yellow");
 	});
 
-	it("keeps an angle bracket that isn't part of a tag", () => {
+	it("keeps a < that has no closing >", () => {
 		const srt = `1\n00:00:01,000 --> 00:00:02,000\nI <3 you\n\n`;
 		expect(parseSrt(srt)[0].text).toBe("I <3 you");
 	});

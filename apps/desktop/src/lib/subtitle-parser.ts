@@ -15,9 +15,9 @@ const parseTimestamp = (ts: string): number => {
 /**
  * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
  *
- * React shows the result as plain text, never as HTML. The replacement still
- * repeats until nothing changes, which is the fix CodeQL's incomplete
- * sanitization check asks for, so removing one tag can't leave another behind.
+ * React shows the result as plain text, never as HTML. With this pattern a
+ * second pass never finds anything, but CodeQL's incomplete sanitization check
+ * only accepts a replacement that repeats until nothing changes, so keep the loop.
  */
 const stripTags = (text: string): string => {
 	let stripped = text;
