@@ -9,7 +9,7 @@ video plays through libmpv, drawn into the same window underneath the webview.
 ```
 MaxVideoPlayer/
 ├── apps/
-│   └── desktop/
+│   └── player/                   the app for desktop, iPhone and iPad
 │       ├── src/                  React frontend
 │       │   ├── components/       UI by area: channels, player, playlist, settings, downloads, ui
 │       │   ├── hooks/            useChannels, useMpv, useDownloads, useUpdateChecker, ...
@@ -54,7 +54,7 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 | `downloads/` | Download model, file paths, ffmpeg invocation, retention, and `recording.rs`, which names recording files and plans when each recording starts, merges, stops or is missed |
 | `models/` | `Channel`, `Playlist` and related types |
 
-### `apps/desktop/src-tauri`
+### `apps/player/src-tauri`
 
 The app itself. `lib.rs` opens the database in the app data folder and registers the
 plugins, and `commands.rs` exposes the core features to the frontend as Tauri commands.

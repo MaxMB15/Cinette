@@ -58,7 +58,7 @@ case "$PLATFORM" in
 
     # Target the app's declared minimum instead of whatever the build machine's
     # toolchain defaults to, so bundle-libmpv.sh's minimum-version check passes.
-    TAURI_CONF="$(dirname "$LIBS_DIR")/apps/desktop/src-tauri/tauri.conf.json"
+    TAURI_CONF="$(dirname "$LIBS_DIR")/apps/player/src-tauri/tauri.conf.json"
     export MACOSX_DEPLOYMENT_TARGET
     MACOSX_DEPLOYMENT_TARGET=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["bundle"]["macOS"]["minimumSystemVersion"])' "$TAURI_CONF")
     echo "    Deployment target: macOS $MACOSX_DEPLOYMENT_TARGET"

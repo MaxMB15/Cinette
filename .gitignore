@@ -7,10 +7,14 @@ dist/
 *.tsbuildinfo
 
 # Tauri
-apps/desktop/src-tauri/gen/*
+apps/player/src-tauri/gen/*
 # The Xcode project is hand-edited (MPVKit, signing), so it's checked in.
-!apps/desktop/src-tauri/gen/apple/
-apps/desktop/src-tauri/target/
+!apps/player/src-tauri/gen/apple/
+apps/player/src-tauri/target/
+
+# The app's folder before it moved to apps/player. Older checkouts keep their
+# ignored files in it until it's deleted.
+/apps/desktop/
 
 # IDE
 .vscode/
@@ -34,10 +38,10 @@ Thumbs.db
 coverage/
 
 # Bundled resources
-apps/desktop/resources/
+apps/player/resources/
 
 # ffmpeg sidecar binaries (fetched via scripts/fetch-ffmpeg.sh)
-apps/desktop/src-tauri/binaries
+apps/player/src-tauri/binaries
 
 # libmpv built by scripts/build-libmpv.sh, and the source it builds from
 /libs

@@ -5,10 +5,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TAURI_CONF="$REPO_ROOT/apps/desktop/src-tauri/tauri.conf.json"
-CARGO_TOML="$REPO_ROOT/apps/desktop/src-tauri/Cargo.toml"
-IOS_PROJECT="$REPO_ROOT/apps/desktop/src-tauri/gen/apple/project.yml"
-IOS_PLIST="$REPO_ROOT/apps/desktop/src-tauri/gen/apple/max-video-player_iOS/Info.plist"
+TAURI_CONF="$REPO_ROOT/apps/player/src-tauri/tauri.conf.json"
+CARGO_TOML="$REPO_ROOT/apps/player/src-tauri/Cargo.toml"
+IOS_PROJECT="$REPO_ROOT/apps/player/src-tauri/gen/apple/project.yml"
+IOS_PLIST="$REPO_ROOT/apps/player/src-tauri/gen/apple/max-video-player_iOS/Info.plist"
 # The files the version bump changes. The release commit holds these and no others.
 BUMPED=("$TAURI_CONF" "$CARGO_TOML" "$IOS_PROJECT" "$IOS_PLIST" "$REPO_ROOT/Cargo.lock")
 

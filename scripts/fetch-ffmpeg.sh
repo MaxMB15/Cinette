@@ -13,7 +13,7 @@ set -euo pipefail
 SIDECAR=max-video-player-ffmpeg
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT_DIR="$ROOT/apps/desktop/src-tauri/binaries"
+OUT_DIR="$ROOT/apps/player/src-tauri/binaries"
 mkdir -p "$OUT_DIR"
 
 TARGET_TRIPLE="$(rustc -Vv | grep '^host:' | cut -d' ' -f2)"

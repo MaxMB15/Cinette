@@ -71,7 +71,7 @@ Common types are `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci` and `ch
 
 - TypeScript and React use arrow functions, never `function` declarations.
   `export default function` is the one exception.
-- Every call into the Rust backend goes through `apps/desktop/src/lib/tauri.ts`.
+- Every call into the Rust backend goes through `apps/player/src/lib/tauri.ts`.
 - Prettier and ESLint settle formatting. Don't fight them.
 
 ## License and contributor agreement
