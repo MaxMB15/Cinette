@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-# Mutation testing for mvp-core with cargo-mutants. It makes small changes to
-# the code, like flipping a comparison or returning a default, and runs the
-# tests against each one. A change that no test notices points at code the
-# tests run but don't check. A missed mutant is a result for the summary and
-# fails nothing. Only an error, like a build that breaks, fails a job.
+# Mutation testing for the Rust crates with cargo-mutants. It makes small
+# changes to the code, like flipping a comparison or returning a default, and
+# runs the tests against each one. A change that no test notices points at code
+# the tests run but don't check. A missed mutant is a result for the summary
+# and fails nothing. Only an error, like a build that breaks, fails a job.
 name: Mutation testing
 
 on:
@@ -13,15 +13,26 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "crates/core/**"
+      - "crates/**"
+      - "apps/player/src-tauri/**"
       - ".github/workflows/mutants.yml"
       - "scripts/mutants-summary.py"
       - ".cargo/mutants.toml"
-  # The whole crate once a week. Schedules run from the default branch, main,
-  # so the start job below runs the workflow again on dev.
+  # Every crate once a week. Schedules run from the default branch, main, so
+  # the start job below runs the workflow again on dev.
   schedule:
     - cron: "23 4 * * 1"
   workflow_dispatch:
+    inputs:
+      package:
+        description: Crate to test
+        type: choice
+        default: all
+        options:
+          - all
+          - mvp-core
+          - tauri-plugin-mpv
+          - max-video-player
 
 permissions:
   contents: read
@@ -38,13 +49,18 @@ env:
   # A mutant only needs a pass or a fail, so the test builds skip debug info.
   CARGO_PROFILE_DEV_DEBUG: none
   CARGO_MUTANTS_VERSION: 27.1.0
+  # The plugin links libmpv, and the app also links GTK and WebKitGTK. These
+  # are the packages the test-system-libmpv job in build.yml installs.
+  APT_PACKAGES: >-
+    libmpv-dev libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
+    libsoup-3.0-dev libegl-dev libwayland-dev libssl-dev pkg-config
 
 jobs:
   diff:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    # Each mutant takes about 7 seconds, so this fits a change that touches
-    # most of the crate.
+    runs-on: ubuntu-24.04
+    # A mutant in mvp-core takes about 7 seconds and one in the app takes
+    # longer, so this fits a change to a large part of a crate.
     timeout-minutes: 150
     steps:
       # A pull request checks out its merge into dev. The first parent is dev,
@@ -53,17 +69,28 @@ jobs:
         with:
           fetch-depth: 2
 
-      # Without a changed Rust file there's nothing to mutate, so the job
-      # skips the cache, the install and the build.
+      # Lists the crates with a changed Rust file. Without one there's nothing
+      # to mutate, so the job skips the cache, the installs and the build. The
+      # plugin and the app need system libraries, and the app also needs the
+      # built frontend and the ffmpeg sidecar, so those steps only run when
+      # their crate changed.
       - name: Find the changed Rust files
         id: changes
         run: |
-          git diff HEAD^1 HEAD -- crates/core > pr.diff
-          if grep -q '^+++ b/crates/core/.*\.rs$' pr.diff; then
-            echo "rust=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "rust=false" >> "$GITHUB_OUTPUT"
-            printf '## Mutation testing\n\nThis pull request changes no Rust code in mvp-core.\n' >> "$GITHUB_STEP_SUMMARY"
+          git diff HEAD^1 HEAD -- crates apps/player/src-tauri > pr.diff
+          packages=""
+          changed() { grep -q "^+++ b/$1/.*\.rs\$" pr.diff; }
+          changed crates/core && packages="$packages -p mvp-core"
+          changed crates/tauri-plugin-mpv && packages="$packages -p tauri-plugin-mpv"
+          changed apps/player/src-tauri && packages="$packages -p max-video-player"
+          {
+            echo "packages=$packages"
+            echo "rust=$([ -n "$packages" ] && echo true || echo false)"
+            echo "system=$(grep -qE 'tauri-plugin-mpv|max-video-player' <<< "$packages" && echo true || echo false)"
+            echo "app=$(grep -q max-video-player <<< "$packages" && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$packages" ]; then
+            printf '## Mutation testing\n\nThis pull request changes no Rust code.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Install Rust
@@ -77,8 +104,24 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants
+          shared-key: mutants-diff
           save-if: false
+
+      - name: Install system libraries
+        if: steps.changes.outputs.system == 'true'
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+
+      - name: Set up the frontend
+        if: steps.changes.outputs.app == 'true'
+        uses: ./.github/actions/setup-frontend
+
+      # The app embeds the built frontend, and its build script stops when the
+      # sidecar is missing.
+      - name: Build the frontend and fetch the ffmpeg sidecar
+        if: steps.changes.outputs.app == 'true'
+        run: |
+          pnpm run build:desktop
+          ./scripts/fetch-ffmpeg.sh linux
 
       - name: Install cargo-mutants
         if: steps.changes.outputs.rust == 'true'
@@ -89,13 +132,18 @@ jobs:
       # cargo-mutants exits with 2 when a mutant survives and 3 when one times
       # out. Those are results for the summary, so only other codes fail.
       # --in-place mutates the checkout itself, which reuses the cached build.
-      # When the changed lines hold no mutants, such as a change that only adds
-      # tests, it exits with 0 and writes no results.
+      # Each mutant runs the tests of its own crate. When the changed lines
+      # hold no mutants, such as a change that only adds tests, it exits with
+      # 0 and writes no results.
       - name: Test mutants in the changed lines
         if: steps.changes.outputs.rust == 'true'
+        env:
+          PACKAGES: ${{ steps.changes.outputs.packages }}
         run: |
           code=0
-          cargo mutants --in-place -p mvp-core --in-diff pr.diff || code=$?
+          # $PACKAGES holds one -p flag per crate, so it's split on purpose.
+          # shellcheck disable=SC2086
+          cargo mutants --in-place $PACKAGES --in-diff pr.diff || code=$?
           if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
             exit "$code"
           fi
@@ -109,7 +157,7 @@ jobs:
 
   # The weekly run starts a manual run on dev, which tests the newest code.
   # Every job of that run checks out the commit dev was at when it started, and
-  # it saves the cache where pull requests to dev can restore it.
+  # it saves the caches where pull requests to dev can restore them.
   start:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -120,16 +168,43 @@ jobs:
       - name: Start the full run on dev
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run mutants.yml --repo "$GITHUB_REPOSITORY" --ref dev
+        run: gh workflow run mutants.yml --repo "$GITHUB_REPOSITORY" --ref dev -f package=all
 
-  full:
+  # Lists a job for each shard of each crate the run tests. The app's mutants
+  # take the longest to build and test, so it gets the most shards.
+  plan:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: List the shards
+        id: plan
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          matrix=$(jq -cn --arg only "$PACKAGE" '
+            [ {package: "mvp-core", shards: 4},
+              {package: "tauri-plugin-mpv", shards: 4},
+              {package: "max-video-player", shards: 8} ]
+            | map(select($only == "all" or .package == $only))
+            | {include: [.[] | .package as $p | .shards as $n
+                | range($n) | {package: $p, shard: ., shards: $n}]}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  full:
+    name: full (${{ matrix.package }}, ${{ matrix.shard }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
     strategy:
       fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PACKAGE: ${{ matrix.package }}
+      SHARD: ${{ matrix.shard }}
+      SHARDS: ${{ matrix.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -138,28 +213,42 @@ jobs:
         with:
           toolchain: stable
 
-      # Only a run on dev saves, from one shard, since the shards build the
-      # same thing.
+      # Only a run on dev saves, from the first shard of each crate, since a
+      # crate's shards build the same thing.
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
-          shared-key: mutants
+          shared-key: mutants-${{ matrix.package }}
           save-if: ${{ github.ref == 'refs/heads/dev' && matrix.shard == 0 }}
+
+      - name: Install system libraries
+        if: matrix.package != 'mvp-core'
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+
+      - name: Set up the frontend
+        if: matrix.package == 'max-video-player'
+        uses: ./.github/actions/setup-frontend
+
+      - name: Build the frontend and fetch the ffmpeg sidecar
+        if: matrix.package == 'max-video-player'
+        run: |
+          pnpm run build:desktop
+          ./scripts/fetch-ffmpeg.sh linux
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
-      # Each shard writes to a folder named after it, so the report can
-      # download them all into one place.
-      - name: Test shard ${{ matrix.shard }} of the mutants
+      # Each shard writes to a folder named after its crate and number, so the
+      # report can download them all into one place.
+      - name: Test shard ${{ matrix.shard }} of ${{ matrix.package }}
         run: |
-          mkdir -p results/mutants-shard-${{ matrix.shard }}
+          out="results/mutants-$PACKAGE-shard-$SHARD"
+          mkdir -p "$out"
           code=0
-          cargo mutants --in-place -p mvp-core --shard ${{ matrix.shard }}/4 \
-            --output results/mutants-shard-${{ matrix.shard }} || code=$?
+          cargo mutants --in-place -p "$PACKAGE" --shard "$SHARD/$SHARDS" --output "$out" || code=$?
           if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
             exit "$code"
           fi
@@ -170,14 +259,14 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mutants-shard-${{ matrix.shard }}
+          name: mutants-${{ matrix.package }}-shard-${{ matrix.shard }}
           path: |
             results/
             !results/*/mutants.out/log/
           retention-days: 30
 
   report:
-    needs: full
+    needs: [plan, full]
     if: ${{ !cancelled() && needs.full.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -186,19 +275,26 @@ jobs:
         with:
           sparse-checkout: scripts
 
-      # Each artifact holds one mutants-shard-N folder. Merging them gives the
-      # same layout however many shards uploaded, where a lone artifact would
-      # otherwise land in shards/ itself.
+      # Each artifact holds one mutants-<crate>-shard-N folder. Merging them
+      # gives the same layout however many shards uploaded, where a lone
+      # artifact would otherwise land in shards/ itself.
       - name: Download the shards
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: mutants-shard-*
+          pattern: mutants-*-shard-*
           path: shards
           merge-multiple: true
 
-      # Each shard is named, so one that uploaded nothing shows up in the
-      # summary under "No results in" instead of dropping out of the totals.
+      # One section for each crate the plan lists. Every shard in the plan is
+      # named, so one that uploaded nothing shows up under "No results in"
+      # instead of dropping out of the totals.
       - name: Write the summary
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
         run: |
-          python3 scripts/mutants-summary.py shards/mutants-shard-{0,1,2,3}/mutants.out \
-            >> "$GITHUB_STEP_SUMMARY"
+          for package in $(jq -r '[.include[].package] | unique[]' <<< "$MATRIX"); do
+            mapfile -t folders < <(jq -r --arg p "$package" \
+              '.include[] | select(.package == $p) | "shards/mutants-\($p)-shard-\(.shard)/mutants.out"' <<< "$MATRIX")
+            python3 scripts/mutants-summary.py --title "Mutants in $package" "${folders[@]}" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          done
