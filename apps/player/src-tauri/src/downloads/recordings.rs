@@ -1763,6 +1763,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(download_of(&app, &id).status, DownloadStatus::Recording);
+        // Like the app's own, the thread never ends. It goes on checking
+        // this test's app until the test process exits.
     }
 
     #[test]
@@ -1933,6 +1935,19 @@ mod tests {
         );
         assert!(error.contains("404"), "{error}");
         assert!(others(&app, &id).is_empty());
+    }
+
+    /// The app counts an ffmpeg that stops near the time limit it was given
+    /// as done, so that limit has to fall a little after the recording ends.
+    #[test]
+    fn a_recordings_time_limit_is_a_little_after_it_ends() {
+        let (app, id) = app_recording();
+        let end_at = download_of(&app, &id).end_at.unwrap();
+        let limit_at = app.handle().state::<Recorder>().running()[&id].limit_at;
+        assert!(
+            limit_at > end_at && limit_at <= end_at + 60 * 60,
+            "limit {limit_at}, end {end_at}"
+        );
     }
 
     #[test]

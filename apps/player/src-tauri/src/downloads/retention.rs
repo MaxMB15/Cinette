@@ -179,6 +179,16 @@ mod tests {
         assert!(download(&app, "a").is_none());
     }
 
+    /// The app's own checks start an hour after launch, so a download that
+    /// came due while the app was closed isn't gone as soon as it opens.
+    #[test]
+    fn the_app_waits_before_its_first_check() {
+        let (app, file) = app_with_a_due_download();
+        start(&app.handle());
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(download(&app, "a").is_some() && file.exists());
+    }
+
     #[test]
     fn the_first_check_waits_so_a_due_download_can_still_be_kept() {
         let (app, file) = app_with_a_due_download();
