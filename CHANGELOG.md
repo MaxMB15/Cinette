@@ -4,12 +4,14 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-13
+
 ### Changed
 
 - Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
 - Some colors are a little more vivid, such as the green checks on the start screen and the Live, Movie and Series badges (#236).
-- The Linux .deb and .rpm now require WebKitGTK 2.40 or later, which the app's styles need. If yours is older, `apt` or `dnf` updates it along with the app (#242).
-- The Favorites tab loads the TV guide for its own live channels, not for every channel in the playlist, so it has far less to load on a large playlist. While the guide loads, a channel still waiting for its programs shows an empty bar rather than "no epg" (#243).
+- The Linux .deb and .rpm now require WebKitGTK 2.40 or later, which the app's styles need. Every release they support already has it (#242).
+- While the TV guide loads, a channel still waiting for its programs shows an empty bar rather than "no epg" (#243).
 
 ### Fixed
 
@@ -22,7 +24,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The TV guide now shows the lines it was meant to have. The channel list has a faint line at every half hour beside its hour lines, and each channel's programs have lines at every hour and half hour and a thin light edge along the top (#236).
 - On phones and tablets, the remove buttons in Recently played, History and the pinned groups only showed on hover, which a touch screen doesn't have. They're always shown there now. The unpin button on a pinned group also shows when you reach it with the Tab key, like the other two (#236).
 - While the Channels page stayed open, the TV guide stayed on the hours from when the page opened, until you resized the window or left the page. After a while it showed programs that had already ended, and the red line for now only moved when something else on the page changed. The guide now moves along with the clock and loads more programs as it goes (#237).
-- The Favorites tab showed no TV guide for its live channels until you'd opened the Live tab. It now loads the guide itself (#237).
+- The Favorites tab showed no TV guide for its live channels until you'd opened the Live tab. It now loads the guide itself, only for its own live channels (#237, #243).
 - With a 12-hour clock, some times in the TV guide wrapped onto two lines, with the AM or PM under the time. That happened to every start time in the schedule in the player's info drawer, and to the time labels near the right edge of a guide timeline. They stay on one line now (#238).
 - The Linux .deb installed on Ubuntu 22.04, and then the app wouldn't start because 22.04's libmpv is too old for it. The .deb now requires the newer libmpv that Debian 12 and Ubuntu 24.04 have, so it won't install on 22.04 (#242).
 - With the Linux .deb on Debian 12 or Ubuntu 24.04, whose libmpv is older than mpv 0.38, resuming a movie or episode where you left off failed with an error. So did reconnecting after a stream dropped, and the Retry button once a stream had played for more than a second. They now work with these older versions of mpv too (#245).
@@ -386,7 +388,8 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.1...v0.5.2
