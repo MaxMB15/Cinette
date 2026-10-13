@@ -37,7 +37,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC_TAURI = ROOT / "apps/desktop/src-tauri"
 APPLE = SRC_TAURI / "gen/apple"
 
-SEMVER_RE = re.compile(r"\d+\.\d+\.\d+")
+# ASCII digits only, without leading zeros.
+SEMVER_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
 
 class Field(NamedTuple):
