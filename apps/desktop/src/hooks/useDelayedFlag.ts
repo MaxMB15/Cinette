@@ -9,11 +9,10 @@ import { useEffect, useState } from "react";
  */
 export const useDelayedFlag = (value: boolean, delayMs: number): boolean => {
 	const [delayed, setDelayed] = useState(false);
+	// Turning off starts the wait over for the next time it turns on.
+	if (!value && delayed) setDelayed(false);
 	useEffect(() => {
-		if (!value) {
-			setDelayed(false);
-			return;
-		}
+		if (!value) return;
 		const t = setTimeout(() => setDelayed(true), delayMs);
 		return () => clearTimeout(t);
 	}, [value, delayMs]);

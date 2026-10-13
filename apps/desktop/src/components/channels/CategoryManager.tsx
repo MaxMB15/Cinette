@@ -110,31 +110,34 @@ export const CategoryManager = ({
 	const [aiPromptCategory, setAiPromptCategory] = useState<string | null>(null);
 	const [aiPromptLoading, setAiPromptLoading] = useState(false);
 
-	const load = useCallback(async () => {
-		try {
-			const h = await getGroupHierarchy(providerId, contentType);
-			if (h.length > 0) {
-				setEntries(h);
-				// Remove empty categories that now have groups in DB
-				const dbCatNames = new Set(superCategoryNames(h));
-				setEmptyCategories((prev) => prev.filter((c) => !dbCatNames.has(c)));
-			} else {
-				// No hierarchy yet — show all provider groups as uncategorized
-				setEntries(
-					groupTitles(channels, contentType).map((g, i) => ({
-						providerId,
-						contentType,
-						groupName: g,
-						superCategory: null,
-						sortOrder: i,
-						isUserOverride: false,
-					}))
-				);
-			}
-		} catch {
-			// silent
-		}
-	}, [providerId, contentType, channels]);
+	const load = useCallback(
+		() =>
+			getGroupHierarchy(providerId, contentType)
+				.then((h) => {
+					if (h.length > 0) {
+						setEntries(h);
+						// Remove empty categories that now have groups in DB
+						const dbCatNames = new Set(superCategoryNames(h));
+						setEmptyCategories((prev) => prev.filter((c) => !dbCatNames.has(c)));
+					} else {
+						// No hierarchy yet, so show all provider groups as uncategorized
+						setEntries(
+							groupTitles(channels, contentType).map((g, i) => ({
+								providerId,
+								contentType,
+								groupName: g,
+								superCategory: null,
+								sortOrder: i,
+								isUserOverride: false,
+							}))
+						);
+					}
+				})
+				.catch(() => {
+					// silent
+				}),
+		[providerId, contentType, channels]
+	);
 
 	useEffect(() => {
 		load();

@@ -765,6 +765,34 @@ describe("ChannelList search", () => {
 		expect(await screen.findByText("3 channels")).toBeInTheDocument();
 	});
 
+	it("drops a program search that answers after the search is cleared", async () => {
+		let answer: (results: EpgSearchResult[]) => void = () => {};
+		tauri.searchEpgProgrammes.mockReturnValue(
+			new Promise<EpgSearchResult[]>((resolve) => {
+				answer = resolve;
+			})
+		);
+		await renderList();
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+
+		typeSearch("");
+		await act(async () =>
+			answer([
+				{
+					channelId: "news.tv",
+					channelName: "News 24",
+					title: "Market Watch",
+					startTime: 0,
+					endTime: 0,
+				},
+			])
+		);
+		expect(screen.queryByText("Market Watch")).toBeNull();
+		expect(await screen.findByText("3 channels")).toBeInTheDocument();
+	});
+
 	it("searches no programs outside the live tab", async () => {
 		saveBrowseTab("movie");
 		await renderList();

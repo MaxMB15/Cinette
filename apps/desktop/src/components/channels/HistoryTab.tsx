@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Trash, LoaderCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getWatchHistory, deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
@@ -34,43 +34,32 @@ const ContentTypeBadge = ({ type }: { type: string }) => {
 export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 	const [entries, setEntries] = useState<WatchHistoryEntry[]>([]);
 	const [loading, setLoading] = useState(true);
-	const mountedRef = useRef(true);
-
 	useEffect(() => {
-		mountedRef.current = true;
+		let current = true;
+		getWatchHistory(200)
+			.then((data) => {
+				if (current) setEntries(data);
+			})
+			.catch((e) => console.error("[HistoryTab] failed to fetch history:", e))
+			.finally(() => {
+				if (current) setLoading(false);
+			});
 		return () => {
-			mountedRef.current = false;
+			current = false;
 		};
 	}, []);
 
-	const fetchHistory = useCallback(async () => {
-		setLoading(true);
+	// The entry leaves the list in place. Loading the history again would show
+	// the spinner in its place and lose the scroll position.
+	const handleDelete = useCallback(async (e: React.MouseEvent, channelId: string) => {
+		e.stopPropagation();
 		try {
-			const data = await getWatchHistory(200);
-			if (mountedRef.current) setEntries(data);
-		} catch (e) {
-			console.error("[HistoryTab] failed to fetch history:", e);
-		} finally {
-			if (mountedRef.current) setLoading(false);
+			await deleteHistoryEntry(channelId);
+			setEntries((prev) => prev.filter((entry) => entry.channelId !== channelId));
+		} catch (err) {
+			console.error("[HistoryTab] failed to delete entry:", err);
 		}
 	}, []);
-
-	useEffect(() => {
-		fetchHistory();
-	}, [fetchHistory]);
-
-	const handleDelete = useCallback(
-		async (e: React.MouseEvent, channelId: string) => {
-			e.stopPropagation();
-			try {
-				await deleteHistoryEntry(channelId);
-				if (mountedRef.current) await fetchHistory();
-			} catch (err) {
-				console.error("[HistoryTab] failed to delete entry:", err);
-			}
-		},
-		[fetchHistory]
-	);
 
 	const handleClearAll = useCallback(async () => {
 		const confirmed = await ask("Clear all watch history?", {

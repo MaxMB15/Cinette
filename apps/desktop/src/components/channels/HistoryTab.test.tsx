@@ -143,16 +143,17 @@ describe("HistoryTab list", () => {
 		expect(row.querySelector("[aria-hidden='true']")).toHaveTextContent(/^D$/);
 	});
 
-	it("reloads the history after removing an entry", async () => {
-		vi.mocked(getWatchHistory).mockResolvedValueOnce([entry, movie]).mockResolvedValue([movie]);
+	it("removes an entry from the list without loading it again", async () => {
+		vi.mocked(getWatchHistory).mockResolvedValue([entry, movie]);
 		vi.mocked(deleteHistoryEntry).mockResolvedValue(undefined);
 		render(<HistoryTab onPlay={vi.fn()} />);
+		const list = (await screen.findByText("Dune")).closest(".overflow-auto");
 
-		fireEvent.click(await screen.findByRole("button", { name: "Remove News 24 from history" }));
+		fireEvent.click(screen.getByRole("button", { name: "Remove News 24 from history" }));
 
 		await waitFor(() => expect(screen.queryByText("News 24")).toBeNull());
-		expect(screen.getByText("Dune")).toBeInTheDocument();
-		expect(getWatchHistory).toHaveBeenCalledTimes(2);
+		expect(screen.getByText("Dune").closest(".overflow-auto")).toBe(list);
+		expect(getWatchHistory).toHaveBeenCalledTimes(1);
 	});
 
 	it("logs a failed removal and keeps the entry", async () => {

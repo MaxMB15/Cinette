@@ -26,6 +26,7 @@ import { describeSource } from "@/lib/sources";
 import type { PlayerState } from "@/lib/types";
 import type { SkipIntervals } from "@/lib/player-prefs";
 import { useState, useEffect, useRef } from "react";
+import { useChanged } from "@/hooks/useChanged";
 import { CenterControls } from "./CenterControls";
 import { SkipIcon } from "./SkipIcon";
 
@@ -125,18 +126,19 @@ export const Controls = ({
 		return () => window.removeEventListener("pointerdown", handle);
 	}, [sourceMenuOpen]);
 
-	useEffect(() => {
-		if (!visible) setSourceMenuOpen(false);
-	}, [visible]);
+	// Hiding the controls closes the menu with them.
+	if (!visible && sourceMenuOpen) setSourceMenuOpen(false);
 
 	const hasDuration = state.duration > 0;
 	// A new stream starts from its own position, and a drag that began on the
 	// last one doesn't seek it. When the bar goes away mid-drag, its release
 	// never arrives.
+	const urlChanged = useChanged(state.currentUrl);
+	const durationChanged = useChanged(hasDuration);
+	if (urlChanged || durationChanged) setDragPos(null);
 	useEffect(() => {
 		const press = pressRef.current;
 		if (press) pressRef.current = hasDuration ? { ...press, to: null, dropped: true } : null;
-		setDragPos(null);
 	}, [state.currentUrl, hasDuration]);
 
 	// The slider only passes on a press it follows.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { refreshProvider, refreshEpg } from "@/lib/tauri";
 import {
@@ -13,6 +13,7 @@ import {
 import { findDueRefreshes, refreshKeys } from "@/lib/refresh-schedule";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { readStorage, SPLASH_SHOWN_KEY, writeStorage } from "@/lib/storage";
+import { useLatestRef } from "@/hooks/useLatestRef";
 
 export type StepStatus = "pending" | "active" | "done" | "error";
 
@@ -55,12 +56,9 @@ interface UseSplashScreenOptions {
 
 export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenState => {
 	const { updateState, onComplete } = options;
-	const onCompleteRef = useRef(onComplete);
-	useEffect(() => {
-		onCompleteRef.current = onComplete;
-	}, [onComplete]);
+	const onCompleteRef = useLatestRef(onComplete);
 
-	const alreadyShownRef = useRef(readStorage(SPLASH_SHOWN_KEY, "session") === "true");
+	const [alreadyShown] = useState(() => readStorage(SPLASH_SHOWN_KEY, "session") === "true");
 
 	// Consume providers from ChannelsContext (already loaded on mount — no extra Tauri calls)
 	const { providers, initialized, autoRefresh } = useChannels();
@@ -68,7 +66,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 	// Initialize all steps immediately so they're visible from the first render.
 	// The app store updates the mobile apps, so they skip the update check.
 	const [steps, setSteps] = useState<SplashStep[]>(() => {
-		if (alreadyShownRef.current) return [];
+		if (alreadyShown) return [];
 		return [
 			{ id: "providers", label: "Loading providers & channels", status: "active" },
 			{ id: "playlists", label: "Checking playlists…", status: "pending" },
@@ -78,8 +76,8 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 				: []),
 		];
 	});
-	const [allDone, setAllDone] = useState(alreadyShownRef.current);
-	const [dismissed, setDismissed] = useState(alreadyShownRef.current);
+	const [allDone, setAllDone] = useState(alreadyShown);
+	const [dismissed, setDismissed] = useState(alreadyShown);
 	const [hasProviders, setHasProviders] = useState(false);
 
 	const dismiss = useCallback(() => {
@@ -89,7 +87,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 
 	// Run once ChannelsContext has finished its initial provider fetch
 	useEffect(() => {
-		if (alreadyShownRef.current || !initialized) return;
+		if (alreadyShown || !initialized) return;
 
 		let cancelled = false;
 
@@ -196,7 +194,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			// still running, so only one actual check() call happens.
 			// Give up after 7s so the splash never gets stuck.
 			setStepStatus("updates", "active");
-			let foundUpdate: Update | null = null;
+			let foundUpdate: Update | null;
 			try {
 				foundUpdate = await Promise.race([
 					updateState.checkForUpdates(),

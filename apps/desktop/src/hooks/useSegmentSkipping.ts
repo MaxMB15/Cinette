@@ -22,6 +22,7 @@ import {
 	type PlayRun,
 } from "@/lib/skip-segments";
 import type { SkipSegment, SkipSegmentKind } from "@/lib/types";
+import { useLatestRef } from "@/hooks/useLatestRef";
 
 interface SegmentSkippingOptions {
 	/** Tells videos apart, from `useSkipSegments`. A different one starts over. */
@@ -164,6 +165,16 @@ export const useSegmentSkipping = ({
 	const mode = current ? modes[segmentGroup(current.kind)] : "off";
 	const action = current && mode !== "off" ? skipActionFor(current, duration, hasNext) : null;
 
+	// The countdown stops when playback leaves the credits, or when autoplay,
+	// the next episode or "auto" goes away. A reconnect doesn't stop it.
+	if (
+		countdown &&
+		located &&
+		(currentKey !== countdown.key || !autoplay || action?.type !== "next" || mode !== "auto")
+	) {
+		setCountdown(null);
+	}
+
 	const hidden =
 		currentKey !== null &&
 		(currentKey === skipped?.key ||
@@ -180,8 +191,15 @@ export const useSegmentSkipping = ({
 			: null;
 
 	// The latest values, for the callbacks below, which stay the same between renders.
-	const latest = useRef({ currentKey, action, offer, countdown, notice, seek, onNextEpisode });
-	latest.current = { currentKey, action, offer, countdown, notice, seek, onNextEpisode };
+	const latestRef = useLatestRef({
+		currentKey,
+		action,
+		offer,
+		countdown,
+		notice,
+		seek,
+		onNextEpisode,
+	});
 
 	// A different video starts over. Losing the video for a moment, such as
 	// while the player reloads its stream, doesn't.
@@ -228,14 +246,14 @@ export const useSegmentSkipping = ({
 			if (to - position < least) return;
 			doneRef.current.add(key);
 			landingRef.current = to;
-			latest.current.seek(to);
+			latestRef.current.seek(to);
 			setSkipped({ key, at: Date.now() });
 			setNotice({ key, kind: current.kind, from: position });
 		} else if (action?.type === "next" && autoplay) {
 			doneRef.current.add(key);
 			setCountdown({ key, kind: current.kind });
 		}
-	}, [located, position, playing, current, mode, duration, hasNext, autoplay]);
+	}, [located, position, playing, current, mode, duration, hasNext, autoplay, latestRef]);
 
 	// A skipped segment gets its button back once playback has left it, or
 	// once a seek after the skip went back into it.
@@ -244,27 +262,17 @@ export const useSegmentSkipping = ({
 		if (currentKey !== skipped.key || runStartedAtRef.current > skipped.at) setSkipped(null);
 	}, [located, skipped, currentKey, position]);
 
-	// The countdown stops when playback leaves the credits, or when autoplay,
-	// the next episode or "auto" goes away. A reconnect doesn't stop it.
-	const actionType = action?.type;
-	useEffect(() => {
-		if (!countdown || !located) return;
-		if (currentKey !== countdown.key || !autoplay || actionType !== "next" || mode !== "auto") {
-			setCountdown(null);
-		}
-	}, [countdown, located, currentKey, autoplay, actionType, mode]);
-
 	useEffect(() => {
 		if (!notice) return;
 		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
 		return () => clearTimeout(timer);
 	}, [notice]);
 
-	// Each callback clears what it acted on in `latest` until the next render,
+	// Each callback clears what it acted on in `latestRef` until the next render,
 	// so a second call in the same moment, such as Enter as the countdown
 	// ends, does nothing.
 	const skip = useCallback((): boolean => {
-		const now = latest.current;
+		const now = latestRef.current;
 		const { currentKey, action, offer, countdown, seek, onNextEpisode } = now;
 		if (countdown) {
 			now.countdown = null;
@@ -284,26 +292,26 @@ export const useSegmentSkipping = ({
 			seek(action.to);
 		}
 		return true;
-	}, []);
+	}, [latestRef]);
 
 	const undo = useCallback(() => {
-		const now = latest.current;
+		const now = latestRef.current;
 		const { notice, seek } = now;
 		if (!notice) return;
 		now.notice = null;
 		seek(notice.from);
 		setNotice(null);
 		setSkipped(null);
-	}, []);
+	}, [latestRef]);
 
 	const cancelCountdown = useCallback(() => {
-		const now = latest.current;
+		const now = latestRef.current;
 		const { countdown } = now;
 		if (!countdown) return;
 		now.countdown = null;
 		setCountdown(null);
 		setSkipped({ key: countdown.key, at: Date.now() });
-	}, []);
+	}, [latestRef]);
 
 	return {
 		offer,
