@@ -1,2 +1,1 @@
 # Workspace cargo config
-# Note: unexpected_cfgs for objc/cargo-clippy is configured in crates/tauri-plugin-mpv/Cargo.toml

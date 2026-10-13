@@ -126,10 +126,10 @@ impl MpvState {
         // old libmpv core is actually released (see field docstring).
         self.cancel_reconnect_monitor();
         // Take the old renderer OUT of the mutex before dropping it.
-        // detach() calls Queue::main().exec_sync(), which blocks the background thread
+        // detach() calls run_on_main(), which blocks the background thread
         // until the main thread processes the closure. The main thread's on_window_event
         // resize handler also needs the renderer mutex — holding the mutex while calling
-        // exec_sync causes a deadlock. Dropping outside the lock avoids this.
+        // run_on_main causes a deadlock. Dropping outside the lock avoids this.
         let old_renderer = lock_or_recover(&self.renderer).take();
         drop(old_renderer); // calls detach() with renderer mutex RELEASED
         lock_or_recover(&self.inner).stop();
