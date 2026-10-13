@@ -135,7 +135,9 @@ impl MacosGlRenderer {
 
         let views = run_on_main(move |mtm| {
             // SAFETY: the handle points at the content view of the `main`
-            // window, which `window` keeps open.
+            // window. `window` doesn't keep that view alive. This relies on
+            // the main window staying open for as long as the app runs,
+            // since closing it quits the app.
             let content_view = unsafe { Retained::retain(content_view_addr as *mut NSView) }
                 .ok_or("AppKit window handle has no view")?;
             build_views(content_view, mtm).map(|views| MainThreadBound::new(views, mtm))
@@ -334,10 +336,11 @@ impl PlatformRenderer for MacosGlRenderer {
     }
 
     fn detach(&mut self) {
-        let render = self.render.take();
+        // `attach` only sets `render` once `views` exists.
         let Some(views) = self.views.take() else {
             return;
         };
+        let render = self.render.take();
 
         // mpv_render_context_free calls GL functions like
         // glDeleteFramebuffers, so the context has to be current when the
@@ -350,6 +353,10 @@ impl PlatformRenderer for MacosGlRenderer {
                 ..
             } = views.get(mtm);
             gl_context.makeCurrentContext();
+            // A queued frame only holds the render state while it runs, and
+            // the main thread runs one thing at a time, so this is the last
+            // reference and the render context is freed right here.
+            debug_assert!(render.as_ref().is_none_or(|r| Arc::strong_count(r) == 1));
             drop(render);
             // The view and its context are freed once the last queued call
             // that holds them has run, so the main thread mustn't keep
