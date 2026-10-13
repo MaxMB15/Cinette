@@ -36,7 +36,7 @@ The app connects to these, and only when it needs them:
 - OMDb, for movie and series details, if you add an OMDb key. When you open or play a movie or series, the app sends its title. When OMDb finds it, the app sends its IMDb ID to whatson-api at whatson-api.onrender.com for more ratings. Posters load from the image addresses these services return.
 - SkipDB at api.skipdb.tv and IntroDB at api.introdb.app, for the times of intros, recaps and credits, if you add an OMDb key. When you play a movie or episode that OMDb found, the app sends its IMDb ID to both, with the season and episode for a series. SkipDB also gets the length of the video, to check the times against it.
 - OpenSubtitles, to find and download subtitles, if you add a key. It sends the IMDb ID, and the season and episode for a series.
-- Google Gemini, if you add a key, when you use one of the AI actions in the Category Manager, which are Re-categorize All, Assign All with AI and Find & Add Groups. It sends your group and category names, and a few channel names from each group. It doesn't send what you watch.
+- Google Gemini, if you add a key, when you test the key or use one of the AI actions in Manage Categories, which are Re-categorize All, Assign All with AI and Find & Add Groups. An AI action sends your group and category names, and a few channel, movie or series names from each group. It doesn't send what you watch.
 - GitHub, on macOS and Linux only, to check for a new version when the app starts and every two hours after that, and to download it.
 
 Each of these sees your IP address and what the app sends it, and handles that under its own terms and privacy policy:

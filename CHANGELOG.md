@@ -6,7 +6,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Changed
 
-- The Gemini key in Settings now says what the app sends to Google Gemini. When you use an AI action in Manage Categories, it sends your group and category names and a few channel names from each group (#256).
+- Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
 
 ### Fixed
 
