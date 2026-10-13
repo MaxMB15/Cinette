@@ -686,7 +686,9 @@ mod tests {
     #[test]
     fn a_field_tag_in_the_wrong_place_does_not_hide_the_field_inside_it() {
         // A program's tags only count inside a program, and `display-name`
-        // only inside a channel.
+        // only inside a channel. Valid XMLTV never nests them like this, but
+        // nesting is the only place a misplaced tag shows, because the next
+        // channel or program clears whatever it wrote.
         let data = parse_epg(
             r#"<tv>
   <channel id="c1"><title><display-name>One</display-name></title></channel>
