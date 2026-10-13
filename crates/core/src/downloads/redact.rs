@@ -89,7 +89,8 @@ fn redact_short_stream_path(token: &str) -> Option<String> {
         .next()
         .unwrap_or(id)
         .trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
-    if user.is_empty() || pass.is_empty() || stem.is_empty() {
+    // An empty user or password still leaves the other one to hide.
+    if (user.is_empty() && pass.is_empty()) || stem.is_empty() {
         return None;
     }
     if !stem.chars().all(|c| c.is_ascii_digit()) {
@@ -261,10 +262,12 @@ fn trim_trailing_punctuation(url: &str) -> &str {
 }
 
 /// Xtream addresses run `/<user>/<pass>/<id>`, or `/live/<user>/<pass>/<id>`
-/// and the same with `movie` or `series`. A space in the login, or a
-/// character such as a quote or `<`, ends the address early, as in
+/// and the same with `movie` or `series`. Catch-up runs
+/// `/timeshift/<user>/<pass>/<minutes>/<start>/<id>`. A space in the login, or
+/// a character such as a quote or `<`, ends the address early, as in
 /// `http://host/john/pa"ss/12345.ts`, and would leave the rest of the login in
-/// the line.
+/// the line. So does a space after a `?` or `#` in the password, because the
+/// query that [`url_len`] runs to the next whitespace stops there.
 ///
 /// `url` is the address as [`url_len`] found it, after `scheme://`, and
 /// `after` is the text that follows it. If the same line goes on to finish
@@ -272,32 +275,32 @@ fn trim_trailing_punctuation(url: &str) -> &str {
 /// the address, and 0 otherwise. Other text that happens to fit the shape is
 /// hidden along with the address, which errs on the safe side.
 fn rest_of_xtream_path(url: &str, after: &str) -> usize {
-    if after.is_empty() || url.contains(['?', '#']) {
-        return 0;
-    }
     let Some(path_start) = url.find('/') else {
         return 0;
     };
     let path = &url[path_start + 1..];
     // The address can stop in the user or the password, so the ID is one or
-    // two segments on.
+    // two segments on. Both can fit, as in `live/al ice/9876/1.ts`, where
+    // `al ice/9876` looks like a user and an ID. The longer match hides the
+    // password.
     let mut search = 0;
+    let mut longest = 0;
     for _ in 0..2 {
         let Some(found) = after[search..].find(['/', '\n', '\r']) else {
-            return 0;
+            break;
         };
         let slash = search + found;
         if after.as_bytes()[slash] != b'/' {
-            return 0;
+            break;
         }
         if is_xtream_login(&format!("{path}{}", &after[..slash]))
             && let Some(id_len) = stream_id_len(&after[slash + 1..])
         {
-            return slash + 1 + id_len;
+            longest = longest.max(slash + 1 + id_len);
         }
         search = slash + 1;
     }
-    0
+    longest
 }
 
 /// `<user>/<pass>`, or `live/<user>/<pass>` and the same with the other
@@ -312,15 +315,17 @@ fn is_xtream_login(path: &str) -> bool {
     fits && segments.iter().all(|s| !s.is_empty())
 }
 
-/// If `rest` starts with a stream ID that ends an address, the length of the
+/// If `rest` starts with a stream ID that ends a login, the length of the
 /// address from there. That's the ID, or the ID and a query or fragment after
-/// it, which runs to the next whitespace as in [`url_len`].
+/// it, which runs to the next whitespace as in [`url_len`]. A number followed
+/// by `/` counts too, as the minutes do in a catch-up address. An all-digit
+/// password fits this as well, which is why [`rest_of_xtream_path`] keeps
+/// looking one segment further.
 fn stream_id_len(rest: &str) -> Option<usize> {
     let end = rest
         .find(|c: char| c.is_whitespace() || "/?#".contains(c) || UNENCODED.contains(c))
         .unwrap_or(rest.len());
     match rest[end..].chars().next() {
-        Some('/') => None,
         Some('?' | '#') => {
             is_stream_id(&rest[..end]).then(|| rest.find(char::is_whitespace).unwrap_or(rest.len()))
         }
@@ -462,6 +467,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_keep_keeps_each_separator_and_no_empty_parts() {
+        assert_eq!(
+            split_keep(" alice  hunter2\t"),
+            [" ", "alice", " ", " ", "hunter2", "\t"]
+        );
+        assert!(split_keep("").is_empty());
+    }
+
+    #[test]
     fn redacts_path_credentials() {
         let url = "http://host:8080/movie/john/s3cret/12345.mkv";
         let out = redact_credentials(url);
@@ -491,6 +505,24 @@ mod tests {
         );
         let out = redact_credentials("http://host/john/s3cret/7.ts: Server returned 403");
         assert_eq!(out, "http://host/***/***/7.ts: Server returned 403");
+    }
+
+    #[test]
+    fn redacts_the_short_live_path_with_an_empty_user_or_password() {
+        // An empty user used to leave the password in the line.
+        assert_eq!(
+            redact_credentials("http://host//hunter2/12345 failed"),
+            "http://host/***/***/12345 failed"
+        );
+        assert_eq!(
+            redact_credentials("http://host/alice//12345.ts"),
+            "http://host/***/***/12345.ts"
+        );
+        // With neither, there's nothing to hide.
+        assert_eq!(
+            redact_credentials("http://host///12345"),
+            "http://host///12345"
+        );
     }
 
     #[test]
@@ -635,6 +667,144 @@ mod tests {
     }
 
     #[test]
+    fn scrub_log_line_hides_logins_cut_after_a_query_or_fragment_mark() {
+        // A `?` or `#` in the password starts a query that ends at the space,
+        // and the rest of the password used to stay in the line.
+        for (line, expected) in [
+            (
+                "http://host/alice/hun?ter 2/12345.ts failed",
+                "http://host/…?… failed",
+            ),
+            (
+                "http://host/alice/hun#ter 2/12345.ts failed",
+                "http://host/…#… failed",
+            ),
+            // In the user, the ID is two segments on.
+            (
+                "http://host/ali?ce bob/hunter2/12345 failed",
+                "http://host/…?… failed",
+            ),
+        ] {
+            let out = scrub_log_line(line);
+            assert_eq!(out, expected, "{line}");
+            for secret in ["alice", "ce bob", "ter"] {
+                assert!(!out.contains(secret), "{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_hides_catch_up_logins_that_end_the_address() {
+        // In a catch-up address the minutes follow the login, and a space in
+        // the password used to leave the rest of it in the line.
+        for (line, expected) in [
+            (
+                "http://host:8080/timeshift/alice/hun ter2/60/2026-10-12:20-00/9.ts failed",
+                "http://host:8080/…/60/2026-10-12:20-00/9.ts failed",
+            ),
+            (
+                "http://host/alice/hun ter2/12/34 failed",
+                "http://host/…/12/34 failed",
+            ),
+            ("http://host/alice/hun\"ter2/12/34", "http://host/…/12/34"),
+        ] {
+            let out = scrub_log_line(line);
+            assert_eq!(out, expected, "{line}");
+            assert!(!out.contains("ter2") && !out.contains("alice"), "{out}");
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_hides_a_query_after_a_login_that_ends_the_address() {
+        // The query after the ID runs to the next whitespace, as it does when
+        // the address holds it.
+        for (line, expected) in [
+            (
+                "http://host/alice/hun ter2/12345.ts?token=abc next",
+                "http://host/…/12345.ts?… next",
+            ),
+            (
+                "http://host/alice/hun ter2/12345.ts?auth=hunter2 next",
+                "http://host/…/12345.ts?… next",
+            ),
+            (
+                "http://host/alice/hun ter2/12345#t=hunter2 next",
+                "http://host/…/12345#… next",
+            ),
+        ] {
+            let out = scrub_log_line(line);
+            assert_eq!(out, expected, "{line}");
+            assert!(!out.contains("ter2"), "{out}");
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_hides_an_all_digit_password_after_a_split_user() {
+        // `al ice/9876` alone looks like a user and a stream ID, so the
+        // address must run on to the real ID.
+        for line in [
+            "load http://host/live/al ice/9876/12345.ts failed",
+            "load http://host/movie/al ice/9876/12345.mkv failed",
+            "load http://host/series/al\tice/9876/12345.mp4 failed",
+            "load http://host/timeshift/al ice/9876/60/2026-10-12:20-00/9.ts failed",
+        ] {
+            let out = scrub_log_line(line);
+            assert!(!out.contains("9876"), "{line:?} -> {out:?}");
+            assert!(!out.contains("ice"), "{line:?} -> {out:?}");
+            assert!(out.ends_with(" failed"), "{line:?} -> {out:?}");
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_keeps_the_longer_of_two_logins() {
+        // The first ID runs on past `?` to the next space, and the second
+        // stops at a `/`. Keeping the second would show the rest.
+        for line in [
+            "load http://host/timeshift/al ice/12?x/60/2026-10-12:20-00/9.ts?auth=s3cret failed",
+            "load http://host/live/al ice/9876?x/12/s3cret failed",
+            "{\"url\":\"http://host/live/al ice/12?x/345.ts\",\"sig\":\"s3cret\"}",
+            "load http://host/movie/hun ter2/12345.mkv?sig=ab/12/s3cret failed",
+        ] {
+            let out = scrub_log_line(line);
+            assert!(!out.contains("s3cret"), "{line:?} -> {out:?}");
+            assert!(!out.contains("ice"), "{line:?} -> {out:?}");
+            assert!(!out.contains("ter2"), "{line:?} -> {out:?}");
+        }
+    }
+
+    #[test]
+    fn scrub_log_line_hides_logins_with_any_odd_character() {
+        // The app encodes these characters, but an M3U playlist can hold them
+        // as they are.
+        let shapes = [
+            "{login}/12345.ts",
+            "live/{login}/12345.ts",
+            "movie/{login}/777.mkv",
+            "series/{login}/4242.mp4",
+            "timeshift/{login}/60/2026-10-12:20-00/9.ts",
+            "{login}/12345.m3u8?x=1",
+        ];
+        for c in " \t?#\"'()[]<>{}|\\^`.,;:!&=@%+*$~".chars() {
+            for login in [
+                format!("al{c}ice/hunter2"),
+                format!("alice/hun{c}ter2"),
+                format!("al{c}ice/9876"),
+            ] {
+                for shape in shapes {
+                    let path = shape.replace("{login}", &login);
+                    for (before, after) in [("load url=", " failed"), ("(", ")."), ("", "")] {
+                        let line = format!("{before}http://host:8080/{path}{after}");
+                        let out = scrub_log_line(&line);
+                        for part in ["al", "ice", "hun", "ter2", "9876"] {
+                            assert!(!out.contains(part), "{line:?} -> {out:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scrub_looks_for_the_rest_of_a_login_only_where_it_can_be() {
         // On the next line.
         assert_eq!(
@@ -666,6 +836,18 @@ mod tests {
         assert_eq!(
             redact_credentials("http://host/live/john/pa ss/1.ts"),
             "http://host/live/***/*** ss/1.ts"
+        );
+    }
+
+    #[test]
+    fn scrub_drops_only_the_brackets_that_close_outside_the_address() {
+        assert_eq!(
+            scrub_urls("[see http://host/1.ts]"),
+            "[see http://host/1.ts]"
+        );
+        assert_eq!(
+            scrub_urls("[http://host/wiki/Foo_[bar]]"),
+            "[http://host/…]"
         );
     }
 

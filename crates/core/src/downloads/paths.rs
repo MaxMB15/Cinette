@@ -138,6 +138,8 @@ mod tests {
     #[test]
     fn sanitizes_separators_and_reserved() {
         assert_eq!(sanitize_filename("a/b:c*?"), "a_b_c__");
+        // Control characters, tabs and line breaks too.
+        assert_eq!(sanitize_filename("a\tb\u{7}c\nd"), "a_b_c_d");
         assert_eq!(sanitize_filename("  trailing.  "), "trailing");
         assert_eq!(sanitize_filename(""), "untitled");
     }
