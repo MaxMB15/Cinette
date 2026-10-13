@@ -13,6 +13,46 @@ catalog:
 # the install until it's listed under allowBuilds.
 strictDepBuilds: true
 
+# pnpm only installs versions that have been on the registry for at least three
+# days, given here in minutes. A bad release is usually found and pulled by
+# then. pnpm's own default is one day. The check covers every entry already in
+# pnpm-lock.yaml too, so a frozen install in CI fails on a version that's too
+# new. Since the age is set here, pnpm doesn't quietly take a newer version
+# when nothing old enough fits a range. It stops, or asks in a terminal.
+minimumReleaseAge: 4320
+
+# These exact versions were already locked before the age check was turned on.
+# The list can go after 2026-10-15 17:12 UTC, when the last of them passes it.
+minimumReleaseAgeExclude:
+  - "@tanstack/react-virtual@3.14.17"
+  - "@tanstack/virtual-core@3.19.2"
+  - "@typescript-eslint/eslint-plugin@8.71.2"
+  - "@typescript-eslint/parser@8.71.2"
+  - "@typescript-eslint/project-service@8.71.2"
+  - "@typescript-eslint/scope-manager@8.71.2"
+  - "@typescript-eslint/tsconfig-utils@8.71.2"
+  - "@typescript-eslint/type-utils@8.71.2"
+  - "@typescript-eslint/types@8.71.2"
+  - "@typescript-eslint/typescript-estree@8.71.2"
+  - "@typescript-eslint/utils@8.71.2"
+  - "@typescript-eslint/visitor-keys@8.71.2"
+  - "@vitest/coverage-v8@5.0.4"
+  - "@vitest/mocker@5.0.4"
+  - "@vitest/spy@5.0.4"
+  - prettier@3.9.10
+  - tinybench@6.2.2
+  - typescript-eslint@8.71.2
+  - vitest@5.0.4
+
+# pnpm 12 records its own version in a first document in pnpm-lock.yaml.
+# GitHub's dependency graph reads only that document, so it would see no
+# dependencies and close every Dependabot alert. See
+# https://github.com/dependabot/dependabot-core/issues/15904. With ignore, the
+# lockfile stays one document, and pnpm no longer checks or switches its own
+# version. Corepack and pnpm/action-setup already run the version that
+# packageManager in package.json names.
+pmOnFail: ignore
+
 # eslint-plugin-react 7.37.5 still lists ESLint 9 as its newest peer. It runs
 # on ESLint 10 once settings.react.version is set, since detecting the version
 # calls a context method that ESLint 10 removed.

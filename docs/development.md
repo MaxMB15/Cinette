@@ -8,8 +8,13 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 
 - [Rust](https://rustup.rs), the latest stable release
 - [Node.js](https://nodejs.org) 24, or 22.22.1 or a later 22.x release
-- [pnpm](https://pnpm.io/installation). With Node 24, `corepack enable pnpm` sets it
-  up. pnpm 10 or later switches itself to the version that `package.json` names.
+- [pnpm](https://pnpm.io/installation), at the version that `packageManager` in
+  `package.json` names. Run `corepack enable pnpm`, and Corepack then runs that
+  version. Node 24.12 or later, or 22.22.1 or later on 22.x, comes with a Corepack
+  that can start pnpm 12. On an older Node 24, run `npm i -g corepack@latest` first.
+  `pmOnFail` in `pnpm-workspace.yaml` turns off pnpm's own version switching, so a
+  pnpm 11 or later installed another way runs as its own version and doesn't warn.
+  Use Corepack.
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
@@ -91,6 +96,19 @@ the Rust backend won't work there, but it's quick for layout work.
 `pnpm install` doesn't run dependencies' install scripts. If a new dependency has one,
 the install stops until the package is listed under `allowBuilds` in
 `pnpm-workspace.yaml`, with `true` to run its script or `false` to skip it.
+
+pnpm only installs versions that have been on the registry for at least three days,
+as `minimumReleaseAge` in `pnpm-workspace.yaml` sets. `pnpm add` and `pnpm update`
+pick the newest version that's old enough. When none fits the range, they stop with
+an error, or in a terminal ask whether to take the newer version anyway. The check
+also covers every version already in `pnpm-lock.yaml`, so a lockfile that names a
+newer one fails `pnpm install`, in CI as well. A version is let through once it's
+listed as `name@version` under `minimumReleaseAgeExclude`, which is what approving
+it in the terminal does. Dependabot's security pull requests skip the seven-day
+`cooldown` in `.github/dependabot.yml`. When one brings a version under three days
+old, its CI install fails. Re-run the job once that version is three days old, or add
+each version the error names, as `name@version`, to `minimumReleaseAgeExclude` on
+that pull request's branch.
 
 If you installed the packages with npm before the switch to pnpm, delete
 `node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
