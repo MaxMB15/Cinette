@@ -7,6 +7,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Changed
 
 - Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
+- The log now says which mpv version the app runs and, on Linux, which libmpv file it loaded. On Linux, the error the player shows when mpv fails to start names that file too, since a libmpv from somewhere else is the usual cause (#260).
 
 ### Fixed
 

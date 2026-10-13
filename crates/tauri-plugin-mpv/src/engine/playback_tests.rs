@@ -48,6 +48,10 @@ fn create_names_the_option_mpv_rejects() {
         error.starts_with("mpv init: option no-such-option: "),
         "{error}"
     );
+    // Linux also names the libmpv file, since a different one is the usual
+    // reason mpv rejects an option.
+    #[cfg(target_os = "linux")]
+    assert!(error.contains(", libmpv \""), "{error}");
     assert!(engine.mpv.is_none());
 }
 
