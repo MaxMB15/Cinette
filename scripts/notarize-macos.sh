@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# shellcheck source=SCRIPTDIR/lib/retry.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/retry.sh"
+
 file="${1:?usage: $0 <dmg>}"
 : "${APPLE_API_KEY:?}" "${APPLE_API_ISSUER:?}" "${APPLE_API_KEY_PATH:?}"
 auth=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER")
@@ -32,17 +35,8 @@ if [[ "$status" != "Accepted" ]]; then
 fi
 
 # Stapling downloads the ticket from Apple, so a dropped connection or a
-# ticket that isn't published yet fails it. Retry with a longer wait each time.
-attempts=5
-for ((attempt = 1; attempt <= attempts; attempt++)); do
-  if xcrun stapler staple "$file"; then
-    exit 0
-  fi
-  if ((attempt < attempts)); then
-    delay=$((attempt * 20))
-    echo "Stapling failed, attempt $attempt of $attempts. Retrying in ${delay}s..." >&2
-    sleep "$delay"
-  fi
-done
-echo "Error: could not staple the notarization ticket to $(basename "$file")" >&2
-exit 1
+# ticket that isn't published yet fails it.
+if ! retry 5 20 xcrun stapler staple "$file"; then
+  echo "Error: could not staple the notarization ticket to $(basename "$file")" >&2
+  exit 1
+fi
