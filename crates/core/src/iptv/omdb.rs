@@ -301,6 +301,12 @@ mod tests {
     }
 
     #[test]
+    fn a_year_needs_a_bracket_on_each_side() {
+        assert_eq!(strip_trailing_year("Example Film [2010)"), None);
+        assert_eq!(strip_trailing_year("Example Film (2010]"), None);
+    }
+
+    #[test]
     fn test_parse_full_response() {
         let data = parse_omdb_response(full_response()).unwrap();
         assert_eq!(data.title, "The Dark Knight");
