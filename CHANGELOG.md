@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
 - Some colors are a little more vivid, such as the green checks on the start screen and the Live, Movie and Series badges (#236).
+- The Favorites tab loads the TV guide for its own live channels, not for every channel in the playlist, so it has far less to load on a large playlist. A channel you favorite while the tab is open loads only its own programs (#243).
 
 ### Fixed
 
