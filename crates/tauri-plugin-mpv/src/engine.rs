@@ -5,6 +5,7 @@
 //! Options (vo, hwdec, ao) are passed in by the caller. The only platform code
 //! here is `configure_audio`, which Linux needs after mpv starts.
 
+use crate::loadfile::{loadfile, resume_option};
 use crate::log_url::origin_for_log;
 use crate::reconnect::ended_early;
 use libmpv2::Mpv;
@@ -131,22 +132,15 @@ impl MpvEngine {
     /// the reconnect / auto-recovery paths). For non-seekable inputs mpv
     /// silently ignores `start=`, so it's always safe to pass through.
     ///
-    /// Matches the 4-arg form `loadfile <url> <flags> <index> <options>`
-    /// used by `crates/tauri-plugin-mpv/src/reconnect.rs` for its internal
-    /// retries — keeping both paths on the same syntax avoids divergent
-    /// per-file option handling.
+    /// This and the reconnect watcher's retries both go through
+    /// `crate::loadfile`, which picks the form the loaded mpv accepts.
     pub fn loadfile(&self, url: &str, start_pos: Option<f64>) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or("no mpv instance")?;
-        let resume_opt = start_pos.filter(|p| *p > 1.0).map(|p| format!("start=+{p:.3}"));
-        let result = if let Some(ref opts) = resume_opt {
-            mpv.command("loadfile", &[url, "replace", "0", opts])
-        } else {
-            mpv.command("loadfile", &[url, "replace"])
-        };
-        result.map_err(|e| format!("loadfile: {}", e))?;
-        if let Some(p) = start_pos.filter(|p| *p > 1.0) {
+        let resume_opt = resume_option(start_pos);
+        loadfile(mpv, url, resume_opt.as_deref()).map_err(|e| format!("loadfile: {}", e))?;
+        if let Some(opts) = &resume_opt {
             tracing::info!(
-                "[MPV engine] loadfile resumed at start=+{p:.3} origin={}",
+                "[MPV engine] loadfile resumed at {opts} origin={}",
                 origin_for_log(url)
             );
         }

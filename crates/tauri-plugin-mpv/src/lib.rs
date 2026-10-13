@@ -10,6 +10,7 @@ mod artwork;
 mod commands;
 mod engine;
 mod idle_inhibit;
+mod loadfile;
 mod lock;
 mod log_url;
 pub mod mpv;
