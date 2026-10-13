@@ -102,10 +102,10 @@ pub fn backstop_secs(
         .collect();
     next.sort_by_key(|r| r.start_at);
     for r in next {
-        if let (Some(start), Some(next_end)) = (r.start_at, r.end_at) {
-            if start <= end {
-                end = end.max(next_end);
-            }
+        if let (Some(start), Some(next_end)) = (r.start_at, r.end_at)
+            && start <= end
+        {
+            end = end.max(next_end);
         }
     }
     (end - now).clamp(0, MAX_LENGTH_SECS) + BACKSTOP_SLACK_SECS

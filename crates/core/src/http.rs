@@ -297,17 +297,17 @@ pub mod test_server {
         let mut buf = [0u8; 4096];
         let mut total = None;
         loop {
-            if total.is_none() {
-                if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let head = String::from_utf8_lossy(&request[..end]);
-                    let chunked = header(&head, "transfer-encoding")
-                        .is_some_and(|value| value.to_ascii_lowercase().contains("chunked"));
-                    assert!(
-                        !chunked,
-                        "the test server doesn't read chunked request bodies"
-                    );
-                    total = Some((end + 4).saturating_add(content_length(&head)));
-                }
+            if total.is_none()
+                && let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n")
+            {
+                let head = String::from_utf8_lossy(&request[..end]);
+                let chunked = header(&head, "transfer-encoding")
+                    .is_some_and(|value| value.to_ascii_lowercase().contains("chunked"));
+                assert!(
+                    !chunked,
+                    "the test server doesn't read chunked request bodies"
+                );
+                total = Some((end + 4).saturating_add(content_length(&head)));
             }
             if let Some(total) = total.filter(|&total| request.len() >= total) {
                 request.truncate(total);

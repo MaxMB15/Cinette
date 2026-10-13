@@ -31,7 +31,7 @@ use std::sync::{
 use std::time::Duration;
 use tauri::{async_runtime::JoinHandle, AppHandle, Manager, Runtime};
 
-extern "C" {
+unsafe extern "C" {
     fn mvp_ios_register_callbacks(
         lifecycle: Option<extern "C" fn(bool)>,
         remote: Option<extern "C" fn(i32, f64)>,
@@ -128,10 +128,10 @@ static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
 /// arrived. With a thread each, a quick trip to the background and back
 /// could turn video on and then off again.
 fn run_in_order(f: impl FnOnce(&MpvState) + Send + 'static) {
-    if let Some(jobs) = JOBS.get() {
-        if jobs.send(Box::new(f)).is_err() {
-            tracing::warn!("[MPV ios] the callback thread has stopped");
-        }
+    if let Some(jobs) = JOBS.get()
+        && jobs.send(Box::new(f)).is_err()
+    {
+        tracing::warn!("[MPV ios] the callback thread has stopped");
     }
 }
 
@@ -499,10 +499,8 @@ fn run_watcher(
             Some(Ok(Event::PropertyChange { name, change, .. })) => match (name, change) {
                 ("vo-configured", PropertyData::Flag(configured)) => {
                     vo_configured = configured;
-                    if configured {
-                        if let Some(cb) = first_frame.take() {
-                            cb();
-                        }
+                    if configured && let Some(cb) = first_frame.take() {
+                        cb();
                     }
                     false
                 }
@@ -538,9 +536,9 @@ fn run_watcher(
                 resize.start(&client);
             }
         }
-        let gen = MEDIA_INFO_GEN.load(Ordering::Acquire);
-        let info_changed = gen != seen_gen;
-        seen_gen = gen;
+        let info_gen = MEDIA_INFO_GEN.load(Ordering::Acquire);
+        let info_changed = info_gen != seen_gen;
+        seen_gen = info_gen;
         if event_changed || info_changed {
             let position = client.get_property::<f64>("time-pos").unwrap_or(0.0);
             let info = lock_or_recover(&MEDIA_INFO);

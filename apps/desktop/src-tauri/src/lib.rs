@@ -26,7 +26,9 @@ fn apply_linux_workarounds() {
     // for correct compositing with the EGL video subsurface. The original
     // workaround targeted blank-window bugs in some X11/AppImage configs.
     if is_appimage && !is_wayland && std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        // SAFETY: run() calls this before it builds Tauri, and nothing before
+        // it starts a thread, so no other thread can be reading the environment.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
     // The linuxdeploy-plugin-gtk AppRun hook forces GDK_BACKEND=x11 before
     // our binary starts. Override it back to wayland when a Wayland session
@@ -34,7 +36,8 @@ fn apply_linux_workarounds() {
     // video rendering. Scoped to AppImage only — .deb/.rpm use system GTK
     // which auto-detects correctly.
     if std::env::var("APPIMAGE").is_ok() && std::env::var("WAYLAND_DISPLAY").is_ok() {
-        std::env::set_var("GDK_BACKEND", "wayland");
+        // SAFETY: as above, no other thread is running yet.
+        unsafe { std::env::set_var("GDK_BACKEND", "wayland") };
     }
 }
 
@@ -332,10 +335,10 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let handle = app.handle().clone();
                     window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::Resized(size) = event {
-                            if let Some(state) = handle.try_state::<tauri_plugin_mpv::MpvState>() {
-                                state.resize(size.width, size.height);
-                            }
+                        if let tauri::WindowEvent::Resized(size) = event
+                            && let Some(state) = handle.try_state::<tauri_plugin_mpv::MpvState>()
+                        {
+                            state.resize(size.width, size.height);
                         }
                     });
                 }

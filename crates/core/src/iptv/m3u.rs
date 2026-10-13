@@ -192,10 +192,11 @@ fn pair_blocks<T: AsRef<str>>(lines: impl IntoIterator<Item = T>) -> Vec<(T, T)>
         let text = line.as_ref().trim();
         if text.starts_with("#EXTINF:") {
             extinf = Some(line);
-        } else if !text.is_empty() && !text.starts_with('#') {
-            if let Some(extinf) = extinf.take() {
-                blocks.push((extinf, line));
-            }
+        } else if !text.is_empty()
+            && !text.starts_with('#')
+            && let Some(extinf) = extinf.take()
+        {
+            blocks.push((extinf, line));
         }
     }
     blocks
