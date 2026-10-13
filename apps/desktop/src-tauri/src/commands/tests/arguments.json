@@ -11,7 +11,10 @@
 	"get_xtream_series_episodes": { "required": ["channelId"] },
 	"refresh_epg": { "required": ["providerId"] },
 	"get_epg_programmes": { "required": ["channelId", "rangeStart", "rangeEnd"] },
-	"get_epg_for_live_channels": { "required": ["rangeStart", "rangeEnd"] },
+	"get_epg_for_live_channels": {
+		"required": ["rangeStart", "rangeEnd"],
+		"optional": ["channelIds"]
+	},
 	"search_epg_programmes": { "required": ["query", "rangeStart"] },
 	"set_epg_url": { "required": ["providerId"], "optional": ["epgUrl"] },
 	"detect_epg_url": { "required": ["id"] },

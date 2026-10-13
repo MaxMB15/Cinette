@@ -122,10 +122,16 @@ export const getEpgProgrammes = (
 	rangeEnd: number
 ): Promise<EpgProgram[]> => invoke("get_epg_programmes", { channelId, rangeStart, rangeEnd });
 
+/**
+ * The guide's programs between two times for the channels with these guide
+ * ids, or for every channel when `channelIds` is left out.
+ */
 export const getEpgForLiveChannels = (
 	rangeStart: number,
-	rangeEnd: number
-): Promise<EpgProgram[]> => invoke("get_epg_for_live_channels", { rangeStart, rangeEnd });
+	rangeEnd: number,
+	channelIds?: readonly string[]
+): Promise<EpgProgram[]> =>
+	invoke("get_epg_for_live_channels", { rangeStart, rangeEnd, channelIds });
 
 export const searchEpgProgrammes = (
 	query: string,

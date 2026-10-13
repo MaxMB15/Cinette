@@ -1250,18 +1250,10 @@ impl CacheStore {
              WHERE channel_id = ?1 AND start_time < ?3 AND end_time > ?2
              ORDER BY start_time ASC",
         )?;
-        let rows = stmt.query_map(params![channel_id, range_start, range_end], |row| {
-            Ok(StoredEpgProgram {
-                channel_id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                start_time: row.get(3)?,
-                end_time: row.get(4)?,
-                category: row.get(5)?,
-                provider_id: row.get(6)?,
-                fetched_at: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            params![channel_id, range_start, range_end],
+            Self::row_to_epg_programme,
+        )?;
         rows.collect::<SqlResult<Vec<_>>>().map_err(CacheError::Db)
     }
 
@@ -1278,19 +1270,48 @@ impl CacheStore {
              WHERE start_time < ?2 AND end_time > ?1
              ORDER BY channel_id ASC, start_time ASC",
         )?;
-        let rows = stmt.query_map(params![range_start, range_end], |row| {
-            Ok(StoredEpgProgram {
-                channel_id: row.get(0)?,
-                title: row.get(1)?,
-                description: row.get(2)?,
-                start_time: row.get(3)?,
-                end_time: row.get(4)?,
-                category: row.get(5)?,
-                provider_id: row.get(6)?,
-                fetched_at: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![range_start, range_end], Self::row_to_epg_programme)?;
         rows.collect::<SqlResult<Vec<_>>>().map_err(CacheError::Db)
+    }
+
+    /// The EPG programmes of the channels with these guide ids within a time
+    /// range, in the same order as `get_epg_all_channels`. The Favorites tab
+    /// loads its own channels' programmes this way.
+    pub fn get_epg_for_channels(
+        &self,
+        channel_ids: &[String],
+        range_start: i64,
+        range_end: i64,
+    ) -> Result<Vec<StoredEpgProgram>, CacheError> {
+        // The ids go in as one JSON array, so any number of them fits in a
+        // single parameter.
+        let ids = serde_json::to_string(channel_ids)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT channel_id, title, description, start_time, end_time, category, provider_id, fetched_at
+             FROM epg_programmes
+             WHERE channel_id IN (SELECT value FROM json_each(?3))
+               AND start_time < ?2 AND end_time > ?1
+             ORDER BY channel_id ASC, start_time ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![range_start, range_end, ids],
+            Self::row_to_epg_programme,
+        )?;
+        rows.collect::<SqlResult<Vec<_>>>().map_err(CacheError::Db)
+    }
+
+    /// Reads a row whose columns are those of `StoredEpgProgram`, in order.
+    fn row_to_epg_programme(row: &rusqlite::Row) -> SqlResult<StoredEpgProgram> {
+        Ok(StoredEpgProgram {
+            channel_id: row.get(0)?,
+            title: row.get(1)?,
+            description: row.get(2)?,
+            start_time: row.get(3)?,
+            end_time: row.get(4)?,
+            category: row.get(5)?,
+            provider_id: row.get(6)?,
+            fetched_at: row.get(7)?,
+        })
     }
 
     /// Search EPG programmes by title/description, joining with channels for display info.
@@ -4759,6 +4780,51 @@ mod tests {
     }
 
     #[test]
+    fn the_guide_window_can_cover_only_some_channels() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let quoted = "Ñews \"24\".es";
+        store
+            .save_epg_programmes(
+                "p1",
+                &[
+                    timed("cnn.us", "Late", 300, 400),
+                    timed("bbc.uk", "Evening", 100, 200),
+                    timed("cnn.us", "Early", 0, 150),
+                    timed("itv.uk", "Quiz", 100, 200),
+                    timed(quoted, "Headlines", 200, 300),
+                    timed("bbc.uk", "Later", 400, 500),
+                ],
+            )
+            .unwrap();
+        let window = |ids: &[&str]| -> Vec<(String, String)> {
+            let ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+            store
+                .get_epg_for_channels(&ids, 100, 400)
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.channel_id, p.title))
+                .collect()
+        };
+
+        assert_eq!(
+            window(&["cnn.us", "bbc.uk"]),
+            [
+                ("bbc.uk".to_string(), "Evening".to_string()),
+                ("cnn.us".to_string(), "Early".to_string()),
+                ("cnn.us".to_string(), "Late".to_string()),
+            ]
+        );
+        // Any character can be part of a guide id.
+        assert_eq!(
+            window(&[quoted]),
+            [(quoted.to_string(), "Headlines".to_string())]
+        );
+        // An id without programmes, or no id at all, finds nothing.
+        assert!(window(&["abc.au"]).is_empty());
+        assert!(window(&[]).is_empty());
+    }
+
+    #[test]
     fn guide_search_finds_the_next_match_on_each_channel() {
         let store = CacheStore::open_in_memory().unwrap();
         store.upsert_provider(&make_provider("p1", "P")).unwrap();
@@ -5165,6 +5231,7 @@ mod tests {
             store.get_epg_data("p1-ch-0"),
             store.get_epg_programmes("bbc.uk", 0, 100),
             store.get_epg_all_channels(0, 100),
+            store.get_epg_for_channels(&["bbc.uk".to_string()], 0, 100),
             store.search_epg_programmes("news", 0),
             store.get_omdb_cache("p1-ch-1", 3600),
             store.get_watch_history(10),

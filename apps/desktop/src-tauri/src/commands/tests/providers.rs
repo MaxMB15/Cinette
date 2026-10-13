@@ -712,7 +712,7 @@ async fn the_guide_for_all_channels_is_sorted_by_channel_and_time() {
     let app = TestApp::new();
     add_provider_with_guide(&app).await;
 
-    let all = get_epg_for_live_channels(app.state(), NOON, NOON + 3 * HOUR)
+    let all = get_epg_for_live_channels(app.state(), NOON, NOON + 3 * HOUR, None)
         .await
         .unwrap();
     let shown: Vec<(&str, &str)> = all
@@ -728,12 +728,35 @@ async fn the_guide_for_all_channels_is_sorted_by_channel_and_time() {
         ]
     );
 
-    let last_hour = get_epg_for_live_channels(app.state(), NOON + 2 * HOUR, NOON + 3 * HOUR)
+    let last_hour = get_epg_for_live_channels(app.state(), NOON + 2 * HOUR, NOON + 3 * HOUR, None)
         .await
         .unwrap();
     assert_eq!(last_hour.len(), 1);
     assert_eq!(last_hour[0].title, "Evening News Film");
     assert_eq!(last_hour[0].category, None);
+}
+
+#[tokio::test]
+async fn the_guide_for_chosen_channels_leaves_the_others_out() {
+    let app = TestApp::new();
+    add_provider_with_guide(&app).await;
+
+    let news = get_epg_for_live_channels(
+        app.state(),
+        NOON,
+        NOON + 3 * HOUR,
+        Some(vec!["news.test".into(), "missing.test".into()]),
+    )
+    .await
+    .unwrap();
+    let shown: Vec<(&str, &str)> = news
+        .iter()
+        .map(|p| (p.channel_id.as_str(), p.title.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [("news.test", "Noon News"), ("news.test", "Weather")]
+    );
 }
 
 #[tokio::test]
@@ -787,7 +810,7 @@ async fn a_guide_without_programs_keeps_the_saved_one() {
 
     assert_eq!(refresh_epg(app.handle(), "p".into()).await, Ok(0));
 
-    let kept = get_epg_for_live_channels(app.state(), NOON, NOON + 3 * HOUR)
+    let kept = get_epg_for_live_channels(app.state(), NOON, NOON + 3 * HOUR, None)
         .await
         .unwrap();
     assert_eq!(kept.len(), 3);
@@ -1127,7 +1150,7 @@ async fn clearing_caches_drops_the_guide_and_subtitles_but_keeps_providers_and_h
     clear_all_caches(app.handle(), app.state()).await.unwrap();
 
     assert!(!subtitles.exists());
-    let guide = get_epg_for_live_channels(app.state(), NOON, NOON + 3 * HOUR)
+    let guide = get_epg_for_live_channels(app.state(), NOON, NOON + 3 * HOUR, None)
         .await
         .unwrap();
     assert!(guide.is_empty());

@@ -45,12 +45,8 @@ import { useChannels } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useNow } from "@/hooks/useNow";
-import {
-	getXtreamSeriesEpisodes,
-	getCachedSeriesEpisodes,
-	getEpgForLiveChannels,
-	searchEpgProgrammes,
-} from "@/lib/tauri";
+import { useGuidePrograms, type GuideChannels } from "@/hooks/useGuidePrograms";
+import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes, searchEpgProgrammes } from "@/lib/tauri";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
@@ -167,8 +163,6 @@ export const ChannelList = () => {
 	const showSeriesLoading = useDelayedFlag(seriesLoading, 300);
 	const [selectedMovie, setSelectedMovie] = useState<Channel | null>(null);
 
-	// EPG data: tvgId → EpgProgram[] (all programs in the fetch window)
-	const [epgMap, setEpgMap] = useState<Map<string, EpgProgram[]>>(new Map());
 	// EPG search: one result per channel (earliest matching program)
 	const [epgSearchResults, setEpgSearchResults] = useState<EpgSearchResult[]>([]);
 
@@ -350,35 +344,26 @@ export const ChannelList = () => {
 		setGuideRange(guideRangeFor(now, windowStart, windowEnd));
 	}
 
-	// The Live tab shows the guide, and so does the Favorites tab for a live
-	// favorite that has a guide id.
-	const showsGuide =
-		activeTab === "live" ||
-		(activeTab === "favorites" && byType.live.some((ch) => ch.isFavorite && ch.tvgId));
+	// The guide ids of the live favorites, for the Favorites tab.
+	const favoriteGuideIds = useMemo(
+		() => byType.live.flatMap((ch) => (ch.isFavorite && ch.tvgId ? [ch.tvgId] : [])),
+		[byType.live]
+	);
 
-	// Load the guide for all live channels when its range moves, when the tab
-	// starts showing it, and when the channels change. Going between Live and
-	// Favorites keeps what's loaded.
-	useEffect(() => {
-		if (!showsGuide || channels.length === 0 || !guideRange) return;
-		// A load for an older range can finish after the current one.
-		let stale = false;
-		getEpgForLiveChannels(guideRange.from, guideRange.to)
-			.then((progs) => {
-				if (stale) return;
-				const map = new Map<string, EpgProgram[]>();
-				for (const p of progs) {
-					const list = map.get(p.channelId) ?? [];
-					list.push(p);
-					map.set(p.channelId, list);
-				}
-				setEpgMap(map);
-			})
-			.catch(() => {});
-		return () => {
-			stale = true;
-		};
-	}, [showsGuide, channels.length, guideRange]);
+	// The Live tab shows every channel's guide, and the Favorites tab only that
+	// of its live favorites with a guide id. It loads when its range moves,
+	// when the tab starts showing it, and when the channels change. Going from
+	// Live to Favorites keeps what's loaded, and a new favorite loads only its
+	// own programs.
+	const guideChannels: GuideChannels | null =
+		channels.length === 0
+			? null
+			: activeTab === "live"
+				? "all"
+				: activeTab === "favorites" && favoriteGuideIds.length > 0
+					? favoriteGuideIds
+					: null;
+	const epgMap = useGuidePrograms(guideRange, guideChannels, channels.length);
 
 	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.

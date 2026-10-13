@@ -502,18 +502,22 @@ pub struct EpgSearchResultDto {
     pub channel_logo_url: Option<String>,
 }
 
-/// Fetch all EPG programmes across all channels in a time range.
+/// Fetch the EPG programmes in a time range for the channels with these guide
+/// ids, or for every channel when there are none.
 /// Returns a flat list; the frontend groups by channelId to build per-channel strips.
 #[command]
 pub async fn get_epg_for_live_channels(
     state: State<'_, AppState>,
     range_start: i64,
     range_end: i64,
+    channel_ids: Option<Vec<String>>,
 ) -> Result<Vec<EpgProgramDto>, String> {
     let cache = state.cache.lock().map_err(|e| e.to_string())?;
-    let progs = cache
-        .get_epg_all_channels(range_start, range_end)
-        .map_err(|e| e.to_string())?;
+    let progs = match channel_ids {
+        Some(ids) => cache.get_epg_for_channels(&ids, range_start, range_end),
+        None => cache.get_epg_all_channels(range_start, range_end),
+    }
+    .map_err(|e| e.to_string())?;
     Ok(progs
         .into_iter()
         .map(|p| EpgProgramDto {
