@@ -7,6 +7,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Changed
 
 - Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
+- Some colors are a little more vivid, such as the green checks on the start screen and the Live, Movie and Series badges (#236).
 
 ### Fixed
 
@@ -14,6 +15,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - With autoplay on, pausing an episode in its last 5 seconds started the next one. Pressing Next episode there and then cancelling its resume prompt left the episode paused. The player now goes on to the next episode only when it sees one play to its end (#218).
 - Removing an entry from the History tab loaded the whole list again, so a spinner took its place and the list scrolled back to the top. Now only that entry goes (#230).
 - On the Live tab, clearing the search just after typing could leave programs from the guide search showing above the channels (#230).
+- The TV guide in the channel list now draws a line at every hour and a fainter one at every half hour. They were meant to be there but never showed (#236).
+- On phones and tablets, the remove buttons in Recently played, History and the pinned groups only showed on hover, which a touch screen doesn't have. They're always shown there now (#236).
 
 ## [0.6.0] - 2026-10-12
 
