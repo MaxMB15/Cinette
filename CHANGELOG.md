@@ -14,7 +14,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - With autoplay on, pausing an episode in its last 5 seconds started the next one. Pressing Next episode there and then cancelling its resume prompt left the episode paused. The player now goes on to the next episode only when it sees one play to its end (#218).
 - Removing an entry from the History tab loaded the whole list again, so a spinner took its place and the list scrolled back to the top. Now only that entry goes (#230).
 - On the Live tab, clearing the search just after typing could leave programs from the guide search showing above the channels (#230).
-- If the channels were still loading when the Channels page opened, or the list stayed empty until you added your first playlist, the TV guide showed 3 hours however wide the window was, and the movie and series posters were sized for an 800 pixel wide list. This lasted until you resized the window or switched tabs. The list now measures itself as soon as the channels show (#235).
+- After the app started, the TV guide showed 3 hours however wide the window was, and the movie and series posters were sized for an 800 pixel wide list. Opening the Channels page while a new playlist was still loading did the same. It lasted until you resized the window, switched tabs or left the page. The list now measures itself as soon as the channels show (#235).
+- On a window wide enough for more than 6 hours of TV guide, programs near its left and right edges were missing. The guide now loads everything it shows (#235).
 
 ## [0.6.0] - 2026-10-12
 

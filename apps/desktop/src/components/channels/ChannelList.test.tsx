@@ -15,6 +15,7 @@ import type {
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { formatHHMM } from "@/lib/epg-window";
 import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixtures";
+import { deferred } from "@/test/deferred";
 import { ChannelList } from "./ChannelList";
 
 const state = vi.hoisted(() => ({
@@ -314,9 +315,9 @@ const typeSearch = (text: string) => fireEvent.change(searchBox(), { target: { v
 const playedWith = () => state.navigate.mock.lastCall;
 
 /**
- * Swaps in a ResizeObserver the test drives. jsdom's stand-in never reports a
- * size. Returns the elements being watched and a function that gives one of
- * them a new width.
+ * Swaps in a ResizeObserver the test drives, since the one in src/test/setup.ts
+ * never reports a size. Returns the elements being watched and a function that
+ * gives one of them a new width.
  */
 const watchResizes = () => {
 	const watching = new Map<Element, ResizeObserverCallback>();
@@ -329,9 +330,12 @@ const watchResizes = () => {
 				this.targets.push(target);
 				watching.set(target, this.callback);
 			}
-			unobserve() {}
+			unobserve(target: Element) {
+				if (watching.get(target) === this.callback) watching.delete(target);
+			}
 			disconnect() {
-				for (const target of this.targets) watching.delete(target);
+				for (const target of this.targets) this.unobserve(target);
+				this.targets = [];
 			}
 		}
 	);
@@ -595,28 +599,67 @@ describe("ChannelList live rows", () => {
 		expect(screen.getByText(earlier)).toBeInTheDocument();
 	});
 
-	it("measures its width once the channels have loaded", async () => {
+	it("measures and follows its width once the channels arrive at startup", async () => {
 		freezeClock();
-		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
-		state.loading = true;
-		const { rerender } = await renderList();
-
-		state.loading = false;
-		rerender(<ChannelList />);
-
-		expect(screen.getByText(formatHHMM(NOW - 5400))).toBeInTheDocument();
-	});
-
-	it("measures its width once the first playlist adds channels", async () => {
-		freezeClock();
+		const { resize } = watchResizes();
 		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
 		state.channels = [];
-		const { rerender } = await renderList();
+		const { container, rerender } = await renderList();
 
 		state.channels = library;
 		rerender(<ChannelList />);
+		const earlier = formatHHMM(NOW - 5400);
+		expect(screen.getByText(earlier)).toBeInTheDocument();
 
-		expect(screen.getByText(formatHHMM(NOW - 5400))).toBeInTheDocument();
+		resize(container.firstElementChild!, 400);
+		expect(screen.queryByText(earlier)).toBeNull();
+	});
+
+	it("measures and follows its width once a playlist that was loading arrives", async () => {
+		freezeClock();
+		const { resize } = watchResizes();
+		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
+		state.loading = true;
+		const { container, rerender } = await renderList();
+
+		state.loading = false;
+		rerender(<ChannelList />);
+		const earlier = formatHHMM(NOW - 5400);
+		expect(screen.getByText(earlier)).toBeInTheDocument();
+
+		resize(container.firstElementChild!, 400);
+		expect(screen.queryByText(earlier)).toBeNull();
+	});
+
+	it("loads the guide for all of a wide window, once", async () => {
+		freezeClock();
+		vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(1200);
+		await renderList();
+		// About 6.1 hours fit, a little more than 2 back and 4 ahead.
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
+			NOW - 3 * 3600,
+			NOW + 5 * 3600
+		);
+	});
+
+	it("keeps the guide for the current width when a load for an older one finishes last", async () => {
+		freezeClock();
+		const { resize } = watchResizes();
+		const guide = (title: string): EpgProgram[] => [
+			{ channelId: "news.tv", title, startTime: NOW, endTime: NOW + 3600 },
+		];
+		const narrow = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels
+			.mockReturnValueOnce(narrow.promise)
+			.mockResolvedValueOnce(guide("Market Watch"));
+		const { container } = await renderList();
+
+		resize(container.firstElementChild!, 1200);
+		await flush();
+		await act(async () => narrow.resolve(guide("Morning Briefing")));
+
+		expect(screen.getByTitle("Market Watch")).toBeInTheDocument();
+		expect(screen.queryByTitle("Morning Briefing")).toBeNull();
 	});
 
 	it("stops watching its size when it unmounts", async () => {
