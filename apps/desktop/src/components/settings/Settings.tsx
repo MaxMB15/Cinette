@@ -10,15 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Select } from "@/components/ui/select";
 import { usePlatform } from "@/hooks/usePlatform";
-import { isMobilePlatform, platformName } from "@/lib/platform";
+import { isMobilePlatform } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { getVersion } from "@tauri-apps/api/app";
 import {
 	Settings as SettingsIcon,
-	Monitor,
-	Smartphone,
-	Tablet,
-	Tv,
 	CircleCheckBig,
 	Download,
 	RefreshCw,
@@ -148,7 +144,7 @@ interface SettingsProps {
 }
 
 export const Settings = ({ updateState }: SettingsProps) => {
-	const { platform, layoutMode } = usePlatform();
+	const { platform } = usePlatform();
 	const [appVersion, setAppVersion] = useState("");
 	const [hwAccel, setHwAccel] = useState(readHwdecEnabled);
 	const [defaultVolume, setDefaultVolume] = useState(readDefaultVolume);
@@ -240,13 +236,6 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		};
 	}, []);
 
-	const platformIcon = {
-		desktop: Monitor,
-		tablet: Tablet,
-		mobile: Smartphone,
-		tv: Tv,
-	}[layoutMode];
-	const PlatformIcon = platformIcon;
 	// The mobile apps have no downloads, and App Store rules don't allow a
 	// donation link.
 	const mobile = isMobilePlatform(platform);
@@ -366,23 +355,6 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					<SettingsIcon className="h-6 w-6 text-primary" />
 					<h1 className="text-2xl font-bold">Settings</h1>
 				</div>
-
-				<Card>
-					<CardHeader>
-						<CardTitle className="text-base">Platform</CardTitle>
-					</CardHeader>
-					<CardContent>
-						<div className="flex items-center gap-3">
-							<PlatformIcon className="h-5 w-5 text-muted-foreground" />
-							<div>
-								<p className="text-sm font-medium">{platformName(platform)}</p>
-								<p className="text-xs text-muted-foreground">
-									Layout: {layoutMode}
-								</p>
-							</div>
-						</div>
-					</CardContent>
-				</Card>
 
 				<Card>
 					<CardHeader>

@@ -73,10 +73,10 @@
 		"linux": {
 			"deb": {
 				"depends": [
-					"libmpv2 | libmpv1",
+					"libmpv2",
 					"libegl1",
 					"libgtk-3-0",
-					"libwebkit2gtk-4.1-0",
+					"libwebkit2gtk-4.1-0 (>= 2.40)",
 					"libpulse0 | libasound2",
 					"libass9"
 				]
@@ -86,7 +86,7 @@
 					"mpv-libs",
 					"mesa-libEGL",
 					"gtk3",
-					"webkit2gtk4.1",
+					"(webkit2gtk4.1 >= 2.40)",
 					"pulseaudio-libs",
 					"libass"
 				]

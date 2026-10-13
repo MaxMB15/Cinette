@@ -968,19 +968,21 @@ describe("Settings support", () => {
 
 describe("Settings on each platform", () => {
 	it.each([
-		["macos", "desktop", "macOS"],
-		["linux", "desktop", "Linux"],
-		["windows", "desktop", "Windows"],
-		["ios", "desktop", "iOS"],
-		["ios", "tablet", "iOS"],
-		["ios", "mobile", "iOS"],
-		["android", "tv", "Android"],
-	] as const)("names %s with the %s layout", async (platform, layoutMode, name) => {
+		["macos", "desktop"],
+		["linux", "desktop"],
+		["windows", "desktop"],
+		["ios", "desktop"],
+		["ios", "tablet"],
+		["ios", "mobile"],
+		["android", "tv"],
+	] as const)("has no Platform card on %s with the %s layout", async (platform, layoutMode) => {
 		device.platform = platform;
 		device.layoutMode = layoutMode;
 		await renderSettings();
-		expect(screen.getByText(name)).toBeInTheDocument();
-		expect(screen.getByText(`Layout: ${layoutMode}`)).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Platform" })).toBeNull();
+		expect(screen.queryByText(/^Layout:/)).toBeNull();
+		// Playback is the first card under the page heading.
+		expect(screen.getAllByRole("heading")[1]).toHaveTextContent("Playback");
 	});
 
 	it.each(["macos", "linux", "windows"] as const)(

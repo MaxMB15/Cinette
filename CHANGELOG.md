@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Some icons have newer drawings. Play has rounded corners, the pause bars are wider, the skip icons are bigger, and the favorites heart and the settings gear have new shapes (#223).
 - Some colors are a little more vivid, such as the green checks on the start screen and the Live, Movie and Series badges (#236).
+- The Linux .deb and .rpm now require WebKitGTK 2.40 or later, which the app's styles need. If yours is older, `apt` or `dnf` updates it along with the app (#242).
 - The Favorites tab loads the TV guide for its own live channels, not for every channel in the playlist, so it has far less to load on a large playlist. While the guide loads, a channel still waiting for its programs shows an empty bar rather than "no epg" (#243).
 
 ### Fixed
@@ -23,6 +24,11 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - While the Channels page stayed open, the TV guide stayed on the hours from when the page opened, until you resized the window or left the page. After a while it showed programs that had already ended, and the red line for now only moved when something else on the page changed. The guide now moves along with the clock and loads more programs as it goes (#237).
 - The Favorites tab showed no TV guide for its live channels until you'd opened the Live tab. It now loads the guide itself (#237).
 - With a 12-hour clock, some times in the TV guide wrapped onto two lines, with the AM or PM under the time. That happened to every start time in the schedule in the player's info drawer, and to the time labels near the right edge of a guide timeline. They stay on one line now (#238).
+- The Linux .deb installed on Ubuntu 22.04, and then the app wouldn't start because 22.04's libmpv is too old for it. The .deb now requires the newer libmpv that Debian 12 and Ubuntu 24.04 have, so it won't install on 22.04 (#242).
+
+### Removed
+
+- The Platform card in Settings, which showed the platform and the layout (#239).
 
 ## [0.6.0] - 2026-10-12
 

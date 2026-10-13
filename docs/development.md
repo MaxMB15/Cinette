@@ -6,10 +6,15 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs) 1.90 or later, from the stable channel
+- [Rust](https://rustup.rs), the latest stable release
 - [Node.js](https://nodejs.org) 24, or 22.22.1 or a later 22.x release
-- [pnpm](https://pnpm.io/installation). With Node 24, `corepack enable pnpm` sets it
-  up. pnpm 10 or later switches itself to the version that `package.json` names.
+- [pnpm](https://pnpm.io/installation), at the version that `packageManager` in
+  `package.json` names. Run `corepack enable pnpm`, and Corepack then runs that
+  version. Node 24.12 or later, or 22.22.1 or later on 22.x, comes with a Corepack
+  that can start pnpm 12. On an older Node 24, run `npm i -g corepack@latest` first.
+  `pmOnFail` in `pnpm-workspace.yaml` turns off pnpm's own version switching, so a
+  pnpm 11 or later installed another way runs as its own version and doesn't warn.
+  Use Corepack.
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
@@ -44,8 +49,9 @@ sudo apt-get install -y \
   patchelf
 ```
 
-The system `libmpv-dev` is enough for development. To build libmpv from source
-instead, as the AppImage does:
+The system `libmpv-dev` is enough for development on Debian 12, Ubuntu 24.04 and
+later. Ubuntu 22.04 has mpv 0.34, which the app can't use. To build libmpv from
+source instead, as the AppImage does:
 
 ```bash
 sudo apt-get install meson ninja-build \
@@ -90,6 +96,19 @@ the Rust backend won't work there, but it's quick for layout work.
 `pnpm install` doesn't run dependencies' install scripts. If a new dependency has one,
 the install stops until the package is listed under `allowBuilds` in
 `pnpm-workspace.yaml`, with `true` to run its script or `false` to skip it.
+
+pnpm only installs versions that have been on the registry for at least three days,
+as `minimumReleaseAge` in `pnpm-workspace.yaml` sets. `pnpm add` and `pnpm update`
+pick the newest version that's old enough. When none fits the range, they stop with
+an error, or in a terminal ask whether to take the newer version anyway. The check
+also covers every version already in `pnpm-lock.yaml`, so a lockfile that names a
+newer one fails `pnpm install`, in CI as well. A version is let through once it's
+listed as `name@version` under `minimumReleaseAgeExclude`, which is what approving
+it in the terminal does. Dependabot's security pull requests skip the seven-day
+`cooldown` in `.github/dependabot.yml`. When one brings a version under three days
+old, its CI install fails. Re-run the job once that version is three days old, or add
+each version the error names, as `name@version`, to `minimumReleaseAgeExclude` on
+that pull request's branch.
 
 If you installed the packages with npm before the switch to pnpm, delete
 `node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
@@ -158,7 +177,22 @@ may only run on your macOS version; release builds run on a macOS 15 runner.
 
 On Linux, `scripts/bundle-libmpv-linux.sh` copies `libmpv.so` and its dependencies
 into the AppImage. The `.deb` and `.rpm` declare libmpv as a package dependency
-instead.
+instead. The app links against `libmpv.so.2`, which the `libmpv2` package has on
+Debian 12, Ubuntu 24.04 and later, and `mpv-libs` has on Fedora. Ubuntu 22.04 only
+has `libmpv1`, with mpv 0.34's `libmpv.so.1`, so the `.deb` doesn't install there.
+
+The `.deb` and `.rpm` also require WebKitGTK 2.40 or later, the first version that
+supports all the CSS in the app's styles. Tailwind 4's breakpoints like `sm:` use
+range media queries such as `(width >= 40rem)`, which WebKitGTK 2.38 ignores, and
+2.40 is also the first to turn on `@property` and the `lh` unit. Tauri copies each `rpm.depends`
+entry into the package as a bare name, so the `.rpm` gives the version inside an
+RPM boolean dependency, `(webkit2gtk4.1 >= 2.40)`.
+
+The AppImage bundles libmpv, WebKitGTK and most of the libraries they use from the
+machine that built it, which is Ubuntu 24.04 for releases. It leaves out glibc and
+`libstdc++`, which come from the user's system. The bundled libraries need glibc
+2.38 and the `libstdc++` of GCC 13.2 (`GLIBCXX_3.4.32`), so the AppImage doesn't
+start on Ubuntu 22.04 or Debian 12.
 
 The output lands in `target/release/bundle/`. To sign the macOS build with a
 Developer ID, see [macos-signing.md](macos-signing.md).
