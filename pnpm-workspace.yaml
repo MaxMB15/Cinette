@@ -22,7 +22,7 @@ strictDepBuilds: true
 minimumReleaseAge: 4320
 
 # These exact versions were already locked before the age check was turned on.
-# The last of them passes it at 2026-10-15 17:08 UTC, and then this list can go.
+# The list can go after 2026-10-15 17:12 UTC, when the last of them passes it.
 minimumReleaseAgeExclude:
   - "@tanstack/react-virtual@3.14.17"
   - "@tanstack/virtual-core@3.19.2"

@@ -9,10 +9,12 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 - [Rust](https://rustup.rs) 1.90 or later, from the stable channel
 - [Node.js](https://nodejs.org) 24, or 22.22.1 or a later 22.x release
 - [pnpm](https://pnpm.io/installation), at the version that `packageManager` in
-  `package.json` names. With Node 24, `corepack enable pnpm` sets it up, and Corepack
-  then runs that version. A pnpm installed another way runs as whatever version it
-  is, since the repo turns off pnpm's own version switching with `pmOnFail` in
-  `pnpm-workspace.yaml`.
+  `package.json` names. Run `corepack enable pnpm`, and Corepack then runs that
+  version. Corepack comes with Node, but only the one in Node 24.12 or later, or
+  22.22.1 or later on 22.x, can start pnpm 12. On an older Node 24, run
+  `npm i -g corepack@latest` first. A pnpm 11 or later installed another way runs as
+  its own version without a warning, because `pmOnFail` in `pnpm-workspace.yaml` turns
+  off pnpm's version switching, so use Corepack.
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
@@ -101,7 +103,9 @@ an error, or in a terminal ask whether to take the newer version anyway. The che
 also covers every version already in `pnpm-lock.yaml`, so a lockfile that names a
 newer one fails `pnpm install`, in CI as well. A version is let through once it's
 listed as `name@version` under `minimumReleaseAgeExclude`, which is what approving
-it in the terminal does.
+it in the terminal does. Dependabot's security pull requests skip its one-week wait,
+so their CI install fails until the fixed version is three days old, or until that
+pull request's branch lists it under `minimumReleaseAgeExclude`.
 
 If you installed the packages with npm before the switch to pnpm, delete
 `node_modules` and `apps/desktop/node_modules` before the first `pnpm install`.
