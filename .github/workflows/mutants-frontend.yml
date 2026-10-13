@@ -3,10 +3,11 @@
 
 # Mutation testing for the frontend helpers in apps/player/src/lib with
 # StrykerJS. Like mutants.yml does for the Rust code, it makes small changes
-# to the code and runs the tests that reach each one. A change that no test
-# notices is a result for the summary and fails nothing. Only an error, like
-# a first test run that fails, fails the job. Nothing goes to Stryker's
-# dashboard. The report is only kept as an artifact of the run.
+# to the code and runs the tests that reach each one. On the lines a pull
+# request changes, a change that no test notices fails the job. A run of all
+# of src/lib lists those changes in the summary and fails only on an error,
+# like a first test run that fails. Nothing goes to Stryker's dashboard. The
+# report is only kept as an artifact of the run.
 name: Frontend mutation testing
 
 on:
@@ -162,6 +163,21 @@ jobs:
           path: apps/player/reports/mutation/
           if-no-files-found: ignore
           retention-days: 30
+
+      # On the lines a pull request changes, and in the date.ts check, a
+      # mutant that no test catches fails the job, with an annotation on its
+      # line. So does a Stryker comment in the mutated files that isn't
+      # "// Stryker disable next-line <mutator>: <reason>". A run of all of
+      # src/lib only reports, since most of what it tests isn't the pull
+      # request's. Stryker writes no report when no test loads the changed
+      # files, and then there's nothing to check.
+      - name: Check the changed lines
+        if: ${{ !cancelled() && steps.stryker.outcome == 'success' && steps.plan.outputs.mutate != '' }}
+        run: |
+          report=apps/player/reports/mutation/mutation.json
+          if [ -f "$report" ]; then
+            python3 scripts/stryker-summary.py --check --path-prefix apps/player/ "$report"
+          fi
 
   # The weekly run starts a manual run on dev, which tests the newest code.
   start:
