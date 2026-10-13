@@ -7,6 +7,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI_CONF="$REPO_ROOT/apps/desktop/src-tauri/tauri.conf.json"
 CARGO_TOML="$REPO_ROOT/apps/desktop/src-tauri/Cargo.toml"
+IOS_PROJECT="$REPO_ROOT/apps/desktop/src-tauri/gen/apple/project.yml"
+IOS_PLIST="$REPO_ROOT/apps/desktop/src-tauri/gen/apple/max-video-player_iOS/Info.plist"
 
 # ── Git-flow branch guard ─────────────────────────────────────────────────────
 cd "$REPO_ROOT"
@@ -72,7 +74,7 @@ case "$CONFIRM" in
   *) echo "Aborted."; exit 0 ;;
 esac
 
-# ── Bump version in tauri.conf.json and Cargo.toml ───────────────────────────
+# ── Bump the version in Tauri, Cargo and the iOS project ─────────────────────
 python3 "$REPO_ROOT/scripts/bump-version.py" "$NEW"
 
 # ── Update the app's own entry in Cargo.lock, leaving dependencies as they are ─
@@ -81,7 +83,7 @@ echo "  Updated Cargo.lock"
 
 # ── Commit ───────────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-git add "$TAURI_CONF" "$CARGO_TOML" Cargo.lock
+git add "$TAURI_CONF" "$CARGO_TOML" "$IOS_PROJECT" "$IOS_PLIST" Cargo.lock
 git commit -m "chore: bump version to $NEW"
 echo "  Committed version bump"
 

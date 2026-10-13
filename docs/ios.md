@@ -127,8 +127,10 @@ that folder goes first. It also rewrites `max-video-player_iOS/Info.plist` and d
 the quotes around `DEVELOPMENT_TEAM`, so undo those parts of the diff unless you meant
 to change them.
 
-A build with `--build-number` or a `bundle.iOS.bundleVersion` override writes that
-number into `Info.plist`. Don't commit it.
+A build writes the app version from `tauri.conf.json` into `Info.plist`. The release
+bump sets the same version in `project.yml` and `Info.plist`, so neither a build nor
+XcodeGen changes it. A build with `--build-number` or a `bundle.iOS.bundleVersion`
+override writes that number into `Info.plist`. Don't commit it.
 
 ### App icon
 
