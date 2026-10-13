@@ -11,7 +11,6 @@ import { DownloadButton } from "@/components/downloads/DownloadButton";
 import { DownloadProgressBar } from "@/components/downloads/DownloadProgressBar";
 import { enqueueMovieDownload, stopDownload, removeDownload } from "@/lib/tauri";
 import { cn, isFromInnerButton } from "@/lib/utils";
-import { nowSeconds } from "@/lib/date";
 import { aggregateIconState, downloadIconState, isActiveDownload } from "@/lib/download-status";
 import { ChannelLogo, useImageFailed } from "./ChannelLogo";
 
@@ -86,7 +85,7 @@ const RowCardView = ({
 	windowStart?: number;
 	windowEnd?: number;
 }) => {
-	const now = nowSeconds();
+	const now = useNow();
 
 	return (
 		// The channel button on the left plays it, and sits beside the heart

@@ -33,10 +33,18 @@ import { NoSearchResults } from "./NoSearchResults";
 import { DownloadsTab } from "./DownloadsTab";
 import { isMobilePlatform } from "@/lib/platform";
 import { usePlatform } from "@/hooks/usePlatform";
-import { getGridMarks, toPct, formatHHMM } from "@/lib/epg-window";
+import {
+	coversWindow,
+	formatHHMM,
+	getGridMarks,
+	guideRangeFor,
+	toPct,
+	type TimeRange,
+} from "@/lib/epg-window";
 import { useChannels } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
+import { useNow } from "@/hooks/useNow";
 import {
 	getXtreamSeriesEpisodes,
 	getCachedSeriesEpisodes,
@@ -164,9 +172,11 @@ export const ChannelList = () => {
 	// EPG search: one result per channel (earliest matching program)
 	const [epgSearchResults, setEpgSearchResults] = useState<EpgSearchResult[]>([]);
 
-	// Container width → dynamic EPG window + grid column calculation. null
-	// until the root div has been measured.
+	// The root div's width, which sets the guide's window and the grid
+	// columns. It's null until the div has been measured.
 	const [containerWidth, setContainerWidth] = useState<number | null>(null);
+	// The guide's window and its red line for now follow this clock.
+	const now = useNow();
 	/** Virtualizer scroll ref — kept for TanStack Virtual scroll element. */
 	const parentRef = useRef<HTMLDivElement>(null);
 
@@ -186,10 +196,9 @@ export const ChannelList = () => {
 		return () => observer.disconnect();
 	}, []);
 
-	// The guide's window, PX_PER_HOUR wide per hour and never under 3 hours,
-	// with a third of it before now.
+	// The guide's window, PX_PER_HOUR pixels for each hour and never under 3
+	// hours, with a third of it before now. It moves along with the clock.
 	const { windowStart, windowEnd } = useMemo(() => {
-		const now = nowSeconds();
 		// containerWidth is the whole component's width. The scroll container
 		// inside has px-3, 12px on each side, and each row has two fixed
 		// columns, so the timeline gets what's left.
@@ -202,7 +211,7 @@ export const ChannelList = () => {
 		const pastSec = Math.round((totalHours / 3) * 3600);
 		const futureSec = Math.round(((totalHours * 2) / 3) * 3600);
 		return { windowStart: now - pastSec, windowEnd: now + futureSec };
-	}, [containerWidth]);
+	}, [containerWidth, now]);
 
 	const windowTotal = windowEnd - windowStart;
 
@@ -328,19 +337,26 @@ export const ChannelList = () => {
 		bySeries,
 	]);
 
-	// Load the guide for all live channels, at least 2 hours back and 4 ahead,
-	// and the whole window when the list is wide enough to show more. Whole
-	// hours, so resizing only loads it again when the window passes one. It
-	// waits for the first measurement so a wide list doesn't load twice.
-	const measured = containerWidth !== null;
-	const epgHoursBack = Math.max(2, Math.ceil(windowTotal / 3 / 3600));
-	const epgHoursAhead = Math.max(4, Math.ceil((windowTotal * 2) / 3 / 3600));
+	// The part of the guide to load, which covers the window. It waits for the
+	// first measurement so a wide list doesn't load twice. After that it only
+	// moves when the window leaves it, as the list gets wider or the clock
+	// carries the window past its end. A narrower list or a clock tick doesn't
+	// load the guide again.
+	const [guideRange, setGuideRange] = useState<TimeRange | null>(null);
+	if (
+		containerWidth !== null &&
+		!(guideRange && coversWindow(guideRange, windowStart, windowEnd))
+	) {
+		setGuideRange(guideRangeFor(now, windowStart, windowEnd));
+	}
+
+	// Load the guide for all live channels when its range moves, and each time
+	// the Live tab opens or the channels change.
 	useEffect(() => {
-		if (activeTab !== "live" || channels.length === 0 || !measured) return;
-		const now = nowSeconds();
-		// A load for an older width can finish after the current one.
+		if (activeTab !== "live" || channels.length === 0 || !guideRange) return;
+		// A load for an older range can finish after the current one.
 		let stale = false;
-		getEpgForLiveChannels(now - epgHoursBack * 3600, now + epgHoursAhead * 3600)
+		getEpgForLiveChannels(guideRange.from, guideRange.to)
 			.then((progs) => {
 				if (stale) return;
 				const map = new Map<string, EpgProgram[]>();
@@ -355,7 +371,7 @@ export const ChannelList = () => {
 		return () => {
 			stale = true;
 		};
-	}, [activeTab, channels.length, measured, epgHoursBack, epgHoursAhead]);
+	}, [activeTab, channels.length, guideRange]);
 
 	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.
@@ -581,7 +597,6 @@ export const ChannelList = () => {
 		navState.level === "group" ||
 		activeTab === "favorites" ||
 		activeTab === "history";
-	const nowSec = nowSeconds();
 
 	// Grid marks for sticky header and background gridlines (uses same window as ChannelCard)
 	const headerGridMarks = useMemo(
@@ -914,7 +929,7 @@ export const ChannelList = () => {
 						<span
 							className="absolute -translate-x-1/2 text-[9px] text-red-400/80 select-none"
 							style={{
-								left: `${toPct(nowSec, windowStart, windowTotal).toFixed(3)}%`,
+								left: `${toPct(now, windowStart, windowTotal).toFixed(3)}%`,
 								top: "2px",
 							}}
 						>
@@ -1093,7 +1108,7 @@ export const ChannelList = () => {
 										<div
 											className="absolute top-0 bottom-0 w-px bg-red-400/20"
 											style={{
-												left: `${toPct(nowSec, windowStart, windowTotal).toFixed(3)}%`,
+												left: `${toPct(now, windowStart, windowTotal).toFixed(3)}%`,
 											}}
 										/>
 									</div>
@@ -1148,7 +1163,7 @@ export const ChannelList = () => {
 											</p>
 										</div>
 										<span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
-											{formatEpgTime(result.startTime, nowSec)}
+											{formatEpgTime(result.startTime, now)}
 										</span>
 									</button>
 								))}
@@ -1218,7 +1233,7 @@ export const ChannelList = () => {
 									<div
 										className="absolute top-0 bottom-0 w-px bg-red-400/20"
 										style={{
-											left: `${toPct(nowSec, windowStart, windowTotal).toFixed(3)}%`,
+											left: `${toPct(now, windowStart, windowTotal).toFixed(3)}%`,
 										}}
 									/>
 								</div>

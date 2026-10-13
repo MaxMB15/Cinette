@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, expect, it } from "vitest";
-import { formatHHMM, getGridMarks, toPct } from "./epg-window";
+import { coversWindow, formatHHMM, getGridMarks, guideRangeFor, toPct } from "./epg-window";
 
 describe("formatHHMM", () => {
 	it("matches the locale's two digit hour and minute format", () => {
@@ -44,5 +44,40 @@ describe("toPct", () => {
 
 	it("clamps times after the window to 100", () => {
 		expect(toPct(5000, 1000, 2000)).toBe(100);
+	});
+});
+
+const at = (hours: number, minutes = 0) => hours * 3600 + minutes * 60;
+
+describe("guideRangeFor", () => {
+	it("loads 2 hours back and 4 ahead in whole hours, then an hour more", () => {
+		const now = at(10, 20);
+		expect(guideRangeFor(now, at(9, 20), at(12, 20))).toEqual({ from: at(8), to: at(16) });
+	});
+
+	it("starts and ends on the hour when now is on one", () => {
+		expect(guideRangeFor(at(10), at(9), at(12))).toEqual({ from: at(8), to: at(15) });
+	});
+
+	it("covers all of a window that reaches further", () => {
+		const now = at(10, 20);
+		expect(guideRangeFor(now, at(6, 50), at(17, 40))).toEqual({ from: at(6), to: at(19) });
+	});
+});
+
+describe("coversWindow", () => {
+	const range = { from: at(8), to: at(15) };
+
+	it("covers a window inside the range, edges included", () => {
+		expect(coversWindow(range, at(9), at(12))).toBe(true);
+		expect(coversWindow(range, at(8), at(15))).toBe(true);
+	});
+
+	it("doesn't cover a window that starts before the range", () => {
+		expect(coversWindow(range, at(7, 59), at(12))).toBe(false);
+	});
+
+	it("doesn't cover a window that ends after the range", () => {
+		expect(coversWindow(range, at(9), at(15, 1))).toBe(false);
 	});
 });
