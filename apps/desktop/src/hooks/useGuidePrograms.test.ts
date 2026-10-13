@@ -6,6 +6,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { TimeRange } from "@/lib/epg-window";
 import type { EpgProgram } from "@/lib/types";
 import { deferred } from "@/test/deferred";
+import { answerFrom } from "@/test/guide-answers";
 
 vi.mock("@/lib/tauri", () => ({ getEpgForLiveChannels: vi.fn() }));
 
@@ -31,11 +32,6 @@ const guide = [
 	program("news.tv", "Weather", 2800),
 	program("sport.tv", "Match Day"),
 ];
-
-/** Answers the way the backend does, with only the asked-for channels' programs. */
-const answerFrom =
-	(programs: EpgProgram[]) => (_from: number, _to: number, ids?: readonly string[]) =>
-		Promise.resolve(programs.filter((p) => !ids || ids.includes(p.channelId)));
 
 interface Props {
 	range: TimeRange | null;
@@ -66,18 +62,57 @@ describe("useGuidePrograms", () => {
 		rerender({ range: null, channels: "all", resetKey: 1 });
 		await flush();
 		expect(mockLoad).not.toHaveBeenCalled();
-		expect(result.current.size).toBe(0);
+		expect(result.current.programs.size).toBe(0);
 	});
 
 	it("loads every channel's programs and groups them by guide id", async () => {
 		const { result } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 		expect(mockLoad).toHaveBeenCalledExactlyOnceWith(1000, 8000, undefined);
-		expect(titles(result.current)).toEqual({
+		expect(titles(result.current.programs)).toEqual({
 			"arts.tv": ["Gallery Hour"],
 			"news.tv": ["Noon News", "Weather"],
 			"sport.tv": ["Match Day"],
 		});
+	});
+
+	it("says every channel's programs are loading until their answer comes", async () => {
+		const all = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(all.promise);
+		const { result, rerender } = renderGuide({ range: null, channels: "all", resetKey: 1 });
+		expect(result.current.loadingAll).toBe(true);
+		rerender({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+		expect(result.current.loadingAll).toBe(true);
+
+		await act(async () => all.resolve(guide));
+		expect(result.current.loadingAll).toBe(false);
+		// A list of ids or a new range doesn't load every channel's programs.
+		rerender({ range: evening, channels: ["news.tv"], resetKey: 1 });
+		expect(result.current.loadingAll).toBe(false);
+		rerender({ range: evening, channels: "all", resetKey: 1 });
+		expect(result.current.loadingAll).toBe(true);
+		await flush();
+		expect(result.current.loadingAll).toBe(false);
+	});
+
+	it("stops loading when every channel's load fails, and asks again next time", async () => {
+		mockLoad.mockRejectedValueOnce(new Error("offline"));
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+		expect(result.current.loadingAll).toBe(false);
+		expect(result.current.programs.size).toBe(0);
+
+		rerender({ range: morning, channels: ["news.tv"], resetKey: 1 });
+		rerender({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+
+		expect(mockLoad.mock.calls).toStrictEqual([
+			[1000, 8000, undefined],
+			[1000, 8000, ["news.tv"]],
+			[1000, 8000, undefined],
+		]);
+		expect(result.current.programs.size).toBe(3);
 	});
 
 	it("asks for each id once, in order, and not again for a new list of the same ids", async () => {
@@ -91,7 +126,7 @@ describe("useGuidePrograms", () => {
 		await flush();
 
 		expect(mockLoad).toHaveBeenCalledExactlyOnceWith(1000, 8000, ["news.tv", "sport.tv"]);
-		expect(titles(result.current)).toEqual({
+		expect(titles(result.current.programs)).toEqual({
 			"news.tv": ["Noon News", "Weather"],
 			"sport.tv": ["Match Day"],
 		});
@@ -109,9 +144,31 @@ describe("useGuidePrograms", () => {
 
 		expect(mockLoad).toHaveBeenCalledTimes(2);
 		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["arts.tv"]);
-		expect(titles(result.current)).toEqual({
+		expect(titles(result.current.programs)).toEqual({
 			"news.tv": ["Noon News", "Weather"],
 			"arts.tv": ["Gallery Hour"],
+		});
+	});
+
+	it("asks only for a new id while a load is on its way, and keeps both answers", async () => {
+		const first = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(first.promise);
+		const { result, rerender } = renderGuide({
+			range: morning,
+			channels: ["news.tv"],
+			resetKey: 1,
+		});
+		rerender({ range: morning, channels: ["news.tv", "sport.tv"], resetKey: 1 });
+		await flush();
+		await act(async () => first.resolve([program("news.tv", "Noon News")]));
+
+		expect(mockLoad.mock.calls).toStrictEqual([
+			[1000, 8000, ["news.tv"]],
+			[1000, 8000, ["sport.tv"]],
+		]);
+		expect(titles(result.current.programs)).toEqual({
+			"news.tv": ["Noon News"],
+			"sport.tv": ["Match Day"],
 		});
 	});
 
@@ -129,7 +186,7 @@ describe("useGuidePrograms", () => {
 		await flush();
 
 		expect(mockLoad).toHaveBeenCalledOnce();
-		expect(result.current.get("sport.tv")).toHaveLength(1);
+		expect(result.current.programs.get("sport.tv")).toHaveLength(1);
 	});
 
 	it("loads nothing for a list once every channel is loaded", async () => {
@@ -153,17 +210,69 @@ describe("useGuidePrograms", () => {
 		await flush();
 
 		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, undefined);
-		expect(result.current.size).toBe(3);
+		expect(result.current.programs.size).toBe(3);
 	});
 
-	it("loads the whole list again for a new range, and drops the old range's programs", async () => {
+	it("keeps loading every channel once when a list comes and goes during that load", async () => {
+		const all = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(all.promise);
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+		rerender({ range: morning, channels: ["news.tv"], resetKey: 1 });
+		await flush();
+		expect([...result.current.programs.keys()]).toEqual(["news.tv"]);
+		rerender({ range: morning, channels: "all", resetKey: 1 });
+		await act(async () => all.resolve(guide));
+
+		expect(mockLoad.mock.calls).toStrictEqual([
+			[1000, 8000, undefined],
+			[1000, 8000, ["news.tv"]],
+		]);
+		expect(result.current.programs.size).toBe(3);
+	});
+
+	it("keeps the other channels' programs when some load for a new range", async () => {
 		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
-		rerender({ range: evening, channels: ["news.tv"], resetKey: 1 });
+		mockLoad.mockImplementation(answerFrom([program("news.tv", "Late News", 5000)]));
+		rerender({ range: evening, channels: ["news.tv", "arts.tv"], resetKey: 1 });
 		await flush();
 
-		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000, ["news.tv"]);
-		expect([...result.current.keys()]).toEqual(["news.tv"]);
+		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000, ["arts.tv", "news.tv"]);
+		// The answer replaces the asked-for ids, even one it found nothing for.
+		expect(titles(result.current.programs)).toEqual({
+			"news.tv": ["Late News"],
+			"sport.tv": ["Match Day"],
+		});
+	});
+
+	it("replaces every program with what every channel's load finds", async () => {
+		const { result, rerender } = renderGuide({
+			range: morning,
+			channels: ["news.tv", "sport.tv"],
+			resetKey: 1,
+		});
+		await flush();
+		mockLoad.mockImplementation(answerFrom([program("arts.tv", "Late Gallery", 5000)]));
+		rerender({ range: evening, channels: "all", resetKey: 1 });
+		await flush();
+
+		expect(titles(result.current.programs)).toEqual({ "arts.tv": ["Late Gallery"] });
+	});
+
+	it("drops an answer for an older range that comes in last", async () => {
+		const first = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(first.promise);
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+		rerender({ range: evening, channels: "all", resetKey: 1 });
+		await flush();
+		await act(async () => first.resolve([program("news.tv", "Old News")]));
+
+		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000, undefined);
+		expect(titles(result.current.programs)).toEqual({
+			"arts.tv": ["Gallery Hour"],
+			"news.tv": ["Noon News", "Weather"],
+			"sport.tv": ["Match Day"],
+		});
 	});
 
 	it("loads again from scratch when the reset key changes", async () => {
@@ -179,22 +288,25 @@ describe("useGuidePrograms", () => {
 
 		expect(mockLoad).toHaveBeenCalledTimes(2);
 		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["news.tv", "sport.tv"]);
-		expect(titles(result.current)).toEqual({ "news.tv": ["Late News"] });
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Late News"] });
 	});
 
-	it("loads again after a request for nothing", async () => {
-		const { rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+	it("starts over after a request for nothing, and keeps its programs until then", async () => {
+		const later = deferred<EpgProgram[]>();
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 		rerender({ range: morning, channels: null, resetKey: 1 });
-		await flush();
-		rerender({ range: morning, channels: ["news.tv"], resetKey: 1 });
+		mockLoad.mockReturnValueOnce(later.promise);
+		rerender({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 
 		expect(mockLoad).toHaveBeenCalledTimes(2);
-		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["news.tv"]);
+		expect(result.current.programs.size).toBe(3);
+		await act(async () => later.resolve([program("news.tv", "Late News")]));
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Late News"] });
 	});
 
-	it("drops an older load's answer and asks again for what it still needs", async () => {
+	it("drops an answer still on its way after a request for nothing", async () => {
 		const first = deferred<EpgProgram[]>();
 		mockLoad.mockReturnValueOnce(first.promise);
 		const { result, rerender } = renderGuide({
@@ -202,15 +314,10 @@ describe("useGuidePrograms", () => {
 			channels: ["news.tv"],
 			resetKey: 1,
 		});
-		rerender({ range: morning, channels: ["news.tv", "sport.tv"], resetKey: 1 });
-		await flush();
-		await act(async () => first.resolve([program("news.tv", "Old News")]));
+		rerender({ range: morning, channels: null, resetKey: 1 });
+		await act(async () => first.resolve(guide));
 
-		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["news.tv", "sport.tv"]);
-		expect(titles(result.current)).toEqual({
-			"news.tv": ["Noon News", "Weather"],
-			"sport.tv": ["Match Day"],
-		});
+		expect(result.current.programs.size).toBe(0);
 	});
 
 	it("keeps its programs when a load fails, and asks for those ids again next time", async () => {
@@ -223,12 +330,12 @@ describe("useGuidePrograms", () => {
 		mockLoad.mockRejectedValueOnce(new Error("offline"));
 		rerender({ range: morning, channels: ["news.tv", "sport.tv"], resetKey: 1 });
 		await flush();
-		expect([...result.current.keys()]).toEqual(["news.tv"]);
+		expect([...result.current.programs.keys()]).toEqual(["news.tv"]);
 
 		rerender({ range: morning, channels: ["news.tv", "sport.tv", "arts.tv"], resetKey: 1 });
 		await flush();
 
 		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["arts.tv", "sport.tv"]);
-		expect(result.current.size).toBe(3);
+		expect(result.current.programs.size).toBe(3);
 	});
 });

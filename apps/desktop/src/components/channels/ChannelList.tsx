@@ -352,9 +352,9 @@ export const ChannelList = () => {
 
 	// The Live tab shows every channel's guide, and the Favorites tab only that
 	// of its live favorites with a guide id. It loads when its range moves,
-	// when the tab starts showing it, and when the channels change. Going from
-	// Live to Favorites keeps what's loaded, and a new favorite loads only its
-	// own programs.
+	// when the tab starts showing it, and when the number of channels changes.
+	// Going from Live to Favorites keeps what's loaded, and a new favorite
+	// loads only its own programs.
 	const guideChannels: GuideChannels | null =
 		channels.length === 0
 			? null
@@ -363,7 +363,11 @@ export const ChannelList = () => {
 				: activeTab === "favorites" && favoriteGuideIds.length > 0
 					? favoriteGuideIds
 					: null;
-	const epgMap = useGuidePrograms(guideRange, guideChannels, channels.length);
+	const { programs: epgMap, loadingAll: guideLoading } = useGuidePrograms(
+		guideRange,
+		guideChannels,
+		channels.length
+	);
 
 	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.
@@ -389,6 +393,9 @@ export const ChannelList = () => {
 
 	const getChannelPrograms = (ch: Channel): EpgProgram[] =>
 		(ch.tvgId && epgMap.get(ch.tvgId)) || NO_PROGRAMS;
+	// While every channel's guide loads, a row with a guide id may only be
+	// waiting for its programs.
+	const isGuidePending = (ch: Channel): boolean => guideLoading && Boolean(ch.tvgId);
 
 	/**
 	 * Opens the episode list for a show. From Downloads, which has to work
@@ -1012,6 +1019,7 @@ export const ChannelList = () => {
 												variant={rowVariant}
 												onToggleFavorite={handleToggleFavorite}
 												epgPrograms={getChannelPrograms(ch)}
+												guidePending={isGuidePending(ch)}
 												windowStart={windowStart}
 												windowEnd={windowEnd}
 											/>
@@ -1113,6 +1121,7 @@ export const ChannelList = () => {
 										variant={rowVariant}
 										onToggleFavorite={handleToggleFavorite}
 										epgPrograms={getChannelPrograms(ch)}
+										guidePending={isGuidePending(ch)}
 										windowStart={windowStart}
 										windowEnd={windowEnd}
 									/>
@@ -1277,6 +1286,7 @@ export const ChannelList = () => {
 														variant={rowVariant}
 														onToggleFavorite={handleToggleFavorite}
 														epgPrograms={getChannelPrograms(ch)}
+														guidePending={isGuidePending(ch)}
 														windowStart={windowStart}
 														windowEnd={windowEnd}
 													/>
