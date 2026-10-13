@@ -155,7 +155,7 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-lg">Add Provider</CardTitle>
-				<div role="group" aria-label="Provider type" className="flex gap-2 mt-2">
+				<div role="group" aria-label="Provider type" className="flex gap-2">
 					<Button
 						variant={tab === "m3u" ? "default" : "secondary"}
 						size="sm"

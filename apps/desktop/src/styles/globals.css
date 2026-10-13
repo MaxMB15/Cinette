@@ -47,6 +47,18 @@
 	--radius-lg: var(--radius);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-sm: calc(var(--radius) - 4px);
+
+	/* Tailwind 3's line heights. Tailwind 4 gives each size a ratio instead,
+	   and a child with its own size, like text-[11px], inherits the ratio and
+	   gets a shorter line. */
+	--text-xs--line-height: 1rem;
+	--text-sm--line-height: 1.25rem;
+	--text-base--line-height: 1.5rem;
+	--text-lg--line-height: 1.75rem;
+	--text-xl--line-height: 1.75rem;
+	--text-2xl--line-height: 2rem;
+	--text-3xl--line-height: 2.25rem;
+	--text-4xl--line-height: 2.5rem;
 }
 
 @layer base {
