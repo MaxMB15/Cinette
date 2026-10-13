@@ -51,6 +51,13 @@ exclude_re = [
     # catch a change that always answers false.
     'replace (test_omdb_api_key|test_mdblist_api_key) ',
     'replace test_gemini_api_key -> Result<bool, String> with Ok\(false\)',
+    # These make up a key where none is saved, or keep a blank one. The tests
+    # that check OMDb, MDBList, OpenSubtitles, whatson and the skip databases
+    # aren't asked without a key would then send their lookups to the real
+    # services.
+    'replace (omdb_api_key|saved_key|non_empty_key) -> .* with (Ok\()?Some\(',
+    'replace trimmed_key -> .* with Some\("xyzzy"\)',
+    'delete ! in non_empty_key',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's

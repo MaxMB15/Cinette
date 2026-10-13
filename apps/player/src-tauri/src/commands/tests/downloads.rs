@@ -507,6 +507,21 @@ async fn a_retention_setting_is_saved_even_when_the_check_fails() {
     assert!(due.exists() && download(&app, "a").is_some());
 }
 
+/// With retention off there's nothing to count, so Settings gets 0 without
+/// a look at the cache, even one that fails.
+#[tokio::test]
+async fn turning_retention_off_counts_nothing_even_when_the_cache_fails() {
+    let app = TestApp::new();
+    let _due = finished_file(&app, "a", "Dune (2021).mkv");
+    let state = app.state();
+    poison(&state.cache);
+
+    assert_eq!(count_downloads_due(app.handle(), Some(0)).await, Ok(0));
+    assert_eq!(count_downloads_due(app.handle(), None).await, Ok(0));
+
+    state.cache.clear_poison();
+}
+
 #[tokio::test]
 async fn a_finished_download_plays_from_its_file_and_counts_as_played() {
     let app = TestApp::new();

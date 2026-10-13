@@ -152,6 +152,16 @@ fn saved_in_file(app: &TestApp, file: &str, name: &str) -> Value {
     serde_json::from_str::<Value>(&text).unwrap()[name].clone()
 }
 
+/// A day in seconds.
+const DAY: i64 = 24 * 60 * 60;
+
+/// Makes every lookup cached in `table` look `age` seconds old.
+fn age_cached(db: &rusqlite::Connection, table: &str, age: i64) {
+    let fetched_at = chrono::Utc::now().timestamp() - age;
+    let sql = format!("UPDATE {table} SET fetched_at = ?1");
+    db.execute(&sql, [fetched_at]).unwrap();
+}
+
 #[test]
 fn each_service_keeps_its_own_key_without_the_spaces_a_paste_brings() {
     let app = TestApp::new();
@@ -249,6 +259,30 @@ async fn omdb_details_are_kept_for_the_channel_and_read_back_without_asking_agai
     assert_eq!(lookup("ch-2").await, Ok(None));
 }
 
+/// OMDb's details for a title hardly change, so they're used for 30 days.
+#[tokio::test]
+async fn omdb_details_are_used_for_a_month() {
+    let app = TestApp::new();
+    let db = cache_on_disk(&app);
+    keep_omdb_data(&app.state(), "ch-1", "The Matrix", Ok(the_matrix())).unwrap();
+    let lookup = || {
+        fetch_omdb_data(
+            app.handle(),
+            app.state(),
+            "ch-1".into(),
+            "The Matrix".into(),
+            "movie".into(),
+        )
+    };
+
+    age_cached(&db, "omdb_cache", 29 * DAY);
+    assert_eq!(lookup().await, Ok(Some(the_matrix())));
+
+    // Older details would be looked up again, which needs a key.
+    age_cached(&db, "omdb_cache", 31 * DAY);
+    assert_eq!(lookup().await, Ok(None));
+}
+
 #[tokio::test]
 async fn a_failed_omdb_lookup_is_an_error_and_is_not_kept() {
     let app = TestApp::new();
@@ -321,6 +355,39 @@ async fn whatson_ratings_are_kept_and_read_back_without_asking_again() {
     let cached = fetch_whatson_data(app.handle(), app.state(), MOVIE.into(), "movie".into()).await;
 
     assert_eq!(cached, Ok(Some(whatson_ratings())));
+}
+
+/// Ratings change as people vote, so MDBList's and whatson's are used for
+/// 7 days.
+#[tokio::test]
+async fn ratings_are_used_for_a_week() {
+    let app = TestApp::new();
+    let db = cache_on_disk(&app);
+    keep_mdblist_data(&app.state(), MOVIE, Ok(mdblist_ratings())).unwrap();
+    keep_whatson_data(&app.state(), MOVIE, Ok(whatson_ratings())).unwrap();
+    let mdblist = || fetch_mdblist_data(app.handle(), app.state(), MOVIE.into(), "movie".into());
+    let whatson = || fetch_whatson_data(app.handle(), app.state(), MOVIE.into(), "movie".into());
+    let age = |days: i64| {
+        age_cached(&db, "mdblist_cache", days * DAY);
+        age_cached(&db, "whatson_cache", days * DAY);
+    };
+
+    age(6);
+    assert_eq!(mdblist().await, Ok(Some(mdblist_ratings())));
+    assert_eq!(whatson().await, Ok(Some(whatson_ratings())));
+
+    // Older ratings would be looked up again, which needs a key.
+    age(8);
+    assert_eq!(mdblist().await, Ok(None));
+    assert_eq!(whatson().await, Ok(None));
+}
+
+/// The page sends "show" for a series, and whatson files those as TV shows.
+#[test]
+fn whatson_looks_up_a_show_as_a_tv_show() {
+    assert_eq!(whatson_item_type("show"), "tvshow");
+    assert_eq!(whatson_item_type("series"), "tvshow");
+    assert_eq!(whatson_item_type("movie"), "movie");
 }
 
 #[tokio::test]
@@ -429,6 +496,30 @@ async fn with_an_omdb_key_cached_skip_times_are_used_without_asking_again() {
     add_key(&app, OMDB_API_KEY, "omdb-key");
 
     assert_eq!(shown(&lookup().await.unwrap()), both);
+}
+
+/// Times added to the skip databases should show up by the next day, so
+/// cached ones are used for a day.
+#[tokio::test]
+async fn cached_skip_times_are_used_for_a_day() {
+    let app = TestApp::new();
+    let db = cache_on_disk(&app);
+    cache_skip_times(&app);
+    let lookup = || get_skip_segments(app.handle(), app.state(), MOVIE.into(), None, None, LENGTH);
+    let hour = DAY / 24;
+
+    age_cached(&db, "skip_segments_cache", 23 * hour);
+    assert_eq!(
+        shown(&lookup().await.unwrap()),
+        [
+            (SegmentKind::Intro, 60.0, 120.0, SegmentSource::SkipDb),
+            (SegmentKind::Credits, 2500.0, 2700.0, SegmentSource::IntroDb),
+        ]
+    );
+
+    // Older times would be looked up again, which needs an OMDb key.
+    age_cached(&db, "skip_segments_cache", 25 * hour);
+    assert_eq!(lookup().await, Ok(vec![]));
 }
 
 #[tokio::test]
@@ -762,15 +853,27 @@ fn release_with(package_url: &str) -> String {
     test_server::serve_once("200 OK", latest.to_string())
 }
 
-#[tokio::test]
-async fn a_package_is_downloaded_to_a_temp_file_that_goes_when_dropped() {
-    let app = TestApp::new();
+/// The percent of each "package-update://progress" event, as it's emitted.
+fn progress_events(app: &TestApp) -> std::sync::mpsc::Receiver<u64> {
     let (sender, progress) = std::sync::mpsc::channel();
     app.handle()
         .listen("package-update://progress", move |event| {
             let payload: Value = serde_json::from_str(event.payload()).unwrap();
             let _ = sender.send(payload["percent"].as_u64().unwrap());
         });
+    progress
+}
+
+/// The percents sent so far, waiting a while for the first.
+fn percents(progress: &std::sync::mpsc::Receiver<u64>) -> Vec<u64> {
+    let first = progress.recv_timeout(Duration::from_secs(5)).unwrap();
+    std::iter::once(first).chain(progress.try_iter()).collect()
+}
+
+#[tokio::test]
+async fn a_package_is_downloaded_to_a_temp_file_that_goes_when_dropped() {
+    let app = TestApp::new();
+    let progress = progress_events(&app);
     let latest = release_with(&test_server::serve_once("200 OK", "package contents"));
 
     let path = download_package(&app.handle(), &latest, "linux-deb-x86_64", "deb")
@@ -781,13 +884,72 @@ async fn a_package_is_downloaded_to_a_temp_file_that_goes_when_dropped() {
     assert!(name.starts_with("maxvideoplayer_update."), "{name}");
     assert!(name.ends_with(".deb"), "{name}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "package contents");
-    let first = progress.recv_timeout(Duration::from_secs(5)).unwrap();
-    let percents: Vec<u64> = std::iter::once(first).chain(progress.try_iter()).collect();
+    let percents = percents(&progress);
     assert_eq!(percents.last(), Some(&100), "{percents:?}");
     assert!(percents.windows(2).all(|w| w[0] < w[1]), "{percents:?}");
     let file = path.to_path_buf();
     drop(path);
     assert!(!file.exists());
+}
+
+/// A package arrives in many reads, and the progress bar climbs with each one
+/// that moves it to a new percent.
+#[tokio::test]
+async fn progress_climbs_as_a_package_downloads() {
+    let app = TestApp::new();
+    let progress = progress_events(&app);
+    let size = 4 * 1024 * 1024;
+    let latest = release_with(&test_server::serve_once("200 OK", "x".repeat(size)));
+
+    let path = download_package(&app.handle(), &latest, "linux-deb-x86_64", "deb")
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), size as u64);
+    let percents = percents(&progress);
+    assert!(percents[0] < 100, "{percents:?}");
+    assert_eq!(percents.last(), Some(&100), "{percents:?}");
+    assert!(percents.windows(2).all(|w| w[0] < w[1]), "{percents:?}");
+}
+
+/// Answers one request with `body` and no `Content-Length`, ending the body by
+/// closing the connection, and returns the server's base URL.
+fn serve_without_length(body: &'static str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        // The request is read first, or the client may see the connection
+        // reset instead of the reply.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") && matches!(stream.read(&mut byte), Ok(1)) {
+            request.push(byte[0]);
+        }
+        let reply = format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{body}");
+        let _ = stream.write_all(reply.as_bytes());
+    });
+    url
+}
+
+/// With no size to count against, a package from a server that doesn't send
+/// one downloads without progress events.
+#[tokio::test]
+async fn a_package_of_unknown_size_downloads_without_progress() {
+    let app = TestApp::new();
+    let progress = progress_events(&app);
+    let latest = release_with(&serve_without_length("package contents"));
+
+    let path = download_package(&app.handle(), &latest, "linux-deb-x86_64", "deb")
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "package contents");
+    assert_eq!(progress.try_iter().collect::<Vec<_>>(), Vec::<u64>::new());
 }
 
 #[tokio::test]
@@ -943,6 +1105,78 @@ async fn an_installer_that_cannot_be_started_is_an_error() {
 
         let err = installed.unwrap_err();
         assert!(err.starts_with("Failed to run installer: "), "{err}");
+    }
+}
+
+/// A release whose latest.json lists the Debian package at `deb_url` and the
+/// RPM package at `rpm_url`.
+#[cfg(unix)]
+fn release_with_both(deb_url: &str, rpm_url: &str) -> String {
+    let latest = json!({
+        "version": "9.9.9",
+        "packages": {"linux-deb-x86_64": deb_url, "linux-rpm-x86_64": rpm_url},
+    });
+    test_server::serve_once("200 OK", latest.to_string())
+}
+
+/// The temp file a run installed, from the line the stand-in logged for it.
+#[cfg(unix)]
+fn installed_file<'a>(run: &'a str, command: &str) -> &'a std::path::Path {
+    let file = run.strip_prefix(command).unwrap_or_else(|| panic!("{run}"));
+    std::path::Path::new(file)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_deb_install_is_updated_with_the_newest_deb() {
+    let app = TestApp::new();
+    let pkexec = StandIn::new("exit 0");
+    let deb = test_server::serve_once("200 OK", "deb contents");
+    let rpm = format!("{}/never-fetched.rpm", test_server::refused_url());
+    let latest = release_with_both(&deb, &rpm);
+
+    let updated = update_package(&app.handle(), "deb", &latest, pkexec.elevated()).await;
+
+    assert_eq!(updated, Ok(()));
+    let runs = pkexec.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let file = installed_file(&runs[0], "apt-get install -y --allow-downgrades ");
+    assert_eq!(file.extension().unwrap(), "deb");
+    // The download goes once it's installed.
+    assert!(!file.exists(), "{}", file.display());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_rpm_install_is_updated_with_the_newest_rpm() {
+    let app = TestApp::new();
+    let pkexec = StandIn::new("exit 0");
+    let rpm = test_server::serve_once("200 OK", "rpm contents");
+    let deb = format!("{}/never-fetched.deb", test_server::refused_url());
+    let latest = release_with_both(&deb, &rpm);
+
+    let updated = update_package(&app.handle(), "rpm", &latest, pkexec.elevated()).await;
+
+    assert_eq!(updated, Ok(()));
+    let runs = pkexec.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let file = installed_file(&runs[0], "rpm -U ");
+    assert_eq!(file.extension().unwrap(), "rpm");
+    assert!(!file.exists(), "{}", file.display());
+}
+
+/// AppImages, the Tauri updater and the App Store update the app themselves.
+#[tokio::test]
+async fn other_installs_are_not_updated_with_a_package() {
+    let app = TestApp::new();
+    let latest = test_server::refused_url();
+    let never = || -> tokio::process::Command { panic!("nothing should be installed") };
+
+    for install_type in ["appimage", "native", "store"] {
+        let updated = update_package(&app.handle(), install_type, &latest, never).await;
+
+        let refused = format!("package_update not supported for install type: {install_type}");
+        assert_eq!(updated, Err(refused));
     }
 }
 

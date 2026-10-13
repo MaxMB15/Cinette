@@ -20,25 +20,44 @@ use tauri::Manager;
 /// AppImage, which is why it is scoped to that runtime.
 #[cfg(target_os = "linux")]
 fn apply_linux_workarounds() {
-    let is_appimage = std::env::var("APPIMAGE").is_ok();
-    let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+    let is_set = |name| std::env::var(name).is_ok();
+    let changes = linux_workarounds(
+        is_set("APPIMAGE"),
+        is_set("WAYLAND_DISPLAY"),
+        is_set("WEBKIT_DISABLE_DMABUF_RENDERER"),
+    );
+    for (name, value) in changes {
+        // SAFETY: run() calls this before it builds Tauri, and nothing before
+        // it starts a thread, so no other thread can be reading the environment.
+        unsafe { std::env::set_var(name, value) };
+    }
+}
+
+/// The environment variables [`apply_linux_workarounds`] sets, and their
+/// values, for a run from an AppImage or not, in a Wayland session or not,
+/// and with `WEBKIT_DISABLE_DMABUF_RENDERER` already set or not.
+#[cfg(target_os = "linux")]
+fn linux_workarounds(
+    appimage: bool,
+    wayland: bool,
+    dmabuf_chosen: bool,
+) -> Vec<(&'static str, &'static str)> {
+    let mut changes = Vec::new();
     // Disable DMABUF only on X11 — on Wayland the DMABUF renderer is needed
     // for correct compositing with the EGL video subsurface. The original
     // workaround targeted blank-window bugs in some X11/AppImage configs.
-    if is_appimage && !is_wayland && std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-        // SAFETY: run() calls this before it builds Tauri, and nothing before
-        // it starts a thread, so no other thread can be reading the environment.
-        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    if appimage && !wayland && !dmabuf_chosen {
+        changes.push(("WEBKIT_DISABLE_DMABUF_RENDERER", "1"));
     }
     // The linuxdeploy-plugin-gtk AppRun hook forces GDK_BACKEND=x11 before
     // our binary starts. Override it back to wayland when a Wayland session
     // is available so GTK provides native wl_surface handles for embedded
     // video rendering. Scoped to AppImage only — .deb/.rpm use system GTK
     // which auto-detects correctly.
-    if std::env::var("APPIMAGE").is_ok() && std::env::var("WAYLAND_DISPLAY").is_ok() {
-        // SAFETY: as above, no other thread is running yet.
-        unsafe { std::env::set_var("GDK_BACKEND", "wayland") };
+    if appimage && wayland {
+        changes.push(("GDK_BACKEND", "wayland"));
     }
+    changes
 }
 
 /// Decides whether `tauri-plugin-single-instance` can start on Linux, by the
@@ -358,7 +377,7 @@ pub fn run() {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::session_bus_problem;
+    use super::{linux_workarounds, session_bus_problem};
     use std::path::Path;
 
     /// For cases that must not look for the fallback socket.
@@ -403,5 +422,37 @@ mod tests {
         assert_eq!(session_bus_problem(None, None, 1000, user_1000_bus), None);
         let problem = session_bus_problem(None, None, 1001, user_1000_bus);
         assert!(problem.unwrap().contains("/run/user/1001/bus"));
+    }
+
+    /// A .deb or .rpm install uses the system's GTK and WebKit, which choose
+    /// for themselves.
+    #[test]
+    fn outside_an_appimage_nothing_is_changed() {
+        let cases = [(false, false), (false, true), (true, false), (true, true)];
+        for (wayland, dmabuf_chosen) in cases {
+            let changes = linux_workarounds(false, wayland, dmabuf_chosen);
+            assert!(changes.is_empty(), "{changes:?}");
+        }
+    }
+
+    /// WebKit's DMABUF renderer can leave an AppImage's window blank on X11,
+    /// so it's turned off there unless the user already chose a setting.
+    #[test]
+    fn an_appimage_on_x11_turns_off_dmabuf_unless_the_user_chose() {
+        let changes = linux_workarounds(true, false, false);
+        assert_eq!(changes, [("WEBKIT_DISABLE_DMABUF_RENDERER", "1")]);
+        let changes = linux_workarounds(true, false, true);
+        assert!(changes.is_empty(), "{changes:?}");
+    }
+
+    /// The AppImage's GTK hook turns Wayland off. It's turned back on in a
+    /// Wayland session so the video can draw below the page, and DMABUF
+    /// stays on there.
+    #[test]
+    fn an_appimage_on_wayland_goes_back_to_wayland() {
+        for dmabuf_chosen in [false, true] {
+            let changes = linux_workarounds(true, true, dmabuf_chosen);
+            assert_eq!(changes, [("GDK_BACKEND", "wayland")]);
+        }
     }
 }

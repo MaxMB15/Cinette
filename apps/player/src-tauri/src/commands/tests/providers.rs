@@ -171,11 +171,21 @@ async fn add_provider_with_guide(app: &TestApp) {
     assert_eq!(refresh_epg(app.handle(), "p".into()).await, Ok(3));
 }
 
+/// Checks that `provider` was last updated at a time from `since` to now. The
+/// page uses that time to decide when to refresh the provider next.
+fn assert_updated_since(provider: &Provider, since: chrono::DateTime<chrono::Utc>) {
+    let saved = provider.last_updated.as_deref().unwrap_or_default();
+    let updated =
+        chrono::DateTime::parse_from_rfc3339(saved).unwrap_or_else(|e| panic!("{saved:?}: {e}"));
+    assert!(since <= updated && updated <= chrono::Utc::now(), "{saved}");
+}
+
 #[tokio::test]
 async fn a_playlist_from_a_url_is_saved_with_its_guide_address() {
     let app = TestApp::new();
     let body = playlist(Some("http://example.test/guide.xml"), &["Alpha", "Beta"]);
     let url = test_server::serve_once("200 OK", body);
+    let before = chrono::Utc::now();
 
     let channels = load_m3u_playlist(app.state(), "Home".into(), url.clone())
         .await
@@ -191,7 +201,7 @@ async fn a_playlist_from_a_url_is_saved_with_its_guide_address() {
         Some("http://example.test/guide.xml")
     );
     assert_eq!(saved.channel_count, 2);
-    assert!(saved.last_updated.is_some());
+    assert_updated_since(&saved, before);
 
     let ids: Vec<&str> = channels.iter().map(|ch| ch.id.as_str()).collect();
     let expected = [format!("{}-ch-0", saved.id), format!("{}-ch-1", saved.id)];
@@ -234,6 +244,28 @@ async fn a_playlist_file_is_saved_with_a_file_address_and_no_guide() {
     assert_eq!(channels.len(), 1);
     assert_eq!(channels[0].id, format!("{}-ch-0", saved.id));
     assert_eq!(channels[0].tvg_id.as_deref(), Some("Alpha.test"));
+}
+
+#[tokio::test]
+async fn each_playlist_loaded_is_saved_as_a_provider_of_its_own() {
+    let app = TestApp::new();
+    let dir = tempfile::tempdir().unwrap();
+    let lists = [
+        ("first.m3u", &["Alpha", "Beta"][..]),
+        ("second.m3u", &["Gamma"]),
+    ];
+
+    for (file, names) in lists {
+        let path = dir.path().join(file);
+        std::fs::write(&path, playlist(None, names)).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        load_m3u_file(app.state(), file.into(), path).await.unwrap();
+    }
+
+    let providers = get_providers(app.state()).await.unwrap();
+    assert_eq!(providers.len(), 2, "{providers:?}");
+    assert_ne!(providers[0].id, providers[1].id);
+    assert_eq!(channel_names(&app).await, ["Alpha", "Beta", "Gamma"]);
 }
 
 #[tokio::test]
@@ -429,10 +461,18 @@ async fn refreshing_a_file_provider_reads_the_file_again() {
         .unwrap();
     let id = only_provider(&app).await.id;
     std::fs::write(&path, playlist(None, &["Alpha", "Beta", "Gamma"])).unwrap();
+    let before = chrono::Utc::now();
+    let logged = Logged::default();
+    let _logging = logged.start();
 
     refresh_provider(app.state(), id.clone()).await.unwrap();
 
-    assert_eq!(only_provider(&app).await.channel_count, 3);
+    let refreshed = only_provider(&app).await;
+    assert_eq!(refreshed.channel_count, 3);
+    assert_updated_since(&refreshed, before);
+    // Every list loaded, so no saved channels were kept in place of one.
+    let log = logged.text();
+    assert!(!log.contains("keeps its saved"), "{log}");
     let channels = get_all_channels(app.state()).await.unwrap();
     let prefix = format!("{id}-ch-");
     assert_eq!(channels.len(), 3);
@@ -510,9 +550,14 @@ async fn refreshing_an_xtream_provider_keeps_the_movies_its_panel_failed_to_list
     toggle_favorite(app.state(), movie_id.clone())
         .await
         .unwrap();
+    let logged = Logged::default();
+    let _logging = logged.start();
 
-    refresh_provider(app.state(), id).await.unwrap();
+    refresh_provider(app.state(), id.clone()).await.unwrap();
 
+    let log = logged.text();
+    let kept = format!("provider={id} keeps its saved movie channels");
+    assert!(log.contains(&kept), "{log}");
     assert_eq!(channel_names(&app).await, ["Heat", "News One", "Show"]);
     assert_eq!(favorite_ids(&app).await, [movie_id]);
     assert_eq!(only_provider(&app).await.channel_count, 3);

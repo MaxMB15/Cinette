@@ -47,10 +47,21 @@ fn is_finished(position: f64, duration: f64) -> bool {
 /// `None`. Stops by itself once mpv has moved on to something else.
 #[command]
 pub fn hand_off_progress<R: Runtime>(app: AppHandle<R>, item: Option<ProgressItem>) {
+    hand_off(app, item, SAVE_INTERVAL);
+}
+
+/// The work of [`hand_off_progress`], saving every `interval`. Returns the
+/// thread that saves, so a test can wait for it to stop.
+fn hand_off<R: Runtime>(
+    app: AppHandle<R>,
+    item: Option<ProgressItem>,
+    interval: Duration,
+) -> Option<std::thread::JoinHandle<()>> {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    let Some(item) = item else { return };
+    let item = item?;
     tracing::debug!("[Progress] saving {} from Rust", item.key);
-    std::thread::spawn(move || track(&app, item, generation, SAVE_INTERVAL));
+    let saving = std::thread::spawn(move || track(&app, item, generation, interval));
+    Some(saving)
 }
 
 /// Saves `item`'s position every `interval` until mpv moves on or a newer
@@ -142,6 +153,7 @@ mod tests {
     use super::*;
     use crate::test_support::{poison, TestApp};
     use std::sync::{mpsc, Mutex, PoisonError};
+    use std::time::Instant;
 
     const KEY: &str = "movie:dune";
     const URL: &str = "http://example.test/dune.mkv";
@@ -214,8 +226,10 @@ mod tests {
         // load began, and saving that would lose the resume point.
         assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
         assert_eq!(saved(&app), None);
-        assert!(tracker.saw(&handle, Some(URL), 2996.0, 6000.0));
-        assert_eq!(saved(&app), Some((2996.0, 6000.0)));
+        // A seek can land a little short, so five seconds before the resume
+        // point counts as reaching it, as it does on the page.
+        assert!(tracker.saw(&handle, Some(URL), 2995.0, 6000.0));
+        assert_eq!(saved(&app), Some((2995.0, 6000.0)));
         // From there on, an earlier position is the viewer seeking back.
         assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
         assert_eq!(saved(&app), Some((600.0, 6000.0)));
@@ -248,6 +262,15 @@ mod tests {
             assert!(tracker.saw(&handle, Some(URL), position, duration));
             assert_eq!(saved(&app), None, "{position} of {duration}");
         }
+    }
+
+    /// The page offers to resume from 30 seconds in, so that's kept too.
+    #[test]
+    fn thirty_seconds_in_is_far_enough_to_resume() {
+        let app = TestApp::new();
+        let mut tracker = tracker(None);
+        assert!(tracker.saw(&app.handle(), Some(URL), 30.0, 6000.0));
+        assert_eq!(saved(&app), Some((30.0, 6000.0)));
     }
 
     #[test]
@@ -321,6 +344,27 @@ mod tests {
         assert!(track_returns(&app, handed, Duration::from_secs(60 * 60)));
     }
 
+    /// The item may still be loading when the page hands it over, so an idle
+    /// player gets a tick for each allowed miss before the thread stops.
+    #[test]
+    fn a_hand_over_keeps_checking_for_a_few_ticks_before_it_stops() {
+        let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
+        let app = TestApp::new();
+        let interval = Duration::from_millis(20);
+        let started = Instant::now();
+
+        let saving = hand_off(app.handle(), Some(item(None)), interval).unwrap();
+        // Joined on a thread of its own, so a thread that never stops fails
+        // the test rather than hanging it.
+        let (done, joined) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(saving.join().is_ok());
+        });
+        assert_eq!(joined.recv_timeout(Duration::from_secs(10)), Ok(true));
+
+        assert!(started.elapsed() >= interval * (MAX_MISSES - 1));
+    }
+
     #[test]
     fn waits_a_few_ticks_for_the_item_to_play() {
         let mut tracker = Tracker {
@@ -342,6 +386,9 @@ mod tests {
     fn finished_near_the_end() {
         assert!(is_finished(5700.0, 6000.0));
         assert!(is_finished(580.0, 600.0));
+        // A short clip is finished in its last 30 seconds, before it's 95% in.
+        assert!(is_finished(375.0, 400.0));
+        assert!(!is_finished(370.0, 400.0));
         assert!(!is_finished(3000.0, 6000.0));
         assert!(!is_finished(10.0, 0.0));
     }

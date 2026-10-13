@@ -818,10 +818,21 @@ pub async fn fetch_whatson_data<R: Runtime>(
         tracing::debug!("[Whatson] no OMDb API key configured, skipping fetch");
         return Ok(None);
     }
-    let item_type = if media_type == "show" || media_type == "series" { "tvshow" } else { "movie" };
+    let item_type = whatson_item_type(&media_type);
     tracing::info!("[Whatson] fetching data for imdb_id={} type={}", imdb_id, item_type);
     let fetched = mvp_core::iptv::whatson::fetch_whatson(&imdb_id, item_type).await;
     keep_whatson_data(&state, &imdb_id, fetched)
+}
+
+/// What whatson calls the page's `media_type`. The page sends "show" for a
+/// series, and anything that isn't a series is looked up as a movie. Kept
+/// apart from the lookup so tests can check it without asking whatson.
+fn whatson_item_type(media_type: &str) -> &'static str {
+    if media_type == "show" || media_type == "series" {
+        "tvshow"
+    } else {
+        "movie"
+    }
 }
 
 /// Caches the ratings whatson sent back for a title and returns them. A title
@@ -1605,18 +1616,30 @@ async fn download_package<R: Runtime>(
 #[command]
 pub async fn package_update<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let info = get_install_info();
-    let pkg_key = match info.install_type.as_str() {
+    let pkexec = || tokio::process::Command::new("pkexec");
+    update_package(&app, &info.install_type, LATEST_RELEASE_JSON, pkexec).await
+}
+
+/// The work of [`package_update`] for an `install_type` install, with the
+/// release list at `latest_url` and the installer run by the command
+/// `elevated` starts. Tests pass a local release and a stand-in for pkexec.
+async fn update_package<R: Runtime>(
+    app: &AppHandle<R>,
+    install_type: &str,
+    latest_url: &str,
+    elevated: impl Fn() -> tokio::process::Command,
+) -> Result<(), String> {
+    let pkg_key = match install_type {
         "deb" => "linux-deb-x86_64",
         "rpm" => "linux-rpm-x86_64",
         other => return Err(format!("package_update not supported for install type: {other}")),
     };
-    let extension = if info.install_type == "rpm" { "rpm" } else { "deb" };
-    let tmp_path = download_package(&app, LATEST_RELEASE_JSON, pkg_key, extension).await?;
+    let extension = if install_type == "rpm" { "rpm" } else { "deb" };
+    let tmp_path = download_package(app, latest_url, pkg_key, extension).await?;
 
     // 3. Install via pkexec (async so we do not block the Tokio worker for the whole GUI prompt)
     // tmp_path (TempPath) auto-deletes on drop at end of function.
-    let pkexec = || tokio::process::Command::new("pkexec");
-    install_package(pkexec, &info.install_type, &tmp_path).await
+    install_package(elevated, install_type, &tmp_path).await
 }
 
 /// Installs the `install_type` package at `path` with the command `elevated`
