@@ -1,6 +1,6 @@
 [package]
 name = "max-video-player"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 license = "GPL-3.0-only"
 

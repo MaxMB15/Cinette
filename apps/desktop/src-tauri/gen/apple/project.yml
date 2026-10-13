@@ -74,8 +74,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.6.0
-        CFBundleVersion: "0.6.0"
+        CFBundleShortVersionString: 0.6.1
+        CFBundleVersion: "0.6.1"
     entitlements:
       path: max-video-player_iOS/max-video-player_iOS.entitlements
     scheme:

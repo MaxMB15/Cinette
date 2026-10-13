@@ -1,7 +1,7 @@
 {
 	"$schema": "https://raw.githubusercontent.com/nichobi/tauri-apps/tauri-v2/core/tauri-config-schema/schema.json",
 	"productName": "Max Video Player",
-	"version": "0.6.0",
+	"version": "0.6.1",
 	"identifier": "com.maxvideoplayer.app",
 	"build": {
 		"beforeDevCommand": "pnpm dev",
