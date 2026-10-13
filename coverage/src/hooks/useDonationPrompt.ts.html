@@ -25,28 +25,28 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>16/16</span>
+                <span class='fraction'>14/14</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">83.33% </span>
+                <span class="strong">85.71% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>5/6</span>
+                <span class='fraction'>6/7</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>4/4</span>
+                <span class='fraction'>3/3</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>14/14</span>
+                <span class='fraction'>13/13</span>
             </div>
         
             
@@ -100,9 +100,7 @@
 <a name='L35'></a><a href='#L35'>35</a>
 <a name='L36'></a><a href='#L36'>36</a>
 <a name='L37'></a><a href='#L37'>37</a>
-<a name='L38'></a><a href='#L38'>38</a>
-<a name='L39'></a><a href='#L39'>39</a>
-<a name='L40'></a><a href='#L40'>40</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L38'></a><a href='#L38'>38</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -120,31 +118,29 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">2x</span>
-<span class="cline-any cline-yes">14x</span>
-<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">20x</span>
+<span class="cline-any cline-yes">20x</span>
 <span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">2x</span>
-<span class="cline-any cline-yes">92x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">92x</span>
-<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">57x</span>
+<span class="cline-any cline-yes">57x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">57x</span>
+<span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-yes">4x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">92x</span>
-<span class="cline-any cline-yes">3x</span>
-<span class="cline-any cline-yes">3x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">92x</span>
+<span class="cline-any cline-yes">57x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 &nbsp;
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { DONATION_LAST_SHOWN_KEY, readStorage, writeStorage } from "@/lib/storage";
 &nbsp;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -166,19 +162,17 @@ const shouldShowNow = (): boolean =&gt; {
 };
 &nbsp;
 export const useDonationPrompt = ({ enabled }: UseDonationPromptOptions): DonationPromptState =&gt; {
-	const [shouldShow, setShouldShow] = useState(false);
-&nbsp;
-	// Re-evaluate whenever enabled flips to true (i.e. splash just dismissed)
-	useEffect(() =&gt; {
-		if (enabled) setShouldShow(shouldShowNow());
-	}, [enabled]);
+	// Whether it's time is read once, as the app starts. The prompt then waits
+	// for `enabled`, which turns on when the splash screen goes.
+	const [due] = useState(shouldShowNow);
+	const [dismissed, setDismissed] = useState(false);
 &nbsp;
 	const dismiss = useCallback(() =&gt; {
 		writeStorage(DONATION_LAST_SHOWN_KEY, String(Date.now()));
-		setShouldShow(false);
+		setDismissed(true);
 	}, []);
 &nbsp;
-	return { shouldShow, dismiss };
+	return { shouldShow: enabled &amp;&amp; due &amp;&amp; !dismissed, dismiss };
 };
 &nbsp;</pre></td></tr></table></pre>
 
@@ -187,7 +181,7 @@ export const useDonationPrompt = ({ enabled }: UseDonationPromptOptions): Donati
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-10-12T20:15:33.952Z
+                at 2026-10-13T10:10:50.469Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

@@ -1,20 +1,20 @@
-<svg width="142.8" height="20" viewBox="0 0 1428 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Rust coverage: 91.45%">
-  <title>Rust coverage: 91.45%</title>
-  <linearGradient id="GwUdP" x2="0" y2="100%">
+<svg width="142.8" height="20" viewBox="0 0 1428 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Rust coverage: 91.46%">
+  <title>Rust coverage: 91.46%</title>
+  <linearGradient id="YRYXm" x2="0" y2="100%">
     <stop offset="0" stop-opacity=".1" stop-color="#EEE"/>
     <stop offset="1" stop-opacity=".1"/>
   </linearGradient>
-  <mask id="OVAwL"><rect width="1428" height="200" rx="30" fill="#FFF"/></mask>
-  <g mask="url(#OVAwL)">
+  <mask id="ofcDv"><rect width="1428" height="200" rx="30" fill="#FFF"/></mask>
+  <g mask="url(#ofcDv)">
     <rect width="888" height="200" fill="#555"/>
     <rect width="540" height="200" fill="#97c40f" x="888"/>
-    <rect width="1428" height="200" fill="url(#GwUdP)"/>
+    <rect width="1428" height="200" fill="url(#YRYXm)"/>
   </g>
   <g aria-hidden="true" fill="#fff" text-anchor="start" font-family="Verdana,DejaVu Sans,sans-serif" font-size="110">
     <text x="60" y="148" textLength="788" fill="#000" opacity="0.25">Rust coverage</text>
     <text x="50" y="138" textLength="788">Rust coverage</text>
-    <text x="943" y="148" textLength="440" fill="#000" opacity="0.25">91.45%</text>
-    <text x="933" y="138" textLength="440">91.45%</text>
+    <text x="943" y="148" textLength="440" fill="#000" opacity="0.25">91.46%</text>
+    <text x="933" y="138" textLength="440">91.46%</text>
   </g>
   
 </svg>

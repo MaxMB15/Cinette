@@ -23,9 +23,9 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">97.94% </span>
+                <span class="strong">97.93% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>191/195</span>
+                <span class='fraction'>190/194</span>
             </div>
         
             
@@ -39,14 +39,14 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>61/61</span>
+                <span class='fraction'>63/63</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>165/165</span>
+                <span class='fraction'>166/166</span>
             </div>
         
             
@@ -747,7 +747,10 @@
 <a name='L682'></a><a href='#L682'>682</a>
 <a name='L683'></a><a href='#L683'>683</a>
 <a name='L684'></a><a href='#L684'>684</a>
-<a name='L685'></a><a href='#L685'>685</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L685'></a><a href='#L685'>685</a>
+<a name='L686'></a><a href='#L686'>686</a>
+<a name='L687'></a><a href='#L687'>687</a>
+<a name='L688'></a><a href='#L688'>688</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -860,8 +863,9 @@
 <span class="cline-any cline-yes">125x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">125x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">37x</span>
-<span class="cline-any cline-yes">37x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">36x</span>
 <span class="cline-any cline-yes">35x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -871,6 +875,8 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-yes">4x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1019,7 +1025,7 @@
 <span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-yes">4x</span>
 <span class="cline-any cline-yes">4x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">4x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1036,7 +1042,7 @@
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">2x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1439,7 +1445,7 @@ import {
 	RefreshCw,
 	Plus,
 	Pencil,
-	Trash2,
+	Trash,
 	Sparkles,
 	Check,
 	X,
@@ -1543,31 +1549,34 @@ export const CategoryManager = ({
 	const [aiPromptCategory, setAiPromptCategory] = useState&lt;string | null&gt;(null);
 	const [aiPromptLoading, setAiPromptLoading] = useState(false);
 &nbsp;
-	const load = useCallback(async () =&gt; {
-		try {
-			const h = await getGroupHierarchy(providerId, contentType);
-			if (h.length &gt; 0) {
-				setEntries(h);
-				// Remove empty categories that now have groups in DB
-				const dbCatNames = new Set(superCategoryNames(h));
-				setEmptyCategories((prev) =&gt; prev.filter((c) =&gt; !dbCatNames.has(c)));
-			} else {
-				// No hierarchy yet — show all provider groups as uncategorized
-				setEntries(
-					groupTitles(channels, contentType).map((g, i) =&gt; ({
-						providerId,
-						contentType,
-						groupName: g,
-						superCategory: null,
-						sortOrder: i,
-						isUserOverride: false,
-					}))
-				);
-			}
-		} catch {
-			// silent
-		}
-	}, [providerId, contentType, channels]);
+	const load = useCallback(
+		() =&gt;
+			getGroupHierarchy(providerId, contentType)
+				.then((h) =&gt; {
+					if (h.length &gt; 0) {
+						setEntries(h);
+						// Remove empty categories that now have groups in DB
+						const dbCatNames = new Set(superCategoryNames(h));
+						setEmptyCategories((prev) =&gt; prev.filter((c) =&gt; !dbCatNames.has(c)));
+					} else {
+						// No hierarchy yet, so show all provider groups as uncategorized
+						setEntries(
+							groupTitles(channels, contentType).map((g, i) =&gt; ({
+								providerId,
+								contentType,
+								groupName: g,
+								superCategory: null,
+								sortOrder: i,
+								isUserOverride: false,
+							}))
+						);
+					}
+				})
+				.catch(() =&gt; {
+					// silent
+				}),
+		[providerId, contentType, channels]
+	);
 &nbsp;
 	useEffect(() =&gt; {
 		load();
@@ -1947,7 +1956,7 @@ export const CategoryManager = ({
 											className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-destructive/10"
 											title="Delete category"
 										&gt;
-											&lt;Trash2 className="h-3 w-3" /&gt;
+											&lt;Trash className="h-3 w-3" /&gt;
 										&lt;/button&gt;
 									&lt;/&gt;
 								)}
@@ -2122,7 +2131,7 @@ export const CategoryManager = ({
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-10-12T20:15:33.952Z
+                at 2026-10-13T10:10:50.469Z
             </div>
         <script src="../../../prettify.js"></script>
         <script>

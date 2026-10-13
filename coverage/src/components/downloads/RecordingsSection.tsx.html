@@ -271,17 +271,17 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">6x</span>
-<span class="cline-any cline-yes">13x</span>
-<span class="cline-any cline-yes">13x</span>
-<span class="cline-any cline-yes">13x</span>
-<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
+<span class="cline-any cline-yes">14x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">14x</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">14x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -290,10 +290,10 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">17x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">17x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -410,7 +410,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">6x</span>
-<span class="cline-any cline-yes">21x</span>
+<span class="cline-any cline-yes">23x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -421,7 +421,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 &nbsp;
 import { useState } from "react";
-import { Disc, Play, Trash2 } from "lucide-react";
+import { Disc, Play, Trash } from "lucide-react";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { formatBytes } from "@/lib/format";
@@ -455,7 +455,7 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 &nbsp;
 	const run = (action: Promise&lt;void&gt;) =&gt; {
 		setError(null);
-		action.catch(<span class="fstat-no" title="function not covered" >(e</span>) =&gt; <span class="cstat-no" title="statement not covered" >setError(String(e)))</span>;
+		action.<span class="fstat-no" title="function not covered" >catch((e</span>) =&gt; <span class="cstat-no" title="statement not covered" >setError(String(e)))</span>;
 	};
 &nbsp;
 	return (
@@ -545,16 +545,16 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 									&lt;&gt;
 										&lt;RowButton
 											onClick={() =&gt; onPlay(recordingChannel(rec))}
-											aria-label={`Play ${rec.programTitle ?? <span class="branch-1 cbranch-no" title="branch not covered" >rec.title}</span>`}
+											aria-label={`Play ${rec.programTitle ?? <span class="branch-1 cbranch-no" title="branch not covered" >rec.title}`}</span>
 										&gt;
 											&lt;Play className="h-3.5 w-3.5" /&gt;
 											Play
 										&lt;/RowButton&gt;
 										&lt;RowButton
 											onClick={() =&gt; setDeleting(rec)}
-											aria-label={`Delete ${rec.programTitle ?? <span class="branch-1 cbranch-no" title="branch not covered" >rec.title}</span>`}
+											aria-label={`Delete ${rec.programTitle ?? <span class="branch-1 cbranch-no" title="branch not covered" >rec.title}`}</span>
 										&gt;
-											&lt;Trash2 className="h-3.5 w-3.5" /&gt;
+											&lt;Trash className="h-3.5 w-3.5" /&gt;
 										&lt;/RowButton&gt;
 									&lt;/&gt;
 								)}
@@ -579,7 +579,7 @@ export const RecordingsSection = ({ recordings, onPlay }: RecordingsSectionProps
 					<span class="missing-if-branch" title="else path not taken" >E</span>if (deleting) run(removeDownload(deleting.id));
 					setDeleting(null);
 				}}
-				onCancel={<span class="fstat-no" title="function not covered" >() =&gt; <span class="cstat-no" title="statement not covered" >s</span>etDeleting(null)}</span>
+<span class="fstat-no" title="function not covered" >				onCancel={() =&gt; <span class="cstat-no" title="statement not covered" >s</span>etDeleting(null)}</span>
 			/&gt;
 		&lt;/section&gt;
 	);
@@ -601,7 +601,7 @@ const RowButton = (props: ButtonProps) =&gt; (
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-10-12T20:15:33.952Z
+                at 2026-10-13T10:10:50.469Z
             </div>
         <script src="../../../prettify.js"></script>
         <script>

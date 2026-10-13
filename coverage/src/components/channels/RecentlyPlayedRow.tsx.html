@@ -229,26 +229,26 @@
 <span class="cline-any cline-yes">10x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">5x</span>
-<span class="cline-any cline-yes">230x</span>
+<span class="cline-any cline-yes">286x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">230x</span>
-<span class="cline-any cline-yes">78x</span>
-<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">286x</span>
+<span class="cline-any cline-yes">97x</span>
+<span class="cline-any cline-yes">97x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">77x</span>
+<span class="cline-any cline-yes">96x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">78x</span>
-<span class="cline-any cline-yes">78x</span>
+<span class="cline-any cline-yes">97x</span>
+<span class="cline-any cline-yes">97x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">230x</span>
-<span class="cline-any cline-yes">151x</span>
-<span class="cline-any cline-yes">132x</span>
+<span class="cline-any cline-yes">286x</span>
+<span class="cline-any cline-yes">184x</span>
+<span class="cline-any cline-yes">165x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">19x</span>
 <span class="cline-any cline-yes">19x</span>
@@ -262,7 +262,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">230x</span>
+<span class="cline-any cline-yes">286x</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-yes">1x</span>
@@ -276,7 +276,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">230x</span>
+<span class="cline-any cline-yes">286x</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-yes">1x</span>
@@ -285,7 +285,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">230x</span>
+<span class="cline-any cline-yes">286x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">11x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -398,7 +398,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 		try {
 			if (seriesTitle === undefined) {
 				await deleteHistoryEntry(entry.channelId);
-<span class="cstat-no" title="statement not covered" >				setEntries(<span class="fstat-no" title="function not covered" >(p</span>rev) =&gt; <span class="cstat-no" title="statement not covered" >prev.filter(<span class="fstat-no" title="function not covered" >(e</span>) =&gt; <span class="cstat-no" title="statement not covered" >e.channelId !== entry.channelId)</span>)</span>;</span>
+<span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >				setEntries((p</span>rev) =&gt; <span class="cstat-no" title="statement not covered" >prev.<span class="fstat-no" title="function not covered" >filter((e</span>) =&gt; <span class="cstat-no" title="statement not covered" >e.channelId !== entry.channelId)</span>)</span>;</span>
 			} else {
 				await deleteHistorySeries(seriesTitle);
 				setEntries((prev) =&gt; prev.filter((e) =&gt; showOf(e) !== seriesTitle));
@@ -438,7 +438,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 							className="relative min-w-[160px] max-w-[180px] bg-secondary rounded-lg p-2.5 text-left hover:bg-accent transition-colors group shrink-0"
 						&gt;
 							&lt;button
-								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity p-0.5"
+								className="absolute top-1 right-1.5 z-10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 transition-opacity p-0.5"
 								onClick={() =&gt; void dismiss(card)}
 								aria-label={`Dismiss ${card.displayName}`}
 							&gt;
@@ -466,7 +466,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-10-12T20:15:33.952Z
+                at 2026-10-13T10:10:50.469Z
             </div>
         <script src="../../../prettify.js"></script>
         <script>
