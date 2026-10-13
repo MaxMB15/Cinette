@@ -35,8 +35,9 @@ exclude_re = [
     'tauri-plugin-mpv/src/loadfile\.rs:.*replace \| with \^ in client_api_version',
     # Helpers in a test module that only builds on some platforms, such as
     # #[cfg(all(test, desktop))]. cargo-mutants only skips a plain
-    # #[cfg(test)]. It doesn't apply this to a deleted struct field, so one
-    # such mutant in the app's recordings tests still runs.
+    # #[cfg(test)]. It doesn't apply this to a deleted struct field, so a
+    # helper like that sets a field on a line of its own, not in a struct
+    # update.
     '\btests::',
     # The app's entry point builds the whole Tauri app and opens its window.
     'src-tauri/src/lib\.rs:.*\b(run|show_main_window)\b',
