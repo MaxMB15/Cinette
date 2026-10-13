@@ -7,7 +7,7 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { isInside } from "@/lib/hotkeys";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-/** A sheet that slides in with a transform, which would clip a fixed dialog inside it. */
+/** A sheet that slides in with `translate`, which would clip a fixed dialog inside it. */
 const Sheet = ({
 	onConfirm = vi.fn(),
 	notice = false,
@@ -18,7 +18,7 @@ const Sheet = ({
 	const [open, setOpen] = useState(false);
 	const close = () => setOpen(false);
 	return (
-		<div data-testid="sheet" style={{ transform: "translateY(0)" }}>
+		<div data-testid="sheet" style={{ translate: "0 0" }}>
 			<button onClick={() => setOpen(true)}>Download season</button>
 			<ConfirmDialog
 				open={open}

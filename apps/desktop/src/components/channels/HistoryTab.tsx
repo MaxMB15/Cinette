@@ -122,7 +122,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 							<button
 								type="button"
 								onClick={() => onPlay(entry)}
-								className="flex flex-1 min-w-0 items-center gap-3 pl-2 py-2.5 rounded-lg text-left cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+								className="flex flex-1 min-w-0 items-center gap-3 pl-2 py-2.5 rounded-lg text-left cursor-pointer focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
 							>
 								{/* Logo */}
 								<ChannelLogo
@@ -161,7 +161,7 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 							<button
 								type="button"
 								onClick={(e) => handleDelete(e, entry.channelId)}
-								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
+								className="shrink-0 h-7 w-7 flex items-center justify-center rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive text-muted-foreground"
 								aria-label={`Remove ${entry.channelName} from history`}
 							>
 								<Trash className="h-3.5 w-3.5" />

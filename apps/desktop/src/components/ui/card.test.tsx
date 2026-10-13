@@ -75,7 +75,7 @@ describe("Card", () => {
 
 		const card = screen.getByTestId("card");
 		expect(card).toHaveClass("shadow-lg");
-		expect(card).not.toHaveClass("shadow-sm");
+		expect(card).not.toHaveClass("shadow-xs");
 		expect(screen.getByTestId("header")).toHaveClass("p-4", "space-y-1.5");
 		expect(screen.getByTestId("header")).not.toHaveClass("p-6");
 		expect(screen.getByRole("heading")).toHaveClass("text-lg", "font-semibold");

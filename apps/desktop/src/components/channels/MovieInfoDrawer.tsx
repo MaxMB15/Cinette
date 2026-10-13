@@ -104,14 +104,14 @@ export const MovieInfoDrawer = ({
 	return (
 		<div className="fixed inset-0 z-50">
 			<div
-				className={`absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
+				className={`absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ${
 					visible ? "opacity-100" : "opacity-0"
 				}`}
 				onClick={handleClose}
 			/>
 			<div
 				ref={sheetRef}
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[translate,max-height] duration-300 ease-out motion-reduce:transition-none overflow-hidden ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
@@ -151,7 +151,7 @@ export const MovieInfoDrawer = ({
 					</div>
 
 					{/* Movie info */}
-					<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
+					<div className="flex flex-col justify-center gap-1.5 flex-2 min-w-0">
 						{infoLoading ? (
 							<div className="flex items-center gap-2 text-muted-foreground">
 								<LoaderCircle className="h-3.5 w-3.5 animate-spin" />
@@ -210,7 +210,7 @@ export const MovieInfoDrawer = ({
 					</div>
 
 					{/* Controls */}
-					<div className="flex flex-col justify-center gap-2.5 flex-[1] min-w-0 shrink-0">
+					<div className="flex flex-col justify-center gap-2.5 flex-1 min-w-0 shrink-0">
 						{hasSources && (
 							<Select
 								value={selectedSourceIdx}

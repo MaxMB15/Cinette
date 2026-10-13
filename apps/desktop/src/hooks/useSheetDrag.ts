@@ -146,10 +146,12 @@ const dropNextClick = () => {
 };
 
 // Down slides the sheet, up grows it towards full height. Written straight to
-// the element so a drag doesn't re-render the pane on every move.
+// the element so a drag doesn't re-render the pane on every move. It sets
+// `translate`, the property Tailwind's translate-y classes set, so it replaces
+// the sheet's slide while dragging and doesn't add to it.
 const paint = (sheet: HTMLElement, offset: number, expanded: boolean) => {
 	const pull = expanded ? 0 : Math.max(0, -offset);
-	sheet.style.transform = offset > 0 ? `translateY(${offset}px)` : "";
+	sheet.style.translate = offset > 0 ? `0 ${offset}px` : "";
 	sheet.style.maxHeight = expanded
 		? SHEET_FULL_HEIGHT
 		: pull > 0
@@ -166,9 +168,9 @@ const paint = (sheet: HTMLElement, offset: number, expanded: boolean) => {
  *
  * Put `sheetRef` on the sheet, which gets its max height from here, and
  * spread `handleProps` on the handle and header so a mouse can drag them too.
- * The sheet's CSS transition animates the release. Give scrolling content in
- * the sheet `overscroll-y-none`, so a pull down from its top can't also
- * bounce the content.
+ * The sheet's CSS transition on `translate` and `max-height` animates the
+ * release. Give scrolling content in the sheet `overscroll-y-none`, so a pull
+ * down from its top can't also bounce the content.
  */
 export const useSheetDrag = ({
 	onClose,
@@ -269,7 +271,7 @@ export const useSheetDrag = ({
 					});
 			sheet.style.transition = "";
 			if (action === "close") {
-				sheet.style.transform = "translateY(100%)";
+				sheet.style.translate = "0 100%";
 				onClose();
 			} else {
 				paint(sheet, 0, expanded || action === "expand");

@@ -33,8 +33,9 @@ MaxVideoPlayer/
   events such as buffering and reconnecting.
 - `lib/tauri.ts` is the only file that calls `invoke()`. Player commands use the
   `plugin:mpv|<command>` namespace; everything else uses the bare command name.
-- Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 3.
-  Long channel lists use `@tanstack/react-virtual`.
+- Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 4.
+  There is no Tailwind config file. The theme and the custom utilities are in
+  `styles/globals.css`. Long channel lists use `@tanstack/react-virtual`.
 
 ## Backend
 

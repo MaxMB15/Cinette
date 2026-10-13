@@ -160,7 +160,7 @@ const Slider = ({
 			}}
 			className={cn(
 				"relative -my-2 flex w-full cursor-pointer touch-none select-none items-center py-2",
-				"data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+				"data-disabled:pointer-events-none data-disabled:opacity-50",
 				className
 			)}
 			{...props}
@@ -183,7 +183,7 @@ const Slider = ({
 				}}
 				onBlur={() => setFocusSource(null)}
 				className={cn(
-					"block h-4 w-4 rounded-full bg-primary shadow ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none",
+					"block h-4 w-4 rounded-full bg-primary shadow-sm ring-offset-background transition-transform hover:scale-110 focus-visible:outline-hidden",
 					"data-[focus-source=keyboard]:ring-2 data-[focus-source=keyboard]:ring-ring data-[focus-source=keyboard]:ring-offset-2"
 				)}
 			/>

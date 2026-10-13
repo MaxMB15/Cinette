@@ -30,7 +30,7 @@ export const ResumePrompt = ({
 		<Dialog
 			onClose={onCancel}
 			labelledBy="resume-prompt-title"
-			overlayClassName="absolute bg-black/70 backdrop-blur-sm"
+			overlayClassName="absolute bg-black/70 backdrop-blur-xs"
 			className="w-full max-w-sm mx-4 rounded-xl border border-white/10 bg-neutral-900/95 p-5 text-white shadow-2xl"
 		>
 			<h2 id="resume-prompt-title" className="text-base font-semibold">

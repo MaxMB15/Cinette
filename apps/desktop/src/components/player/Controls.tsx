@@ -183,7 +183,7 @@ export const Controls = ({
 			)}
 			<div
 				className={cn(
-					"absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 pt-12 pb-[calc(1rem_+_env(safe-area-inset-bottom))] pl-[calc(1rem_+_env(safe-area-inset-left))] pr-[calc(1rem_+_env(safe-area-inset-right))] transition-opacity duration-300",
+					"absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/80 to-transparent p-4 pt-12 pb-[calc(1rem+env(safe-area-inset-bottom))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] transition-opacity duration-300",
 					visible ? "opacity-100" : "opacity-0 pointer-events-none"
 				)}
 			>
@@ -386,7 +386,7 @@ export const Controls = ({
 								>
 									<div
 										className={cn(
-											"absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-transform duration-200",
+											"absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform duration-200",
 											autoplay ? "translate-x-[14px]" : "translate-x-0.5"
 										)}
 									/>
@@ -413,7 +413,7 @@ export const Controls = ({
 							{sourceMenuOpen && (
 								<div
 									role="menu"
-									className="absolute bottom-full right-0 z-20 mb-2 w-60 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-black/90 p-1 shadow-xl backdrop-blur-sm"
+									className="absolute bottom-full right-0 z-20 mb-2 w-60 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-black/90 p-1 shadow-xl backdrop-blur-xs"
 								>
 									<p className="px-2.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-white/40">
 										Source

@@ -129,8 +129,8 @@ export const VideoTapLayer = ({ seekable, skip, onSkip, onTap }: VideoTapLayerPr
 					className={cn(
 						"pointer-events-none absolute inset-y-0 flex w-2/5 items-center justify-center bg-white/10 transition-opacity duration-300",
 						feedback.side === "back"
-							? "left-0 rounded-r-[50%] pl-[env(safe-area-inset-left)]"
-							: "right-0 rounded-l-[50%] pr-[env(safe-area-inset-right)]",
+							? "left-0 rounded-r-[50%] pl-safe"
+							: "right-0 rounded-l-[50%] pr-safe",
 						feedback.shown ? "opacity-100" : "opacity-0"
 					)}
 				>

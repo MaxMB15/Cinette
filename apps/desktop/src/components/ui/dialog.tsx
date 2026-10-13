@@ -80,7 +80,7 @@ export const Dialog = ({
 				aria-labelledby={labelledBy}
 				aria-label={label}
 				tabIndex={-1}
-				className={cn("focus:outline-none", className)}
+				className={cn("focus:outline-hidden", className)}
 			>
 				{children}
 			</div>

@@ -240,7 +240,7 @@ export const SeriesDetailModal = ({
 		<div className="fixed inset-0 z-50">
 			{/* Backdrop */}
 			<div
-				className={`absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
+				className={`absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ${
 					visible ? "opacity-100" : "opacity-0"
 				}`}
 				onClick={handleClose}
@@ -249,7 +249,7 @@ export const SeriesDetailModal = ({
 			{/* Drawer */}
 			<div
 				ref={sheetRef}
-				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[transform,max-height] duration-300 ease-out motion-reduce:transition-none ${
+				className={`absolute bottom-0 left-0 right-0 bg-card rounded-t-2xl shadow-2xl flex flex-col transition-[translate,max-height] duration-300 ease-out motion-reduce:transition-none ${
 					visible ? "translate-y-0" : "translate-y-full"
 				}`}
 			>
@@ -317,7 +317,7 @@ export const SeriesDetailModal = ({
 							</div>
 
 							{/* Show info — ~65% of remaining space */}
-							<div className="flex flex-col justify-center gap-1.5 flex-[2] min-w-0">
+							<div className="flex flex-col justify-center gap-1.5 flex-2 min-w-0">
 								{infoLoading ? (
 									<div className="flex items-center gap-2 text-muted-foreground">
 										<LoaderCircle className="h-3.5 w-3.5 animate-spin" />
@@ -380,7 +380,7 @@ export const SeriesDetailModal = ({
 							</div>
 
 							{/* Season/episode stats — ~35% of remaining space */}
-							<div className="flex flex-col justify-center gap-2.5 flex-[1] min-w-0 shrink-0">
+							<div className="flex flex-col justify-center gap-2.5 flex-1 min-w-0 shrink-0">
 								<div className="flex flex-col gap-1.5">
 									<div className="flex flex-col items-center justify-center rounded-xl bg-secondary px-3 py-2.5 text-center">
 										<span className="text-base font-bold tabular-nums leading-none">
