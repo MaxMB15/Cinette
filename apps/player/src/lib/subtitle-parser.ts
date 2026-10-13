@@ -3,14 +3,34 @@
 
 import type { SubtitleCue } from "./types";
 
-/** Parse "HH:MM:SS,mmm" or "HH:MM:SS.mmm" into seconds. */
+/**
+ * Parse "HH:MM:SS,mmm" or "HH:MM:SS.mmm" into seconds. WebVTT leaves out the
+ * hours when they're 0, as in "MM:SS.mmm". Gives NaN for any other number of
+ * parts, or for a part that's empty.
+ */
 const parseTimestamp = (ts: string): number => {
-	const clean = ts.trim().replace(",", ".");
-	const parts = clean.split(":");
-	if (parts.length !== 3) return 0;
-	const [h, m, s] = parts.map(Number);
-	return h * 3600 + m * 60 + s;
+	const parts = ts.replace(",", ".").split(":");
+	if (parts.length < 2 || parts.length > 3 || parts.some((p) => !p.trim())) return NaN;
+	// Number ignores the spaces around each part.
+	return parts.map(Number).reduce((total, part) => total * 60 + part, 0);
 };
+
+/** The start and end of a timing line, or null when they can't be read. */
+const parseTiming = (line: string): { start: number; end: number } | null => {
+	const sides = line.split("-->");
+	if (sides.length !== 2) return null;
+	const start = parseTimestamp(sides[0]);
+	// Position values such as "X1:100", or WebVTT settings such as
+	// "align:start", can follow the end time.
+	const end = parseTimestamp(sides[1].trim().split(/\s/)[0]);
+	return isNaN(start) || isNaN(end) ? null : { start, end };
+};
+
+/**
+ * Whether a line starts like a time and has an arrow. A line of text with an
+ * arrow in it isn't a timing line.
+ */
+const isTimingLine = (line: string): boolean => /^\s*\d+[:.,]/.test(line) && line.includes("-->");
 
 /**
  * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
@@ -29,37 +49,42 @@ const stripTags = (text: string): string => {
 	return stripped.trim();
 };
 
-/** Parse SRT file content into an array of SubtitleCue objects. */
+/**
+ * Parse SRT or WebVTT file content into an array of SubtitleCue objects.
+ *
+ * Like FFmpeg's SRT reader, which mpv uses, a cue runs from its timing line to
+ * the next one. A blank line inside a cue keeps the text after it, and two
+ * cues with no blank line between them stay apart. A number right before the
+ * next timing line, or before the blank lines in front of it, is that cue's
+ * number. FFmpeg only ends a cue at a timing line it can read. Here one that
+ * can't be read ends it too, and its own cue is skipped. WebVTT doesn't allow
+ * an empty line inside a cue, so there a cue also ends at one.
+ */
 export const parseSrt = (content: string): SubtitleCue[] => {
+	// A file with only carriage returns ends each line with one, so two in a
+	// row make an empty line. Otherwise a run of carriage returns before a line
+	// feed, from a file converted more than once, is one line break, and so is
+	// a carriage return on its own.
+	const lines = content.includes("\n") ? content.split(/\r+\n?|\n/) : content.split("\r");
+	const webvtt = lines[0].trim().startsWith("WEBVTT");
+	const timings = lines.flatMap((line, at) => (isTimingLine(line) ? [at] : []));
 	const cues: SubtitleCue[] = [];
-	// Normalise line endings and split into blocks
-	const blocks = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().split(/\n\n+/);
-
-	for (const block of blocks) {
-		const lines = block.trim().split("\n");
-		if (lines.length < 2) continue;
-
-		// Find the timestamp line (contains "-->")
-		const tsIdx = lines.findIndex((l) => l.includes("-->"));
-		if (tsIdx === -1) continue;
-
-		const tsParts = lines[tsIdx].split("-->");
-		if (tsParts.length !== 2) continue;
-
-		const start = parseTimestamp(tsParts[0]);
-		const end = parseTimestamp(tsParts[1]);
-		if (isNaN(start) || isNaN(end) || end <= start) continue;
-
-		// Everything after the timestamp line is the subtitle text
-		const text = lines
-			.slice(tsIdx + 1)
-			.map(stripTags)
-			.filter(Boolean)
-			.join("\n");
-
-		if (!text) continue;
-		cues.push({ start, end, text });
-	}
-
+	timings.forEach((at, i) => {
+		const timing = parseTiming(lines[at]);
+		if (!timing || timing.end <= timing.start) return;
+		const next = timings[i + 1] ?? lines.length;
+		const body = lines.slice(at + 1, next);
+		// The next cue's number comes before its timing line, at times with
+		// blank lines between them.
+		let last = body.length - 1;
+		while (body[last]?.trim() === "") last--;
+		const stop = next < lines.length && /^\s*\d+\s*$/.test(body[last]) ? last : last + 1;
+		const kept = body.slice(0, stop);
+		// An empty line keeps a WebVTT note, or the name of the next cue, out
+		// of the text.
+		const shown = webvtt && kept.includes("") ? kept.slice(0, kept.indexOf("")) : kept;
+		const text = shown.map(stripTags).filter(Boolean).join("\n");
+		if (text) cues.push({ ...timing, text });
+	});
 	return cues;
 };
