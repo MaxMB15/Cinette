@@ -17,21 +17,25 @@ interface Loads {
 	ids: Set<string>;
 }
 
-/** Where the last load of every channel's programs finished. */
+/** The loads that have finished over one range since the reset key last changed. */
 interface Landed {
 	range: TimeRange;
 	resetKey: unknown;
+	/** Every channel's load finished. */
+	all: boolean;
+	/** The guide ids whose own load finished. */
+	ids: ReadonlySet<string>;
 }
 
-/** The guide's programs and whether every channel's are still loading. */
+/** The guide's programs and which channels are still waiting for theirs. */
 export interface GuidePrograms {
 	/** The programs over the range by guide id. */
 	programs: ReadonlyMap<string, EpgProgram[]>;
 	/**
-	 * Every channel's programs are asked for and haven't come in, so a channel
+	 * This guide id's programs are asked for and haven't come in, so a channel
 	 * with none may only be waiting for them.
 	 */
-	loadingAll: boolean;
+	isPending: (id: string) => boolean;
 }
 
 const nothingAsked = (): Loads => ({ all: "no", ids: new Set() });
@@ -80,6 +84,10 @@ export const useGuidePrograms = (
 	const [landed, setLanded] = useState<Landed | null>(null);
 	const loads = useRef<Loads | null>(null);
 	const key = useMemo(() => requestKey(channels), [channels]);
+	const asked = useMemo(
+		() => (key === null || key === "all" ? key : new Set<string>(JSON.parse(key) as string[])),
+		[key]
+	);
 
 	// One record for each range and reset key. An answer counts only while its
 	// record is the current one. This runs before the load below, which then
@@ -107,6 +115,14 @@ export const useGuidePrograms = (
 		if (ids ? ids.length === 0 : record.all === "asked") return;
 		if (ids) for (const id of ids) record.ids.add(id);
 		else record.all = "asked";
+		const land = () =>
+			setLanded((old) =>
+				!ids
+					? { range, resetKey, all: true, ids: new Set() }
+					: old && old.resetKey === resetKey && old.range === range
+						? { ...old, ids: new Set([...old.ids, ...ids]) }
+						: { range, resetKey, all: false, ids: new Set(ids) }
+			);
 
 		getEpgForLiveChannels(range.from, range.to, ids).then(
 			(progs) => {
@@ -122,30 +138,21 @@ export const useGuidePrograms = (
 				} else {
 					record.all = "loaded";
 					setPrograms(found);
-					setLanded({ range, resetKey });
 				}
+				land();
 			},
 			() => {
 				// The next request asks for these again.
 				if (loads.current !== record) return;
-				if (ids) {
-					for (const id of ids) record.ids.delete(id);
-				} else {
-					record.all = "no";
-					setLanded({ range, resetKey });
-				}
+				if (ids) for (const id of ids) record.ids.delete(id);
+				else record.all = "no";
+				land();
 			}
 		);
 	}, [range, key, resetKey]);
 
-	const loadingAll =
-		key === "all" &&
-		!(
-			range &&
-			landed &&
-			landed.resetKey === resetKey &&
-			landed.range.from === range.from &&
-			landed.range.to === range.to
-		);
-	return { programs, loadingAll };
+	const done = landed && landed.range === range && landed.resetKey === resetKey ? landed : null;
+	const isPending = (id: string): boolean =>
+		asked !== null && !done?.all && !done?.ids.has(id) && (asked === "all" || asked.has(id));
+	return { programs, isPending };
 };

@@ -76,31 +76,41 @@ describe("useGuidePrograms", () => {
 		});
 	});
 
-	it("says every channel's programs are loading until their answer comes", async () => {
+	it("says which channels' programs are on their way", async () => {
 		const all = deferred<EpgProgram[]>();
 		mockLoad.mockReturnValueOnce(all.promise);
 		const { result, rerender } = renderGuide({ range: null, channels: "all", resetKey: 1 });
-		expect(result.current.loadingAll).toBe(true);
+		expect(result.current.isPending("news.tv")).toBe(true);
 		rerender({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
-		expect(result.current.loadingAll).toBe(true);
+		expect(result.current.isPending("news.tv")).toBe(true);
 
 		await act(async () => all.resolve(guide));
-		expect(result.current.loadingAll).toBe(false);
-		// A list of ids or a new range doesn't load every channel's programs.
+		expect(result.current.isPending("news.tv")).toBe(false);
+		// A list waits only for its own ids over a new range.
+		const news = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(news.promise);
 		rerender({ range: evening, channels: ["news.tv"], resetKey: 1 });
-		expect(result.current.loadingAll).toBe(false);
+		expect(result.current.isPending("news.tv")).toBe(true);
+		expect(result.current.isPending("arts.tv")).toBe(false);
+		await act(async () => news.resolve([]));
+		expect(result.current.isPending("news.tv")).toBe(false);
+		// Every channel's load waits for the rest, but not for news.tv, whose
+		// answer is in.
 		rerender({ range: evening, channels: "all", resetKey: 1 });
-		expect(result.current.loadingAll).toBe(true);
+		expect(result.current.isPending("news.tv")).toBe(false);
+		expect(result.current.isPending("arts.tv")).toBe(true);
 		await flush();
-		expect(result.current.loadingAll).toBe(false);
+		expect(result.current.isPending("arts.tv")).toBe(false);
+		rerender({ range: evening, channels: null, resetKey: 1 });
+		expect(result.current.isPending("arts.tv")).toBe(false);
 	});
 
-	it("stops loading when every channel's load fails, and asks again next time", async () => {
+	it("stops waiting when every channel's load fails, and asks again next time", async () => {
 		mockLoad.mockRejectedValueOnce(new Error("offline"));
 		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
-		expect(result.current.loadingAll).toBe(false);
+		expect(result.current.isPending("news.tv")).toBe(false);
 		expect(result.current.programs.size).toBe(0);
 
 		rerender({ range: morning, channels: ["news.tv"], resetKey: 1 });
@@ -318,6 +328,21 @@ describe("useGuidePrograms", () => {
 		await act(async () => first.resolve(guide));
 
 		expect(result.current.programs.size).toBe(0);
+	});
+
+	it("ignores a failure from a load it already dropped", async () => {
+		const first = deferred<EpgProgram[]>();
+		const second = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+		rerender({ range: morning, channels: null, resetKey: 1 });
+		rerender({ range: morning, channels: "all", resetKey: 1 });
+		await act(async () => first.reject(new Error("offline")));
+		expect(result.current.isPending("news.tv")).toBe(true);
+
+		await act(async () => second.resolve(guide));
+		expect(result.current.isPending("news.tv")).toBe(false);
+		expect(result.current.programs.size).toBe(3);
 	});
 
 	it("keeps its programs when a load fails, and asks for those ids again next time", async () => {

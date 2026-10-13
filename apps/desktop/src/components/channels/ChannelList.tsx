@@ -363,7 +363,7 @@ export const ChannelList = () => {
 				: activeTab === "favorites" && favoriteGuideIds.length > 0
 					? favoriteGuideIds
 					: null;
-	const { programs: epgMap, loadingAll: guideLoading } = useGuidePrograms(
+	const { programs: epgMap, isPending: guidePending } = useGuidePrograms(
 		guideRange,
 		guideChannels,
 		channels.length
@@ -393,9 +393,8 @@ export const ChannelList = () => {
 
 	const getChannelPrograms = (ch: Channel): EpgProgram[] =>
 		(ch.tvgId && epgMap.get(ch.tvgId)) || NO_PROGRAMS;
-	// While every channel's guide loads, a row with a guide id may only be
-	// waiting for its programs.
-	const isGuidePending = (ch: Channel): boolean => guideLoading && Boolean(ch.tvgId);
+	// A row whose programs are on their way may only be waiting for them.
+	const isGuidePending = (ch: Channel): boolean => Boolean(ch.tvgId && guidePending(ch.tvgId));
 
 	/**
 	 * Opens the episode list for a show. From Downloads, which has to work

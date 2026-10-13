@@ -1598,6 +1598,24 @@ describe("ChannelList favorites tab", () => {
 		]);
 	});
 
+	it("says a favorite has no guide only once its own guide has loaded", async () => {
+		freezeClock();
+		const load = deferred<EpgProgram[]>();
+		tauri.getEpgForLiveChannels.mockReturnValueOnce(load.promise);
+		state.channels = [
+			{ ...news, isFavorite: true },
+			{ ...sportGuide, isFavorite: true },
+		];
+		saveBrowseTab("favorites");
+		await renderList();
+
+		expect(row("News 24").queryByText("no epg")).toBeNull();
+		expect(row("Sport One").queryByText("no epg")).toBeNull();
+		await act(async () => load.resolve(guide.filter((p) => p.channelId === "news.tv")));
+		expect(row("News 24").getByTitle("Morning Briefing")).toBeInTheDocument();
+		expect(row("Sport One").getByText("no epg")).toBeInTheDocument();
+	});
+
 	it("keeps the favorites' programs and waits for the rest when Live opens after Favorites", async () => {
 		freezeClock();
 		tauri.getEpgForLiveChannels.mockImplementation(answerFrom(guide));
