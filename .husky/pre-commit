@@ -4,8 +4,9 @@
 # afterwards, even when a task fails. A git error or a killed run can leave
 # the patch behind without saying where, so this hook looks for one before
 # and after the run. lint-staged 16 kept its patch in another place and left
-# it there after a failed task. A worktree that hasn't run pnpm install since
-# 17 came in still has 16, so the hook looks in both places.
+# it there after every run, though it only put the changes back after a pass.
+# A worktree that hasn't run pnpm install since 17 came in still has 16, so
+# the hook looks in both places.
 top=$(git rev-parse --show-toplevel)
 dir=$(git rev-parse --path-format=absolute --git-path lint-staged)
 old=$(git rev-parse --path-format=absolute --git-path lint-staged_unstaged.patch)
@@ -17,13 +18,18 @@ leftover() {
 	fi
 }
 
+# Single-quotes a path for the shell, apostrophes included.
+quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 # git apply skips files outside the folder it runs in, so the command it
 # prints runs from the top of the worktree wherever it's pasted.
 explain() {
 	echo "Put them back with" >&2
 	printf '%s\n' "$1" | while IFS= read -r patch; do
-		printf "  git -C '%s' apply -v --whitespace=nowarn --recount --unidiff-zero '%s'\n" \
-			"$top" "$patch" >&2
+		printf '  git -C %s apply -v --whitespace=nowarn --recount --unidiff-zero %s\n' \
+			"$(quote "$top")" "$(quote "$patch")" >&2
 	done
 	echo "If git status shows a conflict, the patch is already in that file, so" >&2
 	echo "resolve the conflict instead. Check git diff, then delete the patch." >&2
@@ -44,5 +50,9 @@ if ! pnpm exec lint-staged --no-stash; then
 	fi
 	exit 1
 fi
+
+# lint-staged 16 put the changes back but left its patch. The check above
+# means no older patch was there, so this one is from the run that just passed.
+rm -f "$old"
 
 pnpm test
