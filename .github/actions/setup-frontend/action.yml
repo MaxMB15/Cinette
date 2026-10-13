@@ -3,6 +3,7 @@ description: >-
   Install pnpm at the version package.json's packageManager names, then Node,
   then the packages at their locked versions. pnpm runs a dependency's install
   script only if pnpm-workspace.yaml allows it, and stops on one it doesn't list.
+  It also stops on a locked version newer than the minimumReleaseAge set there.
 
 runs:
   using: composite
