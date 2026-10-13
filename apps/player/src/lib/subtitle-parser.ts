@@ -5,12 +5,13 @@ import type { SubtitleCue } from "./types";
 
 /**
  * Parse "HH:MM:SS,mmm" or "HH:MM:SS.mmm" into seconds. WebVTT leaves out the
- * hours when they're 0, as in "MM:SS.mmm". Gives NaN for any other number of
- * parts, or for a part that's empty.
+ * hours when they're 0, as in "MM:SS.mmm". Gives NaN for four parts or more,
+ * or for a part that's empty. A time with one part never gets here, since a
+ * timing line needs a colon in each of its times.
  */
 const parseTimestamp = (ts: string): number => {
 	const parts = ts.replace(",", ".").split(":");
-	if (parts.length < 2 || parts.length > 3 || parts.some((p) => !p.trim())) return NaN;
+	if (parts.length > 3 || parts.some((p) => !p.trim())) return NaN;
 	// Number ignores the spaces around each part.
 	return parts.map(Number).reduce((total, part) => total * 60 + part, 0);
 };
@@ -27,15 +28,15 @@ const parseTiming = (line: string): { start: number; end: number } | null => {
 };
 
 /**
- * Whether a line looks like a timing line. After any spaces and a minus sign,
- * it starts with a number and a colon, then digits or spaces up to another
- * colon, a comma or a period. After its arrow and any spaces, it has a number
- * and one of those marks, with a minus sign first or not. Other lines with an
- * arrow, such as "3, 2, 1 --> go!", "10:00 --> 11:00" or "10:30, go --> left",
- * are text.
+ * Whether a line looks like a timing line. It starts with a number and a
+ * colon, then digits or spaces up to another colon, a comma or a period. Its
+ * arrow has a number and a colon after it. Spaces, and a minus or plus sign,
+ * can come before either number. Other lines with an arrow, such as
+ * "3, 2, 1 --> go!", "10:00 --> 11:00", "10:30, go --> left" or
+ * "4:3, 16:9 --> 2.39:1", are text.
  */
 const isTimingLine = (line: string): boolean =>
-	/^\s*-?\d+:[\d\s]*[:.,]/.test(line) && /-->\s*-?\d+[:.,]/.test(line);
+	/^\s*[-+]?\d+:[\d\s]*[:.,]/.test(line) && /-->\s*[-+]?\d+:/.test(line);
 
 /**
  * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
@@ -61,11 +62,13 @@ const stripTags = (text: string): string => {
  * the next one. A blank line inside a cue keeps the text after it, and two
  * cues with no blank line between them stay apart. A number right before the
  * next timing line, or before the blank lines in front of it, is that cue's
- * number. FFmpeg only ends a cue at a timing line it can read. Here one that
- * can't be read ends it too, and its own cue is skipped. WebVTT doesn't allow
- * an empty line inside a cue, so there a cue also ends at one. That empty line
- * comes before the next cue's name, so a WebVTT cue that's only a number keeps
- * it.
+ * number. FFmpeg keeps a number with a line of spaces after it in the cue
+ * before, and here it's dropped. FFmpeg only ends a cue at a timing line it
+ * can read. Here one that can't be read ends it too, and its own cue is
+ * skipped. WebVTT doesn't allow an empty line inside a cue, so there a cue
+ * also ends at one. That empty line comes before the next cue's name, and the
+ * name sits right on its timing line, so a WebVTT cue that's only a number
+ * keeps it.
  */
 export const parseSrt = (content: string): SubtitleCue[] => {
 	// A file with only carriage returns ends each line with one, so two in a
@@ -85,10 +88,11 @@ export const parseSrt = (content: string): SubtitleCue[] => {
 		// blank lines between them.
 		let last = body.length - 1;
 		while (body[last]?.trim() === "") last--;
-		// A WebVTT cue that's only a number has an empty line after it. When
-		// there's none, the number is the next cue's name, as in SRT.
+		// In WebVTT, the next cue's name sits right on its timing line. A cue
+		// that's only a number, like a countdown, has an empty line or a line
+		// of spaces after it, so it keeps its number.
 		const numbered =
-			(!webvtt || !body.includes("")) &&
+			(!webvtt || last === body.length - 1) &&
 			next < lines.length &&
 			/^\s*\d+\s*$/.test(body[last]);
 		const stop = numbered ? last : last + 1;

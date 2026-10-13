@@ -200,14 +200,16 @@ describe("parseSrt", () => {
 		const srt =
 			`1\n00:00:01,000 --> 00:00:02,000\nA\n10:30, go --> left\n` +
 			`10:30: Arrival --> platform 3\n16:9, 4:3 --> crop\n-10:30, then --> go\n` +
-			`12:00, lunch --> 1 hour\nB\n\n2\n00:00:03,000 --> 00:00:04,000\nC\n`;
+			`12:00, lunch --> 1 hour\n12:00, then --> 3, 2, 1\n4:3, 16:9 --> 2.39:1\n` +
+			`00:00:03,000 --> 02,000\nB\n\n2\n00:00:03,000 --> 00:00:04,000\nC\n`;
 		expect(parseSrt(srt)).toEqual([
 			{
 				start: 1,
 				end: 2,
 				text:
 					"A\n10:30, go --> left\n10:30: Arrival --> platform 3\n16:9, 4:3 --> crop\n" +
-					"-10:30, then --> go\n12:00, lunch --> 1 hour\nB",
+					"-10:30, then --> go\n12:00, lunch --> 1 hour\n12:00, then --> 3, 2, 1\n" +
+					"4:3, 16:9 --> 2.39:1\n00:00:03,000 --> 02,000\nB",
 			},
 			{ start: 3, end: 4, text: "C" },
 		]);
@@ -220,15 +222,19 @@ describe("parseSrt", () => {
 		]);
 	});
 
-	it("reads a timing line with a minus sign before a time", () => {
+	it("reads a timing line with a minus or plus sign before a time", () => {
 		const srt =
 			`1\n00:00:01,000 --> 00:00:02,000\nA\n\n` +
 			`2\n-00:00:03,000 --> 00:00:04,000\nB\n\n` +
-			`3\n00:00:05,000 --> -00:00:06,000\nC\n\n`;
+			`3\n00:00:05,000 --> -00:00:06,000\nC\n\n` +
+			`4\n+00:00:07,000 --> 00:00:08,000\nD\n\n` +
+			`5\n00:00:09,000 --> +00:00:10,000\nE\n\n`;
 		expect(parseSrt(srt)).toEqual([
 			{ start: 1, end: 2, text: "A" },
 			{ start: 3, end: 4, text: "B" },
 			{ start: 5, end: 6, text: "C" },
+			{ start: 7, end: 8, text: "D" },
+			{ start: 9, end: 10, text: "E" },
 		]);
 	});
 
@@ -313,6 +319,13 @@ describe("parseSrt", () => {
 			`00:00:03.000 --> 00:00:04.000\n1984\n\n2\n` +
 			`00:00:05.000 --> 00:00:06.000\n1\n`;
 		expect(parseSrt(vtt).map((c) => c.text)).toEqual(["3", "1984", "1"]);
+	});
+
+	it("keeps a WebVTT cue that's only a number with a line of spaces after it", () => {
+		const vtt =
+			`WEBVTT\n\n00:01.000 --> 00:02.000\n3\n  \n` +
+			`00:03.000 --> 00:04.000\n2\n\t\n00:05.000 --> 00:06.000\n1\n`;
+		expect(parseSrt(vtt).map((c) => c.text)).toEqual(["3", "2", "1"]);
 	});
 
 	it.each([
