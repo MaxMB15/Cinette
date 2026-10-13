@@ -14,6 +14,12 @@ export default defineConfig({
 	},
 	test: {
 		environment: "jsdom",
+		// Each worker loads jsdom once and gives every test file a fresh VM
+		// context and window, so files stay isolated and the suite takes about
+		// half as long. Errors and objects from Node's own modules, or from
+		// packages Vitest doesn't transform, come from another realm, so an
+		// `instanceof` check against them can be false.
+		pool: "vmThreads",
 		setupFiles: ["./src/test/polyfills.ts", "./src/test/setup.ts"],
 		include: ["src/**/*.{test,spec}.{ts,tsx}"],
 		globals: false,
