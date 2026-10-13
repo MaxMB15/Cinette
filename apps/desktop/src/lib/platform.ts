@@ -20,17 +20,6 @@ export const getPlatform = (): Platform => {
 	}
 };
 
-const PLATFORM_NAMES: Record<Platform, string> = {
-	macos: "macOS",
-	ios: "iOS",
-	android: "Android",
-	windows: "Windows",
-	linux: "Linux",
-};
-
-/** The platform as people write it, like "iOS" or "macOS". */
-export const platformName = (p: Platform): string => PLATFORM_NAMES[p];
-
 /** Phones and tablets: no downloads, no updater, no donation prompts. */
 export const isMobilePlatform = (p: Platform = getPlatform()): boolean =>
 	p === "ios" || p === "android";
