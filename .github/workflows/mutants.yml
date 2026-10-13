@@ -4,7 +4,8 @@
 # Mutation testing for mvp-core with cargo-mutants. It makes small changes to
 # the code, like flipping a comparison or returning a default, and runs the
 # tests against each one. A change that no test notices points at code the
-# tests run but don't check. This workflow only reports and fails no build.
+# tests run but don't check. A missed mutant is a result for the summary and
+# fails nothing. Only an error, like a build that breaks, fails a job.
 name: Mutation testing
 
 on:
@@ -25,8 +26,10 @@ on:
 permissions:
   contents: read
 
+# The event is part of the group, so a manual run on main and the weekly run
+# don't cancel each other.
 concurrency:
-  group: mutants-${{ github.ref }}
+  group: mutants-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -39,7 +42,9 @@ jobs:
   diff:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Each mutant takes about 7 seconds, so this fits a change that touches
+    # most of the crate.
+    timeout-minutes: 150
     steps:
       # A pull request checks out its merge into dev. The first parent is dev,
       # so the diff against it is what the pull request changes.
@@ -47,12 +52,27 @@ jobs:
         with:
           fetch-depth: 2
 
+      # Without a changed Rust file there's nothing to mutate, so the job
+      # skips the cache, the install and the build.
+      - name: Find the changed Rust files
+        id: changes
+        run: |
+          git diff HEAD^1 HEAD -- crates/core > pr.diff
+          if grep -q '^+++ b/crates/core/.*\.rs$' pr.diff; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+            printf '## Mutation testing\n\nThis pull request changes no Rust code in mvp-core.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Install Rust
+        if: steps.changes.outputs.rust == 'true'
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
 
       - name: Rust cache
+        if: steps.changes.outputs.rust == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ". -> target"
@@ -60,6 +80,7 @@ jobs:
           save-if: false
 
       - name: Install cargo-mutants
+        if: steps.changes.outputs.rust == 'true'
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
@@ -67,21 +88,48 @@ jobs:
       # cargo-mutants exits with 2 when a mutant survives and 3 when one times
       # out. Those are results for the summary, so only other codes fail.
       # --in-place mutates the checkout itself, which reuses the cached build.
+      # When the changed lines hold no mutants, such as a change that only adds
+      # tests, it exits with 0 and writes no results.
       - name: Test mutants in the changed lines
+        if: steps.changes.outputs.rust == 'true'
         run: |
-          git diff HEAD^1 HEAD -- crates/core > pr.diff
           code=0
           cargo mutants --in-place -p mvp-core --in-diff pr.diff || code=$?
           if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
             exit "$code"
           fi
+          if [ ! -f mutants.out/outcomes.json ]; then
+            printf '## Mutation testing\n\nThe changed lines have nothing to mutate.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Write the summary
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && hashFiles('mutants.out/outcomes.json') != '' }}
         run: python3 scripts/mutants-summary.py mutants.out >> "$GITHUB_STEP_SUMMARY"
 
-  full:
+  # The shards and the report have to test the same commit. A scheduled run
+  # starts on main, so this finds the commit dev is at once and hands it on.
+  revision:
     if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - name: Find the commit to test
+        id: sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "schedule" ]; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)
+          else
+            sha="$GITHUB_SHA"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  full:
+    needs: revision
     runs-on: ubuntu-latest
     timeout-minutes: 150
     strategy:
@@ -91,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          ref: ${{ needs.revision.outputs.sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
@@ -133,13 +181,14 @@ jobs:
           retention-days: 30
 
   report:
-    needs: full
+    needs: [revision, full]
     if: ${{ !cancelled() && needs.full.result != 'skipped' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+          ref: ${{ needs.revision.outputs.sha }}
           sparse-checkout: scripts
 
       - name: Download the shards
@@ -148,5 +197,9 @@ jobs:
           pattern: mutants-shard-*
           path: shards
 
+      # Each shard is named, so one that uploaded nothing shows up in the
+      # summary under "No results in" instead of dropping out of the totals.
       - name: Write the summary
-        run: python3 scripts/mutants-summary.py shards/mutants-shard-* >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 scripts/mutants-summary.py shards/mutants-shard-0 shards/mutants-shard-1 \
+            shards/mutants-shard-2 shards/mutants-shard-3 >> "$GITHUB_STEP_SUMMARY"

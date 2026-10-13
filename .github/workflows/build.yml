@@ -98,7 +98,7 @@ jobs:
               - 'pnpm-workspace.yaml'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - '.cargo/**'
+              - '.cargo/config*'
               - 'scripts/build-app.sh'
               - 'scripts/build-libmpv.sh'
               - 'scripts/fetch-ffmpeg.sh'

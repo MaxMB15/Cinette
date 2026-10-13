@@ -6,3 +6,7 @@
 # The loopback server in mvp-core's http.rs only runs in tests. Changing it
 # tests the tests, not the app.
 exclude_re = ["test_server::"]
+
+# Without --in-place, cargo-mutants copies the tree to build each mutant. This
+# leaves out what git ignores, like node_modules, libs and target.
+gitignore = true

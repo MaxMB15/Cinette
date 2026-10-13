@@ -160,6 +160,9 @@ coverage drops below 80%. CI uses the latest stable Rust, so a new release can a
 lint that fails code nobody changed. Run `rustup update stable` to see the same lints
 locally.
 
+A Husky pre-commit hook runs Prettier and ESLint on the staged files through
+lint-staged, then runs the tests.
+
 ### Mutation testing
 
 Coverage shows which lines the tests run, not whether the tests check what those
@@ -168,11 +171,14 @@ makes one small change at a time, such as returning a default value or turning `
 into `<=`, and runs the core tests against each change. A change that every test
 still passes is missed, and points at code that no test checks.
 
-Install it once, then test the lines you changed since your branch left `dev`:
+Install cargo-mutants once, at the version CI uses, then test the lines you changed
+since your branch left `dev`. A new file only shows up in the diff once git knows about
+it, so `git add` it first.
 
 ```bash
-cargo install cargo-mutants --locked
-git diff "$(git merge-base origin/dev HEAD)" -- crates/core > target/core.diff
+cargo install cargo-mutants --version 27.1.0 --locked
+mkdir -p target
+git diff --merge-base origin/dev -- crates/core > target/core.diff
 cargo mutants -p mvp-core --in-diff target/core.diff
 ```
 
@@ -180,14 +186,13 @@ The results go to `mutants.out/`, which git ignores. `missed.txt` lists the chan
 no test caught, and `diff/` holds each change as a patch. Testing the whole crate
 takes hours on one machine. `--shard 0/4` through `--shard 3/4` split it into four
 runs. [`.cargo/mutants.toml`](../.cargo/mutants.toml) leaves out the loopback server
-that the tests use.
+that the tests use, and keeps the files git ignores out of the copy that cargo-mutants
+builds in.
 
 CI tests the lines a pull request changes in `crates/core`, and the whole crate every
-Monday. Neither run fails a build. Each job's summary lists the missed changes by
-file.
-
-A Husky pre-commit hook runs Prettier and ESLint on the staged files through
-lint-staged, then runs the tests.
+Monday. A missed change doesn't fail either run. Only an error does, such as a build
+that breaks. The pull request job's summary, and the weekly run's report job, list
+the missed changes by file.
 
 ## Production build
 

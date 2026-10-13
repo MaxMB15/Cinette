@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
+from html import escape
 from pathlib import Path
 
 COUNTS = ("caught", "missed", "timeout", "unviable")
@@ -41,14 +42,31 @@ def by_file(mutants: list[str]) -> dict[str, list[tuple[int, int, str]]]:
     return {path: sorted(files[path]) for path in sorted(files)}
 
 
+def code(text: str) -> str:
+    """Wraps `text` in a Markdown code span.
+
+    Mutant descriptions hold Rust types like `Option<&str>`, and GitHub drops
+    anything shaped like an HTML tag from plain Markdown text. A code span
+    shows them as written, and its fence is longer than any run of backticks
+    inside.
+    """
+    longest = run = 0
+    for char in text:
+        run = run + 1 if char == "`" else 0
+        longest = max(longest, run)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
 def mutant_list(title: str, mutants: list[str]) -> list[str]:
     if not mutants:
         return []
     out = ["", f"### {title} ({len(mutants)})", ""]
     for path, entries in by_file(mutants).items():
-        out.append(f"<details><summary><code>{path}</code> ({len(entries)})</summary>")
+        out.append(f"<details><summary><code>{escape(path)}</code> ({len(entries)})</summary>")
         out.append("")
-        out += [f"- `{line}:{col}` {description}" for line, col, description in entries]
+        out += [f"- `{line}:{col}` {code(description)}" for line, col, description in entries]
         out += ["", "</details>"]
     return out
 
