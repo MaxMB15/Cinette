@@ -20,6 +20,16 @@ describe("parseSrt", () => {
 		expect(cues[0].text).toBe("Italic text");
 	});
 
+	it("strips tags that have attributes", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<font color="#ffff00">Yellow</font>\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("Yellow");
+	});
+
+	it("keeps an angle bracket that isn't part of a tag", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\nI <3 you\n\n`;
+		expect(parseSrt(srt)[0].text).toBe("I <3 you");
+	});
+
 	it("joins multi-line text with newline", () => {
 		const srt = `1\n00:00:01,000 --> 00:00:04,000\nLine one\nLine two\n\n`;
 		const cues = parseSrt(srt);
