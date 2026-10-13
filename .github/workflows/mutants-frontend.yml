@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Mutation testing for the frontend helpers in apps/player/src/lib with
+# StrykerJS. Like mutants.yml does for the Rust code, it makes small changes
+# to the code and runs the tests that reach each one. A change that no test
+# notices is a result for the summary and fails nothing. Only an error, like
+# a first test run that fails, fails the job. Nothing goes to Stryker's
+# dashboard. The report is only kept as an artifact of the run.
+name: Frontend mutation testing
+
+on:
+  # Only the lines a pull request changes.
+  pull_request:
+    branches: [dev]
+    paths:
+      - "apps/player/src/lib/**"
+      - "apps/player/stryker.config.mjs"
+      - "apps/player/vitest.stryker.config.ts"
+      - ".github/workflows/mutants-frontend.yml"
+      - "scripts/stryker-summary.py"
+  # All of src/lib once a week. Schedules run from the default branch, main,
+  # so the start job below runs the workflow again on dev.
+  schedule:
+    - cron: "47 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The event is part of the group, so the weekly start job doesn't cancel a
+# manual run on main.
+concurrency:
+  group: mutants-frontend-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutants:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    # The whole of src/lib took 15 minutes on a 10-core Mac, with 4 mutants
+    # tested at once as here.
+    timeout-minutes: 90
+    steps:
+      # A pull request checks out its merge into dev. The first parent is dev,
+      # so the diff against it is what the pull request changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+          persist-credentials: false
+
+      # Stryker takes a range of lines after a file name, like
+      # src/lib/foo.ts:12-15. A diff without context lines starts each hunk
+      # with "@@ -a,b +start,count @@", and a count of 0 only removes lines.
+      # Git quotes a file name with unusual characters, and this skips that
+      # file. --mutate replaces the list in stryker.config.mjs, so this leaves
+      # out the tests itself.
+      - name: Pick the lines to mutate
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A change to how Stryker runs can change the result for any mutant.
+          if ! git diff --quiet HEAD^1 HEAD -- \
+              apps/player/stryker.config.mjs apps/player/vitest.stryker.config.ts \
+              .github/workflows/mutants-frontend.yml scripts/stryker-summary.py; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mutate=$(git diff -U0 --diff-filter=AMR HEAD^1 HEAD -- \
+              'apps/player/src/lib/*.ts' 'apps/player/src/lib/*.tsx' \
+              ':!*.test.ts' ':!*.test.tsx' |
+            awk '
+              /^\+\+\+ / { file = "" }
+              /^\+\+\+ b\// { file = substr($0, 7); sub(/^apps\/player\//, "", file) }
+              /^@@ / && file != "" {
+                split(substr($3, 2), n, ",")
+                count = n[2] == "" ? 1 : n[2]
+                if (count > 0) { printf "%s%s:%d-%d", sep, file, n[1], n[1] + count - 1; sep = "," }
+              }')
+          if [ -z "$mutate" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            printf '## Frontend mutation testing\n\nThis pull request changes no code in src/lib outside the tests.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "mutate=$mutate" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up the frontend
+        if: steps.plan.outputs.run == 'true'
+        uses: ./.github/actions/setup-frontend
+
+      # Stryker exits with 0 when mutants survive, since stryker.config.mjs
+      # sets no score to break on.
+      - name: Test the mutants
+        if: steps.plan.outputs.run == 'true'
+        working-directory: apps/player
+        env:
+          MUTATE: ${{ steps.plan.outputs.mutate }}
+        run: |
+          if [ -n "$MUTATE" ]; then
+            pnpm exec stryker run --mutate "$MUTATE"
+          else
+            pnpm exec stryker run
+          fi
+
+      - name: Write the summary
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
+        run: |
+          python3 scripts/stryker-summary.py --title "Frontend mutation testing" \
+            apps/player/reports/mutation/mutation.json >> "$GITHUB_STEP_SUMMARY"
+
+      # The HTML report shows each mutant in its source file, and the JSON
+      # report is what the summary reads.
+      - name: Upload the report
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stryker-report
+          path: apps/player/reports/mutation/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # The weekly run starts a manual run on dev, which tests the newest code.
+  start:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start the full run on dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run mutants-frontend.yml --repo "$GITHUB_REPOSITORY" --ref dev
