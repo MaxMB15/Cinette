@@ -104,7 +104,7 @@ describe("parseSrt", () => {
 	});
 
 	it("drops lines that are empty once the tags and spaces are gone", () => {
-		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<i></i>\n   \nSpoken line\n\n`;
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n<i></i>\n<b> </b>\nSpoken line\n\n`;
 		expect(parseSrt(srt)[0].text).toBe("Spoken line");
 	});
 

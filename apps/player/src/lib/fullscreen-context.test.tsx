@@ -118,7 +118,7 @@ describe("FullscreenProvider", () => {
 		expect(screen.getByText("fullscreen=false")).toBeTruthy();
 	});
 
-	it("lets the read after its own change lapse once the provider is gone", async () => {
+	it("doesn't check the window again after the provider unmounts", async () => {
 		await renderToggle();
 		vi.useFakeTimers();
 		onTestFinished(() => {

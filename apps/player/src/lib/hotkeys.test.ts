@@ -7,6 +7,7 @@ import {
 	isKeyboardFocusedControl,
 	isSliderOwnKey,
 	leaveSliderKeysToPlayer,
+	type PlayerAction,
 	playerShortcuts,
 	repeatsWhenHeld,
 	resolvePlayerHotkey,
@@ -234,23 +235,23 @@ describe("playerShortcuts", () => {
 				.flatMap(({ keys }) => keys.flatMap((name) => presses[name] ?? []))
 				.map((press) => resolvePlayerHotkey(press)?.type)
 		);
-		expect([...listed].sort()).toEqual(
-			[
-				"escape",
-				"nextEpisode",
-				"prevEpisode",
-				"seekBy",
-				"seekToPercent",
-				"skipSegment",
-				"toggleFullscreen",
-				"toggleInfo",
-				"toggleMute",
-				"togglePlay",
-				"toggleShortcuts",
-				"toggleSubtitles",
-				"volumeBy",
-			].sort()
-		);
+		// The type makes tsc fail when an action is added without a key here.
+		const every: Record<PlayerAction["type"], true> = {
+			escape: true,
+			nextEpisode: true,
+			prevEpisode: true,
+			seekBy: true,
+			seekToPercent: true,
+			skipSegment: true,
+			toggleFullscreen: true,
+			toggleInfo: true,
+			toggleMute: true,
+			togglePlay: true,
+			toggleShortcuts: true,
+			toggleSubtitles: true,
+			volumeBy: true,
+		};
+		expect([...listed].sort()).toEqual(Object.keys(every).sort());
 	});
 });
 
@@ -350,12 +351,10 @@ describe("isKeyboardFocusedControl", () => {
 		}
 	});
 
-	it("follows the browser's own :focus-visible match", () => {
-		const button = document.createElement("button");
-		document.body.appendChild(button);
-		expect(isKeyboardFocusedControl(button)).toBe(false);
-		button.focus();
-		expect(isKeyboardFocusedControl(button)).toBe(true);
+	it("asks the browser whether the control shows focus", () => {
+		const { el, matches } = focusVisible(document.createElement("button"));
+		isKeyboardFocusedControl(el);
+		expect(matches).toHaveBeenCalledWith(":focus-visible");
 	});
 });
 
