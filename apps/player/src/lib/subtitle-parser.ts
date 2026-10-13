@@ -27,10 +27,13 @@ const parseTiming = (line: string): { start: number; end: number } | null => {
 };
 
 /**
- * Whether a line starts like a time and has an arrow. A line of text with an
- * arrow in it isn't a timing line.
+ * Whether a line starts like a time and has an arrow. Like a time, it starts
+ * with a number and a colon, then digits or spaces up to another colon, a
+ * comma or a period. Other lines with an arrow, such as "3, 2, 1 --> go!" or
+ * "10:00 --> 11:00", are text.
  */
-const isTimingLine = (line: string): boolean => /^\s*\d+[:.,]/.test(line) && line.includes("-->");
+const isTimingLine = (line: string): boolean =>
+	/^\s*-?\d+:[\d\s]*[:.,]/.test(line) && line.includes("-->");
 
 /**
  * Strip SRT/HTML tags (<i>, <b>, <font ...>, etc.) from subtitle text.
@@ -58,13 +61,15 @@ const stripTags = (text: string): string => {
  * next timing line, or before the blank lines in front of it, is that cue's
  * number. FFmpeg only ends a cue at a timing line it can read. Here one that
  * can't be read ends it too, and its own cue is skipped. WebVTT doesn't allow
- * an empty line inside a cue, so there a cue also ends at one.
+ * an empty line inside a cue, so there a cue also ends at one. That empty line
+ * comes before the next cue's name, so a WebVTT cue that's only a number keeps
+ * it.
  */
 export const parseSrt = (content: string): SubtitleCue[] => {
 	// A file with only carriage returns ends each line with one, so two in a
-	// row make an empty line. Otherwise a run of carriage returns before a line
-	// feed, from a file converted more than once, is one line break, and so is
-	// a carriage return on its own.
+	// row make an empty line. Otherwise a run of carriage returns is one line
+	// break, with a line feed after it or not. A file converted more than once
+	// can end its lines in "\r\r\n".
 	const lines = content.includes("\n") ? content.split(/\r+\n?|\n/) : content.split("\r");
 	const webvtt = lines[0].trim().startsWith("WEBVTT");
 	const timings = lines.flatMap((line, at) => (isTimingLine(line) ? [at] : []));
@@ -78,7 +83,8 @@ export const parseSrt = (content: string): SubtitleCue[] => {
 		// blank lines between them.
 		let last = body.length - 1;
 		while (body[last]?.trim() === "") last--;
-		const stop = next < lines.length && /^\s*\d+\s*$/.test(body[last]) ? last : last + 1;
+		const numbered = !webvtt && next < lines.length && /^\s*\d+\s*$/.test(body[last]);
+		const stop = numbered ? last : last + 1;
 		const kept = body.slice(0, stop);
 		// An empty line keeps a WebVTT note, or the name of the next cue, out
 		// of the text.

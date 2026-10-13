@@ -105,7 +105,7 @@ describe("parseSrt", () => {
 
 	it("skips a block whose timestamp has one part or four", () => {
 		const srt =
-			`1\n01,000 --> 00:00:02,000\nOne part\n\n` +
+			`1\n00:00:01,000 --> 02,000\nOne part\n\n` +
 			`1\n00:00:00:03,000 --> 00:00:04,000\nExtra start\n\n` +
 			`2\n00:00:05,000 --> 00:00:00:06,000\nExtra end\n\n` +
 			`3\n00:00:07,000 --> 00:00:08,000\nGood\n\n`;
@@ -173,16 +173,48 @@ describe("parseSrt", () => {
 	it("keeps a line of text with an arrow in it", () => {
 		const srt =
 			`1\n00:00:01,000 --> 00:00:02,000\nGo --> there\n3 cats --> home\n` +
-			`Meet at 10:30 --> the station\n10:30 is too late\n\n` +
+			`Meet at 10:30 --> the station\nLeave at 10:30, go --> left\n10:30 is too late\n\n` +
 			`2\n  00:00:03,000 --> 00:00:04,000\n<!-- note -->Hi\n`;
 		expect(parseSrt(srt)).toEqual([
 			{
 				start: 1,
 				end: 2,
-				text: "Go --> there\n3 cats --> home\nMeet at 10:30 --> the station\n10:30 is too late",
+				text:
+					"Go --> there\n3 cats --> home\nMeet at 10:30 --> the station\n" +
+					"Leave at 10:30, go --> left\n10:30 is too late",
 			},
 			{ start: 3, end: 4, text: "Hi" },
 		]);
+	});
+
+	it("keeps a line that starts with numbers and has an arrow as text", () => {
+		const srt =
+			`2\n00:00:03,000 --> 00:00:04,000\n3, 2, 1 --> go!\n1. Left --> right\n` +
+			`10:00 --> 11:00\nnow\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 3, end: 4, text: "3, 2, 1 --> go!\n1. Left --> right\n10:00 --> 11:00\nnow" },
+		]);
+	});
+
+	it("keeps a line that starts like a time but has no arrow", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\n12:30, not yet\n00:00:03 is late\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "12:30, not yet\n00:00:03 is late" },
+		]);
+	});
+
+	it("reads a timing line with a minus sign before its start", () => {
+		const srt =
+			`1\n00:00:01,000 --> 00:00:02,000\nA\n\n` + `2\n-00:00:03,000 --> 00:00:04,000\nB\n\n`;
+		expect(parseSrt(srt)).toEqual([
+			{ start: 1, end: 2, text: "A" },
+			{ start: 3, end: 4, text: "B" },
+		]);
+	});
+
+	it("shows text after the last cue with that cue, as mpv does", () => {
+		const srt = `1\n00:00:01,000 --> 00:00:02,000\nLast\n\n\nSubs by X\n`;
+		expect(parseSrt(srt)).toEqual([{ start: 1, end: 2, text: "Last\nSubs by X" }]);
 	});
 
 	it("skips a cue with no text after its timing line", () => {
@@ -217,10 +249,11 @@ describe("parseSrt", () => {
 
 	it("skips a timing line with a blank part in a time", () => {
 		const srt =
-			`1\n00:00:01,000 --> 00:01: 05,000\nGap in the end\n\n` +
+			`1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n` +
 			`2\n00: :03,000 --> 00:00:04,000\nSpace for minutes\n\n` +
-			`3\n00:00:05,000 --> 00:00:06,000\nGood\n`;
-		expect(parseSrt(srt).map((c) => c.text)).toEqual(["Good"]);
+			`3\n00:00:05,000 --> 00:01: 06,000\nGap in the end\n\n` +
+			`4\n00:00:07,000 --> 00:00:08,000\nGood\n`;
+		expect(parseSrt(srt).map((c) => c.text)).toEqual(["First", "Good"]);
 	});
 
 	it("reads a WebVTT setting after a tab", () => {
@@ -237,6 +270,14 @@ describe("parseSrt", () => {
 			{ start: 1, end: 4, text: "Hello" },
 			{ start: 5, end: 6, text: "There\nStill there" },
 		]);
+	});
+
+	it("keeps a WebVTT cue whose text is only a number", () => {
+		const vtt =
+			`WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n3\n\n` +
+			`00:00:03.000 --> 00:00:04.000\n1984\n\n2\n` +
+			`00:00:05.000 --> 00:00:06.000\n1\n`;
+		expect(parseSrt(vtt).map((c) => c.text)).toEqual(["3", "1984", "1"]);
 	});
 
 	it("ends a WebVTT cue at an empty line in a file with only carriage returns", () => {
@@ -334,10 +375,14 @@ describe("parseSrt", () => {
 		]);
 	});
 
-	it("reads a long run of carriage returns quickly", () => {
+	it.each([
+		{ name: "a file with line feeds", end: "\n" },
+		{ name: "a file without them", end: "" },
+	])("reads a long run of carriage returns in $name quickly", ({ end }) => {
 		// A pattern that backtracks over the run would take seconds here.
+		const srt = "00:00:01,000 --> 00:00:02,000" + "\r".repeat(200_000) + "Hi" + end;
 		const started = performance.now();
-		expect(parseSrt("A" + "\r".repeat(200_000) + "x")).toEqual([]);
+		expect(parseSrt(srt)).toEqual([{ start: 1, end: 2, text: "Hi" }]);
 		expect(performance.now() - started).toBeLessThan(1000);
 	});
 });
