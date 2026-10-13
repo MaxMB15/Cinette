@@ -15,6 +15,12 @@ use std::sync::Mutex;
 /// be called from any thread.
 pub struct IdleInhibitor {
     inner: Mutex<InhibitState>,
+    /// Answers in place of the system when a test sets it, so the test can
+    /// check the bookkeeping here without taking a real power assertion or
+    /// calling D-Bus. Only test builds have the field, so the app always
+    /// asks the system.
+    #[cfg(test)]
+    fake: Option<std::sync::Arc<tests::FakePlatform>>,
 }
 
 struct InhibitState {
@@ -38,6 +44,8 @@ impl IdleInhibitor {
                 cookie: None,
                 active: false,
             }),
+            #[cfg(test)]
+            fake: None,
         }
     }
 
@@ -47,7 +55,7 @@ impl IdleInhibitor {
         if state.active {
             return;
         }
-        if self.platform_inhibit(&mut state) {
+        if self.take(&mut state) {
             state.active = true;
             tracing::debug!("[idle-inhibit] display sleep inhibited");
         }
@@ -59,9 +67,29 @@ impl IdleInhibitor {
         if !state.active {
             return;
         }
-        self.platform_uninhibit(&mut state);
+        self.release(&mut state);
         state.active = false;
         tracing::debug!("[idle-inhibit] display sleep uninhibited");
+    }
+
+    /// Asks the system for the inhibit, or the test's fake when it has one.
+    fn take(&self, state: &mut InhibitState) -> bool {
+        #[cfg(test)]
+        if let Some(fake) = &self.fake {
+            return fake.take();
+        }
+        self.platform_inhibit(state)
+    }
+
+    /// Gives the inhibit back to the system, or to the test's fake when it
+    /// has one.
+    fn release(&self, state: &mut InhibitState) {
+        #[cfg(test)]
+        if let Some(fake) = &self.fake {
+            fake.release();
+            return;
+        }
+        self.platform_uninhibit(state);
     }
 
     /// Whether an inhibit is held, so tests can check who takes and releases

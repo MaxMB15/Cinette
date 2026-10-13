@@ -228,67 +228,73 @@ impl<R: Runtime> Watcher<R> {
             }
 
             // The timeout keeps the retry timers running while mpv is quiet.
-            match signal(self.client.wait_event(1.0)) {
-                Signal::Shutdown => {
-                    tracing::info!("[MPV reconnect] received Shutdown, exiting watcher");
-                    return;
-                }
-                Signal::PausedForCache(paused) => self.on_paused_for_cache(paused),
-                Signal::EndFile(reason) => {
-                    let Some(label) = self.end_file_trigger(reason) else {
-                        continue;
-                    };
-                    if self.arm_retry(label).is_break() {
-                        return;
-                    }
-                }
-                Signal::EofReached(true)
-                    if self.next_retry_at.is_none() && self.is_premature_eof() =>
-                {
-                    tracing::warn!(
-                        "[MPV reconnect] eof-reached=true (premature), likely a swallowed EndFile; arming retry ({})",
-                        self.log_origin
-                    );
-                    if self.arm_retry("eof-reached (premature)").is_break() {
-                        return;
-                    }
-                }
-                // mpv goes idle on startup too, before anything has played,
-                // so only count it once playback got going.
-                Signal::IdleActive(true) if self.next_retry_at.is_none() && self.had_playback() => {
-                    tracing::warn!(
-                        "[MPV reconnect] idle-active=true after playback, mpv unloaded the file; arming retry ({})",
-                        self.log_origin
-                    );
-                    if self.arm_retry("idle-active").is_break() {
-                        return;
-                    }
-                }
-                Signal::PlaybackRestart if self.attempt > 0 && self.recovery_baseline.is_none() => {
-                    self.start_recovery_check();
-                }
-                Signal::TimePos(pos) => self.on_time_pos(pos),
-                Signal::WaitFailed(e) => {
-                    // Usually an end of file that libmpv2 turned into an
-                    // error. The same failure also sets `eof-reached` or
-                    // `idle-active`, which arm the retry, so this only logs.
-                    tracing::warn!(
-                        "[MPV reconnect] wait_event Err (likely a swallowed EndFile): {e}"
-                    );
-                }
-                _ => {}
-            }
-
-            if self.recovery_stalled() && self.arm_retry("recovery stalled").is_break() {
+            let next = signal(self.client.wait_event(1.0));
+            if self.on_signal(next).is_break() {
                 return;
             }
-            if self
-                .next_retry_at
-                .is_some_and(|when| Instant::now() >= when)
-            {
-                self.reload();
-            }
         }
+    }
+
+    /// Acts on one signal from mpv, then sends a reload that is due. Breaks
+    /// when the watcher should exit. Tests call it with signals of their own.
+    fn on_signal(&mut self, signal: Signal) -> ControlFlow<()> {
+        match signal {
+            Signal::Shutdown => {
+                tracing::info!("[MPV reconnect] received Shutdown, exiting watcher");
+                return ControlFlow::Break(());
+            }
+            Signal::PausedForCache(paused) => self.on_paused_for_cache(paused),
+            Signal::EndFile(reason) => {
+                let Some(label) = self.end_file_trigger(reason) else {
+                    return ControlFlow::Continue(());
+                };
+                if self.arm_retry(label).is_break() {
+                    return ControlFlow::Break(());
+                }
+            }
+            Signal::EofReached(true) if self.next_retry_at.is_none() && self.is_premature_eof() => {
+                tracing::warn!(
+                    "[MPV reconnect] eof-reached=true (premature), likely a swallowed EndFile; arming retry ({})",
+                    self.log_origin
+                );
+                if self.arm_retry("eof-reached (premature)").is_break() {
+                    return ControlFlow::Break(());
+                }
+            }
+            // mpv goes idle on startup too, before anything has played,
+            // so only count it once playback got going.
+            Signal::IdleActive(true) if self.next_retry_at.is_none() && self.had_playback() => {
+                tracing::warn!(
+                    "[MPV reconnect] idle-active=true after playback, mpv unloaded the file; arming retry ({})",
+                    self.log_origin
+                );
+                if self.arm_retry("idle-active").is_break() {
+                    return ControlFlow::Break(());
+                }
+            }
+            Signal::PlaybackRestart if self.attempt > 0 && self.recovery_baseline.is_none() => {
+                self.start_recovery_check();
+            }
+            Signal::TimePos(pos) => self.on_time_pos(pos),
+            Signal::WaitFailed(e) => {
+                // Usually an end of file that libmpv2 turned into an
+                // error. The same failure also sets `eof-reached` or
+                // `idle-active`, which arm the retry, so this only logs.
+                tracing::warn!("[MPV reconnect] wait_event Err (likely a swallowed EndFile): {e}");
+            }
+            _ => {}
+        }
+
+        if self.recovery_stalled() && self.arm_retry("recovery stalled").is_break() {
+            return ControlFlow::Break(());
+        }
+        if self
+            .next_retry_at
+            .is_some_and(|when| Instant::now() >= when)
+        {
+            self.reload();
+        }
+        ControlFlow::Continue(())
     }
 
     fn on_paused_for_cache(&mut self, paused: bool) {
