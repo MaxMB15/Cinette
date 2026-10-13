@@ -1112,7 +1112,7 @@ export const PlayerView = () => {
 			>
 				{mpv.error && (
 					<div className="text-center p-6 max-w-md">
-						<p className="text-destructive text-sm mb-2">{mpv.error}</p>
+						<p className="text-destructive text-sm mb-2 wrap-break-word">{mpv.error}</p>
 						{!isMobilePlatform() && (
 							<p className="text-muted-foreground text-xs">
 								Check that libmpv is installed. See README for setup instructions.
