@@ -8,8 +8,9 @@ import base from "./vitest.config.ts";
  * Stryker runs each mutant against only the tests that reached it, which it
  * picks with a test name pattern. Its Vitest runner (10.0.0) joins the suite
  * and test names with a space, but Vitest 5 matches the pattern against names
- * joined with " > ". Nothing matches, no test runs, and the mutant counts as
- * survived. This plugin lets each space in the pattern match " > " as well.
+ * joined with " > ". A test inside a describe block never matches, so it
+ * doesn't run, and a mutant that only such tests reach counts as survived.
+ * This plugin lets each space in the pattern match " > " as well.
  * A space inside a name can then match a suite boundary too, which only runs
  * a few more tests. Once the runner matches Vitest 5, point stryker.config.mjs
  * back at vitest.config.ts and delete this file.
