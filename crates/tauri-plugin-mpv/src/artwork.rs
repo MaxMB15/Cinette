@@ -319,6 +319,28 @@ mod tests {
     }
 
     #[test]
+    fn keeps_logos_that_fill_the_byte_limit_exactly() {
+        let mut recent = RecentArtwork::new(8, 20);
+        recent.insert("whole".into(), png(20, 0));
+        assert_eq!(urls(&recent), ["whole"]);
+
+        recent.insert("a".into(), png(10, 0));
+        recent.insert("b".into(), png(10, 0));
+        assert_eq!(urls(&recent), ["a", "b"]);
+    }
+
+    #[test]
+    fn drops_as_many_old_logos_as_a_big_one_needs() {
+        let mut recent = RecentArtwork::new(8, 25);
+        recent.insert("a".into(), png(9, 0));
+        recent.insert("b".into(), png(9, 0));
+        recent.insert("c".into(), png(9, 0));
+        recent.insert("big".into(), png(20, 0));
+
+        assert_eq!(urls(&recent), ["big"]);
+    }
+
+    #[test]
     fn keeps_the_others_when_a_logo_is_too_big() {
         let mut recent = RecentArtwork::new(8, 25);
         recent.insert("a".into(), png(10, 0));
