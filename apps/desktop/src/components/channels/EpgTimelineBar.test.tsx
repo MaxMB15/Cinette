@@ -125,7 +125,7 @@ describe("EpgTimelineBar", () => {
 	});
 
 	it("keeps each time label on one line", () => {
-		// A label near the right edge has less room than its text, and a 12-hour
+		// Near the right edge, a label has less room than its text, and a 12-hour
 		// time like "06:30 AM" would wrap there.
 		render(
 			<EpgTimelineBar
@@ -136,7 +136,11 @@ describe("EpgTimelineBar", () => {
 				showLabels
 			/>
 		);
-		expect(screen.getByText(formatHHMM(T + 9000))).toHaveClass("whitespace-nowrap");
+		for (const halfHours of [1, 2, 3, 4, 5]) {
+			expect(screen.getByText(formatHHMM(T + halfHours * 1800))).toHaveClass(
+				"whitespace-nowrap"
+			);
+		}
 	});
 
 	it("has no time labels unless asked", () => {
