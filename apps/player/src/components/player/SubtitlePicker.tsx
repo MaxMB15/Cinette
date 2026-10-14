@@ -31,8 +31,8 @@ interface SubtitlePickerProps {
 	episode?: number;
 	onClose: () => void;
 	/**
-	 * False once the player has moved on to another item. A subtitle that
-	 * finishes downloading after that is dropped.
+	 * False once the page has closed or the player has moved on to another
+	 * item. A subtitle that finishes downloading after that is dropped.
 	 */
 	isCurrent?: () => boolean;
 	onSubtitleSelected?: (
@@ -169,8 +169,8 @@ export const SubtitlePicker = ({
 			// overlay can't read. A file that neither can read is an error.
 			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 			// The new track takes the place of the one in use, and a failed add
-			// leaves the old one. Nothing is added once the player has moved on
-			// to another item.
+			// leaves the old one. Nothing is added once the page has closed or
+			// the player has moved on to another item.
 			if (!isCurrent()) return;
 			const added = mpvSubAdd(localPath, cues.length > 0);
 			if (cues.length > 0) added.catch(() => {});

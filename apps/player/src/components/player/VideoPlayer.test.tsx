@@ -1979,7 +1979,7 @@ describe("subtitles", () => {
 		await act(async () => added.reject(new Error("unsupported")));
 		await flush();
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
-		// mpv kept the track in use, so there's nothing to take out.
+		// mpv added nothing, so a remove would only take out the track in use.
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
 
@@ -1998,6 +1998,7 @@ describe("subtitles", () => {
 		await flush();
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
 
 	it("lets mpv draw the next episode's subtitles when the file isn't UTF-8", async () => {

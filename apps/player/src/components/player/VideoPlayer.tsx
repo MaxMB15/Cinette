@@ -687,9 +687,10 @@ export const PlayerView = () => {
 				if (cues.length > 0) added.catch(() => {});
 				else {
 					await added;
-					// mpv draws this track itself. When the page closed or the
-					// player moved on during the add, the track comes out again,
-					// so it doesn't show over the subtitles the player keeps.
+					// mpv draws this track itself, and the player hasn't picked it
+					// when the page closed or the player moved on during the add.
+					// Then the track comes out again, so it doesn't show over the
+					// subtitles the player keeps.
 					if (cancelled) {
 						await mpvSubRemove(-1).catch(() => {});
 						return;
