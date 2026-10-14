@@ -466,8 +466,8 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 
 /// Options for the separate fallback window.
 ///
-/// mpv picks `vo=gpu` on its own. The window gets mpv's own controls, since
-/// the app has none over it.
+/// mpv picks `vo=gpu` on its own. mpv's keys control the window, since the
+/// app has no controls over it.
 pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
         ("hwdec", "videotoolbox"),

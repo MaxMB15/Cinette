@@ -616,7 +616,7 @@ impl MpvState {
     }
 
     /// Shifts the subtitles by `delay` seconds. While there's no mpv, as
-    /// after a failed load, the next load that keeps the subtitles starts
+    /// after a failed load, the next load that keeps a subtitle file starts
     /// with this delay. A delay mpv turns down isn't kept.
     pub fn set_sub_delay(&self, delay: f64) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
