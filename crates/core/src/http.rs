@@ -233,10 +233,10 @@ pub mod test_server {
     /// to it fails to connect and the error carries the full URL.
     pub fn refused_url() -> String {
         // Binding port 0 asks the system for any free port, so no server can
-        // ever be handed port 0 itself. A port freed by a dropped listener
-        // could go to another test's server before the request went out.
-        // Linux refuses the connection and macOS turns down the address,
-        // both before anything is sent.
+        // ever be handed port 0 itself. This doesn't bind and drop a
+        // listener, since the freed port could go to another test's server
+        // first. Linux refuses the connection and macOS turns down the
+        // address, both before the request is sent.
         "http://127.0.0.1:0".to_string()
     }
 
