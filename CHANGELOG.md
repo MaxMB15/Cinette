@@ -21,6 +21,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - When the app can't show the video itself, as on Linux with X11, mpv plays it in a window of its own. That window had no controls and ignored the keyboard. It now takes mpv's keys, such as Space to pause and the arrow keys to seek. On Linux it also has mpv's own controls, which show when you move the mouse over it. Closing the window, or pressing `q` there, now stops playback and takes the app back to the channel list. Subtitles showed twice, once in that window and once on the player page. Now they only show in the window (#277).
 - The subtitles you picked went away when the stream reconnected, when you pressed Retry, or when you switched to another source of the same movie or episode. They now stay, with the delay you gave them (#277).
 - When a stream failed to open and yt-dlp was installed, mpv could pass the stream's link, login included, to yt-dlp. mpv no longer uses yt-dlp (#277).
+- If you left the player while a movie, episode or channel was still starting, it could start anyway. The player then reopened on what played before it, and a movie with a saved resume point paused the video for a prompt you never saw. Leaving the player now stops the start, and what was playing keeps playing (#278).
 
 ## [0.6.1] - 2026-10-13
 
