@@ -12,7 +12,14 @@ import {
 	type ReactNode,
 } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from "react-router";
+import {
+	MemoryRouter,
+	Route,
+	Routes,
+	useLocation,
+	useNavigate,
+	type NavigateFunction,
+} from "react-router";
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
@@ -442,13 +449,17 @@ const NavHandle = () => {
 	return null;
 };
 
-/** Runs when the next page opens, in the commit that closes the player. */
-const nextPage: { onOpen: (() => void) | null } = { onOpen: null };
+/**
+ * Runs in the commit that opens another page, after that page's layout
+ * effects and before its passive ones.
+ */
+const pageOpens: { run: (() => void) | null } = { run: null };
 
-/** A page that runs `nextPage.onOpen` as soon as it's on the screen. */
-const NextPage = () => {
-	useLayoutEffect(() => nextPage.onOpen?.(), []);
-	return <p>Next page</p>;
+/** Runs `pageOpens.run` each time another page opens. */
+const PageOpens = () => {
+	const { pathname } = useLocation();
+	useLayoutEffect(() => pageOpens.run?.(), [pathname]);
+	return null;
 };
 
 type NavState = {
@@ -475,9 +486,9 @@ const renderPlayer = (state: NavState, { from = "/", fullscreen = false }: Rende
 				<Routes>
 					<Route path="/" element={<p>Channel list</p>} />
 					<Route path="/playlists" element={<p>Playlists</p>} />
-					<Route path="/next" element={<NextPage />} />
 					<Route path="/player" element={<PlayerView />} />
 				</Routes>
+				<PageOpens />
 			</MemoryRouter>
 		</FullscreenHarness>
 	);
@@ -612,7 +623,7 @@ beforeEach(() => {
 	env.layoutMode = "desktop";
 	env.os = "macos";
 	nav.current = null;
-	nextPage.onOpen = null;
+	pageOpens.run = null;
 });
 
 afterEach(() => {
@@ -2576,11 +2587,53 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
 		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
 		let kept: boolean | undefined;
-		nextPage.onOpen = () => {
+		pageOpens.run = () => {
 			kept = picker.pick?.keep(MOVIE_URL, dutch, 0);
 		};
-		await goToPage("/next");
+		await goToPage("/");
 		expect(kept).toBe(true);
+	});
+
+	it("keeps a subtitle mpv adds as the page opens again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const pick = picker.pick;
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		let kept: boolean | undefined;
+		// The page that opens reads the saved subtitles after this.
+		pageOpens.run = () => {
+			kept = pick?.keep(MOVIE_URL, dutch, 0);
+		};
+		await goToPage("/player");
+		expect(kept).toBe(true);
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+	});
+
+	it("keeps a subtitle mpv adds after a page that opened again closed", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(true);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
 	});
 
 	it("keeps no subtitle for a page that's open or has moved on to another stream", async () => {

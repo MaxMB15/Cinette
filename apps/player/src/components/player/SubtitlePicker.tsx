@@ -36,9 +36,10 @@ export interface SubtitlePick {
 	 */
 	stream: () => string | null;
 	/**
-	 * Called when mpv has added a track it draws for the stream `url` after
-	 * the page closed. Keeps the pick for when the page opens again, and
-	 * returns false when the player can't keep it, as when it has moved on.
+	 * Called when mpv has added a track it draws for the stream `url`, and the
+	 * player has no stream for the pick any more, as when the page closed.
+	 * Keeps the pick for when the page opens again, and returns false when the
+	 * player can't keep it, as when it has moved on.
 	 */
 	keep: (url: string, entry: SubtitleEntry, rankInLanguage: number) => boolean;
 }
