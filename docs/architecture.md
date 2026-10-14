@@ -29,8 +29,9 @@ MaxVideoPlayer/
   series and the other tabs), `/player`, `/playlists` and `/settings`.
 - `useChannels` provides all provider and channel state through a React context that
   the whole app reads.
-- `useMpv` polls the player state from Rust every second and listens for `mpv://`
-  events such as buffering and reconnecting.
+- `useMpv` polls the player state from Rust every second, and again as soon as the
+  video stops or starts moving. It also listens for `mpv://` events such as
+  buffering and reconnecting.
 - `lib/tauri.ts` is the only file that calls `invoke()`. Player commands use the
   `plugin:mpv|<command>` namespace; everything else uses the bare command name.
 - Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 4.
@@ -87,7 +88,7 @@ records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands
 | `renderer.rs` | The `PlatformRenderer` trait (`attach`, `resize`, `detach`) each platform implements |
 | `macos.rs`, `linux.rs`, `ios.rs` | The embedded renderers |
 | `mpv.rs` | `MpvState`, the managed state that picks the renderer and falls back to a separate window |
-| `reconnect.rs` | Detects stalls and dropped connections and reloads the stream |
+| `reconnect.rs` | Detects stalls and dropped connections, reloads the stream, and tells the frontend when the video stops or starts moving |
 | `idle_inhibit.rs` | Keeps the display awake during playback |
 | `commands.rs` | The `plugin:mpv|*` commands |
 

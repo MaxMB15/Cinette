@@ -449,6 +449,65 @@ describe("useMpv", () => {
 			// The position isn't held back by a volume change.
 			expect(result.current.state.position).toBe(130);
 		});
+
+		it("drops a poll that comes back after a later one", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			const olderPoll = deferred<never>();
+			mockMpvGetState.mockReturnValueOnce(olderPoll.promise);
+			let olderDone: Promise<void>;
+			act(() => {
+				olderDone = result.current.refresh();
+			});
+			mockMpvGetState.mockResolvedValueOnce(playingAt(130));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			await act(async () => {
+				olderPoll.resolve(playingAt(120, 100, true));
+				await olderDone!;
+			});
+			expect(result.current.state.position).toBe(130);
+			expect(result.current.state.waiting).toBe(false);
+
+			// Polls sent after it are still taken.
+			mockMpvGetState.mockResolvedValueOnce(playingAt(131, 100, true));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.position).toBe(131);
+			expect(result.current.state.waiting).toBe(true);
+		});
+
+		it("reads the state again when mpv says the video stopped or moved", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			const polls = mockMpvGetState.mock.calls.length;
+
+			mockMpvGetState.mockResolvedValueOnce(playingAt(120, 100, true));
+			act(() => {
+				mockListenCallbacks.get("mpv://state-changed")!({
+					payload: { url: "http://vod.url" },
+				});
+			});
+			expect(mockMpvGetState).toHaveBeenCalledTimes(polls + 1);
+			await waitFor(() => expect(result.current.state.waiting).toBe(true));
+		});
+
+		it("stops listening for those changes when the player page closes", async () => {
+			const { unmount } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			const mockListen = vi.mocked(listen);
+			const index = mockListen.mock.calls.findIndex(
+				([name]) => name === "mpv://state-changed"
+			);
+			const unlisten = await mockListen.mock.results[index]!.value;
+			expect(unlisten).not.toHaveBeenCalled();
+
+			unmount();
+			await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
+		});
 	});
 
 	it("toggleMute mutes and restores the previous volume", async () => {

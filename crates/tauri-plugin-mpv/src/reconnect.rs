@@ -96,9 +96,15 @@ const EVENT_LOAD_FAILED: &str = "mpv://load-failed";
 /// is `{ "url": string }`.
 const EVENT_WINDOW_CLOSED: &str = "mpv://window-closed";
 
+/// Sent when the video stops or starts moving, as at a pause, a seek or a
+/// stall, and when it plays again after a seek. The frontend reads the
+/// player's state at once, so the subtitles it draws don't wait for its next
+/// poll to catch up. The payload is `{ "url": string }`.
+const EVENT_STATE_CHANGED: &str = "mpv://state-changed";
+
 /// Properties the watcher observes, with the `reply_userdata` id for each.
 /// The ids only need to be unique within this client.
-const OBSERVED: [(&str, Format, u64); 4] = [
+const OBSERVED: [(&str, Format, u64); 5] = [
     // A drained cache is the only sign of a stall while FFmpeg's own
     // reconnect retries the read.
     ("paused-for-cache", Format::Flag, 1),
@@ -107,6 +113,9 @@ const OBSERVED: [(&str, Format, u64); 4] = [
     // Backups for the end of file events that libmpv2 turns into errors.
     ("eof-reached", Format::Flag, 3),
     ("idle-active", Format::Flag, 4),
+    // True whenever the video doesn't move on, for any reason. See
+    // `EVENT_STATE_CHANGED`.
+    ("core-idle", Format::Flag, 5),
 ];
 
 #[derive(Clone, Serialize)]
@@ -150,6 +159,7 @@ enum Signal {
     TimePos(f64),
     EofReached(bool),
     IdleActive(bool),
+    CoreIdle(bool),
     WaitFailed(libmpv2::Error),
     /// A timeout, or an event the watcher doesn't act on.
     Nothing,
@@ -165,6 +175,7 @@ fn signal(event: Option<libmpv2::Result<Event<'_>>>) -> Signal {
             ("time-pos", PropertyData::Double(pos)) => Signal::TimePos(pos),
             ("eof-reached", PropertyData::Flag(eof)) => Signal::EofReached(eof),
             ("idle-active", PropertyData::Flag(idle)) => Signal::IdleActive(idle),
+            ("core-idle", PropertyData::Flag(idle)) => Signal::CoreIdle(idle),
             _ => Signal::Nothing,
         },
         // FileLoaded doesn't prove a reload worked. See
@@ -224,7 +235,8 @@ impl<R: Runtime> Watcher<R> {
         }
     }
 
-    fn run(mut self) {
+    /// Asks mpv for the events and property changes in `OBSERVED`.
+    fn observe(&mut self) {
         // Best effort. Without it the event stream is only noisier.
         if let Err(e) = self.client.disable_deprecated_events() {
             tracing::trace!("[MPV reconnect] disable_deprecated_events: {e}");
@@ -234,6 +246,10 @@ impl<R: Runtime> Watcher<R> {
                 tracing::warn!("[MPV reconnect] observe {name} failed: {e}");
             }
         }
+    }
+
+    fn run(mut self) {
+        self.observe();
         tracing::info!("[MPV reconnect] watcher started for {}", self.log_origin);
 
         loop {
@@ -298,9 +314,15 @@ impl<R: Runtime> Watcher<R> {
                 );
                 self.arm_retry("idle-active");
             }
-            Signal::PlaybackRestart if self.attempt > 0 && self.recovery_baseline.is_none() => {
-                self.start_recovery_check();
+            Signal::PlaybackRestart => {
+                // A quick seek can end before `core-idle` reads true, so it
+                // never changes.
+                self.state_changed();
+                if self.attempt > 0 && self.recovery_baseline.is_none() {
+                    self.start_recovery_check();
+                }
             }
+            Signal::CoreIdle(_) => self.state_changed(),
             Signal::TimePos(pos) => self.on_time_pos(pos),
             Signal::WaitFailed(e) => {
                 // Usually an end of file that libmpv2 turned into an
@@ -321,6 +343,12 @@ impl<R: Runtime> Watcher<R> {
             self.reload();
         }
         ControlFlow::Continue(())
+    }
+
+    fn state_changed(&self) {
+        let _ = self
+            .app
+            .emit(EVENT_STATE_CHANGED, UrlPayload { url: &self.url });
     }
 
     fn on_paused_for_cache(&mut self, paused: bool) {
@@ -601,6 +629,10 @@ mod tests {
         assert_eq!(
             change("idle-active", PropertyData::Flag(false)),
             Signal::IdleActive(false)
+        );
+        assert_eq!(
+            change("core-idle", PropertyData::Flag(true)),
+            Signal::CoreIdle(true)
         );
         assert_eq!(
             change("time-pos", PropertyData::Flag(true)),

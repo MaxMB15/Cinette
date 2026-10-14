@@ -101,6 +101,11 @@ export const useMpv = () => {
 	const [volumeChanges] = useState(createChangeTracker);
 	// A poll sent before a load returns can still describe the old player.
 	const [loads] = useState(createChangeTracker);
+	// Polls go out once a second and whenever mpv says the video stopped or
+	// moved, so two can overlap. One sent before the last poll taken is older,
+	// and is dropped.
+	const pollsSentRef = useRef(0);
+	const pollTakenRef = useRef(0);
 
 	// The event comes while the load runs, before a poll can report it.
 	useEffect(() => {
@@ -496,12 +501,15 @@ export const useMpv = () => {
 		const seekMark = seeks.mark();
 		const volumeMark = volumeChanges.mark();
 		const loadMark = loads.mark();
+		const sent = ++pollsSentRef.current;
 		return mpvGetState()
 			.then((s) => {
 				console.debug("[useMpv] poll state:", JSON.stringify(s));
 				// A poll that lands mid-load may describe the previous stream (or
 				// none at all). Keep the reset state until the load returns.
 				if (loadingRef.current) return;
+				if (sent < pollTakenRef.current) return;
+				pollTakenRef.current = sent;
 				const readAt = performance.now();
 				setState((prev) => {
 					const seeking = seeks.isStale(seekMark);
@@ -536,6 +544,18 @@ export const useMpv = () => {
 		return () => {
 			console.log("[useMpv] clearing poll interval");
 			if (pollRef.current) clearInterval(pollRef.current);
+		};
+	}, [refresh]);
+
+	// mpv says when the video stops or starts moving, as at a pause, a seek or
+	// a stall, and when it plays again after a seek. Reading the state then
+	// keeps the subtitles in time without waiting for the next poll.
+	useEffect(() => {
+		const unlistenPromise = listen<{ url: string }>("mpv://state-changed", () => {
+			refresh();
+		});
+		return () => {
+			unlistenPromise.then((fn) => fn());
 		};
 	}, [refresh]);
 
