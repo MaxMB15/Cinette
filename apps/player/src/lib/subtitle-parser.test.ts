@@ -50,25 +50,28 @@ describe("parseSrt", () => {
 		expect(parseSrt(srt)[0].text).toBe("x y");
 	});
 
+	// A diff of a wrong cue would print the whole line, so these two compare
+	// the text without one.
 	it("keeps a long run of < with no > quickly", () => {
 		// A pattern that backtracks over the run would take seconds here.
 		const line = "<".repeat(200_000) + "Hi";
 		const started = performance.now();
-		expect(parseSrt(`00:00:01,000 --> 00:00:02,000\n${line}\n`)).toEqual([
-			{ start: 1, end: 2, text: line },
-		]);
+		const cues = parseSrt(`00:00:01,000 --> 00:00:02,000\n${line}\n`);
 		expect(performance.now() - started).toBeLessThan(1000);
+		expect(cues.map((cue) => [cue.start, cue.end])).toEqual([[1, 2]]);
+		expect(cues[0].text === line).toBe(true);
 	});
 
-	it("keeps a long run of < after a tag quickly", () => {
-		// A walk that looks for a > from every < in the run would take seconds
-		// here, and a pattern that backtracks over it far longer.
-		const run = "<".repeat(1_000_000);
+	it("keeps many < after a tag quickly", () => {
+		// A walk that looks for a > from every < would take seconds here, and
+		// a pattern that backtracks over them far longer. Each < is on its
+		// own, so a walk that skips over a run of them is slow too.
+		const rest = " <".repeat(500_000);
 		const started = performance.now();
-		expect(parseSrt(`00:00:01,000 --> 00:00:02,000\n<i>Hi</i> ${run}\n`)).toEqual([
-			{ start: 1, end: 2, text: `Hi ${run}` },
-		]);
+		const cues = parseSrt(`00:00:01,000 --> 00:00:02,000\n<i>Hi</i>${rest}\n`);
 		expect(performance.now() - started).toBeLessThan(1000);
+		expect(cues.map((cue) => [cue.start, cue.end])).toEqual([[1, 2]]);
+		expect(cues[0].text === `Hi${rest}`).toBe(true);
 	});
 
 	it("joins multi-line text with newline", () => {
