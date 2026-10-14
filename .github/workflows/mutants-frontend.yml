@@ -117,13 +117,15 @@ jobs:
           # Git counts lines by LF alone, but Stryker's parser also ends a line
           # at a U+2028, a U+2029 or a CR that no LF follows. In a file with
           # one of those, the ranges would miss the lines the pull request
-          # changes, so the job fails for it. An escape like \u2028 is fine.
+          # changes, so the job fails for it. An escape like \u2028 and a CRLF
+          # line ending are fine. The names are split on LF alone, as git
+          # writes them.
           if [ -n "$lines" ]; then
             breaks=$(tr , '\n' <<< "$lines" | sed 's/:[0-9]*-[0-9]*$//' | sort -u |
-              python3 -I -c 'import re, sys; print("\n".join(n for n in sys.stdin.read().splitlines() if re.search(rb"\xe2\x80[\xa8\xa9]|\r(?!\n)", open("apps/player/" + n, "rb").read())))')
+              python3 -I -c 'import re, sys; print("\n".join(n for n in sys.stdin.read().split("\n") if n and re.search(rb"\xe2\x80[\xa8\xa9]|\r(?!\n)", open("apps/player/" + n, "rb").read())))')
             if [ -n "$breaks" ]; then
               while IFS= read -r name; do
-                echo "::error title=Not checked::${name//\%/%25} has a U+2028, a U+2029 or a lone CR, which Stryker counts as a line break and git doesn't. Write it as an escape like \\u2028 so the check can run on the file."
+                echo "::error title=Not checked::${name//\%/%25} has a U+2028, a U+2029 or a lone CR, which Stryker counts as a line break and git doesn't. Write a U+2028 or a U+2029 as an escape like \\u2028, and end each line with an LF, so the check can run on the file."
               done <<< "$breaks"
               exit 1
             fi
@@ -138,8 +140,8 @@ jobs:
           setup=false
           if grep -q -x -F -e apps/player/stryker.config.mjs -e apps/player/vitest.config.ts \
               -e apps/player/vitest.stryker.config.ts <<< "$changed" ||
-            grep -q '^apps/player/src/test/' <<< "$changed" ||
-            grep -q -E '^[-+][[:space:]]*"(vitest|vite|jsdom|@vitest/[^"]+|@vitejs/[^"]+|@stryker-mutator/[^"]+)":' <<< "$versions"; then
+            grep -q -E '^"?apps/player/src/test/' <<< "$changed" ||
+            grep -q -E '^[-+][[:space:]]*"(vitest|vite|jsdom|@vitest/[^"]+|@vitejs/[^"]+|@testing-library/[^"]+|@stryker-mutator/[^"]+)":' <<< "$versions"; then
             setup=true
           fi
           # A change to the setup, the workflow or the summary script with no
@@ -232,8 +234,8 @@ jobs:
       # "// Stryker disable next-line <mutator>: <reason>", alone on its line,
       # and a missing report when Stryker made mutants, which means no test
       # loads the changed files. A mutant a comment turns off there gets a
-      # warning. A pull request that changes the Stryker setup gets a full
-      # run, and that checks only those lines too, since most of what it
+      # warning. A pull request that changes the Stryker or test setup gets a
+      # full run, and that checks only those lines too, since most of what it
       # tests isn't the pull request's. A run that isn't for a pull request
       # has no lines and only reports.
       - name: Check the changed lines

@@ -262,14 +262,15 @@ changes that Stryker ignored. `--mutate` can't take a file name with a comma, a 
 character, a quote or a backslash, so the job fails for a changed file with such a
 name. Rename it. Git counts lines by LF alone, and Stryker also ends a line at a U+2028,
 a U+2029 or a CR on its own, so the two number the lines differently in a file with one
-of those. The job fails for a changed file with one. Write it as an escape like
-`\u2028`.
+of those. The job fails for a changed file with one. Write a U+2028 or a U+2029 as an
+escape like `\u2028`, and end each line with an LF.
 
 A pull request that changes the Stryker or Vitest setup, the files in `src/test`, or the
-versions of Vitest, Vite, jsdom or Stryker gets a run of all of `src/lib`. That run still
-fails only on the lines the pull request changes, or on `date.ts` when it changes none.
-A change to the workflow or to `scripts/stryker-summary.py` alone only runs `date.ts`.
-The Monday run lists the changes that survive and fails only on an error.
+versions of Vitest, Vite, jsdom, Testing Library or Stryker gets a run of all of
+`src/lib`. That run still fails only on the lines the pull request changes, or on
+`date.ts` when it changes none. A change to the workflow or to
+`scripts/stryker-summary.py` alone only runs `date.ts`. The Monday run lists the changes
+that survive and fails only on an error.
 
 ## Production build
 
