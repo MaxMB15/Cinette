@@ -29,3 +29,5 @@ percent-encoding = "2"
 [dev-dependencies]
 # Folders for tests that write files, removed when the test ends.
 tempfile = "3"
+# Captures log lines, so tests can check them.
+tracing-subscriber = "0.3"

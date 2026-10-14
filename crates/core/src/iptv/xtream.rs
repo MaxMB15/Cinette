@@ -621,6 +621,7 @@ mod tests {
         self, assert_hides, route, serve_in_order, serve_once, serve_once_recording, serve_routes,
         Route,
     };
+    use crate::test_log::Logged;
     use serde_json::json;
     use std::sync::OnceLock;
 
@@ -1372,7 +1373,11 @@ mod tests {
             route("action=get_series_categories ", "200 OK", "not json"),
         ]);
         let live = format!("{server}/live/u/{}/7.ts", test_server::password());
-        let fetched = fetch_all_channels(&panel(&server)).await.unwrap();
+        let logged = Logged::default();
+        let fetched = {
+            let _guard = logged.start();
+            fetch_all_channels(&panel(&server)).await.unwrap()
+        };
         assert_eq!(
             id_group_url(&fetched.channels),
             [
@@ -1382,6 +1387,14 @@ mod tests {
         );
         // A failed category list only loses the group names.
         assert_eq!(fetched.failed_content_types, ["movie"]);
+        // Both failures are logged, without the login.
+        let log = logged.text();
+        assert!(log.contains("[Xtream] get_vod_streams failed: "), "{log}");
+        assert!(
+            log.contains("[Xtream] get_series_categories failed: "),
+            "{log}"
+        );
+        assert!(!log.contains(&test_server::password()), "{log}");
     }
 
     #[tokio::test]

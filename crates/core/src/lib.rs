@@ -17,3 +17,5 @@ pub mod iptv;
 mod json;
 /// Data types shared by the app and the services.
 pub mod models;
+#[cfg(test)]
+mod test_log;
