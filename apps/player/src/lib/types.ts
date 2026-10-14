@@ -71,6 +71,9 @@ export interface MpvPlayerState extends PlayerState {
 	/** Playback isn't paused, but the picture doesn't move on, as while mpv
 	 *  opens a file, seeks or waits for more of the stream. */
 	waiting: boolean;
+	/** mpv plays in a window of its own, because the app couldn't draw the
+	 *  video in its own window. Nothing the app draws shows over it. */
+	fallbackActive: boolean;
 }
 
 /** What useMpv keeps of mpv's state, which adds when the position was read. */

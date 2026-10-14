@@ -26,9 +26,14 @@
 //! as recovered, and sends `mpv://reconnected`, once `time-pos` moves
 //! `RECOVERY_CONFIRM_ADVANCE_SECS` past where playback restarted. After
 //! `MAX_ATTEMPTS` the watcher sends `mpv://load-failed` and exits.
+//!
+//! When mpv shuts down by itself, which only happens when the user closes
+//! the fallback window, the watcher stops playback and sends
+//! `mpv://window-closed`.
 
 use crate::loadfile::{loadfile, resume_option};
 use crate::log_url::origin_for_log;
+use crate::mpv::MpvState;
 use libmpv2::{
     events::{Event, PropertyData},
     mpv_end_file_reason, EndFileReason, Format, Mpv,
@@ -38,7 +43,7 @@ use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Longest wait between reloads, in seconds.
 const BACKOFF_CAP_SECS: u64 = 30;
@@ -82,6 +87,12 @@ const EVENT_BUFFERED: &str = "mpv://buffered";
 /// Sent after the last reload fails. The watcher exits, so recovery is up to
 /// the user. The payload is `{ "url": string }`.
 const EVENT_LOAD_FAILED: &str = "mpv://load-failed";
+
+/// Sent when mpv shuts down without being told to. Only the fallback window
+/// does that, when the user closes it or presses `q`. The watcher has
+/// stopped playback by then, and the frontend leaves the player. The payload
+/// is `{ "url": string }`.
+const EVENT_WINDOW_CLOSED: &str = "mpv://window-closed";
 
 /// Properties the watcher observes, with the `reply_userdata` id for each.
 /// The ids only need to be unique within this client.
@@ -240,6 +251,20 @@ impl<R: Runtime> Watcher<R> {
     fn on_signal(&mut self, signal: Signal) -> ControlFlow<()> {
         match signal {
             Signal::Shutdown => {
+                // MpvState sets the kill flag before it destroys the player,
+                // so without it mpv quit by itself. Playback stops here, since
+                // the player page may not be open to stop it.
+                if !self.kill.load(Ordering::Acquire)
+                    && self
+                        .app
+                        .try_state::<MpvState>()
+                        .is_some_and(|state| state.stop_after_quit(&self.kill))
+                {
+                    tracing::info!("[MPV reconnect] mpv quit by itself, the window was closed");
+                    let _ = self
+                        .app
+                        .emit(EVENT_WINDOW_CLOSED, UrlPayload { url: &self.url });
+                }
                 tracing::info!("[MPV reconnect] received Shutdown, exiting watcher");
                 return ControlFlow::Break(());
             }

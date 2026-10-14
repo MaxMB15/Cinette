@@ -219,6 +219,7 @@ export const PlayerView = () => {
 	// The URL mpv was last asked to play. For a download it's the file's path
 	// rather than the channel's URL.
 	const [loadedUrl, setLoadedUrl] = useState(() => sessionStorage.getItem(LOADED_URL_KEY));
+	const loadedUrlRef = useLatestRef(loadedUrl);
 	const rememberLoadedUrl = useCallback((url: string) => {
 		sessionStorage.setItem(LOADED_URL_KEY, url);
 		setLoadedUrl(url);
@@ -782,6 +783,9 @@ export const PlayerView = () => {
 			const resumeAt = ch.contentType === "live" ? 0 : mpv.getLastKnownPosition();
 			flushProgress();
 			const startPos = resumeAt > 1 ? resumeAt : undefined;
+			// The item stays the same, so its subtitles stay too. Before its
+			// first stream loads, mpv still has the last item's, so drop those.
+			const keepSubtitles = loadedUrlRef.current !== null;
 			progressRef.current = {
 				...progressRef.current,
 				url,
@@ -790,10 +794,10 @@ export const PlayerView = () => {
 			};
 			loadRequestRef.current++;
 			rememberLoadedUrl(url);
-			mpv.load(url, startPos).catch(() => {});
+			mpv.load(url, startPos, keepSubtitles).catch(() => {});
 			setActiveChannel({ ...ch, url, sourceList: availableSources });
 		},
-		[mpv, activeChannelRef, flushProgress, availableSources, rememberLoadedUrl]
+		[mpv, activeChannelRef, loadedUrlRef, flushProgress, availableSources, rememberLoadedUrl]
 	);
 
 	const playEpisode = useCallback(
@@ -1121,6 +1125,12 @@ export const PlayerView = () => {
 		navigate("/");
 	}, [mpv, navigate, flushProgress, recordEnd]);
 
+	// Closing mpv's own window stops playback, like the stop button.
+	const handleStopRef = useLatestRef(handleStop);
+	useEffect(() => {
+		if (mpv.windowClosedId > 0) handleStopRef.current();
+	}, [mpv.windowClosedId, handleStopRef]);
+
 	// --- Info drawer episode source ---
 	const episodesForDrawer = sortedEpisodes.length > 0 ? sortedEpisodes : localSeriesEpisodes;
 	const showTitleForDrawer = activeChannel ? seriesTitleOf(activeChannel) : "";
@@ -1175,8 +1185,8 @@ export const PlayerView = () => {
 				<div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg border border-yellow-500/40 bg-yellow-950/80 px-4 py-2 text-yellow-200 text-sm shadow-lg backdrop-blur-xs max-w-xl">
 					<span>⚠</span>
 					<span>
-						Video is playing in a separate window with native controls (embedded
-						renderer unavailable).
+						The video can't show here, so it plays in a window of its own. Closing that
+						window stops playback.
 					</span>
 				</div>
 			)}
@@ -1356,7 +1366,8 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{(subtitleCues.length > 0 || subtitleEditMode) && (
+			{/* mpv's own window shows the subtitles itself. */}
+			{!mpv.fallbackActive && (subtitleCues.length > 0 || subtitleEditMode) && (
 				<SubtitleOverlay
 					cues={subtitleCues}
 					position={mpv.state.position}

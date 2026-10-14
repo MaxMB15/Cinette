@@ -76,6 +76,7 @@ The macOS app includes these shared libraries in `Contents/Frameworks`, alongsid
 | [libxcb](https://www.x.org/) | `libxcb` | MIT |
 | [libxdmcp](https://www.x.org/) | `libXdmcp` | MIT |
 | [little-cms2](https://www.littlecms.com/) | `liblcms2` | MIT |
+| [luajit](https://luajit.org/luajit.html) | `libluajit-5.1` | MIT |
 | [lz4](https://lz4.github.io/lz4/) | `liblz4` | BSD-2-Clause |
 | [mbedtls](https://www.trustedfirmware.org/projects/mbed-tls/) | `libmbedcrypto` | Apache-2.0 |
 | [mpg123](https://www.mpg123.de/) | `libmpg123` | LGPL-2.1-only |

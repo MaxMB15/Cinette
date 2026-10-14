@@ -58,6 +58,7 @@ describe("mpvLoad arguments", () => {
 			url: "http://example.com/live.ts",
 			startPos: null,
 			hwdec: true,
+			keepSubtitles: false,
 		});
 	});
 
@@ -67,6 +68,17 @@ describe("mpvLoad arguments", () => {
 			url: "http://example.com/movie.mkv",
 			startPos: 125,
 			hwdec: false,
+			keepSubtitles: false,
+		});
+	});
+
+	it("asks to keep the subtitles when told to", async () => {
+		await mpvLoad("http://example.com/movie.mkv", undefined, true, true);
+		expect(invoke).toHaveBeenLastCalledWith("plugin:mpv|mpv_load", {
+			url: "http://example.com/movie.mkv",
+			startPos: null,
+			hwdec: true,
+			keepSubtitles: true,
 		});
 	});
 });

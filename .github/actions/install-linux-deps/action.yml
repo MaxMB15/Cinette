@@ -21,7 +21,7 @@ runs:
           meson ninja-build
           libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev
           libass-dev libpulse-dev libasound2-dev
-          libplacebo-dev
+          libplacebo-dev libluajit-5.1-dev
           libx11-dev libxss-dev libxext-dev libxpresent-dev libxrandr-dev
           libwayland-dev
         )

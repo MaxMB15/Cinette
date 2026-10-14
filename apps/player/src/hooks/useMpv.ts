@@ -29,13 +29,13 @@ const DEFAULT_STATE: PolledMpvState = {
 	openFailed: false,
 	reachedEnd: false,
 	waiting: false,
+	fallbackActive: false,
 	positionAt: 0,
 };
 
 export const useMpv = () => {
 	const [state, setState] = useState<PolledMpvState>(DEFAULT_STATE);
 	const [error, setError] = useState<string | null>(null);
-	const [fallbackActive, setFallbackActive] = useState(false);
 	const [firstFrameReady, setFirstFrameReady] = useState(false);
 	// Set only by the first-frame event. The mount check below also sets
 	// `firstFrameReady`, but it can't tell a stream that's still opening from
@@ -99,12 +99,14 @@ export const useMpv = () => {
 	// of them finished still has the old value, so it doesn't replace it.
 	const [seeks] = useState(createChangeTracker);
 	const [volumeChanges] = useState(createChangeTracker);
+	// A poll sent before a load returns can still describe the old player.
+	const [loads] = useState(createChangeTracker);
 
-	// Listen for fallback event emitted when embedded renderer fails.
+	// The event comes while the load runs, before a poll can report it.
 	useEffect(() => {
 		const unlistenPromise = listen<{ reason: string }>("mpv://render-fallback", (event) => {
 			console.warn("[useMpv] render fallback:", event.payload.reason);
-			setFallbackActive(true);
+			setState((s) => ({ ...s, fallbackActive: true }));
 		});
 		return () => {
 			unlistenPromise.then((fn) => fn());
@@ -248,77 +250,99 @@ export const useMpv = () => {
 		}
 	}, [state.position]);
 
+	// Goes up by one when mpv quits by itself, because the user closed its
+	// own window or pressed q there. The plugin has stopped playback by then.
+	const [windowClosedId, setWindowClosedId] = useState(0);
+	useEffect(() => {
+		const unlistenPromise = listen<{ url: string }>("mpv://window-closed", (event) => {
+			// A load replaces the player, so the old one quitting isn't the user's doing.
+			if (loadingRef.current) return;
+			if (event.payload.url !== (requestedUrlRef.current ?? currentUrlRef.current)) return;
+			console.info("[useMpv] mpv window closed:", event.payload.url);
+			setWindowClosedId((id) => id + 1);
+		});
+		return () => {
+			unlistenPromise.then((fn) => fn());
+		};
+	}, [currentUrlRef]);
+
 	// `load(url)` is a fresh start from 00:00 (used for channel switches /
 	// initial play). `load(url, startPos)` is a resume — used by the
 	// `online`-triggered auto-recovery and by the Retry button to preserve
 	// playback position across a hard restart of the mpv instance.
-	const load = useCallback(async (url: string, startPos?: number) => {
-		if (loadingRef.current) return;
-		loadingRef.current = true;
-		loadedThisMountRef.current = true;
-		requestedUrlRef.current = url;
-		setLoadPending(true);
-		setLoadId((id) => id + 1);
-		setError(null);
-		setFallbackActive(false);
-		setFirstFrameReady(false);
-		setFirstFrameSeen(false);
-		setReconnecting(false);
-		setReconnectAttempt(0);
-		setBuffering(false);
-		setLoadFailed(false);
-		setRecentlyRecovered(false);
-		if (bufferingTimerRef.current) {
-			clearTimeout(bufferingTimerRef.current);
-			bufferingTimerRef.current = null;
-		}
-		if (recoveredTimerRef.current) {
-			clearTimeout(recoveredTimerRef.current);
-			recoveredTimerRef.current = null;
-		}
-		// Fresh-start load resets the sticky position so a subsequent
-		// recovery for this URL can't accidentally resume into a position
-		// inherited from a previous channel.
-		if (startPos === undefined) {
-			lastKnownPositionRef.current = 0;
-		}
-		// Reset playing state and position immediately so the bar doesn't show stale values.
-		const positionAt = performance.now();
-		setState((s) => ({
-			...s,
-			isPlaying: false,
-			isPaused: false,
-			position: startPos ?? 0,
-			positionAt,
-			duration: 0,
-			playbackStarted: false,
-			openFailed: false,
-			reachedEnd: false,
-			waiting: false,
-		}));
-		try {
-			await mpvLoad(url, startPos, readHwdecEnabled());
-			const userVolume = userVolumeRef.current;
-			if (userVolume !== 100) {
-				try {
-					await mpvSetVolume(userVolume);
-					setState((s) => ({ ...s, volume: userVolume }));
-				} catch (e) {
-					console.warn("[useMpv] re-applying volume failed:", e);
-				}
+	// `keepSubtitles` is for loading the same item again, see `mpvLoad`.
+	const load = useCallback(
+		async (url: string, startPos?: number, keepSubtitles = false) => {
+			if (loadingRef.current) return;
+			loadingRef.current = true;
+			const loaded = loads.begin();
+			loadedThisMountRef.current = true;
+			requestedUrlRef.current = url;
+			setLoadPending(true);
+			setLoadId((id) => id + 1);
+			setError(null);
+			setFirstFrameReady(false);
+			setFirstFrameSeen(false);
+			setReconnecting(false);
+			setReconnectAttempt(0);
+			setBuffering(false);
+			setLoadFailed(false);
+			setRecentlyRecovered(false);
+			if (bufferingTimerRef.current) {
+				clearTimeout(bufferingTimerRef.current);
+				bufferingTimerRef.current = null;
 			}
-			// Don't set isPlaying optimistically — let the next poll confirm it from Rust
-			// so transparency only kicks in once MPV is actually rendering frames.
-			setState((s) => ({ ...s, currentUrl: url }));
-		} catch (e) {
-			const msg = String(e);
-			setError(msg);
-			throw e;
-		} finally {
-			loadingRef.current = false;
-			setLoadPending(false);
-		}
-	}, []);
+			if (recoveredTimerRef.current) {
+				clearTimeout(recoveredTimerRef.current);
+				recoveredTimerRef.current = null;
+			}
+			// Fresh-start load resets the sticky position so a subsequent
+			// recovery for this URL can't accidentally resume into a position
+			// inherited from a previous channel.
+			if (startPos === undefined) {
+				lastKnownPositionRef.current = 0;
+			}
+			// Reset playing state and position immediately so the bar doesn't show stale values.
+			const positionAt = performance.now();
+			setState((s) => ({
+				...s,
+				isPlaying: false,
+				isPaused: false,
+				position: startPos ?? 0,
+				positionAt,
+				duration: 0,
+				playbackStarted: false,
+				openFailed: false,
+				reachedEnd: false,
+				waiting: false,
+				fallbackActive: false,
+			}));
+			try {
+				await mpvLoad(url, startPos, readHwdecEnabled(), keepSubtitles);
+				const userVolume = userVolumeRef.current;
+				if (userVolume !== 100) {
+					try {
+						await mpvSetVolume(userVolume);
+						setState((s) => ({ ...s, volume: userVolume }));
+					} catch (e) {
+						console.warn("[useMpv] re-applying volume failed:", e);
+					}
+				}
+				// Don't set isPlaying optimistically — let the next poll confirm it from Rust
+				// so transparency only kicks in once MPV is actually rendering frames.
+				setState((s) => ({ ...s, currentUrl: url }));
+			} catch (e) {
+				const msg = String(e);
+				setError(msg);
+				throw e;
+			} finally {
+				loadingRef.current = false;
+				loaded();
+				setLoadPending(false);
+			}
+		},
+		[loads]
+	);
 
 	/**
 	 * Loads the current stream again from where it got to, for the Retry
@@ -335,7 +359,7 @@ export const useMpv = () => {
 		const url = requestedUrlRef.current ?? currentUrlRef.current;
 		if (!url || loadingRef.current) return false;
 		const resumeAt = lastKnownPositionRef.current;
-		await load(url, resumeAt > 1.0 ? resumeAt : undefined);
+		await load(url, resumeAt > 1.0 ? resumeAt : undefined, true);
 		return true;
 	}, [load, currentUrlRef]);
 
@@ -461,6 +485,7 @@ export const useMpv = () => {
 	const refresh = useCallback(() => {
 		const seekMark = seeks.mark();
 		const volumeMark = volumeChanges.mark();
+		const loadMark = loads.mark();
 		return mpvGetState()
 			.then((s) => {
 				console.debug("[useMpv] poll state:", JSON.stringify(s));
@@ -482,13 +507,17 @@ export const useMpv = () => {
 						openFailed: s.openFailed,
 						reachedEnd: s.reachedEnd,
 						waiting: s.waiting,
+						// Kept from the fallback event until a poll describes the new player.
+						fallbackActive: loads.isStale(loadMark)
+							? prev.fallbackActive
+							: s.fallbackActive,
 					};
 				});
 			})
 			.catch((e) => {
 				console.warn("[useMpv] poll failed:", e);
 			});
-	}, [seeks, volumeChanges]);
+	}, [seeks, volumeChanges, loads]);
 
 	useEffect(() => {
 		console.log("[useMpv] starting poll interval");
@@ -513,7 +542,8 @@ export const useMpv = () => {
 	return {
 		state,
 		error,
-		fallbackActive,
+		fallbackActive: state.fallbackActive,
+		windowClosedId,
 		firstFrameReady,
 		opening,
 		loadId,

@@ -34,6 +34,7 @@ vi.mock("@/lib/tauri", () => ({
 		openFailed: false,
 		reachedEnd: false,
 		waiting: false,
+		fallbackActive: false,
 	})),
 }));
 
@@ -86,6 +87,7 @@ describe("useMpv", () => {
 			openFailed: false,
 			reachedEnd: false,
 			waiting: false,
+			fallbackActive: false,
 			positionAt: expect.any(Number),
 		});
 		expect(result.current.error).toBeNull();
@@ -117,7 +119,7 @@ describe("useMpv", () => {
 			await result.current.load("http://stream.url");
 		});
 
-		expect(mockMpvLoad).toHaveBeenCalledWith("http://stream.url", undefined, true);
+		expect(mockMpvLoad).toHaveBeenCalledWith("http://stream.url", undefined, true, false);
 		expect(result.current.state.currentUrl).toBe("http://stream.url");
 	});
 
@@ -146,7 +148,7 @@ describe("useMpv", () => {
 
 		// Only one call should have been made
 		expect(mockMpvLoad).toHaveBeenCalledTimes(1);
-		expect(mockMpvLoad).toHaveBeenCalledWith("http://first.url", undefined, true);
+		expect(mockMpvLoad).toHaveBeenCalledWith("http://first.url", undefined, true, false);
 
 		// Resolve first load
 		await act(async () => {
@@ -263,6 +265,7 @@ describe("useMpv", () => {
 			openFailed: false,
 			reachedEnd: false,
 			waiting: false,
+			fallbackActive: false,
 			positionAt: expect.any(Number),
 		});
 	});
@@ -511,7 +514,7 @@ describe("useMpv", () => {
 		await act(async () => {
 			await result.current.load("http://test/next.m3u8");
 		});
-		expect(mockMpvLoad).toHaveBeenCalledWith("http://test/next.m3u8", undefined, false);
+		expect(mockMpvLoad).toHaveBeenCalledWith("http://test/next.m3u8", undefined, false, false);
 	});
 
 	it("keeps the volume and mute state when the player is reopened", async () => {
@@ -552,6 +555,129 @@ describe("useMpv", () => {
 		});
 
 		expect(result.current.fallbackActive).toBe(true);
+	});
+
+	describe("the fallback window", () => {
+		const reporting = (fallbackActive: boolean, currentUrl: string | null = "http://s") =>
+			({
+				isPlaying: true,
+				isPaused: false,
+				currentUrl,
+				volume: 100,
+				position: 5,
+				duration: 0,
+				playbackStarted: true,
+				openFailed: false,
+				reachedEnd: false,
+				waiting: false,
+				fallbackActive,
+			}) as never;
+
+		const fallBack = () =>
+			mockListenCallbacks.get("mpv://render-fallback")!({ payload: { reason: "no GL" } });
+
+		it("is known to a player reopened on it", async () => {
+			mockMpvGetState.mockResolvedValue(reporting(true));
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(result.current.fallbackActive).toBe(true));
+		});
+
+		it("is cleared by a load, until the plugin reports it again", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			act(fallBack);
+			expect(result.current.fallbackActive).toBe(true);
+
+			await act(async () => {
+				await result.current.load("http://s");
+			});
+			expect(result.current.fallbackActive).toBe(false);
+
+			mockMpvGetState.mockResolvedValue(reporting(true));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.fallbackActive).toBe(true);
+		});
+
+		it("isn't undone by a poll sent before the load returned", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			const poll = deferred<never>();
+			mockMpvGetState.mockReturnValueOnce(poll.promise);
+			let refreshed: Promise<void>;
+			act(() => {
+				refreshed = result.current.refresh();
+			});
+			mockMpvLoad.mockImplementation(async () => fallBack());
+			await act(async () => {
+				await result.current.load("http://s");
+			});
+			expect(result.current.fallbackActive).toBe(true);
+
+			await act(async () => {
+				poll.resolve(reporting(false));
+				await refreshed!;
+			});
+			expect(result.current.fallbackActive).toBe(true);
+		});
+
+		describe("closing it", () => {
+			const closeWindow = (url: string) =>
+				act(() => mockListenCallbacks.get("mpv://window-closed")!({ payload: { url } }));
+
+			it("is counted for the stream the player loaded", async () => {
+				const { result } = renderHook(() => useMpv());
+				await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+				await act(async () => {
+					await result.current.load("http://s");
+				});
+
+				closeWindow("http://s");
+				expect(result.current.windowClosedId).toBe(1);
+				closeWindow("http://s");
+				expect(result.current.windowClosedId).toBe(2);
+			});
+
+			it("is counted on a player reopened on the stream", async () => {
+				mockMpvGetState.mockResolvedValue(reporting(true, "http://s"));
+				const { result } = renderHook(() => useMpv());
+				await waitFor(() => expect(result.current.state.currentUrl).toBe("http://s"));
+
+				closeWindow("http://s");
+				expect(result.current.windowClosedId).toBe(1);
+			});
+
+			it("is ignored for another stream", async () => {
+				const { result } = renderHook(() => useMpv());
+				await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+				await act(async () => {
+					await result.current.load("http://s");
+				});
+
+				closeWindow("http://other");
+				expect(result.current.windowClosedId).toBe(0);
+			});
+
+			it("is ignored while a load replaces the player", async () => {
+				const loading = deferred();
+				mockMpvLoad.mockReturnValue(loading.promise);
+				const { result } = renderHook(() => useMpv());
+				await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+				let loaded: Promise<void>;
+				act(() => {
+					loaded = result.current.load("http://s");
+				});
+
+				closeWindow("http://s");
+				await act(async () => {
+					loading.resolve();
+					await loaded!;
+				});
+				expect(result.current.windowClosedId).toBe(0);
+			});
+		});
 	});
 
 	it("sets firstFrameReady when first-frame event fires", async () => {
@@ -629,6 +755,7 @@ describe("useMpv", () => {
 				playbackStarted: false,
 				openFailed: false,
 				reachedEnd: false,
+				fallbackActive: false,
 				...overrides,
 			}) as never;
 
@@ -822,7 +949,7 @@ describe("useMpv", () => {
 			await act(async () => {
 				window.dispatchEvent(new Event("online"));
 			});
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", undefined, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", undefined, true, true);
 			// It never played, so "playing again" would be wrong. The spinner
 			// shows instead.
 			expect(result.current.recentlyRecovered).toBe(false);
@@ -859,7 +986,7 @@ describe("useMpv", () => {
 			await act(async () => {
 				expect(await result.current.reload()).toBe(true);
 			});
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://next.url", undefined, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://next.url", undefined, true, true);
 		});
 
 		it("reloads from the last known position", async () => {
@@ -875,7 +1002,7 @@ describe("useMpv", () => {
 			await act(async () => {
 				await result.current.reload();
 			});
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", 75, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://live.url", 75, true, true);
 		});
 
 		it("doesn't reload while a load is in flight or after a stop", async () => {
@@ -1115,7 +1242,7 @@ describe("useMpv", () => {
 			});
 
 			expect(mockMpvLoad).toHaveBeenCalledTimes(1);
-			expect(mockMpvLoad).toHaveBeenCalledWith("http://s", 42, true);
+			expect(mockMpvLoad).toHaveBeenCalledWith("http://s", 42, true, true);
 			expect(result.current.recentlyRecovered).toBe(true);
 		});
 

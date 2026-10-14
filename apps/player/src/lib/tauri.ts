@@ -37,8 +37,20 @@ const inOrder = (run: () => Promise<void>): Promise<void> => {
 	return result;
 };
 
-export const mpvLoad = (url: string, startPos?: number, hwdec = true): Promise<void> =>
-	inOrder(() => invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec }));
+/**
+ * Starts `url` in a new player. `keepSubtitles` carries the subtitle file the
+ * last one added, and its delay, over to it. Set it only when the same item
+ * loads again, as for a retry or another source.
+ */
+export const mpvLoad = (
+	url: string,
+	startPos?: number,
+	hwdec = true,
+	keepSubtitles = false
+): Promise<void> =>
+	inOrder(() =>
+		invoke("plugin:mpv|mpv_load", { url, startPos: startPos ?? null, hwdec, keepSubtitles })
+	);
 
 export const mpvPlay = (): Promise<void> => invoke("plugin:mpv|mpv_play");
 

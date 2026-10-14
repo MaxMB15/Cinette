@@ -14,10 +14,10 @@
 
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
-use super::MpvState;
+use super::{KeptSubtitles, MpvState};
 use crate::test_support::{
-    headless, headless_options, load_headless, wait_until, wav, y4m, FakeRenderer, MediaDir,
-    SharedLog, TestApp,
+    headless, headless_options, load_headless, reload_headless, wait_until, wav, y4m, FakeRenderer,
+    MediaDir, SharedLog, TestApp,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +26,10 @@ use tauri::Manager;
 
 const RENDER_FALLBACK: &str = "mpv://render-fallback";
 const FIRST_FRAME: &str = "mpv://first-frame";
+const WINDOW_CLOSED: &str = "mpv://window-closed";
+
+/// A subtitle file with one cue.
+const SRT: &[u8] = b"1\n00:00:00,000 --> 00:00:09,000\nHello\n";
 
 /// Loads `url` through a new fake renderer and returns what it records.
 fn load(app: &TestApp, url: &str) -> SharedLog {
@@ -53,6 +57,19 @@ fn property(state: &MpvState, name: &str) -> String {
         .unwrap()
 }
 
+/// Reads a number property of the loaded player.
+fn number(state: &MpvState, name: &str) -> f64 {
+    let client = state.inner.lock().unwrap().create_event_client();
+    client
+        .expect("a loaded player")
+        .get_property::<f64>(name)
+        .unwrap()
+}
+
+fn wait_for_playback(state: &MpvState) {
+    wait_until("playback to start", || state.get_state().playback_started);
+}
+
 #[test]
 fn an_embedded_load_plays_through_the_renderer() {
     let app = TestApp::new();
@@ -75,6 +92,7 @@ fn an_embedded_load_plays_through_the_renderer() {
         state.get_state().current_url.as_deref(),
         Some(path.as_str())
     );
+    assert!(!state.get_state().fallback_active);
     assert!(events.payloads(RENDER_FALLBACK).is_empty());
 }
 
@@ -109,6 +127,10 @@ fn falls_back_when_the_renderer_cannot_be_made() {
     assert!(state.renderer.lock().unwrap().is_none());
     assert!(!watcher_kill(&state).load(Ordering::Acquire));
     wait_until("playback to start", || state.get_state().playback_started);
+    assert!(state.get_state().fallback_active);
+
+    state.stop();
+    assert!(!state.get_state().fallback_active);
 }
 
 #[test]
@@ -142,7 +164,7 @@ fn mpv_draws_the_subtitles_the_frontend_does_not() {
     let app = TestApp::new();
     let media = MediaDir::new();
     let path = media.file("tone.wav", &wav(10));
-    let subtitles = media.file("en.srt", b"1\n00:00:00,000 --> 00:00:09,000\nHello\n");
+    let subtitles = media.file("en.srt", SRT);
     let state = app.state();
     let visible = || property(&state, "sub-visibility");
 
@@ -162,6 +184,118 @@ fn mpv_draws_the_subtitles_the_frontend_does_not() {
     state.sub_add(&subtitles, true).unwrap();
     assert_eq!(property(&state, "sid"), "1");
     assert_eq!(visible(), "yes");
+}
+
+#[test]
+fn a_load_for_the_same_item_keeps_its_subtitles() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT);
+    let state = app.state();
+    load(&app, &path);
+    wait_for_playback(&state);
+    state.sub_add(&subtitles, true).unwrap();
+    state.set_sub_delay(0.5).unwrap();
+
+    // A retry that ends up in the fallback window, where mpv draws them.
+    reload_headless(&state, &app.handle(), &path, Err("no window".into())).unwrap();
+    wait_for_playback(&state);
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(property(&state, "sub-visibility"), "yes");
+    assert_eq!(number(&state, "sub-delay"), 0.5);
+
+    // Back over the embedded video, the frontend draws them again.
+    let (renderer, _log) = FakeRenderer::working();
+    reload_headless(&state, &app.handle(), &path, Ok(renderer)).unwrap();
+    wait_for_playback(&state);
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(property(&state, "sub-visibility"), "no");
+    assert_eq!(number(&state, "sub-delay"), 0.5);
+
+    // Another item starts without them.
+    load(&app, &path);
+    wait_for_playback(&state);
+    assert_eq!(property(&state, "sid"), "no");
+    assert_eq!(number(&state, "sub-delay"), 0.0);
+    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+}
+
+#[test]
+fn keeps_no_subtitles_that_were_removed_or_never_added() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT);
+    let state = app.state();
+    let reload = || {
+        let (renderer, _log) = FakeRenderer::working();
+        reload_headless(&state, &app.handle(), &path, Ok(renderer)).unwrap();
+        wait_for_playback(&state);
+    };
+    load(&app, &path);
+    wait_for_playback(&state);
+
+    state.sub_add(&subtitles, false).unwrap();
+    state.sub_remove(-1).unwrap();
+    reload();
+    assert_eq!(property(&state, "sid"), "no");
+
+    assert!(state.sub_add(&media.missing("gone.srt"), false).is_err());
+    reload();
+    assert_eq!(property(&state, "sid"), "no");
+
+    state.sub_add(&subtitles, false).unwrap();
+    state.stop();
+    reload();
+    assert_eq!(property(&state, "sid"), "no");
+}
+
+#[test]
+fn closing_the_fallback_window_stops_playback() {
+    let app = TestApp::new();
+    let events = app.record(&[WINDOW_CLOSED]);
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let state = app.state();
+    load_headless(&state, &app.handle(), &path, None, Err("no window".into())).unwrap();
+    wait_for_playback(&state);
+    state.sub_add(&media.file("en.srt", SRT), true).unwrap();
+
+    // mpv runs `quit` when the user closes its window.
+    let client = state.inner.lock().unwrap().create_event_client().unwrap();
+    client.command("quit", &[]).unwrap();
+    drop(client);
+    assert_eq!(events.wait_for(WINDOW_CLOSED), json!({ "url": path }));
+    let polled = state.get_state();
+    assert_eq!(polled.current_url, None);
+    assert!(!polled.is_playing && !polled.fallback_active);
+    assert!(state.reconnect_kill.lock().unwrap().is_none());
+    assert!(!state.idle_inhibitor.is_active());
+    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+}
+
+#[test]
+fn a_quit_leaves_a_newer_stream_alone() {
+    let app = TestApp::new();
+    let events = app.record(&[WINDOW_CLOSED]);
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let state = app.state();
+    load(&app, &path);
+    let old_kill = watcher_kill(&state);
+
+    // The next load trips the old watcher's flag first.
+    load(&app, &path);
+    assert!(!state.stop_after_quit(&old_kill));
+    assert_eq!(
+        state.get_state().current_url.as_deref(),
+        Some(path.as_str())
+    );
+
+    assert!(state.stop_after_quit(&watcher_kill(&state)));
+    assert_eq!(state.get_state().current_url, None);
+    assert!(events.payloads(WINDOW_CLOSED).is_empty());
 }
 
 /// A renderer whose `attach` fails has to go while the core it was made for
@@ -185,7 +319,7 @@ fn drops_a_renderer_that_cannot_attach_before_the_fallback_starts() {
     let mut dropped_before_fallback = None;
 
     state
-        .load_with(true, || {
+        .load_with(true, false, || {
             let embedded = (renderer, headless_options().to_vec());
             state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
                 dropped_before_fallback = Some(log.lock().unwrap().dropped);
@@ -208,7 +342,7 @@ fn falls_back_when_mpv_rejects_an_embedded_option() {
     let embedded = (renderer, headless(&[("no-such-option", "1")]));
 
     state
-        .load_with(true, || {
+        .load_with(true, false, || {
             state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
                 headless_options().to_vec()
             })
@@ -233,7 +367,7 @@ fn a_load_fails_when_the_fallback_cannot_start_either() {
     let path = media.file("tone.wav", &wav(10));
     let state = app.state();
 
-    let result = state.load_with(true, || {
+    let result = state.load_with(true, false, || {
         state.load_embedded(&path, None, &app.handle(), Err("no window".into()), || {
             headless(&[("no-such-option", "1")])
         })
@@ -324,7 +458,7 @@ fn hardware_decoding_follows_the_setting() {
         let (renderer, _log) = FakeRenderer::working();
         let embedded = (renderer, headless(&[("hwdec", "auto")]));
         state
-            .load_with(enabled, || {
+            .load_with(enabled, false, || {
                 state.load_embedded(&path, None, &app.handle(), Ok(embedded), || {
                     headless_options().to_vec()
                 })

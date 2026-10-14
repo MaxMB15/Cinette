@@ -240,11 +240,30 @@ fn exits_once_its_kill_flag_is_set() {
 #[test]
 fn exits_when_the_player_shuts_down() {
     let app = TestApp::new();
+    let events = app.record(&[EVENT_WINDOW_CLOSED]);
     let player = player(&[]);
     let running = Running::start(watcher(&app, &player, UNUSED_URL));
 
+    // Nothing set the kill flag, as when the user closes the fallback window.
     player.command("quit", &[]).unwrap();
     running.wait_for_exit();
+    assert_eq!(
+        events.all(),
+        [(EVENT_WINDOW_CLOSED, json!({ "url": UNUSED_URL }))]
+    );
+}
+
+#[test]
+fn a_shutdown_after_the_kill_flag_says_nothing() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_WINDOW_CLOSED]);
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, UNUSED_URL);
+
+    // MpvState sets the flag, then destroys the player.
+    watcher.kill.store(true, Ordering::Release);
+    assert!(watcher.on_signal(Signal::Shutdown).is_break());
+    assert!(events.all().is_empty(), "{:?}", events.all());
 }
 
 #[test]

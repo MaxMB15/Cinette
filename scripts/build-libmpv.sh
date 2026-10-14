@@ -69,6 +69,8 @@ case "$PLATFORM" in
     # libavdevice is only for capture devices (av://), which we never open.
     # Homebrew links it against sdl2-compat, which needs an SDL3 we don't bundle
     # and aborts the app at launch when it can't find one.
+    # mpv's on-screen controls are a Lua script, and the separate fallback
+    # window has no other controls, so the build needs LuaJIT.
     meson setup "$BUILD_DIR" "$MPV_SRC" \
       --buildtype=release \
       --wipe \
@@ -76,7 +78,8 @@ case "$PLATFORM" in
       -Dgl=enabled \
       -Dvulkan=disabled \
       -Dcocoa=enabled \
-      -Dlibavdevice=disabled
+      -Dlibavdevice=disabled \
+      -Dlua=luajit
 
     echo "    Building libmpv dylib only (this takes a few minutes)..."
     ninja -C "$BUILD_DIR" libmpv.2.dylib
@@ -164,11 +167,13 @@ case "$PLATFORM" in
       -Dx11=enabled
       -Dwayland=enabled
       -Dvulkan=disabled
+      # mpv's on-screen controls are a Lua script, and the separate fallback
+      # window has no other controls, so the build needs LuaJIT.
+      -Dlua=luajit
       # Disable optional features we don't need, so auto-detection doesn't pull
-      # in deps that may not be on the CI runner (lua, javascript, etc.)
+      # in deps that may not be on the CI runner (javascript, etc.)
       # Note: libplacebo is a hard requirement of mpv 0.40.0 (not a meson option),
       # so libplacebo-dev must be installed.
-      -Dlua=disabled
       -Djavascript=disabled
       -Dcaca=disabled
       -Dsdl2=disabled

@@ -52,6 +52,7 @@ const idleState = vi.hoisted(() => (): PolledMpvState => ({
 	openFailed: false,
 	reachedEnd: false,
 	waiting: false,
+	fallbackActive: false,
 	positionAt: 0,
 }));
 
@@ -143,6 +144,7 @@ const fakeMpv = vi.hoisted(() => {
 		loadFailed: false,
 		openFailed: false,
 		recentlyRecovered: false,
+		windowClosedId: 0,
 		...player,
 	});
 	let current = initial();
@@ -1055,7 +1057,7 @@ describe("episodes", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Source" }));
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
 		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Source 2/ }));
-		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep1Mirror.url, undefined);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep1Mirror.url, undefined, true);
 		await press("n");
 		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep2.url, undefined);
 	});
@@ -1263,7 +1265,7 @@ describe("switching sources", () => {
 		fakeMpv.actions.getLastKnownPosition.mockReturnValue(900);
 		pickSource(2);
 		await flush();
-		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900, true);
 		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 880, 3600);
 		expect(tauri.savePlaybackPosition.mock.invocationCallOrder[0]).toBeLessThan(
 			fakeMpv.actions.load.mock.invocationCallOrder[1]
@@ -1290,7 +1292,7 @@ describe("switching sources", () => {
 		const backup = "http://backup.example.test/news24.ts";
 		await openItem(makeNewsChannel({ sources: [backup] }));
 		pickSource(2);
-		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(backup, undefined);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(backup, undefined, true);
 		expect(fakeMpv.actions.getLastKnownPosition).not.toHaveBeenCalled();
 	});
 
@@ -1301,7 +1303,8 @@ describe("switching sources", () => {
 		pickSource(2);
 		await act(async () => lookup.resolve(DOWNLOADED_MOVIE));
 		await flush();
-		expect(fakeMpv.actions.load.mock.calls).toEqual([[MIRROR_URL, undefined]]);
+		// Nothing of this movie loaded before, so mpv drops what it kept.
+		expect(fakeMpv.actions.load.mock.calls).toEqual([[MIRROR_URL, undefined, false]]);
 	});
 });
 
@@ -2453,7 +2456,7 @@ describe("info drawers", () => {
 		await press("i");
 		fireEvent.click(screen.getByRole("button", { name: "Play the second source" }));
 		await flush();
-		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MIRROR_URL, 900, true);
 		expect(
 			screen.queryByRole("dialog", { name: "About The Lantern Keeper" })
 		).not.toBeInTheDocument();
@@ -2481,7 +2484,7 @@ describe("info drawers", () => {
 		await press("i");
 		fireEvent.click(screen.getByRole("button", { name: "Play s1e1-b" }));
 		await flush();
-		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep1Mirror.url, undefined);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(ep1Mirror.url, undefined, true);
 		expect(screen.queryByRole("dialog", { name: "Episodes of Show" })).not.toBeInTheDocument();
 		await press("i");
 		fireEvent.click(screen.getByRole("button", { name: "Play s1e2" }));
@@ -2610,9 +2613,30 @@ describe("connection and errors", () => {
 		tauri.getSkipSegments.mockResolvedValue([makeSegment()]);
 		await openItem(lanternKeeper());
 		await setMpv({ fallbackActive: true, state: playing(MOVIE_URL, 61, 3600) });
-		expect(screen.getByText(/Video is playing in a separate window/)).toBeInTheDocument();
+		expect(screen.getByText(/plays in a window of its own/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
 		expect(tauri.getSkipSegments).not.toHaveBeenCalled();
+	});
+
+	it("leaves the subtitles to mpv's window", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		pickEnglishSubtitles();
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		await setMpv({ fallbackActive: true });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+	});
+
+	it("stops and goes to the channel list when mpv's window closes", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ fallbackActive: true, state: playing(MOVIE_URL, 700, 3600) });
+		await setMpv({ windowClosedId: 1 });
+		await flush();
+		expect(fakeMpv.actions.stop).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Channel list")).toBeInTheDocument();
+		expect(tauri.savePlaybackPosition.mock.calls).toEqual([[MOVIE_KEY, 700, 3600]]);
+		expect(tauri.recordPlayEnd).toHaveBeenCalledWith("mv1", expect.any(Number));
 	});
 });
 

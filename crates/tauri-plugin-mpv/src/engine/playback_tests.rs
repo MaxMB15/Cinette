@@ -32,6 +32,22 @@ fn start(engine: &mut MpvEngine, path: &str, start_pos: Option<f64>) -> PlayerSt
     })
 }
 
+/// Loads `path` on the player while it plays another file, as a reconnect
+/// does, and waits until the new file plays. `start` can't tell, since mpv
+/// reports the old file until the new one opens.
+fn reload(engine: &MpvEngine, path: &str) {
+    engine.loadfile(path, None).expect("loadfile");
+    let name = path.rsplit('/').next().unwrap();
+    wait_until("the new file to play", || {
+        let mpv = mpv(engine);
+        mpv.get_property::<String>("filename")
+            .is_ok_and(|n| n == name)
+            && mpv
+                .get_property::<bool>("seeking")
+                .is_ok_and(|seeking| !seeking)
+    });
+}
+
 /// The engine's player, for reading properties the state doesn't report.
 fn mpv(engine: &MpvEngine) -> &Mpv {
     engine.mpv.as_ref().expect("an mpv instance")
@@ -56,6 +72,25 @@ fn create_names_the_option_mpv_rejects() {
 }
 
 #[test]
+fn create_sets_the_window_options() {
+    let engine = engine(&[
+        ("osc", "yes"),
+        ("ytdl", "no"),
+        ("input-default-bindings", "yes"),
+        ("input-vo-keyboard", "yes"),
+    ]);
+    let mpv = mpv(&engine);
+    assert!(mpv.get_property::<bool>("input-default-bindings").unwrap());
+    assert!(mpv.get_property::<bool>("input-vo-keyboard").unwrap());
+    // `osc` and `ytdl` only exist when libmpv has Lua, and `create` skips
+    // them when it doesn't.
+    if mpv.get_property::<String>("option-info/osc/name").is_ok() {
+        assert!(mpv.get_property::<bool>("osc").unwrap());
+        assert_eq!(mpv.get_property::<String>("ytdl").unwrap(), "no");
+    }
+}
+
+#[test]
 fn every_command_needs_a_player() {
     let mut engine = MpvEngine::new();
     let missing = Err("no mpv instance".to_string());
@@ -67,6 +102,7 @@ fn every_command_needs_a_player() {
     assert_eq!(engine.set_volume(50.0), missing);
     assert_eq!(engine.sub_add("/subs/en.srt", true), missing);
     assert_eq!(engine.sub_remove(-1), missing);
+    assert_eq!(engine.restore_subtitles("/subs/en.srt", true, 0.0), missing);
     assert_eq!(engine.set_sub_pos(90.0), missing);
     assert_eq!(engine.set_sub_delay(0.5), missing);
     assert_eq!(
@@ -297,6 +333,62 @@ fn adds_and_removes_subtitle_tracks() {
     assert_eq!(tracks(&engine), 1);
 
     assert!(engine.sub_remove(99).is_err());
+}
+
+#[test]
+fn a_reload_keeps_the_added_subtitles() {
+    let media = MediaDir::new();
+    let one = media.file("one.wav", &wav(10));
+    let two = media.file("two.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &one, None);
+    let tracks = |engine: &MpvEngine| mpv(engine).get_property::<i64>("track-list/count").unwrap();
+    let selected = |engine: &MpvEngine| mpv(engine).get_property::<String>("sid").unwrap();
+
+    // A reconnect loads the stream again on the same player.
+    engine.sub_add(&subtitles, false).unwrap();
+    engine.set_sub_delay(0.5).unwrap();
+    reload(&engine, &two);
+    assert_eq!(tracks(&engine), 2);
+    assert_eq!(selected(&engine), "1");
+    assert!(!mpv(&engine).get_property::<bool>("sub-visibility").unwrap());
+    assert_eq!(mpv(&engine).get_property::<f64>("sub-delay").unwrap(), 0.5);
+
+    // Adding to the list doesn't add the file to the stream that plays.
+    engine.sub_add(&subtitles, true).unwrap();
+    assert_eq!(tracks(&engine), 2);
+
+    // A removed track stays out.
+    engine.sub_remove(-1).unwrap();
+    reload(&engine, &one);
+    assert_eq!(tracks(&engine), 1);
+    assert_eq!(selected(&engine), "no");
+}
+
+#[test]
+fn a_new_player_starts_with_the_restored_subtitles() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let tracks = |engine: &MpvEngine| mpv(engine).get_property::<i64>("track-list/count").unwrap();
+
+    let mut first = engine(&[("pause", "yes")]);
+    first.restore_subtitles(&subtitles, false, -1.5).unwrap();
+    start(&mut first, &path, None);
+    assert_eq!(tracks(&first), 2);
+    assert_eq!(mpv(&first).get_property::<String>("sid").unwrap(), "1");
+    assert!(!mpv(&first).get_property::<bool>("sub-visibility").unwrap());
+    assert_eq!(mpv(&first).get_property::<f64>("sub-delay").unwrap(), -1.5);
+
+    // A file that's gone by then doesn't stop the stream.
+    let mut second = engine(&[("pause", "yes")]);
+    second
+        .restore_subtitles(&media.missing("gone.srt"), true, 0.0)
+        .unwrap();
+    start(&mut second, &path, None);
+    assert_eq!(tracks(&second), 1);
+    assert!(mpv(&second).get_property::<bool>("sub-visibility").unwrap());
 }
 
 #[test]

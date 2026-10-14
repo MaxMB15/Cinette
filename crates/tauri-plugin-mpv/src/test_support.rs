@@ -75,9 +75,9 @@ pub(crate) fn headless_options() -> &'static [(&'static str, &'static str)] {
             ("terminal", "no"),
             ("keep-open", "yes"),
         ];
-        // These two only exist in builds with scripting, which the Linux
-        // build turns off. Where they exist they keep the bundled scripts
-        // off, so ytdl_hook never starts yt-dlp for a loopback URL.
+        // These two only exist in builds with Lua. Where they exist they
+        // keep the bundled scripts off, so ytdl_hook never starts yt-dlp for
+        // a loopback URL.
         let probe = new_mpv(&options);
         for name in ["load-scripts", "ytdl"] {
             let key = format!("option-info/{name}/name");
@@ -521,8 +521,32 @@ pub(crate) fn load_headless(
     start_pos: Option<f64>,
     renderer: Result<Box<dyn PlatformRenderer>, String>,
 ) -> Result<(), String> {
+    load_headless_as(state, app, url, start_pos, false, renderer)
+}
+
+/// `load_headless` for the item that plays, which keeps its subtitles, as a
+/// retry or a switch to another source does.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn reload_headless(
+    state: &MpvState,
+    app: &AppHandle<MockRuntime>,
+    url: &str,
+    renderer: Result<Box<dyn PlatformRenderer>, String>,
+) -> Result<(), String> {
+    load_headless_as(state, app, url, None, true, renderer)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn load_headless_as(
+    state: &MpvState,
+    app: &AppHandle<MockRuntime>,
+    url: &str,
+    start_pos: Option<f64>,
+    keep_subtitles: bool,
+    renderer: Result<Box<dyn PlatformRenderer>, String>,
+) -> Result<(), String> {
     let renderer = renderer.map(|r| (r, headless_options().to_vec()));
-    state.load_with(true, || {
+    state.load_with(true, keep_subtitles, || {
         state.load_embedded(url, start_pos, app, renderer, || {
             headless_options().to_vec()
         })
