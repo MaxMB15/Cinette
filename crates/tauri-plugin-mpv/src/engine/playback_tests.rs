@@ -403,7 +403,8 @@ fn adds_a_subtitle_when_the_file_starts() {
     assert!(visible(&first));
 
     // mpv refuses a track after a `loadfile` until it starts to open the
-    // file, and `MpvState::load` has returned by then.
+    // file, and a pick can come after `MpvState::load` returns but before
+    // then.
     let mut second = engine(&[("pause", "yes")]);
     second.loadfile(&path, None).unwrap();
     second.sub_add(&subtitles, false).unwrap();
