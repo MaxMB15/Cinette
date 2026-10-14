@@ -218,6 +218,7 @@ vi.mock("./SubtitlePicker", () => ({
 				{props.episode ?? "none"}
 			</p>
 			<input aria-label="Search subtitles" />
+			<p>Current subtitle {props.currentSelectedEntry?.fileId ?? "none"}</p>
 			<button
 				type="button"
 				onClick={() => {
@@ -2489,6 +2490,9 @@ describe("subtitles", () => {
 		await setMpv({ state: playing(ep1.url, 2, 1300) });
 		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		// The next episode gets the second Dutch subtitle too.
 		await press("n");
 		await flush();
@@ -2530,6 +2534,21 @@ describe("subtitles", () => {
 		await setMpv({ state: playing(ep2.url, 2, 1300) });
 		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
 		expect(tauri.downloadSubtitle).not.toHaveBeenCalled();
+	});
+
+	it("keeps no subtitle mpv adds after the page closed once it has opened again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		// The page that opened again already shows the subtitles it read, so
+		// the track goes.
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
 	});
 
 	it("keeps no subtitle for a page that's open or has moved on to another stream", async () => {

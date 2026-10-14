@@ -108,6 +108,11 @@ const END_LEAD_SECONDS = 10;
  * stopped while mpv played on, as iOS does in the background.
  */
 const END_SEEN_WITHIN_MS = 30_000;
+/**
+ * How many player pages are open. A page reads the subtitles the last one
+ * saved when it opens, so a closed page can only change them while none is.
+ */
+let openPlayerPages = 0;
 
 interface PlaybackProgress {
 	/** Resume key (see playbackKey); null for live or nothing playing. */
@@ -242,10 +247,11 @@ export const PlayerView = () => {
 	const loadRequestRef = useRef(0);
 	// Set when the viewer stops playback, which also forgets the subtitles.
 	const stoppedRef = useRef(false);
-	// False once the page closes. A subtitle picked before then is dropped,
-	// since the subtitles the page saved when it closed come back with it. An
-	// item still waiting to start doesn't start, since the page that would
-	// show it is gone.
+	// False once the page closes. A subtitle mpv draws and adds after that
+	// goes to the ones the page saved, as long as no page has opened since.
+	// Any other subtitle that loads after the page closed is dropped. An item
+	// still waiting to start doesn't start, since the page that would show it
+	// is gone.
 	const openRef = useRef(false);
 	// Counts the viewer's subtitle picks, so a subtitle still downloading for
 	// an earlier pick, or for the auto-load, gives way to a newer one.
@@ -266,10 +272,11 @@ export const PlayerView = () => {
 					latest() && openRef.current && activeChannelRef.current?.id === channelId
 						? loadedUrlRef.current
 						: null,
-				// The page saved its subtitles when it closed, and opens again
-				// with them, so the pick goes there.
+				// The page saved its subtitles when it closed, and the next one
+				// opens with them, so the pick goes there. One that's open has
+				// already read them.
 				keep: (url, entry, rankInLanguage) =>
-					!openRef.current &&
+					openPlayerPages === 0 &&
 					channelId !== undefined &&
 					updateSubtitleSession(channelId, url, {
 						fileId: entry.fileId,
@@ -661,13 +668,18 @@ export const PlayerView = () => {
 				selectedSubtitleId === null,
 		}
 	);
-	useEffect(() => {
+	// Layout effects, so the page counts as closed and has saved its
+	// subtitles once it's off the screen. A navigation runs passive cleanups
+	// later, and a subtitle that loads in between would go to the closed page.
+	useLayoutEffect(() => {
 		openRef.current = true;
+		openPlayerPages++;
 		return () => {
 			openRef.current = false;
+			openPlayerPages--;
 		};
 	}, []);
-	useEffect(
+	useLayoutEffect(
 		() => () => {
 			if (stoppedRef.current) saveSubtitleSession(null);
 			// A page that never started an item, as when the viewer cancels the
