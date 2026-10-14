@@ -76,6 +76,57 @@ It downloads a static ffmpeg to `apps/player/src-tauri/binaries/` as
 Linux packages install it in `/usr/bin`, so it has its own name rather than `ffmpeg`.
 If your `binaries/` folder still has an older `ffmpeg-<target>`, run the script again.
 
+The script pins one build for each platform by the SHA-256 of its archive.
+
+| Platform | ffmpeg | Built by |
+| --- | --- | --- |
+| macOS, Apple Silicon | 8.1.2 | [Martin Riedl](https://ffmpeg.martin-riedl.de) |
+| Linux, x86_64 | 8.1.3 | [BtbN](https://github.com/BtbN/FFmpeg-Builds) |
+| Windows, x86_64 | 8.1.3 | [BtbN](https://github.com/BtbN/FFmpeg-Builds) |
+
+It downloads each archive from this repository's `ffmpeg-sidecar-8.1` pre-release
+first and from the builder second. It installs the archive only when the hash
+matches, and fails otherwise. The pre-release keeps a copy because BtbN deletes most
+of its builds after a few weeks. It also holds the ffmpeg source the builds come from.
+Its tag doesn't start with `v`, so it never starts an app release, and it's never
+marked as the latest release, which the updater reads.
+
+Each Monday, `.github/workflows/ffmpeg-update-check.yml` compares the pinned versions
+with ffmpeg's release tags. When a newer release is out, it opens an issue called
+"ffmpeg <version> is out", with each platform's pin and the newest release in its
+series. It never opens two issues with the same title, so closing one skips that
+release.
+
+To move to a new ffmpeg:
+
+1. Download each platform's new build into an empty folder of its own, and check it
+   against the builder's checksums. Martin Riedl puts a `.sha256` file next to each
+   download, and each BtbN release has a `checksums.sha256`. Martin Riedl only builds
+   the newest series, so macOS can trail the other platforms by a patch release.
+2. Check that the app's downloads still work with it. The app runs ffmpeg with the
+   arguments from `crates/core/src/downloads/ffmpeg.rs` and only looks at the exit
+   code. Copy an HLS stream and an MP4 file to MP4, MKV and MPEG-TS, record a few
+   seconds of a live stream, and try an HTTPS stream.
+3. Upload the archives under the names the script's `FILE` lines give them, with the
+   ffmpeg source they come from. For a release, that's the tarball and its `.asc`
+   signature from ffmpeg.org. For a build of a release branch, add a snapshot of that
+   commit too. A new series gets a new pre-release, made with
+   `gh release create ffmpeg-sidecar-<series> --prerelease --latest=false`. A new
+   build in the same series goes up with `gh release upload ffmpeg-sidecar-<series>`.
+4. Update `FFMPEG_VERSION`, `FILE`, `UPSTREAM` and `SHA256` for each platform in the
+   script, and `MIRROR` for a new series. Update the FFmpeg section of
+   `THIRD_PARTY_NOTICES.md`, then open a pull request.
+
+ffmpeg 9.0 checks TLS certificates by default, and 8.1 doesn't. The static macOS 9.0
+build finds no certificate store, so every HTTPS download fails, even from a server
+with a valid certificate. Setting `SSL_CERT_FILE` for the sidecar fixes that. A server
+with a bad certificate still fails, because the HLS demuxer doesn't pass `-tls_verify 0`
+on to its requests for variant playlists and segments. mpv doesn't check certificates
+by default, so such a stream plays but can't be downloaded. Before the sidecar moves to
+9.x, the app needs to handle that, and someone needs to decide whether downloads should
+check certificates. The `ffmpeg-sidecar-9.0.2` pre-release holds 9.0.2 builds for that
+move.
+
 ## Running the app
 
 ```bash

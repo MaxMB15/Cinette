@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Opens an issue when ffmpeg has a release newer than a build that
+# scripts/fetch-ffmpeg.sh pins. It compares the script's FFMPEG_VERSION lines
+# with the release tags in FFmpeg's git repository. It opens one issue for the
+# newest release, unless an issue with the same title exists, open or closed,
+# so closing one means it isn't opened again. A pull request that changes the
+# script or this workflow runs the same comparison and only reports it, so a
+# change that leaves the versions unreadable fails there.
+name: ffmpeg update check
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "scripts/fetch-ffmpeg.sh"
+      - ".github/workflows/ffmpeg-update-check.yml"
+  # Schedules run from the default branch, main, so the job reads the script
+  # on dev.
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # A pull request reads its own copy of the script, and other runs read
+      # the one on dev.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name != 'pull_request' && 'dev' || '' }}
+          sparse-checkout: scripts/fetch-ffmpeg.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Compare the pinned versions with ffmpeg's releases
+        id: compare
+        run: |
+          # Each platform's case in the script sets FFMPEG_VERSION.
+          awk '
+            /^  [a-z]+\)$/ { sub(/\)$/, ""); platform = $1 }
+            /^ +FFMPEG_VERSION=/ { sub(/^ +FFMPEG_VERSION=/, ""); print platform, $0 }
+          ' scripts/fetch-ffmpeg.sh > pins.txt
+          if [[ ! -s pins.txt ]] || grep -qvE '^[a-z]+ [0-9]+\.[0-9]+(\.[0-9]+)?$' pins.txt; then
+            echo "::error::Couldn't read the FFMPEG_VERSION lines in scripts/fetch-ffmpeg.sh"
+            cat pins.txt
+            exit 1
+          fi
+          oldest="$(cut -d' ' -f2 pins.txt | sort -V | head -n 1)"
+
+          # Release tags look like n8.1.3. Tags like n8.2-dev mark where work
+          # on a series began, so they're left out.
+          git ls-remote --tags --refs https://github.com/FFmpeg/FFmpeg.git 'refs/tags/n*' > tags.txt
+          sed -E 's|.*refs/tags/n||' tags.txt | { grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' || true; } | sort -V > releases.txt
+          newest="$(tail -n 1 releases.txt)"
+          if [[ -z "$newest" ]]; then
+            echo "::error::Found no ffmpeg release tags"
+            exit 1
+          fi
+
+          if [[ "$(printf '%s\n' "$oldest" "$newest" | sort -V | tail -n 1)" != "$oldest" ]]; then
+            newer=true
+            lead="ffmpeg $newest is out, and scripts/fetch-ffmpeg.sh pins an older build."
+          else
+            newer=false
+            lead="scripts/fetch-ffmpeg.sh pins the newest ffmpeg release, $newest."
+          fi
+
+          {
+            echo "$lead"
+            echo
+            echo "| Platform | Pinned | Newest in its series |"
+            echo "| --- | --- | --- |"
+            while read -r platform version; do
+              series="$(cut -d. -f1-2 <<< "$version")"
+              latest="$({ grep -E "^${series//./\\.}(\.|$)" releases.txt || true; } | tail -n 1)"
+              echo "| $platform | $version | $latest |"
+            done < pins.txt
+            echo
+            echo "docs/development.md says how to move to a new ffmpeg and what to check first."
+          } > issue.md
+          { echo "## ffmpeg update check"; echo; cat issue.md; } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "newer=$newer"
+            echo "newest=$newest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue
+        if: github.event_name != 'pull_request' && steps.compare.outputs.newer == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEWEST: ${{ steps.compare.outputs.newest }}
+        run: |
+          title="ffmpeg $NEWEST is out"
+          gh issue list --state all --limit 1000 --json title --jq '.[].title' > titles.txt
+          if grep -Fxq -- "$title" titles.txt; then
+            echo "An issue called \"$title\" exists already."
+            exit 0
+          fi
+          gh issue create --title "$title" --body-file issue.md
