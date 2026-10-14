@@ -66,6 +66,7 @@ import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import {
 	readSubtitleSession,
 	saveSubtitleSession,
+	updateSubtitleSession,
 	type SubtitlePreference,
 	type SubtitleSession,
 } from "@/lib/subtitle-session";
@@ -265,6 +266,18 @@ export const PlayerView = () => {
 					latest() && openRef.current && activeChannelRef.current?.id === channelId
 						? loadedUrlRef.current
 						: null,
+				// The page saved its subtitles when it closed, and opens again
+				// with them, so the pick goes there.
+				keep: (url, entry, rankInLanguage) =>
+					!openRef.current &&
+					channelId !== undefined &&
+					updateSubtitleSession(channelId, url, {
+						fileId: entry.fileId,
+						entry,
+						cues: [],
+						preference: { languageCode: entry.languageCode, rankInLanguage },
+						autoLoad: false,
+					}),
 			};
 		},
 		[activeChannelRef, loadedUrlRef]
@@ -429,6 +442,9 @@ export const PlayerView = () => {
 					const target = local ?? ch.url;
 					progress.url = target;
 					rememberLoadedUrl(target);
+					// A page that closed while the player looked for a download
+					// saved its subtitles with no stream. They're for this one.
+					if (!openRef.current) updateSubtitleSession(ch.id, null, { url: target });
 					return mpv.load(target, startPos);
 				})
 				.catch(() => {});

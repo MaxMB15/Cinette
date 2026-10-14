@@ -2436,6 +2436,121 @@ describe("subtitles", () => {
 		);
 	});
 
+	it("loads the next episode's subtitles again when the page closed while it looked for a download", async () => {
+		const srt = "1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n";
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		tauri.readSubtitleFile.mockResolvedValue(srt);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		const local = deferred<string | null>();
+		tauri.resolveLocalDownload.mockReturnValue(local.promise);
+		await press("n");
+		await goToPage("/");
+		await act(async () => local.resolve("/downloads/second.mkv"));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, "/downloads/second.mkv"]);
+		expect(tauri.downloadSubtitle).not.toHaveBeenCalled();
+
+		await goToPage("/player");
+		await flush();
+		await setMpv({ state: playing("/downloads/second.mkv", 2, 1300) });
+		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			true,
+			"/downloads/second.mkv"
+		);
+	});
+
+	it("keeps a subtitle mpv adds after the page closed for when it opens again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["nl"],
+			entries: [
+				{ fileId: 303, languageCode: "nl", format: "ass" },
+				{ fileId: 304, languageCode: "nl", format: "ass" },
+			],
+		});
+		tauri.readSubtitleFile.mockRejectedValue(new Error("stream did not contain valid UTF-8"));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		// mpv draws the new track, which took the English one's place.
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(ep1.url, dutch, 1)).toBe(true);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(ep1.url, 2, 1300) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		// The next episode gets the second Dutch subtitle too.
+		await press("n");
+		await flush();
+		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(304);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
+	});
+
+	it("doesn't load the next episode's subtitles over a pick kept after the page closed", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		const search = deferred<SubtitleSearchResult | null>();
+		tauri.searchSubtitles.mockReturnValue(search.promise);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		expect(tauri.searchSubtitles).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		expect(
+			picker.pick?.keep(ep2.url, { fileId: 304, languageCode: "nl", format: "ass" }, 0)
+		).toBe(true);
+		await act(async () =>
+			search.resolve({
+				languages: ["en", "nl"],
+				entries: [
+					{ fileId: 202, languageCode: "en", format: "srt" },
+					{ fileId: 304, languageCode: "nl", format: "ass" },
+				],
+			})
+		);
+
+		await goToPage("/player");
+		await flush();
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		expect(tauri.downloadSubtitle).not.toHaveBeenCalled();
+	});
+
+	it("keeps no subtitle for a page that's open or has moved on to another stream", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		await goToPage("/player");
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
+		await goToPage("/");
+		expect(picker.pick?.keep(DOWNLOADED_MOVIE, dutch, 0)).toBe(false);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+	});
+
 	it("tells the subtitle picker once the player moves on to another episode", async () => {
 		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
 		await openItem(ep1, { episodes: [ep1, ep2] });
