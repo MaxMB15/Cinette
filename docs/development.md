@@ -108,13 +108,14 @@ To move to a new ffmpeg:
 2. Check that the app's downloads still work with it. The app runs ffmpeg with the
    arguments from `crates/core/src/downloads/ffmpeg.rs`. It reads the `-progress`
    lines for the download's progress, the exit code, and the last line ffmpeg writes
-   to stderr, which it shows as the error. A recording also looks for known errors in
-   that line, such as `404 Not Found` and `Connection refused`.
-   `StreamError::classify` in `crates/core/src/downloads/recording.rs` lists them, and
-   they decide whether a recording tries again and which error it shows, so check that
-   ffmpeg still writes those words. Copy an HLS stream and an MP4 file to MP4, MKV and
-   MPEG-TS, record a few seconds of a live stream, and try an HTTPS stream. Check that
-   the progress moves and that a failed download shows a useful error.
+   to stderr, which it shows as the error. A recording also checks every stderr line
+   for known errors, such as `404 Not Found` and `Connection refused`, and shows the
+   last one it finds in place of the last line. `StreamError::classify` in
+   `crates/core/src/downloads/recording.rs` lists them, and they decide whether a
+   recording tries again and which error it shows, so check that ffmpeg still writes
+   those words. Copy an HLS stream and an MP4 file to MP4, MKV and MPEG-TS, record a
+   few seconds of a live stream, and try an HTTPS stream. Check that the progress moves
+   and that a failed download shows a useful error.
 3. Upload the archives under the names the script's `FILE` lines give them, with the
    ffmpeg source they come from. For a release, that's the tarball and its `.asc`
    signature from ffmpeg.org. For a build of a release branch, add a snapshot of that

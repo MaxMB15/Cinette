@@ -29,7 +29,7 @@ on:
 permissions:
   contents: read
 
-# Plain bash in Actions doesn't set pipefail, and this shell does.
+# Without a shell named, Actions runs bash without pipefail. Naming bash adds it.
 defaults:
   run:
     shell: bash
@@ -77,6 +77,7 @@ jobs:
           repeated="$(cut -d' ' -f1 pins.txt | sort | uniq -d)"
           if [[ -n "$repeated" ]]; then
             echo "::error::scripts/fetch-ffmpeg.sh sets FFMPEG_VERSION more than once for $(paste -sd' ' - <<< "$repeated")"
+            cat pins.txt
             exit 1
           fi
 
