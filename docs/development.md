@@ -27,7 +27,7 @@ libmpv is built from source:
 
 ```bash
 # ffmpeg@7, because mpv 0.40 uses APIs that ffmpeg 8 removed
-brew install meson ninja pkg-config ffmpeg@7 libass libplacebo luajit dylibbundler
+brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
 export PKG_CONFIG_PATH="$(brew --prefix ffmpeg@7)/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 ./scripts/build-libmpv.sh macos

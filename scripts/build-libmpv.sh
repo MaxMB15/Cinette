@@ -69,8 +69,10 @@ case "$PLATFORM" in
     # libavdevice is only for capture devices (av://), which we never open.
     # Homebrew links it against sdl2-compat, which needs an SDL3 we don't bundle
     # and aborts the app at launch when it can't find one.
-    # mpv's on-screen controls are a Lua script, and the separate fallback
-    # window has no other controls, so the build needs LuaJIT.
+    # No Lua, so the fallback window has mpv's keys but not its on-screen
+    # controls. The release app runs under the hardened runtime, which kills
+    # it when LuaJIT runs the code it compiles, and mpv loads its built-in Lua
+    # scripts in every player. Homebrew's LuaJIT isn't built for that runtime.
     meson setup "$BUILD_DIR" "$MPV_SRC" \
       --buildtype=release \
       --wipe \
@@ -79,7 +81,7 @@ case "$PLATFORM" in
       -Dvulkan=disabled \
       -Dcocoa=enabled \
       -Dlibavdevice=disabled \
-      -Dlua=luajit
+      -Dlua=disabled
 
     echo "    Building libmpv dylib only (this takes a few minutes)..."
     ninja -C "$BUILD_DIR" libmpv.2.dylib

@@ -45,8 +45,9 @@ pub(crate) fn shared_options() -> [(&'static str, &'static str); 9] {
 /// libmpv turns off mpv's on-screen controller, its key bindings and the
 /// window's keyboard input. With them on, the mouse and keys control
 /// playback, and closing the window or pressing `q` quits mpv, which
-/// `reconnect.rs` reports to the frontend. A libmpv without Lua has no
-/// on-screen controller and no `osc` option, so `MpvEngine::create` skips it.
+/// `reconnect.rs` reports to the frontend. The macOS libmpv and MPVKit are
+/// built without Lua, so they have no on-screen controller and no `osc`
+/// option, and `MpvEngine::create` skips it there.
 pub(crate) fn window_controls() -> [(&'static str, &'static str); 3] {
     [
         ("osc", "yes"),
