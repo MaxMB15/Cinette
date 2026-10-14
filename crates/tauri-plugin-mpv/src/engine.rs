@@ -341,8 +341,8 @@ impl MpvEngine {
     /// Add a subtitle track from a local file path and select it in place of
     /// the track in use, which it then removes. mpv only draws the new track
     /// when `visible` is true. When the file can't be added, the track in use
-    /// stays. mpv goes on drawing it if it was to draw the new one, and
-    /// otherwise leaves it hidden, since the frontend draws the new subtitles.
+    /// stays. mpv draws it as before when `visible` is true, and hides it when
+    /// it's false, since the frontend draws the new subtitles.
     pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
         // Convert to file:// URI so MPV path resolution is unambiguous for local files
@@ -356,17 +356,20 @@ impl MpvEngine {
             .get_property::<String>("sid")
             .ok()
             .and_then(|id| id.parse::<i64>().ok());
-        let was_visible = mpv.get_property::<bool>("sub-visibility").unwrap_or(true);
-        // Set first, so mpv never draws a frame of a track the overlay draws.
-        if let Err(e) = mpv.set_property("sub-visibility", visible) {
-            tracing::warn!("[MPV] sub-visibility={} failed: {}", visible, e);
+        let set_visible = || {
+            if let Err(e) = mpv.set_property("sub-visibility", visible) {
+                tracing::warn!("[MPV] sub-visibility={} failed: {}", visible, e);
+            }
+        };
+        // mpv hides subtitles before it adds a track the overlay draws, so it
+        // never draws a frame of that track. It shows them only once the
+        // track in use is gone, since the overlay may still draw that one.
+        if !visible {
+            set_visible();
         }
         tracing::info!("[MPV] sub-add: {}", origin_for_log(&uri));
         if let Err(e) = mpv.command("sub-add", &[&uri, "select"]) {
             tracing::warn!("[MPV] sub-add failed: {}", e);
-            if visible {
-                let _ = mpv.set_property("sub-visibility", was_visible);
-            }
             return Err(e.to_string());
         }
         // A track that came with the stream can't be removed, and is only no
@@ -375,6 +378,9 @@ impl MpvEngine {
             && let Err(e) = mpv.command("sub-remove", &[&id.to_string()])
         {
             tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+        }
+        if visible {
+            set_visible();
         }
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())

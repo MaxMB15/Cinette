@@ -1945,9 +1945,12 @@ describe("subtitles", () => {
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
 		await press("n");
 		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 3);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		await act(async () => added.resolve());
 		await flush();
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+		// mpv would draw episode two's subtitles over episode three.
+		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
 	});
 
 	it("leaves the next episode's subtitles unpicked when mpv can't add a file the overlay can't read", async () => {

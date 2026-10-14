@@ -176,7 +176,13 @@ export const SubtitlePicker = ({
 			if (cues.length > 0) added.catch(() => {});
 			else {
 				await added;
-				if (!isCurrent()) return;
+				// mpv draws this track itself. When the page closed or the item
+				// changed during the add, the track comes out again, so it doesn't
+				// show over the subtitles the player keeps.
+				if (!isCurrent()) {
+					await mpvSubRemove(-1).catch(() => {});
+					return;
+				}
 			}
 			setSelectedFileId(entry.fileId);
 			// Compute rank within this language group for auto-selection on next episode.

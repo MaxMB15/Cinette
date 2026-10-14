@@ -29,6 +29,7 @@ import {
 	downloadSubtitle,
 	readSubtitleFile,
 	mpvSubAdd,
+	mpvSubRemove,
 	mpvSetSubDelay,
 	mpvGetState,
 	getPlaybackPosition,
@@ -686,13 +687,20 @@ export const PlayerView = () => {
 				if (cues.length > 0) added.catch(() => {});
 				else {
 					await added;
-					if (cancelled) return;
+					// mpv draws this track itself. When the page closed or the
+					// player moved on during the add, the track comes out again,
+					// so it doesn't show over another episode or the subtitles
+					// the player keeps.
+					if (cancelled) {
+						await mpvSubRemove(-1).catch(() => {});
+						return;
+					}
 				}
 				setSelectedSubtitleId(entry.fileId);
 				setSubtitleCues(cues);
 				setSelectedSubtitleEntry(entry);
 			})
-			.catch(() => {}) // silent — subtitle is best-effort
+			.catch(() => {}) // silent, subtitle is best-effort
 			.finally(() => {
 				if (!cancelled) setAutoLoadFinished(autoLoadTrigger);
 			});

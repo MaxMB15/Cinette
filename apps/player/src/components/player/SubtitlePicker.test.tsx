@@ -429,8 +429,31 @@ describe("SubtitlePicker search and selection", () => {
 		await act(async () => added());
 		expect(entryButton("Sintel.NL")).toBeEnabled();
 		expect(hasCheck(entryButton("Sintel.NL"))).toBe(false);
+		// mpv would draw the track over the subtitles the player keeps.
+		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
 		expect(onSubtitleSelected).not.toHaveBeenCalled();
 		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("leaves the track in use when mpv can't add a file after the player moves on", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		let fail!: (e: Error) => void;
+		tauri.mpvSubAdd.mockReturnValue(
+			new Promise((_, reject) => {
+				fail = reject;
+			})
+		);
+		let current = true;
+		const { onSubtitleSelected } = renderPicker({ isCurrent: () => current });
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() => expect(tauri.mpvSubAdd).toHaveBeenCalledOnce());
+		current = false;
+		await act(async () => fail(new Error("unsupported")));
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
 	});
 
 	it("asks for another subtitle when one can't be loaded", async () => {

@@ -273,15 +273,13 @@ fn adds_and_removes_subtitle_tracks() {
     assert!(!visible(&engine));
 
     // A file mpv can't add leaves the track in use. When mpv was to draw the
-    // new one, it goes back to how it drew the track in use.
+    // new one, it draws the track in use as it did before.
     assert!(engine.sub_add(&media.missing("gone.srt"), true).is_err());
     assert_eq!(selected(&engine), "2");
     assert!(!visible(&engine));
 
-    // mpv sets whether it draws subtitles before it adds the track, so a
-    // track the overlay draws never shows for a frame. When the overlay was
-    // to draw the new one, mpv keeps the track in use hidden after a failed
-    // add.
+    // When the overlay was to draw the new one, mpv hides the track in use,
+    // since the overlay already draws the new subtitles.
     engine.sub_add(&subtitles, true).unwrap();
     assert_eq!(selected(&engine), "3");
     assert!(visible(&engine));
