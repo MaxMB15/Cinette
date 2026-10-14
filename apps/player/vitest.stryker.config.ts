@@ -33,4 +33,13 @@ const matchVitestTestNames = (): Plugin => ({
 
 // Stryker's runner switches the pool to "threads" with one worker. Putting the
 // main config's "vmThreads" back measured no faster, so this file leaves it.
-export default mergeConfig(base, defineConfig({ plugins: [matchVitestTestNames()] }));
+//
+// Stryker sets no reporters, so on GitHub's runners Vitest adds its GitHub
+// reporter, which prints an error command for each failing test. When a
+// mutant crashes a test runner process, Stryker prints the end of that
+// process's output, and GitHub shows those lines as errors on a run that
+// passed. Stryker reads the results itself, so the default reporter is enough.
+export default mergeConfig(
+	base,
+	defineConfig({ plugins: [matchVitestTestNames()], test: { reporters: ["default"] } })
+);

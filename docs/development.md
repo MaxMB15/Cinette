@@ -238,7 +238,39 @@ each change in its file. `vitest.stryker.config.ts` works around a bug in Stryke
 Vitest runner, and its comment says when it can go.
 
 CI runs Stryker on the lines a pull request changes in `src/lib`, and on all of it on
-`dev` each Monday. A change that survives doesn't fail either run.
+`dev` each Monday. Stryker only makes the changes that lie wholly inside those lines,
+so changing one line of a call that runs over three tests only what's on that line. On
+a pull request, a change that no test catches fails the job, and an annotation on its
+line says what the change was. Add a test that fails on it. A change that does the same
+thing as the code can't fail any test. The line before it then gets a comment that
+names the mutator and says why:
+
+```ts
+// Stryker disable next-line StringLiteral: Date.parse gives NaN for both "" and the text Stryker puts in, so this returns 0 either way.
+const ms = Date.parse(value ?? "");
+```
+
+The comment turns off every change of that kind that starts on the next line of code,
+even one that runs over several lines, so name only the mutators that no test can
+catch. Put it alone on its line. The job fails for any other Stryker comment in a
+changed file, since one with no reason, with `all` for the mutators, or one that covers
+more than the next line could hide a change that a test should catch. It also fails
+when no test loads any of the changed files, unless their changed lines have nothing to
+change, like a change to types alone. A comment that turns off a change on a changed
+line gets a warning, so check that its reason still holds. The summary lists the
+changes that Stryker ignored. `--mutate` can't take a file name with a comma, a glob
+character, a quote or a backslash, so the job fails for a changed file with such a
+name. Rename it. Git counts lines by LF alone, and Stryker also ends a line at a U+2028,
+a U+2029 or a CR that no LF follows, so the two number the lines differently in a file
+with one of those. The job fails for a changed file with one. Write a U+2028 or a U+2029
+as an escape like `\u2028`, and replace each CR that no LF follows with an LF.
+
+A pull request that changes the Stryker or Vitest setup, the files in `src/test`, or the
+versions of Vitest, Vite, jsdom, Testing Library or Stryker gets a run of all of
+`src/lib`. That run still fails only on the lines the pull request changes, or on
+`date.ts` when it changes none. A change to the workflow or to
+`scripts/stryker-summary.py` alone only runs `date.ts`. The Monday run lists the changes
+that survive and fails only on an error.
 
 ## Production build
 
@@ -298,7 +330,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
 | [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch the Rust crates, Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A pull request tests only the lines it changes, in the crates it changes. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
-| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or Vitest setup or their versions. Every Monday, the schedule starts a run on `dev`. A surviving change is reported and fails nothing. |
+| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker or test setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or test setup or the test tools' versions. Every Monday, the schedule starts a run on `dev`. A change on the lines a pull request changes that no test catches fails the job, and so do changed files that no test loads. The Monday run reports the changes that survive and fails only on an error. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |
