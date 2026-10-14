@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-mpv-sub-remove"
+description = "Enables the mpv_sub_remove command without any pre-configured scope."
+commands.allow = ["mpv_sub_remove"]
+
+[[permission]]
+identifier = "deny-mpv-sub-remove"
+description = "Denies the mpv_sub_remove command without any pre-configured scope."
+commands.deny = ["mpv_sub_remove"]
