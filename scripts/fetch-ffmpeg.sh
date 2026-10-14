@@ -22,7 +22,6 @@ MIRROR="https://github.com/MaxMB15/MaxVideoPlayer/releases/download/ffmpeg-sidec
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$ROOT/apps/player/src-tauri/binaries"
-mkdir -p "$OUT_DIR"
 
 TARGET_TRIPLE="$(rustc -Vv | grep '^host:' | cut -d' ' -f2)"
 PLATFORM="${1:-}"
@@ -123,6 +122,7 @@ esac
 FOUND="$(find "$TMP" -type f -name "ffmpeg${EXT}" | head -n1)"
 if [[ -z "$FOUND" ]]; then echo "ffmpeg binary not found in archive" >&2; exit 1; fi
 
+mkdir -p "$OUT_DIR"
 DEST="$OUT_DIR/${SIDECAR}-${TARGET_TRIPLE}${EXT}"
 cp "$FOUND" "$DEST"
 chmod +x "$DEST"

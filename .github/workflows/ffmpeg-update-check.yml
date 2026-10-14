@@ -9,7 +9,9 @@
 # newer than every pin. No issue opens when one with the same title exists,
 # open or closed, so closing one means it isn't opened again. A pull request
 # that changes the script or this workflow runs the same comparison and only
-# reports it, so a change that leaves the versions unreadable fails there.
+# reports it. The comparison fails when it can't read a version, when the
+# script has an FFMPEG_VERSION line it didn't read, or when two lines name the
+# same platform, so a pull request that breaks those lines fails there.
 name: ffmpeg update check
 
 on:
@@ -26,6 +28,11 @@ on:
 
 permissions:
   contents: read
+
+# Plain bash in Actions doesn't set pipefail, and this shell does.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   compare:
@@ -57,6 +64,19 @@ jobs:
           if [[ ! -s pins.txt ]] || grep -qvE '^[a-z]+ [0-9]+\.[0-9]+(\.[0-9]+)?$' pins.txt; then
             echo "::error::Couldn't read the FFMPEG_VERSION lines in scripts/fetch-ffmpeg.sh"
             cat pins.txt
+            exit 1
+          fi
+          # A line the awk above skips, such as one indented with a tab, would
+          # leave that platform out without an error.
+          lines="$(grep -cE '^[[:space:]]*FFMPEG_VERSION=' scripts/fetch-ffmpeg.sh)"
+          if [[ "$lines" -ne "$(wc -l < pins.txt)" ]]; then
+            echo "::error::scripts/fetch-ffmpeg.sh has $lines FFMPEG_VERSION lines, and only these were read"
+            cat pins.txt
+            exit 1
+          fi
+          repeated="$(cut -d' ' -f1 pins.txt | sort | uniq -d)"
+          if [[ -n "$repeated" ]]; then
+            echo "::error::scripts/fetch-ffmpeg.sh sets FFMPEG_VERSION more than once for $(paste -sd' ' - <<< "$repeated")"
             exit 1
           fi
 
@@ -118,6 +138,11 @@ jobs:
     if: github.event_name != 'pull_request' && needs.compare.outputs.versions != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # A run started by hand while the Monday one is still going would read the
+    # same titles and open the same issues, so the second waits.
+    concurrency:
+      group: ffmpeg-update-check-issues
+      cancel-in-progress: false
     permissions:
       issues: write
     steps:
@@ -129,6 +154,8 @@ jobs:
           TABLE: ${{ needs.compare.outputs.table }}
         run: |
           gh issue list --state all --limit 1000 --json title --jq '.[].title' > titles.txt
+          # One issue that can't be opened doesn't stop the rest.
+          failed=0
           for version in $VERSIONS; do
             title="ffmpeg $version is out"
             if grep -Fxq -- "$title" titles.txt; then
@@ -142,5 +169,9 @@ jobs:
               echo
               echo "docs/development.md says how to move to a new ffmpeg and what to check first."
             } > issue.md
-            gh issue create --title "$title" --body-file issue.md
+            if ! gh issue create --title "$title" --body-file issue.md; then
+              echo "::error::Couldn't open the issue \"$title\""
+              failed=1
+            fi
           done
+          exit "$failed"
