@@ -230,7 +230,9 @@ export const PlayerView = () => {
 	// Set when the viewer stops playback, which also forgets the subtitles.
 	const stoppedRef = useRef(false);
 	// False once the page closes. A subtitle picked before then is dropped,
-	// since the subtitles the page saved when it closed come back with it.
+	// since the subtitles the page saved when it closed come back with it. An
+	// item still waiting to start doesn't start, since the page that would
+	// show it is gone.
 	const openRef = useRef(false);
 
 	// Remembers which language + rank-within-language the user last picked so the
@@ -422,7 +424,7 @@ export const PlayerView = () => {
 			flushProgress();
 			const key = playbackKey(ch);
 			const saved = key ? await getPlaybackPosition(key).catch(() => null) : null;
-			if (requestId !== startRequestRef.current) return;
+			if (requestId !== startRequestRef.current || !openRef.current) return;
 			if (saved && shouldOfferResume(saved.positionSeconds, saved.durationSeconds)) {
 				const s = mpvStateRef.current;
 				const wasPlaying = s.isPlaying && !s.isPaused;

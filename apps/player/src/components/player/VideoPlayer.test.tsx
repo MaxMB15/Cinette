@@ -714,6 +714,39 @@ describe("opening something to watch", () => {
 		expect(loadedUrls()).toEqual([harborLights().url]);
 	});
 
+	it("doesn't start a movie when the player page closed while its resume point was looked up", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		await goToPage("/");
+		const lookup = deferred<PlaybackPosition | null>();
+		tauri.getPlaybackPosition.mockReturnValue(lookup.promise);
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await goToPage("/");
+		await act(async () => lookup.resolve(null));
+		await flush();
+		expect(loadedUrls()).toEqual([MOVIE_URL]);
+		expect(tauri.recordPlayStart).toHaveBeenCalledTimes(1);
+
+		await goToPage("/player");
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+	});
+
+	it("doesn't start a channel when the player page closed while it checked what played", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		await goToPage("/");
+		const polled = deferred<PolledMpvState>();
+		tauri.mpvGetState.mockReturnValue(polled.promise);
+		await goTo({ url: NEWS_URL, channel: makeNewsChannel() });
+		await goToPage("/");
+		await act(async () => polled.resolve({ ...idleState(), ...playing(MOVIE_URL, 905, 3600) }));
+		await flush();
+		expect(loadedUrls()).toEqual([MOVIE_URL]);
+
+		await goToPage("/player");
+		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+	});
+
 	it("opening another movie from inside the player saves the first and records its end", async () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
@@ -912,6 +945,20 @@ describe("resuming", () => {
 		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
 		expect(fullscreenSpy).not.toHaveBeenCalled();
 		expect(resumePrompt()).toBeInTheDocument();
+	});
+
+	it("doesn't pause what plays when the page closed before the prompt could show", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		await goToPage("/");
+		const lookup = deferred<PlaybackPosition | null>();
+		tauri.getPlaybackPosition.mockReturnValue(lookup.promise);
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await goToPage("/");
+		await act(async () => lookup.resolve(saved("movie:harbor lights", 1800, 3600)));
+		await flush();
+		expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+		expect(loadedUrls()).toEqual([MOVIE_URL]);
 	});
 
 	it("plays what was picked last when lookups finish out of order", async () => {
@@ -2114,7 +2161,7 @@ describe("subtitles", () => {
 		expect(loadedUrls()).toEqual([MOVIE_URL]);
 	});
 
-	it("leaves the subtitles out when another item starts after the player page closed", async () => {
+	it("keeps the subtitles when the page closed before another item could start", async () => {
 		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
 		await openItem(lanternKeeper());
 		pickEnglishSubtitles();
@@ -2126,11 +2173,11 @@ describe("subtitles", () => {
 		await goToPage("/");
 		await act(async () => lookup.resolve(null));
 		await flush();
-		expect(loadedUrls()).toEqual([MOVIE_URL, harborLights().url]);
+		expect(loadedUrls()).toEqual([MOVIE_URL]);
 
 		await goToPage("/player");
-		await setMpv({ state: playing(harborLights().url, 2, 3600) });
-		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
 	});
 
 	it("loads the next episode's subtitles again when the page closed while they loaded", async () => {
