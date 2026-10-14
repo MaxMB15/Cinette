@@ -3,11 +3,13 @@
 
 # Opens an issue when ffmpeg has a release newer than a build that
 # scripts/fetch-ffmpeg.sh pins. It compares the script's FFMPEG_VERSION lines
-# with the release tags in FFmpeg's git repository. It opens one issue for the
-# newest release, unless an issue with the same title exists, open or closed,
-# so closing one means it isn't opened again. A pull request that changes the
-# script or this workflow runs the same comparison and only reports it, so a
-# change that leaves the versions unreadable fails there.
+# with the release tags in FFmpeg's git repository. A release gets an issue
+# when it's the newest in a pinned series and newer than that pin, as a fix
+# release for the series the app ships, or when it's the newest of all and
+# newer than every pin. No issue opens when one with the same title exists,
+# open or closed, so closing one means it isn't opened again. A pull request
+# that changes the script or this workflow runs the same comparison and only
+# reports it, so a change that leaves the versions unreadable fails there.
 name: ffmpeg update check
 
 on:
@@ -26,12 +28,14 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  compare:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write
+    outputs:
+      versions: ${{ steps.compare.outputs.versions }}
+      table: ${{ steps.compare.outputs.table }}
     steps:
       # A pull request reads its own copy of the script, and other runs read
       # the one on dev.
@@ -55,7 +59,6 @@ jobs:
             cat pins.txt
             exit 1
           fi
-          oldest="$(cut -d' ' -f2 pins.txt | sort -V | head -n 1)"
 
           # Release tags look like n8.1.3. Tags like n8.2-dev mark where work
           # on a series began, so they're left out.
@@ -67,44 +70,77 @@ jobs:
             exit 1
           fi
 
-          if [[ "$(printf '%s\n' "$oldest" "$newest" | sort -V | tail -n 1)" != "$oldest" ]]; then
-            newer=true
-            lead="ffmpeg $newest is out, and scripts/fetch-ffmpeg.sh pins an older build."
-          else
-            newer=false
-            lead="scripts/fetch-ffmpeg.sh pins the newest ffmpeg release, $newest."
-          fi
+          # True when version $1 comes after version $2.
+          is_newer() {
+            [[ "$1" != "$2" && "$(printf '%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]]
+          }
 
+          : > newer.txt
           {
-            echo "$lead"
-            echo
             echo "| Platform | Pinned | Newest in its series |"
             echo "| --- | --- | --- |"
             while read -r platform version; do
               series="$(cut -d. -f1-2 <<< "$version")"
               latest="$({ grep -E "^${series//./\\.}(\.|$)" releases.txt || true; } | tail -n 1)"
               echo "| $platform | $version | $latest |"
+              if [[ -n "$latest" ]] && is_newer "$latest" "$version"; then
+                echo "$latest" >> newer.txt
+              fi
             done < pins.txt
-            echo
-            echo "docs/development.md says how to move to a new ffmpeg and what to check first."
-          } > issue.md
-          { echo "## ffmpeg update check"; echo; cat issue.md; } >> "$GITHUB_STEP_SUMMARY"
+          } > table.md
+          highest="$(cut -d' ' -f2 pins.txt | sort -V | tail -n 1)"
+          if is_newer "$newest" "$highest"; then
+            echo "$newest" >> newer.txt
+          fi
+          versions="$(sort -uV newer.txt | paste -sd' ' -)"
+
+          if [[ -n "$versions" ]]; then
+            lead="Newer ffmpeg releases than scripts/fetch-ffmpeg.sh pins: $versions."
+          else
+            lead="scripts/fetch-ffmpeg.sh pins the newest release of each series it uses, and ffmpeg's newest release is $newest."
+          fi
           {
-            echo "newer=$newer"
-            echo "newest=$newest"
+            echo "## ffmpeg update check"
+            echo
+            echo "$lead"
+            echo
+            cat table.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "versions=$versions"
+            echo "table<<END_OF_TABLE"
+            cat table.md
+            echo "END_OF_TABLE"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Open an issue
-        if: github.event_name != 'pull_request' && steps.compare.outputs.newer == 'true'
+  open-issues:
+    needs: compare
+    if: github.event_name != 'pull_request' && needs.compare.outputs.versions != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue for each newer release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          NEWEST: ${{ steps.compare.outputs.newest }}
+          VERSIONS: ${{ needs.compare.outputs.versions }}
+          TABLE: ${{ needs.compare.outputs.table }}
         run: |
-          title="ffmpeg $NEWEST is out"
           gh issue list --state all --limit 1000 --json title --jq '.[].title' > titles.txt
-          if grep -Fxq -- "$title" titles.txt; then
-            echo "An issue called \"$title\" exists already."
-            exit 0
-          fi
-          gh issue create --title "$title" --body-file issue.md
+          for version in $VERSIONS; do
+            title="ffmpeg $version is out"
+            if grep -Fxq -- "$title" titles.txt; then
+              echo "An issue called \"$title\" exists already."
+              continue
+            fi
+            {
+              echo "ffmpeg $version is out, and scripts/fetch-ffmpeg.sh pins an older build."
+              echo
+              printf '%s\n' "$TABLE"
+              echo
+              echo "docs/development.md says how to move to a new ffmpeg and what to check first."
+            } > issue.md
+            gh issue create --title "$title" --body-file issue.md
+          done

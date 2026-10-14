@@ -37,6 +37,7 @@ fi
 # FFMPEG_VERSION is the ffmpeg release a build comes from, and the weekly
 # .github/workflows/ffmpeg-update-check.yml reads those lines. FILE is the
 # archive's name on the pre-release, and UPSTREAM is the builder's copy.
+# TARGETS lists the Rust targets the build runs on.
 #
 # The builds stay on ffmpeg 8.1. ffmpeg 9.0 checks TLS certificates by
 # default, which needs changes in the app first. docs/development.md explains.
@@ -46,6 +47,7 @@ case "$PLATFORM" in
     # Apple Silicon, from Martin Riedl's build server, which keeps every
     # release build it has made. It has no 8.1.3 build.
     FFMPEG_VERSION=8.1.2
+    TARGETS="aarch64-apple-darwin"
     FILE="ffmpeg-$FFMPEG_VERSION-macos-arm64.zip"
     UPSTREAM="https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffmpeg.zip"
     SHA256=ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c
@@ -55,6 +57,7 @@ case "$PLATFORM" in
     # after the 8.1.3 tag. BtbN deletes daily builds after about two weeks but
     # keeps the last one of each month, like this one, for about two years.
     FFMPEG_VERSION=8.1.3
+    TARGETS="x86_64-unknown-linux-gnu"
     FILE="ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz"
     UPSTREAM="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/$FILE"
     SHA256=97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79
@@ -63,6 +66,7 @@ case "$PLATFORM" in
     # x86_64, from the same BtbN build as Linux. CI doesn't build for Windows
     # yet.
     FFMPEG_VERSION=8.1.3
+    TARGETS="x86_64-pc-windows-msvc x86_64-pc-windows-gnu"
     FILE="ffmpeg-n8.1.3-9-g29e619e767-win64-gpl-8.1.zip"
     UPSTREAM="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/$FILE"
     SHA256=7b801cdd3a1a0bb54ae6f572187e68b4ed54f52086cfee133fab2180bfb429fa
@@ -70,6 +74,13 @@ case "$PLATFORM" in
     ;;
   *) echo "Unknown platform: $PLATFORM" >&2; exit 1 ;;
 esac
+
+# The sidecar gets this machine's target name, so a build for another CPU, such
+# as the arm64 macOS build on an Intel Mac, would install and then fail to run.
+if [[ " $TARGETS " != *" $TARGET_TRIPLE "* ]]; then
+  echo "No ffmpeg build is pinned for $TARGET_TRIPLE. The $PLATFORM build runs on $TARGETS." >&2
+  exit 1
+fi
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
