@@ -205,8 +205,9 @@ export const useMpv = () => {
 			}
 			flashRecovered();
 			// The subtitles stood still while the stream reconnected, but
-			// mpv had already played on for a while before this event. Read
-			// where it got to before they run again.
+			// mpv had already played on for a while before this event. They
+			// start again at once from the last reading, and catch up when
+			// this one comes back.
 			refresh();
 		});
 		// Buffering lifecycle (paused-for-cache observation in Rust). Debounce
