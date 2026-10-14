@@ -495,6 +495,39 @@ describe("useMpv", () => {
 			await waitFor(() => expect(result.current.state.waiting).toBe(true));
 		});
 
+		it("reads the state once a load returns if mpv said it changed meanwhile", async () => {
+			const load = deferred<void>();
+			mockMpvLoad.mockReturnValueOnce(load.promise).mockResolvedValueOnce(undefined);
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			const polls = mockMpvGetState.mock.calls.length;
+
+			let loaded: Promise<void>;
+			act(() => {
+				loaded = result.current.load("http://vod.url");
+			});
+			act(() => {
+				mockListenCallbacks.get("mpv://state-changed")!({
+					payload: { url: "http://vod.url" },
+				});
+			});
+			expect(mockMpvGetState).toHaveBeenCalledTimes(polls);
+
+			mockMpvGetState.mockResolvedValueOnce(playingAt(3));
+			await act(async () => {
+				load.resolve();
+				await loaded!;
+			});
+			expect(mockMpvGetState).toHaveBeenCalledTimes(polls + 1);
+			await waitFor(() => expect(result.current.state.isPlaying).toBe(true));
+
+			// A load with no change while it ran leaves it to the next poll.
+			await act(async () => {
+				await result.current.load("http://vod.url");
+			});
+			expect(mockMpvGetState).toHaveBeenCalledTimes(polls + 1);
+		});
+
 		it("stops listening for those changes when the player page closes", async () => {
 			const { unmount } = renderHook(() => useMpv());
 			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
@@ -1196,6 +1229,26 @@ describe("useMpv", () => {
 			expect(result.current.reconnecting).toBe(false);
 			expect(result.current.reconnectAttempt).toBe(0);
 			expect(result.current.recentlyRecovered).toBe(true);
+		});
+
+		it("mpv://reconnected reads the state again at once", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+			const polls = mockMpvGetState.mock.calls.length;
+
+			mockMpvGetState.mockResolvedValueOnce({
+				isPlaying: true,
+				isPaused: false,
+				currentUrl: "http://s",
+				volume: 100,
+				position: 42,
+				duration: 0,
+			} as never);
+			act(() => {
+				mockListenCallbacks.get("mpv://reconnected")!({ payload: { url: "http://s" } });
+			});
+			expect(mockMpvGetState).toHaveBeenCalledTimes(polls + 1);
+			await waitFor(() => expect(result.current.state.position).toBe(42));
 		});
 
 		it("mpv://reconnected defensively clears buffering (stuck via eof-reached path)", async () => {

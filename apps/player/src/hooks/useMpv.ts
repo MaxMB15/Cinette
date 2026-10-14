@@ -106,6 +106,48 @@ export const useMpv = () => {
 	// and is dropped.
 	const pollsSentRef = useRef(0);
 	const pollTakenRef = useRef(0);
+	// Set when mpv's state changes while a load runs, so the load reads it.
+	const changedWhileLoadingRef = useRef(false);
+
+	const refresh = useCallback(() => {
+		const seekMark = seeks.mark();
+		const volumeMark = volumeChanges.mark();
+		const loadMark = loads.mark();
+		const sent = ++pollsSentRef.current;
+		return mpvGetState()
+			.then((s) => {
+				console.debug("[useMpv] poll state:", JSON.stringify(s));
+				// A poll that lands mid-load may describe the previous stream (or
+				// none at all). Keep the reset state until the load returns.
+				if (loadingRef.current) return;
+				if (sent < pollTakenRef.current) return;
+				pollTakenRef.current = sent;
+				const readAt = performance.now();
+				setState((prev) => {
+					const seeking = seeks.isStale(seekMark);
+					return {
+						isPlaying: s.isPlaying,
+						isPaused: s.isPaused,
+						currentUrl: s.currentUrl,
+						volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
+						position: seeking ? prev.position : s.position,
+						positionAt: seeking ? prev.positionAt : readAt,
+						duration: s.duration,
+						playbackStarted: s.playbackStarted,
+						openFailed: s.openFailed,
+						reachedEnd: s.reachedEnd,
+						waiting: s.waiting,
+						// Kept from the fallback event until a poll describes the new player.
+						fallbackActive: loads.isStale(loadMark)
+							? prev.fallbackActive
+							: s.fallbackActive,
+					};
+				});
+			})
+			.catch((e) => {
+				console.warn("[useMpv] poll failed:", e);
+			});
+	}, [seeks, volumeChanges, loads]);
 
 	// The event comes while the load runs, before a poll can report it.
 	useEffect(() => {
@@ -162,6 +204,10 @@ export const useMpv = () => {
 				bufferingTimerRef.current = null;
 			}
 			flashRecovered();
+			// The subtitles stood still while the stream reconnected, but
+			// mpv had already played on for a while before this event. Read
+			// where it got to before they run again.
+			refresh();
 		});
 		// Buffering lifecycle (paused-for-cache observation in Rust). Debounce
 		// the "true" transition by 1.5 s so brief stalls during startup or seek
@@ -207,7 +253,7 @@ export const useMpv = () => {
 				recoveredTimerRef.current = null;
 			}
 		};
-	}, [flashRecovered]);
+	}, [flashRecovered, refresh]);
 
 	// On mount, check if mpv is already playing (e.g. user navigated away and back).
 	// If so, restore firstFrameReady immediately so the background turns transparent.
@@ -354,9 +400,16 @@ export const useMpv = () => {
 				loadingRef.current = false;
 				loaded();
 				setLoadPending(false);
+				// No poll is taken while a load runs. If mpv said the video
+				// started or stopped meanwhile, read the state now rather
+				// than at the next poll.
+				if (changedWhileLoadingRef.current) {
+					changedWhileLoadingRef.current = false;
+					refresh();
+				}
 			}
 		},
-		[loads]
+		[loads, refresh]
 	);
 
 	/**
@@ -497,46 +550,6 @@ export const useMpv = () => {
 	// only ever takes ON forward progress, so it survives the retry window.
 	const getLastKnownPosition = useCallback(() => lastKnownPositionRef.current, []);
 
-	const refresh = useCallback(() => {
-		const seekMark = seeks.mark();
-		const volumeMark = volumeChanges.mark();
-		const loadMark = loads.mark();
-		const sent = ++pollsSentRef.current;
-		return mpvGetState()
-			.then((s) => {
-				console.debug("[useMpv] poll state:", JSON.stringify(s));
-				// A poll that lands mid-load may describe the previous stream (or
-				// none at all). Keep the reset state until the load returns.
-				if (loadingRef.current) return;
-				if (sent < pollTakenRef.current) return;
-				pollTakenRef.current = sent;
-				const readAt = performance.now();
-				setState((prev) => {
-					const seeking = seeks.isStale(seekMark);
-					return {
-						isPlaying: s.isPlaying,
-						isPaused: s.isPaused,
-						currentUrl: s.currentUrl,
-						volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
-						position: seeking ? prev.position : s.position,
-						positionAt: seeking ? prev.positionAt : readAt,
-						duration: s.duration,
-						playbackStarted: s.playbackStarted,
-						openFailed: s.openFailed,
-						reachedEnd: s.reachedEnd,
-						waiting: s.waiting,
-						// Kept from the fallback event until a poll describes the new player.
-						fallbackActive: loads.isStale(loadMark)
-							? prev.fallbackActive
-							: s.fallbackActive,
-					};
-				});
-			})
-			.catch((e) => {
-				console.warn("[useMpv] poll failed:", e);
-			});
-	}, [seeks, volumeChanges, loads]);
-
 	useEffect(() => {
 		console.log("[useMpv] starting poll interval");
 		refresh();
@@ -552,7 +565,8 @@ export const useMpv = () => {
 	// keeps the subtitles in time without waiting for the next poll.
 	useEffect(() => {
 		const unlistenPromise = listen<{ url: string }>("mpv://state-changed", () => {
-			refresh();
+			if (loadingRef.current) changedWhileLoadingRef.current = true;
+			else refresh();
 		});
 		return () => {
 			unlistenPromise.then((fn) => fn());
