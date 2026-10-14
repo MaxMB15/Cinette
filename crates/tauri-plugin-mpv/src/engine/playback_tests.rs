@@ -300,6 +300,31 @@ fn adds_and_removes_subtitle_tracks() {
 }
 
 #[test]
+fn removes_a_subtitle_track_by_id_while_another_is_selected() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &path, None);
+    let tracks = |engine: &MpvEngine| mpv(engine).get_property::<i64>("track-list/count").unwrap();
+    let selected = |engine: &MpvEngine| mpv(engine).get_property::<String>("sid").unwrap();
+
+    // The engine takes out the track in use when it adds one, so mpv adds
+    // the second track itself and track 1 stays.
+    engine.sub_add(&subtitles, true).unwrap();
+    mpv(&engine)
+        .command("sub-add", &[&format!("memory://{SRT}"), "select"])
+        .unwrap();
+    assert_eq!(tracks(&engine), 3);
+    assert_eq!(selected(&engine), "2");
+
+    // Removing track 1 leaves the selected track alone.
+    engine.sub_remove(1).unwrap();
+    assert_eq!(tracks(&engine), 2);
+    assert_eq!(selected(&engine), "2");
+}
+
+#[test]
 fn stop_forgets_the_stream_and_the_player() {
     let media = MediaDir::new();
     let path = media.file("tone.wav", &wav(10));
