@@ -652,4 +652,10 @@ mod tests {
         let name = path.rsplit('/').next().unwrap_or_default();
         assert!(name.starts_with("libmpv.so"), "{path}");
     }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn loaded_libmpv_finds_nothing_off_linux() {
+        assert_eq!(super::loaded_libmpv(), None);
+    }
 }
