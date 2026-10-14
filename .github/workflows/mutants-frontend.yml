@@ -119,15 +119,16 @@ jobs:
           # one of those, the ranges would miss the lines the pull request
           # changes, so the job fails for it. An escape like \u2028 and a CRLF
           # line ending are fine. Git quotes a name with an LF in it, and the
-          # check above fails for that, so the names here split on LF alone.
-          # They're bytes, since a name needn't be UTF-8, and sort runs in the
-          # C locale so that it drops only names that are the same.
+          # check above fails for that and for a comma, so splitting the list
+          # on commas and LFs is safe. The names are bytes, since a name
+          # needn't be UTF-8, and sort runs in the C locale so that it drops
+          # only names that are the same.
           if [ -n "$lines" ]; then
             breaks=$(tr , '\n' <<< "$lines" | sed 's/:[0-9]*-[0-9]*$//' | LC_ALL=C sort -u |
               python3 -I -c 'import re, sys; sys.stdout.buffer.write(b"\n".join(n for n in sys.stdin.buffer.read().split(b"\n") if n and re.search(rb"\xe2\x80[\xa8\xa9]|\r(?!\n)", open(b"apps/player/" + n, "rb").read())))')
             if [ -n "$breaks" ]; then
               while IFS= read -r name; do
-                echo "::error title=Not checked::${name//\%/%25} has a U+2028, a U+2029 or a lone CR, which Stryker counts as a line break and git doesn't. Write a U+2028 or a U+2029 as an escape like \\u2028, and remove each CR that no LF follows, so the check can run on the file."
+                echo "::error title=Not checked::${name//\%/%25} has a U+2028, a U+2029 or a CR that no LF follows, which Stryker counts as a line break and git doesn't. Write a U+2028 or a U+2029 as an escape like \\u2028, and replace each CR that no LF follows with an LF, so the check can run on the file."
               done <<< "$breaks"
               exit 1
             fi
