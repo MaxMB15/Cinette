@@ -130,6 +130,9 @@ pub(crate) fn poison<T>(mutex: &Mutex<T>) {
 }
 
 /// What was logged while a test held [`Logged::start`]'s guard.
+///
+/// mvp-core's `test_log.rs` has a copy of this, so a fix to one belongs in
+/// both.
 #[derive(Clone, Default)]
 pub(crate) struct Logged(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 

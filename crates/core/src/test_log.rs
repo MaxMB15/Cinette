@@ -3,6 +3,9 @@
 
 //! Captures log lines in tests, so a test can check what was logged and that
 //! no login got into it.
+//!
+//! The app's `test_support.rs` has a copy of [`Logged`], so a fix to one
+//! belongs in both.
 
 /// What was logged while a test held [`Logged::start`]'s guard.
 #[derive(Clone, Default)]
