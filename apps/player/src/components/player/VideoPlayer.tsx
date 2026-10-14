@@ -146,6 +146,18 @@ const progressFor = (ch: Channel, startPos?: number, url = ch.url): PlaybackProg
 	pendingStart: startPos ?? null,
 });
 
+/**
+ * Has Rust save `p`'s position from now on, or stop saving when `p` has
+ * nothing to save. The position `p` holds goes stale from here, and flushing
+ * it later, say on a stop right after the app comes back, would overwrite the
+ * newer one Rust saved.
+ */
+const handOffToRust = (p: PlaybackProgress) => {
+	p.dirty = false;
+	const { key, url, pendingStart } = p;
+	handOffProgress(key && url ? { key, url, pendingStart } : null).catch(() => {});
+};
+
 /** Same season + episode (duplicate entries of one episode from different sources). */
 const isSameEpisode = (a: Channel, b: Channel): boolean =>
 	a.season != null && a.episode != null && a.season === b.season && a.episode === b.episode;
@@ -334,15 +346,7 @@ export const PlayerView = () => {
 	// after it closes with the item still playing. Rust saves it until the
 	// player is visible again.
 	useEffect(() => {
-		const handOff = () => {
-			const p = progressRef.current;
-			// Rust saves from here on. The position held here goes stale, and
-			// flushing it later, say on a stop right after the app comes back,
-			// would overwrite the newer one Rust saved.
-			p.dirty = false;
-			const { key, url, pendingStart } = p;
-			handOffProgress(key && url ? { key, url, pendingStart } : null).catch(() => {});
-		};
+		const handOff = () => handOffToRust(progressRef.current);
 		const onVisibilityChange = () => {
 			if (document.visibilityState === "hidden") handOff();
 			else handOffProgress(null).catch(() => {});
@@ -481,12 +485,17 @@ export const PlayerView = () => {
 			const loaded = sessionStorage.getItem(LOADED_URL_KEY) ?? prev.url;
 			const s = await mpvGetState();
 			if (s.currentUrl === loaded && s.duration > 0 && s.position > 1) {
-				progressRef.current = {
+				const progress = {
 					...progressFor(prev, undefined, loaded),
 					position: s.position,
 					duration: s.duration,
 					dirty: true,
 				};
+				progressRef.current = progress;
+				// The page closed while mpv answered, when it had nothing to
+				// hand Rust yet, so nothing else would save this item's
+				// progress until the player opens again.
+				if (!openRef.current) handOffToRust(progress);
 			}
 		} catch {}
 	};
@@ -498,16 +507,18 @@ export const PlayerView = () => {
 	// so starting values for the state wouldn't cover it.
 	useEffect(() => {
 		if (navState?.url) {
-			if (navState.seriesEpisodes?.length) {
-				// eslint-disable-next-line react-hooks/set-state-in-effect -- applies the navigation, see above
-				setSeriesEpisodes(navState.seriesEpisodes);
-			}
+			const navEpisodes = navState.seriesEpisodes?.length ? navState.seriesEpisodes : null;
 			const navChannel = navState.channel;
 			const navUrl = navState.url;
 			if (navChannel) {
 				const ch = navChannel.url === navUrl ? navChannel : withSource(navChannel, navUrl);
-				adoptBackgroundProgress().finally(() => startPlayback(ch, "nav"));
+				// The episode list belongs with the item, so it changes only if
+				// the item starts, not when the start is cancelled or dropped.
+				const apply = navEpisodes ? () => setSeriesEpisodes(navEpisodes) : undefined;
+				adoptBackgroundProgress().finally(() => startPlayback(ch, "nav", apply));
 			} else {
+				// eslint-disable-next-line react-hooks/set-state-in-effect -- applies the navigation, see above
+				if (navEpisodes) setSeriesEpisodes(navEpisodes);
 				loadRequestRef.current++;
 				rememberLoadedUrl(navUrl);
 				mpv.load(navUrl).catch(() => {});

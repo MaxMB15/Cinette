@@ -747,6 +747,42 @@ describe("opening something to watch", () => {
 		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
 	});
 
+	it("has the app save what plays when the player page closed while it checked what played", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		await goToPage("/");
+		const polled = deferred<PolledMpvState>();
+		tauri.mpvGetState.mockReturnValue(polled.promise);
+		await goTo({ url: NEWS_URL, channel: makeNewsChannel() });
+		await goToPage("/");
+		expect(tauri.handOffProgress).toHaveBeenLastCalledWith(null);
+		await act(async () => polled.resolve({ ...idleState(), ...playing(MOVIE_URL, 905, 3600) }));
+		await flush();
+		expect(tauri.handOffProgress).toHaveBeenLastCalledWith({
+			key: MOVIE_KEY,
+			url: MOVIE_URL,
+			pendingStart: null,
+		});
+	});
+
+	it("keeps the episode list of what plays when the page closed before another episode started", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 300, 1300) });
+		await goToPage("/");
+		const lookup = deferred<PlaybackPosition | null>();
+		tauri.getPlaybackPosition.mockReturnValue(lookup.promise);
+		await goTo({ url: ep3.url, channel: ep3, seriesEpisodes: [ep3] });
+		await goToPage("/");
+		await act(async () => lookup.resolve(null));
+		await flush();
+
+		await goToPage("/player");
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
 	it("opening another movie from inside the player saves the first and records its end", async () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
