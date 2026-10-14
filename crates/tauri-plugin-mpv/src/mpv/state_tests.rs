@@ -254,6 +254,39 @@ fn keeps_no_subtitles_that_were_removed_or_never_added() {
 }
 
 #[test]
+fn keeps_a_subtitle_added_before_the_stream_starts() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT);
+    let state = app.state();
+    let reload = |url: &str| {
+        let (renderer, _log) = FakeRenderer::working();
+        reload_headless(&state, &app.handle(), url, Ok(renderer)).unwrap();
+        wait_for_playback(&state);
+    };
+
+    // A load returns once mpv has queued the file.
+    load(&app, &path);
+    state.sub_add(&subtitles, true, &path).unwrap();
+    wait_for_playback(&state);
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(property(&state, "sub-visibility"), "no");
+    reload(&path);
+    assert_eq!(property(&state, "sid"), "1");
+
+    // A file that fails to open leaves mpv waiting with none, and Retry
+    // brings back a subtitle picked by then.
+    let late = media.missing("late.wav");
+    load(&app, &late);
+    wait_until("the load to fail", || state.get_state().open_failed);
+    state.sub_add(&subtitles, true, &late).unwrap();
+    media.file("late.wav", &wav(10));
+    reload(&late);
+    assert_eq!(property(&state, "sid"), "1");
+}
+
+#[test]
 fn subtitles_reach_only_the_stream_they_are_for() {
     let app = TestApp::new();
     let media = MediaDir::new();

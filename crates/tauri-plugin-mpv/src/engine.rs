@@ -357,7 +357,10 @@ impl MpvEngine {
     /// the track in use, which it then removes. mpv only draws the new track
     /// when `visible` is true. When the file can't be added, the track in use
     /// stays. mpv draws it as before when `visible` is true, and hides it when
-    /// it's false, since the frontend draws the new subtitles.
+    /// it's false, since the frontend draws the new subtitles. While mpv
+    /// opens a file, or has none, the file only goes on the list of subtitles
+    /// mpv adds as it opens one. mpv doesn't read the file until then, so one
+    /// it can't read doesn't fail the add.
     pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
         let uri = subtitle_uri(path);
@@ -379,7 +382,28 @@ impl MpvEngine {
             set_visible();
         }
         tracing::info!("[MPV] sub-add: {}", origin_for_log(&uri));
+        // Until mpv has opened the file it loads, it adds the files in
+        // `sub-files` as it opens it, and selects the only one. A `sub-add`
+        // then would add this file a second time.
+        let add_on_open = || -> Result<(), String> {
+            set_sub_files(mpv, Some(&uri))?;
+            if visible {
+                set_visible();
+            }
+            tracing::info!(
+                "[MPV] sub-add: once the file opens, sub-visibility={}",
+                visible
+            );
+            Ok(())
+        };
+        if !file_open(mpv) {
+            return add_on_open();
+        }
         if let Err(e) = mpv.command("sub-add", &[&uri, "select"]) {
+            // Another load can start between the check and the add.
+            if !file_open(mpv) {
+                return add_on_open();
+            }
             tracing::warn!("[MPV] sub-add failed: {}", e);
             return Err(e.to_string());
         }
@@ -393,7 +417,7 @@ impl MpvEngine {
         if visible {
             set_visible();
         }
-        set_sub_files(mpv, Some(&uri));
+        let _ = set_sub_files(mpv, Some(&uri));
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }
@@ -405,7 +429,7 @@ impl MpvEngine {
             .mpv
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?;
-        set_sub_files(mpv, None);
+        let _ = set_sub_files(mpv, None);
         if id == -1 {
             mpv.command("sub-remove", &[]).map_err(|e| e.to_string())
         } else {
@@ -421,7 +445,7 @@ impl MpvEngine {
             .mpv
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?;
-        set_sub_files(mpv, Some(&subtitle_uri(file)));
+        let _ = set_sub_files(mpv, Some(&subtitle_uri(file)));
         mpv.set_property("sub-visibility", visible)
             .and_then(|()| mpv.set_property("sub-delay", delay))
             .map_err(|e| e.to_string())
@@ -502,20 +526,29 @@ fn subtitle_uri(path: &str) -> String {
     }
 }
 
+/// Whether mpv has a file open. `playback-abort` is true from a `loadfile`
+/// until mpv starts opening the file, and while there's none. `seeking` can't
+/// be read until the file is open.
+fn file_open(mpv: &Mpv) -> bool {
+    !mpv.get_property::<bool>("playback-abort").unwrap_or(true)
+        && mpv.get_property::<bool>("seeking").is_ok()
+}
+
 /// Makes `uri` the only file in mpv's `sub-files` list, or empties the list.
 /// mpv adds and selects the list's files each time it loads a file, so a
 /// reconnect's reload keeps the subtitles. Adding to the list doesn't add a
-/// track to the file that's playing.
-fn set_sub_files(mpv: &Mpv, uri: Option<&str>) {
+/// track to the file that's playing. A failure is logged here.
+fn set_sub_files(mpv: &Mpv, uri: Option<&str>) -> Result<(), String> {
     let result = mpv.command("change-list", &["sub-files", "clr", ""]).and_then(|()| match uri {
         // `append` takes the URI as one item. Setting the whole list would
         // split it at its colons.
         Some(uri) => mpv.command("change-list", &["sub-files", "append", uri]),
         None => Ok(()),
     });
-    if let Err(e) = result {
+    result.map_err(|e| {
         tracing::warn!("[MPV] sub-files: {e}");
-    }
+        e.to_string()
+    })
 }
 
 /// Works out `(playback_started, open_failed)` for a load from the latch kept
