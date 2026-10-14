@@ -229,13 +229,15 @@ pub mod test_server {
         (url, receiver)
     }
 
-    /// A base URL on a loopback port that nothing listens on, so a request
+    /// A base URL on loopback port 0, which nothing listens on, so a request
     /// to it fails to connect and the error carries the full URL.
     pub fn refused_url() -> String {
-        // The port is free once the listener drops. Another test could be
-        // handed the same port before the request goes out, but the system
-        // rarely gives a freed port back that soon.
-        bind().1
+        // Binding port 0 asks the system for any free port, so no server can
+        // ever be handed port 0 itself. A port freed by a dropped listener
+        // could go to another test's server before the request went out.
+        // Linux refuses the connection and macOS turns down the address,
+        // both before anything is sent.
+        "http://127.0.0.1:0".to_string()
     }
 
     /// A client that reaches the loopback server even when the machine has a
