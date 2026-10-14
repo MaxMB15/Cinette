@@ -649,6 +649,32 @@ describe("useMpv", () => {
 				expect(result.current.windowClosedId).toBe(1);
 			});
 
+			it("is counted on a reopened player before its first poll", async () => {
+				const poll = deferred<never>();
+				mockMpvGetState.mockReturnValue(poll.promise);
+				const { result } = renderHook(() => useMpv());
+				await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+				closeWindow("http://s");
+				expect(result.current.windowClosedId).toBe(1);
+			});
+
+			it("is counted on a reopened player after a poll of the stopped player", async () => {
+				mockMpvGetState.mockResolvedValue(reporting(true, "http://s"));
+				const { result } = renderHook(() => useMpv());
+				await waitFor(() => expect(result.current.state.currentUrl).toBe("http://s"));
+				mockMpvGetState.mockResolvedValue(reporting(false, null));
+				await act(async () => {
+					await result.current.refresh();
+				});
+				expect(result.current.state.currentUrl).toBeNull();
+
+				closeWindow("http://other");
+				expect(result.current.windowClosedId).toBe(0);
+				closeWindow("http://s");
+				expect(result.current.windowClosedId).toBe(1);
+			});
+
 			it("is ignored for another stream", async () => {
 				const { result } = renderHook(() => useMpv());
 				await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());

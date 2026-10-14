@@ -250,21 +250,31 @@ export const useMpv = () => {
 		}
 	}, [state.position]);
 
+	// The last stream a poll named. The plugin stops playback before it sends
+	// `mpv://window-closed`, so a poll in between already reads no stream.
+	const lastUrlRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (state.currentUrl) lastUrlRef.current = state.currentUrl;
+	}, [state.currentUrl]);
+
 	// Goes up by one when mpv quits by itself, because the user closed its
 	// own window or pressed q there. The plugin has stopped playback by then.
+	// A player reopened before its first poll knows no stream yet, so it
+	// counts the event whatever stream it names.
 	const [windowClosedId, setWindowClosedId] = useState(0);
 	useEffect(() => {
 		const unlistenPromise = listen<{ url: string }>("mpv://window-closed", (event) => {
 			// A load replaces the player, so the old one quitting isn't the user's doing.
 			if (loadingRef.current) return;
-			if (event.payload.url !== (requestedUrlRef.current ?? currentUrlRef.current)) return;
+			const expected = requestedUrlRef.current ?? lastUrlRef.current;
+			if (expected !== null && event.payload.url !== expected) return;
 			console.info("[useMpv] mpv window closed:", event.payload.url);
 			setWindowClosedId((id) => id + 1);
 		});
 		return () => {
 			unlistenPromise.then((fn) => fn());
 		};
-	}, [currentUrlRef]);
+	}, []);
 
 	// `load(url)` is a fresh start from 00:00 (used for channel switches /
 	// initial play). `load(url, startPos)` is a resume — used by the
