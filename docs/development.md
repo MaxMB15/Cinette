@@ -92,9 +92,10 @@ Its tag doesn't start with `v`, so it never starts an app release, and it's neve
 marked as the latest release, which the updater reads.
 
 Each Monday, `.github/workflows/ffmpeg-update-check.yml` compares the pinned versions
-with ffmpeg's release tags. When a newer release is out, it opens an issue called
-"ffmpeg <version> is out", with each platform's pin and the newest release in its
-series. It never opens two issues with the same title, so closing one skips that
+with ffmpeg's release tags. It opens an issue called "ffmpeg <version> is out" for a
+fix release in a series the script pins, such as 8.1.4, and for a release newer than
+every pin, such as 9.0.2. The issue lists each platform's pin and the newest release in
+its series. It never opens two issues with the same title, so closing one skips that
 release.
 
 To move to a new ffmpeg:
@@ -104,9 +105,11 @@ To move to a new ffmpeg:
    download, and each BtbN release has a `checksums.sha256`. Martin Riedl only builds
    the newest series, so macOS can trail the other platforms by a patch release.
 2. Check that the app's downloads still work with it. The app runs ffmpeg with the
-   arguments from `crates/core/src/downloads/ffmpeg.rs` and only looks at the exit
-   code. Copy an HLS stream and an MP4 file to MP4, MKV and MPEG-TS, record a few
-   seconds of a live stream, and try an HTTPS stream.
+   arguments from `crates/core/src/downloads/ffmpeg.rs`. It reads the `-progress`
+   lines for the download's progress, the exit code, and the last line ffmpeg writes
+   to stderr, which it shows as the error. Copy an HLS stream and an MP4 file to MP4,
+   MKV and MPEG-TS, record a few seconds of a live stream, and try an HTTPS stream.
+   Check that the progress moves and that a failed download shows a useful error.
 3. Upload the archives under the names the script's `FILE` lines give them, with the
    ffmpeg source they come from. For a release, that's the tarball and its `.asc`
    signature from ffmpeg.org. For a build of a release branch, add a snapshot of that
