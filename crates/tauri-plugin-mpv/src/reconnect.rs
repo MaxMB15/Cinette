@@ -86,8 +86,8 @@ const EVENT_BUFFERING: &str = "mpv://buffering";
 /// `{ "url": string }`.
 const EVENT_BUFFERED: &str = "mpv://buffered";
 
-/// Sent after the last reload fails. The watcher exits, so recovery is up to
-/// the user. The payload is `{ "url": string }`.
+/// Sent after the last reload fails. The watcher stops reloading, so
+/// recovery is up to the user. The payload is `{ "url": string }`.
 const EVENT_LOAD_FAILED: &str = "mpv://load-failed";
 
 /// Sent when mpv shuts down without being told to. Only the fallback window

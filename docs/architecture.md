@@ -94,8 +94,9 @@ records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands
 ## Video rendering
 
 `MpvState::load()` first tries to draw video inside the app window. If that fails, it
-emits `mpv://render-fallback` to the frontend and opens a separate mpv window with
-mpv's own controls instead.
+emits `mpv://render-fallback` to the frontend and opens a separate mpv window instead.
+mpv's own keys control playback there. On Linux mpv also shows its on-screen controls.
+The macOS libmpv is built without Lua, which those controls need.
 
 ### macOS
 
