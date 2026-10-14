@@ -35,6 +35,13 @@ export interface SubtitlePick {
 	 * and while the player starts the item.
 	 */
 	stream: () => string | null;
+	/**
+	 * Called when mpv has added a track it draws for the stream `url`, and the
+	 * player has no stream for the pick any more, as when the page closed.
+	 * Keeps the pick for when the page opens again, and returns false when the
+	 * player can't keep it, as when it has moved on.
+	 */
+	keep: (url: string, entry: SubtitleEntry, rankInLanguage: number) => boolean;
 }
 
 interface SubtitlePickerProps {
@@ -191,25 +198,28 @@ export const SubtitlePicker = ({
 					setError("The video was still starting. Pick the subtitle again.");
 				return;
 			}
+			// Compute rank within this language group for auto-selection on next episode.
+			const langGroup = grouped.find((g) => g.lang === entry.languageCode);
+			const rankInLanguage =
+				langGroup?.entries.findIndex((e) => e.fileId === entry.fileId) ?? 0;
 			const added = mpvSubAdd(localPath, cues.length > 0, url);
 			if (cues.length > 0) added.catch(() => {});
 			else {
 				await added;
 				// mpv draws this track itself. A newer pick replaces it on its
-				// own. When the page closed or the item changed during the add,
-				// the track comes out again, so it doesn't show over the
-				// subtitles the player keeps.
+				// own. mpv took the old track out for it, so when the page
+				// closed during the add, the player keeps this pick for when
+				// the page opens again. When it can't, or the item changed, the
+				// track comes out again, so it doesn't show over the subtitles
+				// the player keeps.
 				if (!pick.latest()) return;
 				if (pick.stream() === null) {
+					if (pick.keep(url, entry, rankInLanguage)) return;
 					await mpvSubRemove(-1, url).catch(() => {});
 					return;
 				}
 			}
 			setSelectedFileId(entry.fileId);
-			// Compute rank within this language group for auto-selection on next episode.
-			const langGroup = grouped.find((g) => g.lang === entry.languageCode);
-			const rankInLanguage =
-				langGroup?.entries.findIndex((e) => e.fileId === entry.fileId) ?? 0;
 			onSubtitleSelected?.(entry.fileId, cues, entry, rankInLanguage);
 			onClose();
 		} catch (e) {

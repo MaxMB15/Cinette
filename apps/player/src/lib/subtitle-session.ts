@@ -54,3 +54,19 @@ export const saveSubtitleSession = (session: SubtitleSession | null): void => {
 	removeStorage(KEY, "session");
 	if (session) writeStorage(KEY, JSON.stringify(session), "session");
 };
+
+/**
+ * Changes the saved subtitles of the item `channelId` when the player last
+ * loaded `url` for it, as the page saved them. Returns false, and changes
+ * nothing, when none are saved or they're for another item or stream.
+ */
+export const updateSubtitleSession = (
+	channelId: string,
+	url: string | null,
+	change: Partial<SubtitleSession>
+): boolean => {
+	const saved = readSubtitleSession();
+	if (!saved || saved.channelId !== channelId || saved.url !== url) return false;
+	saveSubtitleSession({ ...saved, ...change });
+	return true;
+};

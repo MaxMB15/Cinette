@@ -5,13 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useState,
 	type ComponentProps,
 	type ReactNode,
 } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from "react-router";
+import {
+	MemoryRouter,
+	Route,
+	Routes,
+	useLocation,
+	useNavigate,
+	type NavigateFunction,
+} from "react-router";
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
@@ -218,6 +226,7 @@ vi.mock("./SubtitlePicker", () => ({
 				{props.episode ?? "none"}
 			</p>
 			<input aria-label="Search subtitles" />
+			<p>Current subtitle {props.currentSelectedEntry?.fileId ?? "none"}</p>
 			<button
 				type="button"
 				onClick={() => {
@@ -440,6 +449,19 @@ const NavHandle = () => {
 	return null;
 };
 
+/**
+ * Runs in the commit that opens another page, after that page's layout
+ * effects and before its passive ones.
+ */
+const pageOpens: { run: (() => void) | null } = { run: null };
+
+/** Runs `pageOpens.run` each time another page opens. */
+const PageOpens = () => {
+	const { pathname } = useLocation();
+	useLayoutEffect(() => pageOpens.run?.(), [pathname]);
+	return null;
+};
+
 type NavState = {
 	url?: string;
 	channelName?: string;
@@ -466,6 +488,7 @@ const renderPlayer = (state: NavState, { from = "/", fullscreen = false }: Rende
 					<Route path="/playlists" element={<p>Playlists</p>} />
 					<Route path="/player" element={<PlayerView />} />
 				</Routes>
+				<PageOpens />
 			</MemoryRouter>
 		</FullscreenHarness>
 	);
@@ -600,6 +623,7 @@ beforeEach(() => {
 	env.layoutMode = "desktop";
 	env.os = "macos";
 	nav.current = null;
+	pageOpens.run = null;
 });
 
 afterEach(() => {
@@ -2434,6 +2458,238 @@ describe("subtitles", () => {
 			true,
 			ep2.url
 		);
+	});
+
+	it("loads the next episode's subtitles again when the page closed while it looked for a download", async () => {
+		const srt = "1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n";
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		tauri.readSubtitleFile.mockResolvedValue(srt);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		const local = deferred<string | null>();
+		tauri.resolveLocalDownload.mockReturnValue(local.promise);
+		await press("n");
+		await goToPage("/");
+		await act(async () => local.resolve("/downloads/second.mkv"));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, "/downloads/second.mkv"]);
+		expect(tauri.downloadSubtitle).not.toHaveBeenCalled();
+
+		await goToPage("/player");
+		await flush();
+		await setMpv({ state: playing("/downloads/second.mkv", 2, 1300) });
+		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			true,
+			"/downloads/second.mkv"
+		);
+	});
+
+	it("keeps a subtitle mpv adds after the page closed for when it opens again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["nl"],
+			entries: [
+				{ fileId: 303, languageCode: "nl", format: "ass" },
+				{ fileId: 304, languageCode: "nl", format: "ass" },
+			],
+		});
+		tauri.readSubtitleFile.mockRejectedValue(new Error("stream did not contain valid UTF-8"));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		// mpv draws the new track, which took the English one's place.
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(ep1.url, dutch, 1)).toBe(true);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(ep1.url, 2, 1300) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		// The next episode gets the second Dutch subtitle too.
+		await press("n");
+		await flush();
+		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(304);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
+	});
+
+	it("doesn't load the next episode's subtitles over a pick kept after the page closed", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		const search = deferred<SubtitleSearchResult | null>();
+		tauri.searchSubtitles.mockReturnValue(search.promise);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		expect(tauri.searchSubtitles).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		expect(
+			picker.pick?.keep(ep2.url, { fileId: 304, languageCode: "nl", format: "ass" }, 0)
+		).toBe(true);
+		await act(async () =>
+			search.resolve({
+				languages: ["en", "nl"],
+				entries: [
+					{ fileId: 202, languageCode: "en", format: "srt" },
+					{ fileId: 304, languageCode: "nl", format: "ass" },
+				],
+			})
+		);
+
+		await goToPage("/player");
+		await flush();
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		expect(tauri.downloadSubtitle).not.toHaveBeenCalled();
+	});
+
+	it("keeps no subtitle mpv adds after the page closed once it has opened again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		// The page that opened again already shows the subtitles it read, so
+		// the track goes.
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
+		// Nor once it has closed too, since it saved the subtitles it showed.
+		await goToPage("/");
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+	});
+
+	it("keeps a subtitle mpv adds as the page closes", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		let kept: boolean | undefined;
+		pageOpens.run = () => {
+			kept = picker.pick?.keep(MOVIE_URL, dutch, 0);
+		};
+		await goToPage("/");
+		expect(kept).toBe(true);
+	});
+
+	it("keeps a subtitle mpv adds as the page opens again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const pick = picker.pick;
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		let kept: boolean | undefined;
+		// The page that opens reads the saved subtitles after this.
+		pageOpens.run = () => {
+			kept = pick?.keep(MOVIE_URL, dutch, 0);
+		};
+		await goToPage("/player");
+		expect(kept).toBe(true);
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+	});
+
+	it("keeps a subtitle mpv adds after a page that opened again closed", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(true);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+	});
+
+	it("keeps a subtitle mpv adds after a page opened with a new item closed", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await goToPage("/");
+		// This page reads the subtitles the first one saved.
+		await goToPage("/player");
+		await goToPage("/");
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(harborLights().url, dutch, 0)).toBe(true);
+	});
+
+	it("keeps a subtitle mpv adds while a resume prompt for another item shows", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const pick = picker.pick;
+		remember(saved("movie:harbor lights", 1800, 3600));
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(resumePrompt()).toBeInTheDocument();
+		// The page opened with another item, so it hasn't read the saved
+		// subtitles yet.
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(pick?.keep(MOVIE_URL, dutch, 0)).toBe(true);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+	});
+
+	it("keeps no subtitle for a page that's open or has moved on to another stream", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await goToPage("/");
+		await goToPage("/player");
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
+		await goToPage("/");
+		expect(picker.pick?.keep(DOWNLOADED_MOVIE, dutch, 0)).toBe(false);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
 	});
 
 	it("tells the subtitle picker once the player moves on to another episode", async () => {

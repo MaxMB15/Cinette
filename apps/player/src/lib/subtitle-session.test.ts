@@ -2,11 +2,18 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readSubtitleSession, saveSubtitleSession, type SubtitleSession } from "./subtitle-session";
+import {
+	readSubtitleSession,
+	saveSubtitleSession,
+	updateSubtitleSession,
+	type SubtitleSession,
+} from "./subtitle-session";
+
+const STREAM = "https://cdn.example.test/movies/lantern-keeper.mkv";
 
 const session = (): SubtitleSession => ({
 	channelId: "mv1",
-	url: "https://cdn.example.test/movies/lantern-keeper.mkv",
+	url: STREAM,
 	fileId: 101,
 	entry: { fileId: 101, languageCode: "en", format: "srt" },
 	cues: [{ start: 1, end: 4, text: "Mind the lantern" }],
@@ -57,6 +64,34 @@ describe("subtitle session", () => {
 			throw new DOMException("full", "QuotaExceededError");
 		});
 		saveSubtitleSession(session());
+		expect(readSubtitleSession()).toBeNull();
+	});
+
+	it("changes the subtitles saved for the item and stream", () => {
+		saveSubtitleSession(session());
+		expect(updateSubtitleSession("mv1", STREAM, { fileId: 102, autoLoad: true })).toBe(true);
+		expect(readSubtitleSession()).toEqual({ ...session(), fileId: 102, autoLoad: true });
+	});
+
+	it("gives a stream to subtitles saved before the item had one", () => {
+		saveSubtitleSession({ ...session(), url: null });
+		const url = "/downloads/lantern-keeper.mkv";
+		expect(updateSubtitleSession("mv1", null, { url })).toBe(true);
+		expect(readSubtitleSession()).toEqual({ ...session(), url });
+	});
+
+	it("leaves subtitles saved for another item or stream alone", () => {
+		saveSubtitleSession(session());
+		expect(updateSubtitleSession("mv2", STREAM, { fileId: 102 })).toBe(false);
+		expect(updateSubtitleSession("mv1", "/downloads/lantern-keeper.mkv", { fileId: 102 })).toBe(
+			false
+		);
+		expect(updateSubtitleSession("mv1", null, { fileId: 102 })).toBe(false);
+		expect(readSubtitleSession()).toEqual(session());
+	});
+
+	it("saves nothing when no subtitles are saved", () => {
+		expect(updateSubtitleSession("mv1", null, { fileId: 102 })).toBe(false);
 		expect(readSubtitleSession()).toBeNull();
 	});
 });

@@ -37,16 +37,18 @@ const STREAM = "http://example.test/sintel.mkv";
 /**
  * Hands out picks the way the player does. A test sets `stream` to null for
  * a closed page, another item or an item the player is starting, and starts a
- * pick of its own with `startPick`.
+ * pick of its own with `startPick`. `keep` says whether the player keeps a
+ * pick for its closed page, and records what it was asked to keep.
  */
 const makePlayer = () => {
 	const player = {
 		picks: 0,
 		stream: STREAM as string | null,
+		keep: vi.fn<SubtitlePick["keep"]>(() => false),
 		startPick: (): SubtitlePick => {
 			const pick = ++player.picks;
 			const latest = () => pick === player.picks;
-			return { latest, stream: () => (latest() ? player.stream : null) };
+			return { latest, stream: () => (latest() ? player.stream : null), keep: player.keep };
 		},
 	};
 	return player;
@@ -487,10 +489,29 @@ describe("SubtitlePicker search and selection", () => {
 		await act(async () => added());
 		expect(entryButton("Sintel.NL")).toBeEnabled();
 		expect(hasCheck(entryButton("Sintel.NL"))).toBe(false);
+		expect(player.keep).toHaveBeenCalledExactlyOnceWith(STREAM, dutch, 0);
 		// mpv would draw the track over the subtitles the player keeps.
 		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1, STREAM);
 		expect(onSubtitleSelected).not.toHaveBeenCalled();
 		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("leaves a track mpv adds after the page closed to the player that keeps it", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		const add = deferred();
+		tauri.mpvSubAdd.mockReturnValue(add.promise);
+		const { onSubtitleSelected, player } = renderPicker();
+		player.keep.mockReturnValue(true);
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Subtitle 12"));
+		await waitFor(() => expect(tauri.mpvSubAdd).toHaveBeenCalledOnce());
+		player.stream = null;
+		await act(async () => add.resolve());
+		// Second in its language, which the player uses for the next episode.
+		expect(player.keep).toHaveBeenCalledExactlyOnceWith(STREAM, unnamed, 1);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
 	});
 
 	it("leaves the track in use when mpv can't add a file after the player moves on", async () => {
