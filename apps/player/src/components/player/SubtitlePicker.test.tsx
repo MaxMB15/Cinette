@@ -282,17 +282,27 @@ describe("SubtitlePicker search and selection", () => {
 	});
 
 	it("loads a picked subtitle into the player and hands its cues to the caller", async () => {
+		let removed!: () => void;
+		tauri.mpvSubRemove.mockReturnValue(
+			new Promise((resolve) => {
+				removed = resolve;
+			})
+		);
 		const { onSubtitleSelected, onClose } = renderPicker();
 		await screen.findByText("en (2)");
 
 		fireEvent.click(entryButton("Subtitle 12"));
+		await waitFor(() => expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1));
+		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(12);
+		// The old track goes once the new file is read, and the new one is
+		// only added after it's gone.
+		expect(tauri.readSubtitleFile.mock.invocationCallOrder[0]).toBeLessThan(
+			tauri.mpvSubRemove.mock.invocationCallOrder[0]
+		);
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+		await act(async () => removed());
 		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
 
-		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
-		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(12);
-		expect(tauri.mpvSubRemove.mock.invocationCallOrder[0]).toBeLessThan(
-			tauri.downloadSubtitle.mock.invocationCallOrder[0]
-		);
 		// The overlay draws the subtitles, so mpv doesn't.
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt", true);
 		expect(tauri.readSubtitleFile).toHaveBeenCalledExactlyOnceWith("/subs/12.srt");
@@ -412,6 +422,8 @@ describe("SubtitlePicker search and selection", () => {
 		current = false;
 		await act(async () => finish("/subs/11.srt"));
 		expect(entryButton("Sintel.NL")).toBeEnabled();
+		// The track mpv has now belongs to the item the player moved on to.
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
 		expect(onSubtitleSelected).not.toHaveBeenCalled();
 		expect(onClose).not.toHaveBeenCalled();
@@ -435,6 +447,8 @@ describe("SubtitlePicker search and selection", () => {
 			);
 			expect(onSubtitleSelected).not.toHaveBeenCalled();
 			expect(onClose).not.toHaveBeenCalled();
+			// The subtitle in use stays.
+			expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 			expect(entryButton("Sintel.NL")).toBeEnabled();
 			expect(hasCheck(entryButton("Sintel.2010.720p"))).toBe(false);
 		} finally {

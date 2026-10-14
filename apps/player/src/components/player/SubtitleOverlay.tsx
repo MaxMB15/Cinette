@@ -2,13 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useRef } from "react";
+import { useActiveCue } from "@/hooks/useActiveCue";
 import { clampSubtitlePosition, DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import type { SubtitleCue } from "@/lib/types";
 
 interface SubtitleOverlayProps {
 	cues: SubtitleCue[];
-	position: number; // current MPV playback position in seconds
-	delay?: number; // seconds; positive = show future cues, negative = show past cues
+	position: number; // the last MPV playback position read, in seconds
+	playing?: boolean; // whether the video plays on from that position
+	delay?: number; // seconds; positive shows each cue later, as mpv's sub-delay does
 	fontSize?: number; // px, default 18
 	fontFamily?: string; // CSS font-family string, default system-ui
 	posX?: number; // 0 to 100 %, default 50
@@ -20,6 +22,7 @@ interface SubtitleOverlayProps {
 export const SubtitleOverlay = ({
 	cues,
 	position,
+	playing = false,
 	delay = 0,
 	fontSize = 18,
 	fontFamily = "system-ui, sans-serif",
@@ -29,8 +32,7 @@ export const SubtitleOverlay = ({
 	onPositionChange,
 }: SubtitleOverlayProps) => {
 	const ref = useRef<HTMLDivElement>(null);
-	const lookupPos = position + delay;
-	const active = cues.find((c) => lookupPos >= c.start && lookupPos <= c.end);
+	const active = useActiveCue(cues, position, delay, playing);
 
 	if (!active && !editMode) return null;
 	if (cues.length === 0 && !editMode) return null;

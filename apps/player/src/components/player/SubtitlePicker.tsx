@@ -164,12 +164,14 @@ export const SubtitlePicker = ({
 		setDownloadingId(entry.fileId);
 		setError(null);
 		try {
-			await mpvSubRemove(-1).catch(() => {});
 			const localPath = await downloadSubtitle(entry.fileId);
 			// mpv also reads a file that isn't UTF-8, and draws any file the
 			// overlay can't read. A file that neither can read is an error.
 			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
+			// The track in use stays until the new one is ready, and stays with
+			// the item that plays when the player has moved on.
 			if (!isCurrent()) return;
+			await mpvSubRemove(-1).catch(() => {});
 			const added = mpvSubAdd(localPath, cues.length > 0);
 			if (cues.length > 0) added.catch(() => {});
 			else await added;

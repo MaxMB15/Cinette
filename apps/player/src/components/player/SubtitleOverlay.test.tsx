@@ -57,12 +57,14 @@ describe("SubtitleOverlay", () => {
 		expect(container.querySelectorAll("br")).toHaveLength(1);
 	});
 
-	it("shifts the cues by the delay", () => {
-		const { rerender } = render(<SubtitleOverlay cues={cues} position={9} delay={2} />);
+	it("shows each cue later for a positive delay, as mpv does", () => {
+		const { rerender } = render(<SubtitleOverlay cues={cues} position={13} delay={2} />);
+		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
+		rerender(<SubtitleOverlay cues={cues} position={9} delay={2} />);
+		expect(screen.queryByText("Where are you going?")).toBeNull();
+		rerender(<SubtitleOverlay cues={cues} position={9} delay={-2} />);
 		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
 		rerender(<SubtitleOverlay cues={cues} position={13} delay={-2} />);
-		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
-		rerender(<SubtitleOverlay cues={cues} position={11} delay={-2} />);
 		expect(screen.queryByText("Where are you going?")).toBeNull();
 	});
 

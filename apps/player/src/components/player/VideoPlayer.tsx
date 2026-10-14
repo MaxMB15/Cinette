@@ -676,12 +676,12 @@ export const PlayerView = () => {
 				);
 				if (langEntries.length === 0) return; // preferred language not available — keep none
 				const entry = langEntries[Math.min(pref.rankInLanguage, langEntries.length - 1)];
-				await mpvSubRemove(-1).catch(() => {});
 				const localPath = await downloadSubtitle(entry.fileId);
 				// mpv also reads a file that isn't UTF-8, and draws any file the
 				// overlay can't read.
 				const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 				if (cancelled) return;
+				await mpvSubRemove(-1).catch(() => {});
 				mpvSubAdd(localPath, cues.length > 0).catch(() => {});
 				setSelectedSubtitleId(entry.fileId);
 				setSubtitleCues(cues);
@@ -1347,6 +1347,7 @@ export const PlayerView = () => {
 				<SubtitleOverlay
 					cues={subtitleCues}
 					position={mpv.state.position}
+					playing={videoPlaying && !mpv.buffering}
 					fontSize={subtitleFontSize}
 					fontFamily={subtitleFontFamily}
 					posX={subtitlePos.x}
