@@ -8,6 +8,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 - Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
 - The log now says which mpv version the app runs and, on Linux, which libmpv file it loaded. On Linux, the error the player shows when mpv fails to start names that file too, since a libmpv from somewhere else is the usual cause (#260).
+- Downloads and recordings on macOS and Linux now use ffmpeg 8.1, up from 7.0 on macOS and 7.0.2 on Linux. It has fixes in the code that reads HLS, MPEG-TS and MP4 streams (#276).
 
 ### Fixed
 
