@@ -59,16 +59,19 @@ jobs:
       # with "@@ -a,b +start,count @@", and a count of 0 only removes lines.
       # A file's "+++" line comes before its first hunk, and an added line
       # that starts with "++" looks the same, so this only reads one there.
+      # --text gives hunks for a file git would call binary, such as one with
+      # a NUL byte or one .gitattributes marks -diff.
       # Git quotes a file name with a control character, a quote or a
       # backslash, and puts a tab after one with a space. --mutate would
       # misread a quoted name, and one with a comma or a glob character, so
-      # this leaves them out with a warning.
+      # the job fails for them.
       # --mutate replaces the list in stryker.config.mjs, so this leaves out
       # the tests and types.ts itself. "mutate" is what Stryker mutates, or
       # nothing for all of src/lib, and "lines" is what the check below looks
       # at.
       - name: Pick the lines to mutate
         id: plan
+        shell: bash
         env:
           EVENT: ${{ github.event_name }}
         run: |
@@ -77,7 +80,8 @@ jobs:
             exit 0
           fi
           skipped=$(mktemp)
-          lines=$(git -c core.quotePath=false diff -U0 --diff-filter=AMR HEAD^1 HEAD -- \
+          lines=$(git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
+              -U0 --diff-filter=AMR HEAD^1 HEAD -- \
               'apps/player/src/lib/*.ts' 'apps/player/src/lib/*.tsx' \
               ':!*.test.ts' ':!*.test.tsx' ':!apps/player/src/lib/types.ts' |
             awk -v skipped="$skipped" '
@@ -86,7 +90,9 @@ jobs:
                 file = substr($0, 5)
                 sub(/\t$/, "", file)
                 if (file !~ /^b\// || file ~ /[,*?{}!()]/ || file ~ /\[/ || file ~ /\]/) {
-                  bad = file ~ /^b\// ? substr(file, 3) : file
+                  bad = file
+                  if (sub(/^"b\//, "", bad)) sub(/"$/, "", bad)
+                  else sub(/^b\//, "", bad)
                   file = ""
                 } else {
                   file = substr(file, 3)
@@ -101,24 +107,29 @@ jobs:
                 if (file != "") { printf "%s%s:%d-%d", sep, file, n[1], n[1] + count - 1; sep = "," }
                 else if (bad != "") { print bad > skipped; bad = "" }
               }')
-          while IFS= read -r name; do
-            echo "::warning title=Not checked::Stryker can't take the name ${name//\%/%25} in --mutate, so this run leaves it out. Rename the file to check it."
-          done < "$skipped"
+          if [ -s "$skipped" ]; then
+            while IFS= read -r name; do
+              echo "::error title=Not checked::Stryker can't take the name ${name//\%/%25} in --mutate. Rename the file so the check can run on it."
+            done < "$skipped"
+            exit 1
+          fi
           # A change to the Stryker or Vitest setup, or to their versions in
-          # package.json, can change the result for any mutant.
+          # package.json, can change the result for any mutant. Both reads
+          # are kept whole, so a git error stops the step.
+          changed=$(git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD)
+          versions=$(git diff --text --no-ext-diff --no-textconv -U0 HEAD^1 HEAD -- \
+            apps/player/package.json)
           setup=false
-          if ! git diff --quiet HEAD^1 HEAD -- \
-              apps/player/stryker.config.mjs apps/player/vitest.config.ts \
-              apps/player/vitest.stryker.config.ts scripts/stryker-summary.py ||
-            git diff -U0 HEAD^1 HEAD -- apps/player/package.json |
-              grep -q -E '^[-+][[:space:]]*"(vitest|@stryker-mutator/[^"]+)":'; then
+          if grep -q -x -F -e apps/player/stryker.config.mjs -e apps/player/vitest.config.ts \
+              -e apps/player/vitest.stryker.config.ts -e scripts/stryker-summary.py <<< "$changed" ||
+            grep -q -E '^[-+][[:space:]]*"(vitest|@stryker-mutator/[^"]+)":' <<< "$versions"; then
             setup=true
           fi
           # A change to the setup or the workflow with no lines to check
           # checks one small file instead, so the check runs too. date.ts has
           # its own tests, and every mutant in it is caught or turned off.
           if [ -z "$lines" ] && { [ "$setup" = true ] ||
-              ! git diff --quiet HEAD^1 HEAD -- .github/workflows/mutants-frontend.yml; }; then
+              grep -q -x -F .github/workflows/mutants-frontend.yml <<< "$changed"; }; then
             lines=src/lib/date.ts
             if [ ! -f "apps/player/$lines" ]; then
               echo "::error::$lines is gone. Pick another file for the workflow to check."
@@ -148,7 +159,8 @@ jobs:
       # code to mutate, like a change to types alone, which the log says as
       # "Instrumented 1 source file(s) with 0 mutant(s)". The full run leaves
       # out --allowEmpty, so a broken setup fails there. A bash shell sets
-      # pipefail, so Stryker's exit status gets through tee.
+      # pipefail, so Stryker's exit status gets through tee. The old report
+      # goes first, so the steps below never read one this run didn't write.
       - name: Test the mutants
         id: stryker
         if: steps.plan.outputs.run == 'true'
@@ -157,12 +169,13 @@ jobs:
         env:
           MUTATE: ${{ steps.plan.outputs.mutate }}
         run: |
+          rm -rf reports/mutation
           if [ -z "$MUTATE" ]; then
             pnpm exec stryker run
             exit 0
           fi
           pnpm exec stryker run --mutate "$MUTATE" --allowEmpty 2>&1 | tee "$RUNNER_TEMP/stryker.log"
-          if grep -q -E 'Instrumented [0-9]+ source file\(s\) with 0 mutant\(s\)' "$RUNNER_TEMP/stryker.log"; then
+          if grep -q -E 'Instrumented [1-9][0-9]* source file\(s\) with 0 mutant\(s\)' "$RUNNER_TEMP/stryker.log"; then
             echo "none=true" >> "$GITHUB_OUTPUT"
           fi
 

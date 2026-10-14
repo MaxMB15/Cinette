@@ -246,7 +246,7 @@ thing as the code can't fail any test. The line before it then gets a comment th
 names the mutator and says why:
 
 ```ts
-// Stryker disable next-line StringLiteral: Date.parse gives NaN for any text with no date in it, so this returns 0 either way.
+// Stryker disable next-line StringLiteral: Date.parse gives NaN for both "" and the text Stryker puts in, so this returns 0 either way.
 const ms = Date.parse(value ?? "");
 ```
 
@@ -258,9 +258,9 @@ more than the next line could hide a change that a test should catch. It also fa
 when no test loads any of the changed files, unless their changed lines have nothing to
 change, like a change to types alone. A comment that turns off a change on a changed
 line gets a warning, so check that its reason still holds. The summary lists the
-changes that comments turned off. `--mutate` can't take a file name with a comma, a
-glob character, a quote or a backslash, so CI leaves such a file out and says so in a
-warning.
+changes that Stryker ignored. `--mutate` can't take a file name with a comma, a glob
+character, a quote or a backslash, so the job fails for a changed file with such a
+name. Rename it.
 
 A pull request that changes the Stryker or Vitest setup gets a run of all of `src/lib`.
 That run still fails only on the lines the pull request changes, or on `date.ts` when it

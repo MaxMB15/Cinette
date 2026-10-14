@@ -31,8 +31,8 @@ Stryker reads:
 
 Stryker only makes the mutants whose code lies wholly inside one of the
 ranges, so the check only looks at those too. It prints a warning for each
-mutant a comment turns off there, so a reviewer can check that the reason
-still holds for the changed code.
+mutant Stryker ignored there, as for a comment, so a reviewer can check that
+the reason still holds for the changed code.
 
 --check also fails for any other Stryker comment in the files --lines names.
 One with no reason, or with "all" for the mutators, or one that covers every
@@ -189,7 +189,7 @@ def check(
     """Prints an annotation for each mutant no test caught on `lines`, and for each
     Stryker comment not of the allowed form in their files. Returns 1 if there were
     any, or if there's no report and Stryker made mutants. Also prints a warning for
-    each mutant a comment turns off on `lines`."""
+    each mutant Stryker ignored on `lines`."""
     count = 0
     for name in sorted(lines):
         path = prefix + name
@@ -221,10 +221,10 @@ def check(
             if status == "Ignored":
                 reason = one_line(mutant.get("statusReason") or "")
                 message = (
-                    f"A comment turns off {mutator} changing `{before}` to `{after}` here,"
-                    f' with the reason "{reason}". Check that it still holds for the changed code.'
+                    f"Stryker ignored {mutator} changing `{before}` to `{after}` here,"
+                    f' for the reason "{reason}". Check that it still holds for the changed code.'
                 )
-                title = "Mutant turned off"
+                title = "Mutant ignored"
                 print(annotation(path, start["line"], start["column"], title, message, "warning"))
                 continue
             if status == "Survived":
@@ -344,7 +344,7 @@ def main(argv: list[str]) -> int:
     out = [
         f"## {args.title}",
         "",
-        "| Killed | Survived | No coverage | Timed out | Errors | Turned off | Score |",
+        "| Killed | Survived | No coverage | Timed out | Errors | Ignored | Score |",
         "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         f"| {counts['Killed']} | {counts['Survived']} | {counts['NoCoverage']}"
         f" | {counts['Timeout']} | {errors} | {counts['Ignored']} | {score} |",
@@ -359,7 +359,7 @@ def main(argv: list[str]) -> int:
         ]
     out += mutant_list("Survived", survived)
     out += mutant_list("No coverage", uncovered)
-    out += mutant_list("Turned off", ignored)
+    out += mutant_list("Ignored", ignored)
     print("\n".join(out))
     return 0
 
