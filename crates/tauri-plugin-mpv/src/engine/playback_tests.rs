@@ -386,6 +386,67 @@ fn a_new_player_starts_with_the_restored_subtitles() {
 }
 
 #[test]
+fn adds_a_subtitle_when_the_file_starts() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let tracks = |engine: &MpvEngine| mpv(engine).get_property::<i64>("track-list/count").unwrap();
+    let selected = |engine: &MpvEngine| mpv(engine).get_property::<String>("sid").unwrap();
+    let visible = |engine: &MpvEngine| mpv(engine).get_property::<bool>("sub-visibility").unwrap();
+
+    // Before any file, mpv draws the track only when it was asked to.
+    let mut first = engine(&[("pause", "yes"), ("sub-visibility", "no")]);
+    first.sub_add(&subtitles, true).unwrap();
+    start(&mut first, &path, None);
+    assert_eq!(tracks(&first), 2);
+    assert_eq!(selected(&first), "1");
+    assert!(visible(&first));
+
+    // mpv takes no track from a `loadfile` until it has opened the file,
+    // which is when `MpvState::load` has already returned.
+    let mut second = engine(&[("pause", "yes")]);
+    second.loadfile(&path, None).unwrap();
+    second.sub_add(&subtitles, false).unwrap();
+    second.set_current_url(&path);
+    wait_until("playback to start", || second.get_state().playback_started);
+    assert_eq!(tracks(&second), 2);
+    assert_eq!(selected(&second), "1");
+    assert!(!visible(&second));
+
+    // Nor while it closes the file that plays to load another, as a
+    // reconnect does.
+    let other = media.file("other.wav", &wav(10));
+    second.loadfile(&other, None).unwrap();
+    second.sub_add(&subtitles, true).unwrap();
+    wait_until("the new file to play", || {
+        mpv(&second)
+            .get_property::<String>("filename")
+            .is_ok_and(|n| n == "other.wav")
+            && mpv(&second)
+                .get_property::<bool>("seeking")
+                .is_ok_and(|s| !s)
+    });
+    assert_eq!(tracks(&second), 2);
+    assert_eq!(selected(&second), "1");
+    assert!(visible(&second));
+
+    // Nor while it opens the file, here until the server sends the stream.
+    let (send, held) = std::sync::mpsc::channel();
+    let server = Server::start(wav(10), vec![Reply::HoldAfter(0, held)]);
+    let mut third = engine(&[("pause", "yes")]);
+    third.loadfile(&server.url(), None).unwrap();
+    third.set_current_url(&server.url());
+    wait_until("mpv to ask for the stream", || {
+        !server.requests().is_empty()
+    });
+    third.sub_add(&subtitles, true).unwrap();
+    send.send(()).unwrap();
+    wait_until("playback to start", || third.get_state().playback_started);
+    assert_eq!(tracks(&third), 2);
+    assert_eq!(selected(&third), "1");
+}
+
+#[test]
 fn removes_a_subtitle_track_by_id_while_another_is_selected() {
     let media = MediaDir::new();
     let path = media.file("tone.wav", &wav(10));
