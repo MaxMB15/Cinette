@@ -634,10 +634,6 @@ impl MpvState {
         }
     }
 
-    pub fn set_sub_pos(&self, pos: f64) -> Result<(), String> {
-        lock_or_recover(&self.inner).set_sub_pos(pos)
-    }
-
     /// Shifts the subtitles by `delay` seconds. While there's no mpv, as
     /// after a failed load, the next load that keeps a subtitle file starts
     /// with this delay. A delay mpv turns down isn't kept.

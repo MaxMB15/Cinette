@@ -158,15 +158,6 @@ pub async fn mpv_sub_remove<R: Runtime>(
 }
 
 #[command]
-pub async fn mpv_set_sub_pos(
-    pos: f64,
-    state: tauri::State<'_, MpvState>,
-) -> Result<(), String> {
-    tracing::info!("[MPV] set_sub_pos: {}", pos);
-    state.set_sub_pos(pos)
-}
-
-#[command]
 pub async fn mpv_set_sub_delay(
     delay: f64,
     state: tauri::State<'_, MpvState>,

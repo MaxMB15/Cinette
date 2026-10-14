@@ -246,9 +246,6 @@ export const mpvSubAdd = (path: string, overlay: boolean, url: string): Promise<
 export const mpvSubRemove = (id: number, url?: string): Promise<void> =>
 	inOrder(() => invoke("plugin:mpv|mpv_sub_remove", { id, url }));
 
-export const mpvSetSubPos = (pos: number): Promise<void> =>
-	invoke("plugin:mpv|mpv_set_sub_pos", { pos });
-
 export const mpvSetSubDelay = (delay: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_sub_delay", { delay });
 
