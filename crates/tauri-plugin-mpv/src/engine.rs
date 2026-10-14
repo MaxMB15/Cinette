@@ -495,19 +495,16 @@ fn log_build(mpv: &Mpv) {
     });
 }
 
-/// The libmpv file this process loaded, read from `/proc/self/maps`.
-#[cfg(target_os = "linux")]
+/// The libmpv file this process loaded, read from `/proc/self/maps`. Only
+/// Linux reports it.
 fn loaded_libmpv() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
     // Any mapped file can have a name that isn't UTF-8, and that mustn't
     // hide libmpv.
     let maps = std::fs::read("/proc/self/maps").ok()?;
     libmpv_in_maps(&String::from_utf8_lossy(&maps)).map(str::to_string)
-}
-
-/// Only Linux reports the loaded libmpv file.
-#[cfg(not(target_os = "linux"))]
-fn loaded_libmpv() -> Option<String> {
-    None
 }
 
 /// The path of the first mapped file whose name starts with `libmpv.so`, in
@@ -515,7 +512,6 @@ fn loaded_libmpv() -> Option<String> {
 ///
 /// Each line has five fields separated by single spaces, then padding and
 /// the path. The path can hold spaces of its own.
-#[cfg(any(target_os = "linux", test))]
 fn libmpv_in_maps(maps: &str) -> Option<&str> {
     maps.lines()
         .filter_map(|line| line.splitn(6, ' ').nth(5))
