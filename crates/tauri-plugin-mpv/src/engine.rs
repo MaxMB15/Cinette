@@ -286,6 +286,11 @@ impl MpvEngine {
         self.playback_started = false;
     }
 
+    /// The URL that plays, or None once playback has stopped.
+    pub fn current_url(&self) -> Option<&str> {
+        self.current_url.as_deref()
+    }
+
     /// Stop playback and destroy the mpv instance.
     pub fn stop(&mut self) {
         if let Some(ref mpv) = self.mpv {

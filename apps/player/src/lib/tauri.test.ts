@@ -47,6 +47,31 @@ describe("mpv load and stop", () => {
 		await stopped;
 		expect(commands()).toEqual(["plugin:mpv|mpv_load", "plugin:mpv|mpv_stop"]);
 	});
+
+	it("sends subtitle changes only after the load before them finishes", async () => {
+		const load = deferred();
+		invoke.mockReturnValueOnce(load.promise).mockResolvedValue(undefined);
+
+		void mpvLoad("http://example.com/movie.mkv");
+		const added = tauri.mpvSubAdd("/tmp/a.srt", false, "http://example.com/movie.mkv");
+		const removed = tauri.mpvSubRemove(-1);
+		await flush();
+		expect(commands()).toEqual(["plugin:mpv|mpv_load"]);
+
+		load.resolve();
+		await added;
+		await removed;
+		expect(commands()).toEqual([
+			"plugin:mpv|mpv_load",
+			"plugin:mpv|mpv_sub_add",
+			"plugin:mpv|mpv_sub_remove",
+		]);
+		// A remove for no stream in particular takes the track that plays.
+		expect(invoke.mock.calls[2]).toStrictEqual([
+			"plugin:mpv|mpv_sub_remove",
+			{ id: -1, url: undefined },
+		]);
+	});
 });
 
 describe("mpvLoad arguments", () => {
@@ -132,11 +157,16 @@ describe("backend commands", () => {
 		],
 		[
 			"mpvSubAdd",
-			() => tauri.mpvSubAdd("/tmp/a.srt", true),
+			() => tauri.mpvSubAdd("/tmp/a.srt", true, "http://example.com/movie.mkv"),
 			"plugin:mpv|mpv_sub_add",
-			{ path: "/tmp/a.srt", overlay: true },
+			{ path: "/tmp/a.srt", overlay: true, url: "http://example.com/movie.mkv" },
 		],
-		["mpvSubRemove", () => tauri.mpvSubRemove(3), "plugin:mpv|mpv_sub_remove", { id: 3 }],
+		[
+			"mpvSubRemove",
+			() => tauri.mpvSubRemove(3, "http://example.com/movie.mkv"),
+			"plugin:mpv|mpv_sub_remove",
+			{ id: 3, url: "http://example.com/movie.mkv" },
+		],
 		["mpvSetSubPos", () => tauri.mpvSetSubPos(90), "plugin:mpv|mpv_set_sub_pos", { pos: 90 }],
 		[
 			"mpvSetSubDelay",

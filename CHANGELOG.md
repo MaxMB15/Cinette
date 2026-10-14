@@ -23,6 +23,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 - The subtitles you picked went away when the stream reconnected, when you pressed Retry, or when you switched to another source of the same movie or episode. They now stay, with the delay you gave them (#277).
 - When a stream failed to open and yt-dlp was installed, mpv could pass the stream's link, login included, to yt-dlp. mpv no longer uses yt-dlp (#277).
 - If you left the player right after picking a movie, episode or channel, before it began to load, it could start anyway. The player then showed what played before it, with the episode list of the episode you picked. A movie or episode with a saved resume point also paused what was playing for a prompt you never saw. Leaving the player now stops the start, and what was playing keeps playing (#278).
+- Picking None in the subtitle list while a subtitle still downloaded didn't stop that download, so the subtitle showed up anyway. When the next episode started, a subtitle you picked while its subtitles still loaded on their own was replaced by those once they arrived. What you picked last now stays (#280).
 
 ## [0.6.1] - 2026-10-13
 

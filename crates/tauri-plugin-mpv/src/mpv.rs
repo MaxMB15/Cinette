@@ -30,6 +30,9 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
 
+/// The error for a subtitle change sent for a stream that isn't playing.
+pub(crate) const NOT_PLAYING: &str = "the subtitles are for a stream that isn't playing";
+
 /// The subtitles the frontend gave mpv for the item that plays.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct KeptSubtitles {
@@ -596,19 +599,39 @@ impl MpvState {
     /// Adds a subtitle track in place of the one in use. `overlay` is whether
     /// the frontend draws the subtitles over the video, and then mpv doesn't.
     /// The frontend can't draw over the fallback window, so mpv always draws
-    /// them there.
-    pub fn sub_add(&self, path: &str, overlay: bool) -> Result<(), String> {
+    /// them there. `url` is the stream the subtitles are for, and nothing
+    /// changes once another one plays or playback has stopped.
+    pub fn sub_add(&self, path: &str, overlay: bool, url: &str) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
+        self.check_playing(url)?;
         let visible = !overlay || self.fallback_active.load(Ordering::Acquire);
         lock_or_recover(&self.inner).sub_add(path, visible)?;
         lock_or_recover(&self.subtitles).file = Some((path.to_string(), overlay));
         Ok(())
     }
 
-    pub fn sub_remove(&self, id: i64) -> Result<(), String> {
+    /// Removes subtitle track `id`, and -1 removes the track in use. With a
+    /// `url`, nothing changes once another stream plays or playback has
+    /// stopped. Without one, the track goes from whatever plays, and after a
+    /// failed load the retry starts without the subtitle file.
+    pub fn sub_remove(&self, id: i64, url: Option<&str>) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
+        if let Some(url) = url {
+            self.check_playing(url)?;
+        }
         lock_or_recover(&self.subtitles).file = None;
         lock_or_recover(&self.inner).sub_remove(id)
+    }
+
+    /// Fails unless `url` plays. Subtitle changes go through here with
+    /// `transition` held, so no load or stop can come between the check and
+    /// the change.
+    fn check_playing(&self, url: &str) -> Result<(), String> {
+        if lock_or_recover(&self.inner).current_url() == Some(url) {
+            Ok(())
+        } else {
+            Err(NOT_PLAYING.into())
+        }
     }
 
     pub fn set_sub_pos(&self, pos: f64) -> Result<(), String> {

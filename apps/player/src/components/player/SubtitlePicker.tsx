@@ -25,16 +25,28 @@ const FONT_FAMILIES: { label: string; value: string }[] = [
 ];
 
 // ─── Props ─────────────────────────────────────────────────────────────────
+/** A subtitle choice, which the next one, made by the viewer, replaces. */
+export interface SubtitlePick {
+	/** False once the viewer has picked again. */
+	latest: () => boolean;
+	/**
+	 * The stream to add the subtitles to. Null once the viewer has picked
+	 * again, the page has closed or the player has moved on to another item,
+	 * and while the player starts the item.
+	 */
+	stream: () => string | null;
+}
+
 interface SubtitlePickerProps {
 	imdbId: string;
 	season?: number;
 	episode?: number;
 	onClose: () => void;
 	/**
-	 * False once the page has closed or the player has moved on to another
-	 * item. A subtitle that finishes downloading after that is dropped.
+	 * Called as the viewer picks a subtitle or None. A subtitle that finishes
+	 * downloading once its pick has no stream is dropped.
 	 */
-	isCurrent?: () => boolean;
+	startPick: () => SubtitlePick;
 	onSubtitleSelected?: (
 		fileId: number | null,
 		cues?: SubtitleCue[],
@@ -58,7 +70,7 @@ export const SubtitlePicker = ({
 	season,
 	episode,
 	onClose,
-	isCurrent = () => true,
+	startPick,
 	onSubtitleSelected,
 	currentSelectedId = null,
 	currentSelectedEntry = null,
@@ -161,6 +173,7 @@ export const SubtitlePicker = ({
 	// ─── Subtitle selection ─────────────────────────────────────────────────
 	const handleSelect = async (entry: SubtitleEntry) => {
 		if (downloadingId !== null) return;
+		const pick = startPick();
 		setDownloadingId(entry.fileId);
 		setError(null);
 		try {
@@ -169,18 +182,26 @@ export const SubtitlePicker = ({
 			// overlay can't read. A file that neither can read is an error.
 			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 			// The new track takes the place of the one in use, and a failed add
-			// leaves the old one. Nothing is added once the page has closed or
-			// the player has moved on to another item.
-			if (!isCurrent()) return;
-			const added = mpvSubAdd(localPath, cues.length > 0);
+			// leaves the old one. Nothing is added once the viewer has picked
+			// again, the page has closed or the player has moved on. While the
+			// player starts the item, there's no stream to add it to yet.
+			const url = pick.stream();
+			if (url === null) {
+				if (pick.latest())
+					setError("The video was still starting. Pick the subtitle again.");
+				return;
+			}
+			const added = mpvSubAdd(localPath, cues.length > 0, url);
 			if (cues.length > 0) added.catch(() => {});
 			else {
 				await added;
-				// mpv draws this track itself. When the page closed or the item
-				// changed during the add, the track comes out again, so it doesn't
-				// show over the subtitles the player keeps.
-				if (!isCurrent()) {
-					await mpvSubRemove(-1).catch(() => {});
+				// mpv draws this track itself. A newer pick replaces it on its
+				// own. When the page closed or the item changed during the add,
+				// the track comes out again, so it doesn't show over the
+				// subtitles the player keeps.
+				if (!pick.latest()) return;
+				if (pick.stream() === null) {
+					await mpvSubRemove(-1, url).catch(() => {});
 					return;
 				}
 			}
@@ -193,15 +214,22 @@ export const SubtitlePicker = ({
 			onClose();
 		} catch (e) {
 			console.error("[SubtitlePicker] subtitle load error:", e);
-			setError("Failed to load subtitle. Try another.");
+			if (pick.latest()) setError("Failed to load subtitle. Try another.");
 		} finally {
-			setDownloadingId(null);
+			if (pick.latest()) setDownloadingId(null);
 		}
 	};
 
-	const handleNone = async () => {
-		await mpvSubRemove(-1).catch(() => {});
+	// None also drops a subtitle still downloading, and frees the list to
+	// pick another. An add already on its way to mpv runs first, so the
+	// remove takes its track out too. None only shows once the search found
+	// subtitles, so a message then is about an earlier pick, and goes.
+	const handleNone = () => {
+		startPick();
+		setDownloadingId(null);
 		setSelectedFileId(null);
+		setError(null);
+		mpvSubRemove(-1).catch(() => {});
 		onSubtitleSelected?.(null, [], null, undefined);
 	};
 
