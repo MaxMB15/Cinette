@@ -492,8 +492,8 @@ export const PlayerView = () => {
 					dirty: true,
 				};
 				progressRef.current = progress;
-				// The page closed while mpv answered, when it had nothing to
-				// hand Rust yet, so nothing else would save this item's
+				// The page closed while it waited for mpv, when it had nothing
+				// to hand Rust yet, so nothing else would save this item's
 				// progress until the player opens again.
 				if (!openRef.current) handOffToRust(progress);
 			}

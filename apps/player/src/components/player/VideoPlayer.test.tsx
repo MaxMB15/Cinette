@@ -973,6 +973,32 @@ describe("resuming", () => {
 		expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
 	});
 
+	it("takes the episode list that came with an episode it resumes", async () => {
+		remember(saved("series:show:s1e1", 600, 1300));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		fireEvent.click(screen.getByRole("button", { name: "Resume from 10:00" }));
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("keeps the episode list of what plays when the prompt for another episode is cancelled", async () => {
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		await setMpv({ state: playing(ep1.url, 300, 1300) });
+		await goToPage("/");
+		remember(saved("series:show:s1e3", 600, 1300));
+		await goTo({ url: ep3.url, channel: ep3, seriesEpisodes: [ep3] });
+		await press("Escape");
+		expect(resumePrompt()).not.toBeInTheDocument();
+
+		await goToPage("/player");
+		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
 	it("ignores the player's keys while the prompt is up", async () => {
 		remember(saved(MOVIE_KEY, 1800, 3600));
 		await openItem(lanternKeeper());
