@@ -2636,6 +2636,43 @@ describe("subtitles", () => {
 		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
 	});
 
+	it("keeps a subtitle mpv adds after a page opened with a new item closed", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await goToPage("/");
+		// This page reads the subtitles the first one saved.
+		await goToPage("/player");
+		await goToPage("/");
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(picker.pick?.keep(harborLights().url, dutch, 0)).toBe(true);
+	});
+
+	it("keeps a subtitle mpv adds while a resume prompt for another item shows", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		await goToPage("/");
+		const pick = picker.pick;
+		remember(saved("movie:harbor lights", 1800, 3600));
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		expect(resumePrompt()).toBeInTheDocument();
+		// The page opened with another item, so it hasn't read the saved
+		// subtitles yet.
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		expect(pick?.keep(MOVIE_URL, dutch, 0)).toBe(true);
+
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		expect(screen.getByText("Current subtitle 304")).toBeInTheDocument();
+	});
+
 	it("keeps no subtitle for a page that's open or has moved on to another stream", async () => {
 		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
 		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };

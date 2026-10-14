@@ -110,7 +110,8 @@ const END_LEAD_SECONDS = 10;
 const END_SEEN_WITHIN_MS = 30_000;
 /**
  * How many times a player page has read the subtitles the last one saved. A
- * closed page can only change them until another page reads them.
+ * pick that mpv adds after its page closed only goes in them until another
+ * page reads them.
  */
 let subtitleSessionReads = 0;
 
@@ -680,6 +681,9 @@ export const PlayerView = () => {
 	// Layout effects, so the page counts as closed and has saved its
 	// subtitles once it's off the screen. A navigation runs passive cleanups
 	// later, and a subtitle that loads in between would go to the closed page.
+	// The page takes the count of reads as it opens, since one opened with a
+	// new item never reads the saved subtitles, and checks its own late pick
+	// against that.
 	useLayoutEffect(() => {
 		openRef.current = true;
 		readsSeenRef.current = subtitleSessionReads;
