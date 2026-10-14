@@ -411,6 +411,13 @@ async fn loading_a_provider_logs_where_it_is_without_its_login() {
     assert!(log.contains(&format!("from {list}\n")), "{log}");
     assert!(log.contains(&format!("from {panel}\n")), "{log}");
     assert!(log.contains("fetched 2 episodes for series_id=7"), "{log}");
+    // The panel has no movies, so the log names the lists that failed. The
+    // password check below covers those lines too.
+    assert!(log.contains("[Xtream] get_vod_streams failed: "), "{log}");
+    assert!(
+        log.contains("[Xtream] get_vod_categories failed: "),
+        "{log}"
+    );
     assert!(!log.contains(&list_login), "{log}");
     assert!(!log.contains(&password), "{log}");
 }
