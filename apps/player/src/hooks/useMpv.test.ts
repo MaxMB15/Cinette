@@ -47,6 +47,7 @@ import {
 	mpvSetVolume,
 	mpvGetState,
 } from "@/lib/tauri";
+import { listen } from "@tauri-apps/api/event";
 import { deferred } from "@/test/deferred";
 import { useMpv } from "./useMpv";
 
@@ -702,6 +703,20 @@ describe("useMpv", () => {
 					await loaded!;
 				});
 				expect(result.current.windowClosedId).toBe(0);
+			});
+
+			it("stops being listened for when the player page closes", async () => {
+				const { unmount } = renderHook(() => useMpv());
+				await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+				const mockListen = vi.mocked(listen);
+				const index = mockListen.mock.calls.findIndex(
+					([name]) => name === "mpv://window-closed"
+				);
+				const unlisten = await mockListen.mock.results[index]!.value;
+				expect(unlisten).not.toHaveBeenCalled();
+
+				unmount();
+				await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
 			});
 		});
 	});
