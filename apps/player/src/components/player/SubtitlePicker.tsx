@@ -182,9 +182,14 @@ export const SubtitlePicker = ({
 			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 			// The new track takes the place of the one in use, and a failed add
 			// leaves the old one. Nothing is added once the viewer has picked
-			// again, the page has closed or the player has moved on.
+			// again, the page has closed or the player has moved on. While the
+			// player starts the item, there's no stream to add it to yet.
 			const url = pick.stream();
-			if (url === null) return;
+			if (url === null) {
+				if (pick.latest())
+					setError("The video was still starting. Pick the subtitle again.");
+				return;
+			}
 			const added = mpvSubAdd(localPath, cues.length > 0, url);
 			if (cues.length > 0) added.catch(() => {});
 			else {

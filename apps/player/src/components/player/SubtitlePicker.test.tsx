@@ -432,6 +432,25 @@ describe("SubtitlePicker search and selection", () => {
 		expect(onClose).not.toHaveBeenCalled();
 	});
 
+	it("asks for the subtitle again when it finishes while the item starts", async () => {
+		const download = deferred<string>();
+		tauri.downloadSubtitle.mockReturnValue(download.promise);
+		const { onSubtitleSelected, onClose, player } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.2010.720p"));
+		await act(async () => {});
+		player.stream = null;
+		await act(async () => download.resolve("/subs/11.srt"));
+		expect(
+			screen.getByText("The video was still starting. Pick the subtitle again.")
+		).toBeInTheDocument();
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
 	it("drops a subtitle that mpv adds after the player moves on", async () => {
 		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
 		let added!: () => void;
@@ -575,6 +594,7 @@ describe("SubtitlePicker search and selection", () => {
 		await act(async () => download.resolve("/subs/11.srt"));
 		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
 		expect(onSubtitleSelected).not.toHaveBeenCalled();
+		expect(screen.queryByText(/still starting/)).toBeNull();
 	});
 
 	it("turns subtitles off in mpv while no stream plays for the page", async () => {
@@ -583,7 +603,7 @@ describe("SubtitlePicker search and selection", () => {
 			currentSelectedEntry: unnamed,
 		});
 		await screen.findByText("en (2)");
-		// After a failed load, mpv still keeps the file for a retry.
+		// The player is starting the item again, so the page has no stream.
 		player.stream = null;
 
 		fireEvent.click(entryButton("None"));

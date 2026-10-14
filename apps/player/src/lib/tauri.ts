@@ -26,8 +26,8 @@ import type {
 // Loads, stops and subtitle changes reach mpv one at a time, in the order
 // they were called. Rust runs each command on its own thread, so a stop sent
 // without waiting for it could otherwise land after a newer load and end that
-// stream. A subtitle add names its stream, and sent while that stream
-// still loads it could reach mpv first and fail.
+// stream. A subtitle add names its stream. Sent while that stream still
+// loads, it could reach mpv first and fail.
 let lastTransition: Promise<void> = Promise.resolve();
 
 const inOrder = (run: () => Promise<void>): Promise<void> => {
