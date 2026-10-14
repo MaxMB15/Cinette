@@ -520,6 +520,13 @@ fn seeking_needs_a_stream() {
     assert_eq!(state.seek_relative(-10.0), missing);
 }
 
+#[test]
+fn keeps_no_delay_mpv_turned_down() {
+    let state = MpvState::new();
+    assert_eq!(state.set_sub_delay(1.5), Err("no mpv instance".to_string()));
+    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+}
+
 /// The inhibit is a power assertion on macOS. On Linux it goes over the
 /// desktop's session bus, which CI doesn't have and a developer's machine
 /// would really act on, so these checks only run on macOS.

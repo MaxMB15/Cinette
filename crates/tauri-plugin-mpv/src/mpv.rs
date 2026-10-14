@@ -617,8 +617,9 @@ impl MpvState {
 
     pub fn set_sub_delay(&self, delay: f64) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
+        lock_or_recover(&self.inner).set_sub_delay(delay)?;
         lock_or_recover(&self.subtitles).delay = delay;
-        lock_or_recover(&self.inner).set_sub_delay(delay)
+        Ok(())
     }
 
     pub fn get_state(&self) -> PlayerState {
