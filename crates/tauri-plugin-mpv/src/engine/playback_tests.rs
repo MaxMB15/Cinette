@@ -103,7 +103,6 @@ fn every_command_needs_a_player() {
     assert_eq!(engine.sub_add("/subs/en.srt", true), missing);
     assert_eq!(engine.sub_remove(-1), missing);
     assert_eq!(engine.restore_subtitles("/subs/en.srt", true, 0.0), missing);
-    assert_eq!(engine.set_sub_pos(90.0), missing);
     assert_eq!(engine.set_sub_delay(0.5), missing);
     assert_eq!(
         engine.loadfile("http://example.test/live.ts", None),
@@ -257,13 +256,8 @@ fn keeps_the_volume_inside_the_player_range() {
 }
 
 #[test]
-fn keeps_the_subtitle_position_on_screen_and_sets_the_delay() {
+fn sets_the_subtitle_delay() {
     let engine = engine(&[]);
-    for (asked, set) in [(80.0, 80.0), (72.6, 73.0), (200.0, 150.0), (-5.0, 0.0)] {
-        engine.set_sub_pos(asked).unwrap();
-        let pos = mpv(&engine).get_property::<f64>("sub-pos").unwrap();
-        assert_eq!(pos, set, "asked for {asked}");
-    }
     engine.set_sub_delay(-1.5).unwrap();
     assert_eq!(mpv(&engine).get_property::<f64>("sub-delay").unwrap(), -1.5);
 }

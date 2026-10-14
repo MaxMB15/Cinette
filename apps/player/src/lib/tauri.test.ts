@@ -167,7 +167,6 @@ describe("backend commands", () => {
 			"plugin:mpv|mpv_sub_remove",
 			{ id: 3, url: "http://example.com/movie.mkv" },
 		],
-		["mpvSetSubPos", () => tauri.mpvSetSubPos(90), "plugin:mpv|mpv_set_sub_pos", { pos: 90 }],
 		[
 			"mpvSetSubDelay",
 			() => tauri.mpvSetSubDelay(-0.5),

@@ -13,6 +13,9 @@ Allows all MPV player commands
 - `allow-mpv-set-bounds`
 - `allow-mpv-set-visible`
 - `allow-mpv-get-state`
+- `allow-mpv-sub-add`
+- `allow-mpv-sub-remove`
+- `allow-mpv-set-sub-delay`
 - `allow-mpv-set-media-info`
 - `allow-mpv-set-skip-intervals`
 
@@ -236,6 +239,32 @@ Denies the mpv_set_skip_intervals command without any pre-configured scope.
 <tr>
 <td>
 
+`mpv:allow-mpv-set-sub-delay`
+
+</td>
+<td>
+
+Enables the mpv_set_sub_delay command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-set-sub-delay`
+
+</td>
+<td>
+
+Denies the mpv_set_sub_delay command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `mpv:allow-mpv-set-visible`
 
 </td>
@@ -307,6 +336,58 @@ Enables the mpv_stop command without any pre-configured scope.
 <td>
 
 Denies the mpv_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-sub-add`
+
+</td>
+<td>
+
+Enables the mpv_sub_add command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-sub-add`
+
+</td>
+<td>
+
+Denies the mpv_sub_add command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-sub-remove`
+
+</td>
+<td>
+
+Enables the mpv_sub_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-sub-remove`
+
+</td>
+<td>
+
+Denies the mpv_sub_remove command without any pre-configured scope.
 
 </td>
 </tr>

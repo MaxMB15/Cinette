@@ -49,7 +49,6 @@ fn playback_commands_fail_with_nothing_loaded() {
         not_playing
     );
     assert_eq!(block_on(mpv_sub_remove(h(), s(), -1, None)), failed);
-    assert_eq!(block_on(mpv_set_sub_pos(90.0, s())), failed);
     assert_eq!(block_on(mpv_set_sub_delay(0.5, s())), failed);
     // Stopping nothing is fine, so the frontend can always call it.
     assert_eq!(block_on(mpv_stop(h(), s())), Ok(()));
@@ -104,7 +103,6 @@ mod with_a_stream {
         assert!(get_state(&app).is_playing);
 
         block_on(mpv_sub_add(h(), s(), subtitles, true, path.clone())).unwrap();
-        block_on(mpv_set_sub_pos(80.0, s())).unwrap();
         block_on(mpv_set_sub_delay(-0.5, s())).unwrap();
         block_on(mpv_sub_remove(h(), s(), -1, Some(path.clone()))).unwrap();
 
