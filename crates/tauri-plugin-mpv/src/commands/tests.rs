@@ -8,6 +8,7 @@
 //! Streams are loaded through `test_support::load_headless` instead.
 
 use super::*;
+use crate::mpv::NOT_PLAYING;
 use crate::test_support::TestApp;
 use tauri::async_runtime::block_on;
 
@@ -36,11 +37,18 @@ fn playback_commands_fail_with_nothing_loaded() {
     assert_eq!(block_on(mpv_pause(h(), s())), failed);
     assert_eq!(block_on(mpv_seek(h(), s(), 30.0)), failed);
     assert_eq!(block_on(mpv_set_volume(h(), s(), 50.0)), failed);
+    // Subtitles are always for a stream, and none plays.
+    let url = || "http://host.test/live/1.ts".to_string();
+    let not_playing = Err(NOT_PLAYING.to_string());
     assert_eq!(
-        block_on(mpv_sub_add(h(), s(), "/subs/en.srt".into(), true)),
-        failed
+        block_on(mpv_sub_add(h(), s(), "/subs/en.srt".into(), true, url())),
+        not_playing
     );
-    assert_eq!(block_on(mpv_sub_remove(h(), s(), -1)), failed);
+    assert_eq!(
+        block_on(mpv_sub_remove(h(), s(), -1, Some(url()))),
+        not_playing
+    );
+    assert_eq!(block_on(mpv_sub_remove(h(), s(), -1, None)), failed);
     assert_eq!(block_on(mpv_set_sub_pos(90.0, s())), failed);
     assert_eq!(block_on(mpv_set_sub_delay(0.5, s())), failed);
     // Stopping nothing is fine, so the frontend can always call it.
@@ -95,10 +103,10 @@ mod with_a_stream {
         block_on(mpv_play(h(), s())).unwrap();
         assert!(get_state(&app).is_playing);
 
-        block_on(mpv_sub_add(h(), s(), subtitles, true)).unwrap();
+        block_on(mpv_sub_add(h(), s(), subtitles, true, path.clone())).unwrap();
         block_on(mpv_set_sub_pos(80.0, s())).unwrap();
         block_on(mpv_set_sub_delay(-0.5, s())).unwrap();
-        block_on(mpv_sub_remove(h(), s(), -1)).unwrap();
+        block_on(mpv_sub_remove(h(), s(), -1, Some(path.clone()))).unwrap();
 
         block_on(mpv_set_visible(h(), s(), false)).unwrap();
         block_on(mpv_set_bounds(h(), s(), 8.0, 8.0, 320.0, 180.0)).unwrap();

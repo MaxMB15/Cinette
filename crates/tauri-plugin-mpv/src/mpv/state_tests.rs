@@ -14,7 +14,7 @@
 
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
-use super::{KeptSubtitles, MpvState};
+use super::{KeptSubtitles, MpvState, NOT_PLAYING};
 use crate::test_support::{
     headless, headless_options, load_headless, reload_headless, wait_until, wav, y4m, FakeRenderer,
     MediaDir, SharedLog, TestApp,
@@ -171,17 +171,17 @@ fn mpv_draws_the_subtitles_the_frontend_does_not() {
     // Over the embedded video, the frontend draws the subtitles it can read.
     load(&app, &path);
     wait_until("playback to start", || state.get_state().playback_started);
-    state.sub_add(&subtitles, true).unwrap();
+    state.sub_add(&subtitles, true, &path).unwrap();
     assert_eq!(property(&state, "sid"), "1");
     assert_eq!(visible(), "no");
-    state.sub_add(&subtitles, false).unwrap();
+    state.sub_add(&subtitles, false, &path).unwrap();
     assert_eq!(property(&state, "sid"), "2");
     assert_eq!(visible(), "yes");
 
     // It can't draw over the fallback window, so mpv draws them all there.
     load_headless(&state, &app.handle(), &path, None, Err("no window".into())).unwrap();
     wait_until("playback to start", || state.get_state().playback_started);
-    state.sub_add(&subtitles, true).unwrap();
+    state.sub_add(&subtitles, true, &path).unwrap();
     assert_eq!(property(&state, "sid"), "1");
     assert_eq!(visible(), "yes");
 }
@@ -195,7 +195,7 @@ fn a_load_for_the_same_item_keeps_its_subtitles() {
     let state = app.state();
     load(&app, &path);
     wait_for_playback(&state);
-    state.sub_add(&subtitles, true).unwrap();
+    state.sub_add(&subtitles, true, &path).unwrap();
     state.set_sub_delay(0.5).unwrap();
 
     // A retry that ends up in the fallback window, where mpv draws them.
@@ -236,19 +236,57 @@ fn keeps_no_subtitles_that_were_removed_or_never_added() {
     load(&app, &path);
     wait_for_playback(&state);
 
-    state.sub_add(&subtitles, false).unwrap();
-    state.sub_remove(-1).unwrap();
+    state.sub_add(&subtitles, false, &path).unwrap();
+    state.sub_remove(-1, Some(path.as_str())).unwrap();
     reload();
     assert_eq!(property(&state, "sid"), "no");
 
-    assert!(state.sub_add(&media.missing("gone.srt"), false).is_err());
+    assert!(state
+        .sub_add(&media.missing("gone.srt"), false, &path)
+        .is_err());
     reload();
     assert_eq!(property(&state, "sid"), "no");
 
-    state.sub_add(&subtitles, false).unwrap();
+    state.sub_add(&subtitles, false, &path).unwrap();
     state.stop();
     reload();
     assert_eq!(property(&state, "sid"), "no");
+}
+
+#[test]
+fn subtitles_reach_only_the_stream_they_are_for() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let first = media.file("tone.wav", &wav(10));
+    let second = media.file("other.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT);
+    let state = app.state();
+    let not_playing = Err(NOT_PLAYING.to_string());
+    load(&app, &first);
+    wait_for_playback(&state);
+    state.sub_add(&subtitles, false, &first).unwrap();
+
+    // Changes sent for the first stream arrive after the second started.
+    load(&app, &second);
+    wait_for_playback(&state);
+    assert_eq!(state.sub_add(&subtitles, false, &first), not_playing);
+    assert_eq!(property(&state, "sid"), "no");
+    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+    state.sub_add(&subtitles, false, &second).unwrap();
+    let kept = state.subtitles.lock().unwrap().clone();
+    assert_eq!(state.sub_remove(-1, Some(first.as_str())), not_playing);
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(*state.subtitles.lock().unwrap(), kept);
+
+    // A remove for no stream in particular takes them from the one that plays.
+    state.sub_remove(-1, None).unwrap();
+    assert_eq!(property(&state, "sid"), "no");
+    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+
+    // Nothing plays once the player stops.
+    state.stop();
+    assert_eq!(state.sub_add(&subtitles, false, &second), not_playing);
+    assert_eq!(state.sub_remove(-1, Some(second.as_str())), not_playing);
 }
 
 #[test]
@@ -260,7 +298,9 @@ fn closing_the_fallback_window_stops_playback() {
     let state = app.state();
     load_headless(&state, &app.handle(), &path, None, Err("no window".into())).unwrap();
     wait_for_playback(&state);
-    state.sub_add(&media.file("en.srt", SRT), true).unwrap();
+    state
+        .sub_add(&media.file("en.srt", SRT), true, &path)
+        .unwrap();
 
     // mpv runs `quit` when the user closes its window.
     let client = state.inner.lock().unwrap().create_event_client().unwrap();
@@ -529,7 +569,7 @@ fn a_delay_set_after_a_failed_retry_reaches_the_next_one() {
     let state = app.state();
     load(&app, &path);
     wait_for_playback(&state);
-    state.sub_add(&subtitles, true).unwrap();
+    state.sub_add(&subtitles, true, &path).unwrap();
 
     // mpv can't take a URL with a NUL in it, so the retry leaves no mpv.
     let (renderer, _log) = FakeRenderer::working();
@@ -547,6 +587,40 @@ fn a_delay_set_after_a_failed_retry_reaches_the_next_one() {
     wait_for_playback(&state);
     assert_eq!(property(&state, "sid"), "1");
     assert_eq!(number(&state, "sub-delay"), 1.5);
+}
+
+#[test]
+fn a_retry_after_a_failed_load_has_no_subtitles_that_were_removed() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let state = app.state();
+    load(&app, &path);
+    wait_for_playback(&state);
+    state
+        .sub_add(&media.file("en.srt", SRT), true, &path)
+        .unwrap();
+
+    // mpv can't take a URL with a NUL in it, so the retry leaves no mpv.
+    let (renderer, _log) = FakeRenderer::working();
+    let retry = reload_headless(
+        &state,
+        &app.handle(),
+        "http://example.test/a\0b",
+        Ok(renderer),
+    );
+    assert!(retry.is_err());
+    let missing = Err("no mpv instance".to_string());
+    assert_eq!(
+        state.sub_remove(-1, Some(path.as_str())),
+        Err(NOT_PLAYING.into())
+    );
+    assert_eq!(state.sub_remove(-1, None), missing);
+
+    let (renderer, _log) = FakeRenderer::working();
+    reload_headless(&state, &app.handle(), &path, Ok(renderer)).unwrap();
+    wait_for_playback(&state);
+    assert_eq!(property(&state, "sid"), "no");
 }
 
 #[test]

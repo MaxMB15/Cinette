@@ -4,7 +4,7 @@
 import { Controls } from "./Controls";
 import { ConnectionStatusOverlay } from "./ConnectionStatusOverlay";
 import { OpeningIndicator } from "./OpeningIndicator";
-import { SubtitlePicker } from "./SubtitlePicker";
+import { SubtitlePicker, type SubtitlePick } from "./SubtitlePicker";
 import { SubtitleOverlay } from "./SubtitleOverlay";
 import { ResumePrompt } from "./ResumePrompt";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
@@ -246,6 +246,29 @@ export const PlayerView = () => {
 	// item still waiting to start doesn't start, since the page that would
 	// show it is gone.
 	const openRef = useRef(false);
+	// Counts the viewer's subtitle picks, so a subtitle still downloading for
+	// an earlier pick, or for the auto-load, gives way to a newer one.
+	const subtitlePickRef = useRef(0);
+	/**
+	 * Starts a subtitle choice for the item playing now. One the viewer makes
+	 * replaces any choice before it. The auto-load replaces none, and gives way
+	 * to the viewer's next pick.
+	 */
+	const followSubtitlePick = useCallback(
+		(byViewer: boolean): SubtitlePick => {
+			const pick = byViewer ? ++subtitlePickRef.current : subtitlePickRef.current;
+			const channelId = activeChannelRef.current?.id;
+			const latest = () => pick === subtitlePickRef.current;
+			return {
+				latest,
+				stream: () =>
+					latest() && openRef.current && activeChannelRef.current?.id === channelId
+						? loadedUrlRef.current
+						: null,
+			};
+		},
+		[activeChannelRef, loadedUrlRef]
+	);
 
 	// Remembers which language + rank-within-language the user last picked so the
 	// same subtitle can be auto-selected when navigating to the next episode.
@@ -674,12 +697,18 @@ export const PlayerView = () => {
 	// Auto-load: fires when playEpisode increments autoLoadTrigger, then waits for
 	// activeImdbId to resolve. Using a trigger counter avoids the cancellation bug
 	// where a new item's activeImdbId goes null mid-flight and kills the search.
+	// A load still to run waits while the player finds out whether a download
+	// of the item plays, and so which stream the subtitles go to. One that
+	// finished doesn't run again when the same item restarts.
+	const autoLoadWaits = autoLoadTrigger > autoLoadFinished && loadedUrl === null;
 	useEffect(() => {
 		if (autoLoadTrigger === 0) return; // no episode navigation yet
 		if (!activeImdbId) return; // OMDB still in-flight; re-run when it resolves
+		if (autoLoadWaits) return;
 		const pref = subtitlePreferenceRef.current;
 		if (!pref) return;
 
+		const pick = followSubtitlePick(false);
 		let cancelled = false;
 
 		searchSubtitles(activeImdbId, subtitleSeasonRef.current, subtitleEpisodeRef.current)
@@ -694,19 +723,21 @@ export const PlayerView = () => {
 				// mpv also reads a file that isn't UTF-8, and draws any file the
 				// overlay can't read.
 				const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
-				if (cancelled) return;
+				const url = pick.stream();
+				if (cancelled || url === null) return;
 				// When the overlay read no cues, only mpv can show the
 				// subtitles, so the choice changes once mpv has the track.
-				const added = mpvSubAdd(localPath, cues.length > 0);
+				const added = mpvSubAdd(localPath, cues.length > 0, url);
 				if (cues.length > 0) added.catch(() => {});
 				else {
 					await added;
-					// mpv draws this track itself, and the player hasn't picked it
-					// when the page closed or the player moved on during the add.
-					// Then the track comes out again, so it doesn't show over the
-					// subtitles the player keeps.
-					if (cancelled) {
-						await mpvSubRemove(-1).catch(() => {});
+					// mpv draws this track itself. A pick the viewer made during
+					// the add replaces it on its own. When the page closed or the
+					// player moved on, the track comes out again, so it doesn't
+					// show over the subtitles the player keeps.
+					if (!pick.latest()) return;
+					if (cancelled || pick.stream() === null) {
+						await mpvSubRemove(-1, url).catch(() => {});
 						return;
 					}
 				}
@@ -725,6 +756,8 @@ export const PlayerView = () => {
 	}, [
 		autoLoadTrigger,
 		activeImdbId,
+		autoLoadWaits,
+		followSubtitlePick,
 		subtitlePreferenceRef,
 		subtitleSeasonRef,
 		subtitleEpisodeRef,
@@ -1347,9 +1380,7 @@ export const PlayerView = () => {
 						setShowSubtitlePicker(false);
 						setSubtitleEditMode(false);
 					}}
-					isCurrent={() =>
-						openRef.current && activeChannelRef.current?.id === activeChannel?.id
-					}
+					startPick={() => followSubtitlePick(true)}
 					onSubtitleSelected={(id, cues, entry, rankInLanguage) => {
 						setSelectedSubtitleId(id);
 						setSubtitleCues(cues ?? []);

@@ -128,27 +128,32 @@ pub async fn mpv_set_media_info<R: Runtime>(
 
 /// Adds a subtitle track in place of the one in use. `overlay` is whether the
 /// frontend draws the subtitles itself, which it does when it can read the
-/// file.
+/// file. `url` is the stream they're for, and the add fails once another
+/// stream plays.
 #[command]
 pub async fn mpv_sub_add<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, MpvState>,
     path: String,
     overlay: bool,
+    url: String,
 ) -> Result<(), String> {
     tracing::info!("[MPV cmd] sub_add overlay={}", overlay);
-    state.sub_add(&path, overlay)?;
+    state.sub_add(&path, overlay, &url)?;
     Ok(())
 }
 
+/// Removes a subtitle track. With a `url`, it fails once another stream
+/// plays.
 #[command]
 pub async fn mpv_sub_remove<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, MpvState>,
     id: i64,
+    url: Option<String>,
 ) -> Result<(), String> {
     tracing::info!("[MPV cmd] sub_remove id={}", id);
-    state.sub_remove(id)?;
+    state.sub_remove(id, url.as_deref())?;
     Ok(())
 }
 

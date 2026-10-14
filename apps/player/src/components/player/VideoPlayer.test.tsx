@@ -17,7 +17,7 @@ import type { useMpv } from "@/hooks/useMpv";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
-import type { SubtitlePicker } from "./SubtitlePicker";
+import type { SubtitlePick, SubtitlePicker } from "./SubtitlePicker";
 import type {
 	Channel,
 	DownloadRecord,
@@ -63,8 +63,8 @@ const env = vi.hoisted(() => ({
 	os: "macos" as Platform,
 }));
 
-/** The check the subtitle picker was given for whether its item still plays. */
-const picker = vi.hoisted(() => ({ isCurrent: undefined as (() => boolean) | undefined }));
+/** The last subtitle pick the picker started for a download. */
+const picker = vi.hoisted(() => ({ pick: undefined as SubtitlePick | undefined }));
 
 const tauri = vi.hoisted(() => ({
 	mpvSetBounds: vi.fn<typeof Bridge.mpvSetBounds>(async () => {}),
@@ -220,24 +220,31 @@ vi.mock("./SubtitlePicker", () => ({
 			<input aria-label="Search subtitles" />
 			<button
 				type="button"
-				onClick={() =>
+				onClick={() => {
+					props.startPick();
 					props.onSubtitleSelected?.(
 						101,
 						[{ start: 1, end: 4, text: "Mind the lantern" }],
 						{ fileId: 101, languageCode: "en", format: "srt" },
 						1
-					)
-				}
+					);
+				}}
 			>
 				Pick English
 			</button>
-			<button type="button" onClick={() => props.onSubtitleSelected?.(null)}>
+			<button
+				type="button"
+				onClick={() => {
+					props.startPick();
+					props.onSubtitleSelected?.(null);
+				}}
+			>
 				Pick none
 			</button>
 			<button
 				type="button"
 				onClick={() => {
-					picker.isCurrent = props.isCurrent;
+					picker.pick = props.startPick();
 				}}
 			>
 				Start a download
@@ -1978,7 +1985,11 @@ describe("subtitles", () => {
 		expect(tauri.downloadSubtitle).not.toHaveBeenCalledWith(202);
 		// The overlay draws the subtitles, so mpv doesn't. The new track takes
 		// the place of the old one.
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", true);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			true,
+			ep2.url
+		);
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		await setMpv({ state: playing(ep2.url, 2, 1300) });
 		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
@@ -1998,7 +2009,11 @@ describe("subtitles", () => {
 		await press("n");
 		await flush();
 		expect(tauri.downloadSubtitle).toHaveBeenCalledWith(202);
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
 	});
 
 	it("drops the next episode's subtitles when the viewer moves on before they arrive", async () => {
@@ -2054,7 +2069,11 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
 		await flush();
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
 		await press("n");
 		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 3);
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
@@ -2062,7 +2081,7 @@ describe("subtitles", () => {
 		await flush();
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
 		// The viewer moved on, so the track mpv added comes out again.
-		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
+		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1, ep2.url);
 	});
 
 	it("leaves the track in use when mpv can't add the next episode's subtitles after the viewer moves on", async () => {
@@ -2085,7 +2104,11 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
 		await flush();
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
 		await press("n");
 		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 3);
 		await act(async () => added.reject(new Error("unsupported")));
@@ -2093,6 +2116,139 @@ describe("subtitles", () => {
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
 		// mpv added nothing, so a remove would only take out the track in use.
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+	});
+
+	it("keeps the viewer's pick when the next episode's subtitles arrive after it", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		const file = deferred<string>();
+		tauri.readSubtitleFile.mockReturnValue(file.promise);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		expect(tauri.readSubtitleFile).toHaveBeenCalledTimes(1);
+		pickEnglishSubtitles();
+		await act(async () =>
+			file.resolve("1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n")
+		);
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		expect(screen.queryByText("The tide is turning")).not.toBeInTheDocument();
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+	});
+
+	it("keeps the viewer's pick when mpv adds the next episode's subtitles after it", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "ass" }],
+		});
+		// The overlay can't read the file, so only mpv can show it.
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: The tide\n");
+		const added = deferred<void>();
+		tauri.mpvSubAdd.mockReturnValue(added.promise);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
+		pickEnglishSubtitles();
+		await act(async () => added.resolve());
+		await flush();
+		await setMpv({ state: playing(ep2.url, 2, 1300) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+		// The track the viewer picked takes the place of mpv's, so nothing
+		// takes that one out.
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+	});
+
+	it("drops the next episode's subtitles when another episode starts from elsewhere before they arrive", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		// Episode two has English subtitles and episode three only Dutch ones.
+		tauri.searchSubtitles.mockImplementation(async (_imdbId, _season, episode) => ({
+			languages: ["en", "nl"],
+			entries: [
+				episode === 2
+					? { fileId: 302, languageCode: "en", format: "srt" }
+					: { fileId: 303, languageCode: "nl", format: "srt" },
+			],
+		}));
+		const file = deferred<string>();
+		tauri.readSubtitleFile.mockReturnValue(file.promise);
+		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		expect(tauri.readSubtitleFile).toHaveBeenCalledTimes(1);
+		await goTo({ url: ep3.url, channel: ep3, seriesEpisodes: [ep1, ep2, ep3] });
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url, ep3.url]);
+		await act(async () =>
+			file.resolve("1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n")
+		);
+		await setMpv({ state: playing(ep3.url, 2, 1300) });
+		expect(screen.queryByText("The tide is turning")).not.toBeInTheDocument();
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+	});
+
+	it("adds the next episode's subtitles to its download once the player finds it", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		tauri.readSubtitleFile.mockResolvedValue(
+			"1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n"
+		);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		const local = deferred<string | null>();
+		tauri.resolveLocalDownload.mockReturnValue(local.promise);
+		await press("n");
+		expect(tauri.searchSubtitles).not.toHaveBeenCalled();
+		await act(async () => local.resolve("/downloads/second.mkv"));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, "/downloads/second.mkv"]);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			true,
+			"/downloads/second.mkv"
+		);
+	});
+
+	it("doesn't load the next episode's subtitles again when that episode restarts", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "srt" }],
+		});
+		tauri.readSubtitleFile.mockResolvedValue(
+			"1\n00:00:01,000 --> 00:00:04,000\nThe tide is turning\n"
+		);
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.downloadSubtitle).toHaveBeenCalledOnce();
+		// The player looks for a download of the episode before it loads it.
+		const local = deferred<string | null>();
+		tauri.resolveLocalDownload.mockReturnValue(local.promise);
+		await goTo({ url: ep2.url, channel: ep2, seriesEpisodes: [ep1, ep2] });
+		await act(async () => local.resolve(null));
+		await flush();
+		expect(loadedUrls()).toEqual([ep1.url, ep2.url, ep2.url]);
+		expect(tauri.downloadSubtitle).toHaveBeenCalledOnce();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledOnce();
 	});
 
 	it("leaves the next episode's subtitles unpicked when mpv can't add a file the overlay can't read", async () => {
@@ -2108,7 +2264,11 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
 		await flush();
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
@@ -2125,7 +2285,11 @@ describe("subtitles", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
 		await press("n");
 		await flush();
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			false,
+			ep2.url
+		);
 		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
@@ -2265,7 +2429,11 @@ describe("subtitles", () => {
 		await setMpv({ state: playing(ep2.url, 2, 1300) });
 		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
 		expect(tauri.downloadSubtitle.mock.calls).toEqual([[202], [202]]);
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", true);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith(
+			"/subtitles/chosen.srt",
+			true,
+			ep2.url
+		);
 	});
 
 	it("tells the subtitle picker once the player moves on to another episode", async () => {
@@ -2273,11 +2441,12 @@ describe("subtitles", () => {
 		await openItem(ep1, { episodes: [ep1, ep2] });
 		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
-		expect(picker.isCurrent?.()).toBe(true);
+		expect(picker.pick?.stream()).toBe(ep1.url);
 		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 		await flush();
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
-		expect(picker.isCurrent?.()).toBe(false);
+		expect(picker.pick?.stream()).toBeNull();
+		expect(picker.pick?.latest()).toBe(true);
 	});
 
 	it("tells the subtitle picker once the player page closes", async () => {
@@ -2285,9 +2454,32 @@ describe("subtitles", () => {
 		await openItem(lanternKeeper());
 		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
 		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
-		expect(picker.isCurrent?.()).toBe(true);
+		expect(picker.pick?.stream()).toBe(MOVIE_URL);
 		await goToPage("/");
-		expect(picker.isCurrent?.()).toBe(false);
+		expect(picker.pick?.stream()).toBeNull();
+	});
+
+	it("tells the subtitle picker once the viewer picks again", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		fireEvent.click(screen.getByRole("button", { name: "Pick none" }));
+		expect(picker.pick?.latest()).toBe(false);
+		expect(picker.pick?.stream()).toBeNull();
+	});
+
+	it("gives the subtitle picker no stream before the item's stream is known", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		const local = deferred<string | null>();
+		tauri.resolveLocalDownload.mockReturnValue(local.promise);
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Subtitles" }));
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		expect(picker.pick?.stream()).toBeNull();
+		await act(async () => local.resolve(null));
+		await flush();
+		expect(picker.pick?.stream()).toBe(MOVIE_URL);
 	});
 
 	it("keeps the subtitles when the sidebar's Player link is clicked over a resume prompt for another item", async () => {

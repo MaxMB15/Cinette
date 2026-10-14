@@ -23,9 +23,11 @@ import type {
 
 // --- MPV Player Commands ---
 
-// Loads and stops reach mpv one at a time, in the order they were called.
-// Rust runs each command on its own thread, so a stop sent without waiting
-// for it could otherwise land after a newer load and end that stream.
+// Loads, stops and subtitle changes reach mpv one at a time, in the order
+// they were called. Rust runs each command on its own thread, so a stop sent
+// without waiting for it could otherwise land after a newer load and end that
+// stream. A subtitle add names its stream, and sent while that stream
+// still loads it could reach mpv first and fail.
 let lastTransition: Promise<void> = Promise.resolve();
 
 const inOrder = (run: () => Promise<void>): Promise<void> => {
@@ -229,14 +231,20 @@ export const readSubtitleFile = (path: string): Promise<string> =>
 	invoke("read_subtitle_file", { path });
 
 /**
- * Adds a subtitle file to the player. `overlay` is whether the app draws the
- * subtitles itself. mpv then only draws them in its fallback window.
+ * Adds a subtitle file to the stream at `url`, and fails once another stream
+ * plays. `overlay` is whether the app draws the subtitles itself. mpv then
+ * only draws them in its fallback window.
  */
-export const mpvSubAdd = (path: string, overlay: boolean): Promise<void> =>
-	invoke("plugin:mpv|mpv_sub_add", { path, overlay });
+export const mpvSubAdd = (path: string, overlay: boolean, url: string): Promise<void> =>
+	inOrder(() => invoke("plugin:mpv|mpv_sub_add", { path, overlay, url }));
 
-export const mpvSubRemove = (id: number): Promise<void> =>
-	invoke("plugin:mpv|mpv_sub_remove", { id });
+/**
+ * Removes a subtitle track, or the one in use when `id` is -1. With a `url`,
+ * it fails once another stream plays. Without one, the track goes from
+ * whatever plays.
+ */
+export const mpvSubRemove = (id: number, url?: string): Promise<void> =>
+	inOrder(() => invoke("plugin:mpv|mpv_sub_remove", { id, url }));
 
 export const mpvSetSubPos = (pos: number): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_sub_pos", { pos });
