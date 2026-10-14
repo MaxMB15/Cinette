@@ -25,7 +25,9 @@
 //! the wait doubles from 1 second up to `BACKOFF_CAP_SECS`. A reload counts
 //! as recovered, and sends `mpv://reconnected`, once `time-pos` moves
 //! `RECOVERY_CONFIRM_ADVANCE_SECS` past where playback restarted. After
-//! `MAX_ATTEMPTS` the watcher sends `mpv://load-failed` and exits.
+//! `MAX_ATTEMPTS` the watcher sends `mpv://load-failed` and stops reloading.
+//! It keeps running until the kill flag or a shutdown, so a fallback window
+//! closed after that is still reported.
 //!
 //! When mpv shuts down by itself, which only happens when the user closes
 //! the fallback window, the watcher stops playback and sends
@@ -197,6 +199,9 @@ struct Watcher<R: Runtime> {
     recovery_baseline: Option<f64>,
     /// When `recovery_baseline` was set, for `RECOVERY_STALL_TIMEOUT_SECS`.
     recovery_started_at: Option<Instant>,
+    /// `MAX_ATTEMPTS` ran out and `mpv://load-failed` went out. Only a
+    /// shutdown counts after that.
+    gave_up: bool,
 }
 
 impl<R: Runtime> Watcher<R> {
@@ -215,6 +220,7 @@ impl<R: Runtime> Watcher<R> {
             last_known_pos: None,
             recovery_baseline: None,
             recovery_started_at: None,
+            gave_up: false,
         }
     }
 
@@ -268,23 +274,20 @@ impl<R: Runtime> Watcher<R> {
                 tracing::info!("[MPV reconnect] received Shutdown, exiting watcher");
                 return ControlFlow::Break(());
             }
+            _ if self.gave_up => return ControlFlow::Continue(()),
             Signal::PausedForCache(paused) => self.on_paused_for_cache(paused),
             Signal::EndFile(reason) => {
                 let Some(label) = self.end_file_trigger(reason) else {
                     return ControlFlow::Continue(());
                 };
-                if self.arm_retry(label).is_break() {
-                    return ControlFlow::Break(());
-                }
+                self.arm_retry(label);
             }
             Signal::EofReached(true) if self.next_retry_at.is_none() && self.is_premature_eof() => {
                 tracing::warn!(
                     "[MPV reconnect] eof-reached=true (premature), likely a swallowed EndFile; arming retry ({})",
                     self.log_origin
                 );
-                if self.arm_retry("eof-reached (premature)").is_break() {
-                    return ControlFlow::Break(());
-                }
+                self.arm_retry("eof-reached (premature)");
             }
             // mpv goes idle on startup too, before anything has played,
             // so only count it once playback got going.
@@ -293,9 +296,7 @@ impl<R: Runtime> Watcher<R> {
                     "[MPV reconnect] idle-active=true after playback, mpv unloaded the file; arming retry ({})",
                     self.log_origin
                 );
-                if self.arm_retry("idle-active").is_break() {
-                    return ControlFlow::Break(());
-                }
+                self.arm_retry("idle-active");
             }
             Signal::PlaybackRestart if self.attempt > 0 && self.recovery_baseline.is_none() => {
                 self.start_recovery_check();
@@ -310,8 +311,8 @@ impl<R: Runtime> Watcher<R> {
             _ => {}
         }
 
-        if self.recovery_stalled() && self.arm_retry("recovery stalled").is_break() {
-            return ControlFlow::Break(());
+        if self.recovery_stalled() {
+            self.arm_retry("recovery stalled");
         }
         if self
             .next_retry_at
@@ -444,8 +445,8 @@ impl<R: Runtime> Watcher<R> {
 
     /// Counts an attempt, sends `mpv://reconnecting` and schedules the
     /// reload. Once `MAX_ATTEMPTS` are used up it sends `mpv://load-failed`
-    /// instead and breaks.
-    fn arm_retry(&mut self, label: &str) -> ControlFlow<()> {
+    /// instead and gives up.
+    fn arm_retry(&mut self, label: &str) {
         // Playback never got past the old baseline, so drop it.
         self.recovery_baseline = None;
         self.recovery_started_at = None;
@@ -467,7 +468,9 @@ impl<R: Runtime> Watcher<R> {
             let _ = self
                 .app
                 .emit(EVENT_LOAD_FAILED, UrlPayload { url: &self.url });
-            return ControlFlow::Break(());
+            self.gave_up = true;
+            self.next_retry_at = None;
+            return;
         }
         let _ = self.app.emit(
             EVENT_RECONNECTING,
@@ -477,7 +480,6 @@ impl<R: Runtime> Watcher<R> {
             },
         );
         self.next_retry_at = Some(Instant::now() + retry_delay(self.attempt));
-        ControlFlow::Continue(())
     }
 
     fn reload(&mut self) {

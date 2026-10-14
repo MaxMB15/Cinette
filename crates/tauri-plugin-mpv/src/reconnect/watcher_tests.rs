@@ -145,7 +145,7 @@ fn gives_up_once_the_attempts_run_out() {
     let server = Server::start(wav(20), vec![Reply::CutAfter(after_seconds(6))]);
     let url = server.url();
     let app = TestApp::new();
-    let events = app.record(&[EVENT_RECONNECTING, EVENT_LOAD_FAILED]);
+    let events = app.record(&[EVENT_RECONNECTING, EVENT_LOAD_FAILED, EVENT_WINDOW_CLOSED]);
     let player = player(&[SPEED]);
     loadfile(&player, &url, None).unwrap();
     wait_until("the stream to drop", || {
@@ -159,9 +159,53 @@ fn gives_up_once_the_attempts_run_out() {
     watcher.attempt = MAX_ATTEMPTS;
     let running = Running::start(watcher);
     assert_eq!(events.wait_for(EVENT_LOAD_FAILED), json!({ "url": url }));
+
+    // The watcher stays to report the fallback window closing.
+    player.command("quit", &[]).unwrap();
     running.wait_for_exit();
-    assert_eq!(names(&events.all()), [EVENT_LOAD_FAILED]);
+    assert_eq!(
+        names(&events.all()),
+        [EVENT_LOAD_FAILED, EVENT_WINDOW_CLOSED]
+    );
     assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn after_giving_up_only_a_shutdown_counts() {
+    let app = TestApp::new();
+    let events = app.record(&[
+        EVENT_RECONNECTING,
+        EVENT_BUFFERING,
+        EVENT_LOAD_FAILED,
+        EVENT_WINDOW_CLOSED,
+    ]);
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, UNUSED_URL);
+    watcher.attempt = MAX_ATTEMPTS;
+    watcher.arm_retry("test");
+    assert!(watcher.gave_up);
+
+    // Nothing is loaded, so each of these would otherwise arm a retry or
+    // report a stall.
+    for signal in [
+        Signal::EndFile(mpv_end_file_reason::Error),
+        Signal::EofReached(true),
+        Signal::PausedForCache(true),
+    ] {
+        assert!(watcher.on_signal(signal).is_continue());
+    }
+    assert!(watcher.next_retry_at.is_none());
+    assert_eq!(watcher.attempt, MAX_ATTEMPTS + 1);
+
+    // Nothing set the kill flag, as when the user closes the fallback window.
+    assert!(watcher.on_signal(Signal::Shutdown).is_break());
+    assert_eq!(
+        events.all(),
+        [
+            (EVENT_LOAD_FAILED, json!({ "url": UNUSED_URL })),
+            (EVENT_WINDOW_CLOSED, json!({ "url": UNUSED_URL })),
+        ]
+    );
 }
 
 #[test]
@@ -461,8 +505,12 @@ fn the_last_attempt_still_reloads() {
     let mut watcher = watcher(&app, &player, UNUSED_URL);
     watcher.attempt = MAX_ATTEMPTS - 1;
 
-    assert!(watcher.arm_retry("test").is_continue());
-    assert!(watcher.arm_retry("test").is_break());
+    watcher.arm_retry("test");
+    assert!(!watcher.gave_up);
+    assert!(watcher.next_retry_at.is_some());
+    watcher.arm_retry("test");
+    assert!(watcher.gave_up);
+    assert!(watcher.next_retry_at.is_none());
     assert_eq!(
         events.all(),
         [
@@ -483,7 +531,7 @@ fn a_retry_waits_out_its_backoff() {
     watcher.attempt = 2;
 
     let before = Instant::now();
-    assert!(watcher.arm_retry("test").is_continue());
+    watcher.arm_retry("test");
     let after = Instant::now();
     let retry_at = watcher.next_retry_at.expect("a reload is scheduled");
     assert!(retry_at >= before + retry_delay(3) && retry_at <= after + retry_delay(3));
