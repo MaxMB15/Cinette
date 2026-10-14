@@ -265,28 +265,40 @@ fn adds_and_removes_subtitle_tracks() {
     assert!(visible(&engine));
 
     // Anything else, such as subtitles held in memory, goes through as is.
-    // A track mpv shouldn't draw is still selected.
+    // The new track takes the place of the one in use, and one mpv
+    // shouldn't draw is still selected.
     engine.sub_add(&format!("memory://{SRT}"), false).unwrap();
-    assert_eq!(tracks(&engine), 3);
+    assert_eq!(tracks(&engine), 2);
     assert_eq!(selected(&engine), "2");
     assert!(!visible(&engine));
 
+    // A file mpv can't add leaves the track in use. When mpv was to draw the
+    // new one, it goes back to how it drew the track in use.
+    assert!(engine.sub_add(&media.missing("gone.srt"), true).is_err());
+    assert_eq!(selected(&engine), "2");
+    assert!(!visible(&engine));
+
+    // mpv sets whether it draws subtitles before it adds the track, so a
+    // track the overlay draws never shows for a frame. When the overlay was
+    // to draw the new one, mpv keeps the track in use hidden after a failed
+    // add.
+    engine.sub_add(&subtitles, true).unwrap();
+    assert_eq!(selected(&engine), "3");
+    assert!(visible(&engine));
+    assert!(engine.sub_add(&media.missing("gone.srt"), false).is_err());
+    assert_eq!(selected(&engine), "3");
+    assert!(!visible(&engine));
+    assert_eq!(tracks(&engine), 2);
+
     // -1 removes the selected track and an id removes that one.
     engine.sub_remove(-1).unwrap();
-    assert_eq!(tracks(&engine), 2);
-    engine.sub_remove(1).unwrap();
+    assert_eq!(tracks(&engine), 1);
+    engine.sub_add(&subtitles, true).unwrap();
+    let id: i64 = selected(&engine).parse().unwrap();
+    engine.sub_remove(id).unwrap();
     assert_eq!(tracks(&engine), 1);
 
     assert!(engine.sub_remove(99).is_err());
-
-    // mpv sets whether it draws subtitles before it adds the track, so a
-    // track the overlay draws never shows for a frame. A failed add still
-    // sets it.
-    assert!(engine.sub_add(&media.missing("gone.srt"), true).is_err());
-    assert!(visible(&engine));
-    assert!(engine.sub_add(&media.missing("gone.srt"), false).is_err());
-    assert!(!visible(&engine));
-    assert_eq!(tracks(&engine), 1);
 }
 
 #[test]
@@ -301,6 +313,33 @@ fn stop_forgets_the_stream_and_the_player() {
     assert_eq!(state.current_url, None);
     assert!(!state.is_playing && !state.playback_started);
     assert_eq!(engine.play(), Err("no mpv instance".to_string()));
+}
+
+#[test]
+fn reports_waiting_while_a_stream_stalls() {
+    // The server holds the stream twelve seconds in, until the test lets it
+    // go. mpv fills some of its cache before playback starts.
+    let (resume, held) = std::sync::mpsc::channel();
+    let server = Server::start(wav(20), vec![Reply::HoldAfter(after_seconds(12), held)]);
+    let mut engine = engine(&[("speed", "4")]);
+    start(&mut engine, &server.url(), None);
+
+    let state = wait_for("the stream to stall", || {
+        let state = engine.get_state();
+        state.waiting.then_some(state)
+    });
+    assert!(state.is_playing && !state.is_paused, "{state:?}");
+
+    resume.send(()).unwrap();
+    wait_until("the stream to play on", || {
+        let state = engine.get_state();
+        !state.waiting && state.position > 12.5
+    });
+
+    // mpv's core is idle while paused too, but that isn't waiting.
+    engine.pause().unwrap();
+    assert!(mpv(&engine).get_property::<bool>("core-idle").unwrap());
+    assert!(!engine.get_state().waiting);
 }
 
 #[test]

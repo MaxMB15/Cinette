@@ -282,44 +282,23 @@ describe("SubtitlePicker search and selection", () => {
 	});
 
 	it("loads a picked subtitle into the player and hands its cues to the caller", async () => {
-		let removed!: () => void;
-		tauri.mpvSubRemove.mockReturnValue(
-			new Promise((resolve) => {
-				removed = resolve;
-			})
-		);
 		const { onSubtitleSelected, onClose } = renderPicker();
 		await screen.findByText("en (2)");
 
 		fireEvent.click(entryButton("Subtitle 12"));
-		await waitFor(() => expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1));
-		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(12);
-		// The old track goes once the new file is read, and the new one is
-		// only added after it's gone.
-		expect(tauri.readSubtitleFile.mock.invocationCallOrder[0]).toBeLessThan(
-			tauri.mpvSubRemove.mock.invocationCallOrder[0]
-		);
-		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
-		await act(async () => removed());
 		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-
-		// The overlay draws the subtitles, so mpv doesn't.
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt", true);
+		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(12);
 		expect(tauri.readSubtitleFile).toHaveBeenCalledExactlyOnceWith("/subs/12.srt");
+		// The overlay draws the subtitles, so mpv doesn't. The new track takes
+		// the place of the old one once the file is read, so the old one stays
+		// until then.
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt", true);
+		expect(tauri.readSubtitleFile.mock.invocationCallOrder[0]).toBeLessThan(
+			tauri.mpvSubAdd.mock.invocationCallOrder[0]
+		);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		// Second in its language, which the player uses to pick one for the next episode.
 		expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(12, CUES, unnamed, 1);
-	});
-
-	it("still loads a subtitle when the player can't swap its tracks", async () => {
-		tauri.mpvSubRemove.mockRejectedValue(new Error("no track"));
-		tauri.mpvSubAdd.mockRejectedValue(new Error("busy"));
-		const { onSubtitleSelected } = renderPicker();
-		await screen.findByText("en (2)");
-
-		fireEvent.click(entryButton("Sintel.NL"));
-		await waitFor(() =>
-			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, CUES, dutch, 0)
-		);
 	});
 
 	it("lets the player draw a subtitle the overlay can't read", async () => {
@@ -332,6 +311,7 @@ describe("SubtitlePicker search and selection", () => {
 			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, [], dutch, 0)
 		);
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
 
 	it("lets the player draw a subtitle file that isn't UTF-8", async () => {
@@ -425,6 +405,30 @@ describe("SubtitlePicker search and selection", () => {
 		// The track mpv has now belongs to the item the player moved on to.
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("drops a subtitle that mpv adds after the player moves on", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		let added!: () => void;
+		tauri.mpvSubAdd.mockReturnValue(
+			new Promise((resolve) => {
+				added = resolve;
+			})
+		);
+		let current = true;
+		const { onSubtitleSelected, onClose } = renderPicker({ isCurrent: () => current });
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false)
+		);
+		current = false;
+		await act(async () => added());
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		expect(hasCheck(entryButton("Sintel.NL"))).toBe(false);
 		expect(onSubtitleSelected).not.toHaveBeenCalled();
 		expect(onClose).not.toHaveBeenCalled();
 	});

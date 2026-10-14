@@ -29,7 +29,6 @@ import {
 	downloadSubtitle,
 	readSubtitleFile,
 	mpvSubAdd,
-	mpvSubRemove,
 	mpvSetSubDelay,
 	mpvGetState,
 	getPlaybackPosition,
@@ -681,8 +680,14 @@ export const PlayerView = () => {
 				// overlay can't read.
 				const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 				if (cancelled) return;
-				await mpvSubRemove(-1).catch(() => {});
-				mpvSubAdd(localPath, cues.length > 0).catch(() => {});
+				// When the overlay read no cues, only mpv can show the
+				// subtitles, so the choice changes once mpv has the track.
+				const added = mpvSubAdd(localPath, cues.length > 0);
+				if (cues.length > 0) added.catch(() => {});
+				else {
+					await added;
+					if (cancelled) return;
+				}
 				setSelectedSubtitleId(entry.fileId);
 				setSubtitleCues(cues);
 				setSelectedSubtitleEntry(entry);
@@ -1347,7 +1352,8 @@ export const PlayerView = () => {
 				<SubtitleOverlay
 					cues={subtitleCues}
 					position={mpv.state.position}
-					playing={videoPlaying && !mpv.buffering}
+					positionAt={mpv.state.positionAt}
+					playing={videoPlaying && !mpv.buffering && !mpv.state.waiting}
 					fontSize={subtitleFontSize}
 					fontFamily={subtitleFontFamily}
 					posX={subtitlePos.x}

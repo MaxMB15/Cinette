@@ -68,6 +68,16 @@ export interface MpvPlayerState extends PlayerState {
 	 *  A pause near the end doesn't set it. A seek back or the next load
 	 *  clears it. */
 	reachedEnd: boolean;
+	/** Playback isn't paused, but the picture doesn't move on, as while mpv
+	 *  opens a file, seeks or waits for more of the stream. */
+	waiting: boolean;
+}
+
+/** What useMpv keeps of mpv's state, which adds when the position was read. */
+export interface PolledMpvState extends MpvPlayerState {
+	/** When `position` was read from mpv or set by a seek or a load, in
+	 *  `performance.now()` milliseconds. */
+	positionAt: number;
 }
 
 export interface EpgProgram {

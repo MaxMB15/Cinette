@@ -9,6 +9,7 @@ import type { SubtitleCue } from "@/lib/types";
 interface SubtitleOverlayProps {
 	cues: SubtitleCue[];
 	position: number; // the last MPV playback position read, in seconds
+	positionAt: number; // when it was read, in performance.now() milliseconds
 	playing?: boolean; // whether the video plays on from that position
 	delay?: number; // seconds; positive shows each cue later, as mpv's sub-delay does
 	fontSize?: number; // px, default 18
@@ -22,6 +23,7 @@ interface SubtitleOverlayProps {
 export const SubtitleOverlay = ({
 	cues,
 	position,
+	positionAt,
 	playing = false,
 	delay = 0,
 	fontSize = 18,
@@ -32,7 +34,7 @@ export const SubtitleOverlay = ({
 	onPositionChange,
 }: SubtitleOverlayProps) => {
 	const ref = useRef<HTMLDivElement>(null);
-	const active = useActiveCue(cues, position, delay, playing);
+	const active = useActiveCue(cues, position, positionAt, delay, playing);
 
 	if (!active && !editMode) return null;
 	if (cues.length === 0 && !editMode) return null;

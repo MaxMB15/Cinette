@@ -36,6 +36,10 @@ pub struct PlayerState {
     /// false, and so does a connection that closed early, which `reconnect.rs`
     /// reloads. A seek back or the next load clears it.
     pub reached_end: bool,
+    /// Playback isn't paused, but the picture doesn't move on, as while mpv
+    /// opens a file, seeks or waits for more of the stream. This is mpv's
+    /// `core-idle` when it isn't paused.
+    pub waiting: bool,
 }
 
 /// Written out by hand so a logged state shows only the stream's origin,
@@ -55,6 +59,7 @@ impl fmt::Debug for PlayerState {
             .field("playback_started", &self.playback_started)
             .field("open_failed", &self.open_failed)
             .field("reached_end", &self.reached_end)
+            .field("waiting", &self.waiting)
             .finish()
     }
 }
@@ -333,8 +338,11 @@ impl MpvEngine {
             .map_err(|e| e.to_string())
     }
 
-    /// Add a subtitle track from a local file path and select it. mpv only
-    /// draws it when `visible` is true.
+    /// Add a subtitle track from a local file path and select it in place of
+    /// the track in use, which it then removes. mpv only draws the new track
+    /// when `visible` is true. When the file can't be added, the track in use
+    /// stays. mpv goes on drawing it if it was to draw the new one, and
+    /// otherwise leaves it hidden, since the frontend draws the new subtitles.
     pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
         // Convert to file:// URI so MPV path resolution is unambiguous for local files
@@ -343,16 +351,31 @@ impl MpvEngine {
         } else {
             path.to_string()
         };
+        // "no" when no track is in use, which isn't a number.
+        let in_use = mpv
+            .get_property::<String>("sid")
+            .ok()
+            .and_then(|id| id.parse::<i64>().ok());
+        let was_visible = mpv.get_property::<bool>("sub-visibility").unwrap_or(true);
         // Set first, so mpv never draws a frame of a track the overlay draws.
         if let Err(e) = mpv.set_property("sub-visibility", visible) {
             tracing::warn!("[MPV] sub-visibility={} failed: {}", visible, e);
         }
         tracing::info!("[MPV] sub-add: {}", origin_for_log(&uri));
-        mpv.command("sub-add", &[&uri, "select"])
-            .map_err(|e| {
-                tracing::warn!("[MPV] sub-add failed: {}", e);
-                e.to_string()
-            })?;
+        if let Err(e) = mpv.command("sub-add", &[&uri, "select"]) {
+            tracing::warn!("[MPV] sub-add failed: {}", e);
+            if visible {
+                let _ = mpv.set_property("sub-visibility", was_visible);
+            }
+            return Err(e.to_string());
+        }
+        // A track that came with the stream can't be removed, and is only no
+        // longer selected.
+        if let Some(id) = in_use
+            && let Err(e) = mpv.command("sub-remove", &[&id.to_string()])
+        {
+            tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+        }
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }
@@ -403,6 +426,8 @@ impl MpvEngine {
             state.is_paused = mpv.get_property::<bool>("pause").unwrap_or(false);
             state.volume = mpv.get_property::<f64>("volume").unwrap_or(100.0);
             state.is_playing = !state.is_paused && state.current_url.is_some();
+            state.waiting =
+                state.is_playing && mpv.get_property::<bool>("core-idle").unwrap_or(false);
             if state.current_url.is_some() {
                 // Once playback has started the properties aren't read again.
                 let started = self.playback_started;
@@ -547,12 +572,14 @@ mod tests {
             playback_started: true,
             open_failed: true,
             reached_end: true,
+            waiting: true,
             ..Default::default()
         };
         let json = serde_json::to_value(state).unwrap();
         assert_eq!(json["playbackStarted"], true);
         assert_eq!(json["openFailed"], true);
         assert_eq!(json["reachedEnd"], true);
+        assert_eq!(json["waiting"], true);
     }
 
     #[test]

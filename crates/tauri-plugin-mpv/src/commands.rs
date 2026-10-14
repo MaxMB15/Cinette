@@ -123,8 +123,9 @@ pub async fn mpv_set_media_info<R: Runtime>(
     Ok(())
 }
 
-/// Adds a subtitle track. `overlay` is whether the frontend draws the
-/// subtitles itself, which it does when it can read the file.
+/// Adds a subtitle track in place of the one in use. `overlay` is whether the
+/// frontend draws the subtitles itself, which it does when it can read the
+/// file.
 #[command]
 pub async fn mpv_sub_add<R: Runtime>(
     _app: AppHandle<R>,

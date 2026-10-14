@@ -33,6 +33,7 @@ vi.mock("@/lib/tauri", () => ({
 		playbackStarted: false,
 		openFailed: false,
 		reachedEnd: false,
+		waiting: false,
 	})),
 }));
 
@@ -84,6 +85,8 @@ describe("useMpv", () => {
 			playbackStarted: false,
 			openFailed: false,
 			reachedEnd: false,
+			waiting: false,
+			positionAt: expect.any(Number),
 		});
 		expect(result.current.error).toBeNull();
 		expect(result.current.fallbackActive).toBe(false);
@@ -172,7 +175,8 @@ describe("useMpv", () => {
 	});
 
 	it("resets state immediately when load is called", async () => {
-		// Start from a video the poll reports held on its last frame.
+		// Start from a video the poll reports held on its last frame, while
+		// mpv waits for more of it.
 		mockMpvGetState.mockResolvedValue({
 			isPlaying: false,
 			isPaused: true,
@@ -181,18 +185,23 @@ describe("useMpv", () => {
 			position: 120,
 			duration: 120,
 			reachedEnd: true,
+			waiting: true,
 		} as never);
 
 		const { result } = renderHook(() => useMpv());
 		await waitFor(() => expect(result.current.state.reachedEnd).toBe(true));
+		expect(result.current.state.waiting).toBe(true);
 
 		// Now load resets position/duration immediately
 		mockMpvLoad.mockResolvedValue(undefined);
+		vi.spyOn(performance, "now").mockReturnValue(4321);
 		await act(async () => {
 			await result.current.load("http://new.url");
 		});
 
 		expect(result.current.state.position).toBe(0);
+		expect(result.current.state.positionAt).toBe(4321);
+		expect(result.current.state.waiting).toBe(false);
 		expect(result.current.state.duration).toBe(0);
 		expect(result.current.state.reachedEnd).toBe(false);
 		expect(result.current.firstFrameReady).toBe(false);
@@ -253,6 +262,8 @@ describe("useMpv", () => {
 			playbackStarted: false,
 			openFailed: false,
 			reachedEnd: false,
+			waiting: false,
+			positionAt: expect.any(Number),
 		});
 	});
 
@@ -283,7 +294,7 @@ describe("useMpv", () => {
 	});
 
 	describe("polls that cross a seek or volume change", () => {
-		const playingAt = (position: number, volume = 100) =>
+		const playingAt = (position: number, volume = 100, waiting = false) =>
 			({
 				isPlaying: true,
 				isPaused: false,
@@ -294,7 +305,36 @@ describe("useMpv", () => {
 				playbackStarted: true,
 				openFailed: false,
 				reachedEnd: false,
+				waiting,
 			}) as never;
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("times each position it reads", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			vi.spyOn(performance, "now").mockReturnValue(1234);
+			mockMpvGetState.mockResolvedValueOnce(playingAt(120));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.position).toBe(120);
+			expect(result.current.state.positionAt).toBe(1234);
+		});
+
+		it("says when mpv waits for more of the stream", async () => {
+			const { result } = renderHook(() => useMpv());
+			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
+
+			mockMpvGetState.mockResolvedValueOnce(playingAt(120, 100, true));
+			await act(async () => {
+				await result.current.refresh();
+			});
+			expect(result.current.state.waiting).toBe(true);
+		});
 
 		it("shows the seek position before mpv confirms it", async () => {
 			const seekCall = deferred<void>();
@@ -348,15 +388,20 @@ describe("useMpv", () => {
 			const { result } = renderHook(() => useMpv());
 			await waitFor(() => expect(mockMpvGetState).toHaveBeenCalled());
 
+			const now = vi.spyOn(performance, "now").mockReturnValue(500);
 			let seekDone: Promise<void>;
 			act(() => {
 				seekDone = result.current.seek(600);
 			});
+			expect(result.current.state.positionAt).toBe(500);
+			now.mockReturnValue(900);
 			mockMpvGetState.mockResolvedValueOnce(playingAt(120));
 			await act(async () => {
 				await result.current.refresh();
 			});
 			expect(result.current.state.position).toBe(600);
+			// The position is still the one set at the seek.
+			expect(result.current.state.positionAt).toBe(500);
 
 			await act(async () => {
 				seekCall.resolve();

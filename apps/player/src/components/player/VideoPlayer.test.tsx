@@ -22,8 +22,8 @@ import type {
 	Channel,
 	DownloadRecord,
 	LayoutMode,
-	MpvPlayerState,
 	PlaybackPosition,
+	PolledMpvState,
 	Platform,
 	SkipSegment,
 	SubtitleSearchResult,
@@ -41,7 +41,7 @@ import { PlayerView } from "./VideoPlayer";
 type Mpv = ReturnType<typeof useMpv>;
 
 /** What mpv reports with nothing loaded. */
-const idleState = vi.hoisted(() => (): MpvPlayerState => ({
+const idleState = vi.hoisted(() => (): PolledMpvState => ({
 	isPlaying: false,
 	isPaused: false,
 	currentUrl: null,
@@ -51,6 +51,8 @@ const idleState = vi.hoisted(() => (): MpvPlayerState => ({
 	playbackStarted: false,
 	openFailed: false,
 	reachedEnd: false,
+	waiting: false,
+	positionAt: 0,
 }));
 
 const env = vi.hoisted(() => ({
@@ -157,11 +159,14 @@ const fakeMpv = vi.hoisted(() => {
 		reset: () => {
 			current = initial();
 		},
-		set: (patch: Partial<Omit<Mpv, "state">> & { state?: Partial<MpvPlayerState> }) => {
+		set: (patch: Partial<Omit<Mpv, "state">> & { state?: Partial<PolledMpvState> }) => {
 			current = {
 				...current,
 				...patch,
-				state: patch.state ? { ...current.state, ...patch.state } : current.state,
+				// Each state is a new reading of mpv's position, as useMpv's poll is.
+				state: patch.state
+					? { ...current.state, positionAt: performance.now(), ...patch.state }
+					: current.state,
 			};
 			listeners.forEach((listener) => listener());
 		},
@@ -1807,11 +1812,31 @@ describe("subtitles", () => {
 		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
 	});
 
+	it("doesn't count on while the video is paused", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, 0.5, 3600) });
+		pickEnglishSubtitles();
+		act(() => vi.advanceTimersByTime(1000));
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+	});
+
 	it("doesn't count on while the stream stalls", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
 		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 0.5, 3600), buffering: true });
+		pickEnglishSubtitles();
+		act(() => vi.advanceTimersByTime(1000));
+		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
+	});
+
+	it("doesn't count on while mpv waits for more of the stream", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		await setMpv({ state: { ...playing(MOVIE_URL, 0.5, 3600), waiting: true } });
 		pickEnglishSubtitles();
 		act(() => vi.advanceTimersByTime(1000));
 		expect(screen.queryByText("Mind the lantern")).not.toBeInTheDocument();
@@ -1839,9 +1864,10 @@ describe("subtitles", () => {
 		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 2);
 		expect(tauri.downloadSubtitle).toHaveBeenCalledWith(203);
 		expect(tauri.downloadSubtitle).not.toHaveBeenCalledWith(202);
-		expect(tauri.mpvSubRemove).toHaveBeenCalledWith(-1);
-		// The overlay draws the subtitles, so mpv doesn't.
+		// The overlay draws the subtitles, so mpv doesn't. The new track takes
+		// the place of the old one.
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", true);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		await setMpv({ state: playing(ep2.url, 2, 1300) });
 		expect(screen.getByText("The tide is turning")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
@@ -1893,6 +1919,51 @@ describe("subtitles", () => {
 		// and keeps its own subtitles.
 		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+	});
+
+	it("drops the next episode's subtitles when mpv adds them after the viewer moves on", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		// Episode two has English subtitles and episode three only Dutch ones.
+		tauri.searchSubtitles.mockImplementation(async (_imdbId, _season, episode) => ({
+			languages: ["en", "nl"],
+			entries: [
+				episode === 2
+					? { fileId: 302, languageCode: "en", format: "ass" }
+					: { fileId: 303, languageCode: "nl", format: "srt" },
+			],
+		}));
+		// The overlay can't read the file, so only mpv can show it.
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: The tide\n");
+		const added = deferred<void>();
+		tauri.mpvSubAdd.mockReturnValue(added.promise);
+		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		await press("n");
+		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 3);
+		await act(async () => added.resolve());
+		await flush();
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+	});
+
+	it("leaves the next episode's subtitles unpicked when mpv can't add a file the overlay can't read", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		tauri.searchSubtitles.mockResolvedValue({
+			languages: ["en"],
+			entries: [{ fileId: 202, languageCode: "en", format: "ass" }],
+		});
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: The tide\n");
+		tauri.mpvSubAdd.mockRejectedValue(new Error("unsupported"));
+		await openItem(ep1, { episodes: [ep1, ep2] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
 	});
 

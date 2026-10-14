@@ -528,9 +528,10 @@ impl MpvState {
         lock_or_recover(&self.inner).set_volume(volume)
     }
 
-    /// Adds a subtitle track. `overlay` is whether the frontend draws the
-    /// subtitles over the video, and then mpv doesn't. The frontend can't draw
-    /// over the fallback window, so mpv always draws them there.
+    /// Adds a subtitle track in place of the one in use. `overlay` is whether
+    /// the frontend draws the subtitles over the video, and then mpv doesn't.
+    /// The frontend can't draw over the fallback window, so mpv always draws
+    /// them there.
     pub fn sub_add(&self, path: &str, overlay: bool) -> Result<(), String> {
         let visible = !overlay || self.fallback_active.load(Ordering::Acquire);
         lock_or_recover(&self.inner).sub_add(path, visible)
