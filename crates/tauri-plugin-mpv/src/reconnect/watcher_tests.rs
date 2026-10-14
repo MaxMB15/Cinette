@@ -178,6 +178,7 @@ fn after_giving_up_only_a_shutdown_counts() {
         EVENT_BUFFERING,
         EVENT_LOAD_FAILED,
         EVENT_WINDOW_CLOSED,
+        EVENT_STATE_CHANGED,
     ]);
     let player = player(&[]);
     let mut watcher = watcher(&app, &player, UNUSED_URL);
@@ -186,11 +187,13 @@ fn after_giving_up_only_a_shutdown_counts() {
     assert!(watcher.gave_up);
 
     // Nothing is loaded, so each of these would otherwise arm a retry or
-    // report a stall.
+    // send an event.
     for signal in [
         Signal::EndFile(mpv_end_file_reason::Error),
         Signal::EofReached(true),
         Signal::PausedForCache(true),
+        Signal::CoreIdle(true),
+        Signal::PlaybackRestart,
     ] {
         assert!(watcher.on_signal(signal).is_continue());
     }
@@ -408,6 +411,53 @@ fn sends_buffering_and_buffered_once_each() {
             (EVENT_BUFFERED, json!({ "url": UNUSED_URL })),
         ]
     );
+}
+
+#[test]
+fn says_when_the_video_stops_or_moves_and_after_a_seek() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE_CHANGED]);
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, UNUSED_URL);
+
+    for signal in [
+        Signal::CoreIdle(true),
+        Signal::TimePos(3.0),
+        Signal::CoreIdle(false),
+        Signal::PausedForCache(false),
+        Signal::PlaybackRestart,
+        Signal::Nothing,
+    ] {
+        assert!(watcher.on_signal(signal).is_continue());
+    }
+    assert_eq!(
+        events.payloads(EVENT_STATE_CHANGED),
+        vec![json!({ "url": UNUSED_URL }); 3]
+    );
+}
+
+#[test]
+fn mpv_reports_a_pause_a_resume_and_a_seek() {
+    let server = Server::start(wav(20), Vec::new());
+    let url = server.url();
+    let app = TestApp::new();
+    let player = player(&[]);
+    let mut watcher = watcher(&app, &player, &url);
+    watcher.observe();
+    // Reads the watcher's events until `wanted` comes, as `run` reads them.
+    let wait_for_signal = |wanted: Signal| {
+        let what = format!("{wanted:?}");
+        wait_until(&what, || signal(watcher.client.wait_event(0.1)) == wanted);
+    };
+
+    loadfile(&player, &url, None).unwrap();
+    wait_for_signal(Signal::CoreIdle(false));
+    player.set_property("pause", true).unwrap();
+    wait_for_signal(Signal::CoreIdle(true));
+    player.set_property("pause", false).unwrap();
+    wait_for_signal(Signal::CoreIdle(false));
+    player.command("seek", &["10", "absolute"]).unwrap();
+    wait_for_signal(Signal::PlaybackRestart);
 }
 
 #[test]
