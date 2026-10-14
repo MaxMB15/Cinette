@@ -36,7 +36,8 @@ const STREAM = "http://example.test/sintel.mkv";
 
 /**
  * Hands out picks the way the player does. A test sets `stream` to null for
- * a closed page or another item, and starts a pick of its own with `startPick`.
+ * a closed page, another item or an item the player is starting, and starts a
+ * pick of its own with `startPick`.
  */
 const makePlayer = () => {
 	const player = {
@@ -449,6 +450,22 @@ describe("SubtitlePicker search and selection", () => {
 		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
 		expect(onSubtitleSelected).not.toHaveBeenCalled();
 		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("takes the message about an earlier pick away once None is picked", async () => {
+		const download = deferred<string>();
+		tauri.downloadSubtitle.mockReturnValue(download.promise);
+		const { player } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.2010.720p"));
+		await act(async () => {});
+		player.stream = null;
+		await act(async () => download.resolve("/subs/11.srt"));
+		expect(screen.getByText(/still starting/)).toBeInTheDocument();
+
+		fireEvent.click(entryButton("None"));
+		expect(screen.queryByText(/still starting/)).toBeNull();
 	});
 
 	it("drops a subtitle that mpv adds after the player moves on", async () => {

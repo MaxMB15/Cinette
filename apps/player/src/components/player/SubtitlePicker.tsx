@@ -31,7 +31,8 @@ export interface SubtitlePick {
 	latest: () => boolean;
 	/**
 	 * The stream to add the subtitles to. Null once the viewer has picked
-	 * again, the page has closed or the player has moved on to another item.
+	 * again, the page has closed or the player has moved on to another item,
+	 * and while the player starts the item.
 	 */
 	stream: () => string | null;
 }
@@ -221,11 +222,13 @@ export const SubtitlePicker = ({
 
 	// None also drops a subtitle still downloading, and frees the list to
 	// pick another. An add already on its way to mpv runs first, so the
-	// remove takes its track out too.
+	// remove takes its track out too. None only shows once the search found
+	// subtitles, so a message then is about an earlier pick, and goes.
 	const handleNone = () => {
 		startPick();
 		setDownloadingId(null);
 		setSelectedFileId(null);
+		setError(null);
 		mpvSubRemove(-1).catch(() => {});
 		onSubtitleSelected?.(null, [], null, undefined);
 	};
