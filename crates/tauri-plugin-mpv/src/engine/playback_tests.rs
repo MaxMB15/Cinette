@@ -402,8 +402,8 @@ fn adds_a_subtitle_when_the_file_starts() {
     assert_eq!(selected(&first), "1");
     assert!(visible(&first));
 
-    // mpv takes no track from a `loadfile` until it has opened the file,
-    // which is when `MpvState::load` has already returned.
+    // mpv refuses a track after a `loadfile` until it starts to open the
+    // file, and `MpvState::load` has returned by then.
     let mut second = engine(&[("pause", "yes")]);
     second.loadfile(&path, None).unwrap();
     second.sub_add(&subtitles, false).unwrap();
@@ -430,10 +430,11 @@ fn adds_a_subtitle_when_the_file_starts() {
     assert_eq!(selected(&second), "1");
     assert!(visible(&second));
 
-    // Nor while it opens the file, here until the server sends the stream.
+    // While it opens the file, here until the server sends the stream, mpv
+    // takes the track and then adds the file again from `sub-files`.
     let (send, held) = std::sync::mpsc::channel();
     let server = Server::start(wav(10), vec![Reply::HoldAfter(0, held)]);
-    let mut third = engine(&[("pause", "yes")]);
+    let mut third = engine(&[("pause", "yes"), ("sub-visibility", "no")]);
     third.loadfile(&server.url(), None).unwrap();
     third.set_current_url(&server.url());
     wait_until("mpv to ask for the stream", || {
@@ -444,6 +445,7 @@ fn adds_a_subtitle_when_the_file_starts() {
     wait_until("playback to start", || third.get_state().playback_started);
     assert_eq!(tracks(&third), 2);
     assert_eq!(selected(&third), "1");
+    assert!(visible(&third));
 }
 
 #[test]
