@@ -521,10 +521,47 @@ fn seeking_needs_a_stream() {
 }
 
 #[test]
-fn keeps_no_delay_mpv_turned_down() {
-    let state = MpvState::new();
+fn a_delay_set_after_a_failed_retry_reaches_the_next_one() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT);
+    let state = app.state();
+    load(&app, &path);
+    wait_for_playback(&state);
+    state.sub_add(&subtitles, true).unwrap();
+
+    // mpv can't take a URL with a NUL in it, so the retry leaves no mpv.
+    let (renderer, _log) = FakeRenderer::working();
+    let retry = reload_headless(
+        &state,
+        &app.handle(),
+        "http://example.test/a\0b",
+        Ok(renderer),
+    );
+    assert!(retry.is_err());
     assert_eq!(state.set_sub_delay(1.5), Err("no mpv instance".to_string()));
-    assert_eq!(*state.subtitles.lock().unwrap(), KeptSubtitles::default());
+
+    let (renderer, _log) = FakeRenderer::working();
+    reload_headless(&state, &app.handle(), &path, Ok(renderer)).unwrap();
+    wait_for_playback(&state);
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(number(&state, "sub-delay"), 1.5);
+}
+
+#[test]
+fn keeps_no_delay_mpv_turned_down() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let state = app.state();
+    load(&app, &media.file("tone.wav", &wav(10)));
+    wait_for_playback(&state);
+    state.set_sub_delay(0.5).unwrap();
+
+    // mpv turns down a delay that isn't a number.
+    assert!(state.set_sub_delay(f64::NAN).is_err());
+    assert_eq!(state.subtitles.lock().unwrap().delay, 0.5);
+    assert_eq!(number(&state, "sub-delay"), 0.5);
 }
 
 /// The inhibit is a power assertion on macOS. On Linux it goes over the

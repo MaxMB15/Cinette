@@ -615,11 +615,18 @@ impl MpvState {
         lock_or_recover(&self.inner).set_sub_pos(pos)
     }
 
+    /// Shifts the subtitles by `delay` seconds. While there's no mpv, as
+    /// after a failed load, the next load that keeps the subtitles starts
+    /// with this delay. A delay mpv turns down isn't kept.
     pub fn set_sub_delay(&self, delay: f64) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
-        lock_or_recover(&self.inner).set_sub_delay(delay)?;
-        lock_or_recover(&self.subtitles).delay = delay;
-        Ok(())
+        let mut kept = lock_or_recover(&self.subtitles);
+        let engine = lock_or_recover(&self.inner);
+        let result = engine.set_sub_delay(delay);
+        if result.is_ok() || !engine.has_instance() {
+            kept.delay = delay;
+        }
+        result
     }
 
     pub fn get_state(&self) -> PlayerState {

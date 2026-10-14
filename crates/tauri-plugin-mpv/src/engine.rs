@@ -435,6 +435,11 @@ impl MpvEngine {
     }
 
     /// Set subtitle time delay in seconds (negative = earlier, positive = later).
+    /// Whether there's an mpv instance. A stop or a failed load leaves none.
+    pub fn has_instance(&self) -> bool {
+        self.mpv.is_some()
+    }
+
     pub fn set_sub_delay(&self, delay: f64) -> Result<(), String> {
         self.mpv
             .as_ref()
