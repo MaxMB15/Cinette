@@ -29,17 +29,25 @@ Stryker reads:
 
   // Stryker disable next-line EqualityOperator: <why no test can catch it>
 
+Stryker only makes the mutants whose code lies wholly inside one of the
+ranges, so the check only looks at those too. It prints a warning for each
+mutant a comment turns off there, so a reviewer can check that the reason
+still holds for the changed code.
+
 --check also fails for any other Stryker comment in the files --lines names.
 One with no reason, or with "all" for the mutators, or one that covers every
-line after it, could hide a mutant that a test should catch. It fails, too,
-when there's no report. Stryker writes none when no test loads the files it
-mutates. --path-prefix goes before each file name, since Stryker's names start
-in apps/player, and GitHub's, like the working folder's, at the top of the
-repo.
+line after it, could hide a mutant that a test should catch. So could one with
+another Stryker comment in its reason. It fails, too, when there's no report.
+Stryker writes none when no test loads the files it mutates. --no-mutants says
+Stryker made no mutants at all, as for a change to types alone, and then a
+missing report is fine. --path-prefix goes before each file name, since
+Stryker's names start in apps/player, and GitHub's, like the working folder's,
+at the top of the repo.
 
 Usage:
   python3 scripts/stryker-summary.py [--title TITLE] MUTATION_JSON
-  python3 scripts/stryker-summary.py --check --lines LINES [--path-prefix PREFIX] MUTATION_JSON
+  python3 scripts/stryker-summary.py --check --lines LINES [--no-mutants]
+      [--path-prefix PREFIX] MUTATION_JSON
 """
 from __future__ import annotations
 
@@ -110,10 +118,12 @@ def escape_property(text: str) -> str:
     return escape_data(text).replace(":", "%3A").replace(",", "%2C")
 
 
-def annotation(path: str, line: int, column: int, title: str, message: str) -> str:
-    """A GitHub error annotation on a line of a file."""
+def annotation(
+    path: str, line: int, column: int, title: str, message: str, kind: str = "error"
+) -> str:
+    """A GitHub annotation on a line of a file, an error unless `kind` says otherwise."""
     return (
-        f"::error file={escape_property(path)},line={line},col={column},"
+        f"::{kind} file={escape_property(path)},line={line},col={column},"
         f"title={escape_property(title)}::{escape_data(message)}"
     )
 
@@ -130,6 +140,11 @@ def comment_problems(source: str) -> list[tuple[int, int, str]]:
             problem = (
                 "Only `// Stryker disable next-line <mutator>: <reason>`, alone on its line,"
                 " is used here, so that each comment covers one line."
+            )
+        elif MENTION.search(allowed[2]):
+            problem = (
+                "Leave other Stryker comments out of the reason. If this line sits inside a"
+                " block comment or a template string, Stryker could read one there."
             )
         elif any(name.strip().lower() == "all" for name in allowed[1].split(",")):
             problem = "Name the mutators this comment turns off, rather than all of them."
@@ -156,18 +171,25 @@ def changed_lines(spec: str) -> dict[str, list[tuple[int, int]] | None]:
     return files
 
 
-def touches(location: dict, ranges: list[tuple[int, int]] | None) -> bool:
-    """Whether a mutant's code shares a line with any of `ranges`."""
+def within(location: dict, ranges: list[tuple[int, int]] | None) -> bool:
+    """Whether a mutant's code lies wholly inside one of `ranges`. Those are the
+    mutants Stryker makes when --mutate names the ranges."""
     if ranges is None:
         return True
     first, last = location["start"]["line"], location["end"]["line"]
-    return any(start <= last and first <= end for start, end in ranges)
+    return any(start <= first and last <= end for start, end in ranges)
 
 
-def check(report: dict | None, prefix: str, lines: dict[str, list[tuple[int, int]] | None]) -> int:
+def check(
+    report: dict | None,
+    prefix: str,
+    lines: dict[str, list[tuple[int, int]] | None],
+    no_mutants: bool = False,
+) -> int:
     """Prints an annotation for each mutant no test caught on `lines`, and for each
     Stryker comment not of the allowed form in their files. Returns 1 if there were
-    any, or if there's no report."""
+    any, or if there's no report and Stryker made mutants. Also prints a warning for
+    each mutant a comment turns off on `lines`."""
     count = 0
     for name in sorted(lines):
         path = prefix + name
@@ -175,7 +197,7 @@ def check(report: dict | None, prefix: str, lines: dict[str, list[tuple[int, int
         for line, column, problem in comment_problems(source):
             print(annotation(path, line, column, "Stryker comment", problem))
             count += 1
-    if report is None:
+    if report is None and not no_mutants:
         message = (
             f"No test loads {', '.join(sorted(lines))}, so Stryker had nothing to run."
             " Add tests for the changes."
@@ -188,7 +210,7 @@ def check(report: dict | None, prefix: str, lines: dict[str, list[tuple[int, int
         path = prefix + name
         for mutant in file["mutants"]:
             status = mutant["status"]
-            if status not in ("Survived", "NoCoverage") or not touches(
+            if status not in ("Survived", "NoCoverage", "Ignored") or not within(
                 mutant["location"], lines[name]
             ):
                 continue
@@ -196,6 +218,15 @@ def check(report: dict | None, prefix: str, lines: dict[str, list[tuple[int, int
             mutator = mutant["mutatorName"]
             before = one_line(original(file["source"], mutant["location"]))
             after = one_line(mutant.get("replacement", ""))
+            if status == "Ignored":
+                reason = one_line(mutant.get("statusReason") or "")
+                message = (
+                    f"A comment turns off {mutator} changing `{before}` to `{after}` here,"
+                    f' with the reason "{reason}". Check that it still holds for the changed code.'
+                )
+                title = "Mutant turned off"
+                print(annotation(path, start["line"], start["column"], title, message, "warning"))
+                continue
             if status == "Survived":
                 title = "Mutant survived"
                 message = (
@@ -218,7 +249,10 @@ def check(report: dict | None, prefix: str, lines: dict[str, list[tuple[int, int
         if count > 10:
             print("GitHub shows at most 10 of them as annotations, and this log lists them all.")
         return 1
-    print("Every mutant on the lines this pull request changes was caught.")
+    if report is None:
+        print("Stryker found no code to mutate on the lines this pull request changes.")
+    else:
+        print("Every mutant on the lines this pull request changes was caught.")
     return 0
 
 
@@ -251,6 +285,11 @@ def main(argv: list[str]) -> int:
         default="",
         help="with --check, the lines to check, as Stryker's --mutate takes them",
     )
+    parser.add_argument(
+        "--no-mutants",
+        action="store_true",
+        help="with --check, Stryker made no mutants, so a missing report is fine",
+    )
     parser.add_argument("--path-prefix", default="", help="goes before each file name")
     parser.add_argument("report", metavar="MUTATION_JSON")
     args = parser.parse_args(argv)
@@ -261,7 +300,7 @@ def main(argv: list[str]) -> int:
         if not lines:
             parser.error("--check needs --lines")
         report = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-        return check(report, args.path_prefix, lines)
+        return check(report, args.path_prefix, lines, args.no_mutants)
     if not path.exists():
         print(f"## {args.title}\n\nNo report at `{args.report}`.")
         return 0
