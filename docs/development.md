@@ -56,7 +56,7 @@ source instead, as the AppImage does:
 ```bash
 sudo apt-get install meson ninja-build \
   libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavfilter-dev \
-  libass-dev libdrm-dev
+  libass-dev libdrm-dev libluajit-5.1-dev
 
 ./scripts/build-libmpv.sh linux
 export LD_LIBRARY_PATH="$(pwd)/libs/linux:$LD_LIBRARY_PATH"

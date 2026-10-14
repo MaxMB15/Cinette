@@ -40,6 +40,9 @@ pub struct PlayerState {
     /// opens a file, seeks or waits for more of the stream. This is mpv's
     /// `core-idle` when it isn't paused.
     pub waiting: bool,
+    /// mpv plays in a window of its own, which the frontend can't draw over.
+    /// `MpvState` sets it, since the engine doesn't know which window it has.
+    pub fallback_active: bool,
 }
 
 /// Written out by hand so a logged state shows only the stream's origin,
@@ -60,6 +63,7 @@ impl fmt::Debug for PlayerState {
             .field("open_failed", &self.open_failed)
             .field("reached_end", &self.reached_end)
             .field("waiting", &self.waiting)
+            .field("fallback_active", &self.fallback_active)
             .finish()
     }
 }
@@ -97,9 +101,15 @@ impl MpvEngine {
         let mut failed: Option<&str> = None;
         let mpv = Mpv::with_initializer(|init| {
             for (k, v) in &opts {
-                if let Err(e) = init.set_option(k.as_str(), v.as_str()) {
-                    failed = Some(k.as_str());
-                    return Err(e);
+                match init.set_option(k.as_str(), v.as_str()) {
+                    Ok(()) => {}
+                    Err(e) if can_skip(k, &e) => {
+                        tracing::info!("[MPV] option {k} skipped, this libmpv has no Lua");
+                    }
+                    Err(e) => {
+                        failed = Some(k.as_str());
+                        return Err(e);
+                    }
                 }
             }
             Ok(())
@@ -345,12 +355,7 @@ impl MpvEngine {
     /// it's false, since the frontend draws the new subtitles.
     pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
-        // Convert to file:// URI so MPV path resolution is unambiguous for local files
-        let uri = if path.starts_with('/') {
-            format!("file://{path}")
-        } else {
-            path.to_string()
-        };
+        let uri = subtitle_uri(path);
         // "no" when no track is in use, which isn't a number.
         let in_use = mpv
             .get_property::<String>("sid")
@@ -383,16 +388,19 @@ impl MpvEngine {
         if visible {
             set_visible();
         }
+        set_sub_files(mpv, Some(&uri));
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }
 
     /// Remove an external subtitle track. Pass -1 to remove the current track (no-arg form).
+    /// mpv also stops adding the file when it reloads the stream.
     pub fn sub_remove(&self, id: i64) -> Result<(), String> {
         let mpv = self
             .mpv
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?;
+        set_sub_files(mpv, None);
         if id == -1 {
             mpv.command("sub-remove", &[]).map_err(|e| e.to_string())
         } else {
@@ -410,6 +418,25 @@ impl MpvEngine {
             .ok_or_else(|| "no mpv instance".to_string())?
             .set_property("sub-pos", pos.clamp(0.0, 150.0).round() as i64)
             .map_err(|e| e.to_string())
+    }
+
+    /// Gives a new mpv instance the subtitles the last one had, before its
+    /// first `loadfile`. mpv adds and selects `file` with the stream, draws
+    /// it only when `visible` is true, and shifts it by `delay` seconds.
+    pub fn restore_subtitles(&self, file: &str, visible: bool, delay: f64) -> Result<(), String> {
+        let mpv = self
+            .mpv
+            .as_ref()
+            .ok_or_else(|| "no mpv instance".to_string())?;
+        set_sub_files(mpv, Some(&subtitle_uri(file)));
+        mpv.set_property("sub-visibility", visible)
+            .and_then(|()| mpv.set_property("sub-delay", delay))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Whether there's an mpv instance. A stop or a failed load leaves none.
+    pub fn has_instance(&self) -> bool {
+        self.mpv.is_some()
     }
 
     /// Set subtitle time delay in seconds (negative = earlier, positive = later).
@@ -458,6 +485,43 @@ impl MpvEngine {
             self.ensure_audio_selected();
         }
         state
+    }
+}
+
+/// Options that only exist when libmpv was built with Lua.
+const LUA_OPTIONS: [&str; 2] = ["osc", "ytdl"];
+
+/// Whether `create` can go on without an option mpv turned down. That's one
+/// of the Lua options on a libmpv built without Lua, which doesn't know them.
+/// The fallback window then has no on-screen controls, and with no Lua there
+/// is no `ytdl_hook` to turn off.
+fn can_skip(key: &str, error: &libmpv2::Error) -> bool {
+    LUA_OPTIONS.contains(&key)
+        && matches!(error, libmpv2::Error::Raw(code) if *code == libmpv2::mpv_error::OptionNotFound)
+}
+
+/// A local path as a `file://` URI, so mpv can't read it as anything else.
+fn subtitle_uri(path: &str) -> String {
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        path.to_string()
+    }
+}
+
+/// Makes `uri` the only file in mpv's `sub-files` list, or empties the list.
+/// mpv adds and selects the list's files each time it loads a file, so a
+/// reconnect's reload keeps the subtitles. Adding to the list doesn't add a
+/// track to the file that's playing.
+fn set_sub_files(mpv: &Mpv, uri: Option<&str>) {
+    let result = mpv.command("change-list", &["sub-files", "clr", ""]).and_then(|()| match uri {
+        // `append` takes the URI as one item. Setting the whole list would
+        // split it at its colons.
+        Some(uri) => mpv.command("change-list", &["sub-files", "append", uri]),
+        None => Ok(()),
+    });
+    if let Err(e) = result {
+        tracing::warn!("[MPV] sub-files: {e}");
     }
 }
 
@@ -528,7 +592,8 @@ mod playback_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{libmpv_in_maps, open_status, PlayerState};
+    use super::{can_skip, libmpv_in_maps, open_status, subtitle_uri, PlayerState};
+    use libmpv2::mpv_error;
 
     #[test]
     fn a_logged_state_hides_the_login_in_the_url() {
@@ -539,6 +604,23 @@ mod tests {
         let logged = format!("{state:?}");
         assert!(logged.contains("http://host.test:8080"), "{logged}");
         assert!(!logged.contains("USER") && !logged.contains("SECRET"), "{logged}");
+    }
+
+    #[test]
+    fn can_skip_only_a_lua_option_mpv_does_not_know() {
+        let unknown = libmpv2::Error::Raw(mpv_error::OptionNotFound);
+        assert!(can_skip("osc", &unknown));
+        assert!(can_skip("ytdl", &unknown));
+        assert!(!can_skip("vo", &unknown));
+        let bad_value = libmpv2::Error::Raw(mpv_error::OptionFormat);
+        assert!(!can_skip("osc", &bad_value));
+        assert!(!can_skip("osc", &libmpv2::Error::Null));
+    }
+
+    #[test]
+    fn subtitle_uri_turns_a_path_into_a_file_uri() {
+        assert_eq!(subtitle_uri("/tmp/a b.srt"), "file:///tmp/a b.srt");
+        assert_eq!(subtitle_uri("file:///tmp/a.srt"), "file:///tmp/a.srt");
     }
 
     #[test]
@@ -583,6 +665,7 @@ mod tests {
         assert_eq!(json["openFailed"], true);
         assert_eq!(json["reachedEnd"], true);
         assert_eq!(json["waiting"], true);
+        assert_eq!(json["fallbackActive"], false);
     }
 
     #[test]

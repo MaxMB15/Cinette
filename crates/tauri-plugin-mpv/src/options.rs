@@ -21,7 +21,7 @@ const LAVF_RECONNECT_OPTS: &str =
 ///
 /// Each platform puts its own video and audio options in front and its
 /// `msg-level` after.
-pub(crate) fn shared_options() -> [(&'static str, &'static str); 8] {
+pub(crate) fn shared_options() -> [(&'static str, &'static str); 9] {
     [
         ("cache", "yes"),
         ("cache-secs", "30"),
@@ -33,7 +33,26 @@ pub(crate) fn shared_options() -> [(&'static str, &'static str); 8] {
         // frontend sees (`reached_end`) and `reconnect.rs` both read
         // `eof-reached`, which mpv only leaves set while the file stays open.
         ("keep-open", "yes"),
+        // mpv's ytdl_hook hands a stream that fails to open to yt-dlp, login
+        // and all, when yt-dlp is installed. A libmpv without Lua has no
+        // ytdl_hook and no `ytdl` option, so `MpvEngine::create` skips it.
+        ("ytdl", "no"),
         ("terminal", "yes"),
+    ]
+}
+
+/// What the fallback window needs, since the app has no controls over it.
+/// libmpv turns off mpv's on-screen controller, its key bindings and the
+/// window's keyboard input. With them on, the mouse and keys control
+/// playback, and closing the window or pressing `q` quits mpv, which
+/// `reconnect.rs` reports to the frontend. The macOS libmpv is built without
+/// Lua, so it has no on-screen controller and no `osc` option, and
+/// `MpvEngine::create` skips it there.
+pub(crate) fn window_controls() -> [(&'static str, &'static str); 3] {
+    [
+        ("osc", "yes"),
+        ("input-default-bindings", "yes"),
+        ("input-vo-keyboard", "yes"),
     ]
 }
 
@@ -61,6 +80,7 @@ mod tests {
                 ("stream-lavf-o", LAVF),
                 ("network-timeout", "30"),
                 ("keep-open", "yes"),
+                ("ytdl", "no"),
                 ("terminal", "yes"),
                 ("msg-level", "all=status"),
             ]
@@ -78,7 +98,11 @@ mod tests {
                 ("stream-lavf-o", LAVF),
                 ("network-timeout", "30"),
                 ("keep-open", "yes"),
+                ("ytdl", "no"),
                 ("terminal", "yes"),
+                ("osc", "yes"),
+                ("input-default-bindings", "yes"),
+                ("input-vo-keyboard", "yes"),
                 ("msg-level", "all=status"),
             ]
         );
@@ -103,6 +127,7 @@ mod tests {
                 ("stream-lavf-o", LAVF),
                 ("network-timeout", "30"),
                 ("keep-open", "yes"),
+                ("ytdl", "no"),
                 ("terminal", "yes"),
                 ("msg-level", "all=info"),
             ]
@@ -121,7 +146,11 @@ mod tests {
                 ("stream-lavf-o", LAVF),
                 ("network-timeout", "30"),
                 ("keep-open", "yes"),
+                ("ytdl", "no"),
                 ("terminal", "yes"),
+                ("osc", "yes"),
+                ("input-default-bindings", "yes"),
+                ("input-vo-keyboard", "yes"),
                 ("msg-level", "all=info"),
             ]
         );

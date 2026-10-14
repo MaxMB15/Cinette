@@ -21,7 +21,7 @@
 #![allow(deprecated)]
 
 use crate::gl_render::GlRenderContext;
-use crate::options::shared_options;
+use crate::options::{shared_options, window_controls};
 use crate::renderer::PlatformRenderer;
 use dispatch2::{run_on_main, DispatchQueue, MainThreadBound};
 use libmpv2::{render::mpv_render_update, Mpv};
@@ -466,8 +466,8 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 
 /// Options for the separate fallback window.
 ///
-/// mpv picks `vo=gpu` on its own. Leave its on-screen controller on, since
-/// this window has no other controls.
+/// mpv picks `vo=gpu` on its own. mpv's keys control the window, since the
+/// app has no controls over it.
 pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
     let mut options = vec![
         ("hwdec", "videotoolbox"),
@@ -475,6 +475,7 @@ pub fn fallback_options() -> Vec<(&'static str, &'static str)> {
         ("video-sync", "display-resample"),
     ];
     options.extend(shared_options());
+    options.extend(window_controls());
     options.push(("msg-level", "all=status"));
     options
 }

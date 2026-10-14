@@ -12,15 +12,18 @@ pub async fn mpv_load<R: Runtime>(
     url: String,
     start_pos: Option<f64>,
     hwdec: Option<bool>,
+    keep_subtitles: Option<bool>,
 ) -> Result<(), String> {
     let hwdec = hwdec.unwrap_or(true);
+    let keep_subtitles = keep_subtitles.unwrap_or(false);
     tracing::info!(
-        "[MPV cmd] load origin={} start_pos={:?} hwdec={}",
+        "[MPV cmd] load origin={} start_pos={:?} hwdec={} keep_subtitles={}",
         origin_for_log(&url),
         start_pos,
-        hwdec
+        hwdec,
+        keep_subtitles
     );
-    state.load(&url, start_pos, hwdec, &app)?;
+    state.load(&url, start_pos, hwdec, keep_subtitles, &app)?;
     tracing::debug!("[MPV cmd] load complete, state={:?}", state.get_state());
     Ok(())
 }

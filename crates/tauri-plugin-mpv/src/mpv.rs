@@ -30,6 +30,29 @@ use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
 
+/// The subtitles the frontend gave mpv for the item that plays.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct KeptSubtitles {
+    /// The file and whether the frontend draws it (`overlay` in `sub_add`).
+    file: Option<(String, bool)>,
+    /// mpv's `sub-delay`, in seconds.
+    delay: f64,
+}
+
+impl KeptSubtitles {
+    /// Gives a new mpv instance these subtitles before its first `loadfile`.
+    /// `window` is whether mpv plays in a window of its own, where it always
+    /// draws them. A failure only costs the subtitles, so the load goes on.
+    fn restore(&self, engine: &MpvEngine, window: bool) {
+        let Some((path, overlay)) = &self.file else {
+            return;
+        };
+        if let Err(e) = engine.restore_subtitles(path, !overlay || window, self.delay) {
+            tracing::warn!("[MPV] restoring subtitles failed: {e}");
+        }
+    }
+}
+
 pub struct MpvState {
     /// Declared before `inner` so it drops first. A renderer's render
     /// context has to be freed before the engine destroys the mpv core.
@@ -60,12 +83,16 @@ pub struct MpvState {
     /// exits the next time it wakes from `wait_event`, dropping its client
     /// and releasing the core.
     reconnect_kill: Mutex<Option<Arc<AtomicBool>>>,
-    /// Held through each whole `load()` and `stop()`. Both are async
-    /// commands, so without it they can run at once, and a stop could stop
-    /// the engine that a newer load had just created. Nothing on the main
-    /// thread takes it, so they can still wait on the main thread while
-    /// holding it.
+    /// Held through each whole `load()` and `stop()`, and while subtitles
+    /// change. These are async commands, so without it they can run at once,
+    /// and a stop could stop the engine that a newer load had just created.
+    /// Nothing on the main thread takes it, so they can still wait on the
+    /// main thread while holding it.
     transition: Mutex<()>,
+    /// The subtitles for the item that plays. A load that keeps them, such
+    /// as a retry or another source for the same item, gives them to the new
+    /// mpv instance. Locked after `transition` and before `inner`.
+    subtitles: Mutex<KeptSubtitles>,
 }
 
 impl Default for MpvState {
@@ -85,6 +112,7 @@ impl MpvState {
             idle_inhibitor: IdleInhibitor::new(),
             reconnect_kill: Mutex::new(None),
             transition: Mutex::new(()),
+            subtitles: Mutex::new(KeptSubtitles::default()),
         }
     }
 
@@ -102,14 +130,18 @@ impl MpvState {
         }
     }
 
+    /// Plays `url` in a new mpv instance. `keep_subtitles` is true when it
+    /// plays the same item as before, and the new instance then starts with
+    /// the subtitles the last one had.
     pub fn load<R: tauri::Runtime>(
         &self,
         url: &str,
         start_pos: Option<f64>,
         hwdec: bool,
+        keep_subtitles: bool,
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
-        self.load_with(hwdec, || self.load_impl(url, start_pos, app))
+        self.load_with(hwdec, keep_subtitles, || self.load_impl(url, start_pos, app))
     }
 
     /// The body of `load()`, with the platform setup passed in as `start`.
@@ -118,6 +150,7 @@ impl MpvState {
     pub(crate) fn load_with(
         &self,
         hwdec: bool,
+        keep_subtitles: bool,
         start: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let _transition = lock_or_recover(&self.transition);
@@ -136,6 +169,9 @@ impl MpvState {
         self.idle_inhibitor.uninhibit();
         self.fallback_active.store(false, Ordering::Release);
         self.hwdec_enabled.store(hwdec, Ordering::Release);
+        if !keep_subtitles {
+            *lock_or_recover(&self.subtitles) = KeptSubtitles::default();
+        }
 
         let result = start();
         if result.is_ok() {
@@ -299,10 +335,12 @@ impl MpvState {
 
         self.install_renderer(renderer);
 
+        let kept = lock_or_recover(&self.subtitles).clone();
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
             #[cfg(target_os = "linux")]
             engine.configure_audio()?;
+            kept.restore(&engine, false);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
             engine.create_event_client().ok()
@@ -357,8 +395,10 @@ impl MpvState {
 
         self.install_renderer(Box::new(metal_renderer));
 
+        let kept = lock_or_recover(&self.subtitles).clone();
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
+            kept.restore(&engine, false);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
             engine.create_event_client().ok()
@@ -375,9 +415,11 @@ impl MpvState {
         app: &tauri::AppHandle<R>,
     ) -> Result<(), String> {
         use tauri::Emitter;
+        let kept = lock_or_recover(&self.subtitles).clone();
         let event_client = {
             let mut engine = lock_or_recover(&self.inner);
             engine.create(&[])?;
+            kept.restore(&engine, true);
             engine.loadfile(url, start_pos)?;
             engine.set_current_url(url);
             engine.create_event_client().ok()
@@ -423,10 +465,12 @@ impl MpvState {
         start_pos: Option<f64>,
         options: impl FnOnce() -> Vec<(&'static str, &'static str)>,
     ) -> Result<Option<libmpv2::Mpv>, String> {
+        let kept = lock_or_recover(&self.subtitles).clone();
         let mut engine = lock_or_recover(&self.inner);
         engine.create(&self.options(options()))?;
         #[cfg(target_os = "linux")]
         engine.configure_audio()?;
+        kept.restore(&engine, true);
         engine.loadfile(url, start_pos)?;
         engine.set_current_url(url);
         Ok(engine.create_event_client().ok())
@@ -476,6 +520,25 @@ impl MpvState {
 
     pub fn stop(&self) {
         let _transition = lock_or_recover(&self.transition);
+        self.stop_locked();
+    }
+
+    /// Stops playback after mpv quit by itself, which only the fallback
+    /// window does, when the user closes it. `kill` is the flag of the
+    /// watcher that saw mpv quit. A load or stop that already replaced that
+    /// mpv instance sets it first, and then this leaves the new one alone and
+    /// returns false.
+    pub(crate) fn stop_after_quit(&self, kill: &AtomicBool) -> bool {
+        let _transition = lock_or_recover(&self.transition);
+        if kill.load(Ordering::Acquire) {
+            return false;
+        }
+        self.stop_locked();
+        true
+    }
+
+    /// `stop()` with `transition` held.
+    fn stop_locked(&self) {
         // Same ordering rule as `load()`: cancel the monitor BEFORE the
         // engine drops the parent `Mpv`, otherwise the watcher's client
         // keeps the libmpv core alive (hardware decoder + audio device).
@@ -485,6 +548,8 @@ impl MpvState {
         drop(old_renderer); // detach() runs synchronously on GLib main thread
         lock_or_recover(&self.inner).stop();
         self.idle_inhibitor.uninhibit();
+        self.fallback_active.store(false, Ordering::Release);
+        *lock_or_recover(&self.subtitles) = KeptSubtitles::default();
         #[cfg(target_os = "ios")]
         crate::ios::set_audio_active(false);
     }
@@ -533,11 +598,16 @@ impl MpvState {
     /// The frontend can't draw over the fallback window, so mpv always draws
     /// them there.
     pub fn sub_add(&self, path: &str, overlay: bool) -> Result<(), String> {
+        let _transition = lock_or_recover(&self.transition);
         let visible = !overlay || self.fallback_active.load(Ordering::Acquire);
-        lock_or_recover(&self.inner).sub_add(path, visible)
+        lock_or_recover(&self.inner).sub_add(path, visible)?;
+        lock_or_recover(&self.subtitles).file = Some((path.to_string(), overlay));
+        Ok(())
     }
 
     pub fn sub_remove(&self, id: i64) -> Result<(), String> {
+        let _transition = lock_or_recover(&self.transition);
+        lock_or_recover(&self.subtitles).file = None;
         lock_or_recover(&self.inner).sub_remove(id)
     }
 
@@ -545,12 +615,24 @@ impl MpvState {
         lock_or_recover(&self.inner).set_sub_pos(pos)
     }
 
+    /// Shifts the subtitles by `delay` seconds. While there's no mpv, as
+    /// after a failed load, the next load that keeps a subtitle file starts
+    /// with this delay. A delay mpv turns down isn't kept.
     pub fn set_sub_delay(&self, delay: f64) -> Result<(), String> {
-        lock_or_recover(&self.inner).set_sub_delay(delay)
+        let _transition = lock_or_recover(&self.transition);
+        let mut kept = lock_or_recover(&self.subtitles);
+        let engine = lock_or_recover(&self.inner);
+        let result = engine.set_sub_delay(delay);
+        if result.is_ok() || !engine.has_instance() {
+            kept.delay = delay;
+        }
+        result
     }
 
     pub fn get_state(&self) -> PlayerState {
-        lock_or_recover(&self.inner).get_state()
+        let mut state = lock_or_recover(&self.inner).get_state();
+        state.fallback_active = self.fallback_active.load(Ordering::Acquire);
+        state
     }
 }
 

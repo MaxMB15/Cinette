@@ -21,7 +21,7 @@
 
 use crate::gl_render::GlRenderContext;
 use crate::lock::lock_or_recover;
-use crate::options::shared_options;
+use crate::options::{shared_options, window_controls};
 use crate::renderer::PlatformRenderer;
 use khronos_egl as egl;
 use libmpv2::{render::mpv_render_update, Mpv};
@@ -1069,8 +1069,8 @@ pub fn embedded_options(software_gl: bool) -> Vec<(&'static str, &'static str)> 
 }
 
 /// Options for the separate fallback window, where mpv picks `vo=gpu` and
-/// shows its own controls. `wayland` says whether mpv will open that window
-/// on Wayland, see [`mpv_uses_wayland`].
+/// gets its own controls, since the app has none over it. `wayland` says
+/// whether mpv will open that window on Wayland, see [`mpv_uses_wayland`].
 pub fn fallback_options(wayland: bool) -> Vec<(&'static str, &'static str)> {
     // X11 never reaches libva's Wayland code, so keep zero-copy decoding
     // there. X11 sessions always use this window.
@@ -1082,6 +1082,7 @@ pub fn fallback_options(wayland: bool) -> Vec<(&'static str, &'static str)> {
         ("video-sync", "display-resample"),
     ];
     options.extend(shared_options());
+    options.extend(window_controls());
     options.push(("msg-level", "all=info"));
     options
 }
