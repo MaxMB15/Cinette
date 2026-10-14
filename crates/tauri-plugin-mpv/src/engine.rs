@@ -362,8 +362,9 @@ impl MpvEngine {
             }
         };
         // mpv hides subtitles before it adds a track the overlay draws, so it
-        // never draws a frame of that track. It shows them only once the
-        // track in use is gone, since the overlay may still draw that one.
+        // never draws a frame of that track. It shows them only after the add,
+        // which has switched away from the track in use by then, since the
+        // overlay may still draw that track's cues.
         if !visible {
             set_visible();
         }

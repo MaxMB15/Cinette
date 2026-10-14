@@ -273,7 +273,7 @@ fn adds_and_removes_subtitle_tracks() {
     assert!(!visible(&engine));
 
     // A file mpv can't add leaves the track in use. When mpv was to draw the
-    // new one, it draws the track in use as it did before.
+    // new one, the track in use stays as it was, which here is hidden.
     assert!(engine.sub_add(&media.missing("gone.srt"), true).is_err());
     assert_eq!(selected(&engine), "2");
     assert!(!visible(&engine));

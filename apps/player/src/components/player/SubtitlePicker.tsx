@@ -169,7 +169,7 @@ export const SubtitlePicker = ({
 			// overlay can't read. A file that neither can read is an error.
 			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
 			// The new track takes the place of the one in use, and a failed add
-			// leaves the old one. Nothing changes once the player has moved on
+			// leaves the old one. Nothing is added once the player has moved on
 			// to another item.
 			if (!isCurrent()) return;
 			const added = mpvSubAdd(localPath, cues.length > 0);

@@ -1949,8 +1949,38 @@ describe("subtitles", () => {
 		await act(async () => added.resolve());
 		await flush();
 		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
-		// mpv would draw episode two's subtitles over episode three.
+		// The viewer moved on, so the track mpv added comes out again.
 		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
+	});
+
+	it("leaves the track in use when mpv can't add the next episode's subtitles after the viewer moves on", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(showOmdb());
+		// Episode two has English subtitles and episode three only Dutch ones.
+		tauri.searchSubtitles.mockImplementation(async (_imdbId, _season, episode) => ({
+			languages: ["en", "nl"],
+			entries: [
+				episode === 2
+					? { fileId: 302, languageCode: "en", format: "ass" }
+					: { fileId: 303, languageCode: "nl", format: "srt" },
+			],
+		}));
+		// The overlay can't read the file, so only mpv can show it.
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: The tide\n");
+		const added = deferred<void>();
+		tauri.mpvSubAdd.mockReturnValue(added.promise);
+		await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Close subtitles" }));
+		await press("n");
+		await flush();
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
+		await press("n");
+		expect(tauri.searchSubtitles).toHaveBeenLastCalledWith("tt9000002", 1, 3);
+		await act(async () => added.reject(new Error("unsupported")));
+		await flush();
+		expect(screen.getByRole("button", { name: "Subtitles" })).not.toHaveClass("text-blue-400");
+		// mpv kept the track in use, so there's nothing to take out.
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
 
 	it("leaves the next episode's subtitles unpicked when mpv can't add a file the overlay can't read", async () => {
@@ -1984,6 +2014,7 @@ describe("subtitles", () => {
 		await flush();
 		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subtitles/chosen.srt", false);
 		expect(screen.getByRole("button", { name: "Subtitles" })).toHaveClass("text-blue-400");
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 	});
 
 	it("shows the subtitles as they were when the player is opened again from the sidebar", async () => {

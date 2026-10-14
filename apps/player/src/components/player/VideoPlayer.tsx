@@ -674,7 +674,7 @@ export const PlayerView = () => {
 				const langEntries = (result?.entries ?? []).filter(
 					(e) => e.languageCode === pref.languageCode
 				);
-				if (langEntries.length === 0) return; // preferred language not available — keep none
+				if (langEntries.length === 0) return; // preferred language not available, keep none
 				const entry = langEntries[Math.min(pref.rankInLanguage, langEntries.length - 1)];
 				const localPath = await downloadSubtitle(entry.fileId);
 				// mpv also reads a file that isn't UTF-8, and draws any file the
@@ -689,8 +689,7 @@ export const PlayerView = () => {
 					await added;
 					// mpv draws this track itself. When the page closed or the
 					// player moved on during the add, the track comes out again,
-					// so it doesn't show over another episode or the subtitles
-					// the player keeps.
+					// so it doesn't show over the subtitles the player keeps.
 					if (cancelled) {
 						await mpvSubRemove(-1).catch(() => {});
 						return;
