@@ -137,6 +137,33 @@ fn falls_back_when_the_renderer_cannot_attach() {
     wait_until("playback to start", || state.get_state().playback_started);
 }
 
+#[test]
+fn mpv_draws_the_subtitles_the_frontend_does_not() {
+    let app = TestApp::new();
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", b"1\n00:00:00,000 --> 00:00:09,000\nHello\n");
+    let state = app.state();
+    let visible = || property(&state, "sub-visibility");
+
+    // Over the embedded video, the frontend draws the subtitles it can read.
+    load(&app, &path);
+    wait_until("playback to start", || state.get_state().playback_started);
+    state.sub_add(&subtitles, true).unwrap();
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(visible(), "no");
+    state.sub_add(&subtitles, false).unwrap();
+    assert_eq!(property(&state, "sid"), "2");
+    assert_eq!(visible(), "yes");
+
+    // It can't draw over the fallback window, so mpv draws them all there.
+    load_headless(&state, &app.handle(), &path, None, Err("no window".into())).unwrap();
+    wait_until("playback to start", || state.get_state().playback_started);
+    state.sub_add(&subtitles, true).unwrap();
+    assert_eq!(property(&state, "sid"), "1");
+    assert_eq!(visible(), "yes");
+}
+
 /// A renderer whose `attach` fails has to go while the core it was made for
 /// is still alive, and before the fallback creates the next core. The
 /// fallback asks for its options in between, so the test checks both there.

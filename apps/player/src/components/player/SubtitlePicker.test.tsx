@@ -22,7 +22,7 @@ const tauri = vi.hoisted(() => ({
 		>(),
 	downloadSubtitle: vi.fn<(fileId: number) => Promise<string>>(),
 	readSubtitleFile: vi.fn<(path: string) => Promise<string>>(),
-	mpvSubAdd: vi.fn<(path: string) => Promise<void>>(),
+	mpvSubAdd: vi.fn<(path: string, overlay: boolean) => Promise<void>>(),
 	mpvSubRemove: vi.fn<(id: number) => Promise<void>>(),
 }));
 
@@ -287,21 +287,73 @@ describe("SubtitlePicker search and selection", () => {
 
 		fireEvent.click(entryButton("Subtitle 12"));
 		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-
-		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
 		expect(tauri.downloadSubtitle).toHaveBeenCalledExactlyOnceWith(12);
-		expect(tauri.mpvSubRemove.mock.invocationCallOrder[0]).toBeLessThan(
-			tauri.downloadSubtitle.mock.invocationCallOrder[0]
-		);
-		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt");
 		expect(tauri.readSubtitleFile).toHaveBeenCalledExactlyOnceWith("/subs/12.srt");
+		// The overlay draws the subtitles, so mpv doesn't. The new track takes
+		// the place of the old one once the file is read, so the old one stays
+		// until then.
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/12.srt", true);
+		expect(tauri.readSubtitleFile.mock.invocationCallOrder[0]).toBeLessThan(
+			tauri.mpvSubAdd.mock.invocationCallOrder[0]
+		);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 		// Second in its language, which the player uses to pick one for the next episode.
 		expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(12, CUES, unnamed, 1);
 	});
 
-	it("still loads a subtitle when the player can't swap its tracks", async () => {
-		tauri.mpvSubRemove.mockRejectedValue(new Error("no track"));
-		tauri.mpvSubAdd.mockRejectedValue(new Error("busy"));
+	it("lets the player draw a subtitle the overlay can't read", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		const { onSubtitleSelected } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, [], dutch, 0)
+		);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false);
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+	});
+
+	it("lets the player draw a subtitle file that isn't UTF-8", async () => {
+		tauri.readSubtitleFile.mockRejectedValue(new Error("stream did not contain valid UTF-8"));
+		const { onSubtitleSelected, onClose } = renderPicker();
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, [], dutch, 0)
+		);
+		expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false);
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(screen.queryByText("Failed to load subtitle. Try another.")).not.toBeInTheDocument();
+	});
+
+	it("asks for another subtitle when neither it nor the player can read the file", async () => {
+		const failure = new Error("Can not open external file");
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		tauri.mpvSubAdd.mockRejectedValue(failure);
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const { onSubtitleSelected, onClose } = renderPicker();
+			await screen.findByText("en (2)");
+
+			fireEvent.click(entryButton("Sintel.NL"));
+			expect(
+				await screen.findByText("Failed to load subtitle. Try another.")
+			).toBeInTheDocument();
+			expect(consoleError).toHaveBeenCalledWith(
+				"[SubtitlePicker] subtitle load error:",
+				failure
+			);
+			expect(onSubtitleSelected).not.toHaveBeenCalled();
+			expect(onClose).not.toHaveBeenCalled();
+		} finally {
+			consoleError.mockRestore();
+		}
+	});
+
+	it("shows subtitles it can read even when the player can't add them", async () => {
+		tauri.mpvSubAdd.mockRejectedValue(new Error("no mpv instance"));
 		const { onSubtitleSelected } = renderPicker();
 		await screen.findByText("en (2)");
 
@@ -309,6 +361,7 @@ describe("SubtitlePicker search and selection", () => {
 		await waitFor(() =>
 			expect(onSubtitleSelected).toHaveBeenCalledExactlyOnceWith(21, CUES, dutch, 0)
 		);
+		expect(screen.queryByText("Failed to load subtitle. Try another.")).not.toBeInTheDocument();
 	});
 
 	it("shows a spinner on the subtitle loading and holds the others until it's done", async () => {
@@ -333,6 +386,76 @@ describe("SubtitlePicker search and selection", () => {
 		expect(entryButton("Sintel.NL")).toBeEnabled();
 	});
 
+	it("drops a subtitle that finishes loading after the player moves on", async () => {
+		let finish!: (path: string) => void;
+		tauri.downloadSubtitle.mockReturnValue(
+			new Promise((resolve) => {
+				finish = resolve;
+			})
+		);
+		let current = true;
+		const { onSubtitleSelected, onClose } = renderPicker({ isCurrent: () => current });
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.2010.720p"));
+		await act(async () => {});
+		current = false;
+		await act(async () => finish("/subs/11.srt"));
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		// The track mpv has now belongs to the item the player moved on to.
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+		expect(tauri.mpvSubAdd).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("drops a subtitle that mpv adds after the player moves on", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		let added!: () => void;
+		tauri.mpvSubAdd.mockReturnValue(
+			new Promise((resolve) => {
+				added = resolve;
+			})
+		);
+		let current = true;
+		const { onSubtitleSelected, onClose } = renderPicker({ isCurrent: () => current });
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() =>
+			expect(tauri.mpvSubAdd).toHaveBeenCalledExactlyOnceWith("/subs/21.srt", false)
+		);
+		current = false;
+		await act(async () => added());
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		expect(hasCheck(entryButton("Sintel.NL"))).toBe(false);
+		// mpv would draw the track over the subtitles the player keeps.
+		expect(tauri.mpvSubRemove).toHaveBeenCalledExactlyOnceWith(-1);
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	it("leaves the track in use when mpv can't add a file after the player moves on", async () => {
+		tauri.readSubtitleFile.mockResolvedValue("[Script Info]\nTitle: Sintel\n");
+		let fail!: (e: Error) => void;
+		tauri.mpvSubAdd.mockReturnValue(
+			new Promise((_, reject) => {
+				fail = reject;
+			})
+		);
+		let current = true;
+		const { onSubtitleSelected } = renderPicker({ isCurrent: () => current });
+		await screen.findByText("en (2)");
+
+		fireEvent.click(entryButton("Sintel.NL"));
+		await waitFor(() => expect(tauri.mpvSubAdd).toHaveBeenCalledOnce());
+		current = false;
+		await act(async () => fail(new Error("unsupported")));
+		expect(entryButton("Sintel.NL")).toBeEnabled();
+		expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
+		expect(onSubtitleSelected).not.toHaveBeenCalled();
+	});
+
 	it("asks for another subtitle when one can't be loaded", async () => {
 		const failure = new Error("download failed");
 		tauri.downloadSubtitle.mockRejectedValue(failure);
@@ -351,6 +474,8 @@ describe("SubtitlePicker search and selection", () => {
 			);
 			expect(onSubtitleSelected).not.toHaveBeenCalled();
 			expect(onClose).not.toHaveBeenCalled();
+			// The subtitle in use stays.
+			expect(tauri.mpvSubRemove).not.toHaveBeenCalled();
 			expect(entryButton("Sintel.NL")).toBeEnabled();
 			expect(hasCheck(entryButton("Sintel.2010.720p"))).toBe(false);
 		} finally {

@@ -3,7 +3,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { MpvPlayerState } from "@/lib/types";
+import type { PolledMpvState } from "@/lib/types";
 import {
 	mpvLoad,
 	mpvPlay,
@@ -18,7 +18,7 @@ import { isOpeningStream } from "@/lib/stream-opening";
 import { createChangeTracker } from "@/lib/change-tracker";
 import { useLatestRef } from "@/hooks/useLatestRef";
 
-const DEFAULT_STATE: MpvPlayerState = {
+const DEFAULT_STATE: PolledMpvState = {
 	isPlaying: false,
 	isPaused: false,
 	currentUrl: null,
@@ -28,10 +28,12 @@ const DEFAULT_STATE: MpvPlayerState = {
 	playbackStarted: false,
 	openFailed: false,
 	reachedEnd: false,
+	waiting: false,
+	positionAt: 0,
 };
 
 export const useMpv = () => {
-	const [state, setState] = useState<MpvPlayerState>(DEFAULT_STATE);
+	const [state, setState] = useState<PolledMpvState>(DEFAULT_STATE);
 	const [error, setError] = useState<string | null>(null);
 	const [fallbackActive, setFallbackActive] = useState(false);
 	const [firstFrameReady, setFirstFrameReady] = useState(false);
@@ -281,15 +283,18 @@ export const useMpv = () => {
 			lastKnownPositionRef.current = 0;
 		}
 		// Reset playing state and position immediately so the bar doesn't show stale values.
+		const positionAt = performance.now();
 		setState((s) => ({
 			...s,
 			isPlaying: false,
 			isPaused: false,
 			position: startPos ?? 0,
+			positionAt,
 			duration: 0,
 			playbackStarted: false,
 			openFailed: false,
 			reachedEnd: false,
+			waiting: false,
 		}));
 		try {
 			await mpvLoad(url, startPos, readHwdecEnabled());
@@ -402,7 +407,8 @@ export const useMpv = () => {
 		async (position: number) => {
 			console.log("[useMpv] seek position=", position);
 			// If the seek fails, the next poll puts the real position back.
-			setState((s) => ({ ...s, position }));
+			const positionAt = performance.now();
+			setState((s) => ({ ...s, position, positionAt }));
 			const done = seeks.begin();
 			try {
 				await mpvSeek(position);
@@ -461,17 +467,23 @@ export const useMpv = () => {
 				// A poll that lands mid-load may describe the previous stream (or
 				// none at all). Keep the reset state until the load returns.
 				if (loadingRef.current) return;
-				setState((prev) => ({
-					isPlaying: s.isPlaying,
-					isPaused: s.isPaused,
-					currentUrl: s.currentUrl,
-					volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
-					position: seeks.isStale(seekMark) ? prev.position : s.position,
-					duration: s.duration,
-					playbackStarted: s.playbackStarted,
-					openFailed: s.openFailed,
-					reachedEnd: s.reachedEnd,
-				}));
+				const readAt = performance.now();
+				setState((prev) => {
+					const seeking = seeks.isStale(seekMark);
+					return {
+						isPlaying: s.isPlaying,
+						isPaused: s.isPaused,
+						currentUrl: s.currentUrl,
+						volume: volumeChanges.isStale(volumeMark) ? prev.volume : s.volume,
+						position: seeking ? prev.position : s.position,
+						positionAt: seeking ? prev.positionAt : readAt,
+						duration: s.duration,
+						playbackStarted: s.playbackStarted,
+						openFailed: s.openFailed,
+						reachedEnd: s.reachedEnd,
+						waiting: s.waiting,
+					};
+				});
 			})
 			.catch((e) => {
 				console.warn("[useMpv] poll failed:", e);

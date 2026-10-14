@@ -30,6 +30,11 @@ interface SubtitlePickerProps {
 	season?: number;
 	episode?: number;
 	onClose: () => void;
+	/**
+	 * False once the page has closed or the player has moved on to another
+	 * item. A subtitle that finishes downloading after that is dropped.
+	 */
+	isCurrent?: () => boolean;
 	onSubtitleSelected?: (
 		fileId: number | null,
 		cues?: SubtitleCue[],
@@ -53,6 +58,7 @@ export const SubtitlePicker = ({
 	season,
 	episode,
 	onClose,
+	isCurrent = () => true,
 	onSubtitleSelected,
 	currentSelectedId = null,
 	currentSelectedEntry = null,
@@ -158,11 +164,26 @@ export const SubtitlePicker = ({
 		setDownloadingId(entry.fileId);
 		setError(null);
 		try {
-			await mpvSubRemove(-1).catch(() => {});
 			const localPath = await downloadSubtitle(entry.fileId);
-			mpvSubAdd(localPath).catch(() => {});
-			const content = await readSubtitleFile(localPath);
-			const cues = parseSrt(content);
+			// mpv also reads a file that isn't UTF-8, and draws any file the
+			// overlay can't read. A file that neither can read is an error.
+			const cues = await readSubtitleFile(localPath).then(parseSrt, () => []);
+			// The new track takes the place of the one in use, and a failed add
+			// leaves the old one. Nothing is added once the page has closed or
+			// the player has moved on to another item.
+			if (!isCurrent()) return;
+			const added = mpvSubAdd(localPath, cues.length > 0);
+			if (cues.length > 0) added.catch(() => {});
+			else {
+				await added;
+				// mpv draws this track itself. When the page closed or the item
+				// changed during the add, the track comes out again, so it doesn't
+				// show over the subtitles the player keeps.
+				if (!isCurrent()) {
+					await mpvSubRemove(-1).catch(() => {});
+					return;
+				}
+			}
 			setSelectedFileId(entry.fileId);
 			// Compute rank within this language group for auto-selection on next episode.
 			const langGroup = grouped.find((g) => g.lang === entry.languageCode);

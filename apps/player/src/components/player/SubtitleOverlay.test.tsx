@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SubtitleOverlay } from "./SubtitleOverlay";
@@ -32,37 +32,63 @@ describe("SubtitleOverlay", () => {
 	afterEach(cleanup);
 
 	it("shows nothing between cues", () => {
-		const { container } = render(<SubtitleOverlay cues={cues} position={13} />);
+		const { container } = render(<SubtitleOverlay cues={cues} position={13} positionAt={0} />);
 		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("shows nothing without cues", () => {
-		const { container } = render(<SubtitleOverlay cues={[]} position={11} />);
+		const { container } = render(<SubtitleOverlay cues={[]} position={11} positionAt={0} />);
 		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("shows the cue under the playhead, including at its first and last second", () => {
-		const { rerender } = render(<SubtitleOverlay cues={cues} position={10} />);
+		const { rerender } = render(<SubtitleOverlay cues={cues} position={10} positionAt={0} />);
 		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
-		rerender(<SubtitleOverlay cues={cues} position={12} />);
+		rerender(<SubtitleOverlay cues={cues} position={12} positionAt={0} />);
 		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
-		rerender(<SubtitleOverlay cues={cues} position={12.1} />);
+		rerender(<SubtitleOverlay cues={cues} position={12.1} positionAt={0} />);
 		expect(screen.queryByText("Where are you going?")).toBeNull();
 	});
 
+	it("counts on from when the position was read", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+		try {
+			vi.advanceTimersByTime(5000);
+			// mpv read 9.5 s 400 ms ago, so the cue starts 100 ms from now.
+			render(
+				<SubtitleOverlay
+					cues={cues}
+					position={9.5}
+					positionAt={performance.now() - 400}
+					playing
+				/>
+			);
+			act(() => vi.advanceTimersByTime(98));
+			expect(screen.queryByText("Where are you going?")).toBeNull();
+			act(() => vi.advanceTimersByTime(4));
+			expect(screen.getByText("Where are you going?")).toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("breaks a cue into its lines", () => {
-		const { container } = render(<SubtitleOverlay cues={cues} position={16} />);
+		const { container } = render(<SubtitleOverlay cues={cues} position={16} positionAt={0} />);
 		expect(screen.getByText("Home.")).toBeInTheDocument();
 		expect(screen.getByText("I'm going home.")).toBeInTheDocument();
 		expect(container.querySelectorAll("br")).toHaveLength(1);
 	});
 
-	it("shifts the cues by the delay", () => {
-		const { rerender } = render(<SubtitleOverlay cues={cues} position={9} delay={2} />);
+	it("shows each cue later for a positive delay, as mpv does", () => {
+		const { rerender } = render(
+			<SubtitleOverlay cues={cues} position={13} positionAt={0} delay={2} />
+		);
 		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
-		rerender(<SubtitleOverlay cues={cues} position={13} delay={-2} />);
+		rerender(<SubtitleOverlay cues={cues} position={9} positionAt={0} delay={2} />);
+		expect(screen.queryByText("Where are you going?")).toBeNull();
+		rerender(<SubtitleOverlay cues={cues} position={9} positionAt={0} delay={-2} />);
 		expect(screen.getByText("Where are you going?")).toBeInTheDocument();
-		rerender(<SubtitleOverlay cues={cues} position={11} delay={-2} />);
+		rerender(<SubtitleOverlay cues={cues} position={13} positionAt={0} delay={-2} />);
 		expect(screen.queryByText("Where are you going?")).toBeNull();
 	});
 
@@ -71,6 +97,7 @@ describe("SubtitleOverlay", () => {
 			<SubtitleOverlay
 				cues={cues}
 				position={11}
+				positionAt={0}
 				fontSize={24}
 				fontFamily="Georgia, serif"
 				posX={30}
@@ -88,7 +115,7 @@ describe("SubtitleOverlay", () => {
 	});
 
 	it("sits near the bottom center by default", () => {
-		render(<SubtitleOverlay cues={cues} position={11} />);
+		render(<SubtitleOverlay cues={cues} position={11} positionAt={0} />);
 		const box = overlayOf("Where are you going?");
 		expect(box.style.left).toBe("50%");
 		expect(box.style.top).toBe("88%");
@@ -97,7 +124,7 @@ describe("SubtitleOverlay", () => {
 	});
 
 	it("shows a faded sample to position when no cue is on screen", () => {
-		render(<SubtitleOverlay cues={[]} position={0} editMode />);
+		render(<SubtitleOverlay cues={[]} position={0} positionAt={0} editMode />);
 		const text = screen.getByText("Sample subtitle text").closest("div") as HTMLElement;
 		expect(text.style.opacity).toBe("0.5");
 		expect(text.style.border).toContain("dashed");
@@ -105,7 +132,7 @@ describe("SubtitleOverlay", () => {
 	});
 
 	it("shows the real cue at full strength while positioning", () => {
-		render(<SubtitleOverlay cues={cues} position={11} editMode />);
+		render(<SubtitleOverlay cues={cues} position={11} positionAt={0} editMode />);
 		const text = screen.getByText("Where are you going?").closest("div") as HTMLElement;
 		expect(text.style.opacity).toBe("1");
 		expect(screen.queryByText("Sample subtitle text")).toBeNull();
@@ -113,7 +140,7 @@ describe("SubtitleOverlay", () => {
 
 	it("follows a drag in positioning mode as a share of the player's size", () => {
 		const onPositionChange = vi.fn();
-		renderInPlayer({ cues, position: 11, editMode: true, onPositionChange });
+		renderInPlayer({ cues, position: 11, positionAt: 0, editMode: true, onPositionChange });
 		const box = overlayOf("Where are you going?");
 
 		fireEvent.mouseDown(box, { clientX: 500, clientY: 400 });
@@ -127,7 +154,7 @@ describe("SubtitleOverlay", () => {
 
 	it("keeps a dragged subtitle inside the player", () => {
 		const onPositionChange = vi.fn();
-		renderInPlayer({ cues, position: 11, editMode: true, onPositionChange });
+		renderInPlayer({ cues, position: 11, positionAt: 0, editMode: true, onPositionChange });
 		const box = overlayOf("Where are you going?");
 
 		fireEvent.mouseDown(box, { clientX: 500, clientY: 400 });
@@ -140,7 +167,7 @@ describe("SubtitleOverlay", () => {
 
 	it("can't be dragged outside positioning mode", () => {
 		const onPositionChange = vi.fn();
-		renderInPlayer({ cues, position: 11, onPositionChange });
+		renderInPlayer({ cues, position: 11, positionAt: 0, onPositionChange });
 		fireEvent.mouseDown(overlayOf("Where are you going?"), { clientX: 500, clientY: 400 });
 		fireEvent.mouseMove(document, { clientX: 600, clientY: 350 });
 		fireEvent.mouseUp(document);

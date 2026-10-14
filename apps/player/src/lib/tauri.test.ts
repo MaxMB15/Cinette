@@ -120,9 +120,9 @@ describe("backend commands", () => {
 		],
 		[
 			"mpvSubAdd",
-			() => tauri.mpvSubAdd("/tmp/a.srt"),
+			() => tauri.mpvSubAdd("/tmp/a.srt", true),
 			"plugin:mpv|mpv_sub_add",
-			{ path: "/tmp/a.srt" },
+			{ path: "/tmp/a.srt", overlay: true },
 		],
 		["mpvSubRemove", () => tauri.mpvSubRemove(3), "plugin:mpv|mpv_sub_remove", { id: 3 }],
 		["mpvSetSubPos", () => tauri.mpvSetSubPos(90), "plugin:mpv|mpv_set_sub_pos", { pos: 90 }],
