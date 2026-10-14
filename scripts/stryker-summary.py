@@ -20,22 +20,26 @@ stops its module from loading does that, and so does every covered mutant when
 Stryker's test name pattern stops matching Vitest's test names.
 
 With --check, it prints a GitHub error annotation for each mutant no test
-caught instead, and exits with 1 if there are any. CI runs that on the lines a
-pull request changes. A change that does the same thing as the code it
-replaces can't be caught by any test. The line before it then gets a comment
-that names the mutator and says why, which Stryker reads:
+caught on the lines --lines names instead, and exits with 1 if there are any.
+CI runs that on the lines a pull request changes. --lines takes them as
+Stryker's --mutate does, like src/lib/a.ts:3-5,src/lib/b.ts. A change that does
+the same thing as the code it replaces can't be caught by any test. The line
+before it then gets a comment that names the mutator and says why, which
+Stryker reads:
 
   // Stryker disable next-line EqualityOperator: <why no test can catch it>
 
---check also fails for a Stryker comment in the mutated files that isn't of
-that form. One with no reason, or with "all" for the mutators, or one that
-covers every line after it, could hide a mutant that a test should catch.
---path-prefix goes before each file name in the annotations, since Stryker's
-names start in apps/player and GitHub's start at the top of the repo.
+--check also fails for any other Stryker comment in the files --lines names.
+One with no reason, or with "all" for the mutators, or one that covers every
+line after it, could hide a mutant that a test should catch. It fails, too,
+when there's no report. Stryker writes none when no test loads the files it
+mutates. --path-prefix goes before each file name, since Stryker's names start
+in apps/player, and GitHub's, like the working folder's, at the top of the
+repo.
 
 Usage:
   python3 scripts/stryker-summary.py [--title TITLE] MUTATION_JSON
-  python3 scripts/stryker-summary.py --check [--path-prefix PREFIX] MUTATION_JSON
+  python3 scripts/stryker-summary.py --check --lines LINES [--path-prefix PREFIX] MUTATION_JSON
 """
 from __future__ import annotations
 
@@ -50,10 +54,17 @@ from pathlib import Path
 # The longest code shown for a mutant. A replaced block can run to many lines.
 MAX_CODE = 80
 
-# A Stryker comment, read as Stryker reads it, with what follows the colon.
-DIRECTIVE = re.compile(
-    r"(?://|/\*) ?Stryker (disable|restore)(?: (next-line))? ([a-zA-Z, ]+)(?::(.*))?"
-)
+# Where a line ends in JavaScript, and so in Stryker's line numbers.
+LINE_BREAK = re.compile(r"\r\n|[\n\r\u2028\u2029]")
+
+# Text that Stryker could read as a comment that turns mutants off or on.
+# Stryker reads it at the start of a comment, after at most one space of any
+# kind, so this looks for it anywhere.
+MENTION = re.compile(r"Stryker (?:disable|restore)")
+
+# The one Stryker comment allowed, alone on its line, with the mutators it
+# names and its reason.
+ALLOWED = re.compile(r"[ \t]*// Stryker disable next-line ([A-Za-z]+(?:, ?[A-Za-z]+)*):(.*)")
 
 
 def code(text: str) -> str:
@@ -80,16 +91,13 @@ def one_line(text: str) -> str:
 
 def original(source: str, location: dict) -> str:
     """The code a mutant replaces. Stryker's lines and columns start at 1."""
-    lines = source.splitlines(keepends=True)
+    lines = LINE_BREAK.split(source)
     start, end = location["start"], location["end"]
     first, last = start["line"] - 1, end["line"] - 1
     if first == last:
         return lines[first][start["column"] - 1 : end["column"] - 1]
-    return (
-        lines[first][start["column"] - 1 :]
-        + "".join(lines[first + 1 : last])
-        + lines[last][: end["column"] - 1]
-    )
+    head, tail = lines[first][start["column"] - 1 :], lines[last][: end["column"] - 1]
+    return "\n".join([head, *lines[first + 1 : last], tail])
 
 
 def escape_data(text: str) -> str:
@@ -113,38 +121,76 @@ def annotation(path: str, line: int, column: int, title: str, message: str) -> s
 def comment_problems(source: str) -> list[tuple[int, int, str]]:
     """The line, column and problem of each Stryker comment not of the allowed form."""
     problems = []
-    for match in DIRECTIVE.finditer(source):
-        kind, scope, mutators, reason = match.groups()
-        names = [name.strip() for name in mutators.split(",") if name.strip()]
-        if kind != "disable" or scope != "next-line":
+    for number, line in enumerate(LINE_BREAK.split(source), start=1):
+        mention = MENTION.search(line)
+        if not mention:
+            continue
+        allowed = ALLOWED.fullmatch(line)
+        if not allowed:
             problem = (
-                "Only `// Stryker disable next-line <mutator>: <reason>` is used here,"
-                " so that each comment covers one line."
+                "Only `// Stryker disable next-line <mutator>: <reason>`, alone on its line,"
+                " is used here, so that each comment covers one line."
             )
-        elif not names or any(name.lower() == "all" for name in names):
+        elif any(name.strip().lower() == "all" for name in allowed[1].split(",")):
             problem = "Name the mutators this comment turns off, rather than all of them."
-        elif not (reason or "").strip():
-            problem = "Say after a colon why no test can catch the mutants this comment turns off."
+        elif not allowed[2].strip():
+            problem = (
+                "Say after the colon why no test can catch the mutants this comment turns off."
+            )
         else:
             continue
-        line = source.count("\n", 0, match.start()) + 1
-        column = match.start() - (source.rfind("\n", 0, match.start()) + 1) + 1
-        problems.append((line, column, problem))
+        problems.append((number, mention.start() + 1, problem))
     return problems
 
 
-def check(report: dict, prefix: str) -> int:
-    """Prints an annotation for each mutant no test caught, and for each Stryker comment
-    not of the allowed form. Returns 1 if there were any."""
+def changed_lines(spec: str) -> dict[str, list[tuple[int, int]] | None]:
+    """The files and ranges of lines in `spec`, as Stryker's --mutate takes them.
+    None stands for the whole file."""
+    files: dict[str, list[tuple[int, int]] | None] = {}
+    for part in filter(None, spec.split(",")):
+        match = re.fullmatch(r"(.+):(\d+)-(\d+)", part)
+        if not match:
+            files[part] = None
+        elif files.get(match[1], []) is not None:
+            files.setdefault(match[1], []).append((int(match[2]), int(match[3])))
+    return files
+
+
+def touches(location: dict, ranges: list[tuple[int, int]] | None) -> bool:
+    """Whether a mutant's code shares a line with any of `ranges`."""
+    if ranges is None:
+        return True
+    first, last = location["start"]["line"], location["end"]["line"]
+    return any(start <= last and first <= end for start, end in ranges)
+
+
+def check(report: dict | None, prefix: str, lines: dict[str, list[tuple[int, int]] | None]) -> int:
+    """Prints an annotation for each mutant no test caught on `lines`, and for each
+    Stryker comment not of the allowed form in their files. Returns 1 if there were
+    any, or if there's no report."""
     count = 0
-    for name, file in sorted(report["files"].items()):
+    for name in sorted(lines):
         path = prefix + name
-        for line, column, problem in comment_problems(file["source"]):
+        source = Path(path).read_bytes().decode("utf-8")
+        for line, column, problem in comment_problems(source):
             print(annotation(path, line, column, "Stryker comment", problem))
             count += 1
+    if report is None:
+        message = (
+            f"No test loads {', '.join(sorted(lines))}, so Stryker had nothing to run."
+            " Add tests for the changes."
+        )
+        print(f"::error title={escape_property('No tests')}::{escape_data(message)}")
+        count += 1
+    for name, file in sorted((report or {"files": {}})["files"].items()):
+        if name not in lines:
+            continue
+        path = prefix + name
         for mutant in file["mutants"]:
             status = mutant["status"]
-            if status not in ("Survived", "NoCoverage"):
+            if status not in ("Survived", "NoCoverage") or not touches(
+                mutant["location"], lines[name]
+            ):
                 continue
             start = mutant["location"]["start"]
             mutator = mutant["mutatorName"]
@@ -153,7 +199,7 @@ def check(report: dict, prefix: str) -> int:
             if status == "Survived":
                 title = "Mutant survived"
                 message = (
-                    f"{mutator} changed `{before}` to `{after}`, and every test still passed."
+                    f"{mutator} changed `{before}` to `{after}`, and no test failed."
                     " Add a test that fails on this change. If it does the same thing as the"
                     f" code, put `// Stryker disable next-line {mutator}: <why>` on the line"
                     " before."
@@ -168,7 +214,9 @@ def check(report: dict, prefix: str) -> int:
             count += 1
     if count:
         problems = "problem" if count == 1 else "problems"
-        print(f"Stryker found {count} {problems} on the lines this pull request changes.")
+        print(f"Stryker found {count} {problems} in the files this pull request changes.")
+        if count > 10:
+            print("GitHub shows at most 10 of them as annotations, and this log lists them all.")
         return 1
     print("Every mutant on the lines this pull request changes was caught.")
     return 0
@@ -198,20 +246,26 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print an annotation for each mutant no test caught, and fail if there are any",
     )
+    parser.add_argument(
+        "--lines",
+        default="",
+        help="with --check, the lines to check, as Stryker's --mutate takes them",
+    )
     parser.add_argument("--path-prefix", default="", help="goes before each file name")
     parser.add_argument("report", metavar="MUTATION_JSON")
     args = parser.parse_args(argv)
 
     path = Path(args.report)
+    if args.check:
+        lines = changed_lines(args.lines)
+        if not lines:
+            parser.error("--check needs --lines")
+        report = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        return check(report, args.path_prefix, lines)
     if not path.exists():
-        if args.check:
-            print(f"No report at {args.report}.")
-            return 1
         print(f"## {args.title}\n\nNo report at `{args.report}`.")
         return 0
     report = json.loads(path.read_text(encoding="utf-8"))
-    if args.check:
-        return check(report, args.path_prefix)
 
     counts: dict[str, int] = defaultdict(int)
     survived: dict[str, list[str]] = defaultdict(list)

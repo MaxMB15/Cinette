@@ -244,16 +244,20 @@ that does the same thing as the code can't fail any test. The line before it the
 a comment that names the mutator and says why:
 
 ```ts
-// Stryker disable next-line ConditionalExpression: Date.parse gives NaN for "", null and undefined, so this returns 0 either way.
-if (!value) return 0;
+// Stryker disable next-line StringLiteral: Date.parse gives NaN for any text with no date in it, so this returns 0 either way.
+const ms = Date.parse(value ?? "");
 ```
 
-The comment turns off every change of that kind on its line, so name only the mutators
-that no test can catch. The job also fails for a Stryker comment with no reason, with
-`all` for the mutators, or one that covers more than the next line. The summary lists
-the changes that comments turned off. A run of all of `src/lib`, on Mondays or when a
-pull request changes the Stryker setup, lists the changes that survive and fails only
-on an error.
+The comment turns off every change of that kind on the line after it, so name only the
+mutators that no test can catch. Put it alone on its line. The job fails for any other
+Stryker comment in a changed file, since one with no reason, with `all` for the
+mutators, or one that covers more than the next line could hide a change that a test
+should catch. It also fails when no test loads a changed file. The summary lists the
+changes that comments turned off.
+
+A pull request that changes the Stryker or Vitest setup gets a run of all of `src/lib`.
+That run still fails only on the lines the pull request changes, or on `date.ts` when it
+changes none. The Monday run lists the changes that survive and fails only on an error.
 
 ## Production build
 
@@ -313,7 +317,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
 | [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch the Rust crates, Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A pull request tests only the lines it changes, in the crates it changes. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
-| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or Vitest setup or their versions. Every Monday, the schedule starts a run on `dev`. A change that survives on the lines a pull request changes fails the job. A run of all of `src/lib` reports surviving changes and fails nothing. |
+| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or Vitest setup or their versions. Every Monday, the schedule starts a run on `dev`. A change that survives on the lines a pull request changes fails the job, and so does a changed file that no test loads. The Monday run reports the changes that survive and fails only on an error. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

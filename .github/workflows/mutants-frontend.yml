@@ -4,10 +4,11 @@
 # Mutation testing for the frontend helpers in apps/player/src/lib with
 # StrykerJS. Like mutants.yml does for the Rust code, it makes small changes
 # to the code and runs the tests that reach each one. On the lines a pull
-# request changes, a change that no test notices fails the job. A run of all
-# of src/lib lists those changes in the summary and fails only on an error,
-# like a first test run that fails. Nothing goes to Stryker's dashboard. The
-# report is only kept as an artifact of the run.
+# request changes, a change that no test notices fails the job, and so does a
+# changed file that no test loads. A run of all of src/lib lists those changes
+# in the summary and fails only on an error, like a first test run that
+# fails. Nothing goes to Stryker's dashboard. The report is only kept as an
+# artifact of the run.
 name: Frontend mutation testing
 
 on:
@@ -60,6 +61,8 @@ jobs:
       # with a space. This skips a quoted name, and one with a comma or a glob
       # character, which --mutate would misread. --mutate replaces the list in
       # stryker.config.mjs, so this leaves out the tests and types.ts itself.
+      # "mutate" is what Stryker mutates, or nothing for all of src/lib, and
+      # "lines" is what the check below looks at.
       - name: Pick the lines to mutate
         id: plan
         env:
@@ -69,17 +72,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # A change to the Stryker or Vitest setup, or to their versions in
-          # package.json, can change the result for any mutant.
-          if ! git diff --quiet HEAD^1 HEAD -- \
-              apps/player/stryker.config.mjs apps/player/vitest.config.ts \
-              apps/player/vitest.stryker.config.ts scripts/stryker-summary.py ||
-            git diff -U0 HEAD^1 HEAD -- apps/player/package.json |
-              grep -q -E '^[-+][[:space:]]*"(vitest|@stryker-mutator/[^"]+)":'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          mutate=$(git diff -U0 --diff-filter=AMR HEAD^1 HEAD -- \
+          lines=$(git diff -U0 --diff-filter=AMR HEAD^1 HEAD -- \
               'apps/player/src/lib/*.ts' 'apps/player/src/lib/*.tsx' \
               ':!*.test.ts' ':!*.test.tsx' ':!apps/player/src/lib/types.ts' |
             awk '
@@ -95,23 +88,36 @@ jobs:
                 count = n[2] == "" ? 1 : n[2]
                 if (count > 0) { printf "%s%s:%d-%d", sep, file, n[1], n[1] + count - 1; sep = "," }
               }')
-          # A change to the workflow alone tests one small file, which checks
-          # that the steps still work without a full run. date.ts has its own
-          # tests, so this run must find some.
-          if [ -z "$mutate" ] && ! git diff --quiet HEAD^1 HEAD -- .github/workflows/mutants-frontend.yml; then
-            mutate=src/lib/date.ts
-            if [ ! -f "apps/player/$mutate" ]; then
-              echo "::error::$mutate is gone. Pick another file for the workflow to test."
+          # A change to the Stryker or Vitest setup, or to their versions in
+          # package.json, can change the result for any mutant.
+          setup=false
+          if ! git diff --quiet HEAD^1 HEAD -- \
+              apps/player/stryker.config.mjs apps/player/vitest.config.ts \
+              apps/player/vitest.stryker.config.ts scripts/stryker-summary.py ||
+            git diff -U0 HEAD^1 HEAD -- apps/player/package.json |
+              grep -q -E '^[-+][[:space:]]*"(vitest|@stryker-mutator/[^"]+)":'; then
+            setup=true
+          fi
+          # A change to the setup or the workflow with no lines to check
+          # checks one small file instead, so the check runs too. date.ts has
+          # its own tests, and every mutant in it is caught or turned off.
+          if [ -z "$lines" ] && { [ "$setup" = true ] ||
+              ! git diff --quiet HEAD^1 HEAD -- .github/workflows/mutants-frontend.yml; }; then
+            lines=src/lib/date.ts
+            if [ ! -f "apps/player/$lines" ]; then
+              echo "::error::$lines is gone. Pick another file for the workflow to check."
               exit 1
             fi
-            echo "check=true" >> "$GITHUB_OUTPUT"
           fi
-          if [ -z "$mutate" ]; then
+          if [ -z "$lines" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             printf '## Frontend mutation testing\n\nThis pull request adds or changes no lines in src/lib for Stryker to mutate.\n' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "mutate=$mutate" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          if [ "$setup" = false ]; then
+            echo "mutate=$lines" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up the frontend
@@ -120,22 +126,19 @@ jobs:
 
       # Stryker exits with 0 when mutants survive, since stryker.config.mjs
       # sets no score to break on. It runs only the tests that load a file it
-      # mutates. A pull request that changes only files no test loads leaves
-      # no tests to run, which --allowEmpty lets pass without a report. The
-      # full run and the date.ts run leave it out, so a broken setup fails
-      # them.
+      # mutates. When no test loads the changed files, --allowEmpty lets it
+      # end without a report, and the check below fails with a clearer
+      # message than Stryker's. The full run leaves it out, so a broken setup
+      # fails there.
       - name: Test the mutants
         id: stryker
         if: steps.plan.outputs.run == 'true'
         working-directory: apps/player
         env:
           MUTATE: ${{ steps.plan.outputs.mutate }}
-          CHECK: ${{ steps.plan.outputs.check }}
         run: |
           if [ -z "$MUTATE" ]; then
             pnpm exec stryker run
-          elif [ "$CHECK" = true ]; then
-            pnpm exec stryker run --mutate "$MUTATE"
           else
             pnpm exec stryker run --mutate "$MUTATE" --allowEmpty
           fi
@@ -148,7 +151,7 @@ jobs:
         run: |
           report=apps/player/reports/mutation/mutation.json
           if [ "$OUTCOME" = success ] && [ -n "$MUTATE" ] && [ ! -f "$report" ]; then
-            printf '## Frontend mutation testing\n\nNo test loads the files this pull request changes, so Stryker had nothing to run.\n' >> "$GITHUB_STEP_SUMMARY"
+            printf '## Frontend mutation testing\n\nNo test loads the files this pull request changes, so Stryker had nothing to run. The check below fails for that.\n' >> "$GITHUB_STEP_SUMMARY"
           else
             python3 scripts/stryker-summary.py --title "Frontend mutation testing" "$report" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -164,20 +167,21 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # On the lines a pull request changes, and in the date.ts check, a
-      # mutant that no test catches fails the job, with an annotation on its
-      # line. So does a Stryker comment in the mutated files that isn't
-      # "// Stryker disable next-line <mutator>: <reason>". A run of all of
-      # src/lib only reports, since most of what it tests isn't the pull
-      # request's. Stryker writes no report when no test loads the changed
-      # files, and then there's nothing to check.
+      # On the lines a pull request changes, or in date.ts when it changes
+      # none, a mutant that no test catches fails the job, with an annotation
+      # on its line. So does a Stryker comment in a changed file that isn't
+      # "// Stryker disable next-line <mutator>: <reason>", alone on its line,
+      # and a missing report, which means no test loads the changed files. A
+      # full run checks only those lines too, since most of what it tests
+      # isn't the pull request's. A run that isn't for a pull request has no
+      # lines and only reports.
       - name: Check the changed lines
-        if: ${{ !cancelled() && steps.stryker.outcome == 'success' && steps.plan.outputs.mutate != '' }}
+        if: ${{ !cancelled() && steps.stryker.outcome == 'success' && steps.plan.outputs.lines != '' }}
+        env:
+          LINES: ${{ steps.plan.outputs.lines }}
         run: |
-          report=apps/player/reports/mutation/mutation.json
-          if [ -f "$report" ]; then
-            python3 scripts/stryker-summary.py --check --path-prefix apps/player/ "$report"
-          fi
+          python3 scripts/stryker-summary.py --check --lines "$LINES" \
+            --path-prefix apps/player/ apps/player/reports/mutation/mutation.json
 
   # The weekly run starts a manual run on dev, which tests the newest code.
   start:
