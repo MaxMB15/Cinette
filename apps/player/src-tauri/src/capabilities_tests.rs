@@ -57,12 +57,19 @@ fn call(app: &App<MockRuntime>, command: &str) -> Option<String> {
         })
 }
 
-/// Every `plugin:mpv|` command `src/lib/tauri.ts` calls.
+/// Every `plugin:mpv|` command `src/lib/tauri.ts` names, however it's
+/// quoted. One named in a comment counts too.
 fn frontend_mpv_commands() -> Vec<String> {
     include_str!("../../src/lib/tauri.ts")
-        .split("\"plugin:mpv|")
+        .split("plugin:mpv|")
         .skip(1)
-        .map(|rest| format!("plugin:mpv|{}", rest.split('"').next().unwrap()))
+        .map(|rest| {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            format!("plugin:mpv|{name}")
+        })
         .collect()
 }
 
@@ -87,11 +94,14 @@ fn the_page_may_call_every_mpv_command_the_frontend_uses() {
     }
 }
 
-/// Shows the test above can tell a refused command from one that ran.
+/// Shows the test above can tell a refused command from one that ran: one
+/// Tauri has but no capability grants, and one the plugin doesn't have.
 #[test]
-fn the_page_may_not_call_an_mpv_command_no_permission_names() {
+fn the_page_may_not_call_a_command_no_permission_names() {
     let dir = tempfile::tempdir().expect("create a folder for the app");
     let app = app(&dir);
+    let error = call(&app, "plugin:window|set_title").expect("a refusal");
+    assert!(error.contains("not allowed"), "{error}");
     let error = call(&app, "plugin:mpv|mpv_no_such_command").expect("a refusal");
     assert!(error.contains("not allowed"), "{error}");
 }
