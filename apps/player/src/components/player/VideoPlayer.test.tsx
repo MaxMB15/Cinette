@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useState,
 	type ComponentProps,
@@ -441,6 +442,15 @@ const NavHandle = () => {
 	return null;
 };
 
+/** Runs when the next page opens, in the commit that closes the player. */
+const nextPage: { onOpen: (() => void) | null } = { onOpen: null };
+
+/** A page that runs `nextPage.onOpen` as soon as it's on the screen. */
+const NextPage = () => {
+	useLayoutEffect(() => nextPage.onOpen?.(), []);
+	return <p>Next page</p>;
+};
+
 type NavState = {
 	url?: string;
 	channelName?: string;
@@ -465,6 +475,7 @@ const renderPlayer = (state: NavState, { from = "/", fullscreen = false }: Rende
 				<Routes>
 					<Route path="/" element={<p>Channel list</p>} />
 					<Route path="/playlists" element={<p>Playlists</p>} />
+					<Route path="/next" element={<NextPage />} />
 					<Route path="/player" element={<PlayerView />} />
 				</Routes>
 			</MemoryRouter>
@@ -601,6 +612,7 @@ beforeEach(() => {
 	env.layoutMode = "desktop";
 	env.os = "macos";
 	nav.current = null;
+	nextPage.onOpen = null;
 });
 
 afterEach(() => {
@@ -2549,6 +2561,26 @@ describe("subtitles", () => {
 		// the track goes.
 		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
 		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
+		// Nor once it has closed too, since it saved the subtitles it showed.
+		await goToPage("/");
+		expect(picker.pick?.keep(MOVIE_URL, dutch, 0)).toBe(false);
+		await goToPage("/player");
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		expect(screen.getByText("Mind the lantern")).toBeInTheDocument();
+	});
+
+	it("keeps a subtitle mpv adds as the page closes", async () => {
+		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
+		await openItem(lanternKeeper());
+		pickEnglishSubtitles();
+		fireEvent.click(screen.getByRole("button", { name: "Start a download" }));
+		const dutch = { fileId: 304, languageCode: "nl", format: "ass" };
+		let kept: boolean | undefined;
+		nextPage.onOpen = () => {
+			kept = picker.pick?.keep(MOVIE_URL, dutch, 0);
+		};
+		await goToPage("/next");
+		expect(kept).toBe(true);
 	});
 
 	it("keeps no subtitle for a page that's open or has moved on to another stream", async () => {

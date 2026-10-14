@@ -109,10 +109,11 @@ const END_LEAD_SECONDS = 10;
  */
 const END_SEEN_WITHIN_MS = 30_000;
 /**
- * How many player pages are open. A page reads the subtitles the last one
- * saved when it opens, so a closed page can only change them while none is.
+ * How many player pages have opened. A page reads the subtitles the last one
+ * saved when it opens, so a closed page can only change them until the next
+ * one opens.
  */
-let openPlayerPages = 0;
+let playerPagesOpened = 0;
 
 interface PlaybackProgress {
 	/** Resume key (see playbackKey); null for live or nothing playing. */
@@ -253,6 +254,8 @@ export const PlayerView = () => {
 	// still waiting to start doesn't start, since the page that would show it
 	// is gone.
 	const openRef = useRef(false);
+	// The value of playerPagesOpened once this page had opened.
+	const openedAsRef = useRef(0);
 	// Counts the viewer's subtitle picks, so a subtitle still downloading for
 	// an earlier pick, or for the auto-load, gives way to a newer one.
 	const subtitlePickRef = useRef(0);
@@ -273,10 +276,11 @@ export const PlayerView = () => {
 						? loadedUrlRef.current
 						: null,
 				// The page saved its subtitles when it closed, and the next one
-				// opens with them, so the pick goes there. One that's open has
-				// already read them.
+				// opens with them, so the pick goes there. Once a page has opened,
+				// it has read them.
 				keep: (url, entry, rankInLanguage) =>
-					openPlayerPages === 0 &&
+					!openRef.current &&
+					playerPagesOpened === openedAsRef.current &&
 					channelId !== undefined &&
 					updateSubtitleSession(channelId, url, {
 						fileId: entry.fileId,
@@ -673,10 +677,9 @@ export const PlayerView = () => {
 	// later, and a subtitle that loads in between would go to the closed page.
 	useLayoutEffect(() => {
 		openRef.current = true;
-		openPlayerPages++;
+		openedAsRef.current = ++playerPagesOpened;
 		return () => {
 			openRef.current = false;
-			openPlayerPages--;
 		};
 	}, []);
 	useLayoutEffect(
