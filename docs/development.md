@@ -260,11 +260,16 @@ change, like a change to types alone. A comment that turns off a change on a cha
 line gets a warning, so check that its reason still holds. The summary lists the
 changes that Stryker ignored. `--mutate` can't take a file name with a comma, a glob
 character, a quote or a backslash, so the job fails for a changed file with such a
-name. Rename it.
+name. Rename it. Git counts lines by LF alone, and Stryker also ends a line at a U+2028,
+a U+2029 or a CR on its own, so the two number the lines differently in a file with one
+of those. The job fails for a changed file with one. Write it as an escape like
+`\u2028`.
 
-A pull request that changes the Stryker or Vitest setup gets a run of all of `src/lib`.
-That run still fails only on the lines the pull request changes, or on `date.ts` when it
-changes none. The Monday run lists the changes that survive and fails only on an error.
+A pull request that changes the Stryker or Vitest setup, the files in `src/test`, or the
+versions of Vitest, Vite, jsdom or Stryker gets a run of all of `src/lib`. That run still
+fails only on the lines the pull request changes, or on `date.ts` when it changes none.
+A change to the workflow or to `scripts/stryker-summary.py` alone only runs `date.ts`.
+The Monday run lists the changes that survive and fails only on an error.
 
 ## Production build
 
@@ -324,7 +329,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
 | [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch the Rust crates, Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A pull request tests only the lines it changes, in the crates it changes. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
-| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or Vitest setup or their versions. Every Monday, the schedule starts a run on `dev`. A change on the lines a pull request changes that no test catches fails the job, and so do changed files that no test loads. The Monday run reports the changes that survive and fails only on an error. |
+| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker or test setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or test setup or the test tools' versions. Every Monday, the schedule starts a run on `dev`. A change on the lines a pull request changes that no test catches fails the job, and so do changed files that no test loads. The Monday run reports the changes that survive and fails only on an error. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

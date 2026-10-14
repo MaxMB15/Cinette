@@ -13,11 +13,12 @@ name: Frontend mutation testing
 
 on:
   # The lines a pull request changes, or all of src/lib when it changes the
-  # Stryker setup.
+  # Stryker or test setup.
   pull_request:
     branches: [dev]
     paths:
       - "apps/player/src/lib/**"
+      - "apps/player/src/test/**"
       - "apps/player/package.json"
       - "apps/player/stryker.config.mjs"
       - "apps/player/vitest.config.ts"
@@ -113,23 +114,42 @@ jobs:
             done < "$skipped"
             exit 1
           fi
-          # A change to the Stryker or Vitest setup, or to their versions in
-          # package.json, can change the result for any mutant. Both reads
-          # are kept whole, so a git error stops the step.
+          # Git counts lines by LF alone, but Stryker's parser also ends a line
+          # at a U+2028, a U+2029 or a CR that no LF follows. In a file with
+          # one of those, the ranges would miss the lines the pull request
+          # changes, so the job fails for it. An escape like \u2028 is fine.
+          if [ -n "$lines" ]; then
+            breaks=$(tr , '\n' <<< "$lines" | sed 's/:[0-9]*-[0-9]*$//' | sort -u |
+              python3 -I -c 'import re, sys; print("\n".join(n for n in sys.stdin.read().splitlines() if re.search(rb"\xe2\x80[\xa8\xa9]|\r(?!\n)", open("apps/player/" + n, "rb").read())))')
+            if [ -n "$breaks" ]; then
+              while IFS= read -r name; do
+                echo "::error title=Not checked::${name//\%/%25} has a U+2028, a U+2029 or a lone CR, which Stryker counts as a line break and git doesn't. Write it as an escape like \\u2028 so the check can run on the file."
+              done <<< "$breaks"
+              exit 1
+            fi
+          fi
+          # A change to the Stryker or Vitest setup, to the files in src/test
+          # that the tests load, or to the versions of the tools that run the
+          # tests can change the result for any mutant. Both reads are kept
+          # whole, so a git error stops the step.
           changed=$(git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD)
           versions=$(git diff --text --no-ext-diff --no-textconv -U0 HEAD^1 HEAD -- \
             apps/player/package.json)
           setup=false
           if grep -q -x -F -e apps/player/stryker.config.mjs -e apps/player/vitest.config.ts \
-              -e apps/player/vitest.stryker.config.ts -e scripts/stryker-summary.py <<< "$changed" ||
-            grep -q -E '^[-+][[:space:]]*"(vitest|@stryker-mutator/[^"]+)":' <<< "$versions"; then
+              -e apps/player/vitest.stryker.config.ts <<< "$changed" ||
+            grep -q '^apps/player/src/test/' <<< "$changed" ||
+            grep -q -E '^[-+][[:space:]]*"(vitest|vite|jsdom|@vitest/[^"]+|@vitejs/[^"]+|@stryker-mutator/[^"]+)":' <<< "$versions"; then
             setup=true
           fi
-          # A change to the setup or the workflow with no lines to check
-          # checks one small file instead, so the check runs too. date.ts has
-          # its own tests, and every mutant in it is caught or turned off.
+          # A change to the setup, the workflow or the summary script with no
+          # lines to check checks one small file instead, so the check runs
+          # too. The summary script can't change what happens to a mutant, so
+          # it needs no full run. date.ts has its own tests, and every mutant
+          # in it is caught or turned off.
           if [ -z "$lines" ] && { [ "$setup" = true ] ||
-              grep -q -x -F .github/workflows/mutants-frontend.yml <<< "$changed"; }; then
+              grep -q -x -F -e .github/workflows/mutants-frontend.yml \
+                -e scripts/stryker-summary.py <<< "$changed"; }; then
             lines=src/lib/date.ts
             if [ ! -f "apps/player/$lines" ]; then
               echo "::error::$lines is gone. Pick another file for the workflow to check."
