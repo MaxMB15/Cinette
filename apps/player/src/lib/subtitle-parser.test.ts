@@ -51,7 +51,7 @@ describe("parseSrt", () => {
 	});
 
 	// A diff of a wrong cue would print the whole line, so these compare the
-	// length first and then the text with ===, which prints no diff.
+	// length first and then the text with ===, so a failure doesn't print the line.
 	it("keeps a long run of < with no > quickly", () => {
 		// A pattern that backtracks over the run would take seconds here.
 		const line = "<".repeat(200_000) + "Hi";
