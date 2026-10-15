@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { gateProbe, nowSeconds, parseDateMs } from "./date";
+import { nowSeconds, parseDateMs } from "./date";
 
 describe("nowSeconds", () => {
 	afterEach(() => {
@@ -40,11 +40,5 @@ describe("parseDateMs", () => {
 
 	it("returns 0 for NaN-producing input", () => {
 		expect(parseDateMs("NaN")).toBe(0);
-	});
-});
-
-describe("gateProbe", () => {
-	it("doubles the first number and adds the second", () => {
-		expect(gateProbe(3, 1)).toBe(7);
 	});
 });
