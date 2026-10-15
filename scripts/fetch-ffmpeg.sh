@@ -56,16 +56,16 @@ case "$PLATFORM" in
     # Apple Silicon, built on GitHub's macos-15 runner.
     FFMPEG_VERSION=8.1.3
     TARGETS="aarch64-apple-darwin"
-    FILE="$SIDECAR-$FFMPEG_VERSION-build1-macos-arm64.tar.xz"
-    SHA256=15a6f1f4bc2d4797b284a49b943c47017817b105c696d500c9cdf61105d3c788
+    FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-arm64.tar.xz"
+    SHA256=512919842746ec801af6e5328a519b5edd9a3c2ba2bebbeaf1d3cf05f79394be
     ;;
   linux)
     # x86_64, built in Debian 12, so it runs on Debian 12, Ubuntu 24.04 and
     # later.
     FFMPEG_VERSION=8.1.3
     TARGETS="x86_64-unknown-linux-gnu"
-    FILE="$SIDECAR-$FFMPEG_VERSION-build1-linux-x86_64.tar.xz"
-    SHA256=b032942dc65d62529e6ab849f252eb3cbcc193e4f8e535c1650703158ce961ad
+    FILE="$SIDECAR-$FFMPEG_VERSION-build2-linux-x86_64.tar.xz"
+    SHA256=410f2dfb926797da3c774123044df02573cf92d60f5d1b04367435116518af24
     ;;
   windows)
     # x86_64, from BtbN's FFmpeg-Builds. It's the release/8.1 branch 9 commits
