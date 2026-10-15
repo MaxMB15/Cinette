@@ -6,9 +6,10 @@
 # scripts/test-ffmpeg-sidecar.py. It runs on pull requests that change those
 # scripts, scripts/fetch-ffmpeg.sh or this workflow, and by hand. Each build
 # job uploads an archive for the ffmpeg-sidecar pre-release, with its SHA-256
-# in the job summary for scripts/fetch-ffmpeg.sh. docs/development.md says how
-# to put a new build on the pre-release. The workflow uses no secrets, and the
-# tests only reach servers on 127.0.0.1.
+# in the job summary for scripts/fetch-ffmpeg.sh. The pinned jobs run the same
+# test on the archives that scripts/fetch-ffmpeg.sh pins, which the app ships.
+# docs/development.md says how to put a new build on the pre-release. The
+# workflow uses no secrets, and the tests only reach servers on 127.0.0.1.
 name: ffmpeg build
 
 on:
@@ -80,10 +81,11 @@ jobs:
             runner: macos-15
             container: ""
           # Debian 12's glibc, so the build runs on Debian 12, Ubuntu 24.04
-          # and later.
+          # and later. The digest is debian:12's on 2026-10-15, and nothing
+          # updates it. apt-get installs the newest build tools on top.
           - platform: linux-x86_64
             runner: ubuntu-24.04
-            container: debian:12
+            container: debian:12@sha256:2c037a04925515fdd6ea85ea14a682d0e79931f5e9f5d07b6dbfc6ba12f9e858
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     timeout-minutes: 45
@@ -110,6 +112,40 @@ jobs:
 
       - name: Build ffmpeg
         run: ./scripts/build-ffmpeg.sh out
+
+      # An archive's name has the ffmpeg version and FFMPEG_BUILD, and older
+      # commits pin the archives on the pre-release. A build whose name is
+      # taken there must come from the same source and options.
+      - name: Compare with the pre-release's archive of the same name
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          version="$(sed -n 's/^FFMPEG_VERSION=//p' scripts/build-ffmpeg.sh)"
+          build="$(sed -n 's/^FFMPEG_BUILD=//p' scripts/build-ffmpeg.sh)"
+          mirror="$(sed -n 's/^MIRROR="\(.*\)"$/\1/p' scripts/fetch-ffmpeg.sh)"
+          name="max-video-player-ffmpeg-$version-build$build-$PLATFORM"
+          status="$(curl -sSL --retry 3 -o existing.tar.xz -w '%{http_code}' "$mirror/$name.tar.xz")"
+          case "$status" in
+            200) ;;
+            404)
+              echo "The pre-release has no $name.tar.xz yet."
+              exit 0
+              ;;
+            *)
+              echo "::error::Downloading $mirror/$name.tar.xz gave HTTP $status"
+              exit 1
+              ;;
+          esac
+          mkdir existing
+          tar -C existing -xJf existing.tar.xz
+          # Linux's "OpenSSL headers" line follows Debian's updates, so it's
+          # left out.
+          fields='^(Source|License|OpenSSL|Configure):'
+          if ! diff <(grep -E "$fields" "existing/$name/BUILDINFO.txt") <(grep -E "$fields" out/BUILDINFO.txt); then
+            echo "::error::The pre-release's $name.tar.xz comes from other source or options, shown above. Raise FFMPEG_BUILD in scripts/build-ffmpeg.sh."
+            exit 1
+          fi
+          echo "This build matches the pre-release's $name.tar.xz."
 
       - name: Test the build
         run: python3 -I scripts/test-ffmpeg-sidecar.py test out/ffmpeg media
@@ -152,3 +188,76 @@ jobs:
             dist/*.tar.xz
             dist/*.tar.xz.sha256
           if-no-files-found: error
+
+  # Tests the archives that scripts/fetch-ffmpeg.sh pins, which the app ships.
+  # It fails until fetch-ffmpeg.sh names the build that build-ffmpeg.sh makes,
+  # so a new ffmpeg or a raised FFMPEG_BUILD can't merge with the old archives
+  # still pinned.
+  pinned:
+    name: pinned (${{ matrix.archive }})
+    needs: media
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            archive: macos-arm64
+            runner: macos-15
+          - platform: linux
+            archive: linux-x86_64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that fetch-ffmpeg.sh pins this build
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          build="$(sed -n 's/^FFMPEG_BUILD=//p' scripts/build-ffmpeg.sh)"
+          want="FILE=\"\$SIDECAR-\$FFMPEG_VERSION-build$build-$ARCHIVE.tar.xz\""
+          pinned="$(awk -v want="  $PLATFORM)" '
+            $0 == want { found = 1 }
+            found && /^ +FILE=/ { sub(/^ +/, ""); print; exit }
+          ' scripts/fetch-ffmpeg.sh)"
+          if [[ "$pinned" != "$want" ]]; then
+            echo "::error::scripts/fetch-ffmpeg.sh has ${pinned:-no FILE} for $PLATFORM, and build $build of scripts/build-ffmpeg.sh is $want"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-test-media
+          path: media
+
+      # fetch-ffmpeg.sh asks rustc for the target name.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      # Ubuntu's ffmpeg reads back what the pinned build wrote.
+      - name: Install a full ffmpeg
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Fetch the pinned build
+        env:
+          FFMPEG_PINNED_ONLY: "1"
+          PLATFORM: ${{ matrix.platform }}
+        run: ./scripts/fetch-ffmpeg.sh "$PLATFORM"
+
+      - name: Test the pinned build
+        run: |
+          sidecar="apps/player/src-tauri/binaries/max-video-player-ffmpeg-$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            python3 -I scripts/test-ffmpeg-sidecar.py test "$sidecar" media --reader ffmpeg
+          else
+            python3 -I scripts/test-ffmpeg-sidecar.py test "$sidecar" media
+          fi

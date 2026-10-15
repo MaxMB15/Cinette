@@ -122,9 +122,12 @@ jobs:
         uses: ./.github/actions/setup-frontend
 
       # The app embeds the built frontend, and its build script stops when the
-      # sidecar is missing.
+      # sidecar is missing. FFMPEG_PINNED_ONLY makes the fetch fail rather than
+      # build ffmpeg from source when the pinned build doesn't download.
       - name: Build the frontend and fetch the ffmpeg sidecar
         if: steps.changes.outputs.app == 'true'
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: |
           pnpm run build:desktop
           ./scripts/fetch-ffmpeg.sh linux
@@ -218,7 +221,11 @@ jobs:
         with:
           toolchain: stable
 
+      # Fails when the pinned build doesn't download, rather than building
+      # ffmpeg from source.
       - name: Fetch the ffmpeg sidecar
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Upload the sidecar
