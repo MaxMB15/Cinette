@@ -21,29 +21,6 @@ strictDepBuilds: true
 # when nothing old enough fits a range. It stops, or asks in a terminal.
 minimumReleaseAge: 4320
 
-# These exact versions were already locked before the age check was turned on.
-# The list can go after 2026-10-15 17:12 UTC, when the last of them passes it.
-minimumReleaseAgeExclude:
-  - "@tanstack/react-virtual@3.14.17"
-  - "@tanstack/virtual-core@3.19.2"
-  - "@typescript-eslint/eslint-plugin@8.71.2"
-  - "@typescript-eslint/parser@8.71.2"
-  - "@typescript-eslint/project-service@8.71.2"
-  - "@typescript-eslint/scope-manager@8.71.2"
-  - "@typescript-eslint/tsconfig-utils@8.71.2"
-  - "@typescript-eslint/type-utils@8.71.2"
-  - "@typescript-eslint/types@8.71.2"
-  - "@typescript-eslint/typescript-estree@8.71.2"
-  - "@typescript-eslint/utils@8.71.2"
-  - "@typescript-eslint/visitor-keys@8.71.2"
-  - "@vitest/coverage-v8@5.0.4"
-  - "@vitest/mocker@5.0.4"
-  - "@vitest/spy@5.0.4"
-  - prettier@3.9.10
-  - tinybench@6.2.2
-  - typescript-eslint@8.71.2
-  - vitest@5.0.4
-
 # pnpm 12 records its own version in a first document in pnpm-lock.yaml.
 # GitHub's dependency graph reads only that document, so it would see no
 # dependencies and close every Dependabot alert. See
