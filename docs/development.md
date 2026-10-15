@@ -93,8 +93,8 @@ and only the ASS and WebVTT encoders, which decide which subtitle tracks ffmpeg
 keeps. It can't read DASH, which would need libxml2. HTTPS goes through OpenSSL 3. The macOS build has OpenSSL 3.5 built in,
 and the Linux build uses the system's OpenSSL and zlib. The script fails if the
 build would be anything but LGPL, or would link any other library. The macOS build
-is about 7.7 MB, where Martin Riedl's full build was 66 MB, and the Linux build
-is about 4.4 MB, where BtbN's was 172 MB.
+is 7.8 MB, where Martin Riedl's full build was 66 MB, and the Linux build is
+4.1 MB, where BtbN's was 172 MB.
 
 `.github/workflows/ffmpeg-build.yml` builds macOS on GitHub's macos-15 runner and
 Linux in Debian 12, so the Linux build runs on Debian 12, Ubuntu 24.04 and later.
