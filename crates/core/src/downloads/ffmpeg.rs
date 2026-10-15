@@ -238,4 +238,22 @@ mod tests {
         }
         assert_eq!(acc, ProgressUpdate::default());
     }
+
+    #[test]
+    fn the_sidecar_test_runs_the_apps_arguments() {
+        // scripts/test-ffmpeg-sidecar.py tests each ffmpeg build with a copy
+        // of the arguments a download and a recording use.
+        let script = include_str!("../../../../scripts/test-ffmpeg-sidecar.py");
+        let download = build_ffmpeg_args("URL", "DEST", "mp4").join(" ");
+        let recording = crate::downloads::recording::ffmpeg_args("URL", "DEST", 60).join(" ");
+        for line in [
+            format!("DOWNLOAD_ARGS = \"{download}\""),
+            format!("RECORDING_ARGS = \"{recording}\""),
+        ] {
+            assert!(
+                script.lines().any(|l| l == line),
+                "scripts/test-ffmpeg-sidecar.py should have the line {line}"
+            );
+        }
+    }
 }

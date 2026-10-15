@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+set -euo pipefail
+
+# Builds the ffmpeg that the app runs for downloads and recordings, from
+# ffmpeg's release source, with only what copying a stream needs. The app never
+# decodes or encodes with it. The few decoders below only read details such as
+# the picture size while ffmpeg opens a stream, as a full build would, and the
+# two encoders only decide which subtitle tracks ffmpeg keeps.
+#
+# Usage: ./scripts/build-ffmpeg.sh <output folder>
+#
+# It writes <output folder>/ffmpeg and <output folder>/BUILDINFO.txt, and builds
+# for the machine it runs on. HTTPS goes through OpenSSL 3. On Linux that's the
+# system's OpenSSL, which the app links too, so the build needs a C compiler,
+# make, pkg-config and the OpenSSL and zlib headers, such as libssl-dev and
+# zlib1g-dev on Debian. macOS has no OpenSSL of its own, so the script builds
+# one and links it in. Apple's SecureTransport would need nothing extra, but
+# it can't do TLS 1.3, so a server that only takes TLS 1.3 would fail. The
+# build is LGPL version 3 or later, and the script fails if it isn't.
+#
+# .github/workflows/ffmpeg-build.yml builds and tests the copies that
+# scripts/fetch-ffmpeg.sh pins, and docs/development.md explains how.
+
+FFMPEG_VERSION=8.1.3
+FFMPEG_SHA256=7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3
+# OpenSSL for macOS, from its 3.5 long-term support series.
+OPENSSL_VERSION=3.5.9
+OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+# The copies on this repo's ffmpeg-sidecar pre-release first, then the
+# projects' own.
+MIRROR="https://github.com/MaxMB15/MaxVideoPlayer/releases/download/ffmpeg-sidecar-8.1"
+FFMPEG_SOURCES=(
+  "$MIRROR/ffmpeg-$FFMPEG_VERSION.tar.xz"
+  "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
+)
+OPENSSL_SOURCES=(
+  "$MIRROR/openssl-$OPENSSL_VERSION.tar.gz"
+  "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz"
+)
+
+# The containers the app writes, from muxer_for_container in
+# crates/core/src/downloads/ffmpeg.rs.
+MUXERS=avi,matroska,mov,mp4,mpegts,webm
+# Streams the app may be given: HLS, MPEG-TS, MP4, MKV and the other files an
+# Xtream provider serves, RTSP, RTMP and UDP links from an M3U playlist, and
+# audio-only streams such as radio. The app's own download tests serve WAV.
+DEMUXERS=aac,ac3,avi,eac3,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rtp,rtsp,sdp,srt,wav,webvtt
+PROTOCOLS=crypto,data,file,http,httpproxy,https,pipe,rtmp,rtmps,rtp,tcp,tls,udp
+PARSERS=aac,aac_latm,ac3,av1,dca,dvbsub,dvdsub,flac,h264,hevc,mpeg4video,mpegaudio,mpegvideo,opus,vorbis,vp8,vp9,vvc
+BSFS=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,mpeg4_unpack_bframes,null,setts,vp9_superframe,vvc_mp4toannexb
+DECODERS=aac,aac_latm,ac3,ass,dvbsub,dvdsub,eac3,h264,hevc,mov_text,mp2,mp3,mpeg2video,mpeg4,subrip,webvtt
+# Without -map, ffmpeg only keeps a subtitle track when it has an encoder for
+# the container's own subtitle format, ASS for Matroska and WebVTT for WebM.
+# The app copies the track, so neither runs.
+ENCODERS=ass,webvtt
+
+OUT="${1:-}"
+if [[ -z "$OUT" ]]; then
+  echo "Usage: $0 <output folder>" >&2
+  exit 1
+fi
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+
+CONFIGURE=(
+  --disable-everything
+  --disable-autodetect
+  --disable-doc
+  --disable-debug
+  --disable-ffplay
+  --disable-ffprobe
+  --disable-avdevice
+  --disable-swscale
+  --enable-version3
+  --enable-small
+  --enable-zlib
+  "--enable-muxer=$MUXERS"
+  "--enable-demuxer=$DEMUXERS"
+  "--enable-protocol=$PROTOCOLS"
+  "--enable-parser=$PARSERS"
+  "--enable-bsf=$BSFS"
+  "--enable-decoder=$DECODERS"
+  "--enable-encoder=$ENCODERS"
+)
+case "$(uname -s)" in
+  Darwin)
+    PLATFORM=macos
+    JOBS="$(sysctl -n hw.ncpu)"
+    # The app runs on macOS 15 and later.
+    export MACOSX_DEPLOYMENT_TARGET=15.0
+    # configure always links CoreMedia and CoreVideo, which nothing here uses.
+    # -dead_strip leaves out the parts of OpenSSL that ffmpeg never calls.
+    CONFIGURE+=(--enable-openssl --pkg-config-flags=--static "--extra-ldflags=-Wl,-dead_strip_dylibs -Wl,-dead_strip")
+    # libSystem and zlib.
+    ALLOWED_LIBS='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libz\.1\.dylib)$'
+    ;;
+  Linux)
+    PLATFORM=linux
+    JOBS="$(nproc)"
+    # --disable-x86asm saves needing nasm. Only the decoders have assembly, and
+    # they read a few frames at most. --gc-sections leaves out the functions
+    # that nothing calls, as -dead_strip does on macOS.
+    CONFIGURE+=(--enable-openssl --toolchain=hardened --disable-x86asm
+      "--extra-cflags=-ffunction-sections -fdata-sections" "--extra-ldflags=-Wl,--gc-sections")
+    # glibc, OpenSSL and zlib. On some CPUs the program also names glibc's
+    # loader, such as ld-linux-aarch64.so.1.
+    ALLOWED_LIBS='^((libc|libm|libssl|libcrypto|libz)\.so\.[0-9]+|ld-linux-[a-z0-9_-]+\.so\.[0-9]+)$'
+    ;;
+  *) echo "build-ffmpeg.sh builds on macOS and Linux only" >&2; exit 1 ;;
+esac
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# fetch FILE SHA256 URL... saves FILE in $WORK from the first URL that gives
+# it with the pinned SHA-256, and unpacks it there.
+fetch() {
+  local file="$1" sha256="$2" url got
+  shift 2
+  for url in "$@"; do
+    echo "Fetching $file from $url"
+    rm -f "$WORK/$file"
+    if ! curl -fL --retry 3 --retry-all-errors --retry-delay 5 "$url" -o "$WORK/$file"; then
+      echo "Couldn't download $url" >&2
+      continue
+    fi
+    got="$(sha256_of "$WORK/$file")"
+    if [[ "$got" == "$sha256" ]]; then
+      tar xf "$WORK/$file" -C "$WORK"
+      return
+    fi
+    echo "The file from $url has SHA-256 $got, not the pinned $sha256" >&2
+  done
+  echo "No source gave the pinned $file" >&2
+  exit 1
+}
+
+if [[ "$PLATFORM" == macos ]]; then
+  fetch "openssl-$OPENSSL_VERSION.tar.gz" "$OPENSSL_SHA256" "${OPENSSL_SOURCES[@]}"
+  echo "Building OpenSSL $OPENSSL_VERSION"
+  (
+    cd "$WORK/openssl-$OPENSSL_VERSION"
+    # Only the static libraries, with nothing loaded at run time. ffmpeg
+    # needs DTLS, so that stays.
+    if ! ./Configure no-shared no-module no-legacy no-engine no-apps no-docs no-tests \
+      --prefix="$WORK/openssl" --libdir=lib > configure.log 2>&1; then
+      tail -n 40 configure.log >&2
+      exit 1
+    fi
+    make -j"$JOBS" build_libs > make.log 2>&1 || { tail -n 40 make.log >&2; exit 1; }
+    make install_dev > install.log 2>&1 || { tail -n 40 install.log >&2; exit 1; }
+  )
+  # ffmpeg finds this OpenSSL and never one from Homebrew.
+  export PKG_CONFIG_LIBDIR="$WORK/openssl/lib/pkgconfig"
+  CONFIGURE+=("--extra-cflags=-I$WORK/openssl/include" "--extra-ldflags=-L$WORK/openssl/lib")
+fi
+
+fetch "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256" "${FFMPEG_SOURCES[@]}"
+mkdir "$WORK/build"
+cd "$WORK/build"
+echo "Configuring ffmpeg $FFMPEG_VERSION for $PLATFORM: ${CONFIGURE[*]}"
+if ! "$WORK/ffmpeg-$FFMPEG_VERSION/configure" "${CONFIGURE[@]}" > configure.log 2>&1; then
+  tail -n 40 configure.log >&2
+  tail -n 40 ffbuild/config.log >&2 || true
+  exit 1
+fi
+LICENSE="$(sed -n 's/^License: //p' configure.log)"
+if [[ "$LICENSE" != "LGPL version 3 or later" ]]; then
+  echo "The build would be ${LICENSE:-of no license configure named}, not LGPL version 3 or later" >&2
+  exit 1
+fi
+make -j"$JOBS" ffmpeg > make.log 2>&1 || { tail -n 40 make.log >&2; exit 1; }
+strip ffmpeg
+
+# A library the build wasn't meant to link would also have to ship with the app.
+if [[ "$PLATFORM" == macos ]]; then
+  LIBS="$(otool -L ffmpeg | tail -n +2 | awk '{print $1}')"
+  GLIBC=""
+else
+  LIBS="$(readelf -d ffmpeg | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')"
+  GLIBC="$(readelf -V ffmpeg | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)"
+fi
+UNEXPECTED="$(grep -vE "$ALLOWED_LIBS" <<< "$LIBS" || true)"
+if [[ -n "$UNEXPECTED" ]]; then
+  echo "ffmpeg links libraries it shouldn't:" >&2
+  echo "$UNEXPECTED" >&2
+  exit 1
+fi
+
+cp ffmpeg "$OUT/ffmpeg"
+{
+  echo "ffmpeg $FFMPEG_VERSION, built by scripts/build-ffmpeg.sh"
+  echo "Source: ffmpeg-$FFMPEG_VERSION.tar.xz, SHA-256 $FFMPEG_SHA256"
+  echo "License: $LICENSE"
+  echo "Built on: $(uname -sm), $(if [[ "$PLATFORM" == macos ]]; then echo "macOS $(sw_vers -productVersion)"; else sed -n 's/^PRETTY_NAME="\(.*\)"/\1/p' /etc/os-release; fi)"
+  echo "Compiler: $(cc --version | head -n 1)"
+  if [[ "$PLATFORM" == macos ]]; then
+    echo "OpenSSL: $OPENSSL_VERSION, linked in, from openssl-$OPENSSL_VERSION.tar.gz, SHA-256 $OPENSSL_SHA256"
+  else
+    echo "OpenSSL headers: $(pkg-config --modversion openssl)"
+    echo "Newest glibc symbol: $GLIBC"
+  fi
+  echo "Links:"
+  sed 's/^/  /' <<< "$LIBS"
+  echo "Configure: ${CONFIGURE[*]//$WORK/<build folder>}"
+} > "$OUT/BUILDINFO.txt"
+cat "$OUT/BUILDINFO.txt"
+echo "Built $OUT/ffmpeg ($(wc -c < "$OUT/ffmpeg" | tr -d ' ') bytes)"

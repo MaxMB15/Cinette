@@ -1,0 +1,149 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Builds the ffmpeg that the app bundles on macOS and Linux with
+# scripts/build-ffmpeg.sh, and tests each build with
+# scripts/test-ffmpeg-sidecar.py. It runs on pull requests that change those
+# scripts, scripts/fetch-ffmpeg.sh or this workflow, and by hand. Each build
+# job uploads an archive for the ffmpeg-sidecar pre-release, with its SHA-256
+# in the job summary for scripts/fetch-ffmpeg.sh. docs/development.md says how
+# to put a new build on the pre-release. The workflow uses no secrets, and the
+# tests only reach servers on 127.0.0.1.
+name: ffmpeg build
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "scripts/build-ffmpeg.sh"
+      - "scripts/fetch-ffmpeg.sh"
+      - "scripts/test-ffmpeg-sidecar.py"
+      - ".github/workflows/ffmpeg-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Without a shell named, Actions runs bash without pipefail. Naming bash adds it.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  media:
+    name: Test media
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that both scripts name the same ffmpeg
+        run: |
+          built="$(sed -n 's/^FFMPEG_VERSION=//p' scripts/build-ffmpeg.sh)"
+          for platform in macos linux; do
+            pinned="$(awk -v want="  $platform)" '
+              $0 == want { found = 1 }
+              found && /^ +FFMPEG_VERSION=/ { sub(/^ +FFMPEG_VERSION=/, ""); print; exit }
+            ' scripts/fetch-ffmpeg.sh)"
+            if [[ "$pinned" != "$built" ]]; then
+              echo "::error::scripts/fetch-ffmpeg.sh pins ffmpeg ${pinned:-nothing} for $platform, and scripts/build-ffmpeg.sh builds ${built:-nothing}"
+              exit 1
+            fi
+          done
+
+      # Ubuntu's ffmpeg has the encoders that the test media needs.
+      - name: Install a full ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Make the test media
+        run: python3 -I scripts/test-ffmpeg-sidecar.py media ffmpeg media
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffmpeg-test-media
+          path: media
+          retention-days: 7
+          if-no-files-found: error
+
+  build:
+    name: build (${{ matrix.platform }})
+    needs: media
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+            container: ""
+          # Debian 12's glibc, so the build runs on Debian 12, Ubuntu 24.04
+          # and later.
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            container: debian:12
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # Before checkout, which needs git to clone.
+      - name: Install the build tools
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev zlib1g-dev \
+            ca-certificates curl git xz-utils python3 openssl
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-test-media
+          path: media
+
+      - name: Build ffmpeg
+        run: ./scripts/build-ffmpeg.sh out
+
+      - name: Test the build
+        run: python3 -I scripts/test-ffmpeg-sidecar.py test out/ffmpeg media
+
+      - name: Pack the build
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          version="$(sed -n 's/^FFMPEG_VERSION=//p' scripts/build-ffmpeg.sh)"
+          name="max-video-player-ffmpeg-$version-$PLATFORM"
+          mkdir -p "dist/$name"
+          cp out/ffmpeg out/BUILDINFO.txt "dist/$name/"
+          # macOS's tar would otherwise add Apple's file attributes.
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            COPYFILE_DISABLE=1 tar --no-mac-metadata -C dist -cJf "dist/$name.tar.xz" "$name"
+          else
+            tar -C dist -cJf "dist/$name.tar.xz" "$name"
+          fi
+          sha256="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "dist/$name.tar.xz")"
+          echo "$sha256  $name.tar.xz" > "dist/$name.tar.xz.sha256"
+          {
+            echo "### $name.tar.xz"
+            echo
+            echo "SHA-256 \`$sha256\`, $(wc -c < out/ffmpeg | tr -d ' ') bytes unpacked"
+            echo
+            echo '```'
+            cat out/BUILDINFO.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffmpeg-${{ matrix.platform }}
+          path: |
+            dist/*.tar.xz
+            dist/*.tar.xz.sha256
+          if-no-files-found: error
