@@ -80,19 +80,20 @@ The script pins one build for each platform by the SHA-256 of its archive.
 
 | Platform | ffmpeg | Built by | License |
 | --- | --- | --- | --- |
-| macOS, Apple Silicon | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL 3.0 or later |
-| Linux, x86_64 | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL 3.0 or later |
-| Windows, x86_64 | 8.1.3 | [BtbN](https://github.com/BtbN/FFmpeg-Builds) | GPL 3.0 or later |
+| macOS, Apple Silicon | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL version 3 or later |
+| Linux, x86_64 | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL version 3 or later |
+| Windows, x86_64 | 8.1.3 | [BtbN](https://github.com/BtbN/FFmpeg-Builds) | GPL version 3 or later |
 
 `scripts/build-ffmpeg.sh` builds ffmpeg from its release source with only what the
 app's downloads and recordings use. They copy a stream from HLS, MPEG-TS, MP4, MKV
-and the other files an Xtream provider serves, such as AVI, FLV and WMV, into MP4,
-MKV, MPEG-TS, AVI or WebM. The build can also read RTSP, RTMP and UDP links, but the
-app can't download them yet. It passes `-reconnect`, which only HTTP takes, so
-ffmpeg stops with `Option reconnect not found`. The app never decodes or encodes
-with ffmpeg, so the build has a few decoders, which only read details such as the
-picture size, and only the ASS and WebVTT encoders, which decide which subtitle
-tracks ffmpeg keeps. It can't read DASH, which would need libxml2.
+and the other files an Xtream provider serves, such as AVI, FLV and WMV, or from a
+radio station, into MP4, MOV, MKV, MPEG-TS, AVI or WebM. The build can also read
+RTSP, RTMP and UDP links, but the app can't download them yet. It passes
+`-reconnect`, which only HTTP takes, so ffmpeg stops with `Option reconnect not
+found`. The app never decodes or encodes with ffmpeg, so the build has a few
+decoders, which only read details such as the picture size, and only the ASS and
+WebVTT encoders, which decide which subtitle tracks ffmpeg keeps. It can't read
+DASH, which would need libxml2.
 
 HTTPS goes through OpenSSL 3. The macOS build has OpenSSL 3.5 built in. The Linux
 build uses the system's OpenSSL and zlib, except in the AppImage, which carries
@@ -104,26 +105,42 @@ BtbN's was 172 MB.
 
 `.github/workflows/ffmpeg-build.yml` builds macOS on GitHub's macos-15 runner and
 Linux in Debian 12, so the Linux build runs on Debian 12, Ubuntu 24.04 and later.
-It runs on pull requests that change the ffmpeg scripts. Each job runs
-`scripts/test-ffmpeg-sidecar.py` on its build. The test makes short test files
-with a full ffmpeg, serves them over HTTP, HTTPS and TLS 1.3 only on 127.0.0.1,
-runs the build with the app's download and recording arguments and reads back
-what it wrote. It never uses a login. Each job then uploads an archive of its
-build, with the archive's SHA-256 and the build's size in the job summary.
+It runs on pull requests to `dev` that change the ffmpeg scripts or the workflow,
+and by hand. Each build job runs `scripts/test-ffmpeg-sidecar.py` on its build.
+The test makes short test files with a full ffmpeg and serves them on 127.0.0.1
+over HTTP, over HTTPS, from a server that only takes TLS 1.3 and from one that
+only takes TLS 1.2. It runs the build with the app's download and recording
+arguments, checks the exit code and the error text the app looks for, and reads
+back what the build wrote. MP4 and MOV files must have their index before the
+media, as `-movflags +faststart` asks. The build reads its own files back unless
+`--reader` names another ffmpeg. The test never uses a login. It needs a Python
+whose `ssl` module has TLS 1.3, which macOS's own `/usr/bin/python3` lacks. Each
+build job then uploads an archive of its build, with the archive's SHA-256 and the
+build's size in the job summary. When the pre-release already has an archive with
+the same name, the job fails unless that archive came from the same source and
+configure options.
+
+The workflow's `pinned` jobs fetch the archives that `fetch-ffmpeg.sh` pins, on
+macos-15 and Ubuntu 24.04, and run the same test on them, with Ubuntu's ffmpeg
+reading the files back on Linux. They fail when `fetch-ffmpeg.sh` doesn't name the
+build that `build-ffmpeg.sh` makes.
 
 The script downloads each archive from this repository's `ffmpeg-sidecar-8.1`
 pre-release, and the Windows one from BtbN when that fails. It installs the
 archive only when the hash matches. The pre-release also holds the ffmpeg and
-OpenSSL source the builds come from, with their signatures. Its tag doesn't start
-with `v`, so it never starts an app release, and it's never marked as the latest
-release, which the updater reads.
+OpenSSL release tarballs the builds come from, with their signatures, and
+`ffmpeg-29e619e767.tar.gz`, ffmpeg's source at the commit BtbN's Windows build
+comes from, which has no signature. Its tag doesn't start with `v`, so it never
+starts an app release, and it's never marked as the latest release, which the
+updater reads.
 
 On macOS and Linux, when no archive matches, or when no build is pinned for your
 machine, such as an Intel Mac or Linux on ARM, the script builds ffmpeg with
 `build-ffmpeg.sh` in its place. That takes a few minutes and needs a C compiler,
-`make`, `pkg-config` and `curl`, and on Linux the OpenSSL and zlib headers, such as
-`libssl-dev` and `zlib1g-dev` on Debian. In GitHub Actions it says so in a
-warning. The release workflow and the Build & Bundle jobs set
+`make`, `pkg-config`, `curl` and `tar`, and on Linux `xz` and the OpenSSL and zlib
+headers, such as `xz-utils`, `libssl-dev` and `zlib1g-dev` on Debian. In GitHub
+Actions it says so in a warning. On an Intel Mac the build leaves out ffmpeg's x86
+assembly, which would need nasm. The release workflow and the Build & Bundle jobs set
 `FFMPEG_PINNED_ONLY=1`, which makes the script fail instead. A release only ships a
 pinned build, since a Linux build made on the runner would need the runner's newer
 glibc. Build & Bundle fails a pull request whose pinned archive doesn't download or
@@ -135,8 +152,10 @@ newest fix release in a series the script pins, such as 8.1.4, and for ffmpeg's 
 release when it's newer than every pin, such as 9.0.2. A release in between gets no
 issue, such as 9.0.2 once 9.1 is out. The issue lists each platform's pin and the
 newest release in its series. It never opens two issues with the same title, so
-closing one skips that release. Nothing watches OpenSSL. The macOS build needs
-building again for an OpenSSL security release, the same way as for a new ffmpeg.
+closing one skips that release. Nothing watches OpenSSL. For an OpenSSL security
+release, raise `FFMPEG_BUILD` and follow the steps below. The macOS build links
+OpenSSL in, and the Linux build gets a new archive too, since the two share the
+build number.
 
 To move to a new ffmpeg:
 
@@ -147,12 +166,16 @@ To move to a new ffmpeg:
    versions. For a new series, also set `MIRROR` in both scripts. For OpenSSL,
    check its tarball against the keys at openssl-library.org and set
    `OPENSSL_VERSION` and `OPENSSL_SHA256`. When the build changes but ffmpeg
-   doesn't, such as for a new OpenSSL, raise `FFMPEG_BUILD`, which goes in the
-   archive's name.
+   doesn't, such as for a new OpenSSL or new configure options, raise
+   `FFMPEG_BUILD`, which goes in the archive's name. The macOS and Linux builds
+   share it, so both get new archives.
 2. Open a pull request. The ffmpeg build workflow builds and tests both platforms.
    To try a build yourself, run `./scripts/build-ffmpeg.sh <folder>`, then
    `python3 scripts/test-ffmpeg-sidecar.py media <a full ffmpeg> <media folder>`
-   and `python3 scripts/test-ffmpeg-sidecar.py test <folder>/ffmpeg <media folder>`.
+   and `python3 scripts/test-ffmpeg-sidecar.py test <folder>/ffmpeg <media folder>`,
+   with `--reader <a full ffmpeg>` to read the files back with a full ffmpeg. The
+   workflow's `pinned` jobs fail until step 5 pins the new archives, and so does
+   Build & Bundle when the ffmpeg version changed.
 3. Check that the app's downloads still work with it. Copy the build into
    `binaries/` under the sidecar's name, and run
    `cargo test -p max-video-player --lib downloads`, whose tests run the sidecar.
@@ -165,19 +188,24 @@ To move to a new ffmpeg:
    and they decide whether a recording tries again and which error it shows, so
    check that ffmpeg still writes those words. A stream the app needs that the
    build can't read needs its demuxer, protocol or parser added in
-   `build-ffmpeg.sh`, and a case in the test.
+   `build-ffmpeg.sh`, and a case in the test. `cargo test -p mvp-core` fails when
+   the build leaves out a muxer that `muxer_for_container` picks.
 4. Download the workflow's `ffmpeg-macos-arm64` and `ffmpeg-linux-x86_64` artifacts
-   and upload the archives to the pre-release, with the ffmpeg tarball and its
-   `.asc`, and the OpenSSL tarball and its `.asc` when OpenSSL changed. A new series
-   gets a new pre-release, made with
-   `gh release create ffmpeg-sidecar-<series> --prerelease --latest=false`. A new
-   build in the same series goes up with `gh release upload ffmpeg-sidecar-<series>`.
-   Never replace an archive that's already there, because older commits pin it.
+   and upload the archives to the pre-release for the series, where `<series>` is
+   the first two numbers of the version, such as 8.1. A new series gets a new
+   pre-release, made with
+   `gh release create ffmpeg-sidecar-<series> --prerelease --latest=false`, and
+   needs the ffmpeg and OpenSSL tarballs and their `.asc` signatures too. A new
+   build in the same series goes up with `gh release upload ffmpeg-sidecar-<series>`,
+   with whichever tarball and `.asc` changed. Never replace an archive that's
+   already there, because older commits pin it.
 5. Set each archive's `FILE` and `SHA256` in `fetch-ffmpeg.sh`, and check that the
-   Build & Bundle jobs pass with it. For Windows, download BtbN's new build, check it
-   against the `checksums.sha256` of its release, upload it to the pre-release and
-   set `FFMPEG_VERSION`, `FILE`, `UPSTREAM` and `SHA256`. Update the FFmpeg section
-   of `THIRD_PARTY_NOTICES.md`.
+   Build & Bundle jobs and the `pinned` jobs pass with them. For Windows, download
+   BtbN's new build and check it against the `checksums.sha256` of its release.
+   Upload it to the pre-release with a `.tar.gz` of ffmpeg's source at the commit
+   in the build's name, as `ffmpeg-<commit>.tar.gz`, and set `FFMPEG_VERSION`,
+   `FILE`, `UPSTREAM` and `SHA256`. Update the FFmpeg section of
+   `THIRD_PARTY_NOTICES.md`.
 
 ffmpeg 9.0 checks TLS certificates by default, and 8.1 doesn't. Martin Riedl's static
 macOS 9.0 build finds no certificate store, so every HTTPS download fails, even from a
@@ -186,8 +214,8 @@ certificates in `/etc/ssl/cert.pem`, where macOS keeps them. The Linux `.deb` an
 `.rpm` use the system's OpenSSL, which knows where its certificates are. The
 AppImage's OpenSSL, from Ubuntu, looks in `/usr/lib/ssl`, which only Debian, Ubuntu
 and the systems built on them have, so on Fedora or Arch it would find none. None of
-this has been tried with 9.0. A server with a bad certificate would fail even if the app passed
-`-tls_verify 0`, because the HLS demuxer doesn't pass it on to its requests for
+this has been tried with 9.0. A server with a bad certificate would fail even if the
+app passed `-tls_verify 0`, because the HLS demuxer doesn't pass it on to its requests for
 variant playlists and segments. mpv doesn't check certificates by default, so such a
 stream plays but can't be downloaded. Before the sidecar moves to 9.x, the app needs
 to handle that, and someone needs to decide whether downloads should check
