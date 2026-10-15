@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+"""
+Tests for changed-code.py. Each test builds a small git repo with a made-up
+workspace in a temp folder and points the script at it, so nothing here reads
+the real repo or reaches the network.
+
+  python3 -I scripts/changed-code-test.py
+"""
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+SCRIPT = Path(__file__).resolve().parent / "changed-code.py"
+
+
+def load_script():
+    spec = importlib.util.spec_from_file_location("changed_code", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses look the module up by name while the file runs.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+cc = load_script()
+
+# Git that ignores the user's own config and any repo the tests run inside.
+GIT_ENV = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_AUTHOR_NAME": "Test",
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "Test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+}
+GIT_UNSET = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY")
+
+WORKSPACE = {
+    "Cargo.toml": '[workspace]\nmembers = ["crates/core"]\nresolver = "3"\n',
+    "crates/core/Cargo.toml": '[package]\nname = "mvp-core"\n',
+    "crates/core/src/lib.rs": "pub fn one() -> u8 {\n    1\n}\n",
+    "apps/player/src/lib/a.ts": "export const a = 1;\n",
+    "apps/player/src/lib/b.ts": "export const b = 2;\n",
+    cc.EXCLUDE_FILE: "",
+}
+
+
+class RepoTest(unittest.TestCase):
+    """A test with its own git repo as the script's ROOT."""
+
+    def setUp(self) -> None:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        env = mock.patch.dict(os.environ, GIT_ENV)
+        env.start()
+        self.addCleanup(env.stop)
+        for name in GIT_UNSET:
+            os.environ.pop(name, None)
+        root = mock.patch.object(cc, "ROOT", self.root)
+        root.start()
+        self.addCleanup(root.stop)
+        self.git("init", "-q", "-b", "main")
+        self.write(WORKSPACE)
+        self.commit("base")
+
+    def git(self, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=self.root, check=True, stdout=subprocess.DEVNULL)
+
+    def write(self, files: dict[str, str | bytes]) -> None:
+        for name, text in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(text, bytes):
+                path.write_bytes(text)
+            else:
+                path.write_text(text, encoding="utf-8")
+
+    def commit(self, message: str) -> None:
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", message)
+
+    def run_script(self, *args: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = cc.main(list(args))
+        return status, out.getvalue()
+
+
+class ExclusionFileTest(RepoTest):
+    def test_files_must_be_a_list(self) -> None:
+        self.write({cc.EXCLUDE_FILE: '[[exclude]]\nfiles = "apps/player/src/lib/a.ts"\nreason = "x"\n'})
+        with self.assertRaises(SystemExit) as caught:
+            cc.load_exclusions()
+        self.assertIn("list of file globs", str(caught.exception))
+
+    def test_entries_must_be_tables(self) -> None:
+        self.write({cc.EXCLUDE_FILE: "exclude = [1]\n"})
+        with self.assertRaises(SystemExit) as caught:
+            cc.load_exclusions()
+        self.assertIn("[[exclude]] table", str(caught.exception))
+
+    def test_reads_a_good_entry(self) -> None:
+        self.write(
+            {
+                cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["crates/core/src/lib.rs"]\n'
+                'functions = ["one"]\nreason = " Needs a window. "\n'
+            }
+        )
+        (entry,) = cc.load_exclusions()
+        self.assertEqual(entry.files, ["crates/core/src/lib.rs"])
+        self.assertEqual(entry.functions, ["one"])
+        self.assertEqual(entry.reason, "Needs a window.")
+
+
+class WidenedExclusionTest(RepoTest):
+    def setUp(self) -> None:
+        super().setUp()
+        self.write({cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["apps/player/src/lib/a.ts"]\nreason = "x"\n'})
+        self.commit("exclude a.ts")
+        self.summary = self.root.parent / f"{self.root.name}-summary.md"
+        self.addCleanup(self.summary.unlink, missing_ok=True)
+
+    def plan(self) -> str:
+        status, out = self.run_script(
+            "plan", "--base", "HEAD^1", "--head", "HEAD", "--summary", str(self.summary)
+        )
+        self.assertEqual(status, 0)
+        return out
+
+    def test_warns_about_a_widened_glob(self) -> None:
+        self.write({cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["apps/player/src/lib/*.ts"]\nreason = "x"\n'})
+        self.commit("exclude more")
+        out = self.plan()
+        self.assertIn("::warning title=Exclusion added::", out)
+        self.assertIn("leaves out the file apps/player/src/lib/b.ts,", out)
+        self.assertNotIn("lib/a.ts,", out)
+        summary = self.summary.read_text(encoding="utf-8")
+        self.assertTrue(summary.startswith("## Exclusions\n\n- "))
+        self.assertIn("apps/player/src/lib/b.ts", summary)
+
+    def test_warns_about_an_added_function(self) -> None:
+        self.write(
+            {
+                cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["apps/player/src/lib/a.ts"]\nreason = "x"\n'
+                '[[exclude]]\nfiles = ["crates/core/src/lib.rs"]\nfunctions = ["one"]\nreason = "y"\n'
+            }
+        )
+        self.commit("exclude a function")
+        out = self.plan()
+        self.assertIn("entry 2, leaves out the function one in crates/core/src/lib.rs,", out)
+        self.assertNotIn("entry 1", out)
+
+    def test_ignores_files_that_never_count(self) -> None:
+        self.write(
+            {
+                "apps/player/src/lib/a.test.ts": "it('a', () => {});\n",
+                cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["apps/player/src/lib/a*.ts"]\nreason = "x"\n',
+            }
+        )
+        self.commit("exclude a test file")
+        out = self.plan()
+        self.assertNotIn("Exclusion added", out)
+        self.assertFalse(self.summary.exists())
+
+    def test_quiet_when_nothing_changes(self) -> None:
+        self.write({"apps/player/src/lib/b.ts": "export const b = 3;\n"})
+        self.commit("change b")
+        out = self.plan()
+        self.assertNotIn("Exclusion added", out)
+        self.assertIn("frontend: true", out)
+        self.assertFalse(self.summary.exists())
+
+    def test_lists_three_and_counts_the_rest(self) -> None:
+        self.assertEqual(cc.listing(["a"], "files"), "a")
+        self.assertEqual(cc.listing(["a", "b"], "files"), "a and b")
+        self.assertEqual(cc.listing(["a", "b", "c"], "files"), "a, b and c")
+        self.assertEqual(cc.listing(["a", "b", "c", "d", "e"], "files"), "a, b, c and 2 more files")
+
+
+class TestCodeTest(RepoTest):
+    def counted_rust(self) -> dict[str, list[int]]:
+        return cc.counted(cc.Change("HEAD^1", "HEAD"), []).rust
+
+    def test_a_file_named_tests_counts_unless_declared_as_test(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": "pub fn one() -> u8 {\n    1\n}\npub mod tests;\npub mod parse_tests;\n",
+                "crates/core/src/tests.rs": "pub fn two() -> u8 {\n    2\n}\n",
+                "crates/core/src/parse_tests.rs": "pub fn three() -> u8 {\n    3\n}\n",
+            }
+        )
+        self.commit("add modules")
+        rust = self.counted_rust()
+        self.assertEqual(rust.get("crates/core/src/tests.rs"), [1, 2, 3])
+        self.assertEqual(rust.get("crates/core/src/parse_tests.rs"), [1, 2, 3])
+
+    def test_a_module_declared_under_cfg_test_does_not_count(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": "pub fn one() -> u8 {\n    1\n}\n#[cfg(test)]\nmod checks;\n",
+                "crates/core/src/checks.rs": "#[test]\nfn one_is_one() {\n    assert_eq!(super::one(), 1);\n}\n",
+            }
+        )
+        self.commit("add a test module")
+        self.assertEqual(self.counted_rust(), {})
+
+    def test_tokio_test_with_arguments_is_test_code(self) -> None:
+        scan = cc.scan_rust(
+            '#[tokio::test(flavor = "multi_thread")]\nasync fn runs() {\n    assert!(true);\n}\n'
+            "fn real() {}\n"
+        )
+        self.assertEqual(scan.test_lines(), {1, 2, 3, 4})
+
+    def test_plain_tokio_test_is_test_code(self) -> None:
+        scan = cc.scan_rust("#[tokio::test]\nasync fn runs() {\n    assert!(true);\n}\n")
+        self.assertEqual(scan.test_lines(), {1, 2, 3, 4})
+
+    def test_a_path_visibility_is_one_qualifier(self) -> None:
+        scan = cc.scan_rust(
+            "#[cfg(test)]\npub(in crate::player) fn helper() -> Result<(), String> {\n"
+            "    Ok(())\n}\npub fn real() -> u8 {\n    1\n}\n"
+        )
+        self.assertEqual(scan.test_lines(), {1, 2, 3, 4})
+        (real,) = [fn for fn in scan.functions if fn.name == "real"]
+        self.assertEqual((real.first, real.last), (5, 7))
+
+
+class CoverageTest(RepoTest):
+    def setUp(self) -> None:
+        super().setUp()
+        self.write({"apps/player/src/lib/a.ts": "export const a = 1;\nexport const c = 3;\n"})
+        self.commit("change a")
+        self.lcov = self.root / "lcov.info"
+
+    def coverage(self, report: str) -> tuple[int, str]:
+        self.lcov.write_text(report, encoding="utf-8")
+        return self.run_script(
+            "coverage", "--base", "HEAD^1", "--head", "HEAD", "--frontend-lcov", str(self.lcov)
+        )
+
+    def test_passes_when_the_changed_lines_run(self) -> None:
+        status, out = self.coverage("SF:src/lib/a.ts\nDA:1,1\nDA:2,4\nend_of_record\n")
+        self.assertEqual(status, 0)
+        self.assertIn("| Frontend | 1 | 1 | 100.0% | passes |", out)
+
+    def test_fails_when_a_changed_line_never_runs(self) -> None:
+        status, out = self.coverage("SF:src/lib/a.ts\nDA:1,1\nDA:2,0\nend_of_record\n")
+        self.assertEqual(status, 1)
+        self.assertIn("| Frontend | 1 | 0 | 0.0% | fails, under 80% |", out)
+        self.assertIn("::error file=apps/player/src/lib/a.ts,line=2,title=Not covered::", out)
+
+    def test_a_frontend_file_with_no_data_fails(self) -> None:
+        status, out = self.coverage("SF:src/lib/b.ts\nDA:1,1\nend_of_record\n")
+        self.assertEqual(status, 1)
+        self.assertIn("::error file=apps/player/src/lib/a.ts,title=No coverage data::", out)
+        self.assertIn("which fails the check", out)
+
+    def test_a_rust_file_with_no_data_does_not_count(self) -> None:
+        self.write({"crates/core/src/lib.rs": "pub fn one() -> u8 {\n    2\n}\n"})
+        self.commit("change one")
+        self.lcov.write_text("", encoding="utf-8")
+        status, out = self.run_script(
+            "coverage", "--base", "HEAD^1", "--head", "HEAD", "--rust-lcov", str(self.lcov)
+        )
+        self.assertEqual(status, 0)
+        self.assertIn("so they don't count", out)
+
+    def test_the_share_rounds_down(self) -> None:
+        self.assertEqual(cc.share_text(7999, 10000), "79.9%")
+        self.assertEqual(cc.share_text(4, 5), "80.0%")
+        self.assertEqual(cc.share_text(2, 3), "66.6%")
+        self.assertEqual(cc.share_text(1, 1), "100.0%")
+
+
+def mutant(line: int, genre: str = "BinaryOperator") -> dict:
+    return {
+        "file": "crates/core/src/lib.rs",
+        "name": f"crates/core/src/lib.rs:{line}:5: replace + with - in add",
+        "genre": genre,
+        "span": {"start": {"line": line, "column": 5}, "end": {"line": line, "column": 6}},
+    }
+
+
+class MutantsTest(RepoTest):
+    def setUp(self) -> None:
+        super().setUp()
+        self.out = self.root / "mutants.out"
+        self.out.mkdir()
+
+    def outcomes(self, *outcomes: dict) -> None:
+        data = {"outcomes": [{"scenario": "Baseline", "summary": "Success"}, *outcomes]}
+        (self.out / "outcomes.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def mutants(self) -> tuple[int, str]:
+        return self.run_script("mutants", str(self.out))
+
+    def test_missing_results_fail(self) -> None:
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("::error title=No results::", out)
+        self.assertIn("is missing", out)
+
+    def test_results_with_no_mutants_fail(self) -> None:
+        self.outcomes()
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("has no mutants", out)
+
+    def test_an_unknown_summary_fails(self) -> None:
+        self.outcomes({"scenario": {"Mutant": mutant(2)}, "summary": "Failure"})
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn('summary is "Failure"', out)
+
+    def test_caught_mutants_pass(self) -> None:
+        self.outcomes(
+            {"scenario": {"Mutant": mutant(2)}, "summary": "CaughtMutant"},
+            {"scenario": {"Mutant": mutant(2)}, "summary": "Timeout"},
+            {"scenario": {"Mutant": mutant(2)}, "summary": "Unviable"},
+        )
+        status, out = self.mutants()
+        self.assertEqual(status, 0)
+        self.assertIn("Every mutant in the changed lines was caught.", out)
+
+    def test_a_missed_mutant_fails(self) -> None:
+        self.outcomes({"scenario": {"Mutant": mutant(2)}, "summary": "MissedMutant"})
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("::error file=crates/core/src/lib.rs,line=2,title=Mutant missed::", out)
+
+    def test_a_skip_comment_counts_lines_as_git_does(self) -> None:
+        # A U+2028 in a string is one line to git and cargo-mutants, though
+        # Python's splitlines() splits there.
+        self.write(
+            {
+                "crates/core/src/lib.rs": 'pub const S: &str = "a b";\n'
+                "// mutants: skip BinaryOperator: Adding zero either way.\n"
+                "pub fn add(a: u8) -> u8 { a + 0 }\n"
+            }
+        )
+        self.outcomes({"scenario": {"Mutant": mutant(3)}, "summary": "MissedMutant"})
+        status, out = self.mutants()
+        self.assertEqual(status, 0)
+        self.assertIn("title=Mutant skipped::", out)
+        self.assertIn('"Adding zero either way"', out)
+
+
+class PlanShardsTest(RepoTest):
+    def plan(self) -> tuple[int, str]:
+        return self.run_script(
+            "plan", "--base", "HEAD^1", "--head", "HEAD", "--shards", str(self.root / "rust.diff")
+        )
+
+    def test_a_frontend_change_needs_no_cargo_mutants(self) -> None:
+        self.write({"apps/player/src/lib/b.ts": "export const b = 3;\n"})
+        self.commit("change b")
+        with (
+            mock.patch.object(cc, "has_cargo_mutants", return_value=False),
+            mock.patch.object(cc, "list_mutants", side_effect=AssertionError("listed mutants")),
+        ):
+            status, out = self.plan()
+        self.assertEqual(status, 0)
+        self.assertIn("mvp-core: no changed .rs lines", out)
+        self.assertIn("matrix: \n", out)
+
+    def test_a_rust_change_needs_cargo_mutants(self) -> None:
+        self.write({"crates/core/src/lib.rs": "pub fn one() -> u8 {\n    2\n}\n"})
+        self.commit("change one")
+        with mock.patch.object(cc, "has_cargo_mutants", return_value=False):
+            with self.assertRaises(SystemExit) as caught:
+                self.plan()
+        self.assertIn("needs cargo-mutants", str(caught.exception))
+
+    def test_a_rust_change_is_split_into_shards(self) -> None:
+        self.write({"crates/core/src/lib.rs": "pub fn one() -> u8 {\n    2\n}\n"})
+        self.commit("change one")
+        with (
+            mock.patch.object(cc, "has_cargo_mutants", return_value=True),
+            mock.patch.object(cc, "list_mutants", return_value=150),
+        ):
+            status, out = self.plan()
+        self.assertEqual(status, 0)
+        matrix = json.loads(out.split("matrix: ", 1)[1].split("\n", 1)[0])
+        self.assertEqual(
+            matrix["include"],
+            [
+                {"package": "mvp-core", "shard": 0, "shards": 2},
+                {"package": "mvp-core", "shard": 1, "shards": 2},
+            ],
+        )
+        self.assertIn(b"+    2", (self.root / "rust.diff").read_bytes())
+
+
+if __name__ == "__main__":
+    unittest.main()
