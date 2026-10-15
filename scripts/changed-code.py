@@ -1161,7 +1161,7 @@ def mutants(args: argparse.Namespace) -> int:
             skipped += 1
             message = (
                 f"cargo-mutants missed {description}, and a comment skips it, for the reason"
-                f' "{reason}". Check that it still holds for the changed code.'
+                f' "{reason.rstrip(".")}". Check that it still holds for the changed code.'
             )
             print(annotation("warning", "Mutant skipped", message, path, start["line"]))
             continue
