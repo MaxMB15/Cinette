@@ -1,0 +1,447 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Checks the code a pull request into dev adds or changes. Tests must run at
+# least 80% of the changed lines, counted for the frontend and for Rust each,
+# and catch every mutant that StrykerJS and cargo-mutants make in them, unless
+# a comment says why no test can. The "Changed code" job at the end sums up
+# the others, so a ruleset can require that one check. "Changed code" in
+# docs/development.md explains the rules, the exclusion file and the skip
+# comments, and `pnpm check:changed` runs the same checks on a computer.
+name: Changed code
+
+on:
+  # Every pull request, with no paths filter, so the final check always
+  # reports. The plan job skips the checks a pull request has nothing for.
+  pull_request:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changed-code-${{ github.ref }}
+  cancel-in-progress: true
+
+# Swatinem/rust-cache puts every variable that isn't empty and whose name
+# starts with CARGO, CC, CFLAGS, CXX, CMAKE or RUST in its cache key, which
+# takes in RUSTFLAGS and RUST_BACKTRACE. So each job that restores a cache
+# sets the same ones as the job that saved it, build-linux in build.yml for
+# coverage-rust and the full job in mutants.yml for rust-mutants.
+env:
+  CARGO_TERM_COLOR: always
+  # The plugin links libmpv, and the app also links GTK and WebKitGTK. These
+  # are the packages mutants.yml installs.
+  APT_PACKAGES: >-
+    libmpv-dev libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
+    libsoup-3.0-dev libegl-dev libwayland-dev libssl-dev pkg-config
+
+jobs:
+  # A pull request checks out its merge into dev. The first parent is dev, so
+  # the diff against it is what the pull request changes. The plan says which
+  # checks have changed lines to look at, and splits the Rust mutants in them
+  # into shards.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_MUTANTS_VERSION: 27.1.0
+    outputs:
+      frontend: ${{ steps.plan.outputs.frontend }}
+      rust: ${{ steps.plan.outputs.rust }}
+      stryker: ${{ steps.plan.outputs.stryker }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      app: ${{ steps.plan.outputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # The tests make small git repos of their own with made-up files.
+      - name: Test changed-code.py
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- 'scripts/changed-code*'; then
+            echo "This pull request doesn't change scripts/changed-code*."
+          else
+            python3 -I scripts/changed-code-test.py
+          fi
+
+      # cargo-mutants lists the mutants in the changed lines with cargo
+      # metadata, which needs no build.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
+
+      - name: Plan the checks
+        id: plan
+        run: |
+          python3 scripts/changed-code.py plan --base HEAD^1 --head HEAD \
+            --shards "$RUNNER_TEMP/rust.diff" --output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+  # The app's build script stops when the ffmpeg sidecar is missing. This job
+  # downloads it once for the Rust coverage job and the app's mutant shards.
+  sidecar:
+    needs: plan
+    if: needs.plan.outputs.rust == 'true' || needs.plan.outputs.app == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      # fetch-ffmpeg.sh asks rustc for the target name.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      # Fails when the pinned build doesn't download, rather than building
+      # ffmpeg from source.
+      - name: Fetch the ffmpeg sidecar
+        env:
+          FFMPEG_PINNED_ONLY: "1"
+        run: ./scripts/fetch-ffmpeg.sh linux
+
+      - name: Upload the sidecar
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ffmpeg-sidecar
+          path: apps/player/src-tauri/binaries/
+          # Long enough to re-run a failed job on a later day.
+          retention-days: 7
+
+  coverage-frontend:
+    needs: plan
+    if: needs.plan.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
+
+      # The reporter given here replaces the ones in vitest.config.ts.
+      - name: Run the tests with coverage
+        working-directory: apps/player
+        run: |
+          pnpm exec vitest run --coverage --coverage.reporter=lcovonly \
+            --coverage.reportsDirectory="$RUNNER_TEMP/frontend-coverage"
+
+      - name: Check the changed lines
+        run: |
+          python3 scripts/changed-code.py coverage --base HEAD^1 --head HEAD \
+            --frontend-lcov "$RUNNER_TEMP/frontend-coverage/lcov.info" \
+            --title "Frontend changed-line coverage" --summary "$GITHUB_STEP_SUMMARY"
+
+  # The same build and tests as build-linux in build.yml, which also measures
+  # Rust coverage, so this restores its cache. The two set the same cache key
+  # variables, which the note at the top lists.
+  coverage-rust:
+    needs: [plan, sidecar]
+    if: ${{ !cancelled() && needs.plan.outputs.rust == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Download the ffmpeg sidecar
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-sidecar
+          path: apps/player/src-tauri/binaries
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          # cargo-llvm-cov reads the coverage data with LLVM's tools.
+          components: llvm-tools
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-llvm-cov@0.8.7
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          shared-key: desktop-linux
+          save-if: false
+
+      - name: Install system deps
+        uses: ./.github/actions/install-linux-deps
+
+      - name: Build libmpv from source
+        run: |
+          ./scripts/build-libmpv.sh linux
+          echo "LD_LIBRARY_PATH=$(pwd)/libs/linux:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
+
+      # The app embeds the built frontend. An artifact doesn't keep the
+      # sidecar's executable bit.
+      - name: Build the frontend
+        run: |
+          chmod +x apps/player/src-tauri/binaries/*
+          pnpm run build:desktop
+
+      - name: Run the tests with coverage
+        run: cargo llvm-cov --locked --workspace --lcov --output-path "$RUNNER_TEMP/rust.lcov"
+
+      - name: Check the changed lines
+        run: |
+          python3 scripts/changed-code.py coverage --base HEAD^1 --head HEAD \
+            --rust-lcov "$RUNNER_TEMP/rust.lcov" \
+            --title "Rust changed-line coverage" --summary "$GITHUB_STEP_SUMMARY"
+
+  # StrykerJS on the changed lines of the frontend's source, apart from tests
+  # and the files in scripts/changed-code-exclude.toml. A change to the
+  # Stryker or test setup also mutates all of src/lib, to show the setup
+  # still works.
+  frontend-mutants:
+    needs: plan
+    if: needs.plan.outputs.stryker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Fails, with an annotation, for a file Stryker can't take, so no
+      # changed file goes unchecked.
+      - name: Pick the lines to mutate
+        id: plan
+        run: python3 scripts/changed-code.py stryker --base HEAD^1 --head HEAD --output "$GITHUB_OUTPUT"
+
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
+
+      # Stryker exits with 0 when mutants survive, since stryker.config.mjs
+      # sets no score to break on. It runs only the tests that load a file it
+      # mutates. When no test loads the changed files, --allowEmpty lets it
+      # end without a report, and the check below fails with a clearer
+      # message than Stryker's. That's fine when the changed lines have no
+      # code to mutate, like a change to types alone, which the log says as
+      # "Instrumented 1 source file(s) with 0 mutant(s)". A run for a setup
+      # change leaves out --allowEmpty, so a broken setup fails there. A bash
+      # shell sets pipefail, so Stryker's exit status gets through tee.
+      - name: Test the mutants
+        id: stryker
+        working-directory: apps/player
+        shell: bash
+        env:
+          MUTATE: ${{ steps.plan.outputs.mutate }}
+          FULL: ${{ steps.plan.outputs.full }}
+        run: |
+          rm -rf reports/mutation
+          empty=--allowEmpty
+          if [ "$FULL" = true ]; then
+            empty=
+          fi
+          pnpm exec stryker run --mutate "$MUTATE" $empty 2>&1 | tee "$RUNNER_TEMP/stryker.log"
+          if grep -q -E 'Instrumented [1-9][0-9]* source file\(s\) with 0 mutant\(s\)' "$RUNNER_TEMP/stryker.log"; then
+            echo "none=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write the summary
+        if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
+        env:
+          OUTCOME: ${{ steps.stryker.outcome }}
+          NONE: ${{ steps.stryker.outputs.none }}
+        run: |
+          report=apps/player/reports/mutation/mutation.json
+          if [ "$OUTCOME" = success ] && [ ! -f "$report" ] && [ "$NONE" = true ]; then
+            printf '## Frontend mutation testing\n\nThe changed lines have no code for Stryker to mutate.\n' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$OUTCOME" = success ] && [ ! -f "$report" ]; then
+            printf '## Frontend mutation testing\n\nNo test loads the changed files, so Stryker had nothing to run. The check below fails for that.\n' >> "$GITHUB_STEP_SUMMARY"
+          else
+            python3 scripts/stryker-summary.py --title "Frontend mutation testing" "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The HTML report shows each mutant in its source file.
+      - name: Upload the report
+        if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stryker-report
+          path: apps/player/reports/mutation/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # A mutant on a changed line that no test catches fails the job, with an
+      # annotation on its line. So does a Stryker comment in a changed file
+      # that isn't "// Stryker disable next-line <mutator>: <reason>", alone
+      # on its line, and a missing report when Stryker made mutants, which
+      # means no test loads the changed files. A mutant a comment turns off
+      # there gets a warning. A run for a setup change checks only the
+      # changed lines too, since most of what it tests isn't the pull
+      # request's.
+      - name: Check the changed lines
+        if: ${{ !cancelled() && steps.stryker.outcome == 'success' }}
+        env:
+          LINES: ${{ steps.plan.outputs.lines }}
+          NONE: ${{ steps.stryker.outputs.none }}
+        run: |
+          python3 scripts/stryker-summary.py --check --lines "$LINES" \
+            ${NONE:+--no-mutants} \
+            --path-prefix apps/player/ apps/player/reports/mutation/mutation.json
+
+  # cargo-mutants on the changed lines, a shard at a time. A mutant no test
+  # catches fails the shard, unless a "// mutants: skip" comment covers it.
+  # A timeout counts as caught, and a mutant that doesn't build is left out.
+  rust-mutants:
+    name: rust-mutants (${{ matrix.package }}, ${{ matrix.shard }})
+    needs: [plan, sidecar]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.matrix != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # This sets the same cache key variables as the full job in mutants.yml,
+    # whose cache it restores. The note at the top lists them.
+    env:
+      # A mutant only needs a pass or a fail, so the test builds skip debug
+      # info, as in mutants.yml.
+      CARGO_PROFILE_DEV_DEBUG: none
+      CARGO_MUTANTS_VERSION: 27.1.0
+      PACKAGE: ${{ matrix.package }}
+      SHARD: ${{ matrix.shard }}
+      SHARDS: ${{ matrix.shards }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Download the ffmpeg sidecar
+        if: matrix.package == 'max-video-player'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ffmpeg-sidecar
+          path: apps/player/src-tauri/binaries
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      # Restores what the weekly run of mutants.yml saved on dev.
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          shared-key: mutants-all
+          save-if: false
+
+      - name: Install system libraries
+        if: matrix.package != 'mvp-core'
+        run: |
+          # $APT_PACKAGES is a list of names, so it's split on purpose.
+          # shellcheck disable=SC2086
+          sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+
+      - name: Set up the frontend
+        if: matrix.package == 'max-video-player'
+        uses: ./.github/actions/setup-frontend
+
+      - name: Build the frontend
+        if: matrix.package == 'max-video-player'
+        run: |
+          chmod +x apps/player/src-tauri/binaries/*
+          pnpm run build:desktop
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
+
+      # cargo-mutants exits with 2 when a mutant survives and 3 when one times
+      # out. The check below reads those results, so only other codes fail
+      # here. --in-place mutates the checkout itself, which reuses the cached
+      # build, and each mutant runs the tests of its own crate.
+      - name: Test shard ${{ matrix.shard }} of ${{ matrix.package }}
+        run: |
+          python3 scripts/changed-code.py rust-diff --base HEAD^1 --head HEAD "$RUNNER_TEMP/rust.diff"
+          code=0
+          cargo mutants --in-place -p "$PACKAGE" --in-diff "$RUNNER_TEMP/rust.diff" \
+            --shard "$SHARD/$SHARDS" --output "$RUNNER_TEMP/mutants" || code=$?
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
+            exit "$code"
+          fi
+
+      # hashFiles() only reads the workspace, so the shell looks for the
+      # results in the runner's temp folder.
+      - name: Write the summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/mutants/mutants.out/outcomes.json" ]; then
+            python3 scripts/mutants-summary.py --title "Mutants in $PACKAGE, shard $SHARD of $SHARDS" \
+              "$RUNNER_TEMP/mutants/mutants.out" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The logs hold each mutant's build and test output, which is most of
+      # the size. diff/ still shows what each mutant changed.
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-${{ matrix.package }}-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/mutants/
+            !${{ runner.temp }}/mutants/mutants.out/log/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Check the changed lines
+        run: python3 scripts/changed-code.py mutants "$RUNNER_TEMP/mutants/mutants.out"
+
+  # One check that sums up the others, so a ruleset can require it. A
+  # skipped job is fine, but a failed or cancelled one isn't, including the
+  # plan, whose failure would otherwise skip the checks.
+  changed-code:
+    name: Changed code
+    if: always()
+    needs:
+      - plan
+      - sidecar
+      - coverage-frontend
+      - coverage-rust
+      - frontend-mutants
+      - rust-mutants
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the other jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          if jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' <<< "$NEEDS" > /dev/null; then
+            echo "::error::A job failed or was cancelled."
+            exit 1
+          fi

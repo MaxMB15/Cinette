@@ -32,12 +32,16 @@ Stryker reads:
 Stryker only makes the mutants whose code lies wholly inside one of the
 ranges, so the check only looks at those too. It prints a warning for each
 mutant Stryker ignored there, as for a comment, so a reviewer can check that
-the reason still holds for the changed code.
+the reason still holds for the changed code. The mutants that
+apps/player/stryker.class-names.mjs leaves out, which only change class
+names, get none.
 
 --check also fails for any other Stryker comment in the files --lines names.
 One with no reason, or with "all" for the mutators, or one that covers every
 line after it, could hide a mutant that a test should catch. So could one with
-another Stryker comment in its reason. It fails, too, when there's no report.
+another Stryker comment in its reason, or one that gives the class-names
+plugin's reason, which would hide its mutants from the warnings. It fails, too,
+when there's no report.
 Stryker writes none when no test loads the files it mutates. --no-mutants says
 Stryker made no mutants at all, as for a change to types alone, and then a
 missing report is fine. --path-prefix goes before each file name, since
@@ -73,6 +77,10 @@ MENTION = re.compile(r"Stryker (?:disable|restore)")
 # The one Stryker comment allowed, alone on its line, with the mutators it
 # names and its reason.
 ALLOWED = re.compile(r"[ \t]*// Stryker disable next-line ([A-Za-z]+(?:, ?[A-Za-z]+)*):(.*)")
+
+# The reason apps/player/stryker.class-names.mjs gives for the mutants it leaves
+# out.
+CLASS_NAMES = "Only changes class names."
 
 
 def code(text: str) -> str:
@@ -128,6 +136,20 @@ def annotation(
     )
 
 
+# What JavaScript's trim() strips, as Stryker does from a comment's reason.
+# Python's split() leaves out U+FEFF, so these all become spaces first.
+JS_SPACE = re.compile(r"[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]")
+
+
+def same_reason(text: str, reason: str) -> bool:
+    """Whether `text` reads as `reason`, apart from case, spacing and final periods."""
+
+    def plain(words: str) -> str:
+        return " ".join(JS_SPACE.sub(" ", words).split()).casefold().rstrip(". ")
+
+    return plain(text) == plain(reason)
+
+
 def comment_problems(source: str) -> list[tuple[int, int, str]]:
     """The line, column and problem of each Stryker comment not of the allowed form."""
     problems = []
@@ -151,6 +173,12 @@ def comment_problems(source: str) -> list[tuple[int, int, str]]:
         elif not allowed[2].strip():
             problem = (
                 "Say after the colon why no test can catch the mutants this comment turns off."
+            )
+        elif same_reason(allowed[2], CLASS_NAMES):
+            problem = (
+                f'"{CLASS_NAMES}" is the reason stryker.class-names.mjs gives, and the check'
+                " doesn't warn about those mutants. Say in your own words why no test can"
+                " catch these."
             )
         else:
             continue
@@ -220,6 +248,8 @@ def check(
             after = one_line(mutant.get("replacement", ""))
             if status == "Ignored":
                 reason = one_line(mutant.get("statusReason") or "")
+                if reason == CLASS_NAMES:
+                    continue
                 message = (
                     f"Stryker ignored {mutator} changing `{before}` to `{after}` here,"
                     f' for the reason "{reason}". Check that it still holds for the changed code.'

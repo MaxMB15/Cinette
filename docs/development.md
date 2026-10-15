@@ -147,12 +147,12 @@ Tools and macOS have all of them except `pkg-config`. Linux also needs `xz`,
 `LDFLAGS`, `LIBRARY_PATH`, `PKG_CONFIG_PATH` and the like from your environment,
 so on Linux the OpenSSL and zlib packages must be where pkg-config and the compiler
 look by default. On an Intel Mac the build leaves out ffmpeg's x86 assembly, which
-would need nasm. The release workflow, the Build & Bundle jobs and the mutation
-tests set `FFMPEG_PINNED_ONLY=1`, which makes the script fail instead. A release
-only ships a pinned build, since a Linux build made on the runner would need the
-runner's newer glibc. Build & Bundle fails a pull request whose pinned archive
-doesn't download or doesn't match its hash, so the release can't find that out
-after its tag is pushed.
+would need nasm. The release workflow, the Build & Bundle jobs, the mutation tests
+and the Changed code checks set `FFMPEG_PINNED_ONLY=1`, which makes the script fail
+instead. A release only ships a pinned build, since a Linux build made on the runner
+would need the runner's newer glibc. Build & Bundle fails a pull request whose pinned
+archive doesn't download or doesn't match its hash, so the release can't find that
+out after its tag is pushed.
 
 Each Monday, `.github/workflows/ffmpeg-update-check.yml` compares the pinned versions
 with ffmpeg's release tags. It opens an issue called "ffmpeg <version> is out" for the
@@ -286,6 +286,7 @@ pnpm lint                 # ESLint
 pnpm format:check         # Prettier
 cargo check               # the whole Rust workspace
 cargo clippy --workspace --all-targets -- -D warnings
+pnpm check:changed        # coverage and mutation testing of your changes, see Changed code
 ```
 
 For a frontend coverage report, run `pnpm --filter ./apps/player test:coverage`
@@ -368,11 +369,11 @@ config out and name the file, since the other exclusions go with the config.
 cargo mutants --no-config --gitignore true -f crates/tauri-plugin-mpv/src/macos.rs
 ```
 
-CI tests the lines a pull request changes in each crate, and every crate on `dev` each
-Monday, in four shards for `mvp-core` and the plugin and eight for the app. A missed
-change doesn't fail either run. Only an error does, such as a build that breaks. The
-pull request job's summary, and the weekly run's report job, list the missed changes
-by file.
+The [Changed code](#changed-code) workflow tests the lines a pull request changes in
+each crate, and fails on a missed change. The Mutation testing workflow tests every
+crate on `dev` each Monday, in four shards for `mvp-core` and the plugin and eight for
+the app. A missed change doesn't fail that run. Only an error does, such as a build
+that breaks. Its report job lists the missed changes by file.
 
 [StrykerJS](https://stryker-mutator.io) does the same for the frontend helpers in
 `apps/player/src/lib`. It changes one thing at a time, such as a condition or a
@@ -391,8 +392,10 @@ to `apps/player/reports/mutation/`, which git ignores, and `index.html` there sh
 each change in its file. `vitest.stryker.config.ts` works around a bug in Stryker's
 Vitest runner, and its comment says when it can go.
 
-CI runs Stryker on the lines a pull request changes in `src/lib`, and on all of it on
-`dev` each Monday. Stryker only makes the changes that lie wholly inside those lines,
+The [Changed code](#changed-code) workflow runs Stryker on the lines a pull request
+changes in any `.ts` or `.tsx` file in `apps/player/src`. The Frontend mutation testing
+workflow runs it on all of `src/lib` on `dev` each Monday. Stryker only makes the
+changes that lie wholly inside those lines,
 so changing one line of a call that runs over three tests only what's on that line. On
 a pull request, a change that no test catches fails the job, and an annotation on its
 line says what the change was. Add a test that fails on it. A change that does the same
@@ -406,13 +409,35 @@ const ms = Date.parse(value ?? "");
 
 The comment turns off every change of that kind that starts on the next line of code,
 even one that runs over several lines, so name only the mutators that no test can
-catch. Put it alone on its line. The job fails for any other Stryker comment in a
+catch. Put it alone on its line. In JSX, put it on its own line inside the braces of
+the expression it covers:
+
+```tsx
+{
+	// Stryker disable next-line ConditionalExpression: <why no test can catch it>
+	open && <Panel />
+}
+```
+
+The job fails for any other Stryker comment in a
 changed file, since one with no reason, with `all` for the mutators, or one that covers
 more than the next line could hide a change that a test should catch. It also fails
 when no test loads any of the changed files, unless their changed lines have nothing to
 change, like a change to types alone. A comment that turns off a change on a changed
 line gets a warning, so check that its reason still holds. The summary lists the
-changes that Stryker ignored. `--mutate` can't take a file name with a comma, a glob
+changes that Stryker ignored.
+
+Stryker leaves out the changes that only touch class names. Those are everything in a
+`className` attribute, or in one whose name ends in `ClassName` like `labelClassName`,
+and in the arguments of `cn()` and `cva()`. They're also the arguments of a variant
+function like `buttonVariants`, which is a `const` in the same file set to what `cva()`
+returns. The tests run in jsdom, which doesn't load Tailwind's CSS, so a test could only
+compare class strings.
+[`stryker.class-names.mjs`](../apps/player/stryker.class-names.mjs) does that, and
+those changes get no warning. So the job fails for a comment that gives its reason,
+"Only changes class names.", as its own.
+
+`--mutate` can't take a file name with a comma, a glob
 character, a quote or a backslash, so the job fails for a changed file with such a
 name. Rename it. Git counts lines by LF alone, and Stryker also ends a line at a U+2028,
 a U+2029 or a CR that no LF follows, so the two number the lines differently in a file
@@ -421,10 +446,117 @@ as an escape like `\u2028`, and replace each CR that no LF follows with an LF.
 
 A pull request that changes the Stryker or Vitest setup, the files in `src/test`, or the
 versions of Vitest, Vite, jsdom, Testing Library or Stryker gets a run of all of
-`src/lib`. That run still fails only on the lines the pull request changes, or on
-`date.ts` when it changes none. A change to the workflow or to
-`scripts/stryker-summary.py` alone only runs `date.ts`. The Monday run lists the changes
-that survive and fails only on an error.
+`src/lib`, plus the changed lines in other files. That run still fails only on the
+lines the pull request changes, or on `date.ts` when it changes none. A change to the
+Changed code workflow, `scripts/changed-code.py` or `scripts/stryker-summary.py` alone
+only runs `date.ts`. The Monday run lists the changes that survive and fails only on an
+error.
+
+### Changed code
+
+The [Changed code](../.github/workflows/changed-code.yml) workflow checks the lines
+that a pull request into `dev` adds or changes. Its last job, also named Changed code,
+fails when any other job in it failed or was cancelled, so a branch rule only needs to
+require that one. It runs three checks.
+
+- Tests must run at least 80% of the changed lines, counted apart for the frontend and
+  for Rust. Only lines that the coverage tool can run count, so a comment, a blank line
+  or a type doesn't. A line counts as covered when any code on it runs, so a function
+  written on one line counts once its file loads, and only the mutation check shows
+  whether a test calls it. Vitest measures the frontend, and cargo-llvm-cov measures
+  Rust on Linux. A pull request with no lines to count passes. The job summary has a
+  table of each file's uncovered changed lines, and each one gets an annotation. Vitest
+  lists every frontend file a test could load, so a changed frontend file missing from
+  its report fails the check. A Rust file can be missing, since Linux doesn't build the
+  macOS and iOS code, but a Rust report with no data for any file fails.
+- Stryker mutates the changed lines of the frontend, and a change that no test catches
+  fails the job, as [Mutation testing](#mutation-testing) explains.
+- cargo-mutants mutates the changed lines of each crate, and a change that no test
+  catches fails the job unless a skip comment covers it. A change that runs past the
+  timeout counts as caught, and one that doesn't build doesn't count. The run is split
+  into shards of about 100 changes for `mvp-core`, 55 for the plugin and 45 for the app,
+  at most eight a crate, so a shard takes about 12 minutes plus its build. A shard
+  fails when it writes no results, results with no changes in them, or results the
+  check can't read.
+
+The lines that count are in the `.ts` and `.tsx` files in `apps/player/src` and in the
+`.rs` files in each crate's `src` folder. Tests don't count. That's `*.test.ts` and
+`*.test.tsx` files, `src/test`, `.d.ts` files, modules declared with `#[cfg(test)]` or
+`#[cfg(all(test, ...))]`, in their own file or inline, the modules they declare, and
+`#[test]` and `#[tokio::test]` functions. A Rust file named `tests.rs` counts like any
+other until a module declares it that way, and so does a file a test module names with a
+`#[path]` that the check can't follow. Docs, workflows, scripts and anything else outside
+those folders don't count either.
+
+[`scripts/changed-code-exclude.toml`](../scripts/changed-code-exclude.toml) leaves out
+the code that no test in CI can run, and each entry says why. That's the macOS, iOS
+and Linux renderers, mpv's OpenGL render context, the app's entry points and logging
+setup, loading a stream into a real window, and the calls that keep the display awake.
+An entry names files with globs, and can name only some functions in a Rust file. A
+frontend file listed there is also left out of the Stryker check. The cargo-mutants
+check reads `.cargo/mutants.toml` instead. Keep the list short, and add only code that
+CI can't run. The plan job warns about an entry that matches nothing. It also warns,
+and lists it in its summary, when a pull request adds or widens an entry so that it
+leaves out files or functions that the base commit's copy counts.
+
+An entry's functions match any function with that name, or a name the glob matches,
+anywhere in its files, so a new function with the same name, or one a glob catches,
+drops out too. The plan job warns about the changed lines that a function entry leaves
+out, naming the function and the entry. When other changed Rust lines count, the Rust
+coverage summary lists them too. When none do, the Rust coverage job doesn't run, and
+the plan job's warning is the only place they show.
+
+The plan job also warns when a pull request adds, removes or changes a setting in
+`.cargo/mutants.toml`. Settings like `exclude_re` and `examine_re` decide which
+changes cargo-mutants makes, and ones like `timeout_multiplier` can turn a missed
+change into a timeout, which counts as caught. An entry taken out of `exclude_re` or
+`exclude_globs` gets no warning, since cargo-mutants then makes more changes, and
+nor does a change to comments or spacing. It warns the same way about a
+`#[mutants::skip]` that a pull request adds to a crate's code, or about a changed line
+in one, even when the attribute is split across lines or broken up by a comment.
+Either can hide a missed change in this pull request and every later one.
+
+A missed Rust change that does the same thing as the code can't fail any test. A
+comment then names the change's genre and says why, alone on the line before the
+change's line:
+
+```rust
+// mutants: skip BinaryOperator: <why no test can catch it>
+```
+
+The genres are `FnValue`, `BinaryOperator`, `UnaryOperator`, `MatchArm`,
+`MatchArmGuard` and `StructField`, and the error for a missed change names its genre
+and the line to put the comment on. One comment can name several genres, separated by
+commas. An `FnValue` change replaces a whole function body, so its comment goes on any
+line from the one before the function's doc comment and attributes to the one before
+`fn`. cargo-mutants still runs a change that a comment covers, and the check prints a
+warning for it, so a reviewer can check that the reason still holds. Code that no test
+can reach at all, such as a call to a real web service, belongs in
+`.cargo/mutants.toml`.
+
+Run the same checks on your own machine from the repo root:
+
+```bash
+pnpm check:changed                     # coverage and mutation testing
+pnpm check:changed --no-mutation       # coverage only
+pnpm check:changed --base origin/main  # compare with where the branch left main
+```
+
+It compares the working tree, untracked files included, with the commit where the
+branch left `origin/dev`, so fetch first. The scripts need Python 3.11 or later as
+`python3`. The one macOS ships in `/usr/bin` is 3.9, so use one from Homebrew or
+python.org. Each part needs its tools. Rust coverage needs cargo-llvm-cov and the
+llvm-tools component from [Tests and checks](#tests-and-checks), and Rust mutation
+testing needs cargo-mutants when the change adds lines to a `.rs` file. The plugin and
+the app need libmpv, which the script finds in `libs/<os>` or in `MPV_LIB_DIR`. A
+worktree without `libs/` can point `MPV_LIB_DIR` at the main checkout's. The app also
+needs the ffmpeg sidecar, and the script builds the frontend when `apps/player/dist` is
+missing. cargo-mutants runs in a copy of the repo that leaves out what git ignores, so
+the app's mutants only run with `--in-place`, which changes your own files one at a
+time. That only runs in a linked worktree with every `.rs` change committed. A mutant
+can make the app's tests write `movies`, `recordings` and `series` folders into
+`apps/player/src-tauri`, and the script deletes the ones that weren't there before it
+started.
 
 ## Production build
 
@@ -476,15 +608,17 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org):
   `feat:`, `fix(linux):`, `ci:`, `docs:` and so on.
 - CI builds macOS and Linux on pull requests that touch platform code, and runs the
-  tests on every pull request.
+  tests on every pull request. It also checks that the tests cover and catch changes to
+  the lines a pull request changes. See [Changed code](#changed-code).
 
 ## Continuous integration
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
-| [Mutation testing](../.github/workflows/mutants.yml) | Pull requests to `dev` that touch the Rust crates, Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A pull request tests only the lines it changes, in the crates it changes. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
-| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Pull requests to `dev` that touch `apps/player/src/lib` or the Stryker or test setup, Mondays, manual runs | Runs StrykerJS on the frontend helpers in `src/lib`. A pull request tests only the lines it changes, or all of `src/lib` when it changes the Stryker or test setup or the test tools' versions. Every Monday, the schedule starts a run on `dev`. A change on the lines a pull request changes that no test catches fails the job, and so do changed files that no test loads. The Monday run reports the changes that survive and fails only on an error. |
+| [Changed code](../.github/workflows/changed-code.yml) | Pull requests to `dev` | Checks the lines a pull request changes. Tests must run at least 80% of them, for the frontend and for Rust each, and every change that Stryker and cargo-mutants make to them must fail a test, unless a comment with a reason skips it. The last job, Changed code, fails when any other job failed or was cancelled. See [Changed code](#changed-code). |
+| [Mutation testing](../.github/workflows/mutants.yml) | Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
+| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Mondays, manual runs | Runs StrykerJS on all of the frontend helpers in `src/lib`. Every Monday, the schedule starts a run on `dev`. It reports the changes that survive and fails only on an error. |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

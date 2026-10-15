@@ -4,20 +4,13 @@
 # Mutation testing for the Rust crates with cargo-mutants. It makes small
 # changes to the code, like flipping a comparison or returning a default, and
 # runs the tests against each one. A change that no test notices points at code
-# the tests run but don't check. A missed mutant is a result for the summary
-# and fails nothing. Only an error, like a build that breaks, fails a job.
+# the tests run but don't check. Here a missed mutant is a result for the
+# summary and fails nothing. Only an error, like a build that breaks, fails a
+# job. The Changed code workflow, changed-code.yml, checks the lines a pull
+# request changes, and fails on a missed mutant there.
 name: Mutation testing
 
 on:
-  # Only the lines a pull request changes.
-  pull_request:
-    branches: [dev]
-    paths:
-      - "crates/**"
-      - "apps/player/src-tauri/**"
-      - ".github/workflows/mutants.yml"
-      - "scripts/mutants-summary.py"
-      - ".cargo/mutants.toml"
   # Every crate once a week. Schedules run from the default branch, main, so
   # the start job below runs the workflow again on dev.
   schedule:
@@ -57,113 +50,6 @@ env:
     libsoup-3.0-dev libegl-dev libwayland-dev libssl-dev pkg-config
 
 jobs:
-  diff:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    # A mutant in mvp-core takes about 7 seconds and one in the app takes
-    # longer, so this fits a change to a large part of a crate.
-    timeout-minutes: 150
-    steps:
-      # A pull request checks out its merge into dev. The first parent is dev,
-      # so the diff against it is what the pull request changes.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 2
-          persist-credentials: false
-
-      # Lists the crates with a changed Rust file. Without one there's nothing
-      # to mutate, so the job skips the cache, the installs and the build. The
-      # plugin and the app need system libraries, and the app also needs the
-      # built frontend and the ffmpeg sidecar, so those steps only run when
-      # their crate changed.
-      - name: Find the changed Rust files
-        id: changes
-        run: |
-          git diff HEAD^1 HEAD -- crates apps/player/src-tauri > pr.diff
-          packages=""
-          changed() { grep -q "^+++ b/$1/.*\.rs\$" pr.diff; }
-          changed crates/core && packages="$packages -p mvp-core"
-          changed crates/tauri-plugin-mpv && packages="$packages -p tauri-plugin-mpv"
-          changed apps/player/src-tauri && packages="$packages -p max-video-player"
-          {
-            echo "packages=$packages"
-            echo "rust=$([ -n "$packages" ] && echo true || echo false)"
-            echo "system=$(grep -qE 'tauri-plugin-mpv|max-video-player' <<< "$packages" && echo true || echo false)"
-            echo "app=$(grep -q max-video-player <<< "$packages" && echo true || echo false)"
-          } >> "$GITHUB_OUTPUT"
-          if [ -z "$packages" ]; then
-            printf '## Mutation testing\n\nThis pull request changes no Rust code.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Install Rust
-        if: steps.changes.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-
-      # Restores what the weekly run on dev saved.
-      - name: Rust cache
-        if: steps.changes.outputs.rust == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: ". -> target"
-          shared-key: mutants-all
-          save-if: false
-
-      - name: Install system libraries
-        if: steps.changes.outputs.system == 'true'
-        run: |
-          # $APT_PACKAGES is a list of names, so it's split on purpose.
-          # shellcheck disable=SC2086
-          sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
-
-      - name: Set up the frontend
-        if: steps.changes.outputs.app == 'true'
-        uses: ./.github/actions/setup-frontend
-
-      # The app embeds the built frontend, and its build script stops when the
-      # sidecar is missing. FFMPEG_PINNED_ONLY makes the fetch fail rather than
-      # build ffmpeg from source when the pinned build doesn't download.
-      - name: Build the frontend and fetch the ffmpeg sidecar
-        if: steps.changes.outputs.app == 'true'
-        env:
-          FFMPEG_PINNED_ONLY: "1"
-        run: |
-          pnpm run build:desktop
-          ./scripts/fetch-ffmpeg.sh linux
-
-      - name: Install cargo-mutants
-        if: steps.changes.outputs.rust == 'true'
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
-
-      # cargo-mutants exits with 2 when a mutant survives and 3 when one times
-      # out. Those are results for the summary, so only other codes fail.
-      # --in-place mutates the checkout itself, which reuses the cached build.
-      # Each mutant runs the tests of its own crate. When the changed lines
-      # hold no mutants, such as a change that only adds tests, it exits with
-      # 0 and writes no results.
-      - name: Test mutants in the changed lines
-        if: steps.changes.outputs.rust == 'true'
-        env:
-          PACKAGES: ${{ steps.changes.outputs.packages }}
-        run: |
-          code=0
-          # $PACKAGES holds one -p flag per crate, so it's split on purpose.
-          # shellcheck disable=SC2086
-          cargo mutants --in-place $PACKAGES --in-diff pr.diff || code=$?
-          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ] && [ "$code" -ne 3 ]; then
-            exit "$code"
-          fi
-          if [ ! -f mutants.out/outcomes.json ]; then
-            printf '## Mutation testing\n\nThe changed lines have nothing to mutate.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Write the summary
-        if: ${{ !cancelled() && hashFiles('mutants.out/outcomes.json') != '' }}
-        run: python3 scripts/mutants-summary.py mutants.out >> "$GITHUB_STEP_SUMMARY"
-
   # The weekly run starts a manual run on dev, which tests the newest code.
   # Every job of that run checks out the commit dev was at when it started, and
   # it saves the caches where pull requests to dev can restore them.
@@ -233,7 +119,7 @@ jobs:
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries/
-          retention-days: 1
+          retention-days: 7
 
   # A run without the app skips the sidecar job, which would skip this one too
   # without the check here. When the sidecar fails, the app's shards fail at
