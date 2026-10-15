@@ -16,12 +16,16 @@
 #                  app's mutants need it, since its build reads files that
 #                  git ignores. It only runs in a linked worktree whose .rs
 #                  changes are all committed, since cargo-mutants edits the
-#                  files one mutant at a time.
+#                  files one mutant at a time. A mutant can make the app's
+#                  tests write movies/, recordings/ or series/ into
+#                  apps/player/src-tauri, and the script removes the ones
+#                  that weren't there when it started.
 #
-# Rust coverage needs cargo-llvm-cov and rustup's llvm-tools component, and
-# Rust mutation testing needs cargo-mutants. The Rust checks find libmpv in
-# libs/<os>, or in MPV_LIB_DIR, which a worktree without libs/ can point at
-# the main checkout's.
+# The checks need Python 3.11 or later as python3. Rust coverage needs
+# cargo-llvm-cov and rustup's llvm-tools component, and Rust mutation testing
+# needs cargo-mutants when the change adds lines to .rs files. The Rust checks
+# find libmpv in libs/<os>, or in MPV_LIB_DIR, which a worktree without libs/
+# can point at the main checkout's.
 
 set -euo pipefail
 
@@ -29,7 +33,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 usage() {
-  sed -n '/^# Usage:/,/^# *files one mutant/s/^# \{0,1\}//p' "$0"
+  sed -n '/^# Usage:/,/^# *that weren.t there/s/^# \{0,1\}//p' "$0"
 }
 
 BASE_REF=origin/dev
@@ -49,9 +53,52 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# changed-code.py reads TOML with tomllib, which came in Python 3.11. macOS's
+# own python3 is older.
+if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' > /dev/null 2>&1; then
+  found="$(python3 --version 2> /dev/null || echo "no python3")"
+  echo "The checks need Python 3.11 or later as python3, and this computer has $found." >&2
+  echo "Install a newer Python and put it first on the PATH." >&2
+  exit 1
+fi
+
+SRC_TAURI=apps/player/src-tauri
+FIXTURE_DIRS="movies recordings series"
+FIXTURES_BEFORE=" "
+if [ "$IN_PLACE" = true ]; then
+  # A linked worktree has its own git folder inside the main one's.
+  if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
+    echo "--in-place only runs in a linked worktree, not in the main checkout." >&2
+    exit 1
+  fi
+  if [ -n "$(git status --porcelain --untracked-files=all -- '*.rs')" ]; then
+    echo "--in-place needs every .rs change committed, since cargo-mutants edits the files." >&2
+    exit 1
+  fi
+  for dir in $FIXTURE_DIRS; do
+    if [ -e "$SRC_TAURI/$dir" ]; then
+      FIXTURES_BEFORE+="$dir "
+    fi
+  done
+fi
+
 BASE="$(git merge-base "$BASE_REF" HEAD)"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+
+# A mutant can make the app's tests write their fixture folders into
+# src-tauri, where the tests run. This removes the ones the run made.
+cleanup() {
+  rm -rf "$TMP"
+  if [ "$IN_PLACE" = true ]; then
+    for dir in $FIXTURE_DIRS; do
+      case "$FIXTURES_BEFORE" in
+        *" $dir "*) ;;
+        *) rm -rf "${SRC_TAURI:?}/$dir" ;;
+      esac
+    done
+  fi
+}
+trap cleanup EXIT
 
 check() {
   python3 -I scripts/changed-code.py "$@"
@@ -86,8 +133,12 @@ result() {
   if [ "$2" -eq 0 ]; then PASSED+=("$1"); else FAILED+=("$1"); fi
 }
 
+# A key's last value in a file of key=value lines, or nothing when the
+# command that writes the file stopped before it.
 value() {
-  sed -n "s/^$1=//p" "$2" | tail -n 1
+  if [ -f "$2" ]; then
+    sed -n "s/^$1=//p" "$2" | tail -n 1
+  fi
 }
 
 case "$(uname -s)" in
@@ -106,10 +157,8 @@ fi
 echo "Comparing the working tree with $(git rev-parse --short "$BASE"), where it left $BASE_REF."
 plan_args=(plan --base "$BASE" --output "$TMP/plan")
 if [ "$MUTATION" = true ]; then
-  if ! cargo mutants --version > /dev/null 2>&1; then
-    echo "cargo-mutants isn't installed. Install it, or run with --no-mutation." >&2
-    exit 1
-  fi
+  # The plan only runs cargo-mutants, and fails when it's missing, for a
+  # change that adds lines to .rs files.
   plan_args+=(--shards "$TMP/rust.diff")
 fi
 check "${plan_args[@]}" | readable
@@ -198,17 +247,6 @@ if [ "$MUTATION" = true ] && [ "$STRYKER" = true ]; then
 fi
 
 if [ "$MUTATION" = true ] && [ -n "$PACKAGES" ]; then
-  if [ "$IN_PLACE" = true ]; then
-    # A linked worktree has its own git folder inside the main one's.
-    if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
-      echo "--in-place only runs in a linked worktree, not in the main checkout." >&2
-      exit 1
-    fi
-    if [ -n "$(git status --porcelain -- '*.rs')" ]; then
-      echo "--in-place needs every .rs change committed, since cargo-mutants edits the files." >&2
-      exit 1
-    fi
-  fi
   outs=()
   code=0
   for package in $PACKAGES; do

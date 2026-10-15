@@ -15,24 +15,27 @@ The counted files are the frontend's .ts and .tsx files in apps/player/src,
 apart from tests, src/test and .d.ts files, and the .rs files in the src
 folder of each crate in the workspace, apart from test code. Test code is a
 module declared with #[cfg(test)], or with #[cfg(all(test, ...))], in its own
-file or inline, a #[test] function, and any file named tests.rs or
-*_tests.rs or in a tests folder. scripts/changed-code-exclude.toml leaves out
-more, each with a reason.
+file or inline, and a #[test] or #[tokio::test] function. A file named
+tests.rs counts like any other until a module declares it that way.
+scripts/changed-code-exclude.toml leaves out more, each with a reason.
 
 Subcommands:
 
   plan       Says which checks have changed lines to look at, for the
              workflow. With --shards, it also counts the Rust mutants in the
              changed lines with `cargo mutants --list` and splits each crate
-             into shards.
+             into shards. It warns about each exclusion entry that leaves out
+             more than the base commit's copy of the file does.
   stryker    The lines for Stryker to mutate and to check, as the frontend
              mutation job takes them.
   rust-diff  The diff that cargo-mutants reads with --in-diff.
   coverage   Changed-line coverage from lcov files. Fails when the covered
              share of the counted lines is under 80%, for the frontend or for
-             Rust, and writes a table of the uncovered lines.
+             Rust, and writes a table of the uncovered lines. A frontend file
+             missing from the report fails too.
   mutants    Fails for each mutant cargo-mutants missed, unless a skip comment
-             covers it.
+             covers it, and when a folder's outcomes.json is missing, lists no
+             mutants or has a result this doesn't know.
 
 A skip comment says why no test can catch a Rust mutant. It sits alone on the
 line before the mutant's line, names the mutant's genre and gives a reason:
@@ -54,10 +57,14 @@ import os
 import re
 import subprocess
 import sys
-import tomllib
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
+
+if sys.version_info < (3, 11):
+    raise SystemExit("changed-code.py needs Python 3.11 or later, which has tomllib.")
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDE_FILE = "scripts/changed-code-exclude.toml"
@@ -348,19 +355,26 @@ class Exclusion:
 
 
 def load_exclusions() -> list[Exclusion]:
-    data = tomllib.loads((ROOT / EXCLUDE_FILE).read_text(encoding="utf-8"))
+    return parse_exclusions((ROOT / EXCLUDE_FILE).read_text(encoding="utf-8"))
+
+
+def parse_exclusions(text: str) -> list[Exclusion]:
+    data = tomllib.loads(text)
     unknown = set(data) - {"exclude"}
     if unknown:
         raise SystemExit(f"{EXCLUDE_FILE} has unknown keys: {', '.join(sorted(unknown))}")
+    entries = data.get("exclude", [])
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise SystemExit(f"{EXCLUDE_FILE} needs each entry as an [[exclude]] table")
     out = []
-    for number, entry in enumerate(data.get("exclude", []), start=1):
+    for number, entry in enumerate(entries, start=1):
         where = f"{EXCLUDE_FILE}, entry {number}"
         unknown = set(entry) - {"files", "reason", "functions"}
         if unknown:
             raise SystemExit(f"{where} has unknown keys: {', '.join(sorted(unknown))}")
         files, reason = entry.get("files"), entry.get("reason")
         functions = entry.get("functions", [])
-        if not files or not all(isinstance(f, str) and f for f in files):
+        if not isinstance(files, list) or not files or not all(isinstance(f, str) and f for f in files):
             raise SystemExit(f"{where} needs a list of file globs in files")
         if not isinstance(reason, str) or not reason.strip():
             raise SystemExit(f"{where} needs a reason")
@@ -395,6 +409,75 @@ def stale_exclusions(exclusions: list[Exclusion]) -> list[str]:
                     for fn in scan_rust((ROOT / path).read_text(encoding="utf-8")).functions
                 ):
                     out.append(f"{EXCLUDE_FILE} names the function {name} in {pattern}, which has none.")
+    return out
+
+
+def base_exclusions(change: Change) -> list[Exclusion]:
+    """The exclusion file as the base commit has it. None when it has no such
+    file or one this can't read, so every entry counts as new."""
+    result = subprocess.run(
+        ["git", "show", f"{change.base}:{EXCLUDE_FILE}"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        return parse_exclusions(result.stdout.decode("utf-8"))
+    except (SystemExit, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return []
+
+
+def head_files(change: Change) -> list[str]:
+    """Every file in the new version."""
+    if change.head is None:
+        names = git("ls-files", "-z")
+    else:
+        names = git("ls-tree", "-r", "--name-only", "-z", change.head)
+    out = [os.fsdecode(name) for name in names.split(b"\0") if name]
+    return out + untracked(["."]) if change.head is None else out
+
+
+def listing(names: list[str], more: str) -> str:
+    """The first three of `names` in a sentence, and how many more there are."""
+    shown, rest = names[:3], len(names) - 3
+    if rest > 0:
+        return f"{', '.join(shown)} and {rest} more {more}"
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def widened_exclusions(change: Change, exclusions: list[Exclusion]) -> list[str]:
+    """Warnings for each entry that leaves out code the base commit's copy of
+    the exclusion file counts, so a reviewer sees what a change stops checking."""
+    base = base_exclusions(change)
+    rust = crates()
+    files = [
+        path
+        for path in head_files(change)
+        if frontend_file(path) or any(crate.owns(path) for crate in rust)
+    ]
+    out = []
+    for number, entry in enumerate(exclusions, start=1):
+        new = [path for path in files if entry.matches(path) and file_exclusion(base, path) is None]
+        if entry.functions:
+            what = [
+                f"{name} in {path}"
+                for path in new
+                for name in entry.functions
+                if not any(b.functions and b.matches(path) and name in b.functions for b in base)
+            ]
+            noun = "the functions" if len(what) > 1 else "the function"
+            more = "functions"
+        else:
+            what = new
+            noun = "the files" if len(what) > 1 else "the file"
+            more = "files"
+        if what:
+            out.append(
+                f"{EXCLUDE_FILE}, entry {number}, leaves out {noun} {listing(what, more)},"
+                " which the base commit's copy counts. Check that no test in CI can run that code."
+            )
     return out
 
 
@@ -480,7 +563,7 @@ def matching(tokens: list[tuple[int, str]], i: int) -> int:
 BODY_ITEMS = {"fn", "struct", "enum", "union", "impl", "mod", "trait", "macro_rules", "extern"}
 # Items that end at a semicolon, whatever braces come before it.
 STATEMENT_ITEMS = {"const", "static", "let", "type", "use"}
-QUALIFIERS = {"pub", "async", "unsafe", "default", "crate", "self", "super", "in"}
+QUALIFIERS = {"pub", "async", "unsafe", "default"}
 
 
 def item_end(tokens: list[tuple[int, str]], i: int) -> int:
@@ -492,7 +575,10 @@ def item_end(tokens: list[tuple[int, str]], i: int) -> int:
     ends at a semicolon or at the brace that closes its body.
     """
     k = i
-    while k < len(tokens) and tokens[k][1] in QUALIFIERS | {"(", ")"}:
+    while k < len(tokens) and tokens[k][1] in QUALIFIERS:
+        # A visibility like pub(in crate::player) is one qualifier.
+        if tokens[k][1] == "pub" and k + 1 < len(tokens) and tokens[k + 1][1] == "(":
+            k = matching(tokens, k + 1)
         k += 1
     word = tokens[k][1] if k < len(tokens) else ""
     if word == "const" and k + 1 < len(tokens) and tokens[k + 1][1] in BODY_ITEMS | {"unsafe", "async", "extern"}:
@@ -539,8 +625,11 @@ def cfg_test(tokens: list[str], i: int) -> tuple[bool, int]:
 
 
 def test_attribute(tokens: list[str]) -> bool:
-    """Whether an attribute's tokens make its item test code."""
-    if tokens == ["test"] or tokens[-3:] == [":", ":", "test"]:
+    """Whether an attribute's tokens make its item test code. That's #[test] or a
+    path that ends in ::test, like #[tokio::test(flavor = "multi_thread")], or a
+    cfg that only holds in a test build."""
+    end = next((k for k, tok in enumerate(tokens) if tok in ("(", "=")), len(tokens))
+    if tokens[:end] == ["test"] or tokens[max(end - 3, 0) : end] == [":", ":", "test"]:
         return True
     if len(tokens) > 2 and tokens[0] == "cfg" and tokens[1] == "(":
         return cfg_test(tokens, 2)[0]
@@ -686,11 +775,6 @@ def crates() -> list[Crate]:
     return out
 
 
-def test_folder_name(path: str) -> bool:
-    parts = path.split("/")
-    return parts[-1] == "tests.rs" or parts[-1].endswith("_tests.rs") or "tests" in parts[:-1]
-
-
 def test_modules(crate: Crate) -> tuple[set[str], list[str]]:
     """The files of the crate's test modules, and the folders that hold their
     submodules."""
@@ -733,8 +817,6 @@ class RustFiles:
     def test_file(self, path: str) -> bool:
         crate = self.crate(path)
         if crate is None:
-            return True
-        if test_folder_name(path[len(crate.folder) + 5 :]):
             return True
         if crate.package not in self.cache:
             self.cache[crate.package] = test_modules(crate)
@@ -889,6 +971,20 @@ def stryker_plan(change: Change, exclusions: list[Exclusion]) -> tuple[dict[str,
     return out, errors
 
 
+def has_cargo_mutants() -> bool:
+    try:
+        result = subprocess.run(
+            ["cargo", "mutants", "--version"],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
 def list_mutants(package: str, diff: Path) -> int:
     result = subprocess.run(
         ["cargo", "mutants", "--list", "--json", "--in-diff", str(diff), "-p", package],
@@ -924,6 +1020,12 @@ def plan(args: argparse.Namespace) -> int:
     exclusions = load_exclusions()
     for warning in stale_exclusions(exclusions):
         print(annotation("warning", "Exclusion", warning))
+    widened = widened_exclusions(change, exclusions)
+    for warning in widened:
+        print(annotation("warning", "Exclusion added", warning))
+    if widened and args.summary:
+        with open(args.summary, "a", encoding="utf-8") as summary:
+            summary.write("## Exclusions\n\n" + "".join(f"- {warning}\n" for warning in widened))
     found = counted(change, exclusions)
     stryker, _ = stryker_plan(change, exclusions)
     outputs = {
@@ -935,7 +1037,18 @@ def plan(args: argparse.Namespace) -> int:
         diff = Path(args.shards)
         diff.write_bytes(rust_diff(change))
         include = []
+        checked = False
         for crate in crates():
+            # cargo-mutants only mutates the lines a change adds to .rs files.
+            if not any(path.endswith(".rs") for path in change.added(crate.folder)):
+                print(f"{crate.package}: no changed .rs lines")
+                continue
+            if not checked and not has_cargo_mutants():
+                raise SystemExit(
+                    "Counting the mutants in the changed .rs lines needs cargo-mutants, which"
+                    " isn't installed. Install it, or run pnpm check:changed with --no-mutation."
+                )
+            checked = True
             count = list_mutants(crate.package, diff)
             print(f"{crate.package}: {count} mutants in the changed lines")
             if not count:
@@ -999,6 +1112,13 @@ class FileCoverage:
     uncovered: list[int]
 
 
+def share_text(covered: int, total: int) -> str:
+    """The covered share as a percentage, rounded down so that a share just
+    under the threshold never shows as the threshold."""
+    tenths = 1000 * covered // total
+    return f"{tenths // 10}.{tenths % 10}%"
+
+
 def coverage(args: argparse.Namespace) -> int:
     change = Change(args.base, args.head)
     found = counted(change, load_exclusions())
@@ -1022,6 +1142,21 @@ def coverage(args: argparse.Namespace) -> int:
             data = hits.get(path)
             if data is None:
                 no_data.append(path)
+                # Vitest reports every file in src that a test could load,
+                # even one no test does, so a missing frontend file means the
+                # report doesn't match the change. Rust coverage has no data
+                # for code that Linux doesn't build.
+                if language == "Frontend":
+                    status = 1
+                    annotations.append(
+                        annotation(
+                            "error",
+                            "No coverage data",
+                            "Vitest's coverage report has no data for this file, which this"
+                            " change adds or changes. Check that vitest.config.ts includes it.",
+                            path,
+                        )
+                    )
                 continue
             lines_counted = [n for n in lines if n in data]
             if lines_counted:
@@ -1031,10 +1166,11 @@ def coverage(args: argparse.Namespace) -> int:
         if not total:
             out.append(f"| {language} | 0 | 0 | n/a | passes, nothing to count |")
         else:
-            share = 100 * (total - missed) / total
-            passes = share >= THRESHOLD
+            passes = 100 * (total - missed) >= THRESHOLD * total
             result = "passes" if passes else f"fails, under {THRESHOLD:g}%"
-            out.append(f"| {language} | {total} | {total - missed} | {share:.1f}% | {result} |")
+            out.append(
+                f"| {language} | {total} | {total - missed} | {share_text(total - missed, total)} | {result} |"
+            )
             if not passes:
                 status = 1
             kind = "warning" if passes else "error"
@@ -1059,7 +1195,10 @@ def coverage(args: argparse.Namespace) -> int:
                     f"| {code(r.path)} | {len(r.counted)} | {len(r.uncovered)}"
                     f" | {show_ranges(r.uncovered) or 'none'} |"
                 )
-        if no_data:
+        if no_data and language == "Frontend":
+            details += ["", "No frontend coverage data for these changed files, which fails the check:", ""]
+            details += [f"- {code(path)}" for path in no_data]
+        elif no_data:
             details += ["", f"No {language.lower()} coverage data for these changed files, so they don't count:", ""]
             details += [f"- {code(path)}" for path in no_data]
     out += [
@@ -1138,21 +1277,50 @@ def check_mutant(mutant: dict, lines: list[str]) -> tuple[str | None, list[str]]
     return None, problems
 
 
+# What cargo-mutants says about a mutant in outcomes.json.
+MUTANT_SUMMARIES = {"CaughtMutant", "MissedMutant", "Timeout", "Unviable"}
+
+
+def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
+    """The mutants cargo-mutants missed in `folder`, or why its results can't
+    be read. The plan only starts a run that has mutants to test, so a run
+    without any had a problem."""
+    outcomes = Path(folder) / "outcomes.json"
+    if not outcomes.is_file():
+        return [], f"{outcomes} is missing, so cargo-mutants didn't finish."
+    data = json.loads(outcomes.read_text(encoding="utf-8"))
+    missed = []
+    tested = 0
+    for outcome in data.get("outcomes", []) if isinstance(data, dict) else []:
+        scenario = outcome.get("scenario")
+        if scenario == "Baseline":
+            continue
+        if not isinstance(scenario, dict) or not isinstance(scenario.get("Mutant"), dict):
+            return [], f"{outcomes} has a scenario this check can't read: {json.dumps(scenario)[:200]}"
+        summary = outcome.get("summary")
+        if summary not in MUTANT_SUMMARIES:
+            return [], f"{outcomes} has a mutant whose summary is {json.dumps(summary)}, which this check doesn't know."
+        tested += 1
+        if summary == "MissedMutant":
+            missed.append(scenario["Mutant"])
+    if not tested:
+        return [], f"{outcomes} has no mutants, though the plan found some to test."
+    return missed, None
+
+
 def mutants(args: argparse.Namespace) -> int:
     missed = []
     for folder in args.folders:
-        outcomes = Path(folder) / "outcomes.json"
-        if not outcomes.exists():
-            continue
-        data = json.loads(outcomes.read_text(encoding="utf-8"))
-        for outcome in data.get("outcomes", []):
-            scenario = outcome.get("scenario")
-            if isinstance(scenario, dict) and outcome.get("summary") == "MissedMutant":
-                missed.append(scenario["Mutant"])
+        found, problem = read_outcomes(folder)
+        if problem is not None:
+            print(annotation("error", "No results", problem))
+            return 1
+        missed += found
     count = skipped = 0
     for mutant in sorted(missed, key=lambda m: (m["file"], m["span"]["start"]["line"])):
         path = mutant["file"]
-        lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
+        # cargo-mutants numbers lines by LF alone, as git does.
+        lines = (ROOT / path).read_bytes().decode("utf-8").split("\n")
         start = mutant["span"]["start"]
         description = mutant["name"].split(": ", 1)[-1]
         reason, problems = check_mutant(mutant, lines)
@@ -1211,6 +1379,7 @@ def main(argv: list[str]) -> int:
 
     sub = with_diff("plan", "say which checks have lines to check")
     sub.add_argument("--output", help="append key=value lines here, as for $GITHUB_OUTPUT")
+    sub.add_argument("--summary", help="append a Markdown list of the added exclusions here")
     sub.add_argument(
         "--shards", metavar="DIFF", help="write the Rust diff here and plan the mutant shards"
     )
