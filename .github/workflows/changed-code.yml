@@ -23,10 +23,11 @@ concurrency:
   group: changed-code-${{ github.ref }}
   cancel-in-progress: true
 
-# Swatinem/rust-cache puts every CARGO_ variable in its cache key. So each
-# job that restores a cache sets the same ones as the job that saved it,
-# build-linux in build.yml for coverage-rust and the full job in mutants.yml
-# for rust-mutants.
+# Swatinem/rust-cache puts every variable that isn't empty and whose name
+# starts with CARGO, CC, CFLAGS, CXX, CMAKE or RUST in its cache key, which
+# takes in RUSTFLAGS and RUST_BACKTRACE. So each job that restores a cache
+# sets the same ones as the job that saved it, build-linux in build.yml for
+# coverage-rust and the full job in mutants.yml for rust-mutants.
 env:
   CARGO_TERM_COLOR: always
   # The plugin links libmpv, and the app also links GTK and WebKitGTK. These
@@ -147,8 +148,8 @@ jobs:
             --title "Frontend changed-line coverage" --summary "$GITHUB_STEP_SUMMARY"
 
   # The same build and tests as build-linux in build.yml, which also measures
-  # Rust coverage, so this restores its cache. The two set the same CARGO_
-  # variables, which go into the cache key.
+  # Rust coverage, so this restores its cache. The two set the same cache key
+  # variables, which the note at the top lists.
   coverage-rust:
     needs: [plan, sidecar]
     if: ${{ !cancelled() && needs.plan.outputs.rust == 'true' }}
@@ -320,8 +321,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    # The same CARGO_ variables as the full job in mutants.yml, whose cache
-    # this restores.
+    # This sets the same cache key variables as the full job in mutants.yml,
+    # whose cache it restores. The note at the top lists them.
     env:
       # A mutant only needs a pass or a fail, so the test builds skip debug
       # info, as in mutants.yml.

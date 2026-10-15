@@ -119,7 +119,7 @@ jobs:
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries/
-          retention-days: 1
+          retention-days: 7
 
   # A run without the app skips the sidecar job, which would skip this one too
   # without the check here. When the sidecar fails, the app's shards fail at
