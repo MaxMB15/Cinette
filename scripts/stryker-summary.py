@@ -136,11 +136,16 @@ def annotation(
     )
 
 
+# What JavaScript's trim() strips, as Stryker does from a comment's reason.
+# Python's split() leaves out U+FEFF, so these all become spaces first.
+JS_SPACE = re.compile(r"[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]")
+
+
 def same_reason(text: str, reason: str) -> bool:
     """Whether `text` reads as `reason`, apart from case, spacing and final periods."""
 
     def plain(words: str) -> str:
-        return " ".join(words.split()).casefold().rstrip(". ")
+        return " ".join(JS_SPACE.sub(" ", words).split()).casefold().rstrip(". ")
 
     return plain(text) == plain(reason)
 

@@ -76,7 +76,8 @@ if [ "$IN_PLACE" = true ]; then
     exit 1
   fi
   for dir in $FIXTURE_DIRS; do
-    if [ -e "$SRC_TAURI/$dir" ]; then
+    # -e is false for a link to nothing, which cleanup would still delete.
+    if [ -e "$SRC_TAURI/$dir" ] || [ -L "$SRC_TAURI/$dir" ]; then
       FIXTURES_BEFORE+="$dir "
     fi
   done
