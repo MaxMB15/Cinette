@@ -96,6 +96,9 @@ jobs:
         run: ./scripts/build-libmpv.sh macos
 
       - name: Fetch ffmpeg sidecar (used for offline downloads)
+        # A release ships only the pinned build, never one made on the runner.
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: ./scripts/fetch-ffmpeg.sh macos
 
       - name: Set up Developer ID signing
@@ -228,6 +231,9 @@ jobs:
           echo "LD_LIBRARY_PATH=$(pwd)/libs/linux:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Fetch ffmpeg sidecar (used for offline downloads)
+        # A release ships only the pinned build, never one made on the runner.
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Build Tauri app

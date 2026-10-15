@@ -258,6 +258,9 @@ jobs:
         run: ./scripts/build-libmpv.sh macos
 
       - name: Fetch ffmpeg sidecar (used for offline downloads)
+        # Fails when the pinned build doesn't download, as the release would.
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: ./scripts/fetch-ffmpeg.sh macos
 
       - name: Build frontend
@@ -344,6 +347,9 @@ jobs:
           echo "LD_LIBRARY_PATH=$(pwd)/libs/linux:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Fetch ffmpeg sidecar (used for offline downloads)
+        # Fails when the pinned build doesn't download, as the release would.
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Set up the frontend
