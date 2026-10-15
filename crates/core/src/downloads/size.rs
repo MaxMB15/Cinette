@@ -68,6 +68,16 @@ fn is_text_type(content_type: &str) -> bool {
         || essence.ends_with("json")
 }
 
+/// A probe for the Changed code check, which no test runs yet.
+pub fn gate_probe(a: u32, b: u32) -> u32 {
+    a * 2 + b
+}
+
+/// A probe with a mutant that no test can catch.
+pub fn gate_probe_max(a: u32, b: u32) -> u32 {
+    if a >= b { a } else { b }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

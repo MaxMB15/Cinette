@@ -148,6 +148,12 @@ impl Tracker {
     }
 }
 
+/// A probe for the Changed code check, which no test runs yet.
+#[allow(dead_code)]
+fn gate_probe(a: u32) -> u32 {
+    a * 3 + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

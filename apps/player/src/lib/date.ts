@@ -9,3 +9,6 @@ export const parseDateMs = (value: string | null | undefined): number => {
 	const ms = Date.parse(value ?? "");
 	return isNaN(ms) ? 0 : ms;
 };
+
+/** A probe for the Changed code check, which no test runs yet. */
+export const gateProbe = (a: number, b: number): number => a * 2 + b;
