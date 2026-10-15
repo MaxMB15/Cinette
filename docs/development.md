@@ -427,11 +427,15 @@ change, like a change to types alone. A comment that turns off a change on a cha
 line gets a warning, so check that its reason still holds. The summary lists the
 changes that Stryker ignored.
 
-Stryker leaves out the changes that only touch class names, which are everything in a
-`className` attribute and in the arguments of `cn()` and `cva()`. The tests run in
-jsdom, which doesn't load Tailwind's CSS, so a test could only compare class strings.
+Stryker leaves out the changes that only touch class names. Those are everything in a
+`className` attribute, or in one whose name ends in `ClassName` like `labelClassName`,
+and in the arguments of `cn()` and `cva()`. They're also the arguments of a variant
+function like `buttonVariants`, which is a `const` in the same file set to what `cva()`
+returns. The tests run in jsdom, which doesn't load Tailwind's CSS, so a test could only
+compare class strings.
 [`stryker.class-names.mjs`](../apps/player/stryker.class-names.mjs) does that, and
-those changes get no warning.
+those changes get no warning. So the job fails for a comment that gives its reason,
+"Only changes class names.", as its own.
 
 `--mutate` can't take a file name with a comma, a glob
 character, a quote or a backslash, so the job fails for a changed file with such a
@@ -461,20 +465,25 @@ require that one. It runs three checks.
   written on one line counts once its file loads, and only the mutation check shows
   whether a test calls it. Vitest measures the frontend, and cargo-llvm-cov measures
   Rust on Linux. A pull request with no lines to count passes. The job summary has a
-  table of each file's uncovered changed lines, and each one gets an annotation.
+  table of each file's uncovered changed lines, and each one gets an annotation. Vitest
+  lists every frontend file a test could load, so a changed frontend file missing from
+  its report fails the check. A Rust file can be missing, since Linux doesn't build the
+  macOS and iOS code.
 - Stryker mutates the changed lines of the frontend, and a change that no test catches
   fails the job, as [Mutation testing](#mutation-testing) explains.
 - cargo-mutants mutates the changed lines of each crate, and a change that no test
   catches fails the job unless a skip comment covers it. A change that runs past the
   timeout counts as caught, and one that doesn't build doesn't count. The run is split
   into shards of about 100 changes for `mvp-core`, 55 for the plugin and 45 for the app,
-  at most eight a crate, so a shard takes about 12 minutes plus its build.
+  at most eight a crate, so a shard takes about 12 minutes plus its build. A shard that
+  writes no results, or results with no changes in them, fails.
 
 The lines that count are in the `.ts` and `.tsx` files in `apps/player/src` and in the
 `.rs` files in each crate's `src` folder. Tests don't count. That's `*.test.ts` and
-`*.test.tsx` files, `src/test`, `.d.ts` files, `tests.rs`, `*_tests.rs`, files in a
-`tests` folder, `#[cfg(test)]` modules and `#[test]` functions. Docs, workflows,
-scripts and anything else outside those folders don't count either.
+`*.test.tsx` files, `src/test`, `.d.ts` files, modules declared with `#[cfg(test)]`, in
+their own file or inline, and `#[test]` and `#[tokio::test]` functions. A Rust file
+named `tests.rs` counts like any other until a module declares it that way. Docs,
+workflows, scripts and anything else outside those folders don't count either.
 
 [`scripts/changed-code-exclude.toml`](../scripts/changed-code-exclude.toml) leaves out
 the code that no test in CI can run, and each entry says why. That's the macOS, iOS
@@ -483,7 +492,9 @@ setup, loading a stream into a real window, and the calls that keep the display 
 An entry names files with globs, and can name only some functions in a Rust file. A
 frontend file listed there is also left out of the Stryker check. The cargo-mutants
 check reads `.cargo/mutants.toml` instead. Keep the list short, and add only code that
-CI can't run. The plan job warns about an entry that matches nothing.
+CI can't run. The plan job warns about an entry that matches nothing. It also warns,
+and lists it in its summary, when a pull request adds or widens an entry so that it
+leaves out files or functions that the base commit's copy counts.
 
 A missed Rust change that does the same thing as the code can't fail any test. A
 comment then names the change's genre and says why, alone on the line before the
@@ -512,15 +523,20 @@ pnpm check:changed --base origin/main  # compare with where the branch left main
 ```
 
 It compares the working tree, untracked files included, with the commit where the
-branch left `origin/dev`, so fetch first. Each part needs its tools. Rust coverage needs
-cargo-llvm-cov and the llvm-tools component from [Tests and checks](#tests-and-checks),
-and Rust mutation testing needs cargo-mutants. The plugin and the app need libmpv,
+branch left `origin/dev`, so fetch first. The scripts need Python 3.11 or later as
+`python3`. The one macOS ships in `/usr/bin` is 3.9, so use one from Homebrew or
+python.org. Each part needs its tools. Rust coverage needs cargo-llvm-cov and the
+llvm-tools component from [Tests and checks](#tests-and-checks), and Rust mutation
+testing needs cargo-mutants when the change adds lines to a `.rs` file. The plugin and
+the app need libmpv,
 which the script finds in `libs/<os>` or in `MPV_LIB_DIR`. A worktree without `libs/`
 can point `MPV_LIB_DIR` at the main checkout's. The app also needs the ffmpeg sidecar,
 and the script builds the frontend when `apps/player/dist` is missing. cargo-mutants
 runs in a copy of the repo that leaves out what git ignores, so the app's mutants only
 run with `--in-place`, which changes your own files one at a time. That only runs in a
-linked worktree with every `.rs` change committed.
+linked worktree with every `.rs` change committed. A mutant can make the app's tests
+write `movies`, `recordings` and `series` folders into `apps/player/src-tauri`, and the
+script deletes the ones that weren't there before it started.
 
 ## Production build
 
