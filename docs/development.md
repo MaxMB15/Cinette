@@ -363,9 +363,11 @@ require that one. It runs three checks.
 
 - Tests must run at least 80% of the changed lines, counted apart for the frontend and
   for Rust. Only lines that the coverage tool can run count, so a comment, a blank line
-  or a type doesn't. Vitest measures the frontend, and cargo-llvm-cov measures Rust on
-  Linux. A pull request with no lines to count passes. The job summary has a table of
-  each file's uncovered changed lines, and each one gets an annotation.
+  or a type doesn't. A line counts as covered when any code on it runs, so a function
+  written on one line counts once its file loads, and only the mutation check shows
+  whether a test calls it. Vitest measures the frontend, and cargo-llvm-cov measures
+  Rust on Linux. A pull request with no lines to count passes. The job summary has a
+  table of each file's uncovered changed lines, and each one gets an annotation.
 - Stryker mutates the changed lines of the frontend, and a change that no test catches
   fails the job, as [Mutation testing](#mutation-testing) explains.
 - cargo-mutants mutates the changed lines of each crate, and a change that no test
