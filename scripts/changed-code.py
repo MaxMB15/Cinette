@@ -27,8 +27,10 @@ Subcommands:
              changed lines with `cargo mutants --list` and splits each crate
              into shards. It warns about each exclusion entry that leaves out
              more than the base commit's copy of the file does, about the
-             changed lines a function entry leaves out, and about the mutants
-             a new exclude_re, exclude_globs or #[mutants::skip] turns off.
+             changed lines a function entry leaves out, about each setting
+             the change adds to, removes from or changes in
+             .cargo/mutants.toml, and about each #[mutants::skip] it adds or
+             changes.
   stryker    The lines for Stryker to mutate and to check, as the frontend
              mutation job takes them.
   rust-diff  The diff that cargo-mutants reads with --in-diff.
@@ -39,7 +41,8 @@ Subcommands:
              no data at all.
   mutants    Fails for each mutant cargo-mutants missed, unless a skip comment
              covers it, and when a folder's outcomes.json is missing, lists no
-             mutants or has a result this can't read.
+             mutants or has a result this can't read. A missed mutant in a file
+             this can't read fails too.
 
 A skip comment says why no test can catch a Rust mutant. It sits alone on the
 line before the mutant's line, names the mutant's genre and gives a reason:
@@ -73,8 +76,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDE_FILE = "scripts/changed-code-exclude.toml"
 MUTANTS_CONFIG = ".cargo/mutants.toml"
-# An attribute that turns off every mutant in an item, like #[mutants::skip].
-MUTANTS_SKIP = re.compile(r"\bmutants\s*::\s*skip\b")
 
 # The share of the counted changed lines that tests must run, for the
 # frontend and for Rust each.
@@ -498,54 +499,137 @@ def widened_exclusions(change: Change, exclusions: list[Exclusion]) -> list[str]
     return out
 
 
-def mutant_filters(data: bytes | None) -> list[tuple[str, str]]:
-    """The exclude_re and exclude_globs entries of a copy of
-    .cargo/mutants.toml, each with its key. Empty when there's no copy or one
-    this can't read."""
+def mutants_settings(data: bytes | None) -> dict | None:
+    """A copy of .cargo/mutants.toml as a table. Empty when there's no copy,
+    and None when this can't read it."""
     if data is None:
-        return []
+        return {}
     try:
-        config = tomllib.loads(data.decode("utf-8"))
+        return tomllib.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+
+
+def setting_text(value: object) -> str:
+    """A setting's value for a warning, cut short when it's long."""
+    text = json.dumps(value, default=str, ensure_ascii=False)
+    return code(text if len(text) <= 80 else text[:77] + "...")
+
+
+def string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+MUTANTS_CHECK = (
+    " Check that cargo-mutants still makes the mutants it should and doesn't count"
+    " a missed one as caught."
+)
+
+
+def changed_mutants_settings(change: Change) -> list[tuple[str, str]]:
+    """A title and a warning for each setting the change adds to, removes from
+    or changes in .cargo/mutants.toml. cargo-mutants reads them in this change
+    and every later one, and settings like examine_re or timeout_multiplier
+    can leave out mutants or count missed ones as caught. An entry the change
+    adds to exclude_re or exclude_globs gets a warning of its own, and one it
+    removes gets none, since cargo-mutants then makes more mutants. A change
+    to comments or spacing alone gets no warning."""
+    before, after = show(change.base, MUTANTS_CONFIG), show(change.head, MUTANTS_CONFIG)
+    if before == after:
         return []
+    base, head = mutants_settings(before), mutants_settings(after)
+    if base is None or head is None:
+        copy = "the base commit's copy" if base is None else "the new copy"
+        return [
+            (
+                "Mutants settings",
+                f"{MUTANTS_CONFIG} changes, and this can't read {copy}, so it can't say"
+                " which settings change." + MUTANTS_CHECK,
+            )
+        ]
     out = []
-    for key in ("exclude_re", "exclude_globs"):
-        values = config.get(key, [])
-        if isinstance(values, list):
-            out += [(key, value) for value in values if isinstance(value, str)]
+    for key in sorted(base.keys() | head.keys()):
+        old, new = base.get(key), head.get(key)
+        if old == new:
+            continue
+        if key in ("exclude_re", "exclude_globs") and string_list(old or []) and string_list(new or []):
+            out += [
+                (
+                    "Mutants left out",
+                    f"{MUTANTS_CONFIG} adds {code(value)} to {key}, which the base commit's copy"
+                    " doesn't have, so cargo-mutants makes none of the mutants it matches."
+                    " Check that no test can catch them.",
+                )
+                for value in new or []
+                if value not in (old or [])
+            ]
+        elif key not in base:
+            out.append(
+                (
+                    "Mutants settings",
+                    f"{MUTANTS_CONFIG} sets {key} to {setting_text(new)}, which the base"
+                    " commit's copy doesn't set." + MUTANTS_CHECK,
+                )
+            )
+        elif key not in head:
+            out.append(
+                (
+                    "Mutants settings",
+                    f"{MUTANTS_CONFIG} no longer sets {key}, which the base commit's copy sets"
+                    f" to {setting_text(old)}." + MUTANTS_CHECK,
+                )
+            )
+        else:
+            out.append(
+                (
+                    "Mutants settings",
+                    f"{MUTANTS_CONFIG} changes {key} from {setting_text(old)} to"
+                    f" {setting_text(new)}." + MUTANTS_CHECK,
+                )
+            )
     return out
 
 
-def new_mutant_filters(change: Change) -> list[str]:
-    """Warnings for each exclude_re or exclude_globs entry the change adds to
-    .cargo/mutants.toml, since cargo-mutants then makes no mutant it matches,
-    in this change or any other."""
-    base = set(mutant_filters(show(change.base, MUTANTS_CONFIG)))
-    return [
-        f"{MUTANTS_CONFIG} adds {code(value)} to {key}, which the base commit's copy doesn't"
-        " have, so cargo-mutants makes none of the mutants it matches. Check that no test can"
-        " catch them."
-        for key, value in mutant_filters(show(change.head, MUTANTS_CONFIG))
-        if (key, value) not in base
-    ]
+def skip_attributes(text: str) -> list[tuple[int, int]]:
+    """The first and last lines of each attribute in Rust source that names
+    mutants and then skip, like #[mutants::skip] or
+    #[cfg_attr(test, mutants::skip)], however it's split across lines or
+    broken up by comments."""
+    tokens = rust_tokens(text)
+    out = []
+    for i, (line, tok) in enumerate(tokens):
+        if tok != "#":
+            continue
+        k = i + 1
+        if k < len(tokens) and tokens[k][1] == "!":
+            k += 1
+        if k >= len(tokens) or tokens[k][1] != "[":
+            continue
+        end = matching(tokens, k)
+        words = [word for _, word in tokens[k + 1 : end]]
+        if "mutants" in words and "skip" in words[words.index("mutants") + 1 :]:
+            out.append((line, tokens[end][0]))
+    return out
 
 
 def new_mutant_skips(change: Change) -> list[tuple[str, int, str]]:
-    """Each line the change adds to a crate's .rs files with a
-    #[mutants::skip], and a warning for it."""
+    """Each #[mutants::skip] the change adds to or changes in a crate's .rs
+    files, as its file, its first changed line and a warning."""
     out = []
     for crate in crates():
         for path, lines in sorted(change.added(crate.folder).items()):
             if not path.endswith(".rs"):
                 continue
-            text = change.source(path).decode("utf-8", "replace").split("\n")
-            for number in lines:
-                if number <= len(text) and MUTANTS_SKIP.search(text[number - 1]):
+            added = set(lines)
+            text = change.source(path).decode("utf-8", "replace")
+            for first, last in skip_attributes(text):
+                changed = [number for number in range(first, last + 1) if number in added]
+                if changed:
                     out.append(
                         (
                             path,
-                            number,
-                            f"{path} adds a mutants::skip on line {number}, so cargo-mutants"
+                            changed[0],
+                            f"{path} adds a mutants::skip on line {changed[0]}, so cargo-mutants"
                             " makes no mutant in the item it marks, in this change or any"
                             " other. Check that no test can catch them.",
                         )
@@ -897,7 +981,17 @@ def test_modules(crate: Crate) -> tuple[set[str], list[str]]:
     root = ROOT.resolve()
     for source in sorted((root / crate.folder / "src").rglob("*.rs")):
         rel = source.relative_to(root).as_posix()
-        scan = scan_rust(source.read_text(encoding="utf-8"))
+        try:
+            text = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            # A file this can't read might declare test modules, so the check
+            # stops rather than count their lines.
+            what = "is a link to nothing" if source.is_symlink() and not source.exists() else "can't be read"
+            raise SystemExit(
+                f"{rel} {what}, so the check can't tell whether it declares test modules."
+                f" Fix or delete it. {error}"
+            ) from None
+        scan = scan_rust(text)
         here = source.parent
         children = here if source.name in ("mod.rs", "lib.rs", "main.rs") else here / source.stem
         for inside, name, literal in scan.test_mods:
@@ -1191,8 +1285,8 @@ def plan(args: argparse.Namespace) -> int:
             )
         )
         notes.append(warning)
-    for warning in new_mutant_filters(change):
-        print(annotation("warning", "Mutants left out", warning, MUTANTS_CONFIG))
+    for title, warning in changed_mutants_settings(change):
+        print(annotation("warning", title, warning, MUTANTS_CONFIG))
         notes.append(warning)
     for path, line, warning in new_mutant_skips(change):
         print(annotation("warning", "Mutants left out", warning, path, line))
@@ -1477,13 +1571,13 @@ def has_line(span: object) -> bool:
     """Whether a span in outcomes.json has a start line."""
     start = span.get("start") if isinstance(span, dict) else None
     line = start.get("line") if isinstance(start, dict) else None
-    return isinstance(line, int) and not isinstance(line, bool)
+    return isinstance(line, int) and not isinstance(line, bool) and line >= 1
 
 
 def mutant_problem(mutant: dict) -> str | None:
     """What a mutant in outcomes.json lacks that the check reads, if anything."""
-    if not isinstance(mutant.get("file"), str) or not isinstance(mutant.get("name"), str):
-        return "no file or name"
+    if not all(isinstance(mutant.get(key), str) for key in ("file", "name", "genre")):
+        return "no file, name or genre"
     if not has_line(mutant.get("span")):
         return "no line"
     function = mutant.get("function")
@@ -1501,7 +1595,8 @@ def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
         return [], f"{outcomes} is missing, so cargo-mutants didn't finish."
     try:
         data = json.loads(outcomes.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (ValueError, RecursionError) as error:
+        # ValueError covers bad UTF-8, bad JSON and a number too long to read.
         return [], f"{outcomes} isn't JSON this check can read: {error}"
     entries = data.get("outcomes") if isinstance(data, dict) else None
     if not isinstance(entries, list):
@@ -1520,7 +1615,7 @@ def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
         if problem is not None:
             return [], f"{outcomes} has a mutant with {problem}: {json.dumps(scenario['Mutant'])[:200]}"
         summary = outcome.get("summary")
-        if summary not in MUTANT_SUMMARIES:
+        if not isinstance(summary, str) or summary not in MUTANT_SUMMARIES:
             return [], f"{outcomes} has a mutant whose summary is {json.dumps(summary)}, which this check doesn't know."
         tested += 1
         if summary == "MissedMutant":
@@ -1528,6 +1623,20 @@ def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
     if not tested:
         return [], f"{outcomes} has no mutants, though the plan found some to test."
     return missed, None
+
+
+def repo_lines(path: str) -> list[str] | None:
+    """The lines of a file in the repo as cargo-mutants numbers them, or None
+    when it isn't a UTF-8 file inside the repo."""
+    root = ROOT.resolve()
+    file = (root / path).resolve()
+    if not file.is_relative_to(root) or not file.is_file():
+        return None
+    try:
+        # cargo-mutants numbers lines by LF alone, as git does.
+        return file.read_bytes().decode("utf-8").split("\n")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def mutants(args: argparse.Namespace) -> int:
@@ -1541,10 +1650,17 @@ def mutants(args: argparse.Namespace) -> int:
     count = skipped = 0
     for mutant in sorted(missed, key=lambda m: (m["file"], m["span"]["start"]["line"])):
         path = mutant["file"]
-        # cargo-mutants numbers lines by LF alone, as git does.
-        lines = (ROOT / path).read_bytes().decode("utf-8").split("\n")
         start = mutant["span"]["start"]
         description = mutant["name"].split(": ", 1)[-1]
+        lines = repo_lines(path)
+        if lines is None:
+            count += 1
+            message = (
+                f"cargo-mutants made {description}, and no test failed. This check can't read"
+                f" {path} as a UTF-8 file in the repo, so it can't look for a skip comment."
+            )
+            print(annotation("error", "Mutant missed", message, path, start["line"]))
+            continue
         reason, problems = check_mutant(mutant, lines)
         genre = mutant.get("genre", "")
         if reason is not None:

@@ -247,6 +247,90 @@ class WidenedExclusionTest(RepoTest):
         self.assertIn("::warning file=crates/core/src/lib.rs,line=4,title=Mutants left out::", out)
         self.assertIn("adds a mutants::skip on line 4,", self.summary.read_text(encoding="utf-8"))
 
+    def test_warns_about_any_changed_mutants_setting(self) -> None:
+        self.write(
+            {
+                ".cargo/mutants.toml": 'exclude_re = ["replace one"]\ntimeout_multiplier = 3.0\n'
+                "minimum_test_timeout = 60\n"
+            }
+        )
+        self.commit("settings")
+        self.write(
+            {
+                ".cargo/mutants.toml": 'examine_re = ["^nothing$"]\ntimeout_multiplier = 0.01\n'
+                "exclude_re = []\n"
+            }
+        )
+        self.commit("change the settings")
+        out = self.plan()
+        self.assertIn("::warning file=.cargo/mutants.toml,title=Mutants settings::", out)
+        self.assertIn('sets examine_re to `["^nothing$"]`, which the base commit\'s copy doesn\'t set.', out)
+        self.assertIn("changes timeout_multiplier from `3.0` to `0.01`.", out)
+        self.assertIn("no longer sets minimum_test_timeout, which the base commit's copy sets to `60`.", out)
+        # Taking an entry out of exclude_re makes more mutants, so it's fine.
+        self.assertNotIn("exclude_re", out)
+        self.assertNotIn("Mutants left out", out)
+        self.assertIn("examine_re", self.summary.read_text(encoding="utf-8"))
+
+    def test_quiet_when_mutants_settings_only_change_comments(self) -> None:
+        self.write({".cargo/mutants.toml": 'exclude_re = ["replace one"]\n'})
+        self.commit("settings")
+        self.write({".cargo/mutants.toml": '# Why.\nexclude_re = [\n    "replace one",\n]\n'})
+        self.commit("explain the settings")
+        out = self.plan()
+        self.assertNotIn("Mutants", out)
+        self.assertFalse(self.summary.exists())
+
+    def test_warns_about_mutants_settings_it_cannot_read(self) -> None:
+        self.write({".cargo/mutants.toml": "exclude_re = [\n"})
+        self.commit("break the settings")
+        out = self.plan()
+        self.assertIn("title=Mutants settings::", out)
+        self.assertIn("can't read the new copy", out)
+
+    def test_warns_about_a_split_mutants_skip(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + "#[mutants::\n    skip]\npub fn two() -> u8 {\n    2\n}\n"
+                "#[mutants::/* x */skip]\npub fn three() -> u8 {\n    3\n}\n"
+                "#[cfg_attr(test, mutants::skip)]\npub fn four() -> u8 {\n    4\n}\n"
+            }
+        )
+        self.commit("skip three ways")
+        out = self.plan()
+        for line in (4, 9, 13):
+            self.assertIn(f"::warning file=crates/core/src/lib.rs,line={line},title=Mutants left out::", out)
+        self.assertEqual(out.count("title=Mutants left out::"), 3)
+
+    def test_warns_about_a_changed_line_in_an_old_mutants_skip(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": "#[mutants::\n    allow]\n" + WORKSPACE["crates/core/src/lib.rs"]
+            }
+        )
+        self.commit("allow")
+        self.write(
+            {
+                "crates/core/src/lib.rs": "#[mutants::\n    skip]\n" + WORKSPACE["crates/core/src/lib.rs"]
+            }
+        )
+        self.commit("skip")
+        out = self.plan()
+        self.assertIn("::warning file=crates/core/src/lib.rs,line=2,title=Mutants left out::", out)
+
+    def test_quiet_about_mutants_skip_in_comments_and_strings(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + "// A #[mutants::skip] would hide this.\n"
+                '/// Not #[mutants::skip].\n#[doc = "mutants::skip"]\n#[allow(dead_code)]\n'
+                'pub fn two() -> &\'static str {\n    "#[mutants::skip]"\n}\n'
+            }
+        )
+        self.commit("mention skip")
+        self.assertNotIn("Mutants left out", self.plan())
+
     def test_lists_three_and_counts_the_rest(self) -> None:
         self.assertEqual(cc.listing(["a"], "files"), "a")
         self.assertEqual(cc.listing(["a", "b"], "files"), "a and b")
@@ -396,6 +480,14 @@ class TestCodeTest(RepoTest):
             {"crates/core/src/lib.rs": [4, 5], "crates/core/src/extra.rs": [1]},
         )
 
+    def test_a_link_to_nothing_stops_the_check(self) -> None:
+        self.write({"crates/core/src/lib.rs": "pub fn one() -> u8 {\n    2\n}\n"})
+        self.commit("change one")
+        (self.root / "crates/core/src/gone.rs").symlink_to("missing.rs")
+        with self.assertRaises(SystemExit) as caught:
+            self.counted_rust()
+        self.assertIn("crates/core/src/gone.rs is a link to nothing,", str(caught.exception))
+
     def test_a_path_visibility_is_one_qualifier(self) -> None:
         scan = cc.scan_rust(
             "#[cfg(test)]\npub(in crate::player) fn helper() -> Result<(), String> {\n"
@@ -524,6 +616,58 @@ class MutantsTest(RepoTest):
         status, out = self.mutants()
         self.assertEqual(status, 1)
         self.assertIn("has a mutant with a function with no line", out)
+
+    def test_results_of_the_wrong_shape_fail(self) -> None:
+        def with_mutant(**changes: object) -> dict:
+            return {"scenario": {"Mutant": {**mutant(2), **changes}}, "summary": "MissedMutant"}
+
+        cases = {
+            "a list": [],
+            "outcomes that aren't a list": {"outcomes": {"scenario": "Baseline"}},
+            "a summary that's a list": {
+                "outcomes": [{"scenario": {"Mutant": mutant(2)}, "summary": ["MissedMutant"]}]
+            },
+            "a summary that's an object": {
+                "outcomes": [{"scenario": {"Mutant": mutant(2)}, "summary": {"MissedMutant": 1}}]
+            },
+            "a scenario that's a string": {"outcomes": [{"scenario": "Mutant", "summary": "MissedMutant"}]},
+            "a mutant that's a list": {"outcomes": [{"scenario": {"Mutant": []}, "summary": "MissedMutant"}]},
+            "a file that's a number": {"outcomes": [with_mutant(file=1)]},
+            "a name that's missing": {"outcomes": [with_mutant(name=None)]},
+            "a genre that's a list": {"outcomes": [with_mutant(genre=["FnValue"])]},
+            "a span that's a list": {"outcomes": [with_mutant(span=[2])]},
+            "a line that's a string": {"outcomes": [with_mutant(span={"start": {"line": "2"}})]},
+            "a line that's true": {"outcomes": [with_mutant(span={"start": {"line": True}})]},
+            "a line of 0": {"outcomes": [with_mutant(span={"start": {"line": 0}})]},
+            "a function that's a string": {"outcomes": [with_mutant(function="add")]},
+        }
+        for name, data in cases.items():
+            with self.subTest(name):
+                (self.out / "outcomes.json").write_text(json.dumps(data), encoding="utf-8")
+                status, out = self.mutants()
+                self.assertEqual(status, 1)
+                self.assertIn("::error title=No results::", out)
+        (self.out / "outcomes.json").write_text('{"outcomes": [' + "[" * 100000 + "]" * 100000 + "]}")
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("isn't JSON this check can read", out)
+
+    def test_a_missed_mutant_in_a_file_it_cannot_read_fails(self) -> None:
+        (self.root.parent / f"{self.root.name}-outside.rs").write_text("fn a() {}\n", encoding="utf-8")
+        self.addCleanup((self.root.parent / f"{self.root.name}-outside.rs").unlink)
+        self.write({"crates/core/src/latin1.rs": b"// caf\xe9\n"})
+        for path in (
+            "crates/core/src/gone.rs",
+            f"../{self.root.name}-outside.rs",
+            "crates/core/src",
+            "crates/core/src/latin1.rs",
+        ):
+            with self.subTest(path):
+                self.outcomes({"scenario": {"Mutant": {**mutant(2), "file": path}}, "summary": "MissedMutant"})
+                status, out = self.mutants()
+                self.assertEqual(status, 1)
+                self.assertIn(f"::error file={path},line=2,title=Mutant missed::", out)
+                self.assertIn(f"can't read {path} as a UTF-8 file in the repo", out)
 
     def test_an_unknown_summary_fails(self) -> None:
         self.outcomes({"scenario": {"Mutant": mutant(2)}, "summary": "Failure"})
