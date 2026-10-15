@@ -256,4 +256,25 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn the_ffmpeg_build_has_every_muxer_a_download_picks() {
+        // scripts/build-ffmpeg.sh builds only the muxers on its MUXERS line.
+        let script = include_str!("../../../../scripts/build-ffmpeg.sh");
+        let built: Vec<&str> = script
+            .lines()
+            .find_map(|l| l.strip_prefix("MUXERS="))
+            .expect("scripts/build-ffmpeg.sh should have a MUXERS= line")
+            .split(',')
+            .collect();
+        for container in [
+            "mp4", "m4v", "mov", "ts", "mpegts", "m2ts", "webm", "avi", "mkv", "flv",
+        ] {
+            let muxer = muxer_for_container(container);
+            assert!(
+                built.contains(&muxer),
+                "scripts/build-ffmpeg.sh should build the {muxer} muxer, which .{container} uses"
+            );
+        }
+    }
 }

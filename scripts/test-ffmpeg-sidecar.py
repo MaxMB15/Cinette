@@ -7,16 +7,18 @@ Test the ffmpeg that the app runs for downloads and recordings.
 
 `media` makes short test files with a full ffmpeg, one with the libx264,
 libx265, libvpx-vp9, libopus and libmp3lame encoders. `test` makes a
-throwaway certificate with the openssl command, serves those files over HTTP
-and HTTPS on 127.0.0.1, runs the ffmpeg under test with the app's own
-arguments and reads back what it wrote. No case uses a login, and ffmpeg runs
-without the proxy settings. The only thing that may leave this machine is a
-DNS query for a name ending in .invalid, which RFC 6761 reserves so that it
+throwaway certificate with the openssl command, and serves those files on
+127.0.0.1 over HTTP, over HTTPS, from a server that only takes TLS 1.3 and
+from one that only takes TLS 1.2. It runs the ffmpeg under test with the app's
+own arguments and reads back what it wrote, with the ffmpeg that --reader
+names, or else with the ffmpeg under test. No case uses a login, and ffmpeg
+runs without the proxy settings. The only thing that may leave this machine is
+a DNS query for a name ending in .invalid, which RFC 6761 reserves so that it
 never exists.
 
 Usage:
   python3 -I scripts/test-ffmpeg-sidecar.py media FULL_FFMPEG FOLDER
-  python3 -I scripts/test-ffmpeg-sidecar.py test FFMPEG FOLDER
+  python3 -I scripts/test-ffmpeg-sidecar.py test FFMPEG FOLDER [--reader FULL_FFMPEG]
 
 .github/workflows/ffmpeg-build.yml runs both for the builds that
 scripts/build-ffmpeg.sh makes.
@@ -160,7 +162,7 @@ def make_certificate(folder: Path) -> None:
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, root: Path, tls: Path | None, tls13_only: bool = False) -> None:
+    def __init__(self, root: Path, tls: Path | None, tls_version: ssl.TLSVersion | None = None) -> None:
         super().__init__(("127.0.0.1", 0), Handler)
         self.root = root.resolve()
         self.stop = threading.Event()
@@ -168,8 +170,9 @@ class Server(http.server.ThreadingHTTPServer):
         if tls is not None:
             self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             self.context.load_cert_chain(tls / "cert.pem", tls / "key.pem")
-            if tls13_only:
-                self.context.minimum_version = ssl.TLSVersion.TLSv1_3
+            if tls_version is not None:
+                self.context.minimum_version = tls_version
+                self.context.maximum_version = tls_version
         scheme = "https" if tls is not None else "http"
         self.url = f"{scheme}://127.0.0.1:{self.server_address[1]}"
         threading.Thread(target=self.serve_forever, daemon=True).start()
@@ -317,7 +320,8 @@ class Case:
     # crates/core/src/downloads/recording.rs reads these lines.
     error: str = ""
     recording: bool = False
-    # "http", "https" or "tls13", a server that only takes TLS 1.3.
+    # "http", "https", or "tls13" or "tls12", a server that only takes that
+    # TLS version.
     server: str = "http"
     # Write "q" to ffmpeg after this many seconds, as the app does to stop a
     # recording.
@@ -359,6 +363,8 @@ def cases() -> list[Case]:
         Case("HLS with AES-128 over HTTPS", "/media/hls-aes/index.m3u8", "mkv", av, server="https"),
         Case("MP4 from a server that only takes TLS 1.3", "/media/av.mp4", "mp4", av,
              server="tls13"),
+        Case("MP4 from a server that only takes TLS 1.2", "/media/av.mp4", "mp4", av,
+             server="tls12"),
         # The long file, since ffmpeg reads most of a short one while it
         # opens it.
         Case("A connection that drops halfway", "/drop/live.ts", "ts", av, length=LIVE_LENGTH),
@@ -428,8 +434,12 @@ def run_ffmpeg(ffmpeg: str, args: list[str], timeout: float, quit_after: float |
         try:
             proc.wait(timeout=quit_after)
         except subprocess.TimeoutExpired:
-            proc.stdin.write(b"q")
-            proc.stdin.flush()
+            # ffmpeg may stop on its own just before this.
+            try:
+                proc.stdin.write(b"q")
+                proc.stdin.flush()
+            except BrokenPipeError:
+                pass
     try:
         code: int | None = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -438,7 +448,10 @@ def run_ffmpeg(ffmpeg: str, args: list[str], timeout: float, quit_after: float |
         code = None
     for reader in readers:
         reader.join()
-    proc.stdin.close()
+    try:
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
     return Run(
         code,
         output.get("stdout", b"").decode(errors="replace"),
@@ -450,11 +463,11 @@ STREAM = re.compile(r"^\s*Stream #0:\d+\S*: (?:Video|Audio|Subtitle|Data): (\w+)
 DURATION = re.compile(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)")
 
 
-def read_back(ffmpeg: str, path: Path) -> tuple[list[str], float | None, str]:
+def read_back(reader: str, path: Path) -> tuple[list[str], float | None, str]:
     # Without an output, ffmpeg lists what the file holds and exits with an
     # error.
     result = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", str(path)],
+        [reader, "-hide_banner", "-i", str(path)],
         capture_output=True,
         text=True,
         errors="replace",
@@ -469,7 +482,28 @@ def read_back(ffmpeg: str, path: Path) -> tuple[list[str], float | None, str]:
     return sorted(STREAM.findall(result.stderr)), seconds, result.stderr
 
 
-def check(ffmpeg: str, case: Case, urls: dict[str, str], out: Path) -> str:
+def top_level_boxes(path: Path) -> list[str]:
+    """The types of the boxes at the top level of an MP4 or MOV file, in order."""
+    total = path.stat().st_size
+    boxes = []
+    offset = 0
+    with path.open("rb") as file:
+        while offset + 8 <= total:
+            file.seek(offset)
+            header = file.read(16)
+            size = int.from_bytes(header[:4], "big")
+            if size == 1:
+                size = int.from_bytes(header[8:16], "big")
+            elif size == 0:
+                size = total - offset
+            if size < 8:
+                break
+            boxes.append(header[4:8].decode("latin-1"))
+            offset += size
+    return boxes
+
+
+def check(ffmpeg: str, reader: str, case: Case, urls: dict[str, str], out: Path) -> str:
     """What went wrong in `case`, or nothing."""
     url = case.path if "://" in case.path else urls[case.server] + case.path
     dest = out / f"{re.sub(r'[^a-z0-9]+', '-', case.name.lower())}.{case.container}.part"
@@ -480,6 +514,11 @@ def check(ffmpeg: str, case: Case, urls: dict[str, str], out: Path) -> str:
     if case.error:
         if not re.search(case.error, errors.lower()):
             return f"no error line matched {case.error!r}. ffmpeg said: {errors or 'nothing'}"
+        # The app counts a download as done when ffmpeg exits with 0. A
+        # recording goes by when ffmpeg stopped and by its error lines, and
+        # ffmpeg exits with 0 when a live stream stops sending.
+        if run.code == 0 and not case.recording:
+            return f"ffmpeg exited with 0. It said: {errors}"
         return ""
     if run.code != 0:
         return f"ffmpeg exited with {run.code}: {errors}"
@@ -490,7 +529,13 @@ def check(ffmpeg: str, case: Case, urls: dict[str, str], out: Path) -> str:
         return f"the progress gave no size above 0: {sizes}"
     if not dest.is_file() or dest.stat().st_size == 0:
         return "ffmpeg wrote nothing"
-    codecs, seconds, listing = read_back(ffmpeg, dest)
+    if not case.recording and MUXERS[case.container] in ("mp4", "mov"):
+        # The app asks for -movflags +faststart, which moves the index before
+        # the media, so a player can start the file before it has all of it.
+        boxes = top_level_boxes(dest)
+        if "moov" not in boxes or "mdat" not in boxes or boxes.index("moov") > boxes.index("mdat"):
+            return f"the moov box doesn't come before mdat: {boxes}"
+    codecs, seconds, listing = read_back(reader, dest)
     if codecs != sorted(case.codecs):
         return f"the file holds {codecs}, not {sorted(case.codecs)}:\n{listing}"
     if case.length is not None and (seconds is None or abs(seconds - case.length) > 0.5):
@@ -510,7 +555,8 @@ def listing(ffmpeg: str, flag: str) -> str:
 
 def check_build(ffmpeg: str) -> list[tuple[str, str]]:
     failures = []
-    protocols = listing(ffmpeg, "-protocols").split("Output:")[0].split()
+    # The list starts with "Supported file protocols:", which names "file".
+    protocols = listing(ffmpeg, "-protocols").partition("Input:")[2].split("Output:")[0].split()
     missing = sorted(PROTOCOLS - set(protocols))
     if missing:
         failures.append(("Protocols", f"missing {missing}"))
@@ -528,7 +574,12 @@ def check_build(ffmpeg: str) -> list[tuple[str, str]]:
     return failures
 
 
-def test(ffmpeg: str, folder: Path) -> int:
+def test(ffmpeg: str, folder: Path, reader: str) -> int:
+    # macOS's own /usr/bin/python3 uses LibreSSL, which has no TLS 1.3.
+    if not ssl.HAS_TLSv1_3:
+        print(f"This Python's ssl module, {ssl.OPENSSL_VERSION}, has no TLS 1.3.", file=sys.stderr)
+        print("Run the test with a Python built with OpenSSL, such as Homebrew's.", file=sys.stderr)
+        return 2
     # The servers load the certificate and key as they start, so the key is
     # gone before any case runs.
     with tempfile.TemporaryDirectory() as tls:
@@ -536,7 +587,8 @@ def test(ffmpeg: str, folder: Path) -> int:
         servers = {
             "http": Server(folder / "www", None),
             "https": Server(folder / "www", Path(tls)),
-            "tls13": Server(folder / "www", Path(tls), tls13_only=True),
+            "tls13": Server(folder / "www", Path(tls), ssl.TLSVersion.TLSv1_3),
+            "tls12": Server(folder / "www", Path(tls), ssl.TLSVersion.TLSv1_2),
         }
     urls = {name: server.url for name, server in servers.items()}
     failures = check_build(ffmpeg)
@@ -546,7 +598,7 @@ def test(ffmpeg: str, folder: Path) -> int:
 
     def timed(case: Case, out: Path) -> tuple[str, float]:
         started = time.monotonic()
-        why = check(ffmpeg, case, urls, out)
+        why = check(ffmpeg, reader, case, urls, out)
         return why, time.monotonic() - started
 
     # The cases run side by side, since a few wait half a minute on ffmpeg's
@@ -573,11 +625,12 @@ def main() -> int:
     parser.add_argument("command", choices=("media", "test"))
     parser.add_argument("ffmpeg")
     parser.add_argument("folder", type=Path)
+    parser.add_argument("--reader", help="a full ffmpeg that reads back what the test wrote")
     options = parser.parse_args()
     if options.command == "media":
         make_media(options.ffmpeg, options.folder)
         return 0
-    return test(options.ffmpeg, options.folder)
+    return test(options.ffmpeg, options.folder, options.reader or options.ffmpeg)
 
 
 if __name__ == "__main__":
