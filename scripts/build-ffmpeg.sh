@@ -27,6 +27,11 @@ set -euo pipefail
 # scripts/fetch-ffmpeg.sh pins, and docs/development.md explains how.
 
 FFMPEG_VERSION=8.1.3
+# FFMPEG_BUILD goes in the archive's name, so each build gets its own. Raise
+# it for a new build of the same ffmpeg, such as one with a new OpenSSL, and
+# set it back to 1 for a new ffmpeg. Older commits pin the archives already on
+# the pre-release, so a new build never replaces one.
+FFMPEG_BUILD=1
 FFMPEG_SHA256=7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3
 # OpenSSL for macOS, from its 3.5 long-term support series.
 OPENSSL_VERSION=3.5.9
@@ -243,7 +248,7 @@ fi
 
 cp ffmpeg "$OUT/ffmpeg"
 {
-  echo "ffmpeg $FFMPEG_VERSION, built by scripts/build-ffmpeg.sh"
+  echo "ffmpeg $FFMPEG_VERSION, build $FFMPEG_BUILD of scripts/build-ffmpeg.sh"
   echo "Source: ffmpeg-$FFMPEG_VERSION.tar.xz, SHA-256 $FFMPEG_SHA256"
   echo "License: $LICENSE"
   echo "Built on: $(uname -sm), $(if [[ "$PLATFORM" == macos ]]; then echo "macOS $(sw_vers -productVersion)"; else sed -n 's/^PRETTY_NAME="\(.*\)"/\1/p' /etc/os-release; fi)"

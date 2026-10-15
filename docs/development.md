@@ -142,10 +142,13 @@ To move to a new ffmpeg:
 
 1. Download the release tarball and its `.asc` signature from ffmpeg.org, and check
    the signature. Set `FFMPEG_VERSION` and `FFMPEG_SHA256` in `build-ffmpeg.sh`,
-   and `FFMPEG_VERSION` for macOS and Linux in `fetch-ffmpeg.sh`. The workflow
-   fails when the two scripts name different versions. For a new series, also
-   set `MIRROR` in both scripts. For OpenSSL, check its tarball against the keys
-   at openssl-library.org and set `OPENSSL_VERSION` and `OPENSSL_SHA256`.
+   with `FFMPEG_BUILD` back at 1, and `FFMPEG_VERSION` for macOS and Linux in
+   `fetch-ffmpeg.sh`. The workflow fails when the two scripts name different
+   versions. For a new series, also set `MIRROR` in both scripts. For OpenSSL,
+   check its tarball against the keys at openssl-library.org and set
+   `OPENSSL_VERSION` and `OPENSSL_SHA256`. When the build changes but ffmpeg
+   doesn't, such as for a new OpenSSL, raise `FFMPEG_BUILD`, which goes in the
+   archive's name.
 2. Open a pull request. The ffmpeg build workflow builds and tests both platforms.
    To try a build yourself, run `./scripts/build-ffmpeg.sh <folder>`, then
    `python3 scripts/test-ffmpeg-sidecar.py media <a full ffmpeg> <media folder>`
@@ -169,8 +172,9 @@ To move to a new ffmpeg:
    gets a new pre-release, made with
    `gh release create ffmpeg-sidecar-<series> --prerelease --latest=false`. A new
    build in the same series goes up with `gh release upload ffmpeg-sidecar-<series>`.
-5. Set each archive's `SHA256` in `fetch-ffmpeg.sh`, and check that the Build &
-   Bundle jobs pass with it. For Windows, download BtbN's new build, check it
+   Never replace an archive that's already there, because older commits pin it.
+5. Set each archive's `FILE` and `SHA256` in `fetch-ffmpeg.sh`, and check that the
+   Build & Bundle jobs pass with it. For Windows, download BtbN's new build, check it
    against the `checksums.sha256` of its release, upload it to the pre-release and
    set `FFMPEG_VERSION`, `FILE`, `UPSTREAM` and `SHA256`. Update the FFmpeg section
    of `THIRD_PARTY_NOTICES.md`.

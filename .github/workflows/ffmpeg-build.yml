@@ -119,7 +119,12 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           version="$(sed -n 's/^FFMPEG_VERSION=//p' scripts/build-ffmpeg.sh)"
-          name="max-video-player-ffmpeg-$version-$PLATFORM"
+          build="$(sed -n 's/^FFMPEG_BUILD=//p' scripts/build-ffmpeg.sh)"
+          if [[ ! "$build" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::FFMPEG_BUILD in scripts/build-ffmpeg.sh is '$build', not a number from 1 up"
+            exit 1
+          fi
+          name="max-video-player-ffmpeg-$version-build$build-$PLATFORM"
           mkdir -p "dist/$name"
           cp out/ffmpeg out/BUILDINFO.txt "dist/$name/"
           # macOS's tar would otherwise add Apple's file attributes.

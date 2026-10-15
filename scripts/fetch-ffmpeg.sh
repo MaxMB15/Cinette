@@ -56,7 +56,7 @@ case "$PLATFORM" in
     # Apple Silicon, built on GitHub's macos-15 runner.
     FFMPEG_VERSION=8.1.3
     TARGETS="aarch64-apple-darwin"
-    FILE="$SIDECAR-$FFMPEG_VERSION-macos-arm64.tar.xz"
+    FILE="$SIDECAR-$FFMPEG_VERSION-build1-macos-arm64.tar.xz"
     SHA256=c51bf66ce0dad9a53253f1b9359403f05c3ca7ffb5714efacc3a959c9ba8d77b
     ;;
   linux)
@@ -64,7 +64,7 @@ case "$PLATFORM" in
     # later.
     FFMPEG_VERSION=8.1.3
     TARGETS="x86_64-unknown-linux-gnu"
-    FILE="$SIDECAR-$FFMPEG_VERSION-linux-x86_64.tar.xz"
+    FILE="$SIDECAR-$FFMPEG_VERSION-build1-linux-x86_64.tar.xz"
     SHA256=675385b52c63b4fd08e2e1f032421ed45205f42b011dcece7e7ba5d496807504
     ;;
   windows)
