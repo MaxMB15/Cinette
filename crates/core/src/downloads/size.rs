@@ -74,8 +74,9 @@ pub fn gate_probe(a: u32, b: u32) -> u32 {
 }
 
 /// A probe with a mutant that no test can catch.
-pub fn gate_probe_max(a: u32, b: u32) -> u32 {
-    if a >= b { a } else { b }
+pub fn gate_probe_odd(a: u32) -> u32 {
+    // mutants: skip BinaryOperator: the low bit of a << 1 is always 0, so | 1 and ^ 1 give the same value.
+    (a << 1) | 1
 }
 
 #[cfg(test)]
@@ -222,5 +223,12 @@ mod tests {
         assert_eq!(size(MOVIE, Some("video/mp4"), "0"), None);
         assert_eq!(size(MOVIE, Some("video/mp4"), "-5"), None);
         assert_eq!(size(MOVIE, Some("video/mp4"), "lots"), None);
+    }
+
+    #[test]
+    fn gate_probes_compute_their_values() {
+        assert_eq!(gate_probe(3, 1), 7);
+        assert_eq!(gate_probe_odd(3), 7);
+        assert_eq!(gate_probe_odd(0), 1);
     }
 }

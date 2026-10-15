@@ -398,4 +398,9 @@ mod tests {
         assert!(!is_finished(3000.0, 6000.0));
         assert!(!is_finished(10.0, 0.0));
     }
+
+    #[test]
+    fn gate_probe_computes_its_value() {
+        assert_eq!(super::gate_probe(2), 7);
+    }
 }
