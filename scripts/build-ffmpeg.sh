@@ -29,10 +29,11 @@ set -euo pipefail
 # ffmpeg's configure, OpenSSL's Configure and the compiler read these from the
 # environment, and pkg-config reads its own. Clearing them keeps a local
 # build's flags and libraries the same as CI's.
-unset CC CXX CPP AS LD AR ARFLAGS RANLIB CROSS_COMPILE \
+unset CC CXX CPP AS LD AR ARFLAGS RANLIB OBJCOPY CROSS_COMPILE \
   CFLAGS CXXFLAGS OBJCFLAGS CPPFLAGS CPPDEFINES CPPINCLUDES ASFLAGS \
   LDFLAGS LDEXEFLAGS LDSOFLAGS LDLIBS LIBS \
   CPATH C_INCLUDE_PATH LIBRARY_PATH SDKROOT \
+  PERL HASHBANGPERL OPENSSL_LOCAL_CONFIG_DIR \
   PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
 
 FFMPEG_VERSION=8.1.3
@@ -147,7 +148,7 @@ else
   # why when it can't.
   if ! xcode-select -p > /dev/null 2>&1 || ! xcrun -f cc > /dev/null; then
     echo "build-ffmpeg.sh needs a C compiler from the Command Line Tools or Xcode." >&2
-    echo "Run xcode-select --install, or xcode-select -s to pick a working one." >&2
+    echo "Run xcode-select --install, or sudo xcode-select -s <folder> to pick a working one." >&2
     exit 1
   fi
 fi

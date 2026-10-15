@@ -145,13 +145,14 @@ Tools and macOS have all of them except `pkg-config`. Linux also needs `xz`,
 `readelf` and the OpenSSL and zlib headers, such as `xz-utils`, `binutils`,
 `libssl-dev` and `zlib1g-dev` on Debian. `build-ffmpeg.sh` ignores `CFLAGS`,
 `LDFLAGS`, `LIBRARY_PATH`, `PKG_CONFIG_PATH` and the like from your environment,
-so the OpenSSL headers must be where pkg-config looks by default. On an Intel Mac
-the build leaves out ffmpeg's x86 assembly, which would need nasm. The release
-workflow, the Build & Bundle jobs and the mutation tests set `FFMPEG_PINNED_ONLY=1`,
-which makes the script fail instead. A release only ships a pinned build, since a
-Linux build made on the runner would need the runner's newer glibc. Build & Bundle
-fails a pull request whose pinned archive doesn't download or doesn't match its
-hash, so the release can't find that out after its tag is pushed.
+so on Linux the OpenSSL and zlib packages must be where pkg-config and the compiler
+look by default. On an Intel Mac the build leaves out ffmpeg's x86 assembly, which
+would need nasm. The release workflow, the Build & Bundle jobs and the mutation
+tests set `FFMPEG_PINNED_ONLY=1`, which makes the script fail instead. A release
+only ships a pinned build, since a Linux build made on the runner would need the
+runner's newer glibc. Build & Bundle fails a pull request whose pinned archive
+doesn't download or doesn't match its hash, so the release can't find that out
+after its tag is pushed.
 
 Each Monday, `.github/workflows/ffmpeg-update-check.yml` compares the pinned versions
 with ffmpeg's release tags. It opens an issue called "ffmpeg <version> is out" for the
