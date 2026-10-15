@@ -23,9 +23,12 @@ concurrency:
   group: changed-code-${{ github.ref }}
   cancel-in-progress: true
 
+# Swatinem/rust-cache puts every CARGO_ variable in its cache key. So each
+# job that restores a cache sets the same ones as the job that saved it,
+# build-linux in build.yml for coverage-rust and the full job in mutants.yml
+# for rust-mutants.
 env:
   CARGO_TERM_COLOR: always
-  CARGO_MUTANTS_VERSION: 27.1.0
   # The plugin links libmpv, and the app also links GTK and WebKitGTK. These
   # are the packages mutants.yml installs.
   APT_PACKAGES: >-
@@ -40,6 +43,8 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CARGO_MUTANTS_VERSION: 27.1.0
     outputs:
       frontend: ${{ steps.plan.outputs.frontend }}
       rust: ${{ steps.plan.outputs.rust }}
@@ -51,6 +56,15 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+
+      # The tests make small git repos of their own with made-up files.
+      - name: Test changed-code.py
+        run: |
+          if git diff --quiet HEAD^1 HEAD -- 'scripts/changed-code*'; then
+            echo "This pull request doesn't change scripts/changed-code*."
+          else
+            python3 -I scripts/changed-code-test.py
+          fi
 
       # cargo-mutants lists the mutants in the changed lines with cargo
       # metadata, which needs no build.
@@ -68,7 +82,8 @@ jobs:
         id: plan
         run: |
           python3 scripts/changed-code.py plan --base HEAD^1 --head HEAD \
-            --shards "$RUNNER_TEMP/rust.diff" --output "$GITHUB_OUTPUT"
+            --shards "$RUNNER_TEMP/rust.diff" --output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
   # The app's build script stops when the ffmpeg sidecar is missing. This job
   # downloads it once for the Rust coverage job and the app's mutant shards.
@@ -101,7 +116,8 @@ jobs:
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries/
-          retention-days: 1
+          # Long enough to re-run a failed job on a later day.
+          retention-days: 7
 
   coverage-frontend:
     needs: plan
@@ -131,7 +147,8 @@ jobs:
             --title "Frontend changed-line coverage" --summary "$GITHUB_STEP_SUMMARY"
 
   # The same build and tests as build-linux in build.yml, which also measures
-  # Rust coverage, so this restores its cache.
+  # Rust coverage, so this restores its cache. The two set the same CARGO_
+  # variables, which go into the cache key.
   coverage-rust:
     needs: [plan, sidecar]
     if: ${{ !cancelled() && needs.plan.outputs.rust == 'true' }}
@@ -303,10 +320,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # The same CARGO_ variables as the full job in mutants.yml, whose cache
+    # this restores.
     env:
       # A mutant only needs a pass or a fail, so the test builds skip debug
       # info, as in mutants.yml.
       CARGO_PROFILE_DEV_DEBUG: none
+      CARGO_MUTANTS_VERSION: 27.1.0
       PACKAGE: ${{ matrix.package }}
       SHARD: ${{ matrix.shard }}
       SHARDS: ${{ matrix.shards }}
@@ -372,11 +392,15 @@ jobs:
             exit "$code"
           fi
 
+      # hashFiles() only reads the workspace, so the shell looks for the
+      # results in the runner's temp folder.
       - name: Write the summary
-        if: ${{ !cancelled() && hashFiles(format('{0}/mutants/mutants.out/outcomes.json', runner.temp)) != '' }}
+        if: ${{ !cancelled() }}
         run: |
-          python3 scripts/mutants-summary.py --title "Mutants in $PACKAGE, shard $SHARD of $SHARDS" \
-            "$RUNNER_TEMP/mutants/mutants.out" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$RUNNER_TEMP/mutants/mutants.out/outcomes.json" ]; then
+            python3 scripts/mutants-summary.py --title "Mutants in $PACKAGE, shard $SHARD of $SHARDS" \
+              "$RUNNER_TEMP/mutants/mutants.out" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # The logs hold each mutant's build and test output, which is most of
       # the size. diff/ still shows what each mutant changed.
