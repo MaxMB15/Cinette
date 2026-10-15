@@ -89,7 +89,11 @@ jobs:
         with:
           toolchain: stable
 
+      # Fails when the pinned build doesn't download, rather than building
+      # ffmpeg from source.
       - name: Fetch the ffmpeg sidecar
+        env:
+          FFMPEG_PINNED_ONLY: "1"
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Upload the sidecar
