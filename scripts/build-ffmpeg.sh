@@ -26,6 +26,12 @@ set -euo pipefail
 # .github/workflows/ffmpeg-build.yml builds and tests the copies that
 # scripts/fetch-ffmpeg.sh pins, and docs/development.md explains how.
 
+# ffmpeg's configure and OpenSSL's Configure start from CFLAGS, LDFLAGS and
+# the like when they're set, and pkg-config reads its own. Clearing them gives
+# a local build the same options as CI's.
+unset CC CXX CPP CFLAGS CXXFLAGS CPPFLAGS ASFLAGS LDFLAGS LDLIBS LIBS AR RANLIB \
+  PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
+
 FFMPEG_VERSION=8.1.3
 # FFMPEG_BUILD goes in the archive's name, so each build gets its own. Raise
 # it for a new build of the same ffmpeg, such as one with a new OpenSSL, and
@@ -135,7 +141,7 @@ else
   NEEDS+=(otool perl)
   # A Mac without the Command Line Tools still has cc, make and the rest, which
   # only offer to install them.
-  if ! xcode-select -p > /dev/null 2>&1; then
+  if ! xcode-select -p > /dev/null 2>&1 || ! xcrun -f cc > /dev/null 2>&1; then
     echo "build-ffmpeg.sh needs the Command Line Tools. Run xcode-select --install." >&2
     exit 1
   fi
@@ -204,9 +210,7 @@ if [[ "$PLATFORM" == macos ]]; then
   )
   # The .pc files name the prefix, so they point at the install instead.
   sed -i '' "s|$OPENSSL_PREFIX|$OPENSSL_ROOT|g" "$OPENSSL_ROOT"/lib/pkgconfig/*.pc
-  # ffmpeg finds this OpenSSL and never one from Homebrew. pkg-config looks in
-  # PKG_CONFIG_PATH before PKG_CONFIG_LIBDIR.
-  unset PKG_CONFIG_PATH
+  # ffmpeg finds this OpenSSL and never one from Homebrew.
   export PKG_CONFIG_LIBDIR="$OPENSSL_ROOT/lib/pkgconfig"
 fi
 

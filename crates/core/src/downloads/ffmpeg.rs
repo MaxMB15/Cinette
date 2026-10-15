@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 /// The ffmpeg muxer for each container extension. Any other extension gets
-/// [`DEFAULT_MUXER`]. scripts/build-ffmpeg.sh builds only these muxers.
+/// [`DEFAULT_MUXER`]. scripts/build-ffmpeg.sh builds only these muxers and
+/// that one.
 const CONTAINER_MUXERS: &[(&str, &str)] = &[
     ("mp4", "mp4"),
     ("m4v", "mp4"),
