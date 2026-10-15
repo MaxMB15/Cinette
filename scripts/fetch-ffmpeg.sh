@@ -57,7 +57,7 @@ case "$PLATFORM" in
     FFMPEG_VERSION=8.1.3
     TARGETS="aarch64-apple-darwin"
     FILE="$SIDECAR-$FFMPEG_VERSION-build1-macos-arm64.tar.xz"
-    SHA256=c51bf66ce0dad9a53253f1b9359403f05c3ca7ffb5714efacc3a959c9ba8d77b
+    SHA256=15a6f1f4bc2d4797b284a49b943c47017817b105c696d500c9cdf61105d3c788
     ;;
   linux)
     # x86_64, built in Debian 12, so it runs on Debian 12, Ubuntu 24.04 and
@@ -65,7 +65,7 @@ case "$PLATFORM" in
     FFMPEG_VERSION=8.1.3
     TARGETS="x86_64-unknown-linux-gnu"
     FILE="$SIDECAR-$FFMPEG_VERSION-build1-linux-x86_64.tar.xz"
-    SHA256=675385b52c63b4fd08e2e1f032421ed45205f42b011dcece7e7ba5d496807504
+    SHA256=b032942dc65d62529e6ab849f252eb3cbcc193e4f8e535c1650703158ce961ad
     ;;
   windows)
     # x86_64, from BtbN's FFmpeg-Builds. It's the release/8.1 branch 9 commits
