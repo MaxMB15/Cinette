@@ -145,7 +145,7 @@ jobs:
           # the runner's point release, which changes.
           fields='^(Source|License|OpenSSL|OpenSSL configure|macOS target|Configure):'
           if [[ "$PLATFORM" == linux-* ]]; then
-            fields='^(Source|License|OpenSSL|Built on|Newest glibc symbol|Configure):'
+            fields='^(Source|License|Built on|Newest glibc symbol|Configure):'
           fi
           if ! diff <(grep -E "$fields" "existing/$name/BUILDINFO.txt") <(grep -E "$fields" out/BUILDINFO.txt); then
             echo "::error::The pre-release's $name.tar.xz comes from other source or options, shown above. Raise FFMPEG_BUILD in scripts/build-ffmpeg.sh."

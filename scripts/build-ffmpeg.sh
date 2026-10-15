@@ -26,10 +26,13 @@ set -euo pipefail
 # .github/workflows/ffmpeg-build.yml builds and tests the copies that
 # scripts/fetch-ffmpeg.sh pins, and docs/development.md explains how.
 
-# ffmpeg's configure and OpenSSL's Configure start from CFLAGS, LDFLAGS and
-# the like when they're set, and pkg-config reads its own. Clearing them gives
-# a local build the same options as CI's.
-unset CC CXX CPP CFLAGS CXXFLAGS CPPFLAGS ASFLAGS LDFLAGS LDLIBS LIBS AR RANLIB \
+# ffmpeg's configure, OpenSSL's Configure and the compiler read these from the
+# environment, and pkg-config reads its own. Clearing them keeps a local
+# build's flags and libraries the same as CI's.
+unset CC CXX CPP AS LD AR ARFLAGS RANLIB CROSS_COMPILE \
+  CFLAGS CXXFLAGS OBJCFLAGS CPPFLAGS CPPDEFINES CPPINCLUDES ASFLAGS \
+  LDFLAGS LDEXEFLAGS LDSOFLAGS LDLIBS LIBS \
+  CPATH C_INCLUDE_PATH LIBRARY_PATH SDKROOT \
   PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
 
 FFMPEG_VERSION=8.1.3
@@ -140,9 +143,11 @@ else
   # OpenSSL's Configure is a Perl script.
   NEEDS+=(otool perl)
   # A Mac without the Command Line Tools still has cc, make and the rest, which
-  # only offer to install them.
-  if ! xcode-select -p > /dev/null 2>&1 || ! xcrun -f cc > /dev/null 2>&1; then
-    echo "build-ffmpeg.sh needs the Command Line Tools. Run xcode-select --install." >&2
+  # only offer to install them. xcrun finds the compiler that cc runs, and says
+  # why when it can't.
+  if ! xcode-select -p > /dev/null 2>&1 || ! xcrun -f cc > /dev/null; then
+    echo "build-ffmpeg.sh needs a C compiler from the Command Line Tools or Xcode." >&2
+    echo "Run xcode-select --install, or xcode-select -s to pick a working one." >&2
     exit 1
   fi
 fi

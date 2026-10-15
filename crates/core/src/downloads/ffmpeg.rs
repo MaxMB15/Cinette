@@ -3,7 +3,7 @@
 
 /// The ffmpeg muxer for each container extension. Any other extension gets
 /// [`DEFAULT_MUXER`]. scripts/build-ffmpeg.sh builds only these muxers and
-/// that one.
+/// [`DEFAULT_MUXER`].
 const CONTAINER_MUXERS: &[(&str, &str)] = &[
     ("mp4", "mp4"),
     ("m4v", "mp4"),
