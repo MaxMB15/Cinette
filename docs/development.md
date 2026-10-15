@@ -513,8 +513,8 @@ change into a timeout, which counts as caught. An entry taken out of `exclude_re
 `exclude_globs` gets no warning, since cargo-mutants then makes more changes, and
 nor does a change to comments or spacing. It warns the same way about a
 `#[mutants::skip]` that a pull request adds to a crate's code, or about a changed line
-in one, even when the attribute is split across lines or broken up by a comment. Both
-stop cargo-mutants making those changes in this pull request and every later one.
+in one, even when the attribute is split across lines or broken up by a comment.
+Either can hide a missed change in this pull request and every later one.
 
 A missed Rust change that does the same thing as the code can't fail any test. A
 comment then names the change's genre and says why, alone on the line before the

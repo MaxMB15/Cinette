@@ -1586,6 +1586,14 @@ def mutant_problem(mutant: dict) -> str | None:
     return None
 
 
+def shown(value: object) -> str:
+    """Up to 200 characters of `value` as JSON, for an error message."""
+    try:
+        return json.dumps(value)[:200]
+    except (RecursionError, ValueError):
+        return "a value nested too deeply to show"
+
+
 def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
     """The mutants cargo-mutants missed in `folder`, or why its results can't
     be read. The plan only starts a run that has mutants to test, so a run
@@ -1605,18 +1613,18 @@ def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
     tested = 0
     for outcome in entries:
         if not isinstance(outcome, dict):
-            return [], f"{outcomes} has an outcome this check can't read: {json.dumps(outcome)[:200]}"
+            return [], f"{outcomes} has an outcome this check can't read: {shown(outcome)}"
         scenario = outcome.get("scenario")
         if scenario == "Baseline":
             continue
         if not isinstance(scenario, dict) or not isinstance(scenario.get("Mutant"), dict):
-            return [], f"{outcomes} has a scenario this check can't read: {json.dumps(scenario)[:200]}"
+            return [], f"{outcomes} has a scenario this check can't read: {shown(scenario)}"
         problem = mutant_problem(scenario["Mutant"])
         if problem is not None:
-            return [], f"{outcomes} has a mutant with {problem}: {json.dumps(scenario['Mutant'])[:200]}"
+            return [], f"{outcomes} has a mutant with {problem}: {shown(scenario['Mutant'])}"
         summary = outcome.get("summary")
         if not isinstance(summary, str) or summary not in MUTANT_SUMMARIES:
-            return [], f"{outcomes} has a mutant whose summary is {json.dumps(summary)}, which this check doesn't know."
+            return [], f"{outcomes} has a mutant whose summary is {shown(summary)}, which this check doesn't know."
         tested += 1
         if summary == "MissedMutant":
             missed.append(scenario["Mutant"])

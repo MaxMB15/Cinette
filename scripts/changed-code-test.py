@@ -650,7 +650,15 @@ class MutantsTest(RepoTest):
         (self.out / "outcomes.json").write_text('{"outcomes": [' + "[" * 100000 + "]" * 100000 + "]}")
         status, out = self.mutants()
         self.assertEqual(status, 1)
-        self.assertIn("isn't JSON this check can read", out)
+        # How deep the json module reads depends on the Python build, so either
+        # the reader or the outcome check stops it.
+        self.assertIn("::error title=No results::", out)
+
+    def test_an_outcome_it_cannot_show_still_gets_a_message(self) -> None:
+        circular: list = []
+        circular.append(circular)
+        self.assertEqual(cc.shown(circular), "a value nested too deeply to show")
+        self.assertEqual(cc.shown("x" * 300), json.dumps("x" * 300)[:200])
 
     def test_a_missed_mutant_in_a_file_it_cannot_read_fails(self) -> None:
         (self.root.parent / f"{self.root.name}-outside.rs").write_text("fn a() {}\n", encoding="utf-8")
