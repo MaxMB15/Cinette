@@ -148,12 +148,6 @@ impl Tracker {
     }
 }
 
-/// A probe for the Changed code check, which no test runs yet.
-#[allow(dead_code)]
-fn gate_probe(a: u32) -> u32 {
-    a * 3 + 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,10 +391,5 @@ mod tests {
         assert!(!is_finished(370.0, 400.0));
         assert!(!is_finished(3000.0, 6000.0));
         assert!(!is_finished(10.0, 0.0));
-    }
-
-    #[test]
-    fn gate_probe_computes_its_value() {
-        assert_eq!(super::gate_probe(2), 7);
     }
 }
