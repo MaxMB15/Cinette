@@ -39,7 +39,9 @@ names, get none.
 --check also fails for any other Stryker comment in the files --lines names.
 One with no reason, or with "all" for the mutators, or one that covers every
 line after it, could hide a mutant that a test should catch. So could one with
-another Stryker comment in its reason. It fails, too, when there's no report.
+another Stryker comment in its reason, or one that gives the class-names
+plugin's reason, which would hide its mutants from the warnings. It fails, too,
+when there's no report.
 Stryker writes none when no test loads the files it mutates. --no-mutants says
 Stryker made no mutants at all, as for a change to types alone, and then a
 missing report is fine. --path-prefix goes before each file name, since
@@ -134,6 +136,15 @@ def annotation(
     )
 
 
+def same_reason(text: str, reason: str) -> bool:
+    """Whether `text` reads as `reason`, apart from case, spacing and final periods."""
+
+    def plain(words: str) -> str:
+        return " ".join(words.split()).casefold().rstrip(". ")
+
+    return plain(text) == plain(reason)
+
+
 def comment_problems(source: str) -> list[tuple[int, int, str]]:
     """The line, column and problem of each Stryker comment not of the allowed form."""
     problems = []
@@ -157,6 +168,12 @@ def comment_problems(source: str) -> list[tuple[int, int, str]]:
         elif not allowed[2].strip():
             problem = (
                 "Say after the colon why no test can catch the mutants this comment turns off."
+            )
+        elif same_reason(allowed[2], CLASS_NAMES):
+            problem = (
+                f'"{CLASS_NAMES}" is the reason stryker.class-names.mjs gives, and the check'
+                " doesn't warn about those mutants. Say in your own words why no test can"
+                " catch these."
             )
         else:
             continue
