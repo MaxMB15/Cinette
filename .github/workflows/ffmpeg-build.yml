@@ -115,7 +115,8 @@ jobs:
 
       # An archive's name has the ffmpeg version and FFMPEG_BUILD, and older
       # commits pin the archives on the pre-release. A build whose name is
-      # taken there must come from the same source and options.
+      # taken there must come from the same source and options, which
+      # BUILDINFO.txt lists.
       - name: Compare with the pre-release's archive of the same name
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -140,7 +141,7 @@ jobs:
           tar -C existing -xJf existing.tar.xz
           # Linux's "OpenSSL headers" line follows Debian's updates, so it's
           # left out.
-          fields='^(Source|License|OpenSSL|Configure):'
+          fields='^(Source|License|OpenSSL|OpenSSL configure|macOS target|Configure):'
           if ! diff <(grep -E "$fields" "existing/$name/BUILDINFO.txt") <(grep -E "$fields" out/BUILDINFO.txt); then
             echo "::error::The pre-release's $name.tar.xz comes from other source or options, shown above. Raise FFMPEG_BUILD in scripts/build-ffmpeg.sh."
             exit 1

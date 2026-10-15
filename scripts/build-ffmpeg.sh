@@ -31,7 +31,7 @@ FFMPEG_VERSION=8.1.3
 # it for a new build of the same ffmpeg, such as one with a new OpenSSL, and
 # set it back to 1 for a new ffmpeg. Older commits pin the archives already on
 # the pre-release, so a new build never replaces one.
-FFMPEG_BUILD=1
+FFMPEG_BUILD=2
 FFMPEG_SHA256=7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3
 # OpenSSL for macOS, from its 3.5 long-term support series.
 OPENSSL_VERSION=3.5.9
@@ -98,7 +98,7 @@ case "$(uname -s)" in
   Darwin)
     PLATFORM=macos
     JOBS="$(sysctl -n hw.ncpu)"
-    # The app runs on macOS 15 and later.
+    # The app runs on macOS 15 and later. BUILDINFO.txt records this.
     export MACOSX_DEPLOYMENT_TARGET=15.0
     # configure always links CoreMedia and CoreVideo, which nothing here uses.
     # -dead_strip leaves out the parts of OpenSSL that ffmpeg never calls.
@@ -125,13 +125,20 @@ case "$(uname -s)" in
   *) echo "build-ffmpeg.sh builds on macOS and Linux only" >&2; exit 1 ;;
 esac
 
-# strings, otool and readelf check the finished program.
-NEEDS=(cc make pkg-config curl tar strings)
+# strip makes the program smaller, and strings, otool and readelf check it.
+NEEDS=(cc make pkg-config curl tar strip strings)
 if [[ "$PLATFORM" == linux ]]; then
   # GNU tar unpacks the ffmpeg tarball with xz.
   NEEDS+=(xz readelf)
 else
-  NEEDS+=(otool)
+  # OpenSSL's Configure is a Perl script.
+  NEEDS+=(otool perl)
+  # A Mac without the Command Line Tools still has cc, make and the rest, which
+  # only offer to install them.
+  if ! xcode-select -p > /dev/null 2>&1; then
+    echo "build-ffmpeg.sh needs the Command Line Tools. Run xcode-select --install." >&2
+    exit 1
+  fi
 fi
 for tool in "${NEEDS[@]}"; do
   if ! command -v "$tool" > /dev/null 2>&1; then
@@ -182,13 +189,13 @@ if [[ "$PLATFORM" == macos ]]; then
   # modules or engines from it, and the install goes into the build folder.
   OPENSSL_PREFIX=/opt/max-video-player/openssl
   OPENSSL_ROOT="$WORK/openssl-root$OPENSSL_PREFIX"
+  # Only the static libraries, with nothing loaded at run time. ffmpeg needs
+  # DTLS, so that stays. BUILDINFO.txt records these options.
+  OPENSSL_CONFIGURE=(no-shared no-module no-legacy no-engine no-autoload-config
+    no-apps no-docs no-tests --prefix="$OPENSSL_PREFIX" --openssldir=/etc/ssl --libdir=lib)
   (
     cd "$WORK/openssl-$OPENSSL_VERSION"
-    # Only the static libraries, with nothing loaded at run time. ffmpeg
-    # needs DTLS, so that stays.
-    if ! ./Configure no-shared no-module no-legacy no-engine no-autoload-config \
-      no-apps no-docs no-tests --prefix="$OPENSSL_PREFIX" --openssldir=/etc/ssl \
-      --libdir=lib > configure.log 2>&1; then
+    if ! ./Configure "${OPENSSL_CONFIGURE[@]}" > configure.log 2>&1; then
       tail -n 40 configure.log >&2
       exit 1
     fi
@@ -274,6 +281,8 @@ cp ffmpeg "$OUT/ffmpeg"
   echo "Compiler: $(cc --version | head -n 1)"
   if [[ "$PLATFORM" == macos ]]; then
     echo "OpenSSL: $OPENSSL_VERSION, linked in, from openssl-$OPENSSL_VERSION.tar.gz, SHA-256 $OPENSSL_SHA256"
+    echo "OpenSSL configure: ${OPENSSL_CONFIGURE[*]}"
+    echo "macOS target: $MACOSX_DEPLOYMENT_TARGET"
   else
     echo "OpenSSL headers: $(pkg-config --modversion openssl)"
     echo "Newest glibc symbol: $GLIBC"
