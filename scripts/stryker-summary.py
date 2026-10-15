@@ -32,7 +32,9 @@ Stryker reads:
 Stryker only makes the mutants whose code lies wholly inside one of the
 ranges, so the check only looks at those too. It prints a warning for each
 mutant Stryker ignored there, as for a comment, so a reviewer can check that
-the reason still holds for the changed code.
+the reason still holds for the changed code. The mutants that
+apps/player/stryker.class-names.mjs leaves out, which only change class
+names, get none.
 
 --check also fails for any other Stryker comment in the files --lines names.
 One with no reason, or with "all" for the mutators, or one that covers every
@@ -73,6 +75,10 @@ MENTION = re.compile(r"Stryker (?:disable|restore)")
 # The one Stryker comment allowed, alone on its line, with the mutators it
 # names and its reason.
 ALLOWED = re.compile(r"[ \t]*// Stryker disable next-line ([A-Za-z]+(?:, ?[A-Za-z]+)*):(.*)")
+
+# The reason apps/player/stryker.class-names.mjs gives for the mutants it leaves
+# out.
+CLASS_NAMES = "Only changes class names."
 
 
 def code(text: str) -> str:
@@ -220,6 +226,8 @@ def check(
             after = one_line(mutant.get("replacement", ""))
             if status == "Ignored":
                 reason = one_line(mutant.get("statusReason") or "")
+                if reason == CLASS_NAMES:
+                    continue
                 message = (
                     f"Stryker ignored {mutator} changing `{before}` to `{after}` here,"
                     f' for the reason "{reason}". Check that it still holds for the changed code.'

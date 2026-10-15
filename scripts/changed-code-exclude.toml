@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Code that the changed-line coverage check in the Changed code workflow
+# doesn't count, because no test in CI can run it. scripts/changed-code.py
+# reads this file, and "Changed code" in docs/development.md explains it.
+#
+# Each entry names files with globs, where * and ? stay inside one folder and
+# **/ matches any number of folders. An entry with functions only leaves out
+# those functions in the files, and takes Rust files only. A function name
+# can be a glob too. Every entry says why.
+#
+# A frontend file listed here is also left out of the frontend mutation check.
+# The Rust mutation check reads .cargo/mutants.toml instead.
+#
+# Rust coverage is measured on Linux, so code that only builds for macOS or
+# iOS has no coverage data and never counts. The entries for those files say
+# so for the summary.
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/macos.rs"]
+reason = "The macOS renderer only builds for macOS and needs a window, and CI measures Rust coverage on Linux."
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/ios.rs"]
+reason = "The iOS renderer and lock screen only build for iOS."
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/gl_render.rs"]
+reason = "mpv's OpenGL render context needs a real OpenGL context."
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/linux.rs"]
+reason = "The Linux renderer draws into a Wayland subsurface through GTK and EGL, which CI can't open. The mutation check still runs on its pure helpers."
+
+[[exclude]]
+files = ["apps/player/src-tauri/src/main.rs"]
+reason = "It only calls the library's run."
+
+[[exclude]]
+files = ["apps/player/src/main.tsx"]
+reason = "It mounts the app in the real page. Vitest's coverage leaves it out too."
+
+[[exclude]]
+files = ["apps/player/src-tauri/src/lib.rs"]
+functions = ["run", "show_main_window"]
+reason = "The app's entry point builds the whole Tauri app and opens its window."
+
+[[exclude]]
+files = ["apps/player/src-tauri/src/logging.rs"]
+functions = ["init", "log_panics"]
+reason = "Logging sets the process's one tracing subscriber and panic hook."
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/mpv.rs"]
+functions = ["load", "load_impl"]
+reason = "Loading a stream opens a video view, or mpv's own window, which needs a real window. Tests call load_with with a fake renderer instead."
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/commands.rs"]
+functions = ["mpv_load"]
+reason = "It calls MpvState::load, which needs a real window."
+
+[[exclude]]
+files = ["crates/tauri-plugin-mpv/src/idle_inhibit.rs"]
+functions = ["platform_inhibit", "platform_uninhibit", "cfstring", "dbus_*"]
+reason = "Keeping the display awake goes through IOKit on macOS and D-Bus on Linux. A test would change the machine's own sleep settings."

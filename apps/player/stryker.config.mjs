@@ -2,10 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 // Mutation testing for the helpers in src/lib. Run it with `pnpm test:mutation`.
+// The Changed code workflow also runs it on the lines a pull request changes
+// in any frontend file.
 // Nothing here uploads results. The reports stay in reports/mutation/.
 export default {
 	testRunner: "vitest",
-	plugins: ["@stryker-mutator/vitest-runner"],
+	plugins: ["@stryker-mutator/vitest-runner", "./stryker.class-names.mjs"],
+	// Leaves out the mutants that only change class names, which the tests
+	// can't see the effect of. stryker.class-names.mjs explains.
+	ignorers: ["class-names"],
 	vitest: {
 		// The main config plus a fix for how the runner picks tests by name.
 		configFile: "vitest.stryker.config.ts",
