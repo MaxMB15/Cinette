@@ -1,19 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+/// The ffmpeg muxer for each container extension. Any other extension gets
+/// [`DEFAULT_MUXER`]. scripts/build-ffmpeg.sh builds only these muxers.
+const CONTAINER_MUXERS: &[(&str, &str)] = &[
+    ("mp4", "mp4"),
+    ("m4v", "mp4"),
+    ("mov", "mov"),
+    ("ts", "mpegts"),
+    ("mpegts", "mpegts"),
+    ("m2ts", "mpegts"),
+    ("webm", "webm"),
+    ("avi", "avi"),
+];
+
+/// The muxer for MKV and for any extension not in [`CONTAINER_MUXERS`].
+const DEFAULT_MUXER: &str = "matroska";
+
 /// Map a container extension to the ffmpeg muxer (`-f`) name. We pass this
 /// explicitly because the download writes to a temporary `.part` file whose
 /// extension ffmpeg cannot use to guess the output format (it would fail with
 /// "Unable to choose an output format ... Invalid argument").
 pub fn muxer_for_container(container: &str) -> &'static str {
-    match container.trim_start_matches('.').to_ascii_lowercase().as_str() {
-        "mp4" | "m4v" => "mp4",
-        "mov" => "mov",
-        "ts" | "mpegts" | "m2ts" => "mpegts",
-        "webm" => "webm",
-        "avi" => "avi",
-        _ => "matroska",
-    }
+    let ext = container.trim_start_matches('.').to_ascii_lowercase();
+    CONTAINER_MUXERS
+        .iter()
+        .find(|(name, _)| *name == ext)
+        .map_or(DEFAULT_MUXER, |&(_, muxer)| muxer)
 }
 
 /// Extract the final container extension from a `.part` destination path,
@@ -201,6 +214,8 @@ mod tests {
         assert_eq!(muxer_for_container("ts"), "mpegts");
         assert_eq!(muxer_for_container("webm"), "webm");
         assert_eq!(muxer_for_container("unknown"), "matroska");
+        assert_eq!(muxer_for_container(".M2TS"), "mpegts");
+        assert_eq!(muxer_for_container("M4V"), "mp4");
     }
 
     #[test]
@@ -267,13 +282,11 @@ mod tests {
             .expect("scripts/build-ffmpeg.sh should have a MUXERS= line")
             .split(',')
             .collect();
-        for container in [
-            "mp4", "m4v", "mov", "ts", "mpegts", "m2ts", "webm", "avi", "mkv", "flv",
-        ] {
-            let muxer = muxer_for_container(container);
+        let muxers = CONTAINER_MUXERS.iter().map(|&(_, muxer)| muxer);
+        for muxer in muxers.chain([DEFAULT_MUXER]) {
             assert!(
                 built.contains(&muxer),
-                "scripts/build-ffmpeg.sh should build the {muxer} muxer, which .{container} uses"
+                "scripts/build-ffmpeg.sh should build the {muxer} muxer, which muxer_for_container picks"
             );
         }
     }
