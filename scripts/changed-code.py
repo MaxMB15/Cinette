@@ -15,9 +15,10 @@ The counted files are the frontend's .ts and .tsx files in apps/player/src,
 apart from tests, src/test and .d.ts files, and the .rs files in the src
 folder of each crate in the workspace, apart from test code. Test code is a
 module declared with #[cfg(test)], or with #[cfg(all(test, ...))], in its own
-file or inline, and a #[test] or #[tokio::test] function. A file named
-tests.rs counts like any other until a module declares it that way.
-scripts/changed-code-exclude.toml leaves out more, each with a reason.
+file or inline, the modules it declares, and a #[test] or #[tokio::test]
+function. A file named tests.rs counts like any other until a module declares
+it that way. scripts/changed-code-exclude.toml leaves out more, each with a
+reason.
 
 Subcommands:
 
@@ -25,17 +26,20 @@ Subcommands:
              workflow. With --shards, it also counts the Rust mutants in the
              changed lines with `cargo mutants --list` and splits each crate
              into shards. It warns about each exclusion entry that leaves out
-             more than the base commit's copy of the file does.
+             more than the base commit's copy of the file does, about the
+             changed lines a function entry leaves out, and about the mutants
+             a new exclude_re, exclude_globs or #[mutants::skip] turns off.
   stryker    The lines for Stryker to mutate and to check, as the frontend
              mutation job takes them.
   rust-diff  The diff that cargo-mutants reads with --in-diff.
   coverage   Changed-line coverage from lcov files. Fails when the covered
              share of the counted lines is under 80%, for the frontend or for
              Rust, and writes a table of the uncovered lines. A frontend file
-             missing from the report fails too.
+             missing from the report fails too, and so does a Rust report with
+             no data at all.
   mutants    Fails for each mutant cargo-mutants missed, unless a skip comment
              covers it, and when a folder's outcomes.json is missing, lists no
-             mutants or has a result this doesn't know.
+             mutants or has a result this can't read.
 
 A skip comment says why no test can catch a Rust mutant. It sits alone on the
 line before the mutant's line, names the mutant's genre and gives a reason:
@@ -68,6 +72,9 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 EXCLUDE_FILE = "scripts/changed-code-exclude.toml"
+MUTANTS_CONFIG = ".cargo/mutants.toml"
+# An attribute that turns off every mutant in an item, like #[mutants::skip].
+MUTANTS_SKIP = re.compile(r"\bmutants\s*::\s*skip\b")
 
 # The share of the counted changed lines that tests must run, for the
 # frontend and for Rust each.
@@ -412,19 +419,29 @@ def stale_exclusions(exclusions: list[Exclusion]) -> list[str]:
     return out
 
 
-def base_exclusions(change: Change) -> list[Exclusion]:
-    """The exclusion file as the base commit has it. None when it has no such
-    file or one this can't read, so every entry counts as new."""
+def show(rev: str | None, path: str) -> bytes | None:
+    """A file as `rev` has it, or as the working tree has it when `rev` is
+    None. None when there's no such file."""
+    if rev is None:
+        file = ROOT / path
+        return file.read_bytes() if file.is_file() else None
     result = subprocess.run(
-        ["git", "show", f"{change.base}:{EXCLUDE_FILE}"],
+        ["git", "show", f"{rev}:{path}"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    if result.returncode != 0:
+    return result.stdout if result.returncode == 0 else None
+
+
+def base_exclusions(change: Change) -> list[Exclusion]:
+    """The exclusion file as the base commit has it. Empty when it has no such
+    file or one this can't read, so every entry counts as new."""
+    data = show(change.base, EXCLUDE_FILE)
+    if data is None:
         return []
     try:
-        return parse_exclusions(result.stdout.decode("utf-8"))
+        return parse_exclusions(data.decode("utf-8"))
     except (SystemExit, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return []
 
@@ -478,6 +495,61 @@ def widened_exclusions(change: Change, exclusions: list[Exclusion]) -> list[str]
                 f"{EXCLUDE_FILE}, entry {number}, leaves out {noun} {listing(what, more)},"
                 " which the base commit's copy counts. Check that no test in CI can run that code."
             )
+    return out
+
+
+def mutant_filters(data: bytes | None) -> list[tuple[str, str]]:
+    """The exclude_re and exclude_globs entries of a copy of
+    .cargo/mutants.toml, each with its key. Empty when there's no copy or one
+    this can't read."""
+    if data is None:
+        return []
+    try:
+        config = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return []
+    out = []
+    for key in ("exclude_re", "exclude_globs"):
+        values = config.get(key, [])
+        if isinstance(values, list):
+            out += [(key, value) for value in values if isinstance(value, str)]
+    return out
+
+
+def new_mutant_filters(change: Change) -> list[str]:
+    """Warnings for each exclude_re or exclude_globs entry the change adds to
+    .cargo/mutants.toml, since cargo-mutants then makes no mutant it matches,
+    in this change or any other."""
+    base = set(mutant_filters(show(change.base, MUTANTS_CONFIG)))
+    return [
+        f"{MUTANTS_CONFIG} adds {code(value)} to {key}, which the base commit's copy doesn't"
+        " have, so cargo-mutants makes none of the mutants it matches. Check that no test can"
+        " catch them."
+        for key, value in mutant_filters(show(change.head, MUTANTS_CONFIG))
+        if (key, value) not in base
+    ]
+
+
+def new_mutant_skips(change: Change) -> list[tuple[str, int, str]]:
+    """Each line the change adds to a crate's .rs files with a
+    #[mutants::skip], and a warning for it."""
+    out = []
+    for crate in crates():
+        for path, lines in sorted(change.added(crate.folder).items()):
+            if not path.endswith(".rs"):
+                continue
+            text = change.source(path).decode("utf-8", "replace").split("\n")
+            for number in lines:
+                if number <= len(text) and MUTANTS_SKIP.search(text[number - 1]):
+                    out.append(
+                        (
+                            path,
+                            number,
+                            f"{path} adds a mutants::skip on line {number}, so cargo-mutants"
+                            " makes no mutant in the item it marks, in this change or any"
+                            " other. Check that no test can catch them.",
+                        )
+                    )
     return out
 
 
@@ -650,17 +722,18 @@ class RustScan:
     # The first and last lines of each test item.
     spans: list[tuple[int, int]] = field(default_factory=list)
     # The modules declared in test code, as the inline modules around them,
-    # the name and any #[path].
-    test_mods: list[tuple[list[str], str, str | None]] = field(default_factory=list)
+    # the name and any #[path]. An inline module is None when a #[path] moves
+    # it, and the #[path] is "" when it isn't a plain string.
+    test_mods: list[tuple[list[str | None], str, str | None]] = field(default_factory=list)
     functions: list[Function] = field(default_factory=list)
 
     def test_lines(self) -> set[int]:
         return {line for first, last in self.spans for line in range(first, last + 1)}
 
 
-def mod_declaration(tokens: list[tuple[int, str]], i: int) -> tuple[str | None, int]:
-    """The name of a `mod name;` at `i`, after any `pub(...)`, and the index of
-    its `mod`."""
+def module_item(tokens: list[tuple[int, str]], i: int) -> tuple[str, str, int] | None:
+    """A module at `i`, after any `pub(...)`, as its name, the `;` or `{` that
+    follows the name, and that token's index."""
     k = i
     if tokens[k][1] == "pub":
         k += 1
@@ -670,10 +743,72 @@ def mod_declaration(tokens: list[tuple[int, str]], i: int) -> tuple[str | None, 
         k + 2 < len(tokens)
         and tokens[k][1] == "mod"
         and IDENT.fullmatch(tokens[k + 1][1])
-        and tokens[k + 2][1] == ";"
+        and tokens[k + 2][1] in (";", "{")
     ):
-        return tokens[k + 1][1], k
-    return None, k
+        return tokens[k + 1][1], tokens[k + 2][1], k + 2
+    return None
+
+
+def path_attribute(attr: list[str]) -> str | None:
+    """The string a #[path = "..."] gives, "" when it gives something else, or
+    None for another attribute."""
+    if attr[:2] != ["path", "="]:
+        return None
+    return attr[2] if len(attr) == 3 and attr[2][:1] in ('"', "r") else ""
+
+
+def scan_test_item(
+    tokens: list[tuple[int, str]],
+    i: int,
+    end: int,
+    outer: list[str | None],
+    path: str | None,
+    scan: RustScan,
+) -> None:
+    """Adds the functions and module declarations of the test item from `i` to
+    `end` to `scan`. `outer` holds the inline modules around the item, and
+    `path` is the item's own #[path]."""
+    # The inline modules inside the item, with the depth inside each, so that
+    # `mod helpers;` in `mod tests { ... }` is found under tests/.
+    local: list[tuple[str | None, int]] = []
+    level = 0
+    # The #[path] for the next item.
+    pending = path
+    k = i
+    while k <= end:
+        tok = tokens[k][1]
+        inner = tok == "#" and k + 1 <= end and tokens[k + 1][1] == "!"
+        bracket = k + (2 if inner else 1)
+        if tok == "#" and bracket <= end and tokens[bracket][1] == "[":
+            close = matching(tokens, bracket)
+            found = path_attribute([t for _, t in tokens[bracket + 1 : close]])
+            if not inner and found is not None:
+                pending = found
+            k = close + 1
+            continue
+        module = module_item(tokens, k)
+        if module is not None:
+            name, kind, at = module
+            if kind == ";":
+                scan.test_mods.append((outer + [n for n, _ in local], name, pending))
+            else:
+                level += 1
+                local.append((name if pending is None else None, level))
+            pending = None
+            k = at + 1
+            continue
+        if tok == "fn" and k + 1 < len(tokens) and IDENT.fullmatch(tokens[k + 1][1]):
+            last = item_end(tokens, k)
+            scan.functions.append(Function(tokens[k + 1][1], tokens[k][0], tokens[last][0]))
+        if tok in "([{":
+            level += 1
+        elif tok in ")]}":
+            if tok == "}" and local and local[-1][1] == level:
+                local.pop()
+            level -= 1
+        if tok in (";", "{", "}"):
+            pending = None
+        k += 1
 
 
 def scan_rust(text: str) -> RustScan:
@@ -700,14 +835,7 @@ def scan_rust(text: str) -> RustScan:
             continue
         first = attrs[0][0] if attrs else line
         test = any(test_attribute(attr) for _, attr in attrs)
-        path = next(
-            (
-                attr[2]
-                for _, attr in attrs
-                if len(attr) == 3 and attr[0] == "path" and attr[1] == "="
-            ),
-            None,
-        )
+        path = next((p for _, attr in attrs if (p := path_attribute(attr)) is not None), None)
         attrs = []
         if not test and tok == "fn" and i + 1 < len(tokens) and IDENT.fullmatch(tokens[i + 1][1]):
             end = item_end(tokens, i)
@@ -715,28 +843,14 @@ def scan_rust(text: str) -> RustScan:
         if test:
             end = item_end(tokens, i)
             scan.spans.append((first, tokens[end][0]))
-            inside = [name for name, _ in modules]
-            k = i
-            while k <= end:
-                name, at = mod_declaration(tokens, k)
-                if name is not None:
-                    literal = path if k == i else None
-                    scan.test_mods.append((inside, name, literal))
-                if tokens[k][1] == "fn" and k + 1 < len(tokens) and IDENT.fullmatch(tokens[k + 1][1]):
-                    last = item_end(tokens, k)
-                    scan.functions.append(Function(tokens[k + 1][1], tokens[k][0], tokens[last][0]))
-                k = max(at, k) + 1 if name is not None else k + 1
+            scan_test_item(tokens, i, end, [name for name, _ in modules], path, scan)
             i = end + 1
             continue
-        if (
-            tok == "mod"
-            and i + 2 < len(tokens)
-            and IDENT.fullmatch(tokens[i + 1][1])
-            and tokens[i + 2][1] == "{"
-        ):
+        module = module_item(tokens, i)
+        if module is not None and module[1] == "{":
             depth += 1
-            modules.append((tokens[i + 1][1], depth))
-            i += 3
+            modules.append((module[0] if path is None else None, depth))
+            i = module[2] + 1
             continue
         if tok in "([{":
             depth += 1
@@ -780,27 +894,55 @@ def test_modules(crate: Crate) -> tuple[set[str], list[str]]:
     submodules."""
     files: set[str] = set()
     folders: list[str] = []
-    for source in sorted((ROOT / crate.folder / "src").rglob("*.rs")):
-        rel = source.relative_to(ROOT).as_posix()
+    root = ROOT.resolve()
+    for source in sorted((root / crate.folder / "src").rglob("*.rs")):
+        rel = source.relative_to(root).as_posix()
         scan = scan_rust(source.read_text(encoding="utf-8"))
         here = source.parent
         children = here if source.name in ("mod.rs", "lib.rs", "main.rs") else here / source.stem
         for inside, name, literal in scan.test_mods:
-            if literal is not None and not inside:
+            if None in inside or literal == "" or (literal is not None and inside):
+                # A #[path] inside an inline module, or on one, is read from
+                # a folder this doesn't work out, and one that isn't a plain
+                # string can't be read here. The files it names count.
+                continue
+            if literal is not None:
+                # rustc reads a file that a #[path] names as if it were a
+                # mod.rs, so its own modules sit next to it. That folder can
+                # hold other code, so only the file itself is test code.
                 target = (here / string_value(literal)).resolve()
-                candidates = [target]
-                folder = target.parent / target.stem if target.name != "mod.rs" else target.parent
-            else:
-                base = children.joinpath(*inside)
-                candidates = [base / f"{name}.rs", base / name / "mod.rs"]
-                folder = base / name
-            for candidate in candidates:
+                if target.is_relative_to(root) and target.is_file():
+                    files.add(target.relative_to(root).as_posix())
+                continue
+            base = children.joinpath(*inside)
+            for candidate in (base / f"{name}.rs", base / name / "mod.rs"):
                 if candidate.exists():
-                    files.add(candidate.relative_to(ROOT).as_posix())
-            folders.append(folder.relative_to(ROOT).as_posix() + "/")
+                    files.add(candidate.relative_to(root).as_posix())
+            folders.append((base / name).relative_to(root).as_posix() + "/")
         if scan.whole:
             files.add(rel)
     return files, folders
+
+
+@dataclass
+class FunctionLeftOut:
+    """Changed lines in a function that an exclusion entry leaves out."""
+
+    path: str
+    function: str
+    # The name or glob in the entry's functions that matches.
+    pattern: str
+    entry: int
+    reason: str
+    lines: list[int]
+
+    def warning(self) -> str:
+        what = f"line {self.lines[0]}" if len(self.lines) == 1 else f"lines {show_ranges(self.lines)}"
+        return (
+            f"{EXCLUDE_FILE}, entry {self.entry}, leaves out {what} of {self.function} in"
+            f" {self.path}, which this change adds or changes, since {self.pattern} matches"
+            " the function's name. Check that the entry means to leave out this function."
+        )
 
 
 @dataclass
@@ -823,20 +965,31 @@ class RustFiles:
         files, folders = self.cache[crate.package]
         return path in files or any(path.startswith(folder) for folder in folders)
 
-    def counted(self, path: str, lines: list[int], exclusions: list[Exclusion]) -> list[int]:
-        """The lines of `lines` that aren't test code or in an excluded function."""
+    def counted(
+        self, path: str, lines: list[int], exclusions: list[Exclusion]
+    ) -> tuple[list[int], list[FunctionLeftOut]]:
+        """The lines of `lines` that aren't test code or in an excluded
+        function, and the changed lines each function entry leaves out."""
         if self.test_file(path):
-            return []
+            return [], []
         scan = scan_rust(self.change.source(path).decode("utf-8"))
         if scan.whole:
-            return []
-        skip = scan.test_lines()
-        for entry in exclusions:
-            if entry.functions and entry.matches(path):
-                for fn in scan.functions:
-                    if any(fnmatchcase(fn.name, name) for name in entry.functions):
-                        skip.update(range(fn.first, fn.last + 1))
-        return [line for line in lines if line not in skip]
+            return [], []
+        tests = scan.test_lines()
+        skip = set(tests)
+        left_out = []
+        for number, entry in enumerate(exclusions, start=1):
+            if not entry.functions or not entry.matches(path):
+                continue
+            for fn in scan.functions:
+                pattern = next((name for name in entry.functions if fnmatchcase(fn.name, name)), None)
+                if pattern is None:
+                    continue
+                skip.update(range(fn.first, fn.last + 1))
+                dropped = [line for line in lines if fn.first <= line <= fn.last and line not in tests]
+                if dropped:
+                    left_out.append(FunctionLeftOut(path, fn.name, pattern, number, entry.reason, dropped))
+        return [line for line in lines if line not in skip], left_out
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +1014,8 @@ class Counted:
     rust: dict[str, list[int]]
     # Files left out by an entry in the exclusion file, with its reason.
     excluded: dict[str, str]
+    # Changed lines left out by an entry's functions.
+    functions: list[FunctionLeftOut] = field(default_factory=list)
 
 
 def counted(change: Change, exclusions: list[Exclusion]) -> Counted:
@@ -870,6 +1025,7 @@ def counted(change: Change, exclusions: list[Exclusion]) -> Counted:
     frontend: dict[str, list[int]] = {}
     rust: dict[str, list[int]] = {}
     excluded: dict[str, str] = {}
+    functions: list[FunctionLeftOut] = []
     for path, lines in sorted(added.items()):
         is_frontend, is_rust = frontend_file(path), rust_files.crate(path) is not None
         if not (is_frontend or is_rust):
@@ -880,10 +1036,11 @@ def counted(change: Change, exclusions: list[Exclusion]) -> Counted:
         elif is_frontend:
             frontend[path] = lines
         else:
-            lines = rust_files.counted(path, lines, exclusions)
+            lines, left_out = rust_files.counted(path, lines, exclusions)
+            functions += left_out
             if lines:
                 rust[path] = lines
-    return Counted(frontend, rust, excluded)
+    return Counted(frontend, rust, excluded, functions)
 
 
 # ---------------------------------------------------------------------------
@@ -1020,13 +1177,29 @@ def plan(args: argparse.Namespace) -> int:
     exclusions = load_exclusions()
     for warning in stale_exclusions(exclusions):
         print(annotation("warning", "Exclusion", warning))
-    widened = widened_exclusions(change, exclusions)
-    for warning in widened:
-        print(annotation("warning", "Exclusion added", warning))
-    if widened and args.summary:
-        with open(args.summary, "a", encoding="utf-8") as summary:
-            summary.write("## Exclusions\n\n" + "".join(f"- {warning}\n" for warning in widened))
     found = counted(change, exclusions)
+    # What the change stops checking, for a reviewer to look at.
+    notes = []
+    for warning in widened_exclusions(change, exclusions):
+        print(annotation("warning", "Exclusion added", warning))
+        notes.append(warning)
+    for left_out in found.functions:
+        warning = left_out.warning()
+        print(
+            annotation(
+                "warning", "Function left out", warning, left_out.path, left_out.lines[0], left_out.lines[-1]
+            )
+        )
+        notes.append(warning)
+    for warning in new_mutant_filters(change):
+        print(annotation("warning", "Mutants left out", warning, MUTANTS_CONFIG))
+        notes.append(warning)
+    for path, line, warning in new_mutant_skips(change):
+        print(annotation("warning", "Mutants left out", warning, path, line))
+        notes.append(warning)
+    if notes and args.summary:
+        with open(args.summary, "a", encoding="utf-8") as summary:
+            summary.write("## Exclusions\n\n" + "".join(f"- {note}\n" for note in notes))
     stryker, _ = stryker_plan(change, exclusions)
     outputs = {
         "frontend": str(bool(found.frontend)).lower(),
@@ -1136,6 +1309,20 @@ def coverage(args: argparse.Namespace) -> int:
     details: list[str] = []
     annotations: list[str] = []
     for language, files, hits in sections:
+        if language == "Rust" and not hits:
+            # cargo-llvm-cov writes a record for every file the tests build,
+            # so a report without one means the tests didn't run.
+            status = 1
+            annotations.append(
+                annotation(
+                    "error",
+                    "No coverage data",
+                    "cargo-llvm-cov's report has no data for any file in the repo, so the Rust"
+                    " tests didn't run or the report didn't come through.",
+                )
+            )
+            out.append(f"| {language} | n/a | n/a | n/a | fails, the report has no data |")
+            continue
         results: list[FileCoverage] = []
         no_data: list[str] = []
         for path, lines in files.items():
@@ -1207,9 +1394,14 @@ def coverage(args: argparse.Namespace) -> int:
         f" tool can run. Each part needs at least {THRESHOLD:g}% of them covered.",
     ]
     out += details
-    if found.excluded:
+    functions = found.functions if args.rust_lcov else []
+    if found.excluded or functions:
         out += ["", f"Left out by `{EXCLUDE_FILE}`:", ""]
         out += [f"- {code(path)}: {reason}" for path, reason in found.excluded.items()]
+        out += [
+            f"- {code(f.function)} in {code(f.path)}, lines {show_ranges(f.lines)}, by entry {f.entry}: {f.reason}"
+            for f in functions
+        ]
     text = "\n".join(out) + "\n"
     if args.summary:
         with open(args.summary, "a", encoding="utf-8") as summary:
@@ -1281,6 +1473,25 @@ def check_mutant(mutant: dict, lines: list[str]) -> tuple[str | None, list[str]]
 MUTANT_SUMMARIES = {"CaughtMutant", "MissedMutant", "Timeout", "Unviable"}
 
 
+def has_line(span: object) -> bool:
+    """Whether a span in outcomes.json has a start line."""
+    start = span.get("start") if isinstance(span, dict) else None
+    line = start.get("line") if isinstance(start, dict) else None
+    return isinstance(line, int) and not isinstance(line, bool)
+
+
+def mutant_problem(mutant: dict) -> str | None:
+    """What a mutant in outcomes.json lacks that the check reads, if anything."""
+    if not isinstance(mutant.get("file"), str) or not isinstance(mutant.get("name"), str):
+        return "no file or name"
+    if not has_line(mutant.get("span")):
+        return "no line"
+    function = mutant.get("function")
+    if function is not None and (not isinstance(function, dict) or not has_line(function.get("span"))):
+        return "a function with no line"
+    return None
+
+
 def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
     """The mutants cargo-mutants missed in `folder`, or why its results can't
     be read. The plan only starts a run that has mutants to test, so a run
@@ -1288,15 +1499,26 @@ def read_outcomes(folder: str) -> tuple[list[dict], str | None]:
     outcomes = Path(folder) / "outcomes.json"
     if not outcomes.is_file():
         return [], f"{outcomes} is missing, so cargo-mutants didn't finish."
-    data = json.loads(outcomes.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(outcomes.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return [], f"{outcomes} isn't JSON this check can read: {error}"
+    entries = data.get("outcomes") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return [], f"{outcomes} has no list of outcomes."
     missed = []
     tested = 0
-    for outcome in data.get("outcomes", []) if isinstance(data, dict) else []:
+    for outcome in entries:
+        if not isinstance(outcome, dict):
+            return [], f"{outcomes} has an outcome this check can't read: {json.dumps(outcome)[:200]}"
         scenario = outcome.get("scenario")
         if scenario == "Baseline":
             continue
         if not isinstance(scenario, dict) or not isinstance(scenario.get("Mutant"), dict):
             return [], f"{outcomes} has a scenario this check can't read: {json.dumps(scenario)[:200]}"
+        problem = mutant_problem(scenario["Mutant"])
+        if problem is not None:
+            return [], f"{outcomes} has a mutant with {problem}: {json.dumps(scenario['Mutant'])[:200]}"
         summary = outcome.get("summary")
         if summary not in MUTANT_SUMMARIES:
             return [], f"{outcomes} has a mutant whose summary is {json.dumps(summary)}, which this check doesn't know."

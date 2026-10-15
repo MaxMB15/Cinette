@@ -64,7 +64,8 @@ class RepoTest(unittest.TestCase):
     def setUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        self.root = Path(folder.name)
+        # On macOS the temp folder is under /var, a link to /private/var.
+        self.root = Path(folder.name).resolve()
         env = mock.patch.dict(os.environ, GIT_ENV)
         env.start()
         self.addCleanup(env.stop)
@@ -184,6 +185,68 @@ class WidenedExclusionTest(RepoTest):
         self.assertIn("frontend: true", out)
         self.assertFalse(self.summary.exists())
 
+    def test_warns_about_changed_lines_in_an_excluded_function(self) -> None:
+        self.write(
+            {
+                cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["crates/core/src/lib.rs"]\nfunctions = ["on*"]\nreason = "y"\n'
+            }
+        )
+        self.commit("exclude one")
+        self.write({"crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"] + "pub fn only() -> u8 {\n    3\n}\n"})
+        self.commit("add only")
+        out = self.plan()
+        self.assertIn("::warning file=crates/core/src/lib.rs,line=4,endLine=6,title=Function left out::", out)
+        self.assertIn("entry 1, leaves out lines 4-6 of only in crates/core/src/lib.rs,", out)
+        self.assertIn("since on* matches the function's name", out)
+        self.assertIn("leaves out lines 4-6 of only", self.summary.read_text(encoding="utf-8"))
+        lcov = self.root / "lcov.info"
+        lcov.write_text("SF:crates/core/src/lib.rs\nDA:2,1\nend_of_record\n", encoding="utf-8")
+        status, out = self.run_script(
+            "coverage", "--base", "HEAD^1", "--head", "HEAD", "--rust-lcov", str(lcov)
+        )
+        self.assertEqual(status, 0)
+        self.assertIn("- `only` in `crates/core/src/lib.rs`, lines 4-6, by entry 1: y", out)
+
+    def test_quiet_about_unchanged_lines_in_an_excluded_function(self) -> None:
+        self.write(
+            {
+                cc.EXCLUDE_FILE: '[[exclude]]\nfiles = ["crates/core/src/lib.rs"]\nfunctions = ["one"]\nreason = "y"\n'
+            }
+        )
+        self.commit("exclude one")
+        self.write({"crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"] + "pub fn two() -> u8 {\n    2\n}\n"})
+        self.commit("add two")
+        self.assertNotIn("Function left out", self.plan())
+
+    def test_warns_about_added_mutant_filters(self) -> None:
+        self.write({".cargo/mutants.toml": 'exclude_re = ["replace one"]\n'})
+        self.commit("filter one")
+        self.write(
+            {
+                ".cargo/mutants.toml": 'exclude_re = ["replace one", "replace .* with"]\n'
+                'exclude_globs = ["crates/core/src/lib.rs"]\n'
+            }
+        )
+        self.commit("filter more")
+        out = self.plan()
+        self.assertIn("::warning file=.cargo/mutants.toml,title=Mutants left out::", out)
+        self.assertIn("adds `replace .* with` to exclude_re,", out)
+        self.assertIn("adds `crates/core/src/lib.rs` to exclude_globs,", out)
+        self.assertNotIn("`replace one`", out)
+        self.assertIn("`replace .* with`", self.summary.read_text(encoding="utf-8"))
+
+    def test_warns_about_an_added_mutants_skip(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + "#[mutants :: skip]\npub fn two() -> u8 {\n    2\n}\n"
+            }
+        )
+        self.commit("skip two")
+        out = self.plan()
+        self.assertIn("::warning file=crates/core/src/lib.rs,line=4,title=Mutants left out::", out)
+        self.assertIn("adds a mutants::skip on line 4,", self.summary.read_text(encoding="utf-8"))
+
     def test_lists_three_and_counts_the_rest(self) -> None:
         self.assertEqual(cc.listing(["a"], "files"), "a")
         self.assertEqual(cc.listing(["a", "b"], "files"), "a and b")
@@ -229,6 +292,110 @@ class TestCodeTest(RepoTest):
         scan = cc.scan_rust("#[tokio::test]\nasync fn runs() {\n    assert!(true);\n}\n")
         self.assertEqual(scan.test_lines(), {1, 2, 3, 4})
 
+    def test_a_path_module_leaves_its_folder_counted(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + '#[cfg(test)]\n#[path = "extra/lib_checks.rs"]\nmod tests;\npub mod extra;\n',
+                "crates/core/src/extra/mod.rs": "pub mod real;\n",
+                "crates/core/src/extra/real.rs": "pub fn four() -> u8 {\n    4\n}\n",
+                "crates/core/src/extra/lib_checks.rs": "fn helper() -> u8 {\n    5\n}\n",
+            }
+        )
+        self.commit("add a test module by path")
+        self.assertEqual(
+            self.counted_rust(),
+            {
+                "crates/core/src/lib.rs": [7],
+                "crates/core/src/extra/mod.rs": [1],
+                "crates/core/src/extra/real.rs": [1, 2, 3],
+            },
+        )
+
+    def test_a_path_outside_the_repo_counts_nothing_as_tests(self) -> None:
+        outside = self.root.parent / f"{self.root.name}-outside.rs"
+        outside.write_text("fn helper() {}\n", encoding="utf-8")
+        self.addCleanup(outside.unlink)
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + f'#[cfg(test)]\n#[path = "../../../../{outside.name}"]\nmod tests;\n',
+            }
+        )
+        self.commit("add a test module outside the repo")
+        self.assertEqual(cc.test_modules(cc.crates()[0]), (set(), []))
+        self.assertEqual(self.counted_rust(), {})
+
+    def test_modules_in_an_inline_test_module_are_under_its_folder(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + "pub mod helpers;\n#[cfg(test)]\nmod tests {\n    mod helpers;\n}\n",
+                "crates/core/src/helpers.rs": "pub fn six() -> u8 {\n    6\n}\n",
+                "crates/core/src/tests/helpers.rs": "fn check() {}\n",
+            }
+        )
+        self.commit("add helpers")
+        self.assertEqual(
+            self.counted_rust(),
+            {"crates/core/src/lib.rs": [4], "crates/core/src/helpers.rs": [1, 2, 3]},
+        )
+
+    def test_a_path_in_an_inline_test_module_counts_its_file(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + '#[cfg(test)]\nmod tests {\n    #[path = "helpers.rs"]\n    mod helpers;\n}\n',
+                "crates/core/src/helpers.rs": "fn check() {}\n",
+            }
+        )
+        self.commit("add helpers by path")
+        self.assertEqual(self.counted_rust(), {"crates/core/src/helpers.rs": [1]})
+
+    def test_a_file_module_looks_in_its_own_folder(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"] + "pub mod foo;\n",
+                "crates/core/src/foo.rs": "pub fn seven() -> u8 {\n    7\n}\n#[cfg(test)]\nmod checks;\n",
+                "crates/core/src/foo/checks.rs": "fn check() {}\n",
+                "crates/core/src/checks.rs": "pub fn eight() {}\n",
+            }
+        )
+        self.commit("add foo")
+        self.assertEqual(
+            self.counted_rust(),
+            {
+                "crates/core/src/lib.rs": [4],
+                "crates/core/src/foo.rs": [1, 2, 3],
+                "crates/core/src/checks.rs": [1],
+            },
+        )
+
+    def test_cfg_all_with_test_is_test_code(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + '#[cfg(all(test, feature = "x"))]\nmod checks;\n',
+                "crates/core/src/checks.rs": "fn check() {}\n",
+            }
+        )
+        self.commit("add checks")
+        self.assertEqual(self.counted_rust(), {})
+
+    def test_cfg_any_with_test_still_counts(self) -> None:
+        self.write(
+            {
+                "crates/core/src/lib.rs": WORKSPACE["crates/core/src/lib.rs"]
+                + '#[cfg(any(test, feature = "x"))]\nmod extra;\n',
+                "crates/core/src/extra.rs": "pub fn nine() {}\n",
+            }
+        )
+        self.commit("add extra")
+        self.assertEqual(
+            self.counted_rust(),
+            {"crates/core/src/lib.rs": [4, 5], "crates/core/src/extra.rs": [1]},
+        )
+
     def test_a_path_visibility_is_one_qualifier(self) -> None:
         scan = cc.scan_rust(
             "#[cfg(test)]\npub(in crate::player) fn helper() -> Result<(), String> {\n"
@@ -269,15 +436,24 @@ class CoverageTest(RepoTest):
         self.assertIn("::error file=apps/player/src/lib/a.ts,title=No coverage data::", out)
         self.assertIn("which fails the check", out)
 
-    def test_a_rust_file_with_no_data_does_not_count(self) -> None:
+    def rust_coverage(self, report: str) -> tuple[int, str]:
         self.write({"crates/core/src/lib.rs": "pub fn one() -> u8 {\n    2\n}\n"})
         self.commit("change one")
-        self.lcov.write_text("", encoding="utf-8")
-        status, out = self.run_script(
+        self.lcov.write_text(report, encoding="utf-8")
+        return self.run_script(
             "coverage", "--base", "HEAD^1", "--head", "HEAD", "--rust-lcov", str(self.lcov)
         )
+
+    def test_a_rust_file_with_no_data_does_not_count(self) -> None:
+        status, out = self.rust_coverage("SF:crates/core/src/other.rs\nDA:1,1\nend_of_record\n")
         self.assertEqual(status, 0)
         self.assertIn("so they don't count", out)
+
+    def test_an_empty_rust_report_fails(self) -> None:
+        status, out = self.rust_coverage("")
+        self.assertEqual(status, 1)
+        self.assertIn("| Rust | n/a | n/a | n/a | fails, the report has no data |", out)
+        self.assertIn("::error title=No coverage data::", out)
 
     def test_the_share_rounds_down(self) -> None:
         self.assertEqual(cc.share_text(7999, 10000), "79.9%")
@@ -301,7 +477,7 @@ class MutantsTest(RepoTest):
         self.out = self.root / "mutants.out"
         self.out.mkdir()
 
-    def outcomes(self, *outcomes: dict) -> None:
+    def outcomes(self, *outcomes: object) -> None:
         data = {"outcomes": [{"scenario": "Baseline", "summary": "Success"}, *outcomes]}
         (self.out / "outcomes.json").write_text(json.dumps(data), encoding="utf-8")
 
@@ -319,6 +495,35 @@ class MutantsTest(RepoTest):
         status, out = self.mutants()
         self.assertEqual(status, 1)
         self.assertIn("has no mutants", out)
+
+    def test_results_that_are_not_json_fail(self) -> None:
+        (self.out / "outcomes.json").write_text("{", encoding="utf-8")
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("isn't JSON this check can read", out)
+
+    def test_an_outcome_that_is_not_an_object_fails(self) -> None:
+        self.outcomes(["MissedMutant"])
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("::error title=No results::", out)
+        self.assertIn("has an outcome this check can't read", out)
+
+    def test_a_mutant_with_no_line_fails(self) -> None:
+        bad = mutant(2)
+        del bad["span"]["start"]
+        self.outcomes({"scenario": {"Mutant": bad}, "summary": "MissedMutant"})
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("has a mutant with no line", out)
+
+    def test_a_mutant_whose_function_has_no_line_fails(self) -> None:
+        bad = mutant(2, "FnValue")
+        bad["function"] = {"function_name": "add"}
+        self.outcomes({"scenario": {"Mutant": bad}, "summary": "MissedMutant"})
+        status, out = self.mutants()
+        self.assertEqual(status, 1)
+        self.assertIn("has a mutant with a function with no line", out)
 
     def test_an_unknown_summary_fails(self) -> None:
         self.outcomes({"scenario": {"Mutant": mutant(2)}, "summary": "Failure"})
