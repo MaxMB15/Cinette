@@ -48,6 +48,8 @@
 		"license": "GPL-3.0-only",
 		"resources": {
 			"../../../LICENSE": "LICENSE",
+			"../../../LICENSES/Apache-2.0.txt": "LICENSES/Apache-2.0.txt",
+			"../../../LICENSES/LGPL-3.0-or-later.txt": "LICENSES/LGPL-3.0-or-later.txt",
 			"../../../NOTICE": "NOTICE",
 			"../../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
 			"../../../TRADEMARKS.md": "TRADEMARKS.md"
