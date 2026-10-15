@@ -51,9 +51,9 @@ OPENSSL_SOURCES=(
 # The containers the app writes, from muxer_for_container in
 # crates/core/src/downloads/ffmpeg.rs.
 MUXERS=avi,matroska,mov,mp4,mpegts,webm
-# Streams the app may be given: HLS, MPEG-TS, MP4, MKV and the other files an
-# Xtream provider serves, such as AVI, FLV and WMV, and audio-only streams such
-# as radio. The app's own download tests serve WAV. RTSP, RTMP and UDP links
+# The app may be given HLS, MPEG-TS, MP4, MKV and the other files an Xtream
+# provider serves, such as AVI, FLV and WMV, and audio-only streams such as
+# radio. The app's own download tests serve WAV. RTSP, RTMP and UDP links
 # from an M3U playlist fail for now, since the app passes -reconnect, which only
 # HTTP takes, but the build can read them.
 DEMUXERS=aac,ac3,asf,avi,eac3,flac,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rtp,rtsp,sdp,srt,wav,webvtt
@@ -103,6 +103,10 @@ case "$(uname -s)" in
     # configure always links CoreMedia and CoreVideo, which nothing here uses.
     # -dead_strip leaves out the parts of OpenSSL that ffmpeg never calls.
     CONFIGURE+=(--enable-openssl --pkg-config-flags=--static "--extra-ldflags=-Wl,-dead_strip_dylibs -Wl,-dead_strip")
+    # On an Intel Mac, --disable-x86asm saves needing nasm, as on Linux below.
+    if [[ "$(uname -m)" == x86_64 ]]; then
+      CONFIGURE+=(--disable-x86asm)
+    fi
     # libSystem and zlib.
     ALLOWED_LIBS='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libz\.1\.dylib)$'
     ;;
@@ -120,6 +124,21 @@ case "$(uname -s)" in
     ;;
   *) echo "build-ffmpeg.sh builds on macOS and Linux only" >&2; exit 1 ;;
 esac
+
+# strings, otool and readelf check the finished program.
+NEEDS=(cc make pkg-config curl tar strings)
+if [[ "$PLATFORM" == linux ]]; then
+  # GNU tar unpacks the ffmpeg tarball with xz.
+  NEEDS+=(xz readelf)
+else
+  NEEDS+=(otool)
+fi
+for tool in "${NEEDS[@]}"; do
+  if ! command -v "$tool" > /dev/null 2>&1; then
+    echo "build-ffmpeg.sh needs $tool" >&2
+    exit 1
+  fi
+done
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
