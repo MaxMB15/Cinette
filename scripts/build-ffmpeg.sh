@@ -18,8 +18,10 @@ set -euo pipefail
 # make, pkg-config and the OpenSSL and zlib headers, such as libssl-dev and
 # zlib1g-dev on Debian. macOS has no OpenSSL of its own, so the script builds
 # one and links it in. Apple's SecureTransport would need nothing extra, but
-# it can't do TLS 1.3, so a server that only takes TLS 1.3 would fail. The
-# build is LGPL version 3 or later, and the script fails if it isn't.
+# it can't do TLS 1.3, so a server that only takes TLS 1.3 would fail. That
+# OpenSSL reads no config file, and looks for certificates in /etc/ssl, where
+# macOS keeps them. The build is LGPL version 3 or later, and the script fails
+# if it isn't, or if the program names the folder it was built in.
 #
 # .github/workflows/ffmpeg-build.yml builds and tests the copies that
 # scripts/fetch-ffmpeg.sh pins, and docs/development.md explains how.
@@ -45,13 +47,15 @@ OPENSSL_SOURCES=(
 # crates/core/src/downloads/ffmpeg.rs.
 MUXERS=avi,matroska,mov,mp4,mpegts,webm
 # Streams the app may be given: HLS, MPEG-TS, MP4, MKV and the other files an
-# Xtream provider serves, RTSP, RTMP and UDP links from an M3U playlist, and
-# audio-only streams such as radio. The app's own download tests serve WAV.
-DEMUXERS=aac,ac3,avi,eac3,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rtp,rtsp,sdp,srt,wav,webvtt
+# Xtream provider serves, such as AVI, FLV and WMV, and audio-only streams such
+# as radio. The app's own download tests serve WAV. RTSP, RTMP and UDP links
+# from an M3U playlist fail for now, since the app passes -reconnect, which only
+# HTTP takes, but the build can read them.
+DEMUXERS=aac,ac3,asf,avi,eac3,flac,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rtp,rtsp,sdp,srt,wav,webvtt
 PROTOCOLS=crypto,data,file,http,httpproxy,https,pipe,rtmp,rtmps,rtp,tcp,tls,udp
 PARSERS=aac,aac_latm,ac3,av1,dca,dvbsub,dvdsub,flac,h264,hevc,mpeg4video,mpegaudio,mpegvideo,opus,vorbis,vp8,vp9,vvc
 BSFS=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,mpeg4_unpack_bframes,null,setts,vp9_superframe,vvc_mp4toannexb
-DECODERS=aac,aac_latm,ac3,ass,dvbsub,dvdsub,eac3,h264,hevc,mov_text,mp2,mp3,mpeg2video,mpeg4,subrip,webvtt
+DECODERS=aac,aac_latm,ac3,ass,dvbsub,dvdsub,eac3,h264,hevc,movtext,mp2,mp3,mpeg2video,mpeg4,subrip,webvtt
 # Without -map, ffmpeg only keeps a subtitle track when it has an encoder for
 # the container's own subtitle format, ASS for Matroska and WebVTT for WebM.
 # The app copies the track, so neither runs.
@@ -149,28 +153,38 @@ fetch() {
 if [[ "$PLATFORM" == macos ]]; then
   fetch "openssl-$OPENSSL_VERSION.tar.gz" "$OPENSSL_SHA256" "${OPENSSL_SOURCES[@]}"
   echo "Building OpenSSL $OPENSSL_VERSION"
+  # OpenSSL keeps the folders it was configured with in the program. The
+  # prefix is a folder that doesn't exist on a Mac, since nothing loads
+  # modules or engines from it, and the install goes into the build folder.
+  OPENSSL_PREFIX=/opt/max-video-player/openssl
+  OPENSSL_ROOT="$WORK/openssl-root$OPENSSL_PREFIX"
   (
     cd "$WORK/openssl-$OPENSSL_VERSION"
     # Only the static libraries, with nothing loaded at run time. ffmpeg
     # needs DTLS, so that stays.
-    if ! ./Configure no-shared no-module no-legacy no-engine no-apps no-docs no-tests \
-      --prefix="$WORK/openssl" --libdir=lib > configure.log 2>&1; then
+    if ! ./Configure no-shared no-module no-legacy no-engine no-autoload-config \
+      no-apps no-docs no-tests --prefix="$OPENSSL_PREFIX" --openssldir=/etc/ssl \
+      --libdir=lib > configure.log 2>&1; then
       tail -n 40 configure.log >&2
       exit 1
     fi
     make -j"$JOBS" build_libs > make.log 2>&1 || { tail -n 40 make.log >&2; exit 1; }
-    make install_dev > install.log 2>&1 || { tail -n 40 install.log >&2; exit 1; }
+    make install_dev DESTDIR="$WORK/openssl-root" > install.log 2>&1 || { tail -n 40 install.log >&2; exit 1; }
   )
-  # ffmpeg finds this OpenSSL and never one from Homebrew.
-  export PKG_CONFIG_LIBDIR="$WORK/openssl/lib/pkgconfig"
-  CONFIGURE+=("--extra-cflags=-I$WORK/openssl/include" "--extra-ldflags=-L$WORK/openssl/lib")
+  # The .pc files name the prefix, so they point at the install instead.
+  sed -i '' "s|$OPENSSL_PREFIX|$OPENSSL_ROOT|g" "$OPENSSL_ROOT"/lib/pkgconfig/*.pc
+  # ffmpeg finds this OpenSSL and never one from Homebrew. pkg-config looks in
+  # PKG_CONFIG_PATH before PKG_CONFIG_LIBDIR.
+  unset PKG_CONFIG_PATH
+  export PKG_CONFIG_LIBDIR="$OPENSSL_ROOT/lib/pkgconfig"
 fi
 
 fetch "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256" "${FFMPEG_SOURCES[@]}"
-mkdir "$WORK/build"
-cd "$WORK/build"
+# In the source folder, the compiler gets paths like libavcodec/bytestream.h,
+# and those go into the program for its error messages.
+cd "$WORK/ffmpeg-$FFMPEG_VERSION"
 echo "Configuring ffmpeg $FFMPEG_VERSION for $PLATFORM: ${CONFIGURE[*]}"
-if ! "$WORK/ffmpeg-$FFMPEG_VERSION/configure" "${CONFIGURE[@]}" > configure.log 2>&1; then
+if ! ./configure "${CONFIGURE[@]}" > configure.log 2>&1; then
   tail -n 40 configure.log >&2
   tail -n 40 ffbuild/config.log >&2 || true
   exit 1
@@ -180,8 +194,37 @@ if [[ "$LICENSE" != "LGPL version 3 or later" ]]; then
   echo "The build would be ${LICENSE:-of no license configure named}, not LGPL version 3 or later" >&2
   exit 1
 fi
+# configure leaves out a component it doesn't know, or one that needs what the
+# build lacks, with no more than a warning.
+MISSING=""
+check_enabled() {
+  local kind="$1" name
+  for name in ${2//,/ }; do
+    if ! grep -q "^#define CONFIG_$(tr '[:lower:]' '[:upper:]' <<< "${name}_$kind") 1$" config_components.h; then
+      MISSING+=" ${name}_$kind"
+    fi
+  done
+}
+check_enabled muxer "$MUXERS"
+check_enabled demuxer "$DEMUXERS"
+check_enabled protocol "$PROTOCOLS"
+check_enabled parser "$PARSERS"
+check_enabled bsf "$BSFS"
+check_enabled decoder "$DECODERS"
+check_enabled encoder "$ENCODERS"
+if [[ -n "$MISSING" ]]; then
+  echo "configure didn't enable:$MISSING" >&2
+  exit 1
+fi
 make -j"$JOBS" ffmpeg > make.log 2>&1 || { tail -n 40 make.log >&2; exit 1; }
 strip ffmpeg
+
+# The build folder's random name would only say where the build ran.
+if grep -a -q -F "$(basename "$WORK")" ffmpeg; then
+  echo "ffmpeg names the folder it was built in, $WORK:" >&2
+  strings -a ffmpeg | grep -F "$(basename "$WORK")" >&2 || true
+  exit 1
+fi
 
 # A library the build wasn't meant to link would also have to ship with the app.
 if [[ "$PLATFORM" == macos ]]; then
@@ -213,7 +256,7 @@ cp ffmpeg "$OUT/ffmpeg"
   fi
   echo "Links:"
   sed 's/^/  /' <<< "$LIBS"
-  echo "Configure: ${CONFIGURE[*]//$WORK/<build folder>}"
+  echo "Configure: ${CONFIGURE[*]}"
 } > "$OUT/BUILDINFO.txt"
 cat "$OUT/BUILDINFO.txt"
 echo "Built $OUT/ffmpeg ($(wc -c < "$OUT/ffmpeg" | tr -d ' ') bytes)"

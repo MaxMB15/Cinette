@@ -86,15 +86,21 @@ The script pins one build for each platform by the SHA-256 of its archive.
 
 `scripts/build-ffmpeg.sh` builds ffmpeg from its release source with only what the
 app's downloads and recordings use. They copy a stream from HLS, MPEG-TS, MP4, MKV
-and the other files an Xtream provider serves, or from an RTSP, RTMP or UDP link,
-into MP4, MKV, MPEG-TS, AVI or WebM. The app never decodes or encodes with it, so
-the build has a few decoders, which only read details such as the picture size,
-and only the ASS and WebVTT encoders, which decide which subtitle tracks ffmpeg
-keeps. It can't read DASH, which would need libxml2. HTTPS goes through OpenSSL 3. The macOS build has OpenSSL 3.5 built in,
-and the Linux build uses the system's OpenSSL and zlib. The script fails if the
-build would be anything but LGPL, or would link any other library. The macOS build
-is 7.8 MB, where Martin Riedl's full build was 66 MB, and the Linux build is
-4.1 MB, where BtbN's was 172 MB.
+and the other files an Xtream provider serves, such as AVI, FLV and WMV, into MP4,
+MKV, MPEG-TS, AVI or WebM. The build can also read RTSP, RTMP and UDP links, but the
+app can't download them yet. It passes `-reconnect`, which only HTTP takes, so
+ffmpeg stops with `Option reconnect not found`. The app never decodes or encodes
+with ffmpeg, so the build has a few decoders, which only read details such as the
+picture size, and only the ASS and WebVTT encoders, which decide which subtitle
+tracks ffmpeg keeps. It can't read DASH, which would need libxml2.
+
+HTTPS goes through OpenSSL 3. The macOS build has OpenSSL 3.5 built in. The Linux
+build uses the system's OpenSSL and zlib, except in the AppImage, which carries
+Ubuntu 24.04's OpenSSL 3.0, and the sidecar uses that. The script fails if the build
+would be anything but LGPL, would leave out a component it asks for, would link any
+other library, or would name the folder it was built in. The macOS build is 7.8 MB,
+where Martin Riedl's full build was 66 MB, and the Linux build is 4.1 MB, where
+BtbN's was 172 MB.
 
 `.github/workflows/ffmpeg-build.yml` builds macOS on GitHub's macos-15 runner and
 Linux in Debian 12, so the Linux build runs on Debian 12, Ubuntu 24.04 and later.
@@ -117,9 +123,11 @@ machine, such as an Intel Mac or Linux on ARM, the script builds ffmpeg with
 `build-ffmpeg.sh` in its place. That takes a few minutes and needs a C compiler,
 `make`, `pkg-config` and `curl`, and on Linux the OpenSSL and zlib headers, such as
 `libssl-dev` and `zlib1g-dev` on Debian. In GitHub Actions it says so in a
-warning. The release workflow sets `FFMPEG_PINNED_ONLY=1`, which makes the script
-fail instead, so a release only ships a pinned build. A Linux build made on the
-runner would need the runner's newer glibc.
+warning. The release workflow and the Build & Bundle jobs set
+`FFMPEG_PINNED_ONLY=1`, which makes the script fail instead. A release only ships a
+pinned build, since a Linux build made on the runner would need the runner's newer
+glibc. Build & Bundle fails a pull request whose pinned archive doesn't download or
+doesn't match its hash, so the release can't find that out after its tag is pushed.
 
 Each Monday, `.github/workflows/ffmpeg-update-check.yml` compares the pinned versions
 with ffmpeg's release tags. It opens an issue called "ffmpeg <version> is out" for the
@@ -169,14 +177,18 @@ To move to a new ffmpeg:
 
 ffmpeg 9.0 checks TLS certificates by default, and 8.1 doesn't. Martin Riedl's static
 macOS 9.0 build finds no certificate store, so every HTTPS download fails, even from a
-server with a valid certificate. The macOS build from `build-ffmpeg.sh` looks for one
-in the folder it was built in, so it would fail the same way. Setting `SSL_CERT_FILE`
-for the sidecar fixes that. A server with a bad certificate still fails, because the
-HLS demuxer doesn't pass `-tls_verify 0` on to its requests for variant playlists and
-segments. mpv doesn't check certificates by default, so such a stream plays but can't
-be downloaded. Before the sidecar moves to 9.x, the app needs to handle that, and
-someone needs to decide whether downloads should check certificates. The
-`ffmpeg-sidecar-9.0.2` pre-release holds Martin Riedl's and BtbN's 9.0.2 builds.
+server with a valid certificate. The macOS build from `build-ffmpeg.sh` looks for
+certificates in `/etc/ssl/cert.pem`, where macOS keeps them. The Linux `.deb` and
+`.rpm` use the system's OpenSSL, which knows where its certificates are. The
+AppImage's OpenSSL, from Ubuntu, looks in `/usr/lib/ssl`, which only Debian, Ubuntu
+and the systems built on them have, so on Fedora or Arch it would find none. None of
+this has been tried with 9.0. A server with a bad certificate would fail even if the app passed
+`-tls_verify 0`, because the HLS demuxer doesn't pass it on to its requests for
+variant playlists and segments. mpv doesn't check certificates by default, so such a
+stream plays but can't be downloaded. Before the sidecar moves to 9.x, the app needs
+to handle that, and someone needs to decide whether downloads should check
+certificates. The `ffmpeg-sidecar-9.0.2` pre-release holds Martin Riedl's and BtbN's
+9.0.2 builds.
 
 ## Running the app
 

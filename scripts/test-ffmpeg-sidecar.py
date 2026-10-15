@@ -9,9 +9,10 @@ Test the ffmpeg that the app runs for downloads and recordings.
 libx265, libvpx-vp9, libopus and libmp3lame encoders. `test` makes a
 throwaway certificate with the openssl command, serves those files over HTTP
 and HTTPS on 127.0.0.1, runs the ffmpeg under test with the app's own
-arguments and reads back what it wrote. No case uses a login, and the only
-thing that may leave this machine is a DNS lookup of a .invalid name, which
-resolvers answer without asking anyone.
+arguments and reads back what it wrote. No case uses a login, and ffmpeg runs
+without the proxy settings. The only thing that may leave this machine is a
+DNS query for a name ending in .invalid, which RFC 6761 reserves so that it
+never exists.
 
 Usage:
   python3 -I scripts/test-ffmpeg-sidecar.py media FULL_FFMPEG FOLDER
@@ -61,6 +62,7 @@ LIVE_LENGTH = 30
 CONTENT_TYPES = {
     ".aac": "audio/aac",
     ".avi": "video/x-msvideo",
+    ".flac": "audio/flac",
     ".flv": "video/x-flv",
     ".m3u8": "application/vnd.apple.mpegurl",
     ".m4s": "video/iso.segment",
@@ -70,7 +72,13 @@ CONTENT_TYPES = {
     ".mp4": "video/mp4",
     ".ts": "video/mp2t",
     ".webm": "video/webm",
+    ".wmv": "video/x-ms-wmv",
 }
+
+# ffmpeg sends HTTP through the proxy that these name, and the cases only
+# reach 127.0.0.1.
+PROXIES = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+CHILD_ENV = {name: value for name, value in os.environ.items() if name.lower() not in PROXIES}
 
 # What the build must have for the links the app plays and records, beyond
 # what the cases below use.
@@ -114,8 +122,10 @@ def make_media(ffmpeg: str, folder: Path) -> None:
     run(*av, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
         "-c:a", "libopus", www / "vp9.webm")
     run(*av, "-c:v", "mpeg4", "-c:a", "libmp3lame", www / "mpeg4.avi")
+    run(*av, "-c:v", "wmv2", "-c:a", "wmav2", www / "av.wmv")
     run(*sound(LENGTH), "-c:a", "libmp3lame", www / "radio.mp3")
     run(*sound(LENGTH), "-c:a", "aac", "-f", "adts", www / "radio.aac")
+    run(*sound(LENGTH), "-c:a", "flac", www / "sound.flac")
     # Like the WAV that the app's own download tests serve.
     run(*sound(LENGTH), "-c:a", "pcm_u8", "-ar", "8000", "-ac", "1", www / "sound.wav")
     run(*picture(LIVE_LENGTH), *sound(LIVE_LENGTH), *h264, *aac, www / "live.ts")
@@ -336,6 +346,8 @@ def cases() -> list[Case]:
         Case("HEVC and AC-3 into MKV", "/media/hevc.ts", "mkv", ["ac3", "hevc"]),
         Case("MPEG-2 and MP2 into MKV", "/media/mpeg2.ts", "mkv", ["mp2", "mpeg2video"]),
         Case("FLV into MKV", "/media/av.flv", "mkv", av),
+        Case("WMV into MKV", "/media/av.wmv", "mkv", ["wmav2", "wmv2"]),
+        Case("FLAC into MKV", "/media/sound.flac", "mkv", ["flac"]),
         Case("MPEG-TS into MP4", "/media/av.ts", "mp4", av),
         # The app's own download tests serve WAV.
         Case("WAV into MKV", "/media/sound.wav", "mkv", ["pcm_u8"]),
@@ -395,7 +407,11 @@ class Run:
 def run_ffmpeg(ffmpeg: str, args: list[str], timeout: float, quit_after: float | None) -> Run:
     # stdin stays open, as it does in the app.
     proc = subprocess.Popen(
-        [ffmpeg, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        [ffmpeg, *args],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=CHILD_ENV,
     )
     output: dict[str, bytes] = {}
 

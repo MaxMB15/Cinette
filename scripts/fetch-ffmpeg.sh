@@ -20,8 +20,9 @@ set -euo pipefail
 # On macOS and Linux, when no source gives the pinned archive or no build is
 # pinned for this machine, such as an Intel Mac, the script builds ffmpeg from
 # source with scripts/build-ffmpeg.sh instead. FFMPEG_PINNED_ONLY=1 makes it
-# fail then, as the release workflow does, since a Linux build made on a newer
-# system than Debian 12 wouldn't run on Debian 12.
+# fail then, as the Build & Bundle and release workflows do. A release must ship
+# the pinned build, since a Linux build made on a newer system than Debian 12
+# wouldn't run on Debian 12, and Build & Bundle fails a pin that doesn't work.
 
 # The sidecar's name, the same as FFMPEG_SIDECAR in the app. The Linux packages
 # install it in /usr/bin, so it can't be plain ffmpeg.
@@ -108,8 +109,8 @@ build_from_source() {
     echo "$why" >&2
     exit 1
   fi
-  if [[ -n "${FFMPEG_PINNED_ONLY:-}" ]]; then
-    echo "$why FFMPEG_PINNED_ONLY is set, so the script won't build one from source." >&2
+  if [[ "${FFMPEG_PINNED_ONLY:-}" == 1 ]]; then
+    echo "$why FFMPEG_PINNED_ONLY is 1, so the script won't build one from source." >&2
     exit 1
   fi
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
