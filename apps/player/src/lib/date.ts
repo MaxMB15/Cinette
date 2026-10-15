@@ -11,4 +11,7 @@ export const parseDateMs = (value: string | null | undefined): number => {
 };
 
 /** A probe for the Changed code check, which no test runs yet. */
-export const gateProbe = (a: number, b: number): number => a * 2 + b;
+export const gateProbe = (a: number, b: number): number => {
+	const doubled = a * 2;
+	return doubled + b;
+};
