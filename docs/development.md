@@ -468,7 +468,7 @@ require that one. It runs three checks.
   table of each file's uncovered changed lines, and each one gets an annotation. Vitest
   lists every frontend file a test could load, so a changed frontend file missing from
   its report fails the check. A Rust file can be missing, since Linux doesn't build the
-  macOS and iOS code.
+  macOS and iOS code, but a Rust report with no data for any file fails.
 - Stryker mutates the changed lines of the frontend, and a change that no test catches
   fails the job, as [Mutation testing](#mutation-testing) explains.
 - cargo-mutants mutates the changed lines of each crate, and a change that no test
@@ -480,10 +480,12 @@ require that one. It runs three checks.
 
 The lines that count are in the `.ts` and `.tsx` files in `apps/player/src` and in the
 `.rs` files in each crate's `src` folder. Tests don't count. That's `*.test.ts` and
-`*.test.tsx` files, `src/test`, `.d.ts` files, modules declared with `#[cfg(test)]`, in
-their own file or inline, and `#[test]` and `#[tokio::test]` functions. A Rust file
-named `tests.rs` counts like any other until a module declares it that way. Docs,
-workflows, scripts and anything else outside those folders don't count either.
+`*.test.tsx` files, `src/test`, `.d.ts` files, modules declared with `#[cfg(test)]` or
+`#[cfg(all(test, ...))]`, in their own file or inline, the modules they declare, and
+`#[test]` and `#[tokio::test]` functions. A Rust file named `tests.rs` counts like any
+other until a module declares it that way, and so does a file a test module names with a
+`#[path]` that the check can't follow. Docs, workflows, scripts and anything else outside
+those folders don't count either.
 
 [`scripts/changed-code-exclude.toml`](../scripts/changed-code-exclude.toml) leaves out
 the code that no test in CI can run, and each entry says why. That's the macOS, iOS
@@ -495,6 +497,14 @@ check reads `.cargo/mutants.toml` instead. Keep the list short, and add only cod
 CI can't run. The plan job warns about an entry that matches nothing. It also warns,
 and lists it in its summary, when a pull request adds or widens an entry so that it
 leaves out files or functions that the base commit's copy counts.
+
+An entry's functions match any function with that name, or a name the glob matches,
+anywhere in its files, so a new function with the same name, or one a glob catches,
+drops out too. The plan job warns about the changed lines that a function entry leaves
+out, naming the function and the entry, and the Rust coverage summary lists them. It
+warns the same way when a pull request adds an `exclude_re` or `exclude_globs`
+entry to `.cargo/mutants.toml`, or a `#[mutants::skip]` to a crate's code, since
+cargo-mutants then makes none of those changes in this pull request or any later one.
 
 A missed Rust change that does the same thing as the code can't fail any test. A
 comment then names the change's genre and says why, alone on the line before the
@@ -528,15 +538,15 @@ branch left `origin/dev`, so fetch first. The scripts need Python 3.11 or later 
 python.org. Each part needs its tools. Rust coverage needs cargo-llvm-cov and the
 llvm-tools component from [Tests and checks](#tests-and-checks), and Rust mutation
 testing needs cargo-mutants when the change adds lines to a `.rs` file. The plugin and
-the app need libmpv,
-which the script finds in `libs/<os>` or in `MPV_LIB_DIR`. A worktree without `libs/`
-can point `MPV_LIB_DIR` at the main checkout's. The app also needs the ffmpeg sidecar,
-and the script builds the frontend when `apps/player/dist` is missing. cargo-mutants
-runs in a copy of the repo that leaves out what git ignores, so the app's mutants only
-run with `--in-place`, which changes your own files one at a time. That only runs in a
-linked worktree with every `.rs` change committed. A mutant can make the app's tests
-write `movies`, `recordings` and `series` folders into `apps/player/src-tauri`, and the
-script deletes the ones that weren't there before it started.
+the app need libmpv, which the script finds in `libs/<os>` or in `MPV_LIB_DIR`. A
+worktree without `libs/` can point `MPV_LIB_DIR` at the main checkout's. The app also
+needs the ffmpeg sidecar, and the script builds the frontend when `apps/player/dist` is
+missing. cargo-mutants runs in a copy of the repo that leaves out what git ignores, so
+the app's mutants only run with `--in-place`, which changes your own files one at a
+time. That only runs in a linked worktree with every `.rs` change committed. A mutant
+can make the app's tests write `movies`, `recordings` and `series` folders into
+`apps/player/src-tauri`, and the script deletes the ones that weren't there before it
+started.
 
 ## Production build
 
