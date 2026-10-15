@@ -475,8 +475,9 @@ require that one. It runs three checks.
   catches fails the job unless a skip comment covers it. A change that runs past the
   timeout counts as caught, and one that doesn't build doesn't count. The run is split
   into shards of about 100 changes for `mvp-core`, 55 for the plugin and 45 for the app,
-  at most eight a crate, so a shard takes about 12 minutes plus its build. A shard that
-  writes no results, or results with no changes in them, fails.
+  at most eight a crate, so a shard takes about 12 minutes plus its build. A shard
+  fails when it writes no results, results with no changes in them, or results the
+  check can't read.
 
 The lines that count are in the `.ts` and `.tsx` files in `apps/player/src` and in the
 `.rs` files in each crate's `src` folder. Tests don't count. That's `*.test.ts` and
@@ -501,10 +502,19 @@ leaves out files or functions that the base commit's copy counts.
 An entry's functions match any function with that name, or a name the glob matches,
 anywhere in its files, so a new function with the same name, or one a glob catches,
 drops out too. The plan job warns about the changed lines that a function entry leaves
-out, naming the function and the entry, and the Rust coverage summary lists them. It
-warns the same way when a pull request adds an `exclude_re` or `exclude_globs`
-entry to `.cargo/mutants.toml`, or a `#[mutants::skip]` to a crate's code, since
-cargo-mutants then makes none of those changes in this pull request or any later one.
+out, naming the function and the entry. When other changed Rust lines count, the Rust
+coverage summary lists them too. When none do, the Rust coverage job doesn't run, and
+the plan job's warning is the only place they show.
+
+The plan job also warns when a pull request adds, removes or changes a setting in
+`.cargo/mutants.toml`. Settings like `exclude_re` and `examine_re` decide which
+changes cargo-mutants makes, and ones like `timeout_multiplier` can turn a missed
+change into a timeout, which counts as caught. An entry taken out of `exclude_re` or
+`exclude_globs` gets no warning, since cargo-mutants then makes more changes, and
+nor does a change to comments or spacing. It warns the same way about a
+`#[mutants::skip]` that a pull request adds to a crate's code, or about a changed line
+in one, even when the attribute is split across lines or broken up by a comment. Both
+stop cargo-mutants making those changes in this pull request and every later one.
 
 A missed Rust change that does the same thing as the code can't fail any test. A
 comment then names the change's genre and says why, alone on the line before the
