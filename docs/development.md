@@ -118,7 +118,7 @@ whose `ssl` module has TLS 1.3, which macOS's own `/usr/bin/python3` lacks. Each
 build job then uploads an archive of its build, with the archive's SHA-256 and the
 build's size in the job summary. When the pre-release already has an archive with
 the same name, the job fails unless that archive came from the same source and
-configure options.
+options, which the archive's `BUILDINFO.txt` lists.
 
 The workflow's `pinned` jobs fetch the archives that `fetch-ffmpeg.sh` pins, on
 macos-15 and Ubuntu 24.04, and run the same test on them, with Ubuntu's ffmpeg
@@ -137,14 +137,17 @@ updater reads.
 On macOS and Linux, when no archive matches, or when no build is pinned for your
 machine, such as an Intel Mac or Linux on ARM, the script builds ffmpeg with
 `build-ffmpeg.sh` in its place. That takes a few minutes and needs a C compiler,
-`make`, `pkg-config`, `curl` and `tar`, and on Linux `xz` and the OpenSSL and zlib
-headers, such as `xz-utils`, `libssl-dev` and `zlib1g-dev` on Debian. In GitHub
+`make`, `pkg-config`, `curl`, `tar`, `strip` and `strings`. A Mac also needs
+`otool` and `perl`. The Command Line Tools and macOS have all of them except
+`pkg-config`. Linux also needs `xz`, `readelf` and the OpenSSL and zlib headers,
+such as `xz-utils`, `binutils`, `libssl-dev` and `zlib1g-dev` on Debian. In GitHub
 Actions it says so in a warning. On an Intel Mac the build leaves out ffmpeg's x86
-assembly, which would need nasm. The release workflow and the Build & Bundle jobs set
-`FFMPEG_PINNED_ONLY=1`, which makes the script fail instead. A release only ships a
-pinned build, since a Linux build made on the runner would need the runner's newer
-glibc. Build & Bundle fails a pull request whose pinned archive doesn't download or
-doesn't match its hash, so the release can't find that out after its tag is pushed.
+assembly, which would need nasm. The release workflow, the Build & Bundle jobs and
+the mutation tests set `FFMPEG_PINNED_ONLY=1`, which makes the script fail instead.
+A release only ships a pinned build, since a Linux build made on the runner would
+need the runner's newer glibc. Build & Bundle fails a pull request whose pinned
+archive doesn't download or doesn't match its hash, so the release can't find that
+out after its tag is pushed.
 
 Each Monday, `.github/workflows/ffmpeg-update-check.yml` compares the pinned versions
 with ffmpeg's release tags. It opens an issue called "ffmpeg <version> is out" for the
@@ -166,9 +169,9 @@ To move to a new ffmpeg:
    versions. For a new series, also set `MIRROR` in both scripts. For OpenSSL,
    check its tarball against the keys at openssl-library.org and set
    `OPENSSL_VERSION` and `OPENSSL_SHA256`. When the build changes but ffmpeg
-   doesn't, such as for a new OpenSSL or new configure options, raise
-   `FFMPEG_BUILD`, which goes in the archive's name. The macOS and Linux builds
-   share it, so both get new archives.
+   doesn't, such as for a new OpenSSL, new configure options or a new macOS
+   target, raise `FFMPEG_BUILD`, which goes in the archive's name. The macOS and
+   Linux builds share it, so both get new archives.
 2. Open a pull request. The ffmpeg build workflow builds and tests both platforms.
    To try a build yourself, run `./scripts/build-ffmpeg.sh <folder>`, then
    `python3 scripts/test-ffmpeg-sidecar.py media <a full ffmpeg> <media folder>`
