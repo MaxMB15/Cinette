@@ -3,7 +3,8 @@
 # Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 # Bundle libmpv and its dependencies into the macOS app for distribution.
-# Run as beforeBundleCommand during tauri build. Requires: brew install mpv dylibbundler
+# Run as beforeBundleCommand during tauri build. Needs dylibbundler, from
+# Homebrew on Apple Silicon or MacPorts on Intel, like libmpv's own libraries.
 # CWD when run: workspace root (via beforeBundleCommand cwd)
 # No-op on non-macOS (e.g. when building on Windows/Linux).
 
@@ -43,7 +44,11 @@ fi
 
 # dylibbundler must be installed
 if ! command -v dylibbundler &>/dev/null; then
-  echo "Error: dylibbundler not found. Run: brew install dylibbundler"
+  if [[ "$(uname -m)" == x86_64 ]]; then
+    echo "Error: dylibbundler not found. Run: sudo port install dylibbundler"
+  else
+    echo "Error: dylibbundler not found. Run: brew install dylibbundler"
+  fi
   exit 1
 fi
 
@@ -51,14 +56,25 @@ fi
 rm -rf "$LIBS_BUNDLE"
 mkdir -p "$LIBS_BUNDLE"
 
-# Resolve Homebrew prefix for transitive dep search (works on Apple Silicon + Intel)
-BREW_LIB="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib"
+# libmpv links its libraries by full path, from Homebrew on Apple Silicon and
+# from MacPorts on Intel. build-libmpv.sh makes sure it's only one of them.
+LIBMPV="$LIBS_MACOS/libmpv.dylib"
+[[ -f "$LIBMPV" ]] || LIBMPV="$LIBS_MACOS/libmpv.2.dylib"
+if otool -L "$LIBMPV" | grep -q '^[[:space:]]*/opt/local/'; then
+  # MacPorts keeps ffmpeg 7 in a folder of its own.
+  SEARCH_DIRS=(/opt/local/lib /opt/local/libexec/ffmpeg7/lib)
+else
+  SEARCH_DIRS=("$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib")
+fi
+SEARCH_ARGS=(-s "$LIBS_MACOS")
+for dir in "${SEARCH_DIRS[@]}"; do
+  SEARCH_ARGS+=(-s "$dir")
+done
 
 # -s tells dylibbundler where to find libraries it can't resolve via @rpath.
 # Without this it drops into an interactive prompt (and hangs in CI).
 dylibbundler -od -b -x "$BINARY" -d "$LIBS_BUNDLE" -p "@executable_path/../Frameworks" \
-  -s "$LIBS_MACOS" \
-  -s "$BREW_LIB"
+  "${SEARCH_ARGS[@]}"
 
 # dylibbundler rewrites every LC_RPATH it finds to the -p path, so libmpv (built
 # with one rpath per Homebrew dependency) ends up carrying the same entry ~11
@@ -148,7 +164,8 @@ if [[ -n "$too_new" ]]; then
     echo "Error: $msg" >&2
     exit 1
   fi
-  # Local Homebrew targets this Mac's macOS, so a dev build can't meet the minimum.
+  # Local Homebrew and MacPorts packages target this Mac's macOS, so a dev
+  # build can't meet the minimum.
   echo "Warning: $msg" >&2
   echo "This build only runs on this Mac's macOS version. Release builds run on a macOS $MIN_MACOS CI runner." >&2
 fi

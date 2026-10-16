@@ -18,16 +18,27 @@ case "$PLATFORM" in
     echo "==> Building libmpv from source for macOS..."
     mkdir -p "$LIBS_DIR/macos"
 
+    # Homebrew has no packages for Intel Macs, so they use MacPorts.
+    # docs/development.md has the full setup for both.
+    if [[ "$(uname -m)" == x86_64 ]]; then
+      INSTALL_HINT="sudo port install meson ninja pkgconfig ffmpeg7 libass libplacebo dylibbundler"
+      FFMPEG_PC=/opt/local/libexec/ffmpeg7/lib/pkgconfig
+    else
+      INSTALL_HINT="brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler"
+      FFMPEG_PC="\$(brew --prefix ffmpeg@7)/lib/pkgconfig"
+    fi
+
     # Check build tools
     for tool in meson ninja pkg-config; do
       if ! command -v "$tool" &>/dev/null; then
-        echo "Error: $tool not found. Run: brew install meson ninja pkg-config"
+        echo "Error: $tool not found. Run: $INSTALL_HINT"
         exit 1
       fi
     done
 
     if ! pkg-config --exists libavcodec; then
-      echo "Error: ffmpeg not found. Run: brew install ffmpeg"
+      echo "Error: ffmpeg 7 not found. Run: $INSTALL_HINT"
+      echo "Then: export PKG_CONFIG_PATH=\"$FFMPEG_PC:\$PKG_CONFIG_PATH\""
       exit 1
     fi
 
@@ -92,6 +103,17 @@ case "$PLATFORM" in
       echo "Error: libmpv.dylib not found after build"
       exit 1
     fi
+    # bundle-libmpv.sh copies every library from one package manager. A Mac
+    # with both Homebrew and MacPorts can link a library from each, and the
+    # app would then carry two copies of a library with different versions.
+    PREFIXES=$(otool -L "$DYLIB" | awk 'NR > 1 { print $1 }' \
+      | grep -oE '^(/opt/homebrew|/opt/local|/usr/local)/' | sort -u || true)
+    if (( $(grep -c . <<< "$PREFIXES" || true) > 1 )); then
+      echo "Error: libmpv links libraries from more than one of these: ${PREFIXES//$'\n'/ }"
+      echo "Keep only one package manager's pkg-config on PATH and PKG_CONFIG_PATH."
+      exit 1
+    fi
+
     rm -f "$LIBS_DIR/macos/libmpv.dylib" "$LIBS_DIR/macos/libmpv.2.dylib"
     cp "$DYLIB" "$LIBS_DIR/macos/libmpv.dylib"
     # Symlink for the versioned install name (@rpath/libmpv.2.dylib)

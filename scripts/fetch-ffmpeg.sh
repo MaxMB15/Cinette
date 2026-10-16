@@ -18,8 +18,8 @@ set -euo pipefail
 # move to a new ffmpeg.
 #
 # On macOS and Linux, when no source gives the pinned archive or no build is
-# pinned for this machine, such as an Intel Mac, the script builds ffmpeg from
-# source with scripts/build-ffmpeg.sh instead. FFMPEG_PINNED_ONLY=1 makes it
+# pinned for this machine, such as an arm64 Linux machine, the script builds
+# ffmpeg from source with scripts/build-ffmpeg.sh instead. FFMPEG_PINNED_ONLY=1 makes it
 # fail then, as the Build & Bundle and release workflows do. A release must ship
 # the pinned build, since a Linux build made on a newer system than Debian 12
 # wouldn't run on Debian 12, and Build & Bundle fails a pin that doesn't work.
@@ -53,11 +53,23 @@ EXT=""
 UPSTREAM=""
 case "$PLATFORM" in
   macos)
-    # Apple Silicon, built on GitHub's macos-15 runner.
+    # One build for each CPU. They share one FFMPEG_VERSION line, since the
+    # ffmpeg workflows read one for each platform.
     FFMPEG_VERSION=8.1.3
-    TARGETS="aarch64-apple-darwin"
-    FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-arm64.tar.xz"
-    SHA256=512919842746ec801af6e5328a519b5edd9a3c2ba2bebbeaf1d3cf05f79394be
+    TARGETS="aarch64-apple-darwin x86_64-apple-darwin"
+    case "$TARGET_TRIPLE" in
+      x86_64-apple-darwin)
+        # Intel, built on GitHub's macos-15-intel runner.
+        FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-x86_64.tar.xz"
+        SHA256=0000000000000000000000000000000000000000000000000000000000000000
+        ;;
+      *)
+        # Apple Silicon, built on GitHub's macos-15 runner. The TARGETS check
+        # below turns away any other target.
+        FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-arm64.tar.xz"
+        SHA256=512919842746ec801af6e5328a519b5edd9a3c2ba2bebbeaf1d3cf05f79394be
+        ;;
+    esac
     ;;
   linux)
     # x86_64, built in Debian 12, so it runs on Debian 12, Ubuntu 24.04 and

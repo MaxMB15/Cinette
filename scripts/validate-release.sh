@@ -10,7 +10,8 @@
 #   ./scripts/validate-release.sh v0.3.7       # checks a specific tag
 #
 # Exits 0 if every URL resolves (HTTP 200), non-zero otherwise. Releases from
-# before the installers lost their version numbers fail the README checks.
+# before the installers lost their version numbers fail the README checks, and
+# releases from before the Intel Mac build fail the x64 one.
 
 set -euo pipefail
 
@@ -106,8 +107,9 @@ fi
 # The versionless installers the README's download links point at
 echo ""
 echo "--- README downloads ---"
-for name in MaxVideoPlayer_aarch64.dmg MaxVideoPlayer_amd64.AppImage \
-            MaxVideoPlayer_amd64.deb MaxVideoPlayer_x86_64.rpm; do
+for name in MaxVideoPlayer_aarch64.dmg MaxVideoPlayer_x64.dmg \
+            MaxVideoPlayer_amd64.AppImage MaxVideoPlayer_amd64.deb \
+            MaxVideoPlayer_x86_64.rpm; do
   check_url "$name" "$BASE_URL/$name"
 done
 

@@ -34,7 +34,7 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 
 | Platform | Download | Requirements |
 | --- | --- | --- |
-| **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg) | macOS 15 Sequoia or later on an M-series Mac |
+| **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x64.dmg) | macOS 15 Sequoia or later |
 | **Linux** | [**AppImage**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x86_64.rpm) | x86_64 |
 | Windows | Planned | |
 | iOS, iPadOS | Planned | |
@@ -42,7 +42,7 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 
 These links always point at the newest version. Older versions and release notes are on the [releases page](https://github.com/MaxMB15/MaxVideoPlayer/releases), and the [changelog](CHANGELOG.md) lists what changed in each one. Once installed, the app updates itself.
 
-There's no version for Intel Macs or for macOS 14 and earlier. Older releases claimed to support them, but their bundled libraries needed macOS 15 on Apple Silicon too.
+There's no version for macOS 14 and earlier. Releases before the Intel build only ran on macOS 15 on Apple Silicon, even the ones that claimed to support Intel Macs and older macOS. Pick the build for your Mac's chip, which **About This Mac** shows.
 
 ### Installing
 

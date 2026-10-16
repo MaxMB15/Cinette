@@ -15,8 +15,8 @@ on:
   # platform files changed, and a skipped job still counts as passing.
   pull_request:
     branches: [main, dev, release-*]
-  # A manual run builds only macOS, signed and notarized when the Apple secrets
-  # are set, so signing can be tested without making a release.
+  # A manual run builds only macOS, for both CPUs, signed and notarized when the
+  # Apple secrets are set, so signing can be tested without making a release.
   workflow_dispatch:
 
 permissions:
@@ -111,6 +111,8 @@ jobs:
             macos:
               - *shared
               - 'scripts/bundle-libmpv.sh'
+              - 'scripts/smoke-test-macos-app.sh'
+              - '.github/actions/install-macos-deps/**'
               - '.github/actions/macos-signing/**'
 
   # ── Tests (run on every push and PR) ────────────────────────────────────
@@ -248,11 +250,7 @@ jobs:
         uses: ./.github/actions/setup-frontend
 
       - name: Install system deps
-        run: |
-          # ffmpeg@7 required: mpv 0.40.0 uses FF_PROFILE_* macros removed in ffmpeg 8.x
-          brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
-          # Make ffmpeg@7 visible to pkg-config (it is keg-only, not linked by default)
-          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+        uses: ./.github/actions/install-macos-deps
 
       - name: Prepare libmpv for bundle
         run: ./scripts/build-libmpv.sh macos
@@ -288,6 +286,9 @@ jobs:
         # makes, and tries a failed build once more. The script says why.
         run: ./scripts/build-app.sh
 
+      - name: Start the app
+        run: ./scripts/smoke-test-macos-app.sh target/release/bundle/macos/*.app
+
       - name: Notarize the DMG
         if: steps.apple.outputs.notarizing == 'true'
         run: ./scripts/notarize-macos.sh target/release/bundle/dmg/*.dmg
@@ -303,6 +304,97 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: MaxVideoPlayer-macOS
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
+          if-no-files-found: error
+
+  # ── macOS Desktop on Intel (same trigger as build-macos) ────────────────
+  # A job of its own, not a matrix leg, because rulesets require build-macos
+  # by name. Homebrew stopped building bottles for Intel Macs, so this job's
+  # libraries come from MacPorts. Clippy runs in build-macos only, since the
+  # code is the same for both CPUs.
+  build-macos-intel:
+    if: needs.detect-changes.outputs.macos == 'true' && !startsWith(github.head_ref, 'chore-bump-v')
+    needs: [test, detect-changes]
+    # macOS 15 for the same reason as build-macos. GitHub's last Intel image.
+    runs-on: macos-15-intel
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'macos-signing' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          # Shared with release.yml, which restores it from main.
+          shared-key: desktop-macos-x64
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
+
+      - name: Install system deps
+        uses: ./.github/actions/install-macos-deps
+
+      - name: Prepare libmpv for bundle
+        run: ./scripts/build-libmpv.sh macos
+
+      # Plays short test files through the libmpv built from MacPorts'
+      # libraries, which no other job uses.
+      - name: Test the plugin
+        env:
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/libs/macos
+        run: cargo test --locked -p tauri-plugin-mpv
+
+      - name: Fetch ffmpeg sidecar (used for offline downloads)
+        # Fails when the pinned build doesn't download, as the release would.
+        env:
+          FFMPEG_PINNED_ONLY: "1"
+        run: ./scripts/fetch-ffmpeg.sh macos
+
+      - name: Build frontend
+        run: pnpm run build:desktop
+
+      - name: Set up Developer ID signing
+        id: apple
+        if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/macos-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
+          api-issuer: ${{ secrets.APPLE_API_ISSUER }}
+          api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+
+      - name: Build Tauri app (macOS)
+        run: ./scripts/build-app.sh
+
+      - name: Start the app
+        run: ./scripts/smoke-test-macos-app.sh target/release/bundle/macos/*.app
+
+      - name: Notarize the DMG
+        if: steps.apple.outputs.notarizing == 'true'
+        run: ./scripts/notarize-macos.sh target/release/bundle/dmg/*.dmg
+
+      - name: Verify signing
+        if: steps.apple.outputs.signing == 'true'
+        run: >-
+          ./scripts/verify-macos-signing.sh
+          ${{ steps.apple.outputs.notarizing == 'true' && '--notarized' || '' }}
+          target/release/bundle/macos/*.app target/release/bundle/dmg/*.dmg
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: MaxVideoPlayer-macOS-Intel
           path: |
             target/release/bundle/dmg/*.dmg
             target/release/bundle/macos/*.app
@@ -462,6 +554,7 @@ jobs:
       - test
       - deploy-coverage
       - build-macos
+      - build-macos-intel
       - build-linux
       - test-system-libmpv
     runs-on: ubuntu-latest
