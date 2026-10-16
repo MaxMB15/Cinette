@@ -49,13 +49,26 @@ runs:
         ports=(meson ninja pkgconfig ffmpeg7 libass libplacebo dylibbundler)
         # MacPorts builds a port's binary archive some hours after the port
         # changes, and the installer always gets the newest list of ports.
-        # -b installs archives only. When one is missing, install again
-        # without it, so MacPorts builds only the ports that have no archive.
+        # -b installs archives only. When that fails, most often because an
+        # archive is missing, install again without it, so MacPorts builds
+        # only the ports it couldn't fetch. Trace mode (-t) hides Homebrew's
+        # files in /usr/local from those builds, where the compiler and linker
+        # would otherwise find them.
         if ! sudo port -N -b install "${ports[@]}"; then
-          echo "::warning::A MacPorts port has no binary archive yet, so MacPorts builds it from source"
-          sudo port -N install "${ports[@]}"
+          echo "::warning::MacPorts couldn't install every port from a binary archive, so it builds the rest from source"
+          sudo port -N -t install "${ports[@]}"
         fi
         port installed requested
+
+        # bundle-libmpv.sh copies whatever MacPorts' libraries link into the
+        # app, so stop if one of them links a library from Homebrew's folders.
+        outside="$(otool -L /opt/local/lib/*.dylib /opt/local/libexec/ffmpeg7/lib/*.dylib \
+          | awk '/:$/ { file = $1; sub(/:$/, "", file) } /^\t\/(usr\/local|opt\/homebrew)\// { print file, $1 }')"
+        if [[ -n "$outside" ]]; then
+          echo "::error::MacPorts libraries link libraries from /usr/local or /opt/homebrew:"
+          echo "$outside"
+          exit 1
+        fi
         # ffmpeg7 installs under its own prefix, so a newer ffmpeg can sit next
         # to it. Homebrew's pkg-config files in /usr/local aren't on MacPorts'
         # pkg-config's path, so mpv can't pick up a library from there.
