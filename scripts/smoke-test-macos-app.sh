@@ -9,8 +9,9 @@
 # - a binary links a library from Homebrew, MacPorts or /usr/local by its full
 #   path, which a user's Mac won't have
 # - the app quits within SMOKE_SECONDS of starting, 20 by default
-# - the running app loaded libmpv from anywhere but its own Frameworks folder,
-#   or loaded any library or plugin from Homebrew, MacPorts or /usr/local
+# - after those seconds, the running app has libmpv loaded from anywhere but
+#   its own Frameworks folder, or has any file from Homebrew, MacPorts or
+#   /usr/local mapped into memory, such as a library, a plugin or a cache
 #
 # Quit Max Video Player before running it on your own Mac. The app runs one
 # copy at a time, so a second copy hands over to the first and quits.
@@ -94,9 +95,10 @@ for (( i = 0; i < SECONDS_TO_RUN; i++ )); do
   /bin/sleep 1
 done
 
-# lsof lists each file the app mapped as code with the descriptor txt. That
-# covers the libraries it linked and the plugins it opened later. The system's
-# own libraries come from the shared cache, so they don't show up by name.
+# lsof lists each file the app has mapped into memory with the descriptor txt.
+# That covers the libraries it linked, the plugins it opened later and data
+# files such as caches, as long as they're still mapped. The system's own
+# libraries come from the shared cache, so they don't show up by name.
 mapped="$(lsof -n -P -p "$pid" -Ffn \
   | awk '/^f/ { code = ($0 == "ftxt") } /^n/ && code { print substr($0, 2) }' \
   | sort -u || true)"

@@ -593,8 +593,9 @@ runners.
 In CI, `scripts/smoke-test-macos-app.sh` checks the built app on the runner. Every
 binary in it must have code for the runner's CPU and must not link a library from
 Homebrew, MacPorts or `/usr/local`. Then it starts the app for 20 seconds and fails
-if the app quits, or if it loaded libmpv from outside the app or any library or
-plugin from those folders. Run it on your own build with
+if the app quits. It also fails if, at the end, the app has libmpv loaded from
+outside the app or has any file from those folders mapped into memory, such as a
+library, a plugin or a cache. Run it on your own build with
 `./scripts/smoke-test-macos-app.sh "target/release/bundle/macos/Max Video Player.app"`.
 It starts the app, which opens your own playlists. Quit Max Video Player first. The
 app runs one copy at a time, so the test's copy would hand over to yours and quit.

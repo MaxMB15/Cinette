@@ -67,7 +67,10 @@ if otool -L "$LIBMPV" | grep -q '^[[:space:]]*/opt/local/'; then
   # Some MacPorts libraries, like librsvg, have no room in their headers for a
   # path longer than the one they were built with. @loader_path/ is shorter
   # than /opt/local/lib/, and for a library in Contents/Frameworks it means
-  # that same folder.
+  # that same folder. A few names still grow by a few bytes, because
+  # dylibbundler writes each library's full file name, like
+  # libaom.3.15.1.dylib where libaom.3.dylib was linked. If one doesn't fit,
+  # install_name_tool stops the build.
   LIB_PREFIX="@loader_path/"
 else
   SEARCH_DIRS=("$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib")

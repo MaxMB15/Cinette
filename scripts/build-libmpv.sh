@@ -104,8 +104,8 @@ case "$PLATFORM" in
       exit 1
     fi
     # A Mac with both Homebrew and MacPorts can link libraries from each.
-    # dylibbundler keeps one copy of each file name, so when both have a
-    # library like libz.1.dylib, code built against one gets the other's.
+    # dylibbundler keeps one copy of each library file name, so when both have
+    # a file of the same name, code built against one gets the other's.
     PREFIXES=$(otool -L "$DYLIB" | awk 'NR > 1 { print $1 }' \
       | grep -oE '^(/opt/homebrew|/opt/local|/usr/local)/' | sort -u || true)
     if (( $(grep -c . <<< "$PREFIXES" || true) > 1 )); then
