@@ -10,7 +10,8 @@ unsigned, and nothing fails.
 
 ## What CI does
 
-When the secrets are set, the macOS release job:
+When the secrets are set, each macOS release job, one for Apple Silicon and one for
+Intel, does this:
 
 1. Imports the certificate into a temporary keychain
    ([`.github/actions/macos-signing`](../.github/actions/macos-signing/action.yml)).
@@ -34,8 +35,10 @@ When the secrets are set, the macOS release job:
 
 The secrets live in the `macos-signing` environment, which needs a reviewer's
 approval and only accepts `main`, `dev` and `v*` tags. Each release and each manual
-Build & Bundle run waits in Actions until a reviewer approves it. Push and pull
-request builds don't use the environment, so they never wait and are never signed.
+Build & Bundle run waits in Actions until a reviewer approves it. Each of these runs
+has an Apple Silicon job and an Intel job, and both wait on the environment. Push and
+pull request builds don't use the environment, so they never wait and are never
+signed.
 
 Apple's signature is separate from the updater signature (`TAURI_SIGNING_PRIVATE_KEY`).
 The updater still needs its own key.
@@ -133,21 +136,23 @@ request builds stay unsigned so they don't wait on Apple.
 gh workflow run build.yml --ref dev    # or main
 ```
 
-The macOS job then waits for approval. Open the run in Actions and check that it's on
-the branch and commit you expect, then click **Review deployments**, tick
-`macos-signing` and click **Approve and deploy**. Releases wait the same way. A manual
+The two macOS jobs then wait for approval. Open the run in Actions and check that
+it's on the branch and commit you expect, then click **Review deployments**, tick
+`macos-signing` and click **Approve and deploy**. If a job is still waiting after
+that, approve it the same way. Releases wait the same way. A manual
 run on any other branch fails, because the environment doesn't accept it.
 
 Once this change reaches `main`, you can also use Actions → **Build & Bundle** →
 **Run workflow**. GitHub only shows that button for workflows that accept manual runs
 on the default branch.
 
-Download the `MaxVideoPlayer-macOS` artifact, open the DMG on a Mac and drag the app to
+Download the `MaxVideoPlayer-macOS` artifact for Apple Silicon or
+`MaxVideoPlayer-macOS-Intel` for Intel, open the DMG on a Mac and drag the app to
 Applications. It should open without a Gatekeeper warning. Test with the DMG rather
 than the `.app` in the artifact, because artifact downloads lose file permissions.
 
 Notarization usually takes a few minutes per submission, and each build submits
-twice (the app, then the DMG).
+twice (the app, then the DMG). The two builds run at the same time.
 
 ## Troubleshooting
 

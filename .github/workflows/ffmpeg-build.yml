@@ -80,6 +80,9 @@ jobs:
           - platform: macos-arm64
             runner: macos-15
             container: ""
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            container: ""
           # Debian 12's glibc, so the build runs on Debian 12, Ubuntu 24.04
           # and later. The digest is debian:12's on 2026-10-15, and nothing
           # updates it. apt-get installs the newest build tools on top.
@@ -209,6 +212,9 @@ jobs:
           - platform: macos
             archive: macos-arm64
             runner: macos-15
+          - platform: macos
+            archive: macos-x86_64
+            runner: macos-15-intel
           - platform: linux
             archive: linux-x86_64
             runner: ubuntu-24.04
@@ -226,12 +232,18 @@ jobs:
         run: |
           build="$(sed -n 's/^FFMPEG_BUILD=//p' scripts/build-ffmpeg.sh)"
           want="FILE=\"\$SIDECAR-\$FFMPEG_VERSION-build$build-$ARCHIVE.tar.xz\""
-          pinned="$(awk -v want="  $PLATFORM)" '
-            $0 == want { found = 1 }
-            found && /^ +FILE=/ { sub(/^ +/, ""); print; exit }
+          # macOS picks its FILE in a case of its own for each CPU, so look
+          # for the line anywhere in the platform's case. That case ends at
+          # the first ;; indented four spaces, and the CPU cases indent theirs
+          # further.
+          files="$(awk -v start="  $PLATFORM)" '
+            $0 == start { found = 1; next }
+            found && $0 == "    ;;" { exit }
+            found && /^ +FILE=/ { sub(/^ +/, ""); print }
           ' scripts/fetch-ffmpeg.sh)"
-          if [[ "$pinned" != "$want" ]]; then
-            echo "::error::scripts/fetch-ffmpeg.sh has ${pinned:-no FILE} for $PLATFORM, and build $build of scripts/build-ffmpeg.sh is $want"
+          if ! grep -Fxq -- "$want" <<< "$files"; then
+            listed="$(paste -sd ' ' - <<< "$files")"
+            echo "::error::scripts/fetch-ffmpeg.sh has no $want for $PLATFORM, which build $build of scripts/build-ffmpeg.sh makes. It has ${listed:-no FILE}."
             exit 1
           fi
 

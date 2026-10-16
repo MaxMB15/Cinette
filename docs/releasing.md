@@ -32,9 +32,11 @@ The workflow:
    [`scripts/bump-version.py`](../scripts/bump-version.py) and commits it.
 4. Pushes the `vX.Y.Z` tag, which starts `release.yml`.
 
-The run's summary links to the release run. Open it and approve the macOS job
-(**Review deployments**, tick `macos-signing`, **Approve and deploy**) so it can sign
-and notarize the app. When the release run finishes, publish the draft (see
+The run's summary links to the release run. Open it and approve the macOS jobs
+(**Review deployments**, tick `macos-signing`, **Approve and deploy**) so they can
+sign and notarize the app. The Apple Silicon and Intel builds both wait on
+`macos-signing`. If one of them is still waiting after you approve, approve it the
+same way. When the release run finishes, publish the draft (see
 [Publishing](#publishing)).
 
 Tick **Dry run** to check the build and see the merge and the new version without
@@ -64,25 +66,28 @@ git tag v0.6.0 && git push origin v0.6.0
 ## What the release workflow does
 
 1. Creates the draft release `vX.Y.Z`.
-2. Builds macOS and Linux in parallel and uploads them to the draft. The macOS job
-   waits until you approve it in Actions, then signs and notarizes the app when the
-   Apple secrets are set (see [macos-signing.md](macos-signing.md)).
+2. Builds macOS and Linux in parallel and uploads them to the draft. macOS gets
+   two builds, one on an Apple Silicon runner and one on an Intel runner. Both wait
+   until you approve them in Actions, then sign and notarize the app when the Apple
+   secrets are set (see [macos-signing.md](macos-signing.md)).
 3. Writes `latest.json`, the file the in-app updater reads, and uploads it.
 4. Merges `main` back into `dev` so the version bump reaches `dev`.
 
 The installers have no version in their names, so the README links to
-`releases/latest/download/<name>` always get the newest build. A release has nine
+`releases/latest/download/<name>` always get the newest build. A release has twelve
 assets:
 
 | Asset | What it is |
 | --- | --- |
-| `MaxVideoPlayer_aarch64.dmg` | macOS installer |
+| `MaxVideoPlayer_aarch64.dmg` | macOS installer for Apple Silicon |
+| `MaxVideoPlayer_x64.dmg` | macOS installer for Intel |
 | `MaxVideoPlayer_amd64.AppImage` | Linux AppImage |
 | `MaxVideoPlayer_amd64.deb` | Debian and Ubuntu package |
 | `MaxVideoPlayer_x86_64.rpm` | Fedora package |
-| `MaxVideoPlayer_<version>_aarch64.app.tar.gz` | macOS update for the in-app updater |
+| `MaxVideoPlayer_<version>_aarch64.app.tar.gz` | Apple Silicon update for the in-app updater |
+| `MaxVideoPlayer_<version>_x64.app.tar.gz` | Intel update for the in-app updater |
 | `MaxVideoPlayer_linux.tar.gz` | AppImage update for the in-app updater |
-| `MaxVideoPlayer_<version>_aarch64.app.tar.gz.sig`, `MaxVideoPlayer_linux.tar.gz.sig` | Signatures for the two updates |
+| `MaxVideoPlayer_<version>_aarch64.app.tar.gz.sig`, `MaxVideoPlayer_<version>_x64.app.tar.gz.sig`, `MaxVideoPlayer_linux.tar.gz.sig` | Signatures for the three updates |
 | `latest.json` | Update manifest: version, signatures and download links |
 
 Don't rename these. The README, `latest.json` and the Linux package updater in
@@ -94,7 +99,7 @@ manual workflow, described in [ios.md](ios.md#continuous-integration).
 ## Publishing
 
 1. Open the draft on the [releases page](https://github.com/MaxMB15/MaxVideoPlayer/releases).
-2. Check that all nine assets are there.
+2. Check that all twelve assets are there.
 3. Replace the notes with the version's section from the changelog.
 4. Publish.
 

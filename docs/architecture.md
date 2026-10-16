@@ -111,7 +111,9 @@ objc2 bindings and keeps its AppKit objects and render state in dispatch2's
 `on_main_async()` helper queues work without waiting.
 
 Homebrew's libmpv only supports Vulkan, so the build uses libmpv compiled from source
-with OpenGL enabled (`scripts/build-libmpv.sh`).
+with OpenGL enabled (`scripts/build-libmpv.sh`). Its libraries come from Homebrew on
+Apple Silicon and from MacPorts on Intel, since Homebrew no longer builds packages for
+Intel Macs.
 
 ### Linux
 

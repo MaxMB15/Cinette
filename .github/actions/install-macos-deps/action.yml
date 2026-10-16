@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+name: Install macOS build dependencies
+description: >-
+  Install what scripts/build-libmpv.sh and scripts/bundle-libmpv.sh need. On
+  Apple Silicon they come from Homebrew. Homebrew no longer builds bottles for
+  Intel Macs, so on Intel they come from MacPorts instead.
+
+runs:
+  using: composite
+  steps:
+    - name: Install from Homebrew
+      if: runner.arch != 'X64'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # ffmpeg@7 required: mpv 0.40.0 uses FF_PROFILE_* macros removed in ffmpeg 8.x
+        brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
+        # Make ffmpeg@7 visible to pkg-config (it is keg-only, not linked by default)
+        echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
+    - name: Install from MacPorts
+      if: runner.arch == 'X64'
+      shell: bash
+      env:
+        # The installer for macOS 15, which is what the macos-15-intel runner has.
+        MACPORTS_PKG: MacPorts-2.12.7-15-Sequoia.pkg
+        MACPORTS_URL: https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-15-Sequoia.pkg
+        # From the release's MacPorts-2.12.7.chk.txt.
+        MACPORTS_SHA256: 87b2e87ed7adc4aca947b42eb7ff991614cc0edfccb486237f2bbc75f28aae63
+      run: |
+        set -euo pipefail
+        pkg="$RUNNER_TEMP/$MACPORTS_PKG"
+        curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 -o "$pkg" "$MACPORTS_URL"
+        got="$(shasum -a 256 "$pkg" | cut -d' ' -f1)"
+        if [[ "$got" != "$MACPORTS_SHA256" ]]; then
+          echo "::error::$MACPORTS_PKG has SHA-256 $got, not the pinned $MACPORTS_SHA256"
+          exit 1
+        fi
+        # The installer also downloads the current list of ports.
+        sudo installer -pkg "$pkg" -target /
+        export PATH="/opt/local/bin:$PATH"
+        echo /opt/local/bin >> "$GITHUB_PATH"
+        port version
+
+        # ffmpeg7 is ffmpeg 7.1, since mpv 0.40.0 uses macros that ffmpeg 8
+        # removed.
+        ports=(meson ninja pkgconfig ffmpeg7 libass libplacebo dylibbundler)
+        # MacPorts builds a port's binary archive some hours after the port
+        # changes, and the installer always gets the newest list of ports.
+        # -b installs archives only. When that fails, most often because an
+        # archive is missing, install again without it, so MacPorts builds
+        # only the ports it couldn't fetch. Trace mode (-t) hides Homebrew's
+        # files in /usr/local from those builds, where the compiler and linker
+        # would otherwise find them.
+        if ! sudo port -N -b install "${ports[@]}"; then
+          echo "::warning::MacPorts couldn't install every port from a binary archive, so it builds the rest from source"
+          sudo port -N -t install "${ports[@]}"
+        fi
+        port installed requested
+
+        # bundle-libmpv.sh copies whatever MacPorts' libraries link into the
+        # app, so stop if one of them links a library from Homebrew's folders.
+        outside="$(otool -L /opt/local/lib/*.dylib /opt/local/libexec/ffmpeg7/lib/*.dylib \
+          | awk '/:$/ { file = $1; sub(/:$/, "", file) } /^\t\/(usr\/local|opt\/homebrew)\// { print file, $1 }')"
+        if [[ -n "$outside" ]]; then
+          echo "::error::MacPorts libraries link libraries from /usr/local or /opt/homebrew:"
+          echo "$outside"
+          exit 1
+        fi
+        # ffmpeg7 installs under its own prefix, so a newer ffmpeg can sit next
+        # to it. Homebrew's pkg-config files in /usr/local aren't on MacPorts'
+        # pkg-config's path, so mpv can't pick up a library from there.
+        echo "PKG_CONFIG_PATH=/opt/local/libexec/ffmpeg7/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"

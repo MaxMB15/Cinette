@@ -17,13 +17,13 @@ together, see [architecture.md](architecture.md). For cutting a release, see
   Use Corepack.
 - The platform dependencies below
 
-The desktop app builds on macOS (Apple Silicon) and Linux (x86_64). Windows isn't
-supported yet. For the iPhone and iPad app, see [ios.md](ios.md).
+The desktop app builds on macOS (Apple Silicon and Intel) and Linux (x86_64). Windows
+isn't supported yet. For the iPhone and iPad app, see [ios.md](ios.md).
 
 ### macOS
 
 Homebrew's `mpv` is built for Vulkan only, and the embedded player needs OpenGL, so
-libmpv is built from source:
+libmpv is built from source. On Apple Silicon its libraries come from Homebrew:
 
 ```bash
 # ffmpeg@7, because mpv 0.40 uses APIs that ffmpeg 8 removed
@@ -32,6 +32,23 @@ export PKG_CONFIG_PATH="$(brew --prefix ffmpeg@7)/lib/pkgconfig:$PKG_CONFIG_PATH
 
 ./scripts/build-libmpv.sh macos
 ```
+
+Homebrew no longer builds bottles for Intel Macs, so on an Intel Mac they come from
+[MacPorts](https://www.macports.org/install.php) instead, as in CI. Install MacPorts,
+then:
+
+```bash
+# ffmpeg7 keeps its files in a folder of its own
+sudo port install meson ninja pkgconfig ffmpeg7 libass libplacebo dylibbundler
+export PKG_CONFIG_PATH="/opt/local/libexec/ffmpeg7/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+./scripts/build-libmpv.sh macos
+```
+
+If you also have Homebrew, put `/opt/local/bin` before `/usr/local/bin` in your
+`PATH`, so meson and pkg-config come from MacPorts. The script stops when libmpv
+links libraries from both. `bundle-libmpv.sh` keeps one copy of each file name, so
+code built against one package manager's library could get the other's.
 
 The script clones mpv into `libs/mpv-src/` and writes `libs/macos/libmpv.dylib`. The
 first run takes a few minutes; later runs reuse the clone.
@@ -81,6 +98,7 @@ The script pins one build for each platform by the SHA-256 of its archive.
 | Platform | ffmpeg | Built by | License |
 | --- | --- | --- | --- |
 | macOS, Apple Silicon | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL version 3 or later |
+| macOS, Intel | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL version 3 or later |
 | Linux, x86_64 | 8.1.3 | `scripts/build-ffmpeg.sh` | LGPL version 3 or later |
 | Windows, x86_64 | 8.1.3 | [BtbN](https://github.com/BtbN/FFmpeg-Builds) | GPL version 3 or later |
 
@@ -103,11 +121,12 @@ other library, or would name the folder it was built in. The macOS build is 7.8 
 where Martin Riedl's full build was 66 MB, and the Linux build is 4.1 MB, where
 BtbN's was 172 MB.
 
-`.github/workflows/ffmpeg-build.yml` builds macOS on GitHub's macos-15 runner and
-Linux in Debian 12, so the Linux build runs on Debian 12, Ubuntu 24.04 and later.
-It runs on pull requests to `dev` that change the ffmpeg scripts or the workflow,
-and by hand. Each build job runs `scripts/test-ffmpeg-sidecar.py` on its build.
-The test makes short test files with a full ffmpeg and serves them on 127.0.0.1
+`.github/workflows/ffmpeg-build.yml` builds macOS on GitHub's macos-15 runner for
+Apple Silicon and its macos-15-intel runner for Intel. It builds Linux in Debian 12,
+so the Linux build runs on Debian 12, Ubuntu 24.04 and later. It runs on pull
+requests to `dev` that change the ffmpeg scripts or the workflow, and by hand.
+Each build job runs `scripts/test-ffmpeg-sidecar.py` on its build. The test makes
+short test files with a full ffmpeg and serves them on 127.0.0.1
 over HTTP, over HTTPS, from a server that only takes TLS 1.3 and from one that
 only takes TLS 1.2. It runs the build with the app's download and recording
 arguments, checks the exit code and the error text the app looks for, and reads
@@ -123,9 +142,9 @@ from the same Debian release with the same newest glibc symbol, since those set 
 oldest Linux the build runs on.
 
 The workflow's `pinned` jobs fetch the archives that `fetch-ffmpeg.sh` pins, on
-macos-15 and Ubuntu 24.04, and run the same test on them, with Ubuntu's ffmpeg
-reading the files back on Linux. They fail when `fetch-ffmpeg.sh` doesn't name the
-build that `build-ffmpeg.sh` makes.
+macos-15, macos-15-intel and Ubuntu 24.04, and run the same test on them, with
+Ubuntu's ffmpeg reading the files back on Linux. They fail when `fetch-ffmpeg.sh`
+doesn't name the build that `build-ffmpeg.sh` makes.
 
 The script downloads each archive from this repository's `ffmpeg-sidecar-8.1`
 pre-release, and the Windows one from BtbN when that fails. It installs the
@@ -137,8 +156,8 @@ starts an app release, and it's never marked as the latest release, which the
 updater reads.
 
 On macOS and Linux, when no archive matches, or when no build is pinned for your
-machine, such as an Intel Mac or Linux on ARM, the script builds ffmpeg with
-`build-ffmpeg.sh` in its place. In GitHub Actions it says so in a warning. The
+machine, such as Linux on ARM, the script builds ffmpeg with `build-ffmpeg.sh` in
+its place. In GitHub Actions it says so in a warning. The
 build takes a few minutes and needs a C compiler, `make`, `pkg-config`, `curl`,
 `tar`, `strip` and `strings`. A Mac also needs `otool` and `perl`. The Command Line
 Tools and macOS have all of them except `pkg-config`. Linux also needs `xz`,
@@ -198,10 +217,10 @@ To move to a new ffmpeg:
    build can't read needs its demuxer, protocol or parser added in
    `build-ffmpeg.sh`, and a case in the test. `cargo test -p mvp-core` fails when
    the build leaves out a muxer that `muxer_for_container` picks.
-4. Download the workflow's `ffmpeg-macos-arm64` and `ffmpeg-linux-x86_64` artifacts
-   and upload the archives to the pre-release for the series, where `<series>` is
-   the first two numbers of the version, such as 8.1. A new series gets a new
-   pre-release, made with
+4. Download the workflow's `ffmpeg-macos-arm64`, `ffmpeg-macos-x86_64` and
+   `ffmpeg-linux-x86_64` artifacts and upload the archives to the pre-release for
+   the series, where `<series>` is the first two numbers of the version, such as
+   8.1. A new series gets a new pre-release, made with
    `gh release create ffmpeg-sidecar-<series> --prerelease --latest=false`, and
    needs the ffmpeg and OpenSSL tarballs and their `.asc` signatures too. A new
    build in the same series goes up with `gh release upload ffmpeg-sidecar-<series>`,
@@ -565,10 +584,21 @@ cd apps/player && pnpm tauri build
 ```
 
 On macOS, `scripts/bundle-libmpv.sh` runs as Tauri's `beforeBundleCommand`. It copies
-libmpv and its Homebrew dependencies into the app with `dylibbundler`, removes
-duplicate `LC_RPATH` entries, and fails if any bundled library needs a newer macOS
-than `minimumSystemVersion`. A local build uses your Mac's Homebrew libraries, so it
-may only run on your macOS version; release builds run on a macOS 15 runner.
+libmpv and its Homebrew or MacPorts dependencies into the app with `dylibbundler`,
+removes duplicate `LC_RPATH` entries, and fails if any bundled library needs a newer
+macOS than `minimumSystemVersion`. A local build uses your Mac's Homebrew or MacPorts
+libraries, so it may only run on your macOS version; release builds run on macOS 15
+runners.
+
+In CI, `scripts/smoke-test-macos-app.sh` checks the built app on the runner. Every
+binary in it must have code for the runner's CPU and must not link a library from
+Homebrew, MacPorts or `/usr/local`. Then it starts the app for 20 seconds and fails
+if the app quits. It also fails if, at the end, the app has libmpv loaded from
+outside the app or has any file from those folders mapped into memory, such as a
+library, a plugin or a cache. Run it on your own build with
+`./scripts/smoke-test-macos-app.sh "target/release/bundle/macos/Max Video Player.app"`.
+It starts the app, which opens your own playlists. Quit Max Video Player first. The
+app runs one copy at a time, so the test's copy would hand over to yours and quit.
 
 On Linux, `scripts/bundle-libmpv-linux.sh` copies `libmpv.so` and its dependencies
 into the AppImage. The `.deb` and `.rpm` declare libmpv as a package dependency

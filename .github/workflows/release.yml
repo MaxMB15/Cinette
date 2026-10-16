@@ -45,11 +45,28 @@ jobs:
               --draft
           fi
 
+  # One build for each CPU. build-macos and build-macos-intel in build.yml
+  # build the same way, and save the Rust caches these restore.
   release-macos:
+    name: release-macos (${{ matrix.arch }})
     needs: [prepare-release]
-    # Pinned: the bundle ships Homebrew dylibs, which require the runner's macOS
-    # version. macos-latest moved to macOS 26 and v0.5.0 stopped launching on 15.
-    runs-on: macos-15
+    strategy:
+      # Each CPU's build carries on when the other fails.
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned: the bundle ships Homebrew dylibs, which require the
+          # runner's macOS version. macos-latest moved to macOS 26 and v0.5.0
+          # stopped launching on 15.
+          - arch: aarch64
+            runner: macos-15
+            cache: desktop-macos
+          # Libraries from MacPorts, since Homebrew stopped building bottles
+          # for Intel Macs. Tauri names the Intel build x64.
+          - arch: x64
+            runner: macos-15-intel
+            cache: desktop-macos-x64
+    runs-on: ${{ matrix.runner }}
     # The Apple signing secrets live in this environment, which waits for a
     # reviewer to approve the job before it starts.
     environment: macos-signing
@@ -79,18 +96,14 @@ jobs:
           workspaces: ". -> target"
           # build.yml saves this cache on main. A cache saved from a tag can only be
           # used by that same tag, so saving here would just take up space.
-          shared-key: desktop-macos
+          shared-key: ${{ matrix.cache }}
           save-if: false
 
       - name: Set up the frontend
         uses: ./.github/actions/setup-frontend
 
       - name: Install system deps
-        run: |
-          # ffmpeg@7 required: mpv 0.40.0 uses FF_PROFILE_* macros removed in ffmpeg 8.x
-          brew install meson ninja pkg-config ffmpeg@7 libass libplacebo dylibbundler
-          # Make ffmpeg@7 visible to pkg-config (it is keg-only, not linked by default)
-          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@7)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+        uses: ./.github/actions/install-macos-deps
 
       - name: Build libmpv
         run: ./scripts/build-libmpv.sh macos
@@ -118,6 +131,9 @@ jobs:
         # failed build once more. The script says why.
         run: ./scripts/build-app.sh
 
+      - name: Start the app
+        run: ./scripts/smoke-test-macos-app.sh target/release/bundle/macos/*.app
+
       - name: Notarize the DMG
         if: steps.apple.outputs.notarizing == 'true'
         run: ./scripts/notarize-macos.sh target/release/bundle/dmg/*.dmg
@@ -138,7 +154,7 @@ jobs:
           VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           # productName contains spaces ("Max Video Player"), so the bundler emits
-          # "Max Video Player.app" / "Max Video Player_<v>_aarch64.dmg". Release
+          # "Max Video Player.app" / "Max Video Player_<v>_<arch>.dmg". Release
           # assets keep the space-free "MaxVideoPlayer" prefix so download URLs
           # and latest.json stay stable.
           PRODUCT_NAME=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['productName'])")
@@ -154,20 +170,25 @@ jobs:
       - name: Upload macOS updater signature
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos-updater-sig
+          name: macos-updater-sig-${{ matrix.arch }}
           path: target/release/bundle/macos/MaxVideoPlayer.app.tar.gz.sig
 
       - name: Upload macOS assets to draft release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          DMG_BUILT="target/release/bundle/dmg/${PRODUCT_NAME}_${VERSION}_aarch64.dmg"
+          DMG_BUILT="target/release/bundle/dmg/${PRODUCT_NAME}_${VERSION}_${ARCH}.dmg"
+          if [[ ! -f "$DMG_BUILT" ]]; then
+            echo "::error::The build made no $DMG_BUILT. It made: $(ls target/release/bundle/dmg)"
+            exit 1
+          fi
           # No version in the name, so the README's releases/latest/download link
           # always points at the newest DMG.
-          DMG="target/release/bundle/dmg/MaxVideoPlayer_aarch64.dmg"
+          DMG="target/release/bundle/dmg/MaxVideoPlayer_${ARCH}.dmg"
           UPDATER="target/release/bundle/macos/MaxVideoPlayer.app.tar.gz"
-          UPDATER_VERSIONED="target/release/bundle/macos/MaxVideoPlayer_${VERSION}_aarch64.app.tar.gz"
+          UPDATER_VERSIONED="target/release/bundle/macos/MaxVideoPlayer_${VERSION}_${ARCH}.app.tar.gz"
 
           # Space-free asset name (GitHub would otherwise rewrite spaces to dots)
           cp "$DMG_BUILT" "$DMG"
@@ -319,7 +340,7 @@ jobs:
               --clobber
           done
 
-  # ── Publish latest.json (depends on both platform jobs) ───────────────
+  # ── Publish latest.json (depends on every platform job) ───────────────
   publish-latest-json:
     runs-on: ubuntu-latest
     needs: [release-macos, release-linux]
@@ -342,8 +363,13 @@ jobs:
           VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
 
           MACOS_SIG=""
-          if [[ -f sigs/macos-updater-sig/MaxVideoPlayer.app.tar.gz.sig ]]; then
-            MACOS_SIG=$(cat sigs/macos-updater-sig/MaxVideoPlayer.app.tar.gz.sig)
+          if [[ -f sigs/macos-updater-sig-aarch64/MaxVideoPlayer.app.tar.gz.sig ]]; then
+            MACOS_SIG=$(cat sigs/macos-updater-sig-aarch64/MaxVideoPlayer.app.tar.gz.sig)
+          fi
+
+          MACOS_INTEL_SIG=""
+          if [[ -f sigs/macos-updater-sig-x64/MaxVideoPlayer.app.tar.gz.sig ]]; then
+            MACOS_INTEL_SIG=$(cat sigs/macos-updater-sig-x64/MaxVideoPlayer.app.tar.gz.sig)
           fi
 
           LINUX_SIG=""
@@ -351,15 +377,20 @@ jobs:
             LINUX_SIG=$(cat sigs/linux-updater-sig/MaxVideoPlayer_linux.tar.gz.sig)
           fi
 
-          python3 - "$VERSION" "$MACOS_SIG" "$LINUX_SIG" << 'PYEOF'
+          python3 - "$VERSION" "$MACOS_SIG" "$MACOS_INTEL_SIG" "$LINUX_SIG" << 'PYEOF'
           import json, sys
           from datetime import datetime, timezone
-          version, macos_sig, linux_sig = sys.argv[1], sys.argv[2], sys.argv[3]
+          version, macos_sig, macos_intel_sig, linux_sig = sys.argv[1:5]
           platforms = {}
           if macos_sig:
               platforms["darwin-aarch64"] = {
                   "signature": macos_sig,
                   "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/MaxVideoPlayer_{version}_aarch64.app.tar.gz"
+              }
+          if macos_intel_sig:
+              platforms["darwin-x86_64"] = {
+                  "signature": macos_intel_sig,
+                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/MaxVideoPlayer_{version}_x64.app.tar.gz"
               }
           if linux_sig:
               platforms["linux-x86_64"] = {

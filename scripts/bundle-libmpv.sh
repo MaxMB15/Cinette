@@ -3,7 +3,8 @@
 # Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 # Bundle libmpv and its dependencies into the macOS app for distribution.
-# Run as beforeBundleCommand during tauri build. Requires: brew install mpv dylibbundler
+# Run as beforeBundleCommand during tauri build. Needs dylibbundler, from
+# Homebrew on Apple Silicon or MacPorts on Intel, like libmpv's own libraries.
 # CWD when run: workspace root (via beforeBundleCommand cwd)
 # No-op on non-macOS (e.g. when building on Windows/Linux).
 
@@ -43,7 +44,11 @@ fi
 
 # dylibbundler must be installed
 if ! command -v dylibbundler &>/dev/null; then
-  echo "Error: dylibbundler not found. Run: brew install dylibbundler"
+  if [[ "$(uname -m)" == x86_64 ]]; then
+    echo "Error: dylibbundler not found. Run: sudo port install dylibbundler"
+  else
+    echo "Error: dylibbundler not found. Run: brew install dylibbundler"
+  fi
   exit 1
 fi
 
@@ -51,14 +56,35 @@ fi
 rm -rf "$LIBS_BUNDLE"
 mkdir -p "$LIBS_BUNDLE"
 
-# Resolve Homebrew prefix for transitive dep search (works on Apple Silicon + Intel)
-BREW_LIB="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib"
+# libmpv links its libraries by full path, from Homebrew on Apple Silicon and
+# from MacPorts on Intel. build-libmpv.sh makes sure it's only one of them.
+LIBMPV="$LIBS_MACOS/libmpv.dylib"
+[[ -f "$LIBMPV" ]] || LIBMPV="$LIBS_MACOS/libmpv.2.dylib"
+FRAMEWORKS="@executable_path/../Frameworks/"
+if otool -L "$LIBMPV" | grep -q '^[[:space:]]*/opt/local/'; then
+  # MacPorts keeps ffmpeg 7 in a folder of its own.
+  SEARCH_DIRS=(/opt/local/lib /opt/local/libexec/ffmpeg7/lib)
+  # Some MacPorts libraries, like librsvg, have no room in their headers for a
+  # path longer than the one they were built with. @loader_path/ is shorter
+  # than /opt/local/lib/, and for a library in Contents/Frameworks it means
+  # that same folder. A few names still grow by a few bytes, because
+  # dylibbundler writes each library's full file name, like
+  # libaom.3.15.1.dylib where libaom.3.dylib was linked. If one doesn't fit,
+  # install_name_tool stops the build.
+  LIB_PREFIX="@loader_path/"
+else
+  SEARCH_DIRS=("$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib")
+  LIB_PREFIX="$FRAMEWORKS"
+fi
+SEARCH_ARGS=(-s "$LIBS_MACOS")
+for dir in "${SEARCH_DIRS[@]}"; do
+  SEARCH_ARGS+=(-s "$dir")
+done
 
 # -s tells dylibbundler where to find libraries it can't resolve via @rpath.
 # Without this it drops into an interactive prompt (and hangs in CI).
-dylibbundler -od -b -x "$BINARY" -d "$LIBS_BUNDLE" -p "@executable_path/../Frameworks" \
-  -s "$LIBS_MACOS" \
-  -s "$BREW_LIB"
+dylibbundler -od -b -x "$BINARY" -d "$LIBS_BUNDLE" -p "$LIB_PREFIX" \
+  "${SEARCH_ARGS[@]}"
 
 # dylibbundler rewrites every LC_RPATH it finds to the -p path, so libmpv (built
 # with one rpath per Homebrew dependency) ends up carrying the same entry ~11
@@ -97,6 +123,23 @@ for f in "$BINARY" "$LIBS_BUNDLE"/*.dylib; do
     exit 1
   fi
 done
+
+# The app's binary sits in Contents/MacOS, where @loader_path/ doesn't reach
+# the libraries. Point its links and its one rpath back at Contents/Frameworks.
+if [[ "$LIB_PREFIX" != "$FRAMEWORKS" ]]; then
+  fixes=()
+  while IFS= read -r lib; do
+    fixes+=(-change "$lib" "$FRAMEWORKS${lib#"$LIB_PREFIX"}")
+  done < <(otool -L "$BINARY" | awk -v prefix="$LIB_PREFIX" 'NR > 1 && index($1, prefix) == 1 { print $1 }')
+  if rpaths_of "$BINARY" | grep -qxF -- "$LIB_PREFIX"; then
+    fixes+=(-rpath "$LIB_PREFIX" "$FRAMEWORKS")
+  fi
+  if (( ${#fixes[@]} > 0 )); then
+    install_name_tool "${fixes[@]}" "$BINARY"
+    codesign --force --preserve-metadata=entitlements,requirements,flags,runtime --sign - "$BINARY"
+    echo "Pointed $(basename "$BINARY") at $FRAMEWORKS"
+  fi
+fi
 
 # Homebrew bottles target the macOS version of the machine that builds them, so
 # a newer runner quietly raises the real minimum (v0.5.0 needed macOS 26.4 while
@@ -148,7 +191,8 @@ if [[ -n "$too_new" ]]; then
     echo "Error: $msg" >&2
     exit 1
   fi
-  # Local Homebrew targets this Mac's macOS, so a dev build can't meet the minimum.
+  # Local Homebrew and MacPorts packages target this Mac's macOS, so a dev
+  # build can't meet the minimum.
   echo "Warning: $msg" >&2
   echo "This build only runs on this Mac's macOS version. Release builds run on a macOS $MIN_MACOS CI runner." >&2
 fi
