@@ -60,11 +60,18 @@ mkdir -p "$LIBS_BUNDLE"
 # from MacPorts on Intel. build-libmpv.sh makes sure it's only one of them.
 LIBMPV="$LIBS_MACOS/libmpv.dylib"
 [[ -f "$LIBMPV" ]] || LIBMPV="$LIBS_MACOS/libmpv.2.dylib"
+FRAMEWORKS="@executable_path/../Frameworks/"
 if otool -L "$LIBMPV" | grep -q '^[[:space:]]*/opt/local/'; then
   # MacPorts keeps ffmpeg 7 in a folder of its own.
   SEARCH_DIRS=(/opt/local/lib /opt/local/libexec/ffmpeg7/lib)
+  # Some MacPorts libraries, like librsvg, have no room in their headers for a
+  # path longer than the one they were built with. @loader_path/ is shorter
+  # than /opt/local/lib/, and for a library in Contents/Frameworks it means
+  # that same folder.
+  LIB_PREFIX="@loader_path/"
 else
   SEARCH_DIRS=("$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib")
+  LIB_PREFIX="$FRAMEWORKS"
 fi
 SEARCH_ARGS=(-s "$LIBS_MACOS")
 for dir in "${SEARCH_DIRS[@]}"; do
@@ -73,7 +80,7 @@ done
 
 # -s tells dylibbundler where to find libraries it can't resolve via @rpath.
 # Without this it drops into an interactive prompt (and hangs in CI).
-dylibbundler -od -b -x "$BINARY" -d "$LIBS_BUNDLE" -p "@executable_path/../Frameworks" \
+dylibbundler -od -b -x "$BINARY" -d "$LIBS_BUNDLE" -p "$LIB_PREFIX" \
   "${SEARCH_ARGS[@]}"
 
 # dylibbundler rewrites every LC_RPATH it finds to the -p path, so libmpv (built
@@ -113,6 +120,23 @@ for f in "$BINARY" "$LIBS_BUNDLE"/*.dylib; do
     exit 1
   fi
 done
+
+# The app's binary sits in Contents/MacOS, where @loader_path/ doesn't reach
+# the libraries. Point its links and its one rpath back at Contents/Frameworks.
+if [[ "$LIB_PREFIX" != "$FRAMEWORKS" ]]; then
+  fixes=()
+  while IFS= read -r lib; do
+    fixes+=(-change "$lib" "$FRAMEWORKS${lib#"$LIB_PREFIX"}")
+  done < <(otool -L "$BINARY" | awk -v prefix="$LIB_PREFIX" 'NR > 1 && index($1, prefix) == 1 { print $1 }')
+  if rpaths_of "$BINARY" | grep -qxF -- "$LIB_PREFIX"; then
+    fixes+=(-rpath "$LIB_PREFIX" "$FRAMEWORKS")
+  fi
+  if (( ${#fixes[@]} > 0 )); then
+    install_name_tool "${fixes[@]}" "$BINARY"
+    codesign --force --preserve-metadata=entitlements,requirements,flags,runtime --sign - "$BINARY"
+    echo "Pointed $(basename "$BINARY") at $FRAMEWORKS"
+  fi
+fi
 
 # Homebrew bottles target the macOS version of the machine that builds them, so
 # a newer runner quietly raises the real minimum (v0.5.0 needed macOS 26.4 while
