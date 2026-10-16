@@ -61,7 +61,7 @@ case "$PLATFORM" in
       x86_64-apple-darwin)
         # Intel, built on GitHub's macos-15-intel runner.
         FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-x86_64.tar.xz"
-        SHA256=0000000000000000000000000000000000000000000000000000000000000000
+        SHA256=ecedf4d5d3b3e69a6d846186de044ed078cb1680eedde2012370617c90af2641
         ;;
       *)
         # Apple Silicon, built on GitHub's macos-15 runner. The TARGETS check
