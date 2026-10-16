@@ -37,7 +37,7 @@ case "$PLATFORM" in
     done
 
     if ! pkg-config --exists libavcodec; then
-      echo "Error: ffmpeg 7 not found. Run: $INSTALL_HINT"
+      echo "Error: ffmpeg not found. Run: $INSTALL_HINT"
       echo "Then: export PKG_CONFIG_PATH=\"$FFMPEG_PC:\$PKG_CONFIG_PATH\""
       exit 1
     fi
@@ -103,9 +103,9 @@ case "$PLATFORM" in
       echo "Error: libmpv.dylib not found after build"
       exit 1
     fi
-    # bundle-libmpv.sh copies every library from one package manager. A Mac
-    # with both Homebrew and MacPorts can link a library from each, and the
-    # app would then carry two copies of a library with different versions.
+    # A Mac with both Homebrew and MacPorts can link libraries from each.
+    # dylibbundler keeps one copy of each file name, so when both have a
+    # library like libz.1.dylib, code built against one gets the other's.
     PREFIXES=$(otool -L "$DYLIB" | awk 'NR > 1 { print $1 }' \
       | grep -oE '^(/opt/homebrew|/opt/local|/usr/local)/' | sort -u || true)
     if (( $(grep -c . <<< "$PREFIXES" || true) > 1 )); then

@@ -6,7 +6,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Added
 
-- Max Video Player now runs on Intel Macs with macOS 15 Sequoia or later. The download page has a DMG for each kind of Mac, and the app updates itself on both (#287).
+- Max Video Player now runs on Intel Macs with macOS 15 Sequoia or later. Each release has a DMG for Apple Silicon and one for Intel, and the app updates itself on both (#287).
 
 ### Changed
 

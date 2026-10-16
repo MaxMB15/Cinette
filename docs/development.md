@@ -47,7 +47,8 @@ export PKG_CONFIG_PATH="/opt/local/libexec/ffmpeg7/lib/pkgconfig:$PKG_CONFIG_PAT
 
 If you also have Homebrew, put `/opt/local/bin` before `/usr/local/bin` in your
 `PATH`, so meson and pkg-config come from MacPorts. The script stops when libmpv
-links libraries from both, since `bundle-libmpv.sh` only copies one set.
+links libraries from both. `bundle-libmpv.sh` keeps one copy of each file name, so
+code built against one package manager's library could get the other's.
 
 The script clones mpv into `libs/mpv-src/` and writes `libs/macos/libmpv.dylib`. The
 first run takes a few minutes; later runs reuse the clone.
@@ -592,10 +593,11 @@ runners.
 In CI, `scripts/smoke-test-macos-app.sh` checks the built app on the runner. Every
 binary in it must have code for the runner's CPU and must not link a library from
 Homebrew, MacPorts or `/usr/local`. Then it starts the app for 20 seconds and fails
-if the app quits, or if it loaded libmpv from outside the app or any library from
-those folders. Run it on your own build with
+if the app quits, or if it loaded libmpv from outside the app or any library or
+plugin from those folders. Run it on your own build with
 `./scripts/smoke-test-macos-app.sh "target/release/bundle/macos/Max Video Player.app"`.
-It starts the app, which opens your own playlists.
+It starts the app, which opens your own playlists. Quit Max Video Player first. The
+app runs one copy at a time, so the test's copy would hand over to yours and quit.
 
 On Linux, `scripts/bundle-libmpv-linux.sh` copies `libmpv.so` and its dependencies
 into the AppImage. The `.deb` and `.rpm` declare libmpv as a package dependency

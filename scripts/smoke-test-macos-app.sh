@@ -10,7 +10,10 @@
 #   path, which a user's Mac won't have
 # - the app quits within SMOKE_SECONDS of starting, 20 by default
 # - the running app loaded libmpv from anywhere but its own Frameworks folder,
-#   or loaded any library from Homebrew, MacPorts or /usr/local
+#   or loaded any library or plugin from Homebrew, MacPorts or /usr/local
+#
+# Quit Max Video Player before running it on your own Mac. The app runs one
+# copy at a time, so a second copy hands over to the first and quits.
 #
 # The CI runners have Homebrew, and the Intel one has MacPorts too, so an app
 # that only works with them installed would pass a launch on its own.
@@ -53,7 +56,7 @@ for f in "${machos[@]}"; do
   if [[ " $archs " != *" $ARCH "* ]]; then
     fail "$rel is built for $archs, not $ARCH"
   fi
-  # The first line names the file, and fat files name each slice too.
+  # The first line names the file.
   while IFS= read -r lib; do
     fail "$rel links $lib"
   done < <(otool -L "$f" | awk '/^\t/ { print $1 }' | grep -E "$OUTSIDE" || true)
@@ -63,6 +66,10 @@ if (( failed )); then
 fi
 
 EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+if pgrep -x "$EXE" > /dev/null; then
+  echo "Error: $EXE is already running. Quit it first, since the copy started here would hand over to it and quit." >&2
+  exit 1
+fi
 LOG="$(mktemp)"
 echo "Starting $EXE for $SECONDS_TO_RUN seconds"
 # A library path left in the environment could hide a missing library.
@@ -87,9 +94,13 @@ for (( i = 0; i < SECONDS_TO_RUN; i++ )); do
   /bin/sleep 1
 done
 
-# lsof lists each library the app mapped. The system's own come from the
-# shared cache, so they don't show up by name.
-loaded="$(lsof -n -P -p "$pid" -Fn | sed -n 's/^n//p' | grep '\.dylib$' | sort -u || true)"
+# lsof lists each file the app mapped as code with the descriptor txt. That
+# covers the libraries it linked and the plugins it opened later. The system's
+# own libraries come from the shared cache, so they don't show up by name.
+mapped="$(lsof -n -P -p "$pid" -Ffn \
+  | awk '/^f/ { code = ($0 == "ftxt") } /^n/ && code { print substr($0, 2) }' \
+  | sort -u || true)"
+loaded="$(grep -E '\.(dylib|so)$' <<< "$mapped" || true)"
 libmpv="$(grep '/libmpv[^/]*\.dylib$' <<< "$loaded" || true)"
 if [[ -z "$libmpv" ]]; then
   fail "the running app hasn't loaded libmpv"
@@ -103,7 +114,7 @@ done <<< "$libmpv"
 while IFS= read -r lib; do
   [[ -n "$lib" ]] || continue
   fail "the app loaded $lib"
-done < <(grep -E "$OUTSIDE" <<< "$loaded" || true)
+done < <(grep -E "$OUTSIDE" <<< "$mapped" || true)
 
 echo "Libraries the app loaded by name:"
 while IFS= read -r lib; do

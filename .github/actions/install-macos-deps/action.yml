@@ -4,8 +4,8 @@
 name: Install macOS build dependencies
 description: >-
   Install what scripts/build-libmpv.sh and scripts/bundle-libmpv.sh need. On
-  Apple silicon they come from Homebrew. Homebrew no longer builds bottles for
-  Intel Macs, so on Intel they come from MacPorts' binary archives instead.
+  Apple Silicon they come from Homebrew. Homebrew no longer builds bottles for
+  Intel Macs, so on Intel they come from MacPorts instead.
 
 runs:
   using: composite
@@ -44,10 +44,17 @@ runs:
         echo /opt/local/bin >> "$GITHUB_PATH"
         port version
 
-        # -b installs binary archives only, so a port without one fails here
-        # rather than building from source for an hour. ffmpeg7 is ffmpeg 7.1,
-        # since mpv 0.40.0 uses macros that ffmpeg 8 removed.
-        sudo port -N -b install meson ninja pkgconfig ffmpeg7 libass libplacebo dylibbundler
+        # ffmpeg7 is ffmpeg 7.1, since mpv 0.40.0 uses macros that ffmpeg 8
+        # removed.
+        ports=(meson ninja pkgconfig ffmpeg7 libass libplacebo dylibbundler)
+        # MacPorts builds a port's binary archive some hours after the port
+        # changes, and the installer always gets the newest list of ports.
+        # -b installs archives only. When one is missing, install again
+        # without it, so MacPorts builds only the ports that have no archive.
+        if ! sudo port -N -b install "${ports[@]}"; then
+          echo "::warning::A MacPorts port has no binary archive yet, so MacPorts builds it from source"
+          sudo port -N install "${ports[@]}"
+        fi
         port installed requested
         # ffmpeg7 installs under its own prefix, so a newer ffmpeg can sit next
         # to it. Homebrew's pkg-config files in /usr/local aren't on MacPorts'
