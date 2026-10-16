@@ -4,6 +4,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Max Video Player now runs on Intel Macs with macOS 15 Sequoia or later. The download page has a DMG for each kind of Mac, and the app updates itself on both (#287).
+
 ### Changed
 
 - Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
