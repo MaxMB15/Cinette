@@ -1,20 +1,20 @@
-<svg width="165.3" height="20" viewBox="0 0 1653 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="frontend coverage: 97.89%">
-  <title>frontend coverage: 97.89%</title>
-  <linearGradient id="APVNJ" x2="0" y2="100%">
+<svg width="165.3" height="20" viewBox="0 0 1653 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="frontend coverage: 98.02%">
+  <title>frontend coverage: 98.02%</title>
+  <linearGradient id="DYfxx" x2="0" y2="100%">
     <stop offset="0" stop-opacity=".1" stop-color="#EEE"/>
     <stop offset="1" stop-opacity=".1"/>
   </linearGradient>
-  <mask id="ENzdb"><rect width="1653" height="200" rx="30" fill="#FFF"/></mask>
-  <g mask="url(#ENzdb)">
+  <mask id="uPnby"><rect width="1653" height="200" rx="30" fill="#FFF"/></mask>
+  <g mask="url(#uPnby)">
     <rect width="1113" height="200" fill="#555"/>
     <rect width="540" height="200" fill="#97c40f" x="1113"/>
-    <rect width="1653" height="200" fill="url(#APVNJ)"/>
+    <rect width="1653" height="200" fill="url(#DYfxx)"/>
   </g>
   <g aria-hidden="true" fill="#fff" text-anchor="start" font-family="Verdana,DejaVu Sans,sans-serif" font-size="110">
     <text x="60" y="148" textLength="1013" fill="#000" opacity="0.25">frontend coverage</text>
     <text x="50" y="138" textLength="1013">frontend coverage</text>
-    <text x="1168" y="148" textLength="440" fill="#000" opacity="0.25">97.89%</text>
-    <text x="1158" y="138" textLength="440">97.89%</text>
+    <text x="1168" y="148" textLength="440" fill="#000" opacity="0.25">98.02%</text>
+    <text x="1158" y="138" textLength="440">98.02%</text>
   </g>
   
 </svg>
