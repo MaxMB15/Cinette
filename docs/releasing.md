@@ -104,7 +104,9 @@ manual workflow, described in [ios.md](ios.md#continuous-integration).
 4. Publish.
 
 Publishing makes it the latest release, so the README links and the in-app updater
-switch to it right away. Then check that the README download links and every link in
+switch to it right away. It also starts the Website workflow, which rebuilds the
+[website](https://maxmb15.github.io/MaxVideoPlayer/) with the new version, links and
+file sizes. Then check that the README download links and every link in
 `latest.json` work:
 
 ```bash

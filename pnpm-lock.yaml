@@ -145,6 +145,30 @@ importers:
         specifier: ^5.0.4
         version: 5.0.4(@vitest/coverage-v8@5.0.4)(jsdom@29.1.1)(vite@8.3.3(jiti@2.7.0)(yaml@2.9.1))
 
+  site:
+    devDependencies:
+      '@stryker-mutator/core':
+        specifier: 10.0.0
+        version: 10.0.0
+      '@stryker-mutator/vitest-runner':
+        specifier: 10.0.0
+        version: 10.0.0(@stryker-mutator/core@10.0.0)(vitest@5.0.4)
+      '@tailwindcss/vite':
+        specifier: ^4.3.3
+        version: 4.3.3(vite@8.3.3(jiti@2.7.0)(yaml@2.9.1))
+      tailwindcss:
+        specifier: ^4.3.3
+        version: 4.3.3
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vite:
+        specifier: ^8.3.3
+        version: 8.3.3(jiti@2.7.0)(yaml@2.9.1)
+      vitest:
+        specifier: ^5.0.4
+        version: 5.0.4(@vitest/coverage-v8@5.0.4)(jsdom@29.1.1)(vite@8.3.3(jiti@2.7.0)(yaml@2.9.1))
+
 packages:
 
   '@adobe/css-tools@4.4.4':

@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+# Builds the website in site/ and publishes it to GitHub Pages at
+# https://maxmb15.github.io/MaxVideoPlayer/. The build asks GitHub's releases
+# API for the latest release, so the page links each file with its size.
+#
+# Pull requests build with the made-up release in site/fixtures/release.json
+# and never reach the network. Pushes to main, published releases and manual
+# runs from main build with the real release and publish it.
+#
+# Pages serves the gh-pages branch, where build.yml also keeps the coverage
+# reports under coverage/. The deploy copies the site onto the branch root and
+# keeps every file already there.
+name: Website
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "site/**"
+      - "docs/images/**"
+      - "apps/player/src-tauri/icons/**"
+      - "README.md"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/actions/setup-frontend/**"
+      - ".github/workflows/site.yml"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/images/**"
+      - "apps/player/src-tauri/icons/**"
+      - "README.md"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/actions/setup-frontend/**"
+      - ".github/workflows/site.yml"
+  # A new release changes the version, the links and the sizes. A release runs
+  # the workflow from its tag, so only tags that have this file start it.
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+# A newer push to a pull request cancels the old build. Runs on main and for
+# releases finish, and the deploy job below takes them one at a time.
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
+
+      - name: Test the site
+        run: pnpm --filter ./site test
+
+      # The build script checks the types first. The token only raises the API's
+      # rate limit, and the build never prints it. Without the release, the
+      # build fails rather than publish a page without sizes.
+      - name: Build the site
+        env:
+          SITE_RELEASE_FIXTURE: ${{ github.event_name == 'pull_request' && '1' || '' }}
+          GITHUB_TOKEN: ${{ github.event_name != 'pull_request' && github.token || '' }}
+        run: pnpm --filter ./site build
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site
+          path: site/dist
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: site-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: site
+          path: site
+
+      # keep_files leaves coverage/ and .nojekyll in place. The file names in
+      # site/dist have no hash, so each deploy replaces the last one's files.
+      - name: Publish to gh-pages
+        id: publish
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          keep_files: true
+
+      # build.yml's coverage deploy can push to gh-pages at the same moment,
+      # which rejects the later push. Trying again starts from the new branch.
+      - name: Wait for the other push
+        if: steps.publish.outcome == 'failure'
+        run: sleep 30
+
+      - name: Publish to gh-pages again
+        if: steps.publish.outcome == 'failure'
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          keep_files: true

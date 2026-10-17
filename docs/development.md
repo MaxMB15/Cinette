@@ -298,9 +298,10 @@ won't offer to add what's left in it.
 ## Tests and checks
 
 ```bash
-pnpm test                 # Rust core tests, then frontend tests
+pnpm test                 # Rust core tests, then the app's and the website's tests
 pnpm test:core            # cargo test -p mvp-core
 pnpm test:desktop         # Vitest
+pnpm test:site            # Vitest for the website, see Website
 pnpm lint                 # ESLint
 pnpm format:check         # Prettier
 cargo check               # the whole Rust workspace
@@ -622,11 +623,49 @@ start on Ubuntu 22.04 or Debian 12.
 The output lands in `target/release/bundle/`. To sign the macOS build with a
 Developer ID, see [macos-signing.md](macos-signing.md).
 
+## Website
+
+The [website](https://maxmb15.github.io/MaxVideoPlayer/) lives in `site/`. It's one
+page with the README's content and a link to each file of the latest release with
+its size. Vite and Tailwind build it, as they do the app, from plain TypeScript
+without React.
+
+```bash
+pnpm dev:site                            # the page with hot reload
+pnpm build:site                          # checks the types, then builds site/dist
+SITE_RELEASE_FIXTURE=1 pnpm build:site   # the same with a made-up release, offline
+pnpm --filter ./site preview             # serves site/dist
+pnpm test:site                           # Vitest
+pnpm test:site:mutation                  # StrykerJS on site/src/lib
+```
+
+The build asks GitHub's releases API for the latest release. `site/src/lib/release.ts`
+reads its version, date, files, sizes and SHA-256 checksums, and `render.ts` puts
+them into `index.html`. A file the release doesn't have is left out, so the page
+never links a missing file. When GitHub doesn't answer, the build fails rather
+than make a page without sizes. `SITE_RELEASE_FIXTURE=1` builds with the made-up
+release in `site/fixtures/release.json` instead, as the tests and pull request
+builds do. A `GITHUB_TOKEN` in the environment raises the API's rate limit.
+
+Open the built page through a web server, since a browser won't load its
+stylesheet on a `file://` page. The page uses the app icon from
+`apps/player/src-tauri/icons/` and the screenshots in `docs/images/`, and the build
+copies them into `site/dist/assets`.
+
+The [Website](../.github/workflows/site.yml) workflow tests and builds the site on
+pull requests. Pushes to `main` that change it, published releases and manual runs
+from `main` build it with the latest release and copy `site/dist` onto the
+`gh-pages` branch, which GitHub Pages serves. The copy keeps the coverage reports
+and every other file already there. The built files have no hash in their names,
+so each deploy replaces the last one's. A file the site stops using stays on the
+branch until someone deletes it. CI doesn't run Stryker on the site, so run
+`pnpm test:site:mutation` after changing `site/src/lib`.
+
 ## Code style
 
 - TypeScript and React use arrow functions everywhere, never `function`
   declarations. `export default function` is the one exception.
-- Prettier formats `apps/**`; run `pnpm format`.
+- Prettier formats `apps/**` and `site/**`; run `pnpm format`.
 - All `invoke()` calls to the Rust backend live in `apps/player/src/lib/tauri.ts`.
 - On macOS, AppKit and OpenGL calls must run on the main thread. See
   [architecture.md](architecture.md#macos).
@@ -649,6 +688,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 | [Changed code](../.github/workflows/changed-code.yml) | Pull requests to `dev` | Checks the lines a pull request changes. Tests must run at least 80% of them, for the frontend and for Rust each, and every change that Stryker and cargo-mutants make to them must fail a test, unless a comment with a reason skips it. The last job, Changed code, fails when any other job failed or was cancelled. See [Changed code](#changed-code). |
 | [Mutation testing](../.github/workflows/mutants.yml) | Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
 | [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Mondays, manual runs | Runs StrykerJS on all of the frontend helpers in `src/lib`. Every Monday, the schedule starts a run on `dev`. It reports the changes that survive and fails only on an error. |
+| [Website](../.github/workflows/site.yml) | Pull requests to `main` and `dev` and pushes to `main` that change the site, published releases, manual runs | Tests and builds the website. Pull requests use a made-up release. Pushes to `main`, releases and manual runs from `main` build with the latest release and publish the site to GitHub Pages. See [Website](#website). |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

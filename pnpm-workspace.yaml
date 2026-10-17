@@ -3,6 +3,7 @@
 
 packages:
   - apps/player
+  - site
 
 # Versions that more than one package.json uses. ESLint runs from the root and
 # parses with TypeScript, so it gets the same TypeScript as the app.

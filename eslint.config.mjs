@@ -10,7 +10,15 @@ import eslintConfigPrettier from "eslint-config-prettier";
 import globals from "globals";
 
 export default defineConfig(
-	globalIgnores(["dist/**", "node_modules/**", "**/*.min.js", "libs/**"]),
+	globalIgnores([
+		"dist/**",
+		"node_modules/**",
+		"**/*.min.js",
+		"libs/**",
+		"site/dist/**",
+		"site/reports/**",
+		"site/.stryker-tmp/**",
+	]),
 	eslint.configs.recommended,
 	tseslint.configs.recommended,
 	react.configs.flat.recommended,
@@ -31,6 +39,13 @@ export default defineConfig(
 			"@typescript-eslint/no-empty-object-type": "off",
 			"@typescript-eslint/no-unused-expressions": "off",
 			"no-constant-binary-expression": "off",
+		},
+	},
+	{
+		// The website's build and test configs run in Node.
+		files: ["site/*.config.{ts,mjs}"],
+		languageOptions: {
+			globals: { ...globals.node },
 		},
 	},
 	eslintConfigPrettier

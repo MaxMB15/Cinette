@@ -14,7 +14,7 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 [![Rust coverage](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/badge.svg)](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
-[Download](#download) · [Features](#features) · [Getting started](#getting-started) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md) · [Disclaimer](#disclaimer)
+[Website](https://maxmb15.github.io/MaxVideoPlayer/) · [Download](#download) · [Features](#features) · [Getting started](#getting-started) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md) · [Disclaimer](#disclaimer)
 
 <br>
 
