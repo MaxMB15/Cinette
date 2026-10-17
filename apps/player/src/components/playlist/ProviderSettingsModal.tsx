@@ -15,6 +15,7 @@ import {
 	type ProviderSettings,
 	loadProviderSettings,
 	saveProviderSettings,
+	setEpgLastRefresh,
 } from "@/hooks/useChannels";
 import { refreshEpg, setEpgUrl, detectEpgUrl } from "@/lib/tauri";
 import { XtreamFields } from "./XtreamFields";
@@ -160,6 +161,9 @@ export const ProviderSettingsModal = ({
 		setEpgRefreshEmpty(false);
 		return epgRefresh.run(async () => {
 			const saved = await refreshEpg(provider.id);
+			// The automatic refresh waits a full interval from now, and the
+			// channel list loads the guide again.
+			setEpgLastRefresh(provider.id);
 			setEpgRefreshEmpty(saved === 0);
 		});
 	};

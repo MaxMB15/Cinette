@@ -27,6 +27,7 @@ const state = vi.hoisted(() => ({
 	os: "macos",
 	navigate: vi.fn(),
 	toggleFavorite: vi.fn(),
+	guideVersion: 0,
 }));
 
 /**
@@ -64,6 +65,7 @@ vi.mock("@/hooks/useChannels", () => ({
 		channels: state.channels,
 		loading: state.loading,
 		toggleFavorite: state.toggleFavorite,
+		guideVersion: state.guideVersion,
 		providers: [
 			{
 				id: "p1",
@@ -376,6 +378,7 @@ beforeEach(() => {
 	state.downloads = [];
 	state.layoutMode = "desktop";
 	state.os = "macos";
+	state.guideVersion = 0;
 	state.navigate.mockReset();
 	state.toggleFavorite.mockReset();
 	for (const fn of Object.values(tauri)) fn.mockReset();
@@ -753,6 +756,35 @@ describe("ChannelList live rows", () => {
 
 		expect(screen.getByTitle("Market Watch")).toBeInTheDocument();
 		expect(screen.queryByTitle("Morning Briefing")).toBeNull();
+	});
+
+	it("loads the guide again once a provider's guide finishes refreshing", async () => {
+		freezeClock();
+		tauri.getEpgForLiveChannels.mockResolvedValueOnce([]).mockResolvedValueOnce([
+			{
+				channelId: "news.tv",
+				title: "Morning Briefing",
+				startTime: NOW,
+				endTime: NOW + 3600,
+			},
+		]);
+		const { rerender } = await renderList();
+		// Rendering again with no refresh finished loads nothing.
+		rerender(<ChannelList />);
+		await flush();
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledOnce();
+
+		state.guideVersion = 1;
+		rerender(<ChannelList />);
+		await flush();
+
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
+			NOW - 2 * 3600,
+			NOW + 5 * 3600,
+			undefined
+		);
+		expect(screen.getByTitle("Morning Briefing")).toBeInTheDocument();
 	});
 
 	it("stops watching its size when it unmounts", async () => {
