@@ -6,9 +6,9 @@
 # API for the latest release, so the page links each file with its size.
 #
 # Pull requests build with the made-up release in site/fixtures/release.json
-# and never reach the network. Pushes to main, published releases and manual
-# runs from main build main's site with the real release and publish it.
-# Pre-releases build but don't publish.
+# and never reach the network. Pushes to main, releases and manual runs from
+# main build main's site with the real release and publish it. A pre-release
+# starts nothing until it's changed to a full release.
 #
 # Pages serves the gh-pages branch, where build.yml also keeps the coverage
 # reports under coverage/. The deploy copies the site onto the branch root and
@@ -38,11 +38,14 @@ on:
       - "pnpm-workspace.yaml"
       - ".github/actions/setup-frontend/**"
       - ".github/workflows/site.yml"
-  # A new release changes the version, the links and the sizes. A release runs
-  # the workflow from its tag, so only tags that have this file start it. The
-  # build still checks out main, below.
+  # A new release changes the version, the links and the sizes. The released
+  # type fires when a full release is published and when a pre-release is
+  # changed to one. It never fires for a pre-release, which GitHub's latest
+  # release leaves out anyway. A release runs the workflow from its tag, so
+  # only tags that have this file start it. The build still checks out main,
+  # below.
   release:
-    types: [published]
+    types: [released]
   workflow_dispatch:
 
 permissions: {}
@@ -93,7 +96,7 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name == 'push' || (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'push' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

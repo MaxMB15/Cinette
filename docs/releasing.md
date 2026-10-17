@@ -107,9 +107,10 @@ Publishing makes it the latest release, so the README links and the in-app updat
 switch to it right away. When the tag's tree has `.github/workflows/site.yml`,
 publishing also starts the Website workflow, which rebuilds the
 [website](https://maxmb15.github.io/MaxVideoPlayer/) with the new version, links and
-file sizes. GitHub runs a release's workflows from its tag, and v0.7.0 and earlier
-came before that workflow. The site's first deploy comes from the merge to `main` for
-the next release, or from a manual run of **Website** from `main`.
+file sizes. A pre-release doesn't start it, and changing a pre-release to a full
+release later does. GitHub runs a release's workflows from its tag, and v0.7.0 and
+earlier came before that workflow. The site's first deploy comes from the merge to
+`main` for the next release, or from a manual run of **Website** from `main`.
 
 After publishing:
 
