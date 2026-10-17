@@ -250,7 +250,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				setLoading(false);
 			}
 		},
-		// Stryker disable next-line ArrayDeclaration: every one of these stays the same object for the provider's whole life, so an empty list gives the same callback.
+		// Stryker disable next-line ArrayDeclaration: every one of these stays the same object while the context provider is mounted, so an empty list gives the same callback.
 		[providersRef, refreshProviders, refreshChannels, autoRefresh]
 	);
 
