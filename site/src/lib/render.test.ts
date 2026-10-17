@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+// @vitest-environment jsdom
 
 import { expect, test } from "vitest";
 import { parseRelease, pickDownloads, type FileId, type Release } from "./release";
@@ -27,17 +28,28 @@ const only = (...ids: FileId[]): Release => {
 /** One tag on each line, so a snapshot reads like the page. */
 const lines = (html: string): string => html.replaceAll("><", ">\n<");
 
+/** The HTML as a browser reads it, inside a div. */
+const parse = (html: string): HTMLDivElement => {
+	const div = document.createElement("div");
+	div.innerHTML = html;
+	return div;
+};
+
+/** The element's text, with a space where each tag was. */
+const textOf = (element: Element): string => {
+	const parts: string[] = [];
+	const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+	while (walker.nextNode()) parts.push((walker.currentNode as Text).data);
+	return parts.join(" ").replace(/\s+/g, " ").trim();
+};
+
 /** The visible text of each hero choice, by the system it's for. */
 const picks = (html: string): Record<string, string> =>
 	Object.fromEntries(
-		html
-			.split('<div class="os-pick" data-for="')
-			.slice(1)
-			.map((part) => {
-				const end = part.indexOf('">');
-				const text = part.slice(end + 2).replace(/<[^>]+>/g, " ");
-				return [part.slice(0, end), text.replace(/\s+/g, " ").trim()];
-			})
+		[...parse(html).querySelectorAll<HTMLElement>(".os-pick")].map((pick) => [
+			pick.dataset.for,
+			textOf(pick),
+		])
 	);
 
 test("renderHero offers each system its own download", () => {
@@ -46,12 +58,8 @@ test("renderHero offers each system its own download", () => {
 
 test("renderHero has one choice for each system", () => {
 	const html = renderHero(FULL, pickDownloads(FULL));
-	expect([...html.matchAll(/data-for="(\w+)"/g)].map((m) => m[1])).toEqual([
-		"mac",
-		"linux",
-		"ios",
-		"other",
-	]);
+	const choices = [...parse(html).querySelectorAll<HTMLElement>("[data-for]")];
+	expect(choices.map((choice) => choice.dataset.for)).toEqual(["mac", "linux", "ios", "other"]);
 });
 
 test("renderHero names Apple Silicon and offers Intel next to it", () => {
@@ -66,7 +74,12 @@ test("renderHero leaves Intel out of a release without it", () => {
 	expect(picks(html).mac).toBe(
 		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for macOS 15 Sequoia or later."
 	);
-	expect(html).not.toContain("MaxVideoPlayer_x64.dmg");
+	expect([...parse(html).querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+		"https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg",
+		"https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.AppImage",
+		"#download",
+		"#download",
+	]);
 });
 
 test("renderHero sends Macs to every download when there's no Apple Silicon build", () => {
@@ -120,10 +133,12 @@ test("renderPlatforms lists each file with its size", () => {
 
 test("renderPlatforms only asks about the Mac's chip when there's a choice", () => {
 	const release = only("mac-arm", "appimage");
-	const html = renderPlatforms(pickDownloads(release));
-	expect(html).toContain("<h3>macOS</h3>");
-	expect(html).not.toContain("platform-note");
-	expect(html).toContain('</ul></div><div class="platform"><h3>Linux</h3>');
+	const [mac, linux] = parse(renderPlatforms(pickDownloads(release))).children;
+	expect(mac.querySelector("h3")?.textContent).toBe("macOS");
+	expect(linux.querySelector("h3")?.textContent).toBe("Linux");
+	// Nothing, not even text, follows the Mac's one file.
+	expect(mac.lastChild?.nodeName).toBe("UL");
+	expect(mac.querySelectorAll("li")).toHaveLength(1);
 });
 
 test("renderPlatforms leaves out a system the release has no files for", () => {

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+// @vitest-environment jsdom
 
 // Checks index.html itself: the script that picks the hero's downloads, the
-// links between sections, and that nothing loads from another site.
+// links between sections, and that nothing loads from another site. The page
+// goes through a DOM parser, as a browser would read it, and its script never
+// runs here except through osFor.
 
 import { expect, test } from "vitest";
 import page from "../index.html?raw";
@@ -10,14 +13,21 @@ import fixture from "../fixtures/release.json?raw";
 import { FILES, parseRelease } from "./lib/release";
 import { fillPage } from "./lib/render";
 
-const FILLED = fillPage(page, parseRelease(JSON.parse(fixture)));
+const parse = (html: string): Document => new DOMParser().parseFromString(html, "text/html");
 
-const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+const PAGE = parse(page);
+const FILLED = parse(fillPage(page, parseRelease(JSON.parse(fixture))));
+
+const scripts = [...PAGE.querySelectorAll("script")];
+
+/** The attribute's value on each element the selector finds. */
+const attributes = (doc: Document, selector: string, name: string): string[] =>
+	[...doc.querySelectorAll(selector)].map((element) => element.getAttribute(name) ?? "");
 
 /** Runs the page's script as a browser with this user agent would. */
 const osFor = (userAgent: string, maxTouchPoints = 0): string | undefined => {
 	const document = { documentElement: { dataset: {} as Record<string, string> } };
-	new Function("navigator", "document", scripts[0])({ userAgent, maxTouchPoints }, document);
+	new Function("navigator", "document", scripts[0].text)({ userAgent, maxTouchPoints }, document);
 	return document.documentElement.dataset.os;
 };
 
@@ -26,7 +36,8 @@ const MAC =
 
 test("the page has one script, inline", () => {
 	expect(scripts).toHaveLength(1);
-	expect(page).not.toMatch(/<script[^>]*\ssrc=/);
+	expect(scripts[0].hasAttribute("src")).toBe(false);
+	expect(scripts[0].text.trim()).not.toBe("");
 });
 
 test("the script tells a Mac from an iPad, which asks for the Mac site", () => {
@@ -79,17 +90,21 @@ test("the script offers every download to Android, ChromeOS and Windows", () => 
 });
 
 test("the release fills every marker in the page", () => {
-	expect(FILLED).not.toContain("<!-- release:");
+	const comments: string[] = [];
+	const walker = FILLED.createTreeWalker(FILLED, NodeFilter.SHOW_COMMENT);
+	while (walker.nextNode()) comments.push((walker.currentNode as Comment).data.trim());
+	expect(comments.filter((comment) => comment.startsWith("release:"))).toEqual([]);
+	const links = attributes(FILLED, "a[href]", "href");
 	for (const { file } of FILES) {
-		expect(FILLED).toContain(
-			`href="https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/${file}"`
+		expect(links).toContain(
+			`https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/${file}`
 		);
 	}
 });
 
 test("each link to a section has a section to go to", () => {
-	const ids = new Set([...FILLED.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
-	const targets = [...FILLED.matchAll(/href="#([^"]*)"/g)].map((m) => m[1]);
+	const ids = new Set(attributes(FILLED, "[id]", "id"));
+	const targets = attributes(FILLED, '[href^="#"]', "href").map((href) => href.slice(1));
 	expect(targets.length).toBeGreaterThan(0);
 	for (const target of targets) {
 		expect(ids).toContain(target);
@@ -97,27 +112,39 @@ test("each link to a section has a section to go to", () => {
 });
 
 test("each id is used once", () => {
-	const ids = [...FILLED.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+	const ids = attributes(FILLED, "[id]", "id");
+	expect(ids.length).toBeGreaterThan(0);
 	expect(new Set(ids).size).toBe(ids.length);
 });
 
 test("each image has alt text or is marked as decoration", () => {
-	const images = [...page.matchAll(/<img\b[^>]*>/g)].map((m) => m[0]);
+	const images = [...PAGE.querySelectorAll("img")];
 	expect(images.length).toBeGreaterThan(0);
 	for (const image of images) {
-		expect(image).toMatch(/\salt="/);
+		expect(image.hasAttribute("alt")).toBe(true);
 	}
 });
 
 test("images and styles come from the repo, not another site", () => {
-	for (const [, source] of page.matchAll(/<(?:img|link)\b[^>]*\s(?:src|href)="([^"]+)"/g)) {
-		if (source === "https://maxmb15.github.io/MaxVideoPlayer/") continue;
+	const sources = [
+		...attributes(PAGE, "img", "src"),
+		...attributes(PAGE, 'link:not([rel="canonical"])', "href"),
+	];
+	expect(sources.length).toBeGreaterThan(0);
+	for (const source of sources) {
 		expect(source).toMatch(/^\.\.?\//);
 	}
+	expect(attributes(PAGE, 'link[rel="canonical"]', "href")).toEqual([
+		"https://maxmb15.github.io/MaxVideoPlayer/",
+	]);
 });
 
 test("links to other sites use https", () => {
-	for (const [, href] of FILLED.matchAll(/href="([^"#.][^"]*)"/g)) {
+	const hrefs = attributes(FILLED, "[href]", "href").filter(
+		(href) => !href.startsWith("#") && !href.startsWith(".")
+	);
+	expect(hrefs.length).toBeGreaterThan(0);
+	for (const href of hrefs) {
 		expect(href).toMatch(/^https:\/\//);
 	}
 });
