@@ -9,3 +9,6 @@ pub mod opensubtitles;
 pub mod skip_segments;
 pub mod whatson;
 pub mod xtream;
+
+#[cfg(test)]
+mod demo_tests;
