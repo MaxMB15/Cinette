@@ -34,6 +34,46 @@ const osFor = (userAgent: string, maxTouchPoints = 0): string | undefined => {
 
 const MAC =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+const MAC_FIREFOX =
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:131.0) Gecko/20100101 Firefox/131.0";
+const IPHONE =
+	"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+const IPAD =
+	"Mozilla/5.0 (iPad; CPU OS 12_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1";
+
+const LINUX_DESKTOPS = [
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+];
+
+const LINUX_TVS_AND_PHONES = [
+	"Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 WebAppManager",
+	"Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) 76.0.3809.146/6.0 TV Safari/537.36",
+	"Mozilla/5.0 (SMART-TV; X11; Linux armv7l) AppleWebKit/537.42 (KHTML, like Gecko) Chromium/25.0.1349.2 Chrome/25.0.1349.2 Safari/537.42",
+	"Mozilla/5.0 (Linux; Tizen 2.3) AppleWebKit/538.1 (KHTML, like Gecko)Version/2.3 TV Safari/538.1",
+	"Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/605.1.15",
+];
+
+const ANDROID_CHROMEOS_WINDOWS = [
+	"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+	"Mozilla/5.0 (Linux; Android 9; AFTMM Build/PS7633) AppleWebKit/537.36 (KHTML, like Gecko) Silk/130.0.0 like Chrome/130.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+	"",
+];
+
+/** Each user agent above, with the touch points its device reports. */
+const AGENTS: [userAgent: string, maxTouchPoints: number][] = [
+	[MAC, 0],
+	[MAC, 1],
+	[MAC, 5],
+	[MAC_FIREFOX, 0],
+	[IPHONE, 5],
+	[IPAD, 5],
+	...[...LINUX_DESKTOPS, ...LINUX_TVS_AND_PHONES, ...ANDROID_CHROMEOS_WINDOWS].map(
+		(userAgent): [string, number] => [userAgent, 0]
+	),
+];
 
 test("the page has one script, inline", () => {
 	expect(scripts).toHaveLength(1);
@@ -45,81 +85,48 @@ test("the script tells a Mac from an iPad, which asks for the Mac site", () => {
 	expect(osFor(MAC)).toBe("mac");
 	expect(osFor(MAC, 1)).toBe("mac");
 	expect(osFor(MAC, 5)).toBe("ios");
-	expect(
-		osFor(
-			"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:131.0) Gecko/20100101 Firefox/131.0"
-		)
-	).toBe("mac");
+	expect(osFor(MAC_FIREFOX)).toBe("mac");
 });
 
 test("the script knows iPhones and iPads", () => {
-	expect(
-		osFor(
-			"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
-			5
-		)
-	).toBe("ios");
-	expect(
-		osFor(
-			"Mozilla/5.0 (iPad; CPU OS 12_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1",
-			5
-		)
-	).toBe("ios");
+	expect(osFor(IPHONE, 5)).toBe("ios");
+	expect(osFor(IPAD, 5)).toBe("ios");
 });
 
 test("the script knows desktop Linux", () => {
-	expect(
-		osFor(
-			"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-		)
-	).toBe("linux");
-	expect(
-		osFor("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0")
-	).toBe("linux");
+	for (const userAgent of LINUX_DESKTOPS) {
+		expect(osFor(userAgent)).toBe("linux");
+	}
 });
 
 test("the script offers every download to Linux TVs and phones", () => {
-	for (const userAgent of [
-		"Mozilla/5.0 (Web0S; Linux/SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 WebAppManager",
-		"Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) 76.0.3809.146/6.0 TV Safari/537.36",
-		"Mozilla/5.0 (SMART-TV; X11; Linux armv7l) AppleWebKit/537.42 (KHTML, like Gecko) Chromium/25.0.1349.2 Chrome/25.0.1349.2 Safari/537.42",
-		"Mozilla/5.0 (Linux; Tizen 2.3) AppleWebKit/538.1 (KHTML, like Gecko)Version/2.3 TV Safari/538.1",
-		"Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/605.1.15",
-	]) {
+	for (const userAgent of LINUX_TVS_AND_PHONES) {
 		expect(osFor(userAgent)).toBe("other");
 	}
 });
 
 test("the script offers every download to Android, ChromeOS and Windows", () => {
-	for (const userAgent of [
-		"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
-		"Mozilla/5.0 (Linux; Android 9; AFTMM Build/PS7633) AppleWebKit/537.36 (KHTML, like Gecko) Silk/130.0.0 like Chrome/130.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-		"",
-	]) {
+	for (const userAgent of ANDROID_CHROMEOS_WINDOWS) {
 		expect(osFor(userAgent)).toBe("other");
 	}
 });
 
 test("the script, the hero and the stylesheet name the same systems", () => {
-	const systems = ["ios", "linux", "mac", "other"];
-	// Each value the script can give data-os is a quoted string in it.
-	const set = [...scripts[0].text.matchAll(/"([^"]*)"/g)].map(([, os]) => os);
-	expect(set.sort()).toEqual(systems);
-	expect(attributes(FILLED, ".os-pick", "data-for").sort()).toEqual(systems);
+	// The systems the script picks for the user agents above.
+	const picked = [...new Set(AGENTS.map(([userAgent, touch]) => osFor(userAgent, touch)))].sort();
+	expect(attributes(FILLED, ".os-pick", "data-for").sort()).toEqual(picked);
 	const shown = [
 		...styles.matchAll(/:root\[data-os="([^"]*)"\] \.os-pick\[data-for="([^"]*)"\]/g),
 	];
-	expect(shown.map(([, os]) => os).sort()).toEqual(systems);
+	expect(shown.map(([, os]) => os).sort()).toEqual(picked);
 	for (const [, os, pick] of shown) {
 		expect(pick).toBe(os);
 	}
 	// Without the script, the link to every download shows.
 	expect(styles).toContain(':root:not([data-os]) .os-pick[data-for="other"]');
 	const picks = [...styles.matchAll(/\.os-pick\[data-for="([^"]*)"\]/g)].map(([, os]) => os);
-	expect(picks).toHaveLength(systems.length + 1);
-	expect(new Set(picks)).toEqual(new Set(systems));
+	expect(picks).toHaveLength(picked.length + 1);
+	expect(new Set(picks)).toEqual(new Set(picked));
 });
 
 test("the release fills every marker in the page", () => {
