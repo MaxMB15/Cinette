@@ -17,6 +17,11 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # @types/node follows the Node major that CI runs, set in
+      # .github/actions/setup-frontend. Move both together by hand.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       # Tauri's CLI refuses to build when @tauri-apps/api and the tauri crate
       # differ by a minor version, so Tauri's packages come in a pull request

@@ -1,0 +1,694 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7. -->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Max Video Player</title>
+		<meta
+			name="description"
+			content="A fast, private IPTV player for macOS and Linux. Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app."
+		/>
+		<meta name="color-scheme" content="light dark" />
+		<meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#0f1114" media="(prefers-color-scheme: dark)" />
+		<link rel="canonical" href="https://maxmb15.github.io/MaxVideoPlayer/" />
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content="Max Video Player" />
+		<meta
+			property="og:description"
+			content="A fast, private IPTV player for macOS and Linux. Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app."
+		/>
+		<meta property="og:url" content="https://maxmb15.github.io/MaxVideoPlayer/" />
+		<meta
+			property="og:image"
+			content="https://maxmb15.github.io/MaxVideoPlayer/assets/channels.jpg"
+		/>
+		<meta name="twitter:card" content="summary_large_image" />
+		<link rel="icon" type="image/png" href="../apps/player/src-tauri/icons/32x32.png" />
+		<link rel="stylesheet" href="./src/styles.css" />
+		<script>
+			// Shows the download buttons for the visitor's system before the page
+			// draws. iPads ask for the Mac site, so a Mac with a touch screen is an
+			// iPad. Phones, TVs and Chromebooks that say Linux get every download,
+			// as they do without this script.
+			(() => {
+				const ua = navigator.userAgent;
+				const apple = /Macintosh|iPhone|iPad|iPod/.test(ua);
+				document.documentElement.dataset.os =
+					/iPhone|iPad|iPod/.test(ua) || (apple && navigator.maxTouchPoints > 1)
+						? "ios"
+						: apple
+							? "mac"
+							: /Linux|X11/.test(ua) &&
+								  !/Android|CrOS|SmartTV|SMART-TV|Tizen|Web0S|Mobile/.test(ua)
+								? "linux"
+								: "other";
+			})();
+		</script>
+	</head>
+	<body>
+		<a class="skip-link" href="#main">Skip to the content</a>
+
+		<header class="site-header">
+			<div class="wrap header-inner">
+				<a class="brand" href="#top">
+					<img
+						class="app-icon"
+						src="../apps/player/src-tauri/icons/64x64.png"
+						width="28"
+						height="28"
+						alt=""
+					/>
+					Max Video Player
+				</a>
+				<nav class="site-nav" aria-label="Sections">
+					<a class="nav-wide" href="#features">Features</a>
+					<a href="#download">Download</a>
+					<a class="nav-wide" href="#faq">FAQ</a>
+					<a href="https://github.com/MaxMB15/MaxVideoPlayer">GitHub</a>
+				</nav>
+			</div>
+		</header>
+
+		<main id="main">
+			<section class="hero" id="top" aria-labelledby="title">
+				<div class="wrap">
+					<img
+						class="app-icon"
+						src="../apps/player/src-tauri/icons/128x128@2x.png"
+						width="88"
+						height="88"
+						alt=""
+					/>
+					<h1 class="hero-title" id="title">Max Video Player</h1>
+					<p class="hero-pitch">A fast, private IPTV player for macOS and Linux.</p>
+					<p class="hero-lead">
+						Add your M3U playlist or Xtream Codes account and watch live TV, movies and
+						series in one app. It's open source, with no accounts, ads or tracking.
+					</p>
+					<div class="hero-download">
+						<!-- release:hero -->
+					</div>
+					<div class="hero-shot">
+						<img
+							src="../docs/images/channels.jpg"
+							width="1600"
+							height="1000"
+							alt="The live TV tab: recently played channels, category filters, and a TV guide timeline for each channel"
+						/>
+					</div>
+				</div>
+			</section>
+
+			<section class="section" id="why" aria-labelledby="why-title">
+				<div class="wrap">
+					<h2 class="section-title" id="why-title">Why Max Video Player</h2>
+					<div class="why-grid copy">
+						<div>
+							<h3>It's fast</h3>
+							<p>
+								The app is built in Rust with <a href="https://tauri.app">Tauri</a>,
+								which uses the web view your system already has instead of shipping
+								its own copy of Chromium the way Electron apps do. Video plays
+								through <a href="https://mpv.io">mpv</a> with your computer's
+								hardware decoder, and mpv draws it itself instead of handing it to
+								the web page that holds the controls.
+							</p>
+							<p>
+								Playlists and TV guides are parsed in Rust and saved in a local
+								database, and the app only downloads them again when they're due on
+								the schedule you set. The channel list only draws the rows you can
+								see, however long the playlist is.
+							</p>
+						</div>
+						<div>
+							<h3>It collects nothing</h3>
+							<p>
+								There are no accounts, ads, analytics or telemetry, and the
+								developer gets no data from the app. Your playlists, logins,
+								favorites and history stay on your computer.
+							</p>
+							<p>
+								You don't have to take that on trust. All of the code is
+								<a href="https://github.com/MaxMB15/MaxVideoPlayer">on GitHub</a>
+								for anyone to read, every release is built from it by GitHub
+								Actions, and the
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/docs/privacy.md"
+									>privacy policy</a
+								>
+								lists each service the app talks to and what it sends.
+							</p>
+						</div>
+						<div>
+							<h3>You set it up your way</h3>
+							<p>
+								Choose how often each provider and its guide refresh. Pin, rename,
+								reorder and create categories. Pick whether intros, recaps and
+								credits are skipped automatically, with a button or not at all, and
+								how far the back and forward buttons jump.
+							</p>
+							<p>
+								Set the default volume and hardware decoding, where downloads go,
+								how many run at once and how long they're kept, and how early
+								recordings start and how late they run.
+							</p>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="section" id="features" aria-labelledby="features-title">
+				<div class="wrap">
+					<h2 class="section-title" id="features-title">Features</h2>
+					<div class="feature-grid copy">
+						<div>
+							<h3>Your playlists</h3>
+							<ul>
+								<li>
+									M3U and M3U+ playlists from a URL or a file, and Xtream Codes
+									accounts
+								</li>
+								<li>
+									Several providers side by side, each refreshed on a schedule you
+									choose
+								</li>
+								<li>
+									XMLTV TV guide (EPG), shown as a timeline of what's on for each
+									live channel
+								</li>
+							</ul>
+						</div>
+						<div>
+							<h3>Browsing</h3>
+							<ul>
+								<li>
+									Separate tabs for live TV, movies and series, plus favorites,
+									downloads and watch history
+								</li>
+								<li>Search by channel or title, and on live TV by program name</li>
+								<li>
+									Pin, rename, reorder and create categories, so a playlist with
+									thousands of channels stays manageable
+								</li>
+							</ul>
+						</div>
+						<div>
+							<h3>Playback</h3>
+							<ul>
+								<li>
+									Plays nearly every IPTV stream format, including HLS, MPEG-TS,
+									RTMP and RTSP, through mpv with hardware decoding
+								</li>
+								<li>
+									Reconnects on its own when the stream or your network drops, and
+									picks up where it left off
+								</li>
+								<li>
+									Resumes movies and episodes where you stopped, with next episode
+									and autoplay for series
+								</li>
+								<li>
+									Skips intros, recaps and credits with a button or automatically,
+									using times from <a href="https://skipdb.tv">SkipDB</a> and
+									<a href="https://introdb.app">IntroDB</a>
+								</li>
+								<li>
+									Keyboard shortcuts for playback, which <kbd>?</kbd> in the
+									player lists
+								</li>
+								<li>
+									Subtitles from OpenSubtitles, with timing and position
+									adjustment
+								</li>
+								<li>Keeps your screen awake while you watch</li>
+							</ul>
+						</div>
+						<div>
+							<h3>More</h3>
+							<ul>
+								<li>Download movies, episodes or whole seasons to watch offline</li>
+								<li>
+									Record a live channel now, a program from the guide or any time
+									range
+								</li>
+								<li>Plot, cast and ratings for movies and series from OMDb</li>
+								<li>Optional category sorting with Google Gemini</li>
+								<li>Automatic updates</li>
+							</ul>
+						</div>
+					</div>
+					<p class="note">
+						OpenSubtitles, OMDb and Gemini each need a free API key, which you add in
+						Settings. Skip times need the OMDb key too.
+					</p>
+				</div>
+			</section>
+
+			<section class="section" id="screenshots" aria-labelledby="screenshots-title">
+				<div class="wrap">
+					<h2 class="section-title" id="screenshots-title">Screenshots</h2>
+					<div class="shot-grid">
+						<figure>
+							<img
+								src="../docs/images/movies.jpg"
+								width="1600"
+								height="1000"
+								loading="lazy"
+								alt="The movies tab: a poster grid with genre filters, favorites and download status"
+							/>
+							<figcaption>
+								Movies, with genre filters and what you've downloaded
+							</figcaption>
+						</figure>
+						<figure>
+							<img
+								src="../docs/images/movie-details.jpg"
+								width="1600"
+								height="1000"
+								loading="lazy"
+								alt="A movie's details: poster, rating, cast, plot, source picker, and Play and Download buttons"
+							/>
+							<figcaption>A movie's details, with ratings, cast and plot</figcaption>
+						</figure>
+						<figure>
+							<img
+								src="../docs/images/series.jpg"
+								width="1600"
+								height="1000"
+								loading="lazy"
+								alt="The series tab: recently played shows and a grid of series with favorite and download buttons"
+							/>
+							<figcaption>Series, starting with the ones you watched last</figcaption>
+						</figure>
+						<figure>
+							<img
+								src="../docs/images/series-details.jpg"
+								width="1600"
+								height="1000"
+								loading="lazy"
+								alt="A series' details: rating, creator, cast, plot, a partially downloaded tag, and a download button for each season"
+							/>
+							<figcaption>
+								A series' details, with a download button for each season
+							</figcaption>
+						</figure>
+						<figure>
+							<img
+								src="../docs/images/playlists.jpg"
+								width="1600"
+								height="1000"
+								loading="lazy"
+								alt="The playlists page: the form for adding an M3U or Xtream Codes provider, and two providers already added"
+							/>
+							<figcaption>
+								Adding an M3U playlist or an Xtream Codes account
+							</figcaption>
+						</figure>
+						<figure>
+							<img
+								src="../docs/images/settings.jpg"
+								width="1600"
+								height="1000"
+								loading="lazy"
+								alt="Settings: hardware decoding, default volume, and the Gemini and OMDb API key fields"
+							/>
+							<figcaption>Settings for playback and the optional API keys</figcaption>
+						</figure>
+					</div>
+					<p class="note">Screenshots use made-up channels and titles.</p>
+				</div>
+			</section>
+
+			<section class="section band" id="download" aria-labelledby="download-title">
+				<div class="wrap">
+					<h2 class="section-title" id="download-title">Download</h2>
+					<!-- release:meta -->
+					<div class="platforms">
+						<!-- release:platforms -->
+						<div class="platform">
+							<h3>Other devices</h3>
+							<p class="requirement">Not out yet</p>
+							<ul class="later-list">
+								<li>
+									<span>iPhone and iPad</span
+									><span>Coming soon to the App Store</span>
+								</li>
+								<li><span>Windows</span><span>Planned</span></li>
+								<li><span>Android and Fire TV</span><span>Planned</span></li>
+							</ul>
+						</div>
+					</div>
+					<!-- release:checksums -->
+					<div class="note copy">
+						<p>
+							These links always point at the newest version. Older versions and
+							release notes are on the
+							<a href="https://github.com/MaxMB15/MaxVideoPlayer/releases"
+								>releases page</a
+							>, and the
+							<a
+								href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/CHANGELOG.md"
+								>changelog</a
+							>
+							lists what changed in each one. Once installed, the app updates itself.
+						</p>
+						<p>There's no version for macOS 14 and earlier.</p>
+					</div>
+				</div>
+			</section>
+
+			<section class="section" id="install" aria-labelledby="install-title">
+				<div class="wrap">
+					<h2 class="section-title" id="install-title">Installing</h2>
+					<div class="install-grid copy">
+						<div>
+							<h3>macOS</h3>
+							<p>Open the DMG and drag Max Video Player into Applications.</p>
+							<details class="disclosure">
+								<summary>macOS says the app can't be opened or is damaged</summary>
+								<div class="answer copy">
+									<p>
+										Releases that aren't notarized by Apple are blocked by
+										Gatekeeper the first time you open them. To open the app
+										anyway, follow these steps.
+									</p>
+									<ol>
+										<li>
+											Try to open Max Video Player once and close the warning.
+										</li>
+										<li>
+											Open System Settings and go to Privacy &amp; Security.
+											Scroll down and click <strong>Open Anyway</strong> next
+											to the message about Max Video Player.
+										</li>
+										<li>Confirm with your password or Touch ID.</li>
+									</ol>
+									<p>
+										If macOS says the app is damaged, run this in Terminal and
+										open it again.
+									</p>
+									<pre><code>xattr -dr com.apple.quarantine "/Applications/Max Video Player.app"</code></pre>
+								</div>
+							</details>
+						</div>
+						<div>
+							<h3>Linux AppImage</h3>
+							<p>It includes libmpv, so there's nothing else to install.</p>
+							<pre><code>chmod +x MaxVideoPlayer_amd64.AppImage
+./MaxVideoPlayer_amd64.AppImage</code></pre>
+							<p>
+								The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian
+								13 and current Fedora releases have.
+							</p>
+							<h3>Debian and Ubuntu</h3>
+							<p>
+								<code>sudo apt install ./MaxVideoPlayer_amd64.deb</code> installs
+								the app and the libraries it needs, including libmpv. It needs
+								Debian 12, Ubuntu 24.04 or a later release.
+							</p>
+							<h3>Fedora</h3>
+							<p><code>sudo dnf install ./MaxVideoPlayer_x86_64.rpm</code></p>
+							<p>
+								Both packages need WebKitGTK 2.40 or later, which all of these
+								releases have.
+							</p>
+							<p>
+								Ubuntu 22.04 and releases based on it, such as Linux Mint 21 and
+								Pop!_OS 22.04, aren't supported. Their libmpv is too old for the
+								app, and their glibc is too old for the AppImage.
+							</p>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="section" id="getting-started" aria-labelledby="getting-started-title">
+				<div class="wrap">
+					<h2 class="section-title" id="getting-started-title">Getting started</h2>
+					<ol class="steps">
+						<li>
+							<p>
+								Open <strong>Playlists</strong> and add a provider. That can be an
+								M3U URL, an M3U file, or an Xtream Codes server with your username
+								and password.
+							</p>
+						</li>
+						<li>
+							<p>
+								If your playlist doesn't come with a TV guide, open the provider's
+								settings and add an EPG (XMLTV) URL.
+							</p>
+						</li>
+						<li>
+							<p>Go to <strong>Channels</strong> and pick something to watch.</p>
+						</li>
+					</ol>
+					<p class="note">
+						Max Video Player doesn't come with any channels or content. You need a
+						playlist from a provider you're allowed to use.
+					</p>
+				</div>
+			</section>
+
+			<section class="section" id="faq" aria-labelledby="faq-title">
+				<div class="wrap">
+					<h2 class="section-title" id="faq-title">FAQ</h2>
+					<div class="disclosure-list">
+						<details class="disclosure">
+							<summary>Does Max Video Player collect any data?</summary>
+							<div class="answer copy">
+								<p>
+									No. There are no accounts, analytics or telemetry. The app
+									connects to the providers you add, to GitHub to check for
+									updates, and to OMDb, OpenSubtitles or Google Gemini only if you
+									add a key for them. When OMDb finds a title, the app also
+									fetches extra ratings for it from
+									<a href="https://whatson-api.onrender.com">whatson-api</a>, and
+									times to skip from SkipDB and IntroDB. Your playlists, favorites
+									and history stay in a database on your computer.
+								</p>
+							</div>
+						</details>
+						<details class="disclosure">
+							<summary>Where does the app keep its data?</summary>
+							<div class="answer copy">
+								<p>
+									In
+									<code
+										>~/Library/Application Support/com.maxvideoplayer.app</code
+									>
+									on macOS and
+									<code>~/.local/share/com.maxvideoplayer.app</code> on Linux.
+									Downloads go to the <code>downloads</code> folder inside it.
+								</p>
+							</div>
+						</details>
+						<details class="disclosure">
+							<summary>A stream won't play</summary>
+							<div class="answer copy">
+								<p>
+									Check whether the same URL plays in
+									<a href="https://mpv.io">mpv</a> or VLC. If it does,
+									<a
+										href="https://github.com/MaxMB15/MaxVideoPlayer/issues/new?template=bug_report.yml"
+										>open a bug report</a
+									>
+									with your OS and app version. Leave out your playlist URL and
+									login details.
+								</p>
+							</div>
+						</details>
+						<details class="disclosure">
+							<summary>
+								The app won't open on my Mac after updating to 0.5.0 or 0.5.1
+							</summary>
+							<div class="answer copy">
+								<p>
+									Versions 0.5.0 and 0.5.1 crash at launch, before they can check
+									for updates. Install the
+									<a href="#download">latest version</a> over the old one. Your
+									playlists and settings are kept.
+								</p>
+							</div>
+						</details>
+					</div>
+				</div>
+			</section>
+
+			<section
+				class="section band"
+				aria-label="Privacy, contributing, disclaimer and license"
+			>
+				<div class="wrap fine-print">
+					<div id="privacy">
+						<h2 class="section-title">Privacy</h2>
+						<div class="copy">
+							<p>
+								The app sends nothing to the developer. The
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/docs/privacy.md"
+									>privacy policy</a
+								>
+								lists what it keeps on your device, which services it connects to
+								and what it sends them.
+							</p>
+							<p>
+								This website has no cookies, analytics or scripts from other sites.
+								GitHub Pages hosts it, so
+								<a
+									href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement"
+									>GitHub's privacy statement</a
+								>
+								covers the requests your browser makes to it.
+							</p>
+						</div>
+					</div>
+					<div id="contributing">
+						<h2 class="section-title">Contributing</h2>
+						<div class="copy">
+							<p>
+								Bug reports, ideas and pull requests are welcome. Read
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/CONTRIBUTING.md"
+									>CONTRIBUTING.md</a
+								>
+								to get started, and
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/docs/development.md"
+									>docs/development.md</a
+								>
+								to build the app from source. Report security issues privately as
+								described in
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/SECURITY.md"
+									>SECURITY.md</a
+								>.
+							</p>
+							<p>
+								If you find the app useful, you can
+								<a href="https://buymeacoffee.com/MaxMB15">buy me a coffee</a>.
+							</p>
+						</div>
+					</div>
+					<div id="disclaimer">
+						<h2 class="section-title">Disclaimer</h2>
+						<div class="copy">
+							<p>
+								Max Video Player is only a player. It doesn't include, host, sell or
+								link to any channels, playlists or streams. You add your own
+								sources, and the author has no control over, and no knowledge of,
+								what you add or watch.
+							</p>
+							<p>
+								The app is meant for content you have the legal right to watch, such
+								as a service you subscribe to legally or streams you own. It isn't
+								meant for pirated or otherwise illegally obtained content, and the
+								author doesn't support using it that way.
+							</p>
+							<p>
+								You're responsible for what you play with it and for following the
+								copyright and broadcasting laws where you live.
+							</p>
+							<p>
+								The app is provided as is, without warranty of any kind. As far as
+								the law allows, the author and contributors aren't liable for any
+								claim, damage or other loss arising from the app, from how anyone
+								uses it, or from any content played with it. The
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/LICENSE"
+									>license</a
+								>
+								has the full terms, and
+								<a href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/NOTICE"
+									>NOTICE</a
+								>
+								has the full legal notice.
+							</p>
+						</div>
+					</div>
+					<div id="license">
+						<h2 class="section-title">License</h2>
+						<div class="copy">
+							<p>
+								Max Video Player is free software. Anyone can use it for any
+								purpose, and you can study, change and share the code under the
+								<a
+									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/LICENSE"
+									>GNU General Public License version 3</a
+								>. Anything you distribute that's based on it has to use the same
+								license and come with its source code.
+							</p>
+							<p>
+								The license has a few
+								<a href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/NOTICE"
+									>additional terms</a
+								>, which section 7 of the GPL allows.
+							</p>
+							<ul>
+								<li>
+									Modified versions have to keep the credit "Based on Max Video
+									Player by Max Boksem" on their About screen.
+								</li>
+								<li>
+									Modified versions need their own name and icon. The license
+									grants no trademark rights in the Max Video Player name or logo.
+									See
+									<a
+										href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/TRADEMARKS.md"
+										>TRADEMARKS.md</a
+									>.
+								</li>
+								<li>
+									The author's name can't be used to promote another product
+									without permission.
+								</li>
+							</ul>
+							<p>
+								If you need other terms, for example to ship it in a closed-source
+								product, a commercial license is available. Get in touch through
+								<a href="https://github.com/MaxMB15">github.com/MaxMB15</a>.
+							</p>
+							<p>
+								Releases up to and including 0.5.3 were published under the PolyForm
+								Noncommercial License 1.0.0.
+							</p>
+							<p>
+								It's an independent project and isn't affiliated with Max, Warner
+								Bros. Discovery, or any product with a similar name.
+							</p>
+						</div>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer class="site-footer">
+			<div class="wrap">
+				<nav class="footer-nav" aria-label="Project">
+					<a href="https://github.com/MaxMB15/MaxVideoPlayer">GitHub</a>
+					<a href="https://github.com/MaxMB15/MaxVideoPlayer/releases">Releases</a>
+					<a href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/CHANGELOG.md"
+						>Changelog</a
+					>
+					<a href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/CONTRIBUTING.md"
+						>Contributing</a
+					>
+					<a href="https://buymeacoffee.com/MaxMB15">Buy me a coffee</a>
+				</nav>
+				<p class="footer-credit copy">
+					Built with <a href="https://tauri.app">Tauri</a>,
+					<a href="https://mpv.io">mpv</a>, <a href="https://ffmpeg.org">FFmpeg</a> and
+					<a href="https://react.dev">React</a>.
+					<a
+						href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/THIRD_PARTY_NOTICES.md"
+						>THIRD_PARTY_NOTICES.md</a
+					>
+					lists their licenses and where to get their source code.
+				</p>
+			</div>
+		</footer>
+	</body>
+</html>

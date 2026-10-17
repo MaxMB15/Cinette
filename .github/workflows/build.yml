@@ -211,6 +211,25 @@ jobs:
           label: Rust coverage
 
       - name: Deploy coverage to gh-pages
+        id: publish
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./coverage
+          destination_dir: coverage
+          keep_files: true
+
+      # site.yml's deploy can push to gh-pages at the same moment, which rejects
+      # the later push and would fail the gate below. Trying again starts from
+      # the new branch. The two jobs don't share a concurrency group, because a
+      # cancelled pending job would fail the gate too.
+      - name: Wait for the other push
+        if: steps.publish.outcome == 'failure'
+        run: sleep 30
+
+      - name: Deploy coverage to gh-pages again
+        if: steps.publish.outcome == 'failure'
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

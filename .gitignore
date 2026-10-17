@@ -44,6 +44,8 @@ mutants.out.old/
 # StrykerJS reports and the sandboxes it runs in
 apps/player/reports/
 apps/player/.stryker-tmp/
+site/reports/
+site/.stryker-tmp/
 
 # Bundled resources
 apps/player/resources/

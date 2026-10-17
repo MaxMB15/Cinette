@@ -1,0 +1,773 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7. */
+
+/* Class names live in the page and in the HTML that src/lib builds. */
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "./lib";
+
+@theme {
+	/* The system font, as in the app. */
+	--font-sans:
+		ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+		"Segoe UI Symbol", "Noto Color Emoji";
+
+	--color-background: hsl(var(--background));
+	--color-foreground: hsl(var(--foreground));
+	--color-card: hsl(var(--card));
+	--color-muted: hsl(var(--muted));
+	--color-muted-foreground: hsl(var(--muted-foreground));
+	--color-border: hsl(var(--border));
+	--color-primary: hsl(var(--primary));
+	--color-ring: hsl(var(--ring));
+}
+
+@layer base {
+	/* The light theme keeps the app's blue, darkened so links and buttons have
+	   enough contrast on white. */
+	:root {
+		--background: 220 20% 98%;
+		--foreground: 220 25% 10%;
+		--card: 0 0% 100%;
+		--muted: 220 16% 94%;
+		--muted-foreground: 220 9% 38%;
+		--border: 220 14% 86%;
+		--primary: 214 84% 48%;
+		--ring: 214 84% 48%;
+		--radius: 0.625rem;
+		/* White text on the app's own blue is too faint for small text, so
+		   filled buttons use this one in both themes. White on it is 4.89:1,
+		   and the darker hover is 6.05:1. */
+		--button: 214 84% 48%;
+		--button-hover: 214 84% 42%;
+		color-scheme: light;
+	}
+
+	/* The app's colors, from apps/player/src/styles/globals.css. */
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--background: 220 14% 7%;
+			--foreground: 220 10% 95%;
+			--card: 220 13% 10%;
+			--muted: 220 12% 14%;
+			--muted-foreground: 220 8% 55%;
+			--border: 220 12% 20%;
+			--primary: 214 91% 62%;
+			--ring: 214 91% 62%;
+			color-scheme: dark;
+		}
+	}
+
+	html {
+		scroll-behavior: smooth;
+		scroll-padding-top: 4.5rem;
+		-webkit-text-size-adjust: 100%;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		html {
+			scroll-behavior: auto;
+		}
+	}
+
+	body {
+		background: var(--color-background);
+		color: var(--color-foreground);
+		font-family: var(--font-sans);
+		line-height: 1.6;
+		-webkit-font-smoothing: antialiased;
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--color-ring);
+		outline-offset: 3px;
+		border-radius: 4px;
+	}
+
+	code,
+	kbd,
+	pre {
+		font-size: 0.875em;
+	}
+
+	summary {
+		cursor: pointer;
+	}
+}
+
+@layer components {
+	.wrap {
+		max-width: 72rem;
+		margin-inline: auto;
+		padding-inline: 1rem;
+
+		@media (width >= 40rem) {
+			padding-inline: 1.5rem;
+		}
+	}
+
+	.skip-link {
+		position: absolute;
+		left: 1rem;
+		top: -4rem;
+		z-index: 20;
+		padding: 0.5rem 1rem;
+		border-radius: var(--radius);
+		background: var(--color-card);
+		border: 1px solid var(--color-border);
+
+		&:focus {
+			top: 0.75rem;
+		}
+	}
+
+	/* Text with links, code and lists in it. */
+	.copy {
+		& a {
+			color: var(--color-primary);
+			text-decoration: underline;
+			text-decoration-thickness: 1px;
+			text-underline-offset: 0.18em;
+
+			&:hover {
+				text-decoration-thickness: 2px;
+			}
+		}
+
+		& p + p,
+		& p + ul,
+		& ul + p,
+		& p + ol,
+		& ol + p,
+		& pre + p,
+		& p + pre,
+		& p + details,
+		& details + p {
+			margin-top: 0.875rem;
+		}
+
+		& :not(pre) > code {
+			padding: 0.1em 0.35em;
+			border-radius: 0.3rem;
+			background: var(--color-muted);
+			overflow-wrap: anywhere;
+		}
+
+		& pre {
+			padding: 0.75rem 1rem;
+			border: 1px solid var(--color-border);
+			border-radius: var(--radius);
+			background: var(--color-muted);
+			overflow-x: auto;
+			line-height: 1.7;
+		}
+
+		& kbd {
+			padding: 0 0.4em;
+			border: 1px solid var(--color-border);
+			border-bottom-width: 2px;
+			border-radius: 0.3rem;
+		}
+
+		& ul {
+			list-style: disc;
+			padding-left: 1.25rem;
+		}
+
+		& ol {
+			list-style: decimal;
+			padding-left: 1.5rem;
+		}
+
+		& li + li {
+			margin-top: 0.5rem;
+		}
+
+		& li::marker {
+			color: var(--color-muted-foreground);
+		}
+	}
+
+	.site-header {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		border-bottom: 1px solid var(--color-border);
+		background: color-mix(in srgb, var(--color-background) 88%, transparent);
+		backdrop-filter: blur(12px);
+	}
+
+	.header-inner {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		height: 3.5rem;
+	}
+
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		font-weight: 700;
+		letter-spacing: -0.01em;
+		white-space: nowrap;
+	}
+
+	.site-nav {
+		display: flex;
+		gap: 1.25rem;
+		font-size: 0.9375rem;
+		color: var(--color-muted-foreground);
+
+		& a:hover {
+			color: var(--color-foreground);
+		}
+
+		@media (width < 40rem) {
+			& .nav-wide {
+				display: none;
+			}
+		}
+	}
+
+	.section {
+		padding-block: 4rem;
+
+		@media (width >= 48rem) {
+			padding-block: 4.5rem;
+		}
+	}
+
+	.section-title {
+		font-size: clamp(1.75rem, 1.35rem + 1.4vw, 2.375rem);
+		font-weight: 750;
+		letter-spacing: -0.025em;
+		line-height: 1.15;
+	}
+
+	.section-lead {
+		margin-top: 0.75rem;
+		max-width: 60ch;
+		color: var(--color-muted-foreground);
+		font-size: 1.0625rem;
+	}
+
+	.note {
+		margin-top: 1.5rem;
+		max-width: 72ch;
+		font-size: 0.9375rem;
+		color: var(--color-muted-foreground);
+	}
+
+	/* The first screen. */
+	.hero {
+		padding-top: 3rem;
+		overflow-x: clip;
+
+		@media (width >= 48rem) {
+			padding-top: 5rem;
+		}
+	}
+
+	/* The icon file is square, so the page rounds its corners. */
+	.app-icon {
+		border-radius: 22.5%;
+	}
+
+	.hero-title {
+		margin-top: 1.5rem;
+		font-size: clamp(2.5rem, 1.4rem + 4.6vw, 4.75rem);
+		font-weight: 800;
+		letter-spacing: -0.04em;
+		line-height: 1;
+	}
+
+	.hero-pitch {
+		margin-top: 1.25rem;
+		max-width: 30ch;
+		font-size: clamp(1.25rem, 1.05rem + 0.8vw, 1.75rem);
+		font-weight: 600;
+		letter-spacing: -0.015em;
+		line-height: 1.3;
+	}
+
+	.hero-lead {
+		margin-top: 0.875rem;
+		max-width: 54ch;
+		font-size: 1.0625rem;
+		color: var(--color-muted-foreground);
+	}
+
+	.hero-download {
+		margin-top: 2rem;
+	}
+
+	/* The script in index.html sets data-os before the page draws. Without
+	   it, the link to every download shows. */
+	.os-pick {
+		display: none;
+	}
+
+	:root:not([data-os]) .os-pick[data-for="other"],
+	:root[data-os="other"] .os-pick[data-for="other"],
+	:root[data-os="mac"] .os-pick[data-for="mac"],
+	:root[data-os="linux"] .os-pick[data-for="linux"],
+	:root[data-os="ios"] .os-pick[data-for="ios"] {
+		display: block;
+	}
+
+	.btn-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+
+		@media (width < 30rem) {
+			& > .btn {
+				flex: 1 1 100%;
+			}
+		}
+	}
+
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: 3.25rem;
+		padding: 0.625rem 1.25rem;
+		border-radius: var(--radius);
+		font-weight: 650;
+		line-height: 1.25;
+		transition:
+			background-color 0.15s,
+			border-color 0.15s;
+	}
+
+	.btn-primary {
+		background: hsl(var(--button));
+		color: #fff;
+
+		&:hover {
+			background: hsl(var(--button-hover));
+		}
+	}
+
+	.btn-secondary {
+		border: 1px solid var(--color-border);
+		background: var(--color-card);
+
+		&:hover {
+			border-color: var(--color-primary);
+		}
+	}
+
+	.btn-soon {
+		border: 1px dashed var(--color-border);
+		color: var(--color-muted-foreground);
+	}
+
+	.btn-icon {
+		flex: none;
+		width: 1.25rem;
+		height: 1.25rem;
+	}
+
+	.btn-text {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.btn-note {
+		font-size: 0.8125rem;
+		font-weight: 500;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.hero-note {
+		margin-top: 0.875rem;
+		max-width: 62ch;
+		font-size: 0.9375rem;
+		color: var(--color-muted-foreground);
+
+		& a {
+			color: var(--color-primary);
+			text-decoration: underline;
+			text-underline-offset: 0.18em;
+		}
+	}
+
+	/* The app on a screen, with the light a screen gives off in a dark room. */
+	.hero-shot {
+		position: relative;
+		isolation: isolate;
+		margin-top: 3.5rem;
+
+		&::before {
+			content: "";
+			position: absolute;
+			inset: 6% 4% -6%;
+			z-index: -1;
+			background: radial-gradient(closest-side, hsl(var(--primary) / 0.35), transparent);
+			filter: blur(48px);
+		}
+
+		& img {
+			width: 100%;
+			height: auto;
+			border: 1px solid var(--color-border);
+			border-radius: calc(var(--radius) + 0.25rem);
+			box-shadow: 0 2rem 4rem -1.5rem hsl(220 40% 2% / 0.45);
+		}
+	}
+
+	.why-grid {
+		display: grid;
+		gap: 2.5rem;
+		margin-top: 2.5rem;
+
+		@media (width >= 56rem) {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 3rem;
+		}
+
+		& h3 {
+			font-size: 1.25rem;
+			font-weight: 700;
+			letter-spacing: -0.01em;
+		}
+
+		& h3 + p {
+			margin-top: 0.625rem;
+		}
+	}
+
+	.feature-grid {
+		display: grid;
+		gap: 2.5rem 3rem;
+		margin-top: 2.5rem;
+
+		@media (width >= 48rem) {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		& h3 {
+			margin-bottom: 1rem;
+			padding-bottom: 0.625rem;
+			border-bottom: 1px solid var(--color-border);
+			font-size: 1.125rem;
+			font-weight: 700;
+		}
+	}
+
+	.shot-grid {
+		display: grid;
+		gap: 2rem 1.5rem;
+		margin-top: 2.5rem;
+
+		@media (width >= 48rem) {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		& img {
+			width: 100%;
+			height: auto;
+			border: 1px solid var(--color-border);
+			border-radius: var(--radius);
+		}
+
+		& figcaption {
+			margin-top: 0.625rem;
+			font-size: 0.9375rem;
+			color: var(--color-muted-foreground);
+		}
+	}
+
+	/* Downloads. The sizes are the thing to read here, so they're the largest
+	   text in each row. */
+	.band {
+		border-block: 1px solid var(--color-border);
+		background: var(--color-card);
+	}
+
+	.release-meta {
+		margin-top: 0.75rem;
+		font-size: 1.0625rem;
+		color: var(--color-muted-foreground);
+
+		& a {
+			color: var(--color-primary);
+			text-decoration: underline;
+			text-underline-offset: 0.18em;
+		}
+	}
+
+	.platforms {
+		display: grid;
+		gap: 2.5rem 2rem;
+		margin-top: 2.5rem;
+
+		@media (width >= 48rem) {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		@media (width >= 64rem) {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+
+	.platform h3 {
+		font-size: 1.25rem;
+		font-weight: 700;
+	}
+
+	.requirement,
+	.platform-note {
+		font-size: 0.9375rem;
+		color: var(--color-muted-foreground);
+	}
+
+	.platform-note {
+		margin-top: 0.75rem;
+	}
+
+	.file-list,
+	.later-list {
+		display: grid;
+		gap: 0.625rem;
+		margin-top: 1rem;
+	}
+
+	.file-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			"label size"
+			"name size";
+		align-items: center;
+		column-gap: 1rem;
+		padding: 0.875rem 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius);
+		background: var(--color-background);
+		transition: border-color 0.15s;
+
+		&:hover {
+			border-color: var(--color-primary);
+		}
+	}
+
+	.file-label {
+		grid-area: label;
+		font-weight: 650;
+	}
+
+	.file-name {
+		grid-area: name;
+		font-size: 0.8125rem;
+		color: var(--color-muted-foreground);
+		/* render.ts lets the name break after its underscore, and a long one can
+		   break anywhere after that. */
+		overflow-wrap: anywhere;
+	}
+
+	.file-size {
+		grid-area: size;
+		font-size: 1.5rem;
+		font-weight: 750;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: -0.02em;
+		white-space: nowrap;
+		color: var(--color-primary);
+	}
+
+	.later-list li {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 0.25rem 1rem;
+		padding: 0.875rem 1rem;
+		border: 1px dashed var(--color-border);
+		border-radius: var(--radius);
+		color: var(--color-muted-foreground);
+
+		& span:first-child {
+			color: var(--color-foreground);
+			font-weight: 650;
+		}
+	}
+
+	.checksums {
+		margin-top: 2.5rem;
+		font-size: 0.875rem;
+		color: var(--color-muted-foreground);
+
+		& summary {
+			width: fit-content;
+		}
+
+		& dl {
+			display: grid;
+			gap: 0.75rem;
+			margin-top: 1rem;
+		}
+
+		& dt {
+			color: var(--color-foreground);
+			font-weight: 600;
+		}
+
+		& code {
+			font-size: 0.8125rem;
+			word-break: break-all;
+		}
+	}
+
+	.install-grid {
+		display: grid;
+		/* minmax keeps a long command in a pre from widening the page. */
+		grid-template-columns: minmax(0, 1fr);
+		gap: 3rem;
+		margin-top: 2.5rem;
+
+		@media (width >= 56rem) {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		& h3 {
+			font-size: 1.125rem;
+			font-weight: 700;
+		}
+
+		& h3 + * {
+			margin-top: 0.5rem;
+		}
+
+		& * + h3 {
+			margin-top: 2rem;
+		}
+
+		& .disclosure {
+			border-top: 1px solid var(--color-border);
+		}
+	}
+
+	/* Questions and the Gatekeeper help open in place. */
+	.disclosure {
+		border-bottom: 1px solid var(--color-border);
+
+		& > summary {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 1rem;
+			padding-block: 1.125rem;
+			font-weight: 650;
+			list-style: none;
+
+			&::-webkit-details-marker {
+				display: none;
+			}
+
+			&::after {
+				content: "";
+				flex: none;
+				width: 0.55rem;
+				height: 0.55rem;
+				margin-right: 0.25rem;
+				border-right: 2px solid var(--color-muted-foreground);
+				border-bottom: 2px solid var(--color-muted-foreground);
+				transform: translateY(-25%) rotate(45deg);
+				transition: transform 0.2s;
+			}
+		}
+
+		&[open] > summary::after {
+			transform: translateY(25%) rotate(-135deg);
+		}
+
+		& > .answer {
+			padding-bottom: 1.25rem;
+			max-width: 72ch;
+		}
+
+		@media (prefers-reduced-motion: reduce) {
+			& > summary::after {
+				transition: none;
+			}
+		}
+	}
+
+	.disclosure-list {
+		margin-top: 2rem;
+		border-top: 1px solid var(--color-border);
+
+		& summary {
+			font-size: 1.0625rem;
+		}
+	}
+
+	.steps {
+		display: grid;
+		gap: 1.25rem;
+		max-width: 46rem;
+		margin-top: 2rem;
+		counter-reset: step;
+
+		& li {
+			display: grid;
+			grid-template-columns: 2rem minmax(0, 1fr);
+			gap: 0.75rem;
+			counter-increment: step;
+
+			&::before {
+				content: counter(step);
+				font-size: 1.375rem;
+				font-weight: 800;
+				line-height: 1.3;
+				color: var(--color-primary);
+				font-variant-numeric: tabular-nums;
+			}
+		}
+	}
+
+	.fine-print {
+		display: grid;
+		gap: 3rem;
+
+		@media (width >= 64rem) {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 4rem;
+		}
+
+		& .section-title {
+			font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.75rem);
+		}
+
+		& .copy {
+			margin-top: 1rem;
+			font-size: 0.9375rem;
+		}
+	}
+
+	.site-footer {
+		padding-block: 2.5rem 3rem;
+		border-top: 1px solid var(--color-border);
+		font-size: 0.9375rem;
+		color: var(--color-muted-foreground);
+	}
+
+	.footer-nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem 1.5rem;
+		color: var(--color-foreground);
+
+		& a:hover {
+			color: var(--color-primary);
+		}
+	}
+
+	.footer-credit {
+		margin-top: 1.25rem;
+	}
+}
