@@ -135,7 +135,9 @@ def main() -> None:
     )
     parser.add_argument("--out", type=Path, default=OUT, help="where to write the guide")
     args = parser.parse_args()
-    args.out.write_text(guide(START, END), encoding="utf-8", newline="\n")
+    # Path.write_text only takes newline= from Python 3.10, and macOS ships 3.9.
+    with open(args.out, "w", encoding="utf-8", newline="\n") as out:
+        out.write(guide(START, END))
 
 
 if __name__ == "__main__":

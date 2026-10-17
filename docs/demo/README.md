@@ -22,7 +22,7 @@ The three test streams show up under Live, with a guide. The four films show up 
 
 These servers belong to other people, and an entry can stop working when they move things. Akamai's live test stream stopped working, and the Amazon IVS stream took its place. If another one stops, swap in another public test stream or another copy of the film, and check that it allows anyone to play it.
 
-Blender's later films aren't in the playlist. Blender Studio's pages for Wing It and the Caminandes shorts link only to YouTube, and the other copies are personal uploads, some with the index at the end of the file. Hero and Spring share their titles with other films, so the app would show the wrong details when it has an OMDb key. The Internet Archive lists Sprite Fright as rated PG-13.
+Blender's later films aren't in the playlist. Blender Studio's pages for Wing It and the Caminandes shorts link only to YouTube, and the other copies are personal uploads, some saved so that a player has to read the end of the file before it can start. Hero and Spring share their titles with other films, so the app would show the wrong details when it has an OMDb key. The Internet Archive lists Sprite Fright as rated PG-13, and the demo keeps to films anyone can watch.
 
 ## Pictures
 
@@ -32,7 +32,7 @@ Each film's picture is a still from Wikimedia Commons, kept in `images/` as a JP
 
 `guide.xml` is a made-up XMLTV guide for the three test streams. Apple's entry is a 10-minute on-demand clip that plays from the start and stops at its end. The other two are live streams that show the same test content all day. The guide splits each day into a few blocks whose titles and descriptions say what the entry shows. The playlist's `x-tvg-url` points at it, and each live entry's `tvg-id` matches a channel in it.
 
-It covers 15 October 2026 to 31 December 2027, in UTC. Move `END` later and run the script again before 1 January 2028, or the live entries lose their guide.
+It covers October 15, 2026 to December 31, 2027, in UTC. Move `END` later, run the script again and get the new guide to `main` before January 1, 2028, or the live entries lose their guide. The playlist loads the guide from `main`.
 
 `scripts/demo-guide.py` writes the guide and gives the same file on every run. To change the dates or the programs, edit `START`, `END` or `CHANNELS` in the script, then run it from the repo root and commit both files:
 

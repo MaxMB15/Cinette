@@ -47,21 +47,37 @@ fn the_demo_playlist_points_at_its_guide() {
 }
 
 #[test]
-fn every_demo_picture_is_in_the_repo() {
-    let images = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/demo/images");
+fn the_demo_pictures_match_the_movies() {
     let channels = channels();
-    for channel in of_type(&channels, "movie") {
-        let logo = channel.logo_url.as_deref().unwrap_or_default();
-        let file = logo
-            .strip_prefix(RAW)
-            .and_then(|rest| rest.strip_prefix("images/"))
-            .unwrap_or_else(|| panic!("{} should have a picture under {RAW}images/", channel.name));
-        assert!(
-            images.join(file).is_file(),
-            "{} uses docs/demo/images/{file}, which isn't there",
-            channel.name
-        );
-    }
+    let used: BTreeSet<String> = of_type(&channels, "movie")
+        .into_iter()
+        .map(|channel| {
+            let logo = channel.logo_url.as_deref().unwrap_or_default();
+            logo.strip_prefix(RAW)
+                .and_then(|rest| rest.strip_prefix("images/"))
+                .unwrap_or_else(|| {
+                    panic!("{} should have a picture under {RAW}images/", channel.name)
+                })
+                .to_owned()
+        })
+        .collect();
+
+    // Hidden files, such as the .DS_Store that Finder leaves, aren't pictures.
+    let images = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/demo/images");
+    let in_repo: BTreeSet<String> = std::fs::read_dir(&images)
+        .expect("docs/demo/images should be readable")
+        .map(|entry| {
+            entry
+                .expect("docs/demo/images should be readable")
+                .file_name()
+        })
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+
+    // Each movie has its own picture, and each picture belongs to a movie.
+    assert_eq!(used.len(), of_type(&channels, "movie").len());
+    assert_eq!(used, in_repo);
 }
 
 #[test]
