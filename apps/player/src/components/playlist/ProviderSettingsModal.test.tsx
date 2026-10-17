@@ -161,6 +161,8 @@ describe("ProviderSettingsModal guide refresh", () => {
 		await refreshGuide();
 		expect(mockRefreshEpg).toHaveBeenCalledExactlyOnceWith("p1");
 		expect(screen.queryByText(/no programs/)).toBeNull();
+		// The poll then waits a full interval, and the channel list loads the guide again.
+		expect(Number(localStorage.getItem("epg-last-refresh-p1"))).toBeGreaterThan(0);
 	});
 
 	it("says when the guide came back empty, as a note rather than an error", async () => {
@@ -181,6 +183,7 @@ describe("ProviderSettingsModal guide refresh", () => {
 		renderModal();
 		await refreshGuide();
 		expect(screen.getByText("Failed to fetch EPG: timed out")).toBeInTheDocument();
+		expect(localStorage.getItem("epg-last-refresh-p1")).toBeNull();
 
 		mockRefreshEpg.mockResolvedValueOnce(120);
 		await refreshGuide();

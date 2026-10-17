@@ -114,7 +114,7 @@ const formatEpgTime = (startTime: number, now: number): string => {
 };
 
 export const ChannelList = () => {
-	const { channels, loading, toggleFavorite, providers } = useChannels();
+	const { channels, loading, toggleFavorite, providers, guideVersion } = useChannels();
 	// A phone is too narrow for the EPG timeline, so live rows show what's on now.
 	const { layoutMode } = usePlatform();
 	const compactRows = layoutMode === "mobile";
@@ -352,9 +352,9 @@ export const ChannelList = () => {
 
 	// The Live tab shows every channel's guide, and the Favorites tab only that
 	// of its live favorites with a guide id. It loads when its range moves,
-	// when the tab starts showing it, and when the number of channels changes.
-	// Going from Live to Favorites keeps what's loaded, and a new favorite
-	// loads only its own programs.
+	// when the tab starts showing it, when the number of channels changes and
+	// when a provider's guide finishes refreshing. Going from Live to Favorites
+	// keeps what's loaded, and a new favorite loads only its own programs.
 	const guideChannels: GuideChannels | null =
 		channels.length === 0
 			? null
@@ -366,7 +366,7 @@ export const ChannelList = () => {
 	const { programs: epgMap, isPending: guidePending } = useGuidePrograms(
 		guideRange,
 		guideChannels,
-		channels.length
+		`${channels.length}:${guideVersion}`
 	);
 
 	// Debounced EPG programme search, 300ms since it's a backend round trip.

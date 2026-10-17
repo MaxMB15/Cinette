@@ -9,6 +9,7 @@ import {
 	useEffect,
 	useMemo,
 	useRef,
+	useSyncExternalStore,
 } from "react";
 import type { Channel, Category, Provider } from "@/lib/types";
 import {
@@ -83,11 +84,40 @@ export const getEpgLastRefresh = (id: string): number => {
 	const stored = parseInt(readStorage(epgLastRefreshKey(id)) ?? "0", 10) || 0;
 	return Math.max(stored, epgLastRefreshThisSession.get(id) ?? 0);
 };
+
+// Counts the guide refreshes that have finished, so the channel list knows to
+// load the guide again. Every refresh, from the splash screen, the poll, an add
+// or the settings dialog, records itself through setEpgLastRefresh.
+let guideVersion = 0;
+const guideListeners = new Set<() => void>();
+/** Calls the listener after each guide refresh finishes, and returns a function that stops it. */
+export const subscribeToGuide = (listener: () => void) => {
+	guideListeners.add(listener);
+	return () => {
+		guideListeners.delete(listener);
+	};
+};
+const getGuideVersion = () => guideVersion;
+
+/** Records that this provider's guide just refreshed, and tells the channel list it changed. */
 export const setEpgLastRefresh = (id: string) => {
 	const now = Date.now();
 	epgLastRefreshThisSession.set(id, now);
 	writeStorage(epgLastRefreshKey(id), String(now));
+	guideVersion += 1;
+	for (const listener of guideListeners) listener();
 };
+
+// Where the poll reads each provider's settings and last guide refresh.
+const refreshLookups = {
+	settingsFor: loadProviderSettings,
+	epgLastRefreshFor: getEpgLastRefresh,
+};
+
+// Refreshes a provider's guide through the tracker, so the poll and an add
+// never fetch the same guide at once.
+const refreshGuide = (tracker: RefreshTracker, id: string) =>
+	tracker.run(refreshKeys.epg(id), () => refreshEpgApi(id).then(() => setEpgLastRefresh(id)));
 
 // --- Context ---
 
@@ -101,7 +131,8 @@ interface ChannelsContextValue {
 	loadM3u: (name: string, url: string) => Promise<void>;
 	loadM3uFile: (name: string, path: string) => Promise<void>;
 	loadXtream: (name: string, url: string, username: string, password: string) => Promise<void>;
-	refreshProviders: () => Promise<void>;
+	/** Loads the provider list again, and returns it, or null when it fails. */
+	refreshProviders: () => Promise<Provider[] | null>;
 	refreshChannels: () => Promise<void>;
 	refreshProvider: (id: string) => Promise<void>;
 	updateProvider: (
@@ -115,6 +146,11 @@ interface ChannelsContextValue {
 	toggleFavorite: (channelId: string) => Promise<void>;
 	/** Runs the automatic refreshes, shared by the splash screen and the poll. */
 	autoRefresh: RefreshTracker;
+	/**
+	 * Goes up each time a provider's guide finishes refreshing, so the guide on
+	 * screen can load again.
+	 */
+	guideVersion: number;
 }
 
 export const ChannelsContext = createContext<ChannelsContextValue | null>(null);
@@ -126,6 +162,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const [initialized, setInitialized] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const guideVersion = useSyncExternalStore(subscribeToGuide, getGuideVersion);
 	const channelIndex = useMemo(() => {
 		const m = new Map<string, number>();
 		channels.forEach((ch, i) => m.set(ch.id, i));
@@ -144,9 +181,12 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 
 	const refreshProviders = useCallback(async () => {
 		try {
-			setProviders(await getProviders());
+			const list = await getProviders();
+			setProviders(list);
+			return list;
 		} catch (e) {
 			setError(String(e));
+			return null;
 		}
 	}, []);
 
@@ -177,15 +217,32 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		[refreshProviders]
 	);
 
+	// Keep providers ref current so the poll and an add can read it without re-registering
+	const providersRef = useLatestRef(providers);
+	const refreshProviderRef = useLatestRef(refreshProvider);
+
+	// The splash screen runs its startup refreshes through this tracker too, so
+	// the poll skips one the splash started that is still running.
+	const [autoRefresh] = useState(() => createRefreshTracker());
+
 	// Adding a provider of any kind runs the same steps around a different backend call.
 	const addProvider = useCallback(
 		async (add: () => Promise<unknown>) => {
 			setLoading(true);
 			setError(null);
+			const known = new Set(providersRef.current.map((p) => p.id));
 			try {
 				await add();
-				await refreshProviders();
+				const list = await refreshProviders();
 				await refreshChannels();
+				// Fetch the new provider's guide now rather than at the next poll.
+				// Adding doesn't wait for it, since a guide can take a while.
+				if (list) {
+					const added = list.filter((p) => !known.has(p.id));
+					for (const id of findDueRefreshes(added, refreshLookups).epgIds) {
+						refreshGuide(autoRefresh, id);
+					}
+				}
 			} catch (e) {
 				setError(String(e));
 				throw e;
@@ -193,7 +250,8 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				setLoading(false);
 			}
 		},
-		[refreshProviders, refreshChannels]
+		// Stryker disable next-line ArrayDeclaration: every one of these stays the same object while the context provider is mounted, so an empty list gives the same callback.
+		[providersRef, refreshProviders, refreshChannels, autoRefresh]
 	);
 
 	const loadM3u = useCallback(
@@ -255,31 +313,16 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		});
 	}, [refreshProviders, refreshChannels]);
 
-	// Keep providers ref current so interval can read it without re-registering
-	const providersRef = useLatestRef(providers);
-	const refreshProviderRef = useLatestRef(refreshProvider);
-
-	// The splash screen runs its startup refreshes through this tracker too, so
-	// the poll skips one the splash started that is still running.
-	const [autoRefresh] = useState(() => createRefreshTracker());
-
 	// Poll every 60s to check if any provider/EPG is due for refresh.
 	// Using a ref-based approach avoids resetting timers on every providers update.
 	// The tracker skips refreshes still running and backs off after failures.
 	useEffect(() => {
 		const tick = () => {
-			const { playlistIds, epgIds } = findDueRefreshes(providersRef.current, {
-				settingsFor: loadProviderSettings,
-				epgLastRefreshFor: getEpgLastRefresh,
-			});
+			const { playlistIds, epgIds } = findDueRefreshes(providersRef.current, refreshLookups);
 			for (const id of playlistIds) {
 				autoRefresh.run(refreshKeys.playlist(id), () => refreshProviderRef.current(id));
 			}
-			for (const id of epgIds) {
-				autoRefresh.run(refreshKeys.epg(id), () =>
-					refreshEpgApi(id).then(() => setEpgLastRefresh(id))
-				);
-			}
+			for (const id of epgIds) refreshGuide(autoRefresh, id);
 		};
 
 		tick(); // fire immediately on mount
@@ -304,6 +347,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		removeProvider,
 		toggleFavorite,
 		autoRefresh,
+		guideVersion,
 	};
 };
 

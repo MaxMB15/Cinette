@@ -8,6 +8,7 @@ import {
 	saveProviderSettings,
 	getEpgLastRefresh,
 	setEpgLastRefresh,
+	subscribeToGuide,
 } from "./useChannels";
 
 // ── Pure helper tests (no mocks needed) ──────────────────────────────
@@ -371,6 +372,7 @@ import {
 } from "@/lib/tauri";
 import { ChannelsContext, useChannels } from "./useChannels";
 import { makeProvider } from "@/test/app-fixtures";
+import { deferred } from "@/test/deferred";
 
 const channel = (id: string, isFavorite = false) =>
 	({ id, name: id.toUpperCase(), groupTitle: "News", isFavorite }) as never;
@@ -557,6 +559,126 @@ describe("useChannelsProvider provider changes", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("useChannelsProvider guide refreshes", () => {
+	// The module keeps refresh times in memory, which clearing storage doesn't
+	// clear, so each test uses ids no other test refreshes.
+	const withGuide = (id: string) => makeProvider({ id, epgUrl: `http://example.test/${id}.xml` });
+
+	/** Mounts the provider with fake timers and lets its first load finish. */
+	const mountWithFakeTimers = async () => {
+		vi.useFakeTimers();
+		const hook = renderHook(() => useChannelsProvider());
+		await act(() => vi.advanceTimersByTimeAsync(0));
+		return hook;
+	};
+
+	beforeEach(() => {
+		vi.resetAllMocks();
+		localStorage.clear();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("fetches a new playlist's guide as soon as it's added, and only once", async () => {
+		const guide = deferred<number>();
+		mockRefreshEpg.mockReturnValue(guide.promise);
+		const { result } = await mountWithFakeTimers();
+		mockGetProviders.mockResolvedValue([withGuide("added-guide")]);
+
+		await act(() => result.current.loadM3u("Home", "http://example.test/list.m3u"));
+		expect(mockRefreshEpg).toHaveBeenCalledExactlyOnceWith("added-guide");
+
+		// The poll finds the guide due, but the fetch is still running.
+		await act(() => vi.advanceTimersByTimeAsync(60_000));
+		expect(mockRefreshEpg).toHaveBeenCalledOnce();
+
+		const version = result.current.guideVersion;
+		await act(() => {
+			guide.resolve(120);
+			return vi.advanceTimersByTimeAsync(0);
+		});
+		expect(result.current.guideVersion).toBe(version + 1);
+
+		// Once it's in, the guide isn't due again for a day.
+		await act(() => vi.advanceTimersByTimeAsync(60_000));
+		expect(mockRefreshEpg).toHaveBeenCalledOnce();
+	});
+
+	it("leaves the guides of the providers it already had to the poll", async () => {
+		mockRefreshEpg.mockResolvedValue(120);
+		mockGetProviders.mockResolvedValue([withGuide("had-guide")]);
+		const { result } = await mountWithFakeTimers();
+		mockGetProviders.mockResolvedValue([withGuide("had-guide"), withGuide("xtream-guide")]);
+
+		await act(() => result.current.loadXtream("Xt", "http://xt.example", "user", "secret"));
+		expect(mockRefreshEpg).toHaveBeenCalledExactlyOnceWith("xtream-guide");
+
+		await act(() => vi.advanceTimersByTimeAsync(60_000));
+		expect(mockRefreshEpg).toHaveBeenCalledTimes(2);
+		expect(mockRefreshEpg).toHaveBeenLastCalledWith("had-guide");
+	});
+
+	it("doesn't fetch a guide for a new playlist that has none", async () => {
+		const { result } = await mountWithFakeTimers();
+		mockGetProviders.mockResolvedValue([makeProvider({ id: "no-guide" })]);
+
+		await act(() => result.current.loadM3u("Home", "http://example.test/list.m3u"));
+		await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+		expect(mockRefreshEpg).not.toHaveBeenCalled();
+	});
+
+	it("adds the playlist when its guide fails, and waits before trying the guide again", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		mockRefreshEpg.mockRejectedValue(new Error("offline"));
+		const { result } = await mountWithFakeTimers();
+		mockGetProviders.mockResolvedValue([withGuide("failing-guide")]);
+		const version = result.current.guideVersion;
+
+		await act(() => result.current.loadM3u("Home", "http://example.test/list.m3u"));
+		expect(result.current.providers).toHaveLength(1);
+		expect(result.current.error).toBeNull();
+
+		await act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
+		expect(mockRefreshEpg).toHaveBeenCalledOnce();
+		expect(result.current.guideVersion).toBe(version);
+	});
+
+	it("adds the playlist when the provider list then fails to load, and fetches no guide", async () => {
+		const { result } = await mountWithFakeTimers();
+		mockGetProviders.mockRejectedValue(new Error("providers unavailable"));
+
+		await act(() => result.current.loadM3u("Home", "http://example.test/list.m3u"));
+
+		expect(result.current.error).toBe("Error: providers unavailable");
+		expect(mockRefreshEpg).not.toHaveBeenCalled();
+	});
+
+	it("stops telling a listener about guide refreshes once it unsubscribes", () => {
+		const listener = vi.fn();
+		const unsubscribe = subscribeToGuide(listener);
+
+		setEpgLastRefresh("listened-guide");
+		unsubscribe();
+		setEpgLastRefresh("listened-guide");
+
+		expect(listener).toHaveBeenCalledOnce();
+	});
+
+	it("goes up a version for a guide refresh that finished anywhere", async () => {
+		const { result } = await mountProvider();
+		const version = result.current.guideVersion;
+
+		// The splash screen and the settings dialog record their refreshes this way.
+		act(() => setEpgLastRefresh("splash-guide"));
+
+		expect(result.current.guideVersion).toBe(version + 1);
 	});
 });
 
