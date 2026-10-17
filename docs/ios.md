@@ -134,14 +134,38 @@ override writes that number into `Info.plist`. Don't commit it.
 
 ### App icon
 
-The icons in `src-tauri/icons/ios` and in `Assets.xcassets/AppIcon.appiconset` are
-made from the 1024 px image in `src-tauri/icons/icon.icns`, so the iOS app has the
-same icon as the macOS app. They have no alpha channel, because App Store Connect
-rejects a 1024 px icon that has one.
+Every app icon, for the desktop, iOS and Android, is made from
+`src-tauri/icons/icon.svg`. To change the icon, edit that file and run these from
+`apps/player/`:
 
-`pnpm tauri icon` writes both of those folders as well as the desktop icons, so
-running it replaces these files. Restore them with git afterward unless you meant to
-change the iOS icon.
+```bash
+pnpm tauri icon src-tauri/icons/icon.svg
+python3 -I ../../scripts/ios-icons.py
+```
+
+The SVG has to fill the whole square, with no transparent pixels and no rounded
+corners of its own. iOS and macOS 26 round the corners themselves. On macOS 26 an
+icon that has its own rounded corners and a transparent margin comes out paler and
+embossed. macOS 15 shows the square as it is. Android 8 and later show only the
+middle two thirds of the icon and crop that to the launcher's shape. A round
+launcher cuts off the corners of the frame and the tip of the play button. Only a
+circle 61% as wide as the icon is sure to show.
+
+`pnpm tauri icon` writes the desktop and Android icons to `src-tauri/icons` and the
+iOS icons to `src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset`. The iOS
+icons have an alpha channel, and App Store Connect rejects a 1024 px icon that has
+one. `scripts/ios-icons.py` removes the alpha channel and copies the icons to
+`src-tauri/icons/ios`. It also deletes any icon there that the Xcode set doesn't
+have, so both folders hold the same icons.
+
+The script changes nothing if an icon isn't an 8-bit RGB or RGBA PNG or has a
+pixel that isn't fully opaque. An SVG with transparent parts fails that check.
+`tauri icon` fills those parts of the iOS icons with its `--ios-color`, white by
+default, but leaves the pixels at their edges slightly see-through.
+
+`icon.icns` comes out with different bytes on every run, even when the images in it
+are the same. If you ran `pnpm tauri icon` without changing the SVG, restore it with
+git.
 
 ### Privacy manifest
 

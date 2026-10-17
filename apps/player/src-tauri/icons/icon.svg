@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="1024" height="1024">
+	<rect width="512" height="512" fill="#151819" />
+	<g fill="none" stroke="#4792F6" stroke-width="40" stroke-linejoin="round">
+		<path d="M316 126H156A30 30 0 0 0 126 156V356A30 30 0 0 0 156 386H356A30 30 0 0 0 386 356V242" />
+		<path d="M308.8 226.9A58 58 0 1 0 308.8 313.1" />
+		<path d="M362 134L362 194L412 164Z" fill="#4792F6" stroke-width="12" />
+	</g>
+</svg>
