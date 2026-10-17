@@ -165,12 +165,15 @@ const wait = async () => {};
 
 /**
  * A fetch that gives these answers in turn, throwing each error, and a wait.
- * Both write to one log, so a test sees the order of tries and waits.
+ * Both write to one log, so a test sees the order of tries and waits. Each
+ * request's URL and headers go into `requests`.
  */
 const answers = (...queue: (Response | Error)[]) => {
 	const log: string[] = [];
-	const fetch = async (): Promise<Response> => {
+	const requests: [string, { headers: Record<string, string> }][] = [];
+	const fetch = async (url: string, init: { headers: Record<string, string> }) => {
 		log.push("fetch");
+		requests.push([url, init]);
 		const answer = queue.shift();
 		if (answer === undefined) throw new Error("The test gave no more answers.");
 		if (answer instanceof Error) throw answer;
@@ -179,7 +182,7 @@ const answers = (...queue: (Response | Error)[]) => {
 	const wait = async (ms: number) => {
 		log.push(`wait ${ms}`);
 	};
-	return { log, fetch, wait };
+	return { log, requests, fetch, wait };
 };
 
 const FIXTURE_HINT =
@@ -256,9 +259,25 @@ test("loadRelease tries again after a dropped connection or a 5xx", async () => 
 		response(500, { message: "Server Error" }),
 		response(200, raw({ tag_name: "v0.6.1" }))
 	);
-	const loaded = await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
+	const loaded = await loadRelease({
+		env: { GITHUB_TOKEN: "made-up-token" },
+		readFixture: vi.fn(),
+		...tries,
+	});
 	expect(loaded.tag).toBe("v0.6.1");
 	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch", "wait 5000", "fetch"]);
+	// Each try sends the same request, token and all.
+	const request = [
+		RELEASE_API_URL,
+		{
+			headers: {
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+				Authorization: "Bearer made-up-token",
+			},
+		},
+	];
+	expect(tries.requests).toEqual([request, request, request]);
 });
 
 test("loadRelease stops trying once GitHub answers", async () => {
