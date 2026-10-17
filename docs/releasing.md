@@ -104,9 +104,12 @@ manual workflow, described in [ios.md](ios.md#continuous-integration).
 4. Publish.
 
 Publishing makes it the latest release, so the README links and the in-app updater
-switch to it right away. It also starts the Website workflow, which rebuilds the
+switch to it right away. When the tag's tree has `.github/workflows/site.yml`,
+publishing also starts the Website workflow, which rebuilds the
 [website](https://maxmb15.github.io/MaxVideoPlayer/) with the new version, links and
-file sizes.
+file sizes. GitHub runs a release's workflows from its tag, and v0.7.0 and earlier
+came before that workflow. The site's first deploy comes from the merge to `main` for
+the next release, or from a manual run of **Website** from `main`.
 
 After publishing:
 
@@ -118,8 +121,9 @@ After publishing:
    ```
 
 2. In Actions, check that the **Website** run for the release passed, and re-run it
-   if it didn't. Its build asks GitHub's API up to three times, then fails rather
-   than publish a page without sizes.
+   if it didn't. Start it by hand from `main` if the release started none. Its
+   build asks GitHub's API up to three times, then fails rather than publish a
+   page without sizes.
 
 If you replace a release's files later, run **Website** by hand from `main`
 (**Run workflow**), so the page shows the new files' sizes and checksums.
