@@ -9,6 +9,7 @@ import {
 	downloadUrl,
 	formatDate,
 	formatSize,
+	keepUnlessFailed,
 	loadRelease,
 	parseRelease,
 	pickDownloads,
@@ -335,6 +336,31 @@ test(`loadRelease only takes 1 as a yes for ${FIXTURE_ENV}`, async () => {
 		expect(fetch).toHaveBeenCalledOnce();
 		expect(readFixture).not.toHaveBeenCalled();
 	}
+});
+
+test("keepUnlessFailed loads once and hands every caller what it loaded", async () => {
+	const load = vi.fn(async () => "v1.2.3");
+	const get = keepUnlessFailed(load);
+	expect(load).not.toHaveBeenCalled();
+	expect(await Promise.all([get(), get()])).toEqual(["v1.2.3", "v1.2.3"]);
+	expect(await get()).toBe("v1.2.3");
+	expect(load).toHaveBeenCalledOnce();
+});
+
+test("keepUnlessFailed loads again after a failure", async () => {
+	const load = vi
+		.fn<() => Promise<string>>()
+		.mockRejectedValueOnce(new Error("offline"))
+		.mockResolvedValue("v1.2.3");
+	const get = keepUnlessFailed(load);
+	const waiting = [get(), get()];
+	for (const result of waiting) {
+		await expect(result).rejects.toThrow(new Error("offline"));
+	}
+	expect(load).toHaveBeenCalledOnce();
+	expect(await get()).toBe("v1.2.3");
+	expect(await get()).toBe("v1.2.3");
+	expect(load).toHaveBeenCalledTimes(2);
 });
 
 test("FILES lists the downloads in the order the page shows them", () => {

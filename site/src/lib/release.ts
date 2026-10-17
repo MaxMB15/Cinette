@@ -141,6 +141,19 @@ export const loadRelease = async (options: LoadOptions): Promise<Release> => {
 	return parseRelease(await response.json());
 };
 
+/**
+ * Calls `load` the first time and hands every later caller the same promise.
+ * A promise that rejects isn't kept, so the call after a failure loads again.
+ */
+export const keepUnlessFailed = <T>(load: () => Promise<T>): (() => Promise<T>) => {
+	let kept: Promise<T> | undefined;
+	return () =>
+		(kept ??= load().catch((error: unknown) => {
+			kept = undefined;
+			throw error;
+		}));
+};
+
 export type Platform = "macos" | "linux";
 
 /** A file the page offers, in the order the page lists them. */

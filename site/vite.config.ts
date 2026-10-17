@@ -6,7 +6,7 @@ import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { defineConfig, type Plugin } from "vite";
 import tailwindcss from "@tailwindcss/vite";
-import { loadRelease, type Release } from "./src/lib/release.ts";
+import { keepUnlessFailed, loadRelease } from "./src/lib/release.ts";
 import { fillPage } from "./src/lib/render.ts";
 
 const FIXTURE = path.resolve(import.meta.dirname, "fixtures/release.json");
@@ -15,22 +15,22 @@ const FIXTURE = path.resolve(import.meta.dirname, "fixtures/release.json");
  * Puts the latest release's version, links and file sizes into index.html.
  * It asks GitHub once per build or dev server. When GitHub can't answer, the
  * build fails, unless SITE_RELEASE_FIXTURE=1 asks for the made-up release.
+ * The dev server shows the error and asks again on the next page load.
  */
 const latestRelease = (): Plugin => {
-	let release: Promise<Release> | undefined;
+	const release = keepUnlessFailed(() =>
+		loadRelease({
+			env: process.env,
+			fetch,
+			readFixture: () => readFile(FIXTURE, "utf8"),
+			wait,
+		})
+	);
 	return {
 		name: "latest-release",
 		transformIndexHtml: {
 			order: "pre",
-			handler: async (html) => {
-				release ??= loadRelease({
-					env: process.env,
-					fetch,
-					readFixture: () => readFile(FIXTURE, "utf8"),
-					wait,
-				});
-				return fillPage(html, await release);
-			},
+			handler: async (html) => fillPage(html, await release()),
 		},
 	};
 };
