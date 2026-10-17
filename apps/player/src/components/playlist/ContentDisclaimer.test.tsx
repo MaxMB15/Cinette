@@ -20,6 +20,13 @@ describe("ContentDisclaimer", () => {
 		expect(screen.getByText(/You're responsible for what you watch/)).toBeTruthy();
 	});
 
+	it("names the app and puts a space before the link", () => {
+		render(<ContentDisclaimer />);
+		const text = screen.getByText(/doesn't include any channels/).textContent;
+		expect(text).toMatch(/^Cinette doesn't include/);
+		expect(text).toMatch(/without warranty\. Read the full disclaimer$/);
+	});
+
 	it("opens the full disclaimer in the browser", () => {
 		render(<ContentDisclaimer />);
 		fireEvent.click(screen.getByRole("button", { name: "Read the full disclaimer" }));
