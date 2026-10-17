@@ -4,6 +4,8 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-17
+
 ### Added
 
 - Max Video Player now runs on Intel Macs with macOS 15 Sequoia or later. Each release has a DMG for Apple Silicon and one for Intel, and the app updates itself on both (#287).
@@ -413,7 +415,8 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.2...v0.5.3
