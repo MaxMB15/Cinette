@@ -19,6 +19,9 @@ describe("LegalNotices", () => {
 		expect(screen.getByText("Created by Max Boksem")).toBeTruthy();
 		expect(screen.getByText("Copyright © 2026 Max Boksem")).toBeTruthy();
 		expect(screen.getByText(/GNU General Public License version 3/)).toBeTruthy();
+		expect(
+			screen.getByText(/^Cinette, formerly Max Video Player, is free software\./)
+		).toBeTruthy();
 		expect(screen.getByText(/It comes with no warranty/)).toBeTruthy();
 	});
 

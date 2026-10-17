@@ -483,6 +483,7 @@ test("pickDownloads leaves out a file the release doesn't have", () => {
 			asset("Cinette_amd64.deb"),
 			asset("cinette_x64.dmg"),
 			asset("Cinette-aarch64.dmg"),
+			asset("maxvideoplayer_amd64.AppImage"),
 			asset("Max_x86_64.rpm"),
 		])
 	);
@@ -490,24 +491,30 @@ test("pickDownloads leaves out a file the release doesn't have", () => {
 });
 
 test("pickDownloads takes the names from before the rename to Cinette", () => {
+	const hex = "0123456789abcdef".repeat(4);
 	const downloads = pickDownloads(
-		release([asset("MaxVideoPlayer_aarch64.dmg"), asset("MaxVideoPlayer_amd64.deb")])
+		release([
+			asset("MaxVideoPlayer_aarch64.dmg", { digest: `sha256:${hex}` }),
+			asset("MaxVideoPlayer_amd64.deb"),
+		])
 	);
-	expect(downloads.map((d) => [d.id, d.file, d.url])).toEqual([
+	expect(downloads.map((d) => [d.id, d.file, d.url, d.sha256])).toEqual([
 		[
 			"mac-arm",
 			"MaxVideoPlayer_aarch64.dmg",
 			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg`,
+			hex,
 		],
 		[
 			"deb",
 			"MaxVideoPlayer_amd64.deb",
 			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb`,
+			null,
 		],
 	]);
 });
 
-test("pickDownloads takes the Cinette name when the release has it ready", () => {
+test("pickDownloads prefers the Cinette name and takes the old one while the new one uploads", () => {
 	const downloads = pickDownloads(
 		release([
 			asset("MaxVideoPlayer_x64.dmg", { size: 1 }),

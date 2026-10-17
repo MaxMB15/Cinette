@@ -179,7 +179,7 @@ export type Platform = "macos" | "linux";
  * Player before it became Cinette, and the page shows the last release until
  * the first one under the new name is out.
  */
-export const PREFIXES = ["Cinette_", "MaxVideoPlayer_"] as const;
+const PREFIXES = ["Cinette_", "MaxVideoPlayer_"] as const;
 
 /** A file the page offers, in the order the page lists them, with its name after the prefix. */
 export const FILES = [

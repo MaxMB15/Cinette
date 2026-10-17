@@ -4,7 +4,7 @@ Cinette, formerly called Max Video Player, is free software under the [GNU Gener
 
 ## What you can do without asking
 
-- Say that your project is based on, forked from or works with Cinette, as long as the statement is accurate.
+- Say that your project is based on, forked from or works with Cinette or Max Video Player, as long as the statement is accurate.
 - Link to this repository and to the official releases.
 - Write about the official app by name in articles, reviews, tutorials and videos, and show its icon and screenshots when you do.
 - Build the unchanged source code for your own use.
@@ -20,7 +20,7 @@ Your Appropriate Legal Notices must still credit the original, as term 1 of [NOT
 ## What needs permission
 
 - Using "Cinette" or "Max Video Player", or a name that could be confused with either, in the name of a product, company or domain.
-- Merchandise with the name or icon.
+- Merchandise with either name or the icon.
 - Anything that suggests Max Boksem made, endorses or supports your product.
 
 Ask through [github.com/MaxMB15](https://github.com/MaxMB15). If you aren't sure whether your use is fine, ask.

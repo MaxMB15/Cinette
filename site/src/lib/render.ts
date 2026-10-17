@@ -3,7 +3,8 @@
 
 // Builds the parts of the page that come from the latest release. Only checked
 // values reach the HTML. The tag matches a version, the checksum is hex, the
-// size and date are numbers, and the rest are constants in release.ts.
+// size and date are numbers, a file's name equals a prefix and an ending from
+// release.ts, and the rest are constants there.
 
 import {
 	REPO_URL,

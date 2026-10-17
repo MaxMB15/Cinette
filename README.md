@@ -168,7 +168,7 @@ In `~/Library/Application Support/com.maxvideoplayer.app` on macOS and `~/.local
 
 Yes. Max Video Player was renamed Cinette, and updating keeps your playlists, favorites, settings and downloads. They stay in the folders above.
 
-On a Mac, an update from inside the app keeps the old file name, so the app is still called Max Video Player in Applications. You can rename it to Cinette there. On Linux, installing the `cinette` package removes the `max-video-player` package.
+On a Mac, an update from inside the app keeps the old file name, so the app is still called Max Video Player in Applications. You can rename it to Cinette there. If you install Cinette from the DMG instead, delete the old Max Video Player app. On Linux, installing the `cinette` package removes the `max-video-player` package.
 
 </details>
 
@@ -218,12 +218,12 @@ The license has a few [additional terms](NOTICE), which section 7 of the GPL all
 
 - Modified versions have to keep the credit "Based on Cinette by Max Boksem" on their About screen.
 - Modified versions need their own name and icon. The license grants no trademark rights in the Cinette or Max Video Player names or logos. See [TRADEMARKS.md](TRADEMARKS.md).
-- The author's name can't be used to promote another product without permission.
+- The author's name and the names Cinette and Max Video Player can't be used to promote another product without permission.
 
 If you need other terms, for example to ship it in a closed-source product, a commercial license is available. Get in touch through [github.com/MaxMB15](https://github.com/MaxMB15).
 
 Releases up to and including 0.5.3 were published under the PolyForm Noncommercial License 1.0.0.
 
-It's an independent project and isn't affiliated with Max, Warner Bros. Discovery, or any product with a similar name.
+Under either name, it's an independent project and isn't affiliated with MaxPlayer, Max, Warner Bros. Discovery, or any product with a similar name.
 
 Built with [Tauri](https://tauri.app), [mpv](https://mpv.io), [FFmpeg](https://ffmpeg.org) and [React](https://react.dev). [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists their licenses and where to get their source code.

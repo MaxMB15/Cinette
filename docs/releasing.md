@@ -90,8 +90,8 @@ assets:
 | `Cinette_<version>_aarch64.app.tar.gz.sig`, `Cinette_<version>_x64.app.tar.gz.sig`, `Cinette_linux.tar.gz.sig` | Signatures for the three updates |
 | `latest.json` | Update manifest: version, signatures and download links |
 
-Don't rename these. The README, `latest.json` and the Linux package updater in
-`commands.rs` all depend on the names.
+Don't rename these again. The README and the website link to them by name, and
+so do links on other sites.
 
 Releases from before the app became Cinette name these files `MaxVideoPlayer_*`
 instead. The website takes either name, so it still works while the newest release
