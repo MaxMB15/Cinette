@@ -33,6 +33,14 @@ pmOnFail: ignore
 # eslint-plugin-react 7.37.5 still lists ESLint 9 as its newest peer. It runs
 # on ESLint 10 once settings.react.version is set, since detecting the version
 # calls a context method that ESLint 10 removed.
+# typed-rest-client 2.3.1, which Stryker 10 needs, pins qs to 6.15.1. That
+# version has three moderate advisories, GHSA-q8mj-m7cp-5q26,
+# GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx, fixed in 6.16.0. Stryker only
+# runs in development and CI, and nothing in the app uses qs. Remove this once
+# Stryker depends on typed-rest-client 3, which asks for qs ^6.16.0.
+overrides:
+  typed-rest-client>qs: ^6.16.0
+
 peerDependencyRules:
   allowedVersions:
     eslint-plugin-react>eslint: "10"
