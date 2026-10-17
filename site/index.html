@@ -31,7 +31,8 @@
 		<script>
 			// Shows the download buttons for the visitor's system before the page
 			// draws. iPads ask for the Mac site, so a Mac with a touch screen is an
-			// iPad. Without this script the page offers every download.
+			// iPad. Phones, TVs and Chromebooks that say Linux get every download,
+			// as they do without this script.
 			(() => {
 				const ua = navigator.userAgent;
 				const apple = /Macintosh|iPhone|iPad|iPod/.test(ua);
@@ -40,7 +41,8 @@
 						? "ios"
 						: apple
 							? "mac"
-							: /Linux|X11/.test(ua) && !/Android|CrOS/.test(ua)
+							: /Linux|X11/.test(ua) &&
+								  !/Android|CrOS|SmartTV|SMART-TV|Tizen|Web0S|Mobile/.test(ua)
 								? "linux"
 								: "other";
 			})();
