@@ -14,7 +14,7 @@
 		"test:mutation": "stryker run"
 	},
 	"dependencies": {
-		"@radix-ui/react-slider": "^1.4.7",
+		"@radix-ui/react-slider": "^1.5.0",
 		"@tanstack/react-virtual": "^3.14.13",
 		"@tauri-apps/api": "^2.12.1",
 		"@tauri-apps/plugin-dialog": "^2.8.1",
@@ -24,7 +24,7 @@
 		"@tauri-apps/plugin-updater": "^2.13.1",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
-		"lucide-react": "^1.48.0",
+		"lucide-react": "^1.55.0",
 		"react": "^19.3.0",
 		"react-dom": "^19.3.0",
 		"react-router": "^8.4.0",
@@ -41,12 +41,12 @@
 		"@types/node": "catalog:",
 		"@types/react": "^19.3.0",
 		"@types/react-dom": "^19.3.0",
-		"@vitejs/plugin-react": "^6.1.1",
+		"@vitejs/plugin-react": "^6.1.2",
 		"@vitest/coverage-v8": "^5.0.4",
 		"jsdom": "^29.1.1",
 		"tailwindcss": "^4.3.3",
 		"typescript": "catalog:",
-		"vite": "^8.3.3",
+		"vite": "^8.3.4",
 		"vitest": "^5.0.4"
 	}
 }
