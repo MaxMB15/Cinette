@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::downloads::test_support::record;
-use crate::test_support::TestApp;
+use crate::test_support::{Logged, TestApp};
 use mvp_core::downloads::model::DownloadStatus;
 use std::fs;
 
@@ -123,11 +123,10 @@ fn the_folders_tauri_names_after_the_identifier_are_all_listed() {
     assert_eq!(parents.contains(&webkit), cfg!(target_os = "macos"));
 }
 
-/// A test app, its cache and the data folder it had before the move.
-fn moved_app() -> (TestApp, CacheStore, PathBuf) {
+/// A test app, `cache` and the data folder the app had before the move.
+fn moved_app(cache: CacheStore) -> (TestApp, CacheStore, PathBuf) {
     let app = TestApp::new();
     let old_dir = app.app_dir().with_file_name(OLD_IDENTIFIER);
-    let cache = CacheStore::open_in_memory().unwrap();
     let inside = old_dir.join("downloads").join("Dune.mkv");
     cache
         .upsert_download(&record(
@@ -152,11 +151,19 @@ fn dest_path(cache: &CacheStore, id: &str) -> PathBuf {
     cache.get_download(id).unwrap().unwrap().dest_path.into()
 }
 
+/// Runs `update_moved_paths` and returns what it logged.
+fn update_and_log(app: &TestApp, cache: &CacheStore) -> String {
+    let logged = Logged::default();
+    let _logging = logged.start();
+    update_moved_paths(&app.handle(), cache, &app.app_dir());
+    logged.text()
+}
+
 #[test]
 fn once_the_data_folder_moved_the_paths_into_it_follow() {
-    let (app, cache, _) = moved_app();
+    let (app, cache, _) = moved_app(CacheStore::open_in_memory().unwrap());
 
-    update_moved_paths(&app.handle(), &cache, &app.app_dir());
+    let log = update_and_log(&app, &cache);
 
     assert_eq!(
         dest_path(&cache, "inside"),
@@ -168,11 +175,60 @@ fn once_the_data_folder_moved_the_paths_into_it_follow() {
     );
     crate::downloads::manager::restore_settings(&app.handle());
     assert_eq!(app.downloads().root(), app.app_dir().join("Videos"));
+    assert!(
+        log.contains("Moved the paths of 1 download(s) to the new data folder"),
+        "{log}"
+    );
+}
+
+#[test]
+fn paths_that_already_moved_stay_and_say_nothing() {
+    let (app, cache, _) = moved_app(CacheStore::open_in_memory().unwrap());
+    update_moved_paths(&app.handle(), &cache, &app.app_dir());
+
+    let log = update_and_log(&app, &cache);
+
+    assert_eq!(
+        dest_path(&cache, "inside"),
+        app.app_dir().join("downloads").join("Dune.mkv")
+    );
+    // Every launch after the move gets here, so it has nothing to say.
+    assert_eq!(log, "");
+}
+
+#[test]
+fn paths_the_cache_cant_save_stay_and_a_warning_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("maxvideoplayer.db");
+    let (app, cache, old_dir) = moved_app(CacheStore::open(&db).unwrap());
+    // Makes every change to a download fail, the way a full disk would.
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse_downloads BEFORE UPDATE ON downloads
+             BEGIN SELECT RAISE(ABORT, 'no space left'); END;",
+        )
+        .unwrap();
+
+    let log = update_and_log(&app, &cache);
+
+    assert_eq!(
+        dest_path(&cache, "inside"),
+        old_dir.join("downloads").join("Dune.mkv")
+    );
+    assert!(
+        log.contains("Could not move the download paths to the new data folder"),
+        "{log}"
+    );
+    // The download folder setting is saved apart from the cache, so it still
+    // follows.
+    crate::downloads::manager::restore_settings(&app.handle());
+    assert_eq!(app.downloads().root(), app.app_dir().join("Videos"));
 }
 
 #[test]
 fn while_the_old_data_folder_is_there_the_paths_stay() {
-    let (app, cache, old_dir) = moved_app();
+    let (app, cache, old_dir) = moved_app(CacheStore::open_in_memory().unwrap());
     fs::create_dir_all(&old_dir).unwrap();
 
     update_moved_paths(&app.handle(), &cache, &app.app_dir());
