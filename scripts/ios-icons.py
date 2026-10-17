@@ -18,6 +18,7 @@ the Xcode set doesn't have, so the two folders hold the same icons. It needs
 only Python's standard library.
 """
 
+import os
 import struct
 import sys
 import zlib
@@ -58,7 +59,7 @@ def pngs(folder):
     return sorted(
         path
         for path in folder.iterdir()
-        if path.suffix.lower() == ".png" and not path.is_dir()
+        if path.name.lower().endswith(".png") and not path.is_dir()
     )
 
 
@@ -157,7 +158,7 @@ def flatten(data):
     )
 
 
-def main():
+def update():
     for folder in (XCODE, IOS):
         if not folder.is_dir():
             sys.exit(f"{folder} isn't a folder")
@@ -172,23 +173,34 @@ def main():
             flat[path.name] = flatten(path.read_bytes())
         except (OSError, ValueError, struct.error, zlib.error) as error:
             sys.exit(f"{path.name}: {error}")
-    for name in flat:
-        if (IOS / name).is_dir():
-            sys.exit(f"icons/ios/{name} is a folder")
+    # A target that can't be written would stop the script halfway, with the
+    # two folders different.
+    for folder in (XCODE, IOS):
+        if not os.access(folder, os.W_OK | os.X_OK):
+            sys.exit(f"{folder} is read-only")
+        for name in flat:
+            target = folder / name
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                sys.exit(f"{target} isn't a plain file")
+            if target.exists() and not os.access(target, os.W_OK):
+                sys.exit(f"{target} is read-only")
+    # Delete before writing. Where the file system ignores case, a stale name
+    # that differs from an icon's only in case is the file the icon goes into.
+    for path in pngs(IOS):
+        if path.name not in flat:
+            path.unlink()
+            print(f"deleted icons/ios/{path.name}, which the Xcode set doesn't have")
+    for name, data in flat.items():
+        (XCODE / name).write_bytes(data)
+        (IOS / name).write_bytes(data)
+    print(f"wrote {len(flat)} icons without alpha to {XCODE.name} and icons/ios")
+
+
+def main():
     try:
-        # Delete before writing. Where the file system ignores case, a stale
-        # name that differs from an icon's only in case is the file the icon
-        # goes into.
-        for path in pngs(IOS):
-            if path.name not in flat:
-                path.unlink()
-                print(f"deleted icons/ios/{path.name}, which the Xcode set doesn't have")
-        for name, data in flat.items():
-            (XCODE / name).write_bytes(data)
-            (IOS / name).write_bytes(data)
+        update()
     except OSError as error:
         sys.exit(str(error))
-    print(f"wrote {len(flat)} icons without alpha to {XCODE.name} and icons/ios")
 
 
 if __name__ == "__main__":
