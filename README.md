@@ -37,7 +37,7 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 | **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x64.dmg) | macOS 15 Sequoia or later |
 | **Linux** | [**AppImage**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x86_64.rpm) | x86_64 |
 | Windows | Planned | |
-| iOS, iPadOS | Planned | |
+| iOS, iPadOS | Coming soon to the App Store | |
 | Android, Fire TV | Planned | |
 
 These links always point at the newest version. Older versions and release notes are on the [releases page](https://github.com/MaxMB15/MaxVideoPlayer/releases), and the [changelog](CHANGELOG.md) lists what changed in each one. Once installed, the app updates itself.
