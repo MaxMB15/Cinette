@@ -160,10 +160,36 @@ test("parseRelease leaves out a checksum or state that isn't text", () => {
 const response = (status: number, body: unknown): Response =>
 	new Response(JSON.stringify(body), { status });
 
+/** A wait that returns at once, so no test sleeps. */
+const wait = async () => {};
+
+/**
+ * A fetch that gives these answers in turn, throwing each error, and a wait.
+ * Both write to one log, so a test sees the order of tries and waits.
+ */
+const answers = (...queue: (Response | Error)[]) => {
+	const log: string[] = [];
+	const fetch = async (): Promise<Response> => {
+		log.push("fetch");
+		const answer = queue.shift();
+		if (answer === undefined) throw new Error("The test gave no more answers.");
+		if (answer instanceof Error) throw answer;
+		return answer;
+	};
+	const wait = async (ms: number) => {
+		log.push(`wait ${ms}`);
+	};
+	return { log, fetch, wait };
+};
+
+const FIXTURE_HINT =
+	"Set SITE_RELEASE_FIXTURE=1 to build with the made-up release in fixtures/release.json.";
+
 test("loadRelease asks GitHub for the latest release", async () => {
 	const fetch = vi.fn(async () => response(200, raw({ tag_name: "v0.6.1" })));
 	const readFixture = vi.fn(async () => FIXTURE);
-	const loaded = await loadRelease({ env: {}, fetch, readFixture });
+	const wait = vi.fn(async () => {});
+	const loaded = await loadRelease({ env: {}, fetch, readFixture, wait });
 	expect(loaded).toEqual({ tag: "v0.6.1", publishedAt: "2026-01-02T03:04:05Z", assets: [] });
 	expect(fetch).toHaveBeenCalledExactlyOnceWith(
 		"https://api.github.com/repos/MaxMB15/MaxVideoPlayer/releases/latest",
@@ -175,11 +201,17 @@ test("loadRelease asks GitHub for the latest release", async () => {
 		}
 	);
 	expect(readFixture).not.toHaveBeenCalled();
+	expect(wait).not.toHaveBeenCalled();
 });
 
 test("loadRelease sends GITHUB_TOKEN when there is one", async () => {
 	const fetch = vi.fn(async () => response(200, raw({})));
-	await loadRelease({ env: { GITHUB_TOKEN: "made-up-token" }, fetch, readFixture: vi.fn() });
+	await loadRelease({
+		env: { GITHUB_TOKEN: "made-up-token" },
+		fetch,
+		readFixture: vi.fn(),
+		wait,
+	});
 	expect(fetch).toHaveBeenCalledExactlyOnceWith(RELEASE_API_URL, {
 		headers: {
 			Accept: "application/vnd.github+json",
@@ -191,7 +223,7 @@ test("loadRelease sends GITHUB_TOKEN when there is one", async () => {
 
 test("loadRelease sends no token when GITHUB_TOKEN is empty", async () => {
 	const fetch = vi.fn(async () => response(200, raw({})));
-	await loadRelease({ env: { GITHUB_TOKEN: "" }, fetch, readFixture: vi.fn() });
+	await loadRelease({ env: { GITHUB_TOKEN: "" }, fetch, readFixture: vi.fn(), wait });
 	expect(fetch.mock.calls[0]).toEqual([
 		RELEASE_API_URL,
 		{
@@ -203,23 +235,63 @@ test("loadRelease sends no token when GITHUB_TOKEN is empty", async () => {
 	]);
 });
 
-test("loadRelease fails when GitHub doesn't answer with the release, without the token", async () => {
-	const fetch = vi.fn(async () => response(403, { message: "API rate limit exceeded" }));
-	const loading = loadRelease({
-		env: { GITHUB_TOKEN: "made-up-token" },
-		fetch,
-		readFixture: vi.fn(),
-	});
-	await expect(loading).rejects.toThrow(
-		new Error(
-			"GitHub's releases API answered 403. Set SITE_RELEASE_FIXTURE=1 to build with the made-up release in fixtures/release.json."
-		)
+test("loadRelease fails at once when GitHub refuses, without the token", async () => {
+	for (const status of [403, 404, 499]) {
+		const tries = answers(response(status, { message: "API rate limit exceeded" }));
+		const loading = loadRelease({
+			env: { GITHUB_TOKEN: "made-up-token" },
+			readFixture: vi.fn(),
+			...tries,
+		});
+		await expect(loading).rejects.toThrow(
+			new Error(`GitHub's releases API answered ${status}. ${FIXTURE_HINT}`)
+		);
+		expect(tries.log).toEqual(["fetch"]);
+	}
+});
+
+test("loadRelease tries again after a dropped connection or a 5xx", async () => {
+	const tries = answers(
+		new TypeError("fetch failed"),
+		response(500, { message: "Server Error" }),
+		response(200, raw({ tag_name: "v0.6.1" }))
 	);
+	const loaded = await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
+	expect(loaded.tag).toBe("v0.6.1");
+	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch", "wait 5000", "fetch"]);
+});
+
+test("loadRelease stops trying once GitHub answers", async () => {
+	const tries = answers(response(502, {}), response(200, raw({})));
+	await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
+	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch"]);
+});
+
+test("loadRelease fails after three 5xx answers", async () => {
+	const tries = answers(response(503, {}), response(502, {}), response(504, {}));
+	await expect(loadRelease({ env: {}, readFixture: vi.fn(), ...tries })).rejects.toThrow(
+		new Error(`GitHub's releases API answered 504. ${FIXTURE_HINT}`)
+	);
+	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch", "wait 5000", "fetch"]);
+});
+
+test("loadRelease fails after three tries without a connection, with the last error", async () => {
+	const last = new TypeError("fetch failed: getaddrinfo ENOTFOUND api.github.com");
+	const tries = answers(new TypeError("fetch failed"), new TypeError("fetch failed"), last);
+	const error = await loadRelease({ env: {}, readFixture: vi.fn(), ...tries }).catch(
+		(caught: unknown) => caught
+	);
+	expect(error).toBeInstanceOf(Error);
+	expect((error as Error).message).toBe(
+		`GitHub's releases API couldn't be reached. ${FIXTURE_HINT}`
+	);
+	expect((error as Error).cause).toBe(last);
+	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch", "wait 5000", "fetch"]);
 });
 
 test("loadRelease checks what GitHub sends", async () => {
 	const fetch = vi.fn(async () => response(200, { message: "Not Found" }));
-	await expect(loadRelease({ env: {}, fetch, readFixture: vi.fn() })).rejects.toThrow(
+	await expect(loadRelease({ env: {}, fetch, readFixture: vi.fn(), wait })).rejects.toThrow(
 		"The release's tag isn't a version like v1.2.3: undefined"
 	);
 });
@@ -230,6 +302,7 @@ test(`loadRelease reads the fixture without the network when ${FIXTURE_ENV} is 1
 		env: { [FIXTURE_ENV]: "1" },
 		fetch,
 		readFixture: async () => FIXTURE,
+		wait,
 	});
 	expect(loaded).toEqual(parseRelease(JSON.parse(FIXTURE)));
 	expect(fetch).not.toHaveBeenCalled();
@@ -239,7 +312,7 @@ test(`loadRelease only takes 1 as a yes for ${FIXTURE_ENV}`, async () => {
 	for (const value of ["0", "true", ""]) {
 		const fetch = vi.fn(async () => response(200, raw({})));
 		const readFixture = vi.fn(async () => FIXTURE);
-		await loadRelease({ env: { [FIXTURE_ENV]: value }, fetch, readFixture });
+		await loadRelease({ env: { [FIXTURE_ENV]: value }, fetch, readFixture, wait });
 		expect(fetch).toHaveBeenCalledOnce();
 		expect(readFixture).not.toHaveBeenCalled();
 	}

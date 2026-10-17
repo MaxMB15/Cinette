@@ -82,25 +82,61 @@ export type LoadOptions = {
 	env: Record<string, string | undefined>;
 	fetch: (url: string, init: { headers: Record<string, string> }) => Promise<Response>;
 	readFixture: () => Promise<string>;
+	/** Resolves after the given number of milliseconds. */
+	wait: (ms: number) => Promise<unknown>;
+};
+
+/**
+ * How long loadRelease waits before its second and third tries, in
+ * milliseconds. A request to GitHub's API now and then fails to connect or
+ * gets a 502 that the next one doesn't.
+ */
+export const RETRY_DELAYS = [2000, 5000] as const;
+
+const FIXTURE_HINT = `Set ${FIXTURE_ENV}=1 to build with the made-up release in fixtures/release.json.`;
+
+/**
+ * Asks for the release, and asks again after each of `RETRY_DELAYS` while the
+ * request doesn't reach GitHub or GitHub answers with a 5xx. It returns the
+ * last answer, and the last try's network error reaches the caller.
+ */
+const fetchWithRetries = async (
+	{ fetch, wait }: LoadOptions,
+	headers: Record<string, string>
+): Promise<Response> => {
+	for (const delay of RETRY_DELAYS) {
+		try {
+			const response = await fetch(RELEASE_API_URL, { headers });
+			if (response.status < 500) return response;
+		} catch {
+			// The last try reports the error when the network stays down.
+		}
+		await wait(delay);
+	}
+	return fetch(RELEASE_API_URL, { headers }).catch((error: unknown) => {
+		throw new Error(`GitHub's releases API couldn't be reached. ${FIXTURE_HINT}`, {
+			cause: error,
+		});
+	});
 };
 
 /**
  * Gets the latest release from GitHub, or the fixture when `FIXTURE_ENV` is
- * `1`. A `GITHUB_TOKEN` in `env` only raises GitHub's rate limit, and it never
- * goes into an error message.
+ * `1`. It tries three times when the network or GitHub fails, then throws. A
+ * `GITHUB_TOKEN` in `env` only raises GitHub's rate limit, and it never goes
+ * into an error message.
  */
-export const loadRelease = async ({ env, fetch, readFixture }: LoadOptions): Promise<Release> => {
+export const loadRelease = async (options: LoadOptions): Promise<Release> => {
+	const { env, readFixture } = options;
 	if (env[FIXTURE_ENV] === "1") return parseRelease(JSON.parse(await readFixture()));
 	const headers: Record<string, string> = {
 		Accept: "application/vnd.github+json",
 		"X-GitHub-Api-Version": "2022-11-28",
 	};
 	if (env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
-	const response = await fetch(RELEASE_API_URL, { headers });
+	const response = await fetchWithRetries(options, headers);
 	if (!response.ok) {
-		throw new Error(
-			`GitHub's releases API answered ${response.status}. Set ${FIXTURE_ENV}=1 to build with the made-up release in fixtures/release.json.`
-		);
+		throw new Error(`GitHub's releases API answered ${response.status}. ${FIXTURE_HINT}`);
 	}
 	return parseRelease(await response.json());
 };

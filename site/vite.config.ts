@@ -3,6 +3,7 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { defineConfig, type Plugin } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import { loadRelease, type Release } from "./src/lib/release.ts";
@@ -26,6 +27,7 @@ const latestRelease = (): Plugin => {
 					env: process.env,
 					fetch,
 					readFixture: () => readFile(FIXTURE, "utf8"),
+					wait,
 				});
 				return fillPage(html, await release);
 			},

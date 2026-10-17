@@ -645,10 +645,12 @@ them into `index.html`. A file the release doesn't have is left out, so the page
 never links a missing file. Each link names the release's tag, as in
 `releases/download/v0.7.0/<name>`, so it fetches the file whose size and checksum
 the page shows, even when a later deploy fails and the page stays on an older
-release. When GitHub doesn't answer, the build fails rather
-than make a page without sizes. `SITE_RELEASE_FIXTURE=1` builds with the made-up
-release in `site/fixtures/release.json` instead, as the tests and pull request
-builds do. A `GITHUB_TOKEN` in the environment raises the API's rate limit.
+release. When the request fails to connect or GitHub answers with a 5xx, the build
+waits and tries again, three tries in all. After that, or after any other error
+answer, the build fails rather than make a page without sizes.
+`SITE_RELEASE_FIXTURE=1` builds with the made-up release in
+`site/fixtures/release.json` instead, as the tests and pull request builds do. A
+`GITHUB_TOKEN` in the environment raises the API's rate limit.
 
 Open the built page through a web server, since a browser won't load its
 stylesheet on a `file://` page. The page uses the app icon from

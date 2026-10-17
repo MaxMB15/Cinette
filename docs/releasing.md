@@ -106,13 +106,23 @@ manual workflow, described in [ios.md](ios.md#continuous-integration).
 Publishing makes it the latest release, so the README links and the in-app updater
 switch to it right away. It also starts the Website workflow, which rebuilds the
 [website](https://maxmb15.github.io/MaxVideoPlayer/) with the new version, links and
-file sizes. Then check that the README download links and every link in
-`latest.json` work:
+file sizes.
 
-```bash
-./scripts/validate-release.sh            # the latest release
-./scripts/validate-release.sh v0.6.0     # a specific tag
-```
+After publishing:
+
+1. Check that the README download links and every link in `latest.json` work:
+
+   ```bash
+   ./scripts/validate-release.sh            # the latest release
+   ./scripts/validate-release.sh v0.6.0     # a specific tag
+   ```
+
+2. In Actions, check that the **Website** run for the release passed, and re-run it
+   if it didn't. Its build asks GitHub's API up to three times, then fails rather
+   than publish a page without sizes.
+
+If you replace a release's files later, run **Website** by hand from `main`
+(**Run workflow**), so the page shows the new files' sizes and checksums.
 
 ## Secrets and settings
 
