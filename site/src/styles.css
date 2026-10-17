@@ -36,7 +36,8 @@
 		--ring: 214 84% 48%;
 		--radius: 0.625rem;
 		/* White text on the app's own blue is too faint for small text, so
-		   filled buttons use this one in both themes. */
+		   filled buttons use this one in both themes. White on it is 4.89:1,
+		   and the darker hover is 6.05:1. */
 		--button: 214 84% 48%;
 		--button-hover: 214 84% 42%;
 		color-scheme: light;
@@ -53,7 +54,6 @@
 			--border: 220 12% 20%;
 			--primary: 214 91% 62%;
 			--ring: 214 91% 62%;
-			--button-hover: 214 84% 54%;
 			color-scheme: dark;
 		}
 	}
@@ -381,7 +381,6 @@
 		font-size: 0.8125rem;
 		font-weight: 500;
 		font-variant-numeric: tabular-nums;
-		opacity: 0.85;
 	}
 
 	.hero-note {
