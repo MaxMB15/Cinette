@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import {
 	FILES,
 	FIXTURE_ENV,
@@ -290,6 +290,7 @@ test("loadRelease tries again after a dropped connection or a 5xx", async () => 
 
 test("loadRelease gives each try 30 seconds of its own", async () => {
 	const timeout = vi.spyOn(AbortSignal, "timeout");
+	onTestFinished(() => timeout.mockRestore());
 	const tries = answers(response(502, {}), response(200, raw({})));
 	await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
 	expect(timeout.mock.calls).toEqual([[30_000], [30_000]]);
@@ -297,7 +298,6 @@ test("loadRelease gives each try 30 seconds of its own", async () => {
 	expect(signals).toHaveLength(2);
 	expect(signals[0]).toBe(timeout.mock.results[0]?.value);
 	expect(signals[1]).toBe(timeout.mock.results[1]?.value);
-	timeout.mockRestore();
 });
 
 test("loadRelease tries again when GitHub takes too long to answer", async () => {
@@ -310,21 +310,31 @@ test("loadRelease tries again when GitHub takes too long to answer", async () =>
 	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch"]);
 });
 
-test("loadRelease drops a 5xx answer's body, when it has one, before it waits", async () => {
-	const failed = response(502, { message: "Bad Gateway" });
-	const tries = answers(failed, new Response(null, { status: 503 }), response(200, raw({})));
-	const dropped: boolean[] = [];
+test("loadRelease drops each 5xx answer's body before it waits", async () => {
+	const first = response(502, { message: "Bad Gateway" });
+	const second = response(503, { message: "Service Unavailable" });
+	const tries = answers(first, second, response(200, raw({})));
+	const dropped: [boolean, boolean][] = [];
 	const loaded = await loadRelease({
 		env: {},
 		readFixture: vi.fn(),
 		fetch: tries.fetch,
 		wait: async () => {
-			dropped.push(failed.bodyUsed);
+			dropped.push([first.bodyUsed, second.bodyUsed]);
 		},
 	});
 	expect(loaded.tag).toBe("v1.2.3");
-	expect(dropped).toEqual([true, true]);
-	expect(tries.log).toEqual(["fetch", "fetch", "fetch"]);
+	expect(dropped).toEqual([
+		[true, false],
+		[true, true],
+	]);
+});
+
+test("loadRelease tries again after a 5xx answer with no body", async () => {
+	const tries = answers(new Response(null, { status: 503 }), response(200, raw({})));
+	const loaded = await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
+	expect(loaded.tag).toBe("v1.2.3");
+	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch"]);
 });
 
 test("loadRelease stops trying once GitHub answers", async () => {

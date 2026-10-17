@@ -649,9 +649,10 @@ never links a missing file. Each link names the release's tag, as in
 `releases/download/v0.7.0/<name>`, so it fetches the file whose size and checksum
 the page shows, even when a later deploy fails and the page stays on an older
 release. When the request fails to connect, gets no answer within 30 seconds or
-gets a 5xx from GitHub, the build waits and tries again, three tries in all. After that, or after any other error
-answer, the build fails rather than make a page without sizes. `pnpm dev:site`
-shows the error and asks GitHub again on the next page load.
+gets a 5xx from GitHub, the build waits and tries again, three tries in all.
+After that, or after any other error answer, the build fails rather than make a
+page without sizes. `pnpm dev:site` shows the error and asks GitHub again on the
+next page load.
 `SITE_RELEASE_FIXTURE=1` builds with the made-up release in
 `site/fixtures/release.json` instead, as the tests and pull request builds do. A
 `GITHUB_TOKEN` in the environment raises the API's rate limit.
