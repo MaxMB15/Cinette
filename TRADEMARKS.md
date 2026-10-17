@@ -20,7 +20,7 @@ Your Appropriate Legal Notices must still credit the original, as term 1 of [NOT
 ## What needs permission
 
 - Using "Cinette" or "Max Video Player", or a name that could be confused with either, in the name of a product, company or domain.
-- Merchandise with either name or the icon.
+- Merchandise with either name, their logos or the icon.
 - Anything that suggests Max Boksem made, endorses or supports your product.
 
 Ask through [github.com/MaxMB15](https://github.com/MaxMB15). If you aren't sure whether your use is fine, ask.

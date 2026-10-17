@@ -218,7 +218,7 @@ The license has a few [additional terms](NOTICE), which section 7 of the GPL all
 
 - Modified versions have to keep the credit "Based on Cinette by Max Boksem" on their About screen.
 - Modified versions need their own name and icon. The license grants no trademark rights in the Cinette or Max Video Player names or logos. See [TRADEMARKS.md](TRADEMARKS.md).
-- The author's name and the names Cinette and Max Video Player can't be used to promote another product without permission.
+- The author's name and the names Cinette and Max Video Player can't be used to endorse or promote another product without permission. Accurate statements such as "based on Cinette" don't need it.
 
 If you need other terms, for example to ship it in a closed-source product, a commercial license is available. Get in touch through [github.com/MaxMB15](https://github.com/MaxMB15).
 
