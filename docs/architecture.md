@@ -209,7 +209,7 @@ Going the other way, Rust sends Tauri events: `download://progress` and
 
 ## Storage
 
-Everything lives in the app data folder (`com.maxvideoplayer.app` under
+Everything lives in the app data folder (`app.cinette` under
 `~/Library/Application Support` on macOS, `~/.local/share` on Linux):
 
 - `maxvideoplayer.db`: the SQLite database

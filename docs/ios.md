@@ -43,7 +43,7 @@ pnpm tauri ios build --debug --target aarch64-sim
 xcrun simctl boot "iPhone 17 Pro"    # skip if a simulator is already running
 open -a Simulator
 xcrun simctl install booted src-tauri/gen/apple/build/arm64-sim/Cinette.app
-xcrun simctl launch booted com.maxvideoplayer.app
+xcrun simctl launch booted app.cinette
 ```
 
 Before building for the simulator again, move or delete
@@ -66,21 +66,25 @@ pnpm tauri ios build --debug --target aarch64 --export-method debugging
 xcrun devicectl list devices    # note the device's identifier
 xcrun devicectl device install app --device <identifier> \
   src-tauri/gen/apple/build/arm64/Cinette.ipa
-xcrun devicectl device process launch --device <identifier> com.maxvideoplayer.app
+xcrun devicectl device process launch --device <identifier> app.cinette
 ```
 
 The build bundles the frontend, so the app runs without the Mac once it's installed.
 As with the simulator, move or delete `src-tauri/gen/apple/build/arm64` and
 `src-tauri/gen/apple/build/max-video-player_iOS.xcarchive` before the next build.
 
+Builds from before 0.8.0 used the bundle ID `com.maxvideoplayer.app`, so a device
+that has one keeps it as a separate app, with its own data. Delete it from the device
+once the new build is on it.
+
 The project signs automatically with team `3MLC4VWP96`, the maintainer's. A debug
 build uses the team's wildcard development profile, so it doesn't register
-`com.maxvideoplayer.app` on the developer portal. TestFlight still needs the step
+`app.cinette` on the developer portal. TestFlight still needs the step
 under [Register the app](#1-register-the-app).
 
 If you're not on that team, open the project with `pnpm tauri ios open`, select the
 `max-video-player_iOS` target, open Signing & Capabilities, and pick your own team.
-Change the bundle identifier too, because `com.maxvideoplayer.app` belongs to the
+Change the bundle identifier too, because `app.cinette` belongs to the
 maintainer's team. Don't commit either change.
 
 The first time the app loads a playlist or stream from a local address such as
@@ -199,12 +203,12 @@ simulator but haven't been checked on a device yet.
 ## Logs
 
 On iOS the Rust logs go to the system log under the subsystem
-`com.maxvideoplayer.app`, category `rust`. Debug builds also send Tauri's own
+`app.cinette`, category `rust`. Debug builds also send Tauri's own
 messages there, under the category `app`. The Swift plugin uses `NSLog`, which has
 no subsystem, so its messages only carry the app's process name. To watch them all
 live, open Console on the Mac, select the device and click Start. Then type
 `Cinette` in the search field and pick Process from the menu that appears.
-Searching for `subsystem:com.maxvideoplayer.app category:rust` shows only the Rust
+Searching for `subsystem:app.cinette category:rust` shows only the Rust
 lines. Console hides Rust's DEBUG lines until you turn on Include Info Messages in
 the Action menu, and TRACE lines until you turn on Include Debug Messages. Xcode's
 debug console shows everything when Xcode started the app.
@@ -225,7 +229,7 @@ newest lines are always kept. At launch the last run's `app.log` becomes
 
 ```bash
 xcrun devicectl device copy from --device <identifier> \
-  --domain-type appDataContainer --domain-identifier com.maxvideoplayer.app \
+  --domain-type appDataContainer --domain-identifier app.cinette \
   --source Library/Caches/Logs/app.log --destination app.log
 ```
 
@@ -274,7 +278,7 @@ macOS app, and the Account Holder or Admin role.
 
 1. On [developer.apple.com → Identifiers](https://developer.apple.com/account/resources/identifiers/list),
    click **+**, choose **App IDs** and then **App**, and register the explicit bundle
-   ID `com.maxvideoplayer.app`. The app doesn't need any capabilities.
+   ID `app.cinette`. The app doesn't need any capabilities.
 2. In [App Store Connect → Apps](https://appstoreconnect.apple.com/apps), click **+** →
    **New App**. Choose iOS, pick the bundle ID, and enter a name and an SKU. The name
    has to be unique on the App Store.
@@ -292,7 +296,7 @@ are set.
    with its private key as a `.p12`, and set a password.
 3. On [developer.apple.com → Profiles](https://developer.apple.com/account/resources/profiles/list),
    click **+**, choose **App Store Connect** under Distribution, pick
-   `com.maxvideoplayer.app` and the certificate, and download the profile.
+   `app.cinette` and the certificate, and download the profile.
 4. Add three secrets to the `macos-signing` environment:
 
    | Secret | Value |

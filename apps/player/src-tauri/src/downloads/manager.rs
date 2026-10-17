@@ -142,6 +142,31 @@ pub fn save_folder<R: Runtime>(app: &AppHandle<R>, folder: &str) -> Result<(), S
     save_setting(app, FOLDER_KEY, serde_json::Value::from(folder))
 }
 
+/// Points a saved download folder inside the folder `from` at the same place
+/// inside `to`, after `from` was renamed to `to`. Any other saved folder
+/// stays as it is.
+#[cfg(desktop)]
+pub fn move_saved_folder<R: Runtime>(
+    app: &AppHandle<R>,
+    from: &Path,
+    to: &Path,
+) -> Result<(), String> {
+    let store = app.store(SETTINGS_STORE_FILE).map_err(|e| e.to_string())?;
+    let Some(folder) = store
+        .get(FOLDER_KEY)
+        .and_then(|v| v.as_str().map(PathBuf::from))
+    else {
+        return Ok(());
+    };
+    let Ok(rest) = folder.strip_prefix(from) else {
+        return Ok(());
+    };
+    match to.join(rest).to_str() {
+        Some(moved) => save_folder(app, moved),
+        None => Ok(()),
+    }
+}
+
 /// Save the download concurrency so the next launch uses it.
 pub fn save_concurrency<R: Runtime>(app: &AppHandle<R>, n: usize) -> Result<(), String> {
     save_setting(app, CONCURRENCY_KEY, serde_json::Value::from(n))

@@ -26,7 +26,7 @@ In Settings, you can clear your watch history and where you stopped. Clear All C
 
 On iPhone and iPad, deleting the app deletes all of its data from the device. Copies in your iCloud or computer backups stay until those backups are replaced.
 
-On macOS, the app's data is in `~/Library/Application Support/com.maxvideoplayer.app`, `~/Library/WebKit/com.maxvideoplayer.app` and `~/Library/Caches/com.maxvideoplayer.app`. On Linux, it's in `~/.local/share/com.maxvideoplayer.app`, with cached files under `~/.cache`. Deleting these folders deletes the data. Downloads stay where you saved them until you delete them.
+On macOS, the app's data is in `~/Library/Application Support/app.cinette`, `~/Library/WebKit/app.cinette` and `~/Library/Caches/app.cinette`. On Linux, it's in `~/.local/share/app.cinette`, with cached files under `~/.cache`. Before 0.8.0, these folders were named `com.maxvideoplayer.app`, and the first launch of 0.8.0 renames them. Deleting these folders deletes the data. Downloads stay where you saved them until you delete them.
 
 ## Who the app talks to
 

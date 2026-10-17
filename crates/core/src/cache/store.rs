@@ -2000,6 +2000,33 @@ impl CacheStore {
         Ok(rows.collect::<SqlResult<Vec<_>>>()?)
     }
 
+    /// Points every download path inside the folder `from` at the same place
+    /// inside `to`, after `from` was renamed to `to`. A path outside `from`,
+    /// or one that `to` would turn into something other than UTF-8, stays as
+    /// it is. Returns how many paths changed.
+    pub fn move_download_paths(&self, from: &Path, to: &Path) -> Result<usize, CacheError> {
+        let rows: Vec<(String, String)> = {
+            let mut stmt = self.conn.prepare("SELECT id, dest_path FROM downloads")?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<SqlResult<Vec<_>>>()?
+        };
+        let tx = self.conn.unchecked_transaction()?;
+        let mut changed = 0;
+        {
+            let mut stmt = tx.prepare("UPDATE downloads SET dest_path = ?2 WHERE id = ?1")?;
+            for (id, path) in &rows {
+                let Ok(rest) = Path::new(path).strip_prefix(from) else {
+                    continue;
+                };
+                if let Some(moved) = to.join(rest).to_str() {
+                    changed += stmt.execute(params![id, moved])?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
     pub fn delete_download(&self, id: &str) -> Result<(), CacheError> {
         self.conn
             .execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
@@ -3450,6 +3477,62 @@ mod tests {
         let mut paths = store.list_download_paths().unwrap();
         paths.sort();
         assert_eq!(paths, vec!["/tmp/d1.mkv.part", "/tmp/d2.mkv.part"]);
+    }
+
+    #[test]
+    fn moving_download_paths_changes_only_the_paths_inside_the_folder() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let paths = [
+            ("inside", "/data/old/downloads/Dune.mkv"),
+            ("part", "/data/old/downloads/Heat.mkv.part"),
+            ("nested", "/data/old/a/b/Up.ts"),
+            ("elsewhere", "/Movies/Alien.mkv"),
+            // Shares the folder's name as text, but not as a path.
+            ("lookalike", "/data/older/Jaws.mkv"),
+        ];
+        for (id, path) in paths {
+            let mut rec = movie_record(id, id);
+            rec.dest_path = path.into();
+            store.upsert_download(&rec).unwrap();
+        }
+
+        let changed = store
+            .move_download_paths(Path::new("/data/old"), Path::new("/data/new"))
+            .unwrap();
+
+        assert_eq!(changed, 3);
+        let mut paths = store.list_download_paths().unwrap();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "/Movies/Alien.mkv",
+                "/data/new/a/b/Up.ts",
+                "/data/new/downloads/Dune.mkv",
+                "/data/new/downloads/Heat.mkv.part",
+                "/data/older/Jaws.mkv",
+            ]
+        );
+        // The rest of each record stays.
+        let moved = store.get_download("inside").unwrap().unwrap();
+        assert_eq!(moved.title, "A Movie");
+        assert_eq!(moved.status, DownloadStatus::Queued);
+    }
+
+    #[test]
+    fn moving_download_paths_again_changes_nothing() {
+        let store = CacheStore::open_in_memory().unwrap();
+        let mut rec = movie_record("d1", "c1");
+        rec.dest_path = "/data/old/downloads/Dune.mkv".into();
+        store.upsert_download(&rec).unwrap();
+        let (from, to) = (Path::new("/data/old"), Path::new("/data/new"));
+
+        assert_eq!(store.move_download_paths(from, to).unwrap(), 1);
+        assert_eq!(store.move_download_paths(from, to).unwrap(), 0);
+        assert_eq!(
+            store.list_download_paths().unwrap(),
+            vec!["/data/new/downloads/Dune.mkv"]
+        );
     }
 
     #[test]

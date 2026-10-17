@@ -3,6 +3,8 @@
 
 mod commands;
 mod downloads;
+#[cfg(desktop)]
+mod identifier;
 mod logging;
 mod progress;
 #[cfg(test)]
@@ -220,6 +222,16 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     apply_linux_workarounds();
 
+    let context = tauri::generate_context!();
+    // Moves the folders saved under the old identifier before the app is
+    // built, since building it opens the window, and WebKit's storage with it.
+    #[cfg(desktop)]
+    identifier::move_folders(
+        &identifier::parent_folders(),
+        identifier::OLD_IDENTIFIER,
+        &context.config().identifier,
+    );
+
     let builder = tauri::Builder::default();
     // A second copy of the app would share the database and start the same
     // downloads again, so opening the app again shows the open window. This
@@ -276,6 +288,11 @@ pub fn run() {
 
             let cache = CacheStore::open(&db_path)
                 .expect("failed to open database");
+
+            // A download's file moved with the data folder, so its saved path
+            // has to follow before anything reads it.
+            #[cfg(desktop)]
+            identifier::update_moved_paths(app.handle(), &cache, &app_dir);
 
             // Collapse any leftover duplicate download rows (e.g. a failed
             // attempt sitting next to a later successful one) to one record
@@ -367,7 +384,7 @@ pub fn run() {
 
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {

@@ -49,7 +49,7 @@ impl TestApp {
         let mut context = mock_context(noop_assets());
         // The mock's identifier is blank, which would put files straight in
         // the user's data folder if the override below were ever dropped.
-        context.config_mut().identifier = "com.maxvideoplayer.test".into();
+        context.config_mut().identifier = "app.cinette.test".into();
         context.config_mut().app.app_directories_override =
             Some(AppDirectoriesOverride::Root(dir.path().join("app")));
         let app = mock_builder()
