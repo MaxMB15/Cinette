@@ -7,7 +7,7 @@ video plays through libmpv, drawn into the same window underneath the webview.
 ## Repository layout
 
 ```
-MaxVideoPlayer/
+Cinette/
 ├── apps/
 │   └── player/                   the app for desktop, iPhone and iPad
 │       ├── src/                  React frontend
@@ -227,7 +227,7 @@ player lasts until the app quits, in session storage (`mvp_volume`).
 ## Updates
 
 `tauri-plugin-updater` reads
-`https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json` at
+`https://github.com/MaxMB15/Cinette/releases/latest/download/latest.json` at
 launch and every two hours, and `useUpdateChecker` shows a banner when there's a new
 version. Updates are verified against the public key in `tauri.conf.json`. Linux
 `.deb` and `.rpm` installs download the new package and install it with `pkexec`,

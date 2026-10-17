@@ -16,4 +16,4 @@
 - [ ] `pnpm lint`, `pnpm test` and `cargo clippy --workspace --all-targets -- -D warnings` pass
 - [ ] User-facing changes are added to the `Unreleased` section of `CHANGELOG.md`
 - [ ] No playlist URLs, logins or API keys in the code, tests or screenshots
-- [ ] I have read the [Contributor License Agreement](https://github.com/MaxMB15/MaxVideoPlayer/blob/dev/CLA.md) and agree to it
+- [ ] I have read the [Contributor License Agreement](https://github.com/MaxMB15/Cinette/blob/dev/CLA.md) and agree to it

@@ -134,8 +134,8 @@ case "$PUSH" in
     git push origin "v$NEW"
     echo ""
     echo "  ✓ Release workflow triggered for v$NEW."
-    echo "  Watch progress at: https://github.com/MaxMB15/MaxVideoPlayer/actions"
-    echo "  Draft release will appear at: https://github.com/MaxMB15/MaxVideoPlayer/releases"
+    echo "  Watch progress at: https://github.com/MaxMB15/Cinette/actions"
+    echo "  Draft release will appear at: https://github.com/MaxMB15/Cinette/releases"
     ;;
   *)
     echo ""

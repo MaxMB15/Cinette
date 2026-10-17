@@ -49,7 +49,7 @@ const backend = (command: string): unknown => {
 		case "get_install_info":
 			return {
 				installType: "native",
-				releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+				releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 			};
 		default:
 			return undefined;

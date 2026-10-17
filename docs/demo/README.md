@@ -3,7 +3,7 @@
 `playlist.m3u` is a small playlist for trying the app without an IPTV provider. App Review uses it. To add it, open Playlists in the app. Under Add Provider, choose M3U Playlist, pick URL where the app offers URL or File, and enter:
 
 ```
-https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/playlist.m3u
+https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/playlist.m3u
 ```
 
 The playlist, its guide and its pictures all load from the `main` branch. A change here reaches App Review and the app only once it's merged to `main`.

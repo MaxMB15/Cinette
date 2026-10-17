@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@/lib/tauri", () => ({
 	getInstallInfo: vi.fn().mockResolvedValue({
 		installType: "native",
-		releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+		releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 	}),
 	packageUpdate: vi.fn().mockResolvedValue(undefined),
 }));
@@ -42,7 +42,7 @@ describe("useUpdateChecker", () => {
 		mockRelaunch.mockResolvedValue(undefined);
 		mockGetInstallInfo.mockResolvedValue({
 			installType: "native",
-			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+			releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 		});
 	});
 
@@ -270,7 +270,7 @@ describe("useUpdateChecker", () => {
 	it("sets packageInstall for deb installs", async () => {
 		mockGetInstallInfo.mockResolvedValue({
 			installType: "deb",
-			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+			releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 		});
 		mockCheck.mockResolvedValue(fakeUpdate() as never);
 
@@ -283,7 +283,7 @@ describe("useUpdateChecker", () => {
 	it("sets packageInstall for rpm installs", async () => {
 		mockGetInstallInfo.mockResolvedValue({
 			installType: "rpm",
-			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+			releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 		});
 		mockCheck.mockResolvedValue(fakeUpdate() as never);
 
@@ -296,7 +296,7 @@ describe("useUpdateChecker", () => {
 	it("calls packageUpdate instead of downloadAndInstall for deb installs", async () => {
 		mockGetInstallInfo.mockResolvedValue({
 			installType: "deb",
-			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+			releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 		});
 		const downloadAndInstall = vi.fn();
 		mockCheck.mockResolvedValue(fakeUpdate({ downloadAndInstall }) as never);
@@ -322,7 +322,7 @@ describe("useUpdateChecker over time", () => {
 		mockRelaunch.mockResolvedValue(undefined);
 		mockGetInstallInfo.mockResolvedValue({
 			installType: "native",
-			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+			releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 		});
 	});
 
@@ -352,7 +352,7 @@ describe("useUpdateChecker over time", () => {
 	it("shows package manager progress while a deb update installs", async () => {
 		mockGetInstallInfo.mockResolvedValue({
 			installType: "deb",
-			releaseUrl: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest",
+			releaseUrl: "https://github.com/MaxMB15/Cinette/releases/latest",
 		});
 		mockCheck.mockResolvedValue(fakeUpdate() as never);
 		let listenedTo: string | undefined;

@@ -3,7 +3,7 @@
 
 import { openUrl } from "@/lib/openUrl";
 
-export const REPO_URL = "https://github.com/MaxMB15/MaxVideoPlayer";
+export const REPO_URL = "https://github.com/MaxMB15/Cinette";
 
 // Each release is tagged, so the tag holds the exact source and license files
 // of the running build. Without a version, the links fall back to main.

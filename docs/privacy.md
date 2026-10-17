@@ -64,4 +64,4 @@ If this policy changes, the new version will be on this page with a new date.
 
 ## Contact
 
-Open an issue at https://github.com/MaxMB15/MaxVideoPlayer/issues. Issues are public, so don't include logins, playlist or stream addresses, or API keys, including in logs or screenshots.
+Open an issue at https://github.com/MaxMB15/Cinette/issues. Issues are public, so don't include logins, playlist or stream addresses, or API keys, including in logs or screenshots.

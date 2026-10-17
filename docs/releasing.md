@@ -98,6 +98,13 @@ Releases from before the app became Cinette name these files `MaxVideoPlayer_*`
 instead. The website takes either name, so it still works while the newest release
 has the old ones.
 
+The repo was called `MaxMB15/MaxVideoPlayer` until October 2026. GitHub sends
+the old repo URLs to the new name, though not the old GitHub Pages ones. Copies
+from 0.7.0 and earlier find updates through that redirect, since `latest.json`'s
+address is built into them. Never create a repo with the old name under this
+account, because GitHub then stops redirecting and those copies stop getting
+updates.
+
 The `.deb` and `.rpm` packages are called `cinette`, which the bundler makes from
 `productName`. Releases before the rename made a package called
 `max-video-player`. In `tauri.conf.json`, the `.deb` conflicts with and replaces
@@ -109,7 +116,7 @@ manual workflow, described in [ios.md](ios.md#continuous-integration).
 
 ## Publishing
 
-1. Open the draft on the [releases page](https://github.com/MaxMB15/MaxVideoPlayer/releases).
+1. Open the draft on the [releases page](https://github.com/MaxMB15/Cinette/releases).
 2. Check that all twelve assets are there.
 3. Replace the notes with the version's section from the changelog.
 4. Publish.
@@ -117,7 +124,7 @@ manual workflow, described in [ios.md](ios.md#continuous-integration).
 Publishing makes it the latest release, so the README links and the in-app updater
 switch to it right away. When the tag's tree has `.github/workflows/site.yml`,
 publishing also starts the Website workflow, which rebuilds the
-[website](https://maxmb15.github.io/MaxVideoPlayer/) with the new version, links and
+[website](https://maxmb15.github.io/Cinette/) with the new version, links and
 file sizes. A pre-release doesn't start it, and changing a pre-release to a full
 release later does. GitHub runs a release's workflows from its tag, and v0.7.0 and
 earlier came before that workflow. The site's first deploy comes from the push to

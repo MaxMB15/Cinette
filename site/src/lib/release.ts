@@ -20,9 +20,8 @@ export type ReleaseAsset = {
 	state: string;
 };
 
-export const REPO_URL = "https://github.com/MaxMB15/MaxVideoPlayer";
-export const RELEASE_API_URL =
-	"https://api.github.com/repos/MaxMB15/MaxVideoPlayer/releases/latest";
+export const REPO_URL = "https://github.com/MaxMB15/Cinette";
+export const RELEASE_API_URL = "https://api.github.com/repos/MaxMB15/Cinette/releases/latest";
 
 /**
  * The link to a file in one release. It names the tag rather than going

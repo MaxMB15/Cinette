@@ -29,7 +29,7 @@ set -euo pipefail
 SIDECAR=max-video-player-ffmpeg
 
 # The pre-release that holds a copy of each archive below.
-MIRROR="https://github.com/MaxMB15/MaxVideoPlayer/releases/download/ffmpeg-sidecar-8.1"
+MIRROR="https://github.com/MaxMB15/Cinette/releases/download/ffmpeg-sidecar-8.1"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$ROOT/apps/player/src-tauri/binaries"

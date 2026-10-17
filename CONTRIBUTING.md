@@ -5,7 +5,7 @@ welcome.
 
 ## Reporting a bug
 
-[Open a bug report](https://github.com/MaxMB15/MaxVideoPlayer/issues/new?template=bug_report.yml)
+[Open a bug report](https://github.com/MaxMB15/Cinette/issues/new?template=bug_report.yml)
 and include:
 
 - Your OS and version, and on Linux your desktop and whether it's Wayland or X11
@@ -22,7 +22,7 @@ Security problems go through private reporting instead. See [SECURITY.md](SECURI
 
 ## Suggesting a feature
 
-[Open a feature request](https://github.com/MaxMB15/MaxVideoPlayer/issues/new?template=feature_request.yml).
+[Open a feature request](https://github.com/MaxMB15/Cinette/issues/new?template=feature_request.yml).
 Describe the problem you want solved before the solution you have in mind. That
 leaves room for other ways to solve it.
 
