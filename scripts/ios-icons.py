@@ -12,8 +12,9 @@ AppIcon.appiconset with an alpha channel, and App Store Connect rejects a
 
     python3 -I scripts/ios-icons.py
 
-It stops without writing anything if a pixel isn't fully opaque. It needs only
-Python's standard library.
+It stops without writing anything if a pixel isn't fully opaque. It deletes
+any PNG in icons/ios that the Xcode set doesn't have, so the two folders hold
+the same icons. It needs only Python's standard library.
 """
 
 import struct
@@ -31,12 +32,22 @@ RGBA = 6
 
 
 def chunks(data):
-    """Yields each chunk's type and body."""
+    """Yields each chunk's type and body, up to and including IEND."""
     pos = len(SIGNATURE)
     while pos < len(data):
-        (length,) = struct.unpack(">I", data[pos : pos + 4])
-        yield data[pos + 4 : pos + 8], data[pos + 8 : pos + 8 + length]
+        length = int.from_bytes(data[pos : pos + 4], "big")
+        if pos + 12 + length > len(data):
+            raise ValueError("it's cut off")
+        kind = data[pos + 4 : pos + 8]
+        body = data[pos + 8 : pos + 8 + length]
+        (crc,) = struct.unpack(">I", data[pos + 8 + length : pos + 12 + length])
+        if crc != zlib.crc32(kind + body) & 0xFFFFFFFF:
+            raise ValueError(f"the {kind.decode('latin-1')} chunk has a bad CRC")
+        yield kind, body
+        if kind == b"IEND":
+            return
         pos += 12 + length
+    raise ValueError("there's no IEND chunk")
 
 
 def chunk(kind, body):
@@ -55,6 +66,8 @@ def paeth(a, b, c):
 def unfilter(raw, width, height, bpp):
     """Returns the rows of a non-interlaced image with the PNG filters undone."""
     stride = width * bpp
+    if len(raw) != height * (1 + stride):
+        raise ValueError("the image data is the wrong size")
     prev = bytearray(stride)
     rows = []
     pos = 0
@@ -81,29 +94,35 @@ def unfilter(raw, width, height, bpp):
     return rows
 
 
-def flatten(data, name):
-    """Returns the PNG as 8-bit RGB, or None if it has no alpha channel."""
+def flatten(data):
+    """Returns the PNG as 8-bit RGB, or None if it's already 8-bit RGB."""
     if data[: len(SIGNATURE)] != SIGNATURE:
-        raise ValueError(f"{name} isn't a PNG")
-    idat = b""
+        raise ValueError("it isn't a PNG")
     header = None
+    idat = b""
+    transparency = False
     for kind, body in chunks(data):
         if kind == b"IHDR":
             header = struct.unpack(">IIBBBBB", body)
         elif kind == b"IDAT":
             idat += body
+        elif kind == b"tRNS":
+            transparency = True
+    if header is None:
+        raise ValueError("there's no IHDR chunk")
     width, height, depth, color, _, _, interlace = header
-    if color == RGB:
+    if depth == 8 and color == RGB and interlace == 0 and not transparency:
         return None
     if depth != 8 or color != RGBA or interlace != 0:
         raise ValueError(
-            f"{name} is depth {depth}, color type {color}, interlace {interlace}; "
-            "expected 8-bit RGBA without interlacing"
+            f"it's depth {depth}, color type {color}, interlace {interlace}"
+            f"{' with a tRNS chunk' if transparency else ''}; "
+            "expected 8-bit RGB or RGBA without interlacing"
         )
     out = bytearray()
     for y, line in enumerate(unfilter(zlib.decompress(idat), width, height, 4)):
         if min(line[3::4]) != 255:
-            raise ValueError(f"{name} has a pixel that isn't fully opaque in row {y}")
+            raise ValueError(f"a pixel in row {y} isn't fully opaque")
         rgb = bytearray(width * 3)
         rgb[0::3] = line[0::4]
         rgb[1::3] = line[1::4]
@@ -121,18 +140,24 @@ def main():
     icons = sorted(XCODE.glob("*.png"))
     if not icons:
         sys.exit(f"no icons in {XCODE}")
+    if not IOS.is_dir():
+        sys.exit(f"{IOS} doesn't exist")
     # Check every icon before writing any, so a bad one leaves both folders as
     # they were.
     flat = {}
     for path in icons:
         data = path.read_bytes()
         try:
-            flat[path.name] = flatten(data, path.name) or data
-        except ValueError as error:
-            sys.exit(str(error))
+            flat[path.name] = flatten(data) or data
+        except (ValueError, struct.error, zlib.error) as error:
+            sys.exit(f"{path.name}: {error}")
+    stale = [path for path in sorted(IOS.glob("*.png")) if path.name not in flat]
     for name, data in flat.items():
         (XCODE / name).write_bytes(data)
         (IOS / name).write_bytes(data)
+    for path in stale:
+        path.unlink()
+        print(f"deleted icons/ios/{path.name}, which the Xcode set doesn't have")
     print(f"wrote {len(flat)} icons without alpha to {XCODE.name} and icons/ios")
 
 

@@ -140,21 +140,26 @@ Every app icon, for the desktop, iOS and Android, is made from
 
 ```bash
 pnpm tauri icon src-tauri/icons/icon.svg
-git checkout -- src-tauri/icons/android/values
 python3 -I ../../scripts/ios-icons.py
 ```
 
-`pnpm tauri icon` writes the desktop and Android icons to `src-tauri/icons` and the
-iOS icons to `Assets.xcassets/AppIcon.appiconset`. It also writes the Android
-background color in capitals, which the `git checkout` undoes.
+The SVG has to fill the whole square, with no transparent pixels and no rounded
+corners of its own. iOS and Android round the corners themselves, and so does
+macOS 26. On macOS 26 an icon that comes with its own rounded corners and a
+transparent margin gets an embossed look instead. macOS 15 shows the square as it
+is.
 
-The iOS icons it writes have an alpha channel, and App Store Connect rejects a
-1024 px icon that has one. `scripts/ios-icons.py` removes it and copies the icons to
-`src-tauri/icons/ios`, so both folders hold the same files. The script stops without
-writing anything if a pixel isn't fully opaque.
+`pnpm tauri icon` writes the desktop and Android icons to `src-tauri/icons` and the
+iOS icons to `src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset`. The iOS
+icons it writes have an alpha channel, and App Store Connect rejects a 1024 px icon
+that has one. `scripts/ios-icons.py` removes it and copies the icons to
+`src-tauri/icons/ios`, and deletes any icon there that the Xcode set doesn't have,
+so both folders hold the same files. The script stops without writing anything if
+a pixel isn't fully opaque.
 
 `icon.icns` comes out with different bytes on every run, even when the images in it
-are the same.
+are the same. If you ran `pnpm tauri icon` without changing the SVG, restore it with
+git.
 
 ### Privacy manifest
 
