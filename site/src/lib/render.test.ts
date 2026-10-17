@@ -75,8 +75,8 @@ test("renderHero leaves Intel out of a release without it", () => {
 		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for macOS 15 Sequoia or later."
 	);
 	expect([...parse(html).querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg",
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.AppImage",
+		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg",
+		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.AppImage",
 		"#download",
 		"#download",
 	]);
@@ -144,7 +144,7 @@ test("renderPlatforms only asks about the Mac's chip when there's a choice", () 
 test("renderPlatforms leaves out a system the release has no files for", () => {
 	const linux = only("deb");
 	expect(renderPlatforms(pickDownloads(linux))).toBe(
-		'<div class="platform"><h3>Linux</h3><p class="requirement">x86_64</p><ul class="file-list"><li><a class="file-row" href="https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.deb"><span class="file-label">Debian and Ubuntu</span><span class="file-name">MaxVideoPlayer_<wbr>amd64.deb</span><span class="file-size">41.2 MB</span></a></li></ul></div>'
+		'<div class="platform"><h3>Linux</h3><p class="requirement">x86_64</p><ul class="file-list"><li><a class="file-row" href="https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb"><span class="file-label">Debian and Ubuntu</span><span class="file-name">MaxVideoPlayer_<wbr>amd64.deb</span><span class="file-size">41.2 MB</span></a></li></ul></div>'
 	);
 	const mac = only("mac-intel");
 	expect(renderPlatforms(pickDownloads(mac))).not.toContain("Linux");

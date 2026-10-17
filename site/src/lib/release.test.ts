@@ -5,8 +5,8 @@ import { expect, test, vi } from "vitest";
 import {
 	FILES,
 	FIXTURE_ENV,
-	LATEST_DOWNLOAD_URL,
 	RELEASE_API_URL,
+	downloadUrl,
 	formatDate,
 	formatSize,
 	loadRelease,
@@ -263,35 +263,35 @@ test("FILES has the names the README links to", () => {
 	}
 });
 
-test("pickDownloads links each file the release has through the latest release", () => {
+test("pickDownloads links each file the release has in that release", () => {
 	expect(pickDownloads(parseRelease(JSON.parse(FIXTURE)))).toEqual([
 		{
 			...FILES[0],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg",
 			bytes: 70123456,
 			sha256: "a".repeat(64),
 		},
 		{
 			...FILES[1],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x64.dmg",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_x64.dmg",
 			bytes: 72345678,
 			sha256: "b".repeat(64),
 		},
 		{
 			...FILES[2],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.AppImage",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.AppImage",
 			bytes: 181234567,
 			sha256: "c".repeat(64),
 		},
 		{
 			...FILES[3],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.deb",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb",
 			bytes: 41234567,
 			sha256: "d".repeat(64),
 		},
 		{
 			...FILES[4],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x86_64.rpm",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_x86_64.rpm",
 			bytes: 41239999,
 			sha256: null,
 		},
@@ -335,10 +335,17 @@ test("pickDownloads only shows a checksum that is a SHA-256 in hex", () => {
 	}
 });
 
-test("LATEST_DOWNLOAD_URL always points at the newest release", () => {
-	expect(LATEST_DOWNLOAD_URL).toBe(
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/"
+test("downloadUrl names the release's tag rather than the latest release", () => {
+	expect(downloadUrl("v0.7.0", "MaxVideoPlayer_x64.dmg")).toBe(
+		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v0.7.0/MaxVideoPlayer_x64.dmg"
 	);
+});
+
+test("pickDownloads links the files of the release it was given", () => {
+	const older = { ...release([asset("MaxVideoPlayer_amd64.deb")]), tag: "v0.6.1" };
+	expect(pickDownloads(older).map((d) => d.url)).toEqual([
+		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v0.6.1/MaxVideoPlayer_amd64.deb",
+	]);
 });
 
 test("formatSize shows decimal megabytes with one decimal at most, like Finder", () => {

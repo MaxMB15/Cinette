@@ -97,7 +97,7 @@ test("the release fills every marker in the page", () => {
 	const links = attributes(FILLED, "a[href]", "href");
 	for (const { file } of FILES) {
 		expect(links).toContain(
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/${file}`
+			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/${file}`
 		);
 	}
 });

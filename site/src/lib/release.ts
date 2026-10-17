@@ -23,8 +23,14 @@ export type ReleaseAsset = {
 export const REPO_URL = "https://github.com/MaxMB15/MaxVideoPlayer";
 export const RELEASE_API_URL =
 	"https://api.github.com/repos/MaxMB15/MaxVideoPlayer/releases/latest";
-/** A link in this form always points at the file in the newest release. */
-export const LATEST_DOWNLOAD_URL = `${REPO_URL}/releases/latest/download/`;
+
+/**
+ * The link to a file in one release. It names the tag rather than going
+ * through `releases/latest`, so a page built from an older release, after a
+ * failed or late deploy, still links the files whose sizes it shows.
+ */
+export const downloadUrl = (tag: string, file: string): string =>
+	`${REPO_URL}/releases/download/${tag}/${file}`;
 
 /**
  * Set this to `1` to build with the made-up release in `fixtures/release.json`
@@ -118,6 +124,7 @@ export const FILES = [
 export type FileId = (typeof FILES)[number]["id"];
 
 export type Download = (typeof FILES)[number] & {
+	/** The file in the release the page shows, from `downloadUrl`. */
 	url: string;
 	bytes: number;
 	/** The SHA-256 in hex, when GitHub has one. */
@@ -135,7 +142,7 @@ export const pickDownloads = (release: Release): Download[] =>
 		);
 		if (!asset) return [];
 		const sha256 = asset.digest?.match(SHA256)?.[1] ?? null;
-		return [{ ...file, url: LATEST_DOWNLOAD_URL + file.file, bytes: asset.size, sha256 }];
+		return [{ ...file, url: downloadUrl(release.tag, file.file), bytes: asset.size, sha256 }];
 	});
 
 /**

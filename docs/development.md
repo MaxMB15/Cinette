@@ -642,7 +642,10 @@ pnpm test:site:mutation                  # StrykerJS on site/src/lib
 The build asks GitHub's releases API for the latest release. `site/src/lib/release.ts`
 reads its version, date, files, sizes and SHA-256 checksums, and `render.ts` puts
 them into `index.html`. A file the release doesn't have is left out, so the page
-never links a missing file. When GitHub doesn't answer, the build fails rather
+never links a missing file. Each link names the release's tag, as in
+`releases/download/v0.7.0/<name>`, so it fetches the file whose size and checksum
+the page shows, even when a later deploy fails and the page stays on an older
+release. When GitHub doesn't answer, the build fails rather
 than make a page without sizes. `SITE_RELEASE_FIXTURE=1` builds with the made-up
 release in `site/fixtures/release.json` instead, as the tests and pull request
 builds do. A `GITHUB_TOKEN` in the environment raises the API's rate limit.
