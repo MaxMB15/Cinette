@@ -8,6 +8,10 @@ packages:
 # Versions that more than one package.json uses. ESLint runs from the root and
 # parses with TypeScript, so it gets the same TypeScript as the app.
 catalog:
+  # Vitest and Vite take Node's types as an optional peer, so a package with
+  # another @types/node gets copies of its own. The app and the site share
+  # one, so jest-dom's matchers extend the Vitest the app's tests run.
+  "@types/node": ^24.19.2
   typescript: ~6.0.3
 
 # No dependency runs an install script. A new dependency that has one stops
