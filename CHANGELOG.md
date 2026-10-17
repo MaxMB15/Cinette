@@ -7,7 +7,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 ### Added
 
 - Max Video Player now runs on Intel Macs with macOS 15 Sequoia or later. Each release has a DMG for Apple Silicon and one for Intel, and the app updates itself on both (#287).
-- The project has a website at https://maxmb15.github.io/MaxVideoPlayer/. It shows what the app does and links each download of the latest release with its size.
+- The project has a website at https://maxmb15.github.io/MaxVideoPlayer/. It shows what the app does and links each download of the latest release with its size (#288).
 
 ### Changed
 
