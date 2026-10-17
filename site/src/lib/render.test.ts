@@ -68,11 +68,11 @@ test("renderHero names Apple Silicon and offers Intel next to it", () => {
 	);
 });
 
-test("renderHero leaves Intel out of a release without it", () => {
+test("renderHero leaves Intel out of a release without it and says the app needs Apple Silicon", () => {
 	const release = only("mac-arm", "appimage");
 	const html = renderHero(release, pickDownloads(release));
 	expect(picks(html).mac).toBe(
-		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for macOS 15 Sequoia or later."
+		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for Apple Silicon, macOS 15 Sequoia or later."
 	);
 	expect([...parse(html).querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
 		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg",
@@ -139,6 +139,16 @@ test("renderPlatforms only asks about the Mac's chip when there's a choice", () 
 	// Nothing, not even text, follows the Mac's one file.
 	expect(mac.lastChild?.nodeName).toBe("UL");
 	expect(mac.querySelectorAll("li")).toHaveLength(1);
+});
+
+test("renderPlatforms names the chip when the Mac has one build", () => {
+	const requirement = (release: Release): string | null | undefined =>
+		parse(renderPlatforms(pickDownloads(release))).querySelector(".requirement")?.textContent;
+	expect(requirement(FULL)).toBe("macOS 15 Sequoia or later");
+	expect(requirement(only("mac-arm", "appimage"))).toBe(
+		"Apple Silicon, macOS 15 Sequoia or later"
+	);
+	expect(requirement(only("mac-intel", "appimage"))).toBe("Intel, macOS 15 Sequoia or later");
 });
 
 test("renderPlatforms leaves out a system the release has no files for", () => {

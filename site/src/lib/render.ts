@@ -27,6 +27,9 @@ const button = (download: Download, title: string, note: string, primary: boolea
 
 const ALL_DOWNLOADS = '<a class="btn btn-primary" href="#download">See all downloads</a>';
 
+/** The Intel build needs the same macOS as the Apple Silicon one. */
+const MACOS = "macOS 15 Sequoia or later";
+
 /** One choice in the hero. The script in index.html shows the one for the visitor's system. */
 const pick = (os: string, buttons: string, note: string): string =>
 	`<div class="os-pick" data-for="${os}"><div class="btn-row">${buttons}</div><p class="hero-note">${note}</p></div>`;
@@ -41,7 +44,8 @@ const allDownloads = (os: string, version: string): string =>
 /**
  * The download buttons at the top of the page, one set for each kind of
  * system. Browsers don't say which chip a Mac has, so the Mac set names Apple
- * Silicon and offers Intel next to it.
+ * Silicon and offers Intel next to it. Without an Intel build, the note says
+ * the app needs Apple Silicon.
  */
 export const renderHero = (release: Release, downloads: Download[]): string => {
 	const version = `Version ${versionOf(release)}`;
@@ -54,7 +58,9 @@ export const renderHero = (release: Release, downloads: Download[]): string => {
 				"mac",
 				button(arm, "Download for Mac", `Apple Silicon, ${formatSize(arm.bytes)}`, true) +
 					(intel ? button(intel, "Intel Mac", formatSize(intel.bytes), false) : ""),
-				`${version} for macOS 15 Sequoia or later.${intel ? " About This Mac in the Apple menu shows which chip your Mac has." : ""}`
+				intel
+					? `${version} for ${MACOS}. About This Mac in the Apple menu shows which chip your Mac has.`
+					: `${version} for Apple Silicon, ${MACOS}.`
 			)
 		: allDownloads("mac", version);
 	const linux = appImage
@@ -89,7 +95,10 @@ const group = (title: string, requirement: string, files: Download[], note: stri
 export const renderReleaseMeta = (release: Release): string =>
 	`<p class="release-meta">Version ${versionOf(release)}, released ${formatDate(release.publishedAt)}. <a href="${REPO_URL}/releases/tag/${release.tag}">Release notes</a></p>`;
 
-/** A list of files for macOS and one for Linux, each left out when the release has none. */
+/**
+ * A list of files for macOS and one for Linux, each left out when the release
+ * has none. A Mac list with one file names its chip in the requirement.
+ */
 export const renderPlatforms = (downloads: Download[]): string => {
 	const mac = downloads.filter((d) => d.platform === "macos");
 	const linux = downloads.filter((d) => d.platform === "linux");
@@ -97,10 +106,8 @@ export const renderPlatforms = (downloads: Download[]): string => {
 		mac.length > 1
 			? '<p class="platform-note">Pick the build for your Mac\'s chip, which About This Mac shows.</p>'
 			: "";
-	return (
-		group("macOS", "macOS 15 Sequoia or later", mac, chipNote) +
-		group("Linux", "x86_64", linux, "")
-	);
+	const requirement = mac.length === 1 ? `${mac[0].label}, ${MACOS}` : MACOS;
+	return group("macOS", requirement, mac, chipNote) + group("Linux", "x86_64", linux, "");
 };
 
 /** GitHub's SHA-256 of each file that has one, folded away. */
