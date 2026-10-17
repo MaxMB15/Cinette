@@ -332,8 +332,8 @@ and a built frontend in `apps/player/dist`, which `pnpm build:desktop` makes.
 The Rust figure depends on the platform, because `macos.rs` and `linux.rs` in the
 mpv plugin each build only on their own system.
 
-CI publishes the [frontend report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
-and the [Rust report](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/) for
+CI publishes the [frontend report](https://MaxMB15.github.io/Cinette/coverage/)
+and the [Rust report](https://MaxMB15.github.io/Cinette/coverage/rust/) for
 `main` to GitHub Pages. Both come from Linux runs.
 
 CI runs Clippy with warnings as errors on macOS, on Linux and for the iOS simulator,
@@ -625,7 +625,7 @@ Developer ID, see [macos-signing.md](macos-signing.md).
 
 ## Website
 
-The [website](https://maxmb15.github.io/MaxVideoPlayer/) lives in `site/`. It's one
+The [website](https://maxmb15.github.io/Cinette/) lives in `site/`. It's one
 page with the README's content and a link to each file of the latest release with
 its size. Vite and Tailwind build it, as they do the app, from plain TypeScript
 without React.

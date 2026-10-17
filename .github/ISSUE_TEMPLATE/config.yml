@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: FAQ
-    url: https://github.com/MaxMB15/MaxVideoPlayer#faq
+    url: https://github.com/MaxMB15/Cinette#faq
     about: Answers to common questions, such as a stream that won't play or the app not opening after an update
   - name: Report a security vulnerability
-    url: https://github.com/MaxMB15/MaxVideoPlayer/security/advisories/new
+    url: https://github.com/MaxMB15/Cinette/security/advisories/new
     about: Report security problems privately instead of opening a public issue

@@ -1203,7 +1203,7 @@ fn install_info_points_manual_updates_at_the_latest_release() {
     let info = get_install_info();
     assert_eq!(
         info.release_url,
-        "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest"
+        "https://github.com/MaxMB15/Cinette/releases/latest"
     );
     if cfg!(target_os = "linux") {
         let known = ["appimage", "deb", "rpm", "native"];

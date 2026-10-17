@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 # Builds the website in site/ and publishes it to GitHub Pages at
-# https://maxmb15.github.io/MaxVideoPlayer/. The build asks GitHub's releases
+# https://maxmb15.github.io/Cinette/. The build asks GitHub's releases
 # API for the latest release, so the page links each file with its size.
 #
 # Pull requests build with the made-up release in site/fixtures/release.json

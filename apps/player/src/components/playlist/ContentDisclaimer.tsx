@@ -4,7 +4,7 @@
 import { Info } from "lucide-react";
 import { openUrl } from "@/lib/openUrl";
 
-export const DISCLAIMER_URL = "https://github.com/MaxMB15/MaxVideoPlayer#disclaimer";
+export const DISCLAIMER_URL = "https://github.com/MaxMB15/Cinette#disclaimer";
 
 export const ContentDisclaimer = () => (
 	<div className="flex gap-2 text-xs text-muted-foreground">

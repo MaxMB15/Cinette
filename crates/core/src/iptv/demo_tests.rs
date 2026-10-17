@@ -13,7 +13,7 @@ use std::path::Path;
 const PLAYLIST: &str = include_str!("../../../../docs/demo/playlist.m3u");
 const GUIDE: &str = include_str!("../../../../docs/demo/guide.xml");
 
-const RAW: &str = "https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/";
+const RAW: &str = "https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/";
 
 /// 2026-10-15 00:00 and 2028-01-01 00:00 UTC, where scripts/demo-guide.py
 /// starts and stops the guide.

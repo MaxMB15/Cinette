@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-REPO="MaxMB15/MaxVideoPlayer"
+REPO="MaxMB15/Cinette"
 TAG="${1:-latest}"
 
 echo "=== Validating release: $TAG ==="

@@ -1,15 +1,15 @@
-#EXTM3U x-tvg-url="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/guide.xml"
+#EXTM3U x-tvg-url="https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/guide.xml"
 #EXTINF:-1 tvg-id="apple.demo" group-title="Test streams",Apple HLS example
 https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
 #EXTINF:-1 tvg-id="ivs.demo" group-title="Test streams",Amazon IVS test stream
 https://fcc3ddae59ed.us-west-2.playback.live-video.net/api/video/v1/us-west-2.893648527354.channel.DmumNckWFTqz.m3u8
 #EXTINF:-1 tvg-id="unified.demo" group-title="Test streams",Unified Streaming live test
 https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/big-buck-bunny.jpg" group-title="Blender open movies",Big Buck Bunny
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/images/big-buck-bunny.jpg" group-title="Blender open movies",Big Buck Bunny
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/elephants-dream.jpg" group-title="Blender open movies",Elephants Dream
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/images/elephants-dream.jpg" group-title="Blender open movies",Elephants Dream
 https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/sintel.jpg" group-title="Blender open movies",Sintel
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/images/sintel.jpg" group-title="Blender open movies",Sintel
 https://cdn.theoplayer.com/video/sintel/index.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/tears-of-steel.jpg" group-title="Blender open movies",Tears of Steel
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/Cinette/main/docs/demo/images/tears-of-steel.jpg" group-title="Blender open movies",Tears of Steel
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8

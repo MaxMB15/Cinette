@@ -8,14 +8,14 @@ A fast, private IPTV player for macOS and Linux.<br>
 Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app.<br>
 It used to be called Max Video Player.
 
-[![Latest release](https://img.shields.io/github/v/release/MaxMB15/MaxVideoPlayer?label=release)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/MaxMB15/MaxVideoPlayer/total)](https://github.com/MaxMB15/MaxVideoPlayer/releases)
-[![Build](https://github.com/MaxMB15/MaxVideoPlayer/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MaxMB15/MaxVideoPlayer/actions/workflows/build.yml)
-[![Frontend coverage](https://MaxMB15.github.io/MaxVideoPlayer/coverage/badge.svg)](https://MaxMB15.github.io/MaxVideoPlayer/coverage/)
-[![Rust coverage](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/badge.svg)](https://MaxMB15.github.io/MaxVideoPlayer/coverage/rust/)
+[![Latest release](https://img.shields.io/github/v/release/MaxMB15/Cinette?label=release)](https://github.com/MaxMB15/Cinette/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/MaxMB15/Cinette/total)](https://github.com/MaxMB15/Cinette/releases)
+[![Build](https://github.com/MaxMB15/Cinette/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MaxMB15/Cinette/actions/workflows/build.yml)
+[![Frontend coverage](https://MaxMB15.github.io/Cinette/coverage/badge.svg)](https://MaxMB15.github.io/Cinette/coverage/)
+[![Rust coverage](https://MaxMB15.github.io/Cinette/coverage/rust/badge.svg)](https://MaxMB15.github.io/Cinette/coverage/rust/)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
-[Website](https://maxmb15.github.io/MaxVideoPlayer/) · [Download](#download) · [Features](#features) · [Getting started](#getting-started) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md) · [Disclaimer](#disclaimer)
+[Website](https://maxmb15.github.io/Cinette/) · [Download](#download) · [Features](#features) · [Getting started](#getting-started) · [FAQ](#faq) · [Contributing](CONTRIBUTING.md) · [Disclaimer](#disclaimer)
 
 <br>
 
@@ -35,13 +35,13 @@ It used to be called Max Video Player.
 
 | Platform | Download | Requirements |
 | --- | --- | --- |
-| **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_x64.dmg) | macOS 15 Sequoia or later |
-| **Linux** | [**AppImage**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_x86_64.rpm) | x86_64 |
+| **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_x64.dmg) | macOS 15 Sequoia or later |
+| **Linux** | [**AppImage**](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_x86_64.rpm) | x86_64 |
 | Windows | Planned | |
 | iOS, iPadOS | Coming soon to the App Store | |
 | Android, Fire TV | Planned | |
 
-These links always point at the newest version. Older versions and release notes are on the [releases page](https://github.com/MaxMB15/MaxVideoPlayer/releases), and the [changelog](CHANGELOG.md) lists what changed in each one. Once installed, the app updates itself.
+These links always point at the newest version. Older versions and release notes are on the [releases page](https://github.com/MaxMB15/Cinette/releases), and the [changelog](CHANGELOG.md) lists what changed in each one. Once installed, the app updates itself.
 
 There's no version for macOS 14 and earlier. Releases before the Intel build only ran on macOS 15 on Apple Silicon, even the ones that claimed to support Intel Macs and older macOS. Pick the build for your Mac's chip, which **About This Mac** shows.
 
@@ -177,7 +177,7 @@ On a Mac, an update from inside the app keeps the old file name, so the app is s
 
 <br>
 
-Check whether the same URL plays in [mpv](https://mpv.io) or VLC. If it does, [open a bug report](https://github.com/MaxMB15/MaxVideoPlayer/issues/new?template=bug_report.yml) with your OS and app version. Leave out your playlist URL and login details.
+Check whether the same URL plays in [mpv](https://mpv.io) or VLC. If it does, [open a bug report](https://github.com/MaxMB15/Cinette/issues/new?template=bug_report.yml) with your OS and app version. Leave out your playlist URL and login details.
 
 </details>
 
@@ -186,7 +186,7 @@ Check whether the same URL plays in [mpv](https://mpv.io) or VLC. If it does, [o
 
 <br>
 
-Versions 0.5.0 and 0.5.1 crash at launch, before they can check for updates. Download the [latest version](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_aarch64.dmg), drag it into Applications and delete the old Max Video Player app. Your playlists and settings are kept.
+Versions 0.5.0 and 0.5.1 crash at launch, before they can check for updates. Download the [latest version](https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_aarch64.dmg), drag it into Applications and delete the old Max Video Player app. Your playlists and settings are kept.
 
 </details>
 

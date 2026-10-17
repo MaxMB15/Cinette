@@ -36,7 +36,7 @@ const latestRelease = (): Plugin => {
 };
 
 export default defineConfig({
-	// Relative links, so the page works at /MaxVideoPlayer/ on GitHub Pages
+	// Relative links, so the page works at /Cinette/ on GitHub Pages
 	// and at the root of `vite preview`.
 	base: "./",
 	plugins: [tailwindcss(), latestRelease()],

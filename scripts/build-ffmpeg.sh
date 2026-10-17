@@ -48,7 +48,7 @@ OPENSSL_VERSION=3.5.9
 OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 # The copies on this repo's ffmpeg-sidecar pre-release first, then the
 # projects' own.
-MIRROR="https://github.com/MaxMB15/MaxVideoPlayer/releases/download/ffmpeg-sidecar-8.1"
+MIRROR="https://github.com/MaxMB15/Cinette/releases/download/ffmpeg-sidecar-8.1"
 FFMPEG_SOURCES=(
   "$MIRROR/ffmpeg-$FFMPEG_VERSION.tar.xz"
   "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"

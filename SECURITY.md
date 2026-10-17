@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-Only the [latest release](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest)
+Only the [latest release](https://github.com/MaxMB15/Cinette/releases/latest)
 gets security fixes. The app updates itself, so fixes ship as a new release.
 
 ## Reporting a vulnerability
 
 Don't open a public issue. Report it privately through
-[GitHub's private vulnerability reporting](https://github.com/MaxMB15/MaxVideoPlayer/security/advisories/new)
+[GitHub's private vulnerability reporting](https://github.com/MaxMB15/Cinette/security/advisories/new)
 (Security tab → **Report a vulnerability**).
 
 Include what an attacker could do, the steps to reproduce it, and the app version and

@@ -41,7 +41,7 @@ jobs:
             gh release create "v${VERSION}" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Cinette v${VERSION}" \
-              --notes "See the [CHANGELOG](https://github.com/MaxMB15/MaxVideoPlayer/blob/main/CHANGELOG.md) for details." \
+              --notes "See the [CHANGELOG](https://github.com/MaxMB15/Cinette/blob/main/CHANGELOG.md) for details." \
               --draft
           fi
 
@@ -382,19 +382,19 @@ jobs:
           if macos_sig:
               platforms["darwin-aarch64"] = {
                   "signature": macos_sig,
-                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/Cinette_{version}_aarch64.app.tar.gz"
+                  "url": f"https://github.com/MaxMB15/Cinette/releases/download/v{version}/Cinette_{version}_aarch64.app.tar.gz"
               }
           if macos_intel_sig:
               platforms["darwin-x86_64"] = {
                   "signature": macos_intel_sig,
-                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/Cinette_{version}_x64.app.tar.gz"
+                  "url": f"https://github.com/MaxMB15/Cinette/releases/download/v{version}/Cinette_{version}_x64.app.tar.gz"
               }
           if linux_sig:
               platforms["linux-x86_64"] = {
                   "signature": linux_sig,
-                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/Cinette_linux.tar.gz"
+                  "url": f"https://github.com/MaxMB15/Cinette/releases/download/v{version}/Cinette_linux.tar.gz"
               }
-          base_url = f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}"
+          base_url = f"https://github.com/MaxMB15/Cinette/releases/download/v{version}"
           packages = {
               "linux-deb-x86_64": f"{base_url}/Cinette_amd64.deb",
               "linux-rpm-x86_64": f"{base_url}/Cinette_x86_64.rpm",

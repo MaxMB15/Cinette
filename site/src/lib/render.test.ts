@@ -75,8 +75,8 @@ test("renderHero leaves Intel out of a release without it and says the app needs
 		"Download for Mac Apple Silicon, 70.1 MB Version 1.2.3 for Apple Silicon, macOS 15 Sequoia or later."
 	);
 	expect([...parse(html).querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_aarch64.dmg",
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.AppImage",
+		"https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg",
+		"https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage",
 		"#download",
 		"#download",
 	]);
@@ -123,7 +123,7 @@ test("renderHero tells iPhone and iPad visitors the app is coming", () => {
 
 test("renderReleaseMeta shows the version, the date and the release notes", () => {
 	expect(renderReleaseMeta(FULL)).toBe(
-		'<p class="release-meta">Version 1.2.3, released January 2, 2026. <a href="https://github.com/MaxMB15/MaxVideoPlayer/releases/tag/v1.2.3">Release notes</a></p>'
+		'<p class="release-meta">Version 1.2.3, released January 2, 2026. <a href="https://github.com/MaxMB15/Cinette/releases/tag/v1.2.3">Release notes</a></p>'
 	);
 });
 
@@ -154,7 +154,7 @@ test("renderPlatforms names the chip when the Mac has one build", () => {
 test("renderPlatforms leaves out a system the release has no files for", () => {
 	const linux = only("deb");
 	expect(renderPlatforms(pickDownloads(linux))).toBe(
-		'<div class="platform"><h3>Linux</h3><p class="requirement">x86_64</p><ul class="file-list"><li><a class="file-row" href="https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.deb"><span class="file-label">Debian and Ubuntu</span><span class="file-name">Cinette_<wbr>amd64.deb</span><span class="file-size">41.2 MB</span></a></li></ul></div>'
+		'<div class="platform"><h3>Linux</h3><p class="requirement">x86_64</p><ul class="file-list"><li><a class="file-row" href="https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.deb"><span class="file-label">Debian and Ubuntu</span><span class="file-name">Cinette_<wbr>amd64.deb</span><span class="file-size">41.2 MB</span></a></li></ul></div>'
 	);
 	const mac = only("mac-intel");
 	expect(renderPlatforms(pickDownloads(mac))).not.toContain("Linux");

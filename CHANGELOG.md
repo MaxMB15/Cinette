@@ -6,11 +6,12 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ### Added
 
-- The project has a website at https://maxmb15.github.io/MaxVideoPlayer/. It shows what the app does and links each download of the latest release with its size (#288).
+- The project has a website at https://maxmb15.github.io/Cinette/. It shows what the app does and links each download of the latest release with its size (#288).
 
 ### Changed
 
 - Max Video Player is now called Cinette. Updating keeps your playlists, favorites, settings and downloads. On a Mac, an update from inside the app keeps the old file name in Applications, and you can rename the app there. The installers' names now start with `Cinette_`, and on Linux the `cinette` package replaces the `max-video-player` package (#293).
+- The project moved to https://github.com/MaxMB15/Cinette. Links to the old address still work, and so do updates from older versions.
 - The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
 
 ### Fixed
@@ -428,33 +429,33 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.7.0...HEAD
-[0.7.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.1...v0.7.0
-[0.6.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.3...v0.6.0
-[0.5.3]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.2...v0.5.3
-[0.5.2]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.1...v0.5.2
-[0.5.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.9...v0.5.0
-[0.4.9]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.8...v0.4.9
-[0.4.8]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.7...v0.4.8
-[0.4.7]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.6...v0.4.7
-[0.4.6]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.5...v0.4.6
-[0.4.5]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.4...v0.4.5
-[0.4.4]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.3...v0.4.4
-[0.4.3]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.8...v0.4.0
-[0.3.8]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.7...v0.3.8
-[0.3.7]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.6...v0.3.7
-[0.3.6]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.2.2...v0.3.0
-[0.2.2]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/MaxMB15/MaxVideoPlayer/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/MaxMB15/MaxVideoPlayer/releases/tag/v0.2.0
+[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MaxMB15/Cinette/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/MaxMB15/Cinette/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/MaxMB15/Cinette/compare/v0.5.3...v0.6.0
+[0.5.3]: https://github.com/MaxMB15/Cinette/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/MaxMB15/Cinette/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/MaxMB15/Cinette/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/MaxMB15/Cinette/compare/v0.4.9...v0.5.0
+[0.4.9]: https://github.com/MaxMB15/Cinette/compare/v0.4.8...v0.4.9
+[0.4.8]: https://github.com/MaxMB15/Cinette/compare/v0.4.7...v0.4.8
+[0.4.7]: https://github.com/MaxMB15/Cinette/compare/v0.4.6...v0.4.7
+[0.4.6]: https://github.com/MaxMB15/Cinette/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/MaxMB15/Cinette/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/MaxMB15/Cinette/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/MaxMB15/Cinette/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/MaxMB15/Cinette/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/MaxMB15/Cinette/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/MaxMB15/Cinette/compare/v0.3.8...v0.4.0
+[0.3.8]: https://github.com/MaxMB15/Cinette/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/MaxMB15/Cinette/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/MaxMB15/Cinette/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/MaxMB15/Cinette/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/MaxMB15/Cinette/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/MaxMB15/Cinette/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/MaxMB15/Cinette/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/MaxMB15/Cinette/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/MaxMB15/Cinette/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/MaxMB15/Cinette/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/MaxMB15/Cinette/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/MaxMB15/Cinette/releases/tag/v0.2.0

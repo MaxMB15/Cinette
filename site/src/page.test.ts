@@ -137,7 +137,7 @@ test("the release fills every marker in the page", () => {
 	const links = attributes(FILLED, "a[href]", "href");
 	for (const { suffix } of FILES) {
 		expect(links).toContain(
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_${suffix}`
+			`https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_${suffix}`
 		);
 	}
 });
@@ -175,7 +175,7 @@ test("images and styles come from the repo, not another site", () => {
 		expect(source).toMatch(/^\.\.?\//);
 	}
 	expect(attributes(PAGE, 'link[rel="canonical"]', "href")).toEqual([
-		"https://maxmb15.github.io/MaxVideoPlayer/",
+		"https://maxmb15.github.io/Cinette/",
 	]);
 });
 

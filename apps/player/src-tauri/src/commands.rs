@@ -1533,13 +1533,13 @@ pub fn get_install_info() -> InstallInfo {
     };
     InstallInfo {
         install_type: install_type.to_string(),
-        release_url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest".to_string(),
+        release_url: "https://github.com/MaxMB15/Cinette/releases/latest".to_string(),
     }
 }
 
 /// The newest release's latest.json, which lists the Linux packages.
 const LATEST_RELEASE_JSON: &str =
-    "https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/latest.json";
+    "https://github.com/MaxMB15/Cinette/releases/latest/download/latest.json";
 
 /// Downloads the `pkg_key` package listed in the latest.json at `latest_url` to
 /// a temp file ending in `.extension`, which is deleted when the returned path

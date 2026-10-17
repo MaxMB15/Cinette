@@ -199,7 +199,7 @@ test("loadRelease asks GitHub for the latest release", async () => {
 	const loaded = await loadRelease({ env: {}, fetch, readFixture, wait });
 	expect(loaded).toEqual({ tag: "v0.6.1", publishedAt: "2026-01-02T03:04:05Z", assets: [] });
 	expect(fetch).toHaveBeenCalledExactlyOnceWith(
-		"https://api.github.com/repos/MaxMB15/MaxVideoPlayer/releases/latest",
+		"https://api.github.com/repos/MaxMB15/Cinette/releases/latest",
 		{
 			headers: {
 				Accept: "application/vnd.github+json",
@@ -432,7 +432,7 @@ test("FILES lists the downloads in the order the page shows them", () => {
 test("FILES has the names the README links to", () => {
 	for (const { suffix } of FILES) {
 		expect(README).toContain(
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_${suffix})`
+			`https://github.com/MaxMB15/Cinette/releases/latest/download/Cinette_${suffix})`
 		);
 	}
 });
@@ -442,35 +442,35 @@ test("pickDownloads links each file the release has in that release", () => {
 		{
 			...FILES[0],
 			file: "Cinette_aarch64.dmg",
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_aarch64.dmg",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_aarch64.dmg",
 			bytes: 70123456,
 			sha256: "a".repeat(64),
 		},
 		{
 			...FILES[1],
 			file: "Cinette_x64.dmg",
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_x64.dmg",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x64.dmg",
 			bytes: 72345678,
 			sha256: "b".repeat(64),
 		},
 		{
 			...FILES[2],
 			file: "Cinette_amd64.AppImage",
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.AppImage",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.AppImage",
 			bytes: 181234567,
 			sha256: "c".repeat(64),
 		},
 		{
 			...FILES[3],
 			file: "Cinette_amd64.deb",
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.deb",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_amd64.deb",
 			bytes: 41234567,
 			sha256: "d".repeat(64),
 		},
 		{
 			...FILES[4],
 			file: "Cinette_x86_64.rpm",
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_x86_64.rpm",
+			url: "https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/Cinette_x86_64.rpm",
 			bytes: 41239999,
 			sha256: null,
 		},
@@ -502,13 +502,13 @@ test("pickDownloads takes the names from before the rename to Cinette", () => {
 		[
 			"mac-arm",
 			"MaxVideoPlayer_aarch64.dmg",
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg`,
+			`https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg`,
 			hex,
 		],
 		[
 			"deb",
 			"MaxVideoPlayer_amd64.deb",
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb`,
+			`https://github.com/MaxMB15/Cinette/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb`,
 			null,
 		],
 	]);
@@ -561,14 +561,14 @@ test("pickDownloads only shows a checksum that is a SHA-256 in hex", () => {
 
 test("downloadUrl names the release's tag rather than the latest release", () => {
 	expect(downloadUrl("v0.7.0", "MaxVideoPlayer_x64.dmg")).toBe(
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v0.7.0/MaxVideoPlayer_x64.dmg"
+		"https://github.com/MaxMB15/Cinette/releases/download/v0.7.0/MaxVideoPlayer_x64.dmg"
 	);
 });
 
 test("pickDownloads links the files of the release it was given", () => {
 	const older = { ...release([asset("MaxVideoPlayer_amd64.deb")]), tag: "v0.6.1" };
 	expect(pickDownloads(older).map((d) => d.url)).toEqual([
-		"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v0.6.1/MaxVideoPlayer_amd64.deb",
+		"https://github.com/MaxMB15/Cinette/releases/download/v0.6.1/MaxVideoPlayer_amd64.deb",
 	]);
 });
 
