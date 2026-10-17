@@ -660,7 +660,9 @@ copies them into `site/dist/assets`.
 The [Website](../.github/workflows/site.yml) workflow tests and builds the site on
 pull requests. Pushes to `main` that change it, published releases and manual runs
 from `main` build it with the latest release and copy `site/dist` onto the
-`gh-pages` branch, which GitHub Pages serves. The copy keeps the coverage reports
+`gh-pages` branch, which GitHub Pages serves. A release builds the site on `main`
+rather than the one in its tag, so publishing never brings back an older page. A
+pre-release builds but doesn't publish. The copy keeps the coverage reports
 and every other file already there. The built files have no hash in their names,
 so each deploy replaces the last one's. A file the site stops using stays on the
 branch until someone deletes it. CI doesn't run Stryker on the site, so run
@@ -693,7 +695,7 @@ branch until someone deletes it. CI doesn't run Stryker on the site, so run
 | [Changed code](../.github/workflows/changed-code.yml) | Pull requests to `dev` | Checks the lines a pull request changes. Tests must run at least 80% of them, for the frontend and for Rust each, and every change that Stryker and cargo-mutants make to them must fail a test, unless a comment with a reason skips it. The last job, Changed code, fails when any other job failed or was cancelled. See [Changed code](#changed-code). |
 | [Mutation testing](../.github/workflows/mutants.yml) | Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
 | [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Mondays, manual runs | Runs StrykerJS on all of the frontend helpers in `src/lib`. Every Monday, the schedule starts a run on `dev`. It reports the changes that survive and fails only on an error. |
-| [Website](../.github/workflows/site.yml) | Pull requests to `main` and `dev` and pushes to `main` that change the site, published releases, manual runs | Tests and builds the website. Pull requests use a made-up release. Pushes to `main`, releases and manual runs from `main` build with the latest release and publish the site to GitHub Pages. See [Website](#website). |
+| [Website](../.github/workflows/site.yml) | Pull requests to `main` and `dev` and pushes to `main` that change the site, published releases, manual runs | Tests and builds the website. Pull requests use a made-up release. Pushes to `main`, releases and manual runs from `main` build `main`'s site with the latest release and publish it to GitHub Pages. Pre-releases don't publish. See [Website](#website). |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
 | [Release](../.github/workflows/release.yml) | Tags `v*` | Builds and uploads the release. See [releasing.md](releasing.md). |

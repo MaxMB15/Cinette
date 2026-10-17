@@ -7,7 +7,8 @@
 #
 # Pull requests build with the made-up release in site/fixtures/release.json
 # and never reach the network. Pushes to main, published releases and manual
-# runs from main build with the real release and publish it.
+# runs from main build main's site with the real release and publish it.
+# Pre-releases build but don't publish.
 #
 # Pages serves the gh-pages branch, where build.yml also keeps the coverage
 # reports under coverage/. The deploy copies the site onto the branch root and
@@ -38,7 +39,8 @@ on:
       - ".github/actions/setup-frontend/**"
       - ".github/workflows/site.yml"
   # A new release changes the version, the links and the sizes. A release runs
-  # the workflow from its tag, so only tags that have this file start it.
+  # the workflow from its tag, so only tags that have this file start it. The
+  # build still checks out main, below.
   release:
     types: [published]
   workflow_dispatch:
@@ -58,8 +60,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      # A release event checks out its tag, whose site can be older than main's
+      # when the release was cut before a site change merged. Building main
+      # keeps a release from rolling the page back. Other events build their
+      # own commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'release' && 'main' || '' }}
           persist-credentials: false
 
       - name: Set up the frontend
@@ -86,7 +93,7 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name == 'push' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'push' || (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
