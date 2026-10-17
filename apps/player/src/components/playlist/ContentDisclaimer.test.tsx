@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { ContentDisclaimer, DISCLAIMER_URL } from "./ContentDisclaimer";
+import { ContentDisclaimer } from "./ContentDisclaimer";
 import { openUrl } from "@/lib/openUrl";
 
 vi.mock("@/lib/openUrl", () => ({ openUrl: vi.fn() }));
@@ -30,7 +30,7 @@ describe("ContentDisclaimer", () => {
 	it("opens the full disclaimer in the browser", () => {
 		render(<ContentDisclaimer />);
 		fireEvent.click(screen.getByRole("button", { name: "Read the full disclaimer" }));
-		expect(openUrl).toHaveBeenCalledWith(DISCLAIMER_URL);
+		expect(openUrl).toHaveBeenCalledWith("https://github.com/MaxMB15/Cinette#disclaimer");
 	});
 
 	it("doesn't submit a surrounding form", () => {

@@ -94,15 +94,16 @@ Don't rename these again. Every installed copy fetches `latest.json` by that nam
 to find updates, so renaming it would cut them all off. The README and the website
 link to the installers by name, and so do links on other sites.
 
-The repo was called `MaxMB15/MaxVideoPlayer` until October 2026. GitHub sends
-the old URLs to the new name, and copies from 0.7.0 and earlier find updates
-through that redirect, since `latest.json`'s address is built into them. Never
-create a repo with the old name under this account, because GitHub then stops
-redirecting and those copies stop getting updates.
-
 Releases from before the app became Cinette name these files `MaxVideoPlayer_*`
 instead. The website takes either name, so it still works while the newest release
 has the old ones.
+
+The repo was called `MaxMB15/MaxVideoPlayer` until October 2026. GitHub sends
+the old repo URLs to the new name, though not the old GitHub Pages ones. Copies
+from 0.7.0 and earlier find updates through that redirect, since `latest.json`'s
+address is built into them. Never create a repo with the old name under this
+account, because GitHub then stops redirecting and those copies stop getting
+updates.
 
 The `.deb` and `.rpm` packages are called `cinette`, which the bundler makes from
 `productName`. Releases before the rename made a package called

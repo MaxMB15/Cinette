@@ -38,7 +38,7 @@ describe("LegalNotices", () => {
 	it("links to the source of the running version", () => {
 		render(<LegalNotices version="1.2.3" />);
 		fireEvent.click(screen.getByRole("button", { name: "Source code" }));
-		expect(openUrl).toHaveBeenCalledWith(`${REPO_URL}/tree/v1.2.3`);
+		expect(openUrl).toHaveBeenCalledWith("https://github.com/MaxMB15/Cinette/tree/v1.2.3");
 	});
 
 	it("opens the current privacy policy on main", () => {
