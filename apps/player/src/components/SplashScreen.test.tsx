@@ -56,8 +56,8 @@ describe("SplashScreen", () => {
 		const splash = makeSplash();
 		show(splash);
 
-		expect(screen.getByRole("heading", { name: "Max Video Player" })).toBeInTheDocument();
-		expect(screen.getByText("Welcome to Max Video Player")).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Cinette" })).toBeInTheDocument();
+		expect(screen.getByText("Welcome to Cinette")).toBeInTheDocument();
 		expect(
 			screen.getByText("Add a playlist in the Playlists tab to get started.")
 		).toBeInTheDocument();
@@ -99,7 +99,7 @@ describe("SplashScreen", () => {
 			})
 		);
 
-		expect(screen.queryByText("Welcome to Max Video Player")).not.toBeInTheDocument();
+		expect(screen.queryByText("Welcome to Cinette")).not.toBeInTheDocument();
 		expect(barWithWidth(container, "50%")).toBeDefined();
 		expect(screen.getByText("Providers & channels loaded")).toHaveClass("text-foreground");
 		expect(screen.getByText("Failed to refresh playlists")).toHaveClass("text-amber-500");
@@ -177,9 +177,7 @@ describe("SplashScreen", () => {
 	it("opens the donation page from the QR code and from the coffee button", () => {
 		show(makeSplash());
 
-		expect(
-			screen.getByRole("heading", { name: "Support Max Video Player" })
-		).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Support Cinette" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Scan to donate via Buy Me a Coffee" }));
 		fireEvent.click(screen.getByRole("button", { name: "Buy me a coffee" }));
 
@@ -192,7 +190,7 @@ describe("SplashScreen", () => {
 		vi.mocked(osPlatform).mockReturnValue("ios");
 		show(makeSplash());
 
-		expect(screen.queryByText("Support Max Video Player")).not.toBeInTheDocument();
+		expect(screen.queryByText("Support Cinette")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Buy me a coffee" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Get Started →" })).toBeEnabled();
 	});

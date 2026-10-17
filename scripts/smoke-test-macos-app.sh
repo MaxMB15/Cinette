@@ -13,7 +13,7 @@
 #   its own Frameworks folder, or has any file from Homebrew, MacPorts or
 #   /usr/local mapped into memory, such as a library, a plugin or a cache
 #
-# Quit Max Video Player before running it on your own Mac. The app runs one
+# Quit Cinette before running it on your own Mac. The app runs one
 # copy at a time, so a second copy hands over to the first and quits.
 #
 # The CI runners have Homebrew, and the Intel one has MacPorts too, so an app
@@ -21,7 +21,7 @@
 # The app starts with no saved playlists, so it plays nothing. It opens a
 # window and checks for an update, as it does on any start.
 #
-# Usage: ./scripts/smoke-test-macos-app.sh path/to/MaxVideoPlayer.app
+# Usage: ./scripts/smoke-test-macos-app.sh path/to/Cinette.app
 
 set -euo pipefail
 

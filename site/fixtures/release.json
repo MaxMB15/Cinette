@@ -1,7 +1,7 @@
 {
 	"html_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/tag/v1.2.3",
 	"tag_name": "v1.2.3",
-	"name": "Max Video Player v1.2.3",
+	"name": "Cinette v1.2.3",
 	"draft": false,
 	"prerelease": false,
 	"created_at": "2026-01-02T02:00:00Z",
@@ -16,52 +16,52 @@
 			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/latest.json"
 		},
 		{
-			"name": "MaxVideoPlayer_aarch64.dmg",
+			"name": "Cinette_aarch64.dmg",
 			"content_type": "application/x-apple-diskimage",
 			"state": "uploaded",
 			"size": 70123456,
 			"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg"
+			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_aarch64.dmg"
 		},
 		{
-			"name": "MaxVideoPlayer_x64.dmg",
+			"name": "Cinette_x64.dmg",
 			"content_type": "application/x-apple-diskimage",
 			"state": "uploaded",
 			"size": 72345678,
 			"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_x64.dmg"
+			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_x64.dmg"
 		},
 		{
-			"name": "MaxVideoPlayer_amd64.AppImage",
+			"name": "Cinette_amd64.AppImage",
 			"content_type": "application/octet-stream",
 			"state": "uploaded",
 			"size": 181234567,
 			"digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.AppImage"
+			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.AppImage"
 		},
 		{
-			"name": "MaxVideoPlayer_amd64.deb",
+			"name": "Cinette_amd64.deb",
 			"content_type": "application/vnd.debian.binary-package",
 			"state": "uploaded",
 			"size": 41234567,
 			"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb"
+			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.deb"
 		},
 		{
-			"name": "MaxVideoPlayer_x86_64.rpm",
+			"name": "Cinette_x86_64.rpm",
 			"content_type": "application/x-rpm",
 			"state": "uploaded",
 			"size": 41239999,
 			"digest": null,
-			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_x86_64.rpm"
+			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_x86_64.rpm"
 		},
 		{
-			"name": "MaxVideoPlayer_linux.tar.gz",
+			"name": "Cinette_linux.tar.gz",
 			"content_type": "application/gzip",
 			"state": "uploaded",
 			"size": 180000000,
 			"digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_linux.tar.gz"
+			"browser_download_url": "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_linux.tar.gz"
 		}
 	]
 }

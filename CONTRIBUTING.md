@@ -1,7 +1,7 @@
 # Contributing
 
-Thanks for helping with Max Video Player. Bug reports, feature ideas and pull requests
-are all welcome.
+Thanks for helping with Cinette. Bug reports, feature ideas and pull requests are all
+welcome.
 
 ## Reporting a bug
 
@@ -76,12 +76,12 @@ Common types are `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci` and `ch
 
 ## License and contributor agreement
 
-Max Video Player is licensed under the [GNU General Public License version 3](LICENSE),
+Cinette is licensed under the [GNU General Public License version 3](LICENSE),
 with the additional terms in [NOTICE](NOTICE).
 
 Before your first pull request can be merged, you need to accept the
 [Contributor License Agreement](CLA.md). You keep the copyright in your work. The
-agreement lets the project's owner also offer Max Video Player under other licenses,
+agreement lets the project's owner also offer Cinette under other licenses,
 such as a commercial license or a build for an app store that doesn't accept GPL
 software. You accept it by checking the box in the pull request template.
 

@@ -11,7 +11,9 @@
 #
 # Exits 0 if every URL resolves (HTTP 200), non-zero otherwise. Releases from
 # before the installers lost their version numbers fail the README checks, and
-# releases from before the Intel Mac build fail the x64 one.
+# releases from before the Intel Mac build fail the x64 one. Releases from
+# before the rename to Cinette fail the README checks too, because their files
+# start with MaxVideoPlayer_.
 
 set -euo pipefail
 
@@ -107,9 +109,9 @@ fi
 # The versionless installers the README's download links point at
 echo ""
 echo "--- README downloads ---"
-for name in MaxVideoPlayer_aarch64.dmg MaxVideoPlayer_x64.dmg \
-            MaxVideoPlayer_amd64.AppImage MaxVideoPlayer_amd64.deb \
-            MaxVideoPlayer_x86_64.rpm; do
+for name in Cinette_aarch64.dmg Cinette_x64.dmg \
+            Cinette_amd64.AppImage Cinette_amd64.deb \
+            Cinette_x86_64.rpm; do
   check_url "$name" "$BASE_URL/$name"
 done
 

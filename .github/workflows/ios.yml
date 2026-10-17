@@ -78,7 +78,7 @@ jobs:
 
       - name: Check the app bundle
         run: |
-          APP="apps/player/src-tauri/gen/apple/build/arm64-sim/Max Video Player.app"
+          APP="apps/player/src-tauri/gen/apple/build/arm64-sim/Cinette.app"
           test -d "$APP"
           plutil -p "$APP/Info.plist" | grep -E 'CFBundleIdentifier|MinimumOSVersion|CFBundleShortVersionString'
 

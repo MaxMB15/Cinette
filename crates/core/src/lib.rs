@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! The parts of MaxVideoPlayer that don't depend on a platform or a UI, kept
+//! The parts of Cinette that don't depend on a platform or a UI, kept
 //! apart so they can be tested without running the app.
 
 /// Optional AI helpers for organizing playlists.

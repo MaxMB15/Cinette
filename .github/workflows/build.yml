@@ -322,7 +322,7 @@ jobs:
       - name: Upload macOS artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: MaxVideoPlayer-macOS
+          name: Cinette-macOS
           path: |
             target/release/bundle/dmg/*.dmg
             target/release/bundle/macos/*.app
@@ -413,7 +413,7 @@ jobs:
       - name: Upload macOS artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: MaxVideoPlayer-macOS-Intel
+          name: Cinette-macOS-Intel
           path: |
             target/release/bundle/dmg/*.dmg
             target/release/bundle/macos/*.app
@@ -515,7 +515,7 @@ jobs:
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: MaxVideoPlayer-Linux
+          name: Cinette-Linux
           path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm

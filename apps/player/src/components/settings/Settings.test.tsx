@@ -197,7 +197,7 @@ describe("Settings when it opens", () => {
 		expect(keyInput("Gemini")).toHaveValue("gemini-test-key");
 		expect(folderInput()).toHaveValue("/Users/test/Movies");
 		expect(concurrencyInput()).toHaveValue(4);
-		expect(screen.getByText("Max Video Player v1.2.3")).toBeInTheDocument();
+		expect(screen.getByText("Cinette v1.2.3")).toBeInTheDocument();
 		expect(screen.queryByRole("link", { name: /^Get a/ })).toBeNull();
 		expect(rememberHasOmdbKey).not.toHaveBeenCalled();
 	});
@@ -225,7 +225,7 @@ describe("Settings when it opens", () => {
 		vi.mocked(getDownloadConcurrency).mockRejectedValue(new Error("store"));
 		await renderSettings();
 
-		expect(screen.getByText("Max Video Player")).toBeInTheDocument();
+		expect(screen.getByText("Cinette")).toBeInTheDocument();
 		expect(keyInput("Gemini")).toHaveValue("");
 		expect(keyField("Gemini").getByRole("status")).toHaveTextContent(
 			"Couldn't read the saved key"

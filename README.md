@@ -1,11 +1,12 @@
 <div align="center">
 
-<img src="apps/player/src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Max Video Player icon">
+<img src="apps/player/src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Cinette icon">
 
-# Max Video Player
+# Cinette
 
 A fast, private IPTV player for macOS and Linux.<br>
-Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app.
+Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app.<br>
+It used to be called Max Video Player.
 
 [![Latest release](https://img.shields.io/github/v/release/MaxMB15/MaxVideoPlayer?label=release)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/MaxMB15/MaxVideoPlayer/total)](https://github.com/MaxMB15/MaxVideoPlayer/releases)
@@ -22,7 +23,7 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 
 </div>
 
-## Why Max Video Player
+## Why Cinette
 
 **It's fast.** The app is built in Rust with [Tauri](https://tauri.app), which uses the web view your system already has instead of shipping its own copy of Chromium the way Electron apps do. Video plays through [mpv](https://mpv.io) with your computer's hardware decoder, and mpv draws it itself instead of handing it to the web page that holds the controls. Playlists and programme guides are parsed in Rust and saved in a local database, and the app only downloads them again when they're due on the schedule you set. The channel list only draws the rows you can see, however long the playlist is.
 
@@ -34,8 +35,8 @@ Add your M3U playlist or Xtream Codes account and watch live TV, movies and seri
 
 | Platform | Download | Requirements |
 | --- | --- | --- |
-| **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x64.dmg) | macOS 15 Sequoia or later |
-| **Linux** | [**AppImage**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_x86_64.rpm) | x86_64 |
+| **macOS** | [**Apple Silicon (.dmg)**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_aarch64.dmg) · [Intel (.dmg)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_x64.dmg) | macOS 15 Sequoia or later |
+| **Linux** | [**AppImage**](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_amd64.AppImage) · [Debian / Ubuntu (.deb)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_amd64.deb) · [Fedora (.rpm)](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_x86_64.rpm) | x86_64 |
 | Windows | Planned | |
 | iOS, iPadOS | Coming soon to the App Store | |
 | Android, Fire TV | Planned | |
@@ -46,7 +47,7 @@ There's no version for macOS 14 and earlier. Releases before the Intel build onl
 
 ### Installing
 
-**macOS.** Open the DMG and drag Max Video Player into Applications.
+**macOS.** Open the DMG and drag Cinette into Applications.
 
 <details>
 <summary>macOS says the app "can't be opened" or "is damaged"</summary>
@@ -55,14 +56,14 @@ There's no version for macOS 14 and earlier. Releases before the Intel build onl
 
 Releases that aren't notarized by Apple are blocked by Gatekeeper the first time you open them. To open the app anyway:
 
-1. Try to open Max Video Player once and close the warning.
-2. Open System Settings → Privacy & Security, scroll down, and click **Open Anyway** next to the message about Max Video Player.
+1. Try to open Cinette once and close the warning.
+2. Open System Settings → Privacy & Security, scroll down, and click **Open Anyway** next to the message about Cinette.
 3. Confirm with your password or Touch ID.
 
 If macOS says the app is damaged, run this in Terminal and open it again:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Max Video Player.app"
+xattr -dr com.apple.quarantine /Applications/Cinette.app
 ```
 
 </details>
@@ -70,15 +71,15 @@ xattr -dr com.apple.quarantine "/Applications/Max Video Player.app"
 **Linux AppImage.** It includes libmpv, so there's nothing else to install:
 
 ```bash
-chmod +x MaxVideoPlayer_amd64.AppImage
-./MaxVideoPlayer_amd64.AppImage
+chmod +x Cinette_amd64.AppImage
+./Cinette_amd64.AppImage
 ```
 
 The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian 13 and current Fedora releases have.
 
-**Debian and Ubuntu.** `sudo apt install ./MaxVideoPlayer_amd64.deb` installs the app and the libraries it needs, including libmpv. It needs Debian 12, Ubuntu 24.04 or a later release.
+**Debian and Ubuntu.** `sudo apt install ./Cinette_amd64.deb` installs the app and the libraries it needs, including libmpv. It needs Debian 12, Ubuntu 24.04 or a later release.
 
-**Fedora.** `sudo dnf install ./MaxVideoPlayer_x86_64.rpm`
+**Fedora.** `sudo dnf install ./Cinette_x86_64.rpm`
 
 Both packages need WebKitGTK 2.40 or later, which all of these releases have.
 
@@ -133,7 +134,7 @@ OpenSubtitles, OMDb and Gemini each need a free API key, which you add in Settin
 2. If your playlist doesn't come with a programme guide, open the provider's settings and add an EPG (XMLTV) URL.
 3. Go to **Channels** and pick something to watch.
 
-Max Video Player doesn't come with any channels or content. You need a playlist from a provider you're allowed to use.
+Cinette doesn't come with any channels or content. You need a playlist from a provider you're allowed to use.
 
 <p align="center">
   <img src="docs/images/playlists.jpg" width="49%" alt="The playlists page: the form for adding an M3U or Xtream Codes provider, and two providers already added">
@@ -143,7 +144,7 @@ Max Video Player doesn't come with any channels or content. You need a playlist 
 ## FAQ
 
 <details>
-<summary>Does Max Video Player collect any data?</summary>
+<summary>Does Cinette collect any data?</summary>
 
 <br>
 
@@ -161,6 +162,17 @@ In `~/Library/Application Support/com.maxvideoplayer.app` on macOS and `~/.local
 </details>
 
 <details>
+<summary>Is this the app that was called Max Video Player?</summary>
+
+<br>
+
+Yes. Max Video Player was renamed Cinette, and updating keeps your playlists, favorites, settings and downloads. They stay in the folders above.
+
+On a Mac, an update from inside the app keeps the old file name, so the app is still called Max Video Player in Applications. You can rename it to Cinette there. On Linux, installing the `cinette` package removes the `max-video-player` package.
+
+</details>
+
+<details>
 <summary>A stream won't play</summary>
 
 <br>
@@ -174,7 +186,7 @@ Check whether the same URL plays in [mpv](https://mpv.io) or VLC. If it does, [o
 
 <br>
 
-Versions 0.5.0 and 0.5.1 crash at launch, before they can check for updates. Download the [latest version](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/MaxVideoPlayer_aarch64.dmg) and install it over the old one. Your playlists and settings are kept.
+Versions 0.5.0 and 0.5.1 crash at launch, before they can check for updates. Download the [latest version](https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_aarch64.dmg), drag it into Applications and delete the old Max Video Player app. Your playlists and settings are kept.
 
 </details>
 
@@ -190,7 +202,7 @@ The app sends nothing to the developer. The [privacy policy](docs/privacy.md) li
 
 ## Disclaimer
 
-Max Video Player is only a player. It doesn't include, host, sell or link to any channels, playlists or streams. You add your own sources, and the author has no control over, and no knowledge of, what you add or watch.
+Cinette is only a player. It doesn't include, host, sell or link to any channels, playlists or streams. You add your own sources, and the author has no control over, and no knowledge of, what you add or watch.
 
 The app is meant for content you have the legal right to watch, such as a service you subscribe to legally or streams you own. It isn't meant for pirated or otherwise illegally obtained content, and the author doesn't support using it that way.
 
@@ -200,12 +212,12 @@ The app is provided as is, without warranty of any kind. As far as the law allow
 
 ## License
 
-Max Video Player is free software. Anyone can use it for any purpose, and you can study, change and share the code under the [GNU General Public License version 3](LICENSE). Anything you distribute that's based on it has to use the same license and come with its source code.
+Cinette is free software. Anyone can use it for any purpose, and you can study, change and share the code under the [GNU General Public License version 3](LICENSE). Anything you distribute that's based on it has to use the same license and come with its source code.
 
 The license has a few [additional terms](NOTICE), which section 7 of the GPL allows:
 
-- Modified versions have to keep the credit "Based on Max Video Player by Max Boksem" on their About screen.
-- Modified versions need their own name and icon. The license grants no trademark rights in the Max Video Player name or logo. See [TRADEMARKS.md](TRADEMARKS.md).
+- Modified versions have to keep the credit "Based on Cinette by Max Boksem" on their About screen.
+- Modified versions need their own name and icon. The license grants no trademark rights in the Cinette or Max Video Player names or logos. See [TRADEMARKS.md](TRADEMARKS.md).
 - The author's name can't be used to promote another product without permission.
 
 If you need other terms, for example to ship it in a closed-source product, a commercial license is available. Get in touch through [github.com/MaxMB15](https://github.com/MaxMB15).

@@ -53,32 +53,32 @@ test("parseRelease keeps the tag, the date and each file's name, size, checksum 
 				state: "uploaded",
 			},
 			{
-				name: "MaxVideoPlayer_aarch64.dmg",
+				name: "Cinette_aarch64.dmg",
 				size: 70123456,
 				digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				state: "uploaded",
 			},
 			{
-				name: "MaxVideoPlayer_x64.dmg",
+				name: "Cinette_x64.dmg",
 				size: 72345678,
 				digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 				state: "uploaded",
 			},
 			{
-				name: "MaxVideoPlayer_amd64.AppImage",
+				name: "Cinette_amd64.AppImage",
 				size: 181234567,
 				digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 				state: "uploaded",
 			},
 			{
-				name: "MaxVideoPlayer_amd64.deb",
+				name: "Cinette_amd64.deb",
 				size: 41234567,
 				digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 				state: "uploaded",
 			},
-			{ name: "MaxVideoPlayer_x86_64.rpm", size: 41239999, digest: null, state: "uploaded" },
+			{ name: "Cinette_x86_64.rpm", size: 41239999, digest: null, state: "uploaded" },
 			{
-				name: "MaxVideoPlayer_linux.tar.gz",
+				name: "Cinette_linux.tar.gz",
 				size: 180000000,
 				digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
 				state: "uploaded",
@@ -125,7 +125,7 @@ test("parseRelease rejects a release without a publish date", () => {
 });
 
 test("parseRelease rejects a release without a list of files", () => {
-	for (const assets of [undefined, {}, "MaxVideoPlayer_aarch64.dmg"]) {
+	for (const assets of [undefined, {}, "Cinette_aarch64.dmg"]) {
 		expect(() => parseRelease(raw({ assets }))).toThrow("Release v1.2.3 has no list of files.");
 	}
 });
@@ -420,19 +420,19 @@ test("keepUnlessFailed loads again after a failure", async () => {
 });
 
 test("FILES lists the downloads in the order the page shows them", () => {
-	expect(FILES.map((f) => [f.id, f.platform, f.label, f.file])).toEqual([
-		["mac-arm", "macos", "Apple Silicon", "MaxVideoPlayer_aarch64.dmg"],
-		["mac-intel", "macos", "Intel", "MaxVideoPlayer_x64.dmg"],
-		["appimage", "linux", "AppImage", "MaxVideoPlayer_amd64.AppImage"],
-		["deb", "linux", "Debian and Ubuntu", "MaxVideoPlayer_amd64.deb"],
-		["rpm", "linux", "Fedora", "MaxVideoPlayer_x86_64.rpm"],
+	expect(FILES.map((f) => [f.id, f.platform, f.label, f.suffix])).toEqual([
+		["mac-arm", "macos", "Apple Silicon", "aarch64.dmg"],
+		["mac-intel", "macos", "Intel", "x64.dmg"],
+		["appimage", "linux", "AppImage", "amd64.AppImage"],
+		["deb", "linux", "Debian and Ubuntu", "amd64.deb"],
+		["rpm", "linux", "Fedora", "x86_64.rpm"],
 	]);
 });
 
 test("FILES has the names the README links to", () => {
-	for (const { file } of FILES) {
+	for (const { suffix } of FILES) {
 		expect(README).toContain(
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/${file})`
+			`https://github.com/MaxMB15/MaxVideoPlayer/releases/latest/download/Cinette_${suffix})`
 		);
 	}
 });
@@ -441,31 +441,36 @@ test("pickDownloads links each file the release has in that release", () => {
 	expect(pickDownloads(parseRelease(JSON.parse(FIXTURE)))).toEqual([
 		{
 			...FILES[0],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg",
+			file: "Cinette_aarch64.dmg",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_aarch64.dmg",
 			bytes: 70123456,
 			sha256: "a".repeat(64),
 		},
 		{
 			...FILES[1],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_x64.dmg",
+			file: "Cinette_x64.dmg",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_x64.dmg",
 			bytes: 72345678,
 			sha256: "b".repeat(64),
 		},
 		{
 			...FILES[2],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.AppImage",
+			file: "Cinette_amd64.AppImage",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.AppImage",
 			bytes: 181234567,
 			sha256: "c".repeat(64),
 		},
 		{
 			...FILES[3],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb",
+			file: "Cinette_amd64.deb",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_amd64.deb",
 			bytes: 41234567,
 			sha256: "d".repeat(64),
 		},
 		{
 			...FILES[4],
-			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_x86_64.rpm",
+			file: "Cinette_x86_64.rpm",
+			url: "https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_x86_64.rpm",
 			bytes: 41239999,
 			sha256: null,
 		},
@@ -474,17 +479,55 @@ test("pickDownloads links each file the release has in that release", () => {
 
 test("pickDownloads leaves out a file the release doesn't have", () => {
 	const downloads = pickDownloads(
-		release([asset("MaxVideoPlayer_amd64.deb"), asset("maxvideoplayer_x64.dmg")])
+		release([
+			asset("Cinette_amd64.deb"),
+			asset("cinette_x64.dmg"),
+			asset("Cinette-aarch64.dmg"),
+			asset("Max_x86_64.rpm"),
+		])
 	);
 	expect(downloads.map((d) => d.id)).toEqual(["deb"]);
+});
+
+test("pickDownloads takes the names from before the rename to Cinette", () => {
+	const downloads = pickDownloads(
+		release([asset("MaxVideoPlayer_aarch64.dmg"), asset("MaxVideoPlayer_amd64.deb")])
+	);
+	expect(downloads.map((d) => [d.id, d.file, d.url])).toEqual([
+		[
+			"mac-arm",
+			"MaxVideoPlayer_aarch64.dmg",
+			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_aarch64.dmg`,
+		],
+		[
+			"deb",
+			"MaxVideoPlayer_amd64.deb",
+			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/MaxVideoPlayer_amd64.deb`,
+		],
+	]);
+});
+
+test("pickDownloads takes the Cinette name when the release has it ready", () => {
+	const downloads = pickDownloads(
+		release([
+			asset("MaxVideoPlayer_x64.dmg", { size: 1 }),
+			asset("Cinette_x64.dmg", { size: 2 }),
+			asset("Cinette_amd64.deb", { state: "starter" }),
+			asset("MaxVideoPlayer_amd64.deb", { size: 3 }),
+		])
+	);
+	expect(downloads.map((d) => [d.file, d.bytes])).toEqual([
+		["Cinette_x64.dmg", 2],
+		["MaxVideoPlayer_amd64.deb", 3],
+	]);
 });
 
 test("pickDownloads leaves out a file that hasn't finished uploading or is empty", () => {
 	const downloads = pickDownloads(
 		release([
-			asset("MaxVideoPlayer_aarch64.dmg", { state: "starter" }),
-			asset("MaxVideoPlayer_x64.dmg", { size: 0 }),
-			asset("MaxVideoPlayer_amd64.deb", { size: 1 }),
+			asset("Cinette_aarch64.dmg", { state: "starter" }),
+			asset("Cinette_x64.dmg", { size: 0 }),
+			asset("Cinette_amd64.deb", { size: 1 }),
 		])
 	);
 	expect(downloads.map((d) => [d.id, d.bytes])).toEqual([["deb", 1]]);
@@ -493,7 +536,7 @@ test("pickDownloads leaves out a file that hasn't finished uploading or is empty
 test("pickDownloads only shows a checksum that is a SHA-256 in hex", () => {
 	const hex = "0123456789abcdef".repeat(4);
 	const sha256 = (digest: string | null) =>
-		pickDownloads(release([asset(FILES[0].file, { digest })]))[0].sha256;
+		pickDownloads(release([asset("Cinette_aarch64.dmg", { digest })]))[0].sha256;
 	expect(sha256(`sha256:${hex}`)).toBe(hex);
 	for (const digest of [
 		null,

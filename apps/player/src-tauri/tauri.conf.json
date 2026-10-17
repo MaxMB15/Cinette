@@ -1,6 +1,6 @@
 {
 	"$schema": "https://raw.githubusercontent.com/nichobi/tauri-apps/tauri-v2/core/tauri-config-schema/schema.json",
-	"productName": "Max Video Player",
+	"productName": "Cinette",
 	"version": "0.7.0",
 	"identifier": "com.maxvideoplayer.app",
 	"build": {
@@ -19,7 +19,7 @@
 		"windows": [
 			{
 				"label": "main",
-				"title": "Max Video Player",
+				"title": "Cinette",
 				"width": 1280,
 				"height": 720,
 				"resizable": true,
@@ -81,7 +81,9 @@
 					"libwebkit2gtk-4.1-0 (>= 2.40)",
 					"libpulse0 | libasound2",
 					"libass9"
-				]
+				],
+				"conflicts": ["max-video-player"],
+				"replaces": ["max-video-player"]
 			},
 			"rpm": {
 				"depends": [
@@ -91,7 +93,8 @@
 					"(webkit2gtk4.1 >= 2.40)",
 					"pulseaudio-libs",
 					"libass"
-				]
+				],
+				"obsoletes": ["max-video-player"]
 			}
 		}
 	}

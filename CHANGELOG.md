@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Max Video Player are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to Cinette, formerly called Max Video Player, are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
@@ -10,6 +10,7 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Changed
 
+- Max Video Player is now called Cinette. Updating keeps your playlists, favorites, settings and downloads. On a Mac, an update from inside the app keeps the old file name in Applications, and you can rename the app there. The installers' names now start with `Cinette_`, and on Linux the `cinette` package replaces the `max-video-player` package (#293).
 - The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
 
 ### Fixed

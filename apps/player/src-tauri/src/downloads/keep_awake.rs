@@ -24,7 +24,7 @@ fn command(pid: u32) -> Option<(&'static str, Vec<String>)> {
             "systemd-inhibit",
             vec![
                 "--what=idle:sleep".into(),
-                "--who=Max Video Player".into(),
+                "--who=Cinette".into(),
                 "--why=Recording a live channel".into(),
                 "--mode=block".into(),
                 "tail".into(),

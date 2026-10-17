@@ -34,8 +34,9 @@ export const LegalNotices = ({ version }: LegalNoticesProps) => {
 			<p className="text-sm text-foreground">Created by Max Boksem</p>
 			<p>Copyright © 2026 Max Boksem</p>
 			<p>
-				Max Video Player is free software. You can share and change it under the GNU General
-				Public License version 3, with additional terms. It comes with no warranty.
+				Cinette, formerly Max Video Player, is free software. You can share and change it
+				under the GNU General Public License version 3, with additional terms. It comes with
+				no warranty.
 			</p>
 			<div className="flex flex-wrap gap-x-3 gap-y-1">
 				{links.map(({ label, url }) => (

@@ -135,9 +135,9 @@ test("the release fills every marker in the page", () => {
 	while (walker.nextNode()) comments.push((walker.currentNode as Comment).data.trim());
 	expect(comments.filter((comment) => comment.startsWith("release:"))).toEqual([]);
 	const links = attributes(FILLED, "a[href]", "href");
-	for (const { file } of FILES) {
+	for (const { suffix } of FILES) {
 		expect(links).toContain(
-			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/${file}`
+			`https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v1.2.3/Cinette_${suffix}`
 		);
 	}
 });

@@ -1,8 +1,8 @@
 # Privacy policy
 
-Last updated October 13, 2026. This policy covers Max Video Player on macOS, Linux, iPhone and iPad.
+Last updated October 17, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad.
 
-The developer of Max Video Player receives no data from the app. The app has no accounts, ads or analytics, and no server of its own. Your data stays on your device. The app sends data only to the services listed under "Who the app talks to", and only when you use a feature that needs one.
+The developer of Cinette receives no data from the app. The app has no accounts, ads or analytics, and no server of its own. Your data stays on your device. The app sends data only to the services listed under "Who the app talks to", and only when you use a feature that needs one.
 
 ## What stays on your device
 

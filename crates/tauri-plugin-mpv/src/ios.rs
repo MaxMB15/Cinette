@@ -94,7 +94,7 @@ pub fn embedded_options() -> Vec<(&'static str, &'static str)> {
 /// Called once from plugin setup. Hands Swift the callbacks for the app
 /// lifecycle and the lock screen controls, which need the app's `MpvState`.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
-    let _ = USER_AGENT.set(format!("MaxVideoPlayer/{}", app.package_info().version));
+    let _ = USER_AGENT.set(format!("Cinette/{}", app.package_info().version));
     let (tx, rx) = mpsc::channel::<Job>();
     if JOBS.set(tx).is_err() {
         return;
@@ -264,7 +264,7 @@ const RECENT_ARTWORK_BYTES: usize = 2 * 1024 * 1024;
 
 const ARTWORK_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// `MaxVideoPlayer/<app version>`, set in [`install`]. Some image hosts,
+/// `Cinette/<app version>`, set in [`install`]. Some image hosts,
 /// Wikimedia among them, refuse requests that don't name the app.
 static USER_AGENT: OnceLock<String> = OnceLock::new();
 
@@ -314,7 +314,7 @@ fn artwork_client() -> Result<&'static reqwest::Client, String> {
     }
     let client = reqwest::Client::builder()
         .timeout(ARTWORK_TIMEOUT)
-        .user_agent(USER_AGENT.get().map_or("MaxVideoPlayer", String::as_str))
+        .user_agent(USER_AGENT.get().map_or("Cinette", String::as_str))
         .build()
         .map_err(|e| e.to_string())?;
     Ok(CLIENT.get_or_init(|| client))
