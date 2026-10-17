@@ -4,6 +4,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
+
 ## [0.7.0] - 2026-10-17
 
 ### Added
@@ -12,7 +16,6 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ### Changed
 
-- The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
 - Settings and Manage Categories now say what the app sends to Google Gemini. When you use an AI action in Manage Categories, the app sends Google Gemini your group and category names and a few channel, movie or series names from each group (#256).
 - The log now says which mpv version the app runs and, on Linux, which libmpv file it loaded. On Linux, the error the player shows when mpv fails to start names that file too, since a libmpv from somewhere else is the usual cause (#260).
 - Downloads and recordings on macOS and Linux now use ffmpeg 8.1, up from 7.0 on macOS and 7.0.2 on Linux. It has fixes in the code that reads HLS, MPEG-TS and MP4 streams. It's now built with only what downloads and recordings need, so it takes up 8 MB on macOS, down from 49 MB, and 4 MB on Linux, down from 80 MB. It's licensed under the LGPL rather than the GPL. It can't download DASH streams, whose links end in `.mpd`. The earlier macOS build couldn't either, but the Linux one could (#276, #284).
