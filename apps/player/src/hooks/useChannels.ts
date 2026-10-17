@@ -90,7 +90,8 @@ export const getEpgLastRefresh = (id: string): number => {
 // or the settings dialog, records itself through setEpgLastRefresh.
 let guideVersion = 0;
 const guideListeners = new Set<() => void>();
-const subscribeToGuide = (listener: () => void) => {
+/** Calls the listener after each guide refresh finishes, and returns a function that stops it. */
+export const subscribeToGuide = (listener: () => void) => {
 	guideListeners.add(listener);
 	return () => {
 		guideListeners.delete(listener);
@@ -113,6 +114,11 @@ const refreshLookups = {
 	epgLastRefreshFor: getEpgLastRefresh,
 };
 
+// Refreshes a provider's guide through the tracker, so the poll and an add
+// never fetch the same guide at once.
+const refreshGuide = (tracker: RefreshTracker, id: string) =>
+	tracker.run(refreshKeys.epg(id), () => refreshEpgApi(id).then(() => setEpgLastRefresh(id)));
+
 // --- Context ---
 
 interface ChannelsContextValue {
@@ -125,7 +131,8 @@ interface ChannelsContextValue {
 	loadM3u: (name: string, url: string) => Promise<void>;
 	loadM3uFile: (name: string, path: string) => Promise<void>;
 	loadXtream: (name: string, url: string, username: string, password: string) => Promise<void>;
-	refreshProviders: () => Promise<void>;
+	/** Loads the provider list again, and returns it, or null when it fails. */
+	refreshProviders: () => Promise<Provider[] | null>;
 	refreshChannels: () => Promise<void>;
 	refreshProvider: (id: string) => Promise<void>;
 	updateProvider: (
@@ -172,8 +179,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		}
 	}, []);
 
-	// Loads the provider list, and returns it, or null when it fails.
-	const loadProviders = useCallback(async (): Promise<Provider[] | null> => {
+	const refreshProviders = useCallback(async () => {
 		try {
 			const list = await getProviders();
 			setProviders(list);
@@ -183,10 +189,6 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			return null;
 		}
 	}, []);
-
-	const refreshProviders = useCallback(async () => {
-		await loadProviders();
-	}, [loadProviders]);
 
 	const refreshProvider = useCallback(
 		async (id: string) => {
@@ -223,16 +225,6 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	// the poll skips one the splash started that is still running.
 	const [autoRefresh] = useState(() => createRefreshTracker());
 
-	// Refreshes a provider's guide through the tracker, so the poll and an add
-	// never fetch the same guide at once.
-	const refreshGuide = useCallback(
-		(id: string) =>
-			autoRefresh.run(refreshKeys.epg(id), () =>
-				refreshEpgApi(id).then(() => setEpgLastRefresh(id))
-			),
-		[autoRefresh]
-	);
-
 	// Adding a provider of any kind runs the same steps around a different backend call.
 	const addProvider = useCallback(
 		async (add: () => Promise<unknown>) => {
@@ -241,12 +233,16 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			const known = new Set(providersRef.current.map((p) => p.id));
 			try {
 				await add();
-				const list = await loadProviders();
+				const list = await refreshProviders();
 				await refreshChannels();
 				// Fetch the new provider's guide now rather than at the next poll.
 				// Adding doesn't wait for it, since a guide can take a while.
-				const added = list?.filter((p) => !known.has(p.id)) ?? [];
-				for (const id of findDueRefreshes(added, refreshLookups).epgIds) refreshGuide(id);
+				if (list) {
+					const added = list.filter((p) => !known.has(p.id));
+					for (const id of findDueRefreshes(added, refreshLookups).epgIds) {
+						refreshGuide(autoRefresh, id);
+					}
+				}
 			} catch (e) {
 				setError(String(e));
 				throw e;
@@ -254,7 +250,8 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				setLoading(false);
 			}
 		},
-		[providersRef, loadProviders, refreshChannels, refreshGuide]
+		// Stryker disable next-line ArrayDeclaration: every one of these stays the same object for the provider's whole life, so an empty list gives the same callback.
+		[providersRef, refreshProviders, refreshChannels, autoRefresh]
 	);
 
 	const loadM3u = useCallback(
@@ -325,13 +322,13 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			for (const id of playlistIds) {
 				autoRefresh.run(refreshKeys.playlist(id), () => refreshProviderRef.current(id));
 			}
-			for (const id of epgIds) refreshGuide(id);
+			for (const id of epgIds) refreshGuide(autoRefresh, id);
 		};
 
 		tick(); // fire immediately on mount
 		const id = setInterval(tick, 60_000);
 		return () => clearInterval(id);
-	}, [autoRefresh, providersRef, refreshProviderRef, refreshGuide]);
+	}, [autoRefresh, providersRef, refreshProviderRef]);
 
 	return {
 		channels,

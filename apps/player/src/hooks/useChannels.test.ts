@@ -8,6 +8,7 @@ import {
 	saveProviderSettings,
 	getEpgLastRefresh,
 	setEpgLastRefresh,
+	subscribeToGuide,
 } from "./useChannels";
 
 // ── Pure helper tests (no mocks needed) ──────────────────────────────
@@ -647,6 +648,27 @@ describe("useChannelsProvider guide refreshes", () => {
 		await act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
 		expect(mockRefreshEpg).toHaveBeenCalledOnce();
 		expect(result.current.guideVersion).toBe(version);
+	});
+
+	it("adds the playlist when the provider list then fails to load, and fetches no guide", async () => {
+		const { result } = await mountWithFakeTimers();
+		mockGetProviders.mockRejectedValue(new Error("providers unavailable"));
+
+		await act(() => result.current.loadM3u("Home", "http://example.test/list.m3u"));
+
+		expect(result.current.error).toBe("Error: providers unavailable");
+		expect(mockRefreshEpg).not.toHaveBeenCalled();
+	});
+
+	it("stops telling a listener about guide refreshes once it unsubscribes", () => {
+		const listener = vi.fn();
+		const unsubscribe = subscribeToGuide(listener);
+
+		setEpgLastRefresh("listened-guide");
+		unsubscribe();
+		setEpgLastRefresh("listened-guide");
+
+		expect(listener).toHaveBeenCalledOnce();
 	});
 
 	it("goes up a version for a guide refresh that finished anywhere", async () => {
