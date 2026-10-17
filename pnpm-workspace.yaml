@@ -36,3 +36,12 @@ pmOnFail: ignore
 peerDependencyRules:
   allowedVersions:
     eslint-plugin-react>eslint: "10"
+
+# typed-rest-client 2.3.1, which Stryker 10 needs, pins qs to 6.15.1. That
+# version has three moderate advisories, GHSA-q8mj-m7cp-5q26,
+# GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx, and 6.16.0 fixes all three.
+# Stryker only reaches typed-rest-client through stryker init and its dashboard
+# reporter, which this repo doesn't use, and nothing in the app uses qs. Remove
+# this once Stryker depends on typed-rest-client 3, which asks for qs ^6.16.0.
+overrides:
+  typed-rest-client>qs: ^6.16.0
