@@ -53,6 +53,15 @@ def chunks(data):
     raise ValueError("there's no IEND chunk")
 
 
+def pngs(folder):
+    """Lists the PNG files in a folder, whatever the case of the extension."""
+    return sorted(
+        path
+        for path in folder.iterdir()
+        if path.suffix.lower() == ".png" and not path.is_dir()
+    )
+
+
 def chunk(kind, body):
     crc = zlib.crc32(kind + body) & 0xFFFFFFFF
     return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", crc)
@@ -116,9 +125,11 @@ def flatten(data):
             transparency = True
     if header is None:
         raise ValueError("there's no IHDR chunk")
-    width, height, depth, color, _, _, interlace = header
+    width, height, depth, color, compression, method, interlace = header
     if width == 0 or height == 0:
         raise ValueError(f"it's {width} by {height} pixels")
+    if compression != 0 or method != 0:
+        raise ValueError("it uses an unknown compression or filter method")
     if depth != 8 or color not in (RGB, RGBA) or interlace != 0:
         raise ValueError(
             f"it's depth {depth}, color type {color}, interlace {interlace}; "
@@ -147,28 +158,36 @@ def flatten(data):
 
 
 def main():
-    icons = sorted(path for path in XCODE.glob("*.png") if path.is_file())
+    for folder in (XCODE, IOS):
+        if not folder.is_dir():
+            sys.exit(f"{folder} isn't a folder")
+    icons = pngs(XCODE)
     if not icons:
         sys.exit(f"no icons in {XCODE}")
-    if not IOS.is_dir():
-        sys.exit(f"{IOS} isn't a folder")
-    # Check every icon before changing anything, so a bad one leaves both
+    # Check everything before changing anything, so a bad icon leaves both
     # folders as they were.
     flat = {}
     for path in icons:
         try:
             flat[path.name] = flatten(path.read_bytes())
-        except (ValueError, struct.error, zlib.error) as error:
+        except (OSError, ValueError, struct.error, zlib.error) as error:
             sys.exit(f"{path.name}: {error}")
-    # Delete before writing. Where the file system ignores case, a stale name
-    # that differs from an icon's only in case is the file the icon goes into.
-    for path in sorted(IOS.glob("*.png")):
-        if path.name not in flat and not path.is_dir():
-            path.unlink()
-            print(f"deleted icons/ios/{path.name}, which the Xcode set doesn't have")
-    for name, data in flat.items():
-        (XCODE / name).write_bytes(data)
-        (IOS / name).write_bytes(data)
+    for name in flat:
+        if (IOS / name).is_dir():
+            sys.exit(f"icons/ios/{name} is a folder")
+    try:
+        # Delete before writing. Where the file system ignores case, a stale
+        # name that differs from an icon's only in case is the file the icon
+        # goes into.
+        for path in pngs(IOS):
+            if path.name not in flat:
+                path.unlink()
+                print(f"deleted icons/ios/{path.name}, which the Xcode set doesn't have")
+        for name, data in flat.items():
+            (XCODE / name).write_bytes(data)
+            (IOS / name).write_bytes(data)
+    except OSError as error:
+        sys.exit(str(error))
     print(f"wrote {len(flat)} icons without alpha to {XCODE.name} and icons/ios")
 
 
