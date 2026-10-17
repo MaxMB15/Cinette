@@ -134,14 +134,27 @@ override writes that number into `Info.plist`. Don't commit it.
 
 ### App icon
 
-The icons in `src-tauri/icons/ios` and in `Assets.xcassets/AppIcon.appiconset` are
-made from the 1024 px image in `src-tauri/icons/icon.icns`, so the iOS app has the
-same icon as the macOS app. They have no alpha channel, because App Store Connect
-rejects a 1024 px icon that has one.
+Every app icon, for the desktop, iOS and Android, is made from
+`src-tauri/icons/icon.svg`. To change the icon, edit that file and run these from
+`apps/player/`:
 
-`pnpm tauri icon` writes both of those folders as well as the desktop icons, so
-running it replaces these files. Restore them with git afterward unless you meant to
-change the iOS icon.
+```bash
+pnpm tauri icon src-tauri/icons/icon.svg
+git checkout -- src-tauri/icons/android/values
+python3 -I ../../scripts/ios-icons.py
+```
+
+`pnpm tauri icon` writes the desktop and Android icons to `src-tauri/icons` and the
+iOS icons to `Assets.xcassets/AppIcon.appiconset`. It also writes the Android
+background color in capitals, which the `git checkout` undoes.
+
+The iOS icons it writes have an alpha channel, and App Store Connect rejects a
+1024 px icon that has one. `scripts/ios-icons.py` removes it and copies the icons to
+`src-tauri/icons/ios`, so both folders hold the same files. The script stops without
+writing anything if a pixel isn't fully opaque.
+
+`icon.icns` comes out with different bytes on every run, even when the images in it
+are the same.
 
 ### Privacy manifest
 
