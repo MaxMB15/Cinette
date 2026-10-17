@@ -639,8 +639,8 @@ pnpm test:site                           # Vitest
 pnpm test:site:mutation                  # StrykerJS on site/src/lib
 ```
 
-The type check runs `tsc -b`, which checks `src` with `tsconfig.app.json` and the
-Vite and Vitest configs, where the release plugin lives, with `tsconfig.node.json`.
+`tsc -b` checks `src` with `tsconfig.app.json`, and the Vite and Vitest configs with
+`tsconfig.node.json`. The release plugin is in the Vite config.
 
 The build asks GitHub's releases API for the latest release. `site/src/lib/release.ts`
 reads its version, date, files, sizes and SHA-256 checksums, and `render.ts` puts
