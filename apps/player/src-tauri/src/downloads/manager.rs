@@ -145,6 +145,7 @@ pub fn save_folder<R: Runtime>(app: &AppHandle<R>, folder: &str) -> Result<(), S
 /// Points a saved download folder inside the folder `from` at the same place
 /// inside `to`, after `from` was renamed to `to`. Any other saved folder
 /// stays as it is.
+#[cfg(desktop)]
 pub fn move_saved_folder<R: Runtime>(
     app: &AppHandle<R>,
     from: &Path,

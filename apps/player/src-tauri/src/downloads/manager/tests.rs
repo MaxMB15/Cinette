@@ -872,6 +872,7 @@ fn without_saved_settings_the_defaults_stay() {
     assert_eq!(manager.retention_days(), None);
 }
 
+#[cfg(desktop)]
 #[test]
 fn a_saved_folder_inside_a_renamed_folder_follows_it() {
     let app = TestApp::new();
@@ -882,6 +883,7 @@ fn a_saved_folder_inside_a_renamed_folder_follows_it() {
     assert_eq!(app.downloads().root(), Path::new("/data/new/Videos"));
 }
 
+#[cfg(desktop)]
 #[test]
 fn a_saved_folder_outside_a_renamed_folder_stays() {
     let app = TestApp::new();
@@ -893,6 +895,7 @@ fn a_saved_folder_outside_a_renamed_folder_stays() {
     assert_eq!(app.downloads().root(), Path::new("/data/older/Videos"));
 }
 
+#[cfg(desktop)]
 #[test]
 fn renaming_a_folder_saves_no_download_folder_when_none_was_saved() {
     let app = TestApp::new();
