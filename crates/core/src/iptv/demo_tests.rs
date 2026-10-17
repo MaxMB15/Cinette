@@ -32,37 +32,25 @@ fn of_type<'a>(channels: &'a [Channel], content_type: &str) -> Vec<&'a Channel> 
 }
 
 #[test]
-fn the_demo_playlist_has_live_movie_and_series_entries() {
+fn the_demo_playlist_has_live_and_movie_entries() {
     let channels = channels();
     assert_eq!(of_type(&channels, "live").len(), 3);
-    assert_eq!(of_type(&channels, "movie").len(), 8);
-    let episodes: Vec<_> = of_type(&channels, "series")
-        .into_iter()
-        .map(|c| (c.series_title.as_deref(), c.season, c.episode))
-        .collect();
-    assert_eq!(
-        episodes,
-        [
-            (Some("Caminandes"), Some(1), Some(1)),
-            (Some("Caminandes"), Some(1), Some(2)),
-            (Some("Caminandes"), Some(1), Some(3)),
-        ]
-    );
+    assert_eq!(of_type(&channels, "movie").len(), 4);
+    assert_eq!(channels.len(), 7);
 }
 
 #[test]
 fn the_demo_playlist_points_at_its_guide() {
-    assert_eq!(extract_epg_url(PLAYLIST), Some(format!("{RAW}guide.xml")));
+    // The app reads the guide's URL from the first line only.
+    let first_line = PLAYLIST.lines().next().unwrap_or_default();
+    assert_eq!(extract_epg_url(first_line), Some(format!("{RAW}guide.xml")));
 }
 
 #[test]
 fn every_demo_picture_is_in_the_repo() {
     let images = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/demo/images");
     let channels = channels();
-    for channel in of_type(&channels, "movie")
-        .into_iter()
-        .chain(of_type(&channels, "series"))
-    {
+    for channel in of_type(&channels, "movie") {
         let logo = channel.logo_url.as_deref().unwrap_or_default();
         let file = logo
             .strip_prefix(RAW)

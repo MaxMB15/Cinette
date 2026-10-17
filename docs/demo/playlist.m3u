@@ -5,25 +5,11 @@ https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_exam
 https://fcc3ddae59ed.us-west-2.playback.live-video.net/api/video/v1/us-west-2.893648527354.channel.DmumNckWFTqz.m3u8
 #EXTINF:-1 tvg-id="unified.demo" group-title="Test streams",Unified Streaming live test
 https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/big-buck-bunny.jpg" group-title="Blender open movies",Big Buck Bunny (2008)
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/big-buck-bunny.jpg" group-title="Blender open movies",Big Buck Bunny
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/elephants-dream.jpg" group-title="Blender open movies",Elephants Dream (2006)
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/elephants-dream.jpg" group-title="Blender open movies",Elephants Dream
 https://download.blender.org/ED/elephantsdream-720-h264-st-aac.mov
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/sintel.jpg" group-title="Blender open movies",Sintel (2010)
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/sintel.jpg" group-title="Blender open movies",Sintel
 https://cdn.theoplayer.com/video/sintel/index.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/tears-of-steel.jpg" group-title="Blender open movies",Tears of Steel (2012)
+#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/tears-of-steel.jpg" group-title="Blender open movies",Tears of Steel
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/hero.jpg" group-title="Blender open movies",Hero (2018)
-https://archive.org/download/hero_20260106/hero.mp4
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/spring.jpg" group-title="Blender open movies",Spring (2019)
-https://archive.org/download/springopenmovie/springopenmovie.mp4
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/sprite-fright.jpg" group-title="Blender open movies",Sprite Fright (2021)
-https://archive.org/download/sprite-fright/Sprite%20Fright%20-%20Open%20Movie%20by%20Blender%20Studio-804p.mp4
-#EXTINF:-1 tvg-type="movie" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/wing-it.jpg" group-title="Blender open movies",Wing It! (2023)
-https://archive.org/download/wing_it/wing_it.mp4
-#EXTINF:-1 tvg-type="series" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/caminandes.jpg" group-title="Blender open movies",Caminandes S01E01 Llama Drama
-https://archive.org/download/Caminandes1LlamaDrama/01_llama_drama_1080p.mp4
-#EXTINF:-1 tvg-type="series" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/caminandes.jpg" group-title="Blender open movies",Caminandes S01E02 Gran Dillama
-https://archive.org/download/Caminandes2GranDillama/02_gran_dillama_1080p.mp4
-#EXTINF:-1 tvg-type="series" tvg-logo="https://raw.githubusercontent.com/MaxMB15/MaxVideoPlayer/main/docs/demo/images/caminandes.jpg" group-title="Blender open movies",Caminandes S01E03 Llamigos
-https://archive.org/download/CaminandesLlamigos/Caminandes_%20Llamigos-1080p.mp4
