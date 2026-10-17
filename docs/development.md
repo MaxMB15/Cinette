@@ -1,6 +1,6 @@
 # Development
 
-How to build Max Video Player from source, run it, and test it. For how the code fits
+How to build Cinette from source, run it, and test it. For how the code fits
 together, see [architecture.md](architecture.md). For cutting a release, see
 [releasing.md](releasing.md).
 
@@ -597,8 +597,8 @@ Homebrew, MacPorts or `/usr/local`. Then it starts the app for 20 seconds and fa
 if the app quits. It also fails if, at the end, the app has libmpv loaded from
 outside the app or has any file from those folders mapped into memory, such as a
 library, a plugin or a cache. Run it on your own build with
-`./scripts/smoke-test-macos-app.sh "target/release/bundle/macos/Max Video Player.app"`.
-It starts the app, which opens your own playlists. Quit Max Video Player first. The
+`./scripts/smoke-test-macos-app.sh target/release/bundle/macos/Cinette.app`. It
+starts the app, which opens your own playlists. Quit Cinette first. The
 app runs one copy at a time, so the test's copy would hand over to yours and quit.
 
 On Linux, `scripts/bundle-libmpv-linux.sh` copies `libmpv.so` and its dependencies

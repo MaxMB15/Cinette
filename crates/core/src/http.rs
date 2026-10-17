@@ -43,7 +43,7 @@ fn user_agent() -> &'static str {
 
 /// OpenSubtitles asks every app to identify itself by name and version.
 fn user_agent_for(version: &str) -> String {
-    format!("MaxVideoPlayer/{version}")
+    format!("Cinette/{version}")
 }
 
 /// The client for API calls that return small JSON bodies.
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn user_agent_names_the_app_and_version() {
-        assert_eq!(user_agent_for("1.2.3"), "MaxVideoPlayer/1.2.3");
+        assert_eq!(user_agent_for("1.2.3"), "Cinette/1.2.3");
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
     fn app_version_is_fixed_once_a_client_exists() {
         client();
         assert!(!set_app_version("9.9.9"));
-        assert_ne!(user_agent(), "MaxVideoPlayer/9.9.9");
+        assert_ne!(user_agent(), "Cinette/9.9.9");
     }
 
     /// Set for a copy of the test binary that runs a single test, so nothing
@@ -415,7 +415,7 @@ mod tests {
         const NAME: &str = "http::tests::app_version_can_be_set_before_any_client_exists";
         if std::env::var_os(RUN_ALONE).is_some() {
             assert!(set_app_version("7.7.7"));
-            assert_eq!(user_agent(), "MaxVideoPlayer/7.7.7");
+            assert_eq!(user_agent(), "Cinette/7.7.7");
             assert!(!set_app_version("8.8.8"));
             return;
         }

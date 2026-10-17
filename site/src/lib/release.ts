@@ -174,28 +174,43 @@ export const keepUnlessFailed = <T>(load: () => Promise<T>): (() => Promise<T>) 
 
 export type Platform = "macos" | "linux";
 
-/** A file the page offers, in the order the page lists them. */
+/**
+ * How each installer's name starts, newest first. The app was called Max Video
+ * Player before it became Cinette, and the page shows the last release until
+ * the first one under the new name is out.
+ */
+const PREFIXES = ["Cinette_", "MaxVideoPlayer_"] as const;
+
+/** A file the page offers, in the order the page lists them, with its name after the prefix. */
 export const FILES = [
-	{
-		id: "mac-arm",
-		platform: "macos",
-		label: "Apple Silicon",
-		file: "MaxVideoPlayer_aarch64.dmg",
-	},
-	{ id: "mac-intel", platform: "macos", label: "Intel", file: "MaxVideoPlayer_x64.dmg" },
-	{ id: "appimage", platform: "linux", label: "AppImage", file: "MaxVideoPlayer_amd64.AppImage" },
-	{ id: "deb", platform: "linux", label: "Debian and Ubuntu", file: "MaxVideoPlayer_amd64.deb" },
-	{ id: "rpm", platform: "linux", label: "Fedora", file: "MaxVideoPlayer_x86_64.rpm" },
-] as const satisfies readonly { id: string; platform: Platform; label: string; file: string }[];
+	{ id: "mac-arm", platform: "macos", label: "Apple Silicon", suffix: "aarch64.dmg" },
+	{ id: "mac-intel", platform: "macos", label: "Intel", suffix: "x64.dmg" },
+	{ id: "appimage", platform: "linux", label: "AppImage", suffix: "amd64.AppImage" },
+	{ id: "deb", platform: "linux", label: "Debian and Ubuntu", suffix: "amd64.deb" },
+	{ id: "rpm", platform: "linux", label: "Fedora", suffix: "x86_64.rpm" },
+] as const satisfies readonly { id: string; platform: Platform; label: string; suffix: string }[];
 
 export type FileId = (typeof FILES)[number]["id"];
 
 export type Download = (typeof FILES)[number] & {
+	/** The file's name in the release, such as `Cinette_x64.dmg`. */
+	file: string;
 	/** The file in the release the page shows, from `downloadUrl`. */
 	url: string;
 	bytes: number;
 	/** The SHA-256 in hex, when GitHub has one. */
 	sha256: string | null;
+};
+
+/** The release's file with the first of `PREFIXES` that has one ready to download. */
+const findAsset = (release: Release, suffix: string): ReleaseAsset | undefined => {
+	for (const prefix of PREFIXES) {
+		const asset = release.assets.find(
+			(a) => a.name === `${prefix}${suffix}` && a.state === "uploaded" && a.size > 0
+		);
+		if (asset) return asset;
+	}
+	return undefined;
 };
 
 /**
@@ -204,12 +219,18 @@ export type Download = (typeof FILES)[number] & {
  */
 export const pickDownloads = (release: Release): Download[] =>
 	FILES.flatMap((file) => {
-		const asset = release.assets.find(
-			(a) => a.name === file.file && a.state === "uploaded" && a.size > 0
-		);
+		const asset = findAsset(release, file.suffix);
 		if (!asset) return [];
 		const sha256 = asset.digest?.match(SHA256)?.[1] ?? null;
-		return [{ ...file, url: downloadUrl(release.tag, file.file), bytes: asset.size, sha256 }];
+		return [
+			{
+				...file,
+				file: asset.name,
+				url: downloadUrl(release.tag, asset.name),
+				bytes: asset.size,
+				sha256,
+			},
+		];
 	});
 
 /**

@@ -1,4 +1,4 @@
-Max Video Player
+Cinette, formerly Max Video Player
 Copyright (C) 2026 Max Boksem
 https://github.com/MaxMB15/MaxVideoPlayer
 
@@ -19,22 +19,22 @@ These terms apply to every file in this project that carries a notice pointing t
 
    The program's About screen displays Appropriate Legal Notices as the license defines them. Any covered work that includes that screen, or a replacement for it, must keep displaying the following attribution there, as text a user can read without special effort:
 
-       Based on Max Video Player by Max Boksem
+       Based on Cinette by Max Boksem
        https://github.com/MaxMB15/MaxVideoPlayer
 
    The unmodified program may display "Created by Max Boksem" instead.
 
 2. Origin and modified versions, section 7(c).
 
-   You may not misrepresent the origin of this program or claim that you wrote the original program. If you convey a modified version, you must mark it in reasonable ways as different from the original version. At a minimum, it must use a name and an app icon different from those of Max Video Player, and its Appropriate Legal Notices must say that it is a modified version. TRADEMARKS.md lists the few cases where you may keep the name, such as packaging an unchanged release for a Linux distribution.
+   You may not misrepresent the origin of this program or claim that you wrote the original program. If you convey a modified version, you must mark it in reasonable ways as different from the original version. At a minimum, it must use a name and an app icon different from those of Cinette and of Max Video Player, and its Appropriate Legal Notices must say that it is a modified version. TRADEMARKS.md lists the few cases where you may keep the name, such as packaging an unchanged release for a Linux distribution.
 
 3. Use of the author's name, section 7(d).
 
-   You may not use the name of Max Boksem, or the name Max Video Player, to endorse or promote a product or service without prior written permission. The attribution required by term 1, and accurate statements of fact such as "based on Max Video Player", do not need permission.
+   You may not use the name of Max Boksem, or the names Cinette and Max Video Player, to endorse or promote a product or service without prior written permission. The attribution required by term 1, and accurate statements of fact such as "based on Cinette", do not need permission.
 
 4. Trademarks, section 7(e).
 
-   This license does not grant any rights in the name "Max Video Player", in its logo or in its app icon under trademark law. See TRADEMARKS.md for what is allowed.
+   This license does not grant any rights in the names "Cinette" and "Max Video Player", in their logos or in the app icon under trademark law. See TRADEMARKS.md for what is allowed.
 
 5. Content disclaimer, section 7(a).
 
@@ -47,16 +47,16 @@ These terms apply to every file in this project that carries a notice pointing t
 
 OTHER LICENSES
 
-Max Video Player is also available under other license terms, for example for a closed-source product or for an app store whose terms conflict with the GNU General Public License. For a commercial license, contact the author through https://github.com/MaxMB15.
+Cinette is also available under other license terms, for example for a closed-source product or for an app store whose terms conflict with the GNU General Public License. For a commercial license, contact the author through https://github.com/MaxMB15.
 
 Contributions are accepted under the Contributor License Agreement in CLA.md, which allows the author to offer those other licenses.
 
-Max Video Player includes and links to third-party software, such as mpv and FFmpeg, under their own licenses. See THIRD_PARTY_NOTICES.md.
+Cinette includes and links to third-party software, such as mpv and FFmpeg, under their own licenses. See THIRD_PARTY_NOTICES.md.
 
 
 NAME AND AFFILIATION
 
-Max Video Player is an independent project created for lawful IPTV streaming. It is not affiliated with, endorsed by, or connected to:
+Cinette is an independent project created for lawful IPTV streaming. It was called Max Video Player until 2026. Under either name, it is not affiliated with, endorsed by, or connected to:
 
 - MaxPlayer or any products bearing that name
 - Max (the streaming service currently owned by Warner Bros. Discovery as of Feb 2026)

@@ -41,7 +41,7 @@ describe("DonationPopup", () => {
 		const { container } = render(<DonationPopup onDismiss={vi.fn()} />);
 		const popup = container.firstElementChild as HTMLElement;
 
-		expect(screen.getByText("Enjoying Max Video Player?")).toBeInTheDocument();
+		expect(screen.getByText("Enjoying Cinette?")).toBeInTheDocument();
 		expect(popup).toHaveClass("opacity-0", "translate-y-4");
 
 		nextFrame();

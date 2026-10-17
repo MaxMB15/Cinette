@@ -5,7 +5,7 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Max Video Player</title>
+		<title>Cinette</title>
 		<meta
 			name="description"
 			content="A fast, private IPTV player for macOS and Linux. Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app."
@@ -15,7 +15,7 @@
 		<meta name="theme-color" content="#0f1114" media="(prefers-color-scheme: dark)" />
 		<link rel="canonical" href="https://maxmb15.github.io/MaxVideoPlayer/" />
 		<meta property="og:type" content="website" />
-		<meta property="og:title" content="Max Video Player" />
+		<meta property="og:title" content="Cinette" />
 		<meta
 			property="og:description"
 			content="A fast, private IPTV player for macOS and Linux. Add your M3U playlist or Xtream Codes account and watch live TV, movies and series in one app."
@@ -61,7 +61,7 @@
 						height="28"
 						alt=""
 					/>
-					Max Video Player
+					Cinette
 				</a>
 				<nav class="site-nav" aria-label="Sections">
 					<a class="nav-wide" href="#features">Features</a>
@@ -82,7 +82,7 @@
 						height="88"
 						alt=""
 					/>
-					<h1 class="hero-title" id="title">Max Video Player</h1>
+					<h1 class="hero-title" id="title">Cinette</h1>
 					<p class="hero-pitch">A fast, private IPTV player for macOS and Linux.</p>
 					<p class="hero-lead">
 						Add your M3U playlist or Xtream Codes account and watch live TV, movies and
@@ -104,7 +104,7 @@
 
 			<section class="section" id="why" aria-labelledby="why-title">
 				<div class="wrap">
-					<h2 class="section-title" id="why-title">Why Max Video Player</h2>
+					<h2 class="section-title" id="why-title">Why Cinette</h2>
 					<div class="why-grid copy">
 						<div>
 							<h3>It's fast</h3>
@@ -366,7 +366,7 @@
 					<div class="install-grid copy">
 						<div>
 							<h3>macOS</h3>
-							<p>Open the DMG and drag Max Video Player into Applications.</p>
+							<p>Open the DMG and drag Cinette into Applications.</p>
 							<details class="disclosure">
 								<summary>macOS says the app can't be opened or is damaged</summary>
 								<div class="answer copy">
@@ -376,13 +376,11 @@
 										anyway, follow these steps.
 									</p>
 									<ol>
-										<li>
-											Try to open Max Video Player once and close the warning.
-										</li>
+										<li>Try to open Cinette once and close the warning.</li>
 										<li>
 											Open System Settings and go to Privacy &amp; Security.
 											Scroll down and click <strong>Open Anyway</strong> next
-											to the message about Max Video Player.
+											to the message about Cinette.
 										</li>
 										<li>Confirm with your password or Touch ID.</li>
 									</ol>
@@ -390,27 +388,27 @@
 										If macOS says the app is damaged, run this in Terminal and
 										open it again.
 									</p>
-									<pre><code>xattr -dr com.apple.quarantine "/Applications/Max Video Player.app"</code></pre>
+									<pre><code>xattr -dr com.apple.quarantine /Applications/Cinette.app</code></pre>
 								</div>
 							</details>
 						</div>
 						<div>
 							<h3>Linux AppImage</h3>
 							<p>It includes libmpv, so there's nothing else to install.</p>
-							<pre><code>chmod +x MaxVideoPlayer_amd64.AppImage
-./MaxVideoPlayer_amd64.AppImage</code></pre>
+							<pre><code>chmod +x Cinette_amd64.AppImage
+./Cinette_amd64.AppImage</code></pre>
 							<p>
 								The AppImage needs glibc 2.38 or later, which Ubuntu 24.04, Debian
 								13 and current Fedora releases have.
 							</p>
 							<h3>Debian and Ubuntu</h3>
 							<p>
-								<code>sudo apt install ./MaxVideoPlayer_amd64.deb</code> installs
-								the app and the libraries it needs, including libmpv. It needs
-								Debian 12, Ubuntu 24.04 or a later release.
+								<code>sudo apt install ./Cinette_amd64.deb</code> installs the app
+								and the libraries it needs, including libmpv. It needs Debian 12,
+								Ubuntu 24.04 or a later release.
 							</p>
 							<h3>Fedora</h3>
-							<p><code>sudo dnf install ./MaxVideoPlayer_x86_64.rpm</code></p>
+							<p><code>sudo dnf install ./Cinette_x86_64.rpm</code></p>
 							<p>
 								Both packages need WebKitGTK 2.40 or later, which all of these
 								releases have.
@@ -447,8 +445,8 @@
 						</li>
 					</ol>
 					<p class="note">
-						Max Video Player doesn't come with any channels or content. You need a
-						playlist from a provider you're allowed to use.
+						Cinette doesn't come with any channels or content. You need a playlist from
+						a provider you're allowed to use.
 					</p>
 				</div>
 			</section>
@@ -458,7 +456,7 @@
 					<h2 class="section-title" id="faq-title">FAQ</h2>
 					<div class="disclosure-list">
 						<details class="disclosure">
-							<summary>Does Max Video Player collect any data?</summary>
+							<summary>Does Cinette collect any data?</summary>
 							<div class="answer copy">
 								<p>
 									No. There are no accounts, analytics or telemetry. The app
@@ -483,6 +481,25 @@
 									on macOS and
 									<code>~/.local/share/com.maxvideoplayer.app</code> on Linux.
 									Downloads go to the <code>downloads</code> folder inside it.
+								</p>
+							</div>
+						</details>
+						<details class="disclosure">
+							<summary>Is this the app that was called Max Video Player?</summary>
+							<div class="answer copy">
+								<p>
+									Yes. Max Video Player was renamed Cinette, and updating keeps
+									your playlists, favorites, settings and downloads. They stay in
+									the folders above.
+								</p>
+								<p>
+									On a Mac, an update from inside the app keeps the old file name,
+									so the app is still called Max Video Player in Applications. You
+									can rename it to Cinette there. If you install Cinette from the
+									DMG instead, delete the old Max Video Player app. On Linux,
+									installing the
+									<code>cinette</code> package removes the
+									<code>max-video-player</code> package.
 								</p>
 							</div>
 						</details>
@@ -577,10 +594,10 @@
 						<h2 class="section-title">Disclaimer</h2>
 						<div class="copy">
 							<p>
-								Max Video Player is only a player. It doesn't include, host, sell or
-								link to any channels, playlists or streams. You add your own
-								sources, and the author has no control over, and no knowledge of,
-								what you add or watch.
+								Cinette is only a player. It doesn't include, host, sell or link to
+								any channels, playlists or streams. You add your own sources, and
+								the author has no control over, and no knowledge of, what you add or
+								watch.
 							</p>
 							<p>
 								The app is meant for content you have the legal right to watch, such
@@ -613,8 +630,8 @@
 						<h2 class="section-title">License</h2>
 						<div class="copy">
 							<p>
-								Max Video Player is free software. Anyone can use it for any
-								purpose, and you can study, change and share the code under the
+								Cinette is free software. Anyone can use it for any purpose, and you
+								can study, change and share the code under the
 								<a
 									href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/LICENSE"
 									>GNU General Public License version 3</a
@@ -629,21 +646,23 @@
 							</p>
 							<ul>
 								<li>
-									Modified versions have to keep the credit "Based on Max Video
-									Player by Max Boksem" on their About screen.
+									Modified versions have to keep the credit "Based on Cinette by
+									Max Boksem" on their About screen.
 								</li>
 								<li>
 									Modified versions need their own name and icon. The license
-									grants no trademark rights in the Max Video Player name or logo.
-									See
+									grants no trademark rights in the Cinette or Max Video Player
+									names or logos. See
 									<a
 										href="https://github.com/MaxMB15/MaxVideoPlayer/blob/main/TRADEMARKS.md"
 										>TRADEMARKS.md</a
 									>.
 								</li>
 								<li>
-									The author's name can't be used to promote another product
-									without permission.
+									The author's name and the names Cinette and Max Video Player
+									can't be used to endorse or promote another product without
+									permission. Accurate statements such as "based on Cinette" don't
+									need it.
 								</li>
 							</ul>
 							<p>
@@ -656,8 +675,9 @@
 								Noncommercial License 1.0.0.
 							</p>
 							<p>
-								It's an independent project and isn't affiliated with Max, Warner
-								Bros. Discovery, or any product with a similar name.
+								Under either name, it's an independent project and isn't affiliated
+								with MaxPlayer, Max, Warner Bros. Discovery, or any product with a
+								similar name.
 							</p>
 						</div>
 					</div>

@@ -74,7 +74,7 @@ const LeftPanel = ({
 					className="w-16 h-16 rounded-2xl shadow-lg ring-1 ring-white/10"
 				/>
 				<div>
-					<h1 className="text-2xl font-bold tracking-tight">Max Video Player</h1>
+					<h1 className="text-2xl font-bold tracking-tight">Cinette</h1>
 					<p className="text-sm text-muted-foreground mt-0.5">IPTV Player</p>
 				</div>
 			</div>
@@ -83,7 +83,7 @@ const LeftPanel = ({
 			<div className="w-full max-w-sm flex flex-col gap-6">
 				{!hasProviders ? (
 					<div className="text-center space-y-2">
-						<p className="text-base font-semibold">Welcome to Max Video Player</p>
+						<p className="text-base font-semibold">Welcome to Cinette</p>
 						<p className="text-sm text-muted-foreground leading-relaxed">
 							Add a playlist in the Playlists tab to get started.
 						</p>
@@ -251,7 +251,7 @@ const RightPanel = () => {
 			{/* Header */}
 			<div className="flex flex-col items-center gap-2 text-center">
 				<span className="text-4xl">☕</span>
-				<h2 className="text-lg font-bold">Support Max Video Player</h2>
+				<h2 className="text-lg font-bold">Support Cinette</h2>
 				<p className="text-xs text-muted-foreground">No account needed · takes 2 seconds</p>
 			</div>
 

@@ -79,19 +79,30 @@ assets:
 
 | Asset | What it is |
 | --- | --- |
-| `MaxVideoPlayer_aarch64.dmg` | macOS installer for Apple Silicon |
-| `MaxVideoPlayer_x64.dmg` | macOS installer for Intel |
-| `MaxVideoPlayer_amd64.AppImage` | Linux AppImage |
-| `MaxVideoPlayer_amd64.deb` | Debian and Ubuntu package |
-| `MaxVideoPlayer_x86_64.rpm` | Fedora package |
-| `MaxVideoPlayer_<version>_aarch64.app.tar.gz` | Apple Silicon update for the in-app updater |
-| `MaxVideoPlayer_<version>_x64.app.tar.gz` | Intel update for the in-app updater |
-| `MaxVideoPlayer_linux.tar.gz` | AppImage update for the in-app updater |
-| `MaxVideoPlayer_<version>_aarch64.app.tar.gz.sig`, `MaxVideoPlayer_<version>_x64.app.tar.gz.sig`, `MaxVideoPlayer_linux.tar.gz.sig` | Signatures for the three updates |
+| `Cinette_aarch64.dmg` | macOS installer for Apple Silicon |
+| `Cinette_x64.dmg` | macOS installer for Intel |
+| `Cinette_amd64.AppImage` | Linux AppImage |
+| `Cinette_amd64.deb` | Debian and Ubuntu package |
+| `Cinette_x86_64.rpm` | Fedora package |
+| `Cinette_<version>_aarch64.app.tar.gz` | Apple Silicon update for the in-app updater |
+| `Cinette_<version>_x64.app.tar.gz` | Intel update for the in-app updater |
+| `Cinette_linux.tar.gz` | AppImage update for the in-app updater |
+| `Cinette_<version>_aarch64.app.tar.gz.sig`, `Cinette_<version>_x64.app.tar.gz.sig`, `Cinette_linux.tar.gz.sig` | Signatures for the three updates |
 | `latest.json` | Update manifest: version, signatures and download links |
 
-Don't rename these. The README, `latest.json` and the Linux package updater in
-`commands.rs` all depend on the names.
+Don't rename these again. Every installed copy fetches `latest.json` by that name
+to find updates, so renaming it would cut them all off. The README and the website
+link to the installers by name, and so do links on other sites.
+
+Releases from before the app became Cinette name these files `MaxVideoPlayer_*`
+instead. The website takes either name, so it still works while the newest release
+has the old ones.
+
+The `.deb` and `.rpm` packages are called `cinette`, which the bundler makes from
+`productName`. Releases before the rename made a package called
+`max-video-player`. In `tauri.conf.json`, the `.deb` conflicts with and replaces
+that package and the `.rpm` obsoletes it, so installing or updating removes the old
+package. Keep those fields.
 
 The iPhone and iPad app isn't part of this. It goes to TestFlight through its own
 manual workflow, described in [ios.md](ios.md#continuous-integration).

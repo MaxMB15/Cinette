@@ -762,8 +762,8 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						</CardHeader>
 						<CardContent className="space-y-3">
 							<p className="text-sm text-muted-foreground">
-								Max Video Player is free and open source. If you find it useful,
-								consider supporting development.
+								Cinette is free and open source. If you find it useful, consider
+								supporting development.
 							</p>
 							<div className="flex items-center gap-4">
 								<button
@@ -802,7 +802,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 					</CardHeader>
 					<CardContent className="space-y-4">
 						<p className="text-sm text-muted-foreground">
-							Max Video Player {appVersion ? `v${appVersion}` : ""}
+							Cinette {appVersion ? `v${appVersion}` : ""}
 						</p>
 
 						<LegalNotices version={appVersion || undefined} />

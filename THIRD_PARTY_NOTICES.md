@@ -1,23 +1,23 @@
 # Third-party notices
 
-Max Video Player is built on other people's open source software. Each component below keeps its own license, and Max Video Player's license doesn't change it. Max Video Player's own license is in [LICENSE](LICENSE) and [NOTICE](NOTICE). The [LICENSES](LICENSES) folder has the texts of the GNU Lesser General Public License version 3, which adds to the GNU General Public License version 3 in LICENSE, and the Apache License 2.0. The apps include all of these files.
+Cinette is built on other people's open source software. Each component below keeps its own license, and Cinette's license doesn't change it. Cinette's own license is in [LICENSE](LICENSE) and [NOTICE](NOTICE). The [LICENSES](LICENSES) folder has the texts of the GNU Lesser General Public License version 3, which adds to the GNU General Public License version 3 in LICENSE, and the Apache License 2.0. The apps include all of these files.
 
 ## Getting the source code
 
-- **Max Video Player.** Every release has a tag in this repository. Settings > About in the app links to the source for the version you're running.
+- **Cinette.** Every release has a tag in this repository. Settings > About in the app links to the source for the version you're running.
 - **mpv.** The macOS and Linux apps' libmpv is built from the [mpv v0.40.0 tag](https://github.com/mpv-player/mpv/tree/v0.40.0) by [scripts/build-libmpv.sh](scripts/build-libmpv.sh). The iOS app's libmpv comes from MPVKit, described [below](#libraries-bundled-in-the-ios-app).
 - **FFmpeg.** The `ffmpeg` program in the macOS and Linux apps is built from the FFmpeg 8.1.3 release source by [scripts/build-ffmpeg.sh](scripts/build-ffmpeg.sh). The [ffmpeg-sidecar-8.1](https://github.com/MaxMB15/MaxVideoPlayer/releases/tag/ffmpeg-sidecar-8.1) pre-release has that source, the OpenSSL source the macOS build links in, and the FFmpeg source of the Windows build. Other FFmpeg source releases are at [ffmpeg.org/download.html](https://ffmpeg.org/download.html).
 - **Other libraries.** Each project in the tables below links to its home page, where its source is published. In the Apple Silicon Mac app they come from [Homebrew](https://github.com/Homebrew/homebrew-core), whose formulas record the exact source archive and build options. In the Intel Mac app they come from [MacPorts](https://github.com/macports/macports-ports), whose Portfiles record the same. On iOS they come from MPVKit, whose build scripts record the same.
 
-If you received a copy of Max Video Player and can't find the source for one of its components, [open an issue](https://github.com/MaxMB15/MaxVideoPlayer/issues) and it will be provided.
+If you received a copy of Cinette and can't find the source for one of its components, [open an issue](https://github.com/MaxMB15/MaxVideoPlayer/issues) and it will be provided.
 
 ## mpv
 
-Max Video Player plays video with libmpv from [mpv](https://mpv.io), licensed under the GNU General Public License version 2 or later. Some of its files are under the GNU Lesser General Public License version 2.1 or later. The macOS app and the Linux AppImage include libmpv. The Linux `.deb` and `.rpm` packages use the libmpv package from your distribution instead. The iOS app includes a build of libmpv without mpv's GPL parts, which is licensed under the GNU Lesser General Public License version 2.1 or later.
+Cinette plays video with libmpv from [mpv](https://mpv.io), licensed under the GNU General Public License version 2 or later. Some of its files are under the GNU Lesser General Public License version 2.1 or later. The macOS app and the Linux AppImage include libmpv. The Linux `.deb` and `.rpm` packages use the libmpv package from your distribution instead. The iOS app includes a build of libmpv without mpv's GPL parts, which is licensed under the GNU Lesser General Public License version 2.1 or later.
 
 ## FFmpeg
 
-Max Video Player includes [FFmpeg](https://ffmpeg.org) in two forms. FFmpeg is a trademark of Fabrice Bellard.
+Cinette includes [FFmpeg](https://ffmpeg.org) in two forms. FFmpeg is a trademark of Fabrice Bellard.
 
 - **FFmpeg 7.1 libraries** (`libavcodec`, `libavfilter`, `libavformat`, `libavutil`, `libpostproc`, `libswresample`, `libswscale`), used by libmpv. The Apple Silicon Mac app includes them as built by Homebrew's `ffmpeg@7` formula, with `--enable-gpl` and `--enable-version3`. That build is licensed under the GNU General Public License version 3 or later. The Intel Mac app includes FFmpeg 7.1.5 as built by MacPorts' `ffmpeg7` port with its default `gpl2` variant, which uses `--enable-gpl` without `--enable-version3`. That build is licensed under the GNU General Public License version 2 or later.
 - **FFmpeg 9.0.2 libraries** (`libavcodec`, `libavdevice`, `libavfilter`, `libavformat`, `libavutil`, `libswresample`, `libswscale`), used by libmpv in the iOS app. They're built with `--enable-version3` and without `--enable-gpl`, so they're licensed under the GNU Lesser General Public License version 3 or later.
@@ -159,4 +159,4 @@ The times the player offers to skip come from two online databases.
 
 ## Rust crates and npm packages
 
-Max Video Player is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [pnpm-lock.yaml](pnpm-lock.yaml) list every one, with the exact version.
+Cinette is built with [Tauri](https://tauri.app), [React](https://react.dev) and many other Rust crates and npm packages, each under its own license. Most use the MIT, Apache-2.0 or BSD licenses. [Cargo.lock](Cargo.lock) and [pnpm-lock.yaml](pnpm-lock.yaml) list every one, with the exact version.

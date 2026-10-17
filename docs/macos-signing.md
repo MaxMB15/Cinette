@@ -146,8 +146,8 @@ Once this change reaches `main`, you can also use Actions → **Build & Bundle**
 **Run workflow**. GitHub only shows that button for workflows that accept manual runs
 on the default branch.
 
-Download the `MaxVideoPlayer-macOS` artifact for Apple Silicon or
-`MaxVideoPlayer-macOS-Intel` for Intel, open the DMG on a Mac and drag the app to
+Download the `Cinette-macOS` artifact for Apple Silicon or `Cinette-macOS-Intel`
+for Intel, open the DMG on a Mac and drag the app to
 Applications. It should open without a Gatekeeper warning. Test with the DMG rather
 than the `.app` in the artifact, because artifact downloads lose file permissions.
 

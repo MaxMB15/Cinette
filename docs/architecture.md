@@ -1,6 +1,6 @@
 # Architecture
 
-Max Video Player is a [Tauri 2](https://tauri.app) app. The interface is React and
+Cinette is a [Tauri 2](https://tauri.app) app. The interface is React and
 TypeScript in a system webview. Playlist parsing, storage and downloads are Rust, and
 video plays through libmpv, drawn into the same window underneath the webview.
 

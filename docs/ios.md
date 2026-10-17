@@ -42,7 +42,7 @@ pnpm tauri ios build --debug --target aarch64-sim
 
 xcrun simctl boot "iPhone 17 Pro"    # skip if a simulator is already running
 open -a Simulator
-xcrun simctl install booted "src-tauri/gen/apple/build/arm64-sim/Max Video Player.app"
+xcrun simctl install booted src-tauri/gen/apple/build/arm64-sim/Cinette.app
 xcrun simctl launch booted com.maxvideoplayer.app
 ```
 
@@ -65,7 +65,7 @@ pnpm tauri ios build --debug --target aarch64 --export-method debugging
 
 xcrun devicectl list devices    # note the device's identifier
 xcrun devicectl device install app --device <identifier> \
-  "src-tauri/gen/apple/build/arm64/Max Video Player.ipa"
+  src-tauri/gen/apple/build/arm64/Cinette.ipa
 xcrun devicectl device process launch --device <identifier> com.maxvideoplayer.app
 ```
 
@@ -179,7 +179,7 @@ On iOS the Rust logs go to the system log under the subsystem
 messages there, under the category `app`. The Swift plugin uses `NSLog`, which has
 no subsystem, so its messages only carry the app's process name. To watch them all
 live, open Console on the Mac, select the device and click Start. Then type
-`Max Video Player` in the search field and pick Process from the menu that appears.
+`Cinette` in the search field and pick Process from the menu that appears.
 Searching for `subsystem:com.maxvideoplayer.app category:rust` shows only the Rust
 lines. Console hides Rust's DEBUG lines until you turn on Include Info Messages in
 the Action menu, and TRACE lines until you turn on Include Debug Messages. Xcode's

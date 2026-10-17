@@ -40,7 +40,7 @@ jobs:
           else
             gh release create "v${VERSION}" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Max Video Player v${VERSION}" \
+              --title "Cinette v${VERSION}" \
               --notes "See the [CHANGELOG](https://github.com/MaxMB15/MaxVideoPlayer/blob/main/CHANGELOG.md) for details." \
               --draft
           fi
@@ -153,15 +153,13 @@ jobs:
           set -euo pipefail
           VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          # productName contains spaces ("Max Video Player"), so the bundler emits
-          # "Max Video Player.app" / "Max Video Player_<v>_<arch>.dmg". Release
-          # assets keep the space-free "MaxVideoPlayer" prefix so download URLs
-          # and latest.json stay stable.
+          # The bundler names the app and the DMG after productName, as
+          # "Cinette.app" and "Cinette_<v>_<arch>.dmg".
           PRODUCT_NAME=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['productName'])")
           echo "PRODUCT_NAME=$PRODUCT_NAME" >> "$GITHUB_ENV"
 
           BUNDLE_DIR="target/release/bundle/macos"
-          UPDATER="$BUNDLE_DIR/MaxVideoPlayer.app.tar.gz"
+          UPDATER="$BUNDLE_DIR/Cinette.app.tar.gz"
 
           # Create the .tar.gz updater archive from the built .app
           tar czf "$UPDATER" -C "$BUNDLE_DIR" "${PRODUCT_NAME}.app"
@@ -171,7 +169,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-updater-sig-${{ matrix.arch }}
-          path: target/release/bundle/macos/MaxVideoPlayer.app.tar.gz.sig
+          path: target/release/bundle/macos/Cinette.app.tar.gz.sig
 
       - name: Upload macOS assets to draft release
         env:
@@ -186,11 +184,10 @@ jobs:
           fi
           # No version in the name, so the README's releases/latest/download link
           # always points at the newest DMG.
-          DMG="target/release/bundle/dmg/MaxVideoPlayer_${ARCH}.dmg"
-          UPDATER="target/release/bundle/macos/MaxVideoPlayer.app.tar.gz"
-          UPDATER_VERSIONED="target/release/bundle/macos/MaxVideoPlayer_${VERSION}_${ARCH}.app.tar.gz"
+          DMG="target/release/bundle/dmg/Cinette_${ARCH}.dmg"
+          UPDATER="target/release/bundle/macos/Cinette.app.tar.gz"
+          UPDATER_VERSIONED="target/release/bundle/macos/Cinette_${VERSION}_${ARCH}.app.tar.gz"
 
-          # Space-free asset name (GitHub would otherwise rewrite spaces to dots)
           cp "$DMG_BUILT" "$DMG"
 
           # Rename updater files so the download URL matches what latest.json expects
@@ -271,28 +268,28 @@ jobs:
 
           BUNDLE_DIR="target/release/bundle"
 
-          # productName contains spaces ("Max Video Player"), which the bundler
-          # copies into the artifact filenames. Rename to space-free names without
-          # a version, so the README's releases/latest/download links always
-          # point at the newest packages; latest.json links to them by tag.
-          # (Package identity is unaffected: deb/rpm names are kebab-cased
-          # from productName, so they stay "max-video-player".)
+          # The bundler puts the version in each file name. Rename the files to
+          # names without one, so the README's releases/latest/download links
+          # always point at the newest packages. latest.json links to them by
+          # tag. The deb and rpm packages are named "cinette", productName in
+          # kebab case, and tauri.conf.json makes them replace the
+          # "max-video-player" package that releases before the rename made.
           shopt -s nullglob
           for f in "$BUNDLE_DIR"/deb/*.deb; do
-            mv "$f" "$BUNDLE_DIR/deb/MaxVideoPlayer_amd64.deb"
+            mv "$f" "$BUNDLE_DIR/deb/Cinette_amd64.deb"
           done
           for f in "$BUNDLE_DIR"/rpm/*.rpm; do
-            mv "$f" "$BUNDLE_DIR/rpm/MaxVideoPlayer_x86_64.rpm"
+            mv "$f" "$BUNDLE_DIR/rpm/Cinette_x86_64.rpm"
           done
           for f in "$BUNDLE_DIR"/appimage/*.AppImage; do
-            mv "$f" "$BUNDLE_DIR/appimage/MaxVideoPlayer_amd64.AppImage"
+            mv "$f" "$BUNDLE_DIR/appimage/Cinette_amd64.AppImage"
           done
           shopt -u nullglob
 
           APPIMAGE=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" | head -1)
 
           if [[ -n "$APPIMAGE" ]]; then
-            UPDATER="$BUNDLE_DIR/MaxVideoPlayer_linux.tar.gz"
+            UPDATER="$BUNDLE_DIR/Cinette_linux.tar.gz"
             tar czf "$UPDATER" -C "$(dirname "$APPIMAGE")" "$(basename "$APPIMAGE")"
             python3 scripts/sign-updater.py "$UPDATER"
           fi
@@ -301,7 +298,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-updater-sig
-          path: target/release/bundle/MaxVideoPlayer_linux.tar.gz.sig
+          path: target/release/bundle/Cinette_linux.tar.gz.sig
           if-no-files-found: warn
 
       - name: Publish to GitHub release
@@ -323,7 +320,7 @@ jobs:
             [[ -f "$appimage" ]] && ARTIFACTS+=("$appimage")
           done
           # Include updater tar.gz if it exists
-          UPDATER="$BUNDLE_DIR/MaxVideoPlayer_linux.tar.gz"
+          UPDATER="$BUNDLE_DIR/Cinette_linux.tar.gz"
           if [[ -f "$UPDATER" ]]; then
             ARTIFACTS+=("$UPDATER")
             [[ -f "${UPDATER}.sig" ]] && ARTIFACTS+=("${UPDATER}.sig")
@@ -363,18 +360,18 @@ jobs:
           VERSION=$(python3 -c "import json; print(json.load(open('apps/player/src-tauri/tauri.conf.json'))['version'])")
 
           MACOS_SIG=""
-          if [[ -f sigs/macos-updater-sig-aarch64/MaxVideoPlayer.app.tar.gz.sig ]]; then
-            MACOS_SIG=$(cat sigs/macos-updater-sig-aarch64/MaxVideoPlayer.app.tar.gz.sig)
+          if [[ -f sigs/macos-updater-sig-aarch64/Cinette.app.tar.gz.sig ]]; then
+            MACOS_SIG=$(cat sigs/macos-updater-sig-aarch64/Cinette.app.tar.gz.sig)
           fi
 
           MACOS_INTEL_SIG=""
-          if [[ -f sigs/macos-updater-sig-x64/MaxVideoPlayer.app.tar.gz.sig ]]; then
-            MACOS_INTEL_SIG=$(cat sigs/macos-updater-sig-x64/MaxVideoPlayer.app.tar.gz.sig)
+          if [[ -f sigs/macos-updater-sig-x64/Cinette.app.tar.gz.sig ]]; then
+            MACOS_INTEL_SIG=$(cat sigs/macos-updater-sig-x64/Cinette.app.tar.gz.sig)
           fi
 
           LINUX_SIG=""
-          if [[ -f sigs/linux-updater-sig/MaxVideoPlayer_linux.tar.gz.sig ]]; then
-            LINUX_SIG=$(cat sigs/linux-updater-sig/MaxVideoPlayer_linux.tar.gz.sig)
+          if [[ -f sigs/linux-updater-sig/Cinette_linux.tar.gz.sig ]]; then
+            LINUX_SIG=$(cat sigs/linux-updater-sig/Cinette_linux.tar.gz.sig)
           fi
 
           python3 - "$VERSION" "$MACOS_SIG" "$MACOS_INTEL_SIG" "$LINUX_SIG" << 'PYEOF'
@@ -385,22 +382,22 @@ jobs:
           if macos_sig:
               platforms["darwin-aarch64"] = {
                   "signature": macos_sig,
-                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/MaxVideoPlayer_{version}_aarch64.app.tar.gz"
+                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/Cinette_{version}_aarch64.app.tar.gz"
               }
           if macos_intel_sig:
               platforms["darwin-x86_64"] = {
                   "signature": macos_intel_sig,
-                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/MaxVideoPlayer_{version}_x64.app.tar.gz"
+                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/Cinette_{version}_x64.app.tar.gz"
               }
           if linux_sig:
               platforms["linux-x86_64"] = {
                   "signature": linux_sig,
-                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/MaxVideoPlayer_linux.tar.gz"
+                  "url": f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}/Cinette_linux.tar.gz"
               }
           base_url = f"https://github.com/MaxMB15/MaxVideoPlayer/releases/download/v{version}"
           packages = {
-              "linux-deb-x86_64": f"{base_url}/MaxVideoPlayer_amd64.deb",
-              "linux-rpm-x86_64": f"{base_url}/MaxVideoPlayer_x86_64.rpm",
+              "linux-deb-x86_64": f"{base_url}/Cinette_amd64.deb",
+              "linux-rpm-x86_64": f"{base_url}/Cinette_x86_64.rpm",
           }
           data = {
               "version": version,

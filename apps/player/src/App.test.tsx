@@ -98,7 +98,7 @@ describe("App", () => {
 	it("shows the start screen until the startup checks finish, then opens the app", async () => {
 		renderApp();
 
-		expect(screen.getByText("Welcome to Max Video Player")).toBeInTheDocument();
+		expect(screen.getByText("Welcome to Cinette")).toBeInTheDocument();
 		expect(getStarted()).toBeDisabled();
 
 		await waitForStartupChecks();
@@ -106,7 +106,7 @@ describe("App", () => {
 		expect(check).toHaveBeenCalled();
 
 		fireEvent.click(getStarted());
-		expect(screen.queryByText("Welcome to Max Video Player")).not.toBeInTheDocument();
+		expect(screen.queryByText("Welcome to Cinette")).not.toBeInTheDocument();
 		expect(screen.getByText("Channel list page")).toBeInTheDocument();
 		expect(sessionStorage.getItem("splash-shown")).toBe("true");
 	});
@@ -114,13 +114,13 @@ describe("App", () => {
 	it("asks desktop users for a donation once they leave the start screen", async () => {
 		renderApp();
 		await waitForStartupChecks();
-		expect(screen.queryByText("Enjoying Max Video Player?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 
 		fireEvent.click(getStarted());
-		expect(screen.getByText("Enjoying Max Video Player?")).toBeInTheDocument();
+		expect(screen.getByText("Enjoying Cinette?")).toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss donation prompt" }));
-		expect(screen.queryByText("Enjoying Max Video Player?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 		expect(localStorage.getItem("donation-last-shown")).toMatch(/^\d+$/);
 	});
 
@@ -132,7 +132,7 @@ describe("App", () => {
 		expect(screen.queryByRole("button", { name: "Get Started →" })).not.toBeInTheDocument();
 		expect(screen.getByText("Channel list page")).toBeInTheDocument();
 		await waitFor(() => expect(check).toHaveBeenCalledOnce());
-		expect(screen.queryByText("Enjoying Max Video Player?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -190,11 +190,11 @@ describe("App", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Skip for now →" }));
 		expect(screen.queryByRole("button", { name: "Install Update" })).not.toBeInTheDocument();
 		expect(screen.getByText("Update available — v2.1.0")).toBeInTheDocument();
-		expect(screen.queryByText("Enjoying Max Video Player?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss update" }));
 		expect(screen.queryByText("Update available — v2.1.0")).not.toBeInTheDocument();
-		expect(screen.getByText("Enjoying Max Video Player?")).toBeInTheDocument();
+		expect(screen.getByText("Enjoying Cinette?")).toBeInTheDocument();
 	});
 
 	it("leaves out the update check, the support panel and the donation prompt on iOS", async () => {
@@ -205,7 +205,7 @@ describe("App", () => {
 		expect(screen.getByText("No EPG configured")).toBeInTheDocument();
 		expect(screen.queryByText("Checking for updates")).not.toBeInTheDocument();
 		expect(screen.queryByText("Up to date")).not.toBeInTheDocument();
-		expect(screen.queryByText("Support Max Video Player")).not.toBeInTheDocument();
+		expect(screen.queryByText("Support Cinette")).not.toBeInTheDocument();
 		expect(check).not.toHaveBeenCalled();
 		// The lock screen's skip buttons get the default lengths.
 		expect(invoke).toHaveBeenCalledWith("plugin:mpv|mpv_set_skip_intervals", {
@@ -215,6 +215,6 @@ describe("App", () => {
 
 		fireEvent.click(getStarted());
 		expect(screen.getByText("Channel list page")).toBeInTheDocument();
-		expect(screen.queryByText("Enjoying Max Video Player?")).not.toBeInTheDocument();
+		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 	});
 });

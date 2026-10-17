@@ -16,7 +16,7 @@ packages:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: Max Video Player
+      PRODUCT_NAME: Cinette
       PRODUCT_BUNDLE_IDENTIFIER: com.maxvideoplayer.app
       DEVELOPMENT_TEAM: 3MLC4VWP96
 targetTemplates:
@@ -61,7 +61,7 @@ targets:
           NSAllowsLocalNetworking: true
         # iOS asks before the app reaches a server on the local network, such
         # as a provider on a home server, and shows this text.
-        NSLocalNetworkUsageDescription: Max Video Player connects to IPTV servers on your local network to load playlists and play channels.
+        NSLocalNetworkUsageDescription: Cinette connects to IPTV servers on your local network to load playlists and play channels.
         # The app is always dark, so the launch screen, the keyboard and system
         # sheets use dark colors too.
         UIUserInterfaceStyle: Dark

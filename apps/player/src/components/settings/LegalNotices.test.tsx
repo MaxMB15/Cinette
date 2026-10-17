@@ -14,11 +14,14 @@ describe("LegalNotices", () => {
 		vi.clearAllMocks();
 	});
 
-	it("shows the author, copyright, license and lack of warranty", () => {
+	it("shows the app's names, author, copyright, license and lack of warranty", () => {
 		render(<LegalNotices version="1.2.3" />);
 		expect(screen.getByText("Created by Max Boksem")).toBeTruthy();
 		expect(screen.getByText("Copyright © 2026 Max Boksem")).toBeTruthy();
 		expect(screen.getByText(/GNU General Public License version 3/)).toBeTruthy();
+		expect(
+			screen.getByText(/^Cinette, formerly Max Video Player, is free software\./)
+		).toBeTruthy();
 		expect(screen.getByText(/It comes with no warranty/)).toBeTruthy();
 	});
 
