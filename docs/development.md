@@ -661,8 +661,9 @@ Open the built page through a web server, since a browser won't load its
 stylesheet on a `file://` page. The page uses the app icon from
 `apps/player/src-tauri/icons/` and the screenshots in `docs/images/`. The build
 copies them into `site/dist/assets`. An `<img>` file under 4 KiB goes into the page
-as a data URI instead, as both app icons in the page do. "App icon" in
-[the iOS guide](ios.md#app-icon) explains how the icons are made.
+as a data URI instead, as the icons in the header and the hero do. The favicon is
+always copied. "App icon" in [the iOS guide](ios.md#app-icon) explains how the
+icons are made.
 
 The [Website](../.github/workflows/site.yml) workflow tests and builds the site on
 pull requests. Pushes to `main` that change it, releases and manual runs from `main`

@@ -144,18 +144,18 @@ python3 -I ../../scripts/ios-icons.py
 ```
 
 The SVG has to fill the whole square, with no transparent pixels and no rounded
-corners of its own. iOS and Android round the corners themselves, and so does
-macOS 26. On macOS 26 an icon that comes with its own rounded corners and a
-transparent margin gets an embossed look instead. macOS 15 shows the square as it
-is.
+corners of its own. iOS and macOS 26 round the corners themselves. On macOS 26 an
+icon that has its own rounded corners and a transparent margin comes out paler and
+embossed. macOS 15 shows the square as it is. Android crops the icon to the
+launcher's shape, and a round one cuts off the corners of the frame.
 
 `pnpm tauri icon` writes the desktop and Android icons to `src-tauri/icons` and the
 iOS icons to `src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset`. The iOS
 icons it writes have an alpha channel, and App Store Connect rejects a 1024 px icon
-that has one. `scripts/ios-icons.py` removes it and copies the icons to
-`src-tauri/icons/ios`, and deletes any icon there that the Xcode set doesn't have,
-so both folders hold the same files. The script stops without writing anything if
-a pixel isn't fully opaque.
+that has one. `scripts/ios-icons.py` removes the alpha channel and copies the
+icons to `src-tauri/icons/ios`. It also deletes any icon there that the Xcode set
+doesn't have, so both folders hold the same icons. The script changes nothing if an
+icon isn't an 8-bit RGB or RGBA PNG or has a pixel that isn't fully opaque.
 
 `icon.icns` comes out with different bytes on every run, even when the images in it
 are the same. If you ran `pnpm tauri icon` without changing the SVG, restore it with
