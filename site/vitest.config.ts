@@ -10,5 +10,8 @@ export default defineConfig({
 	test: {
 		environment: "node",
 		include: ["src/**/*.test.ts"],
+		// Vitest blanks imported CSS. page.test.ts reads the stylesheet as text
+		// to check its selectors.
+		css: { include: [/\/styles\.css\?raw$/] },
 	},
 });

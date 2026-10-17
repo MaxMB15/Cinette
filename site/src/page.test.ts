@@ -5,11 +5,12 @@
 // Checks index.html itself: the script that picks the hero's downloads, the
 // links between sections, and that nothing loads from another site. The page
 // goes through a DOM parser, as a browser would read it, and its script never
-// runs here except through osFor.
+// runs here except through osFor. The stylesheet is read as text.
 
 import { expect, test } from "vitest";
 import page from "../index.html?raw";
 import fixture from "../fixtures/release.json?raw";
+import styles from "./styles.css?raw";
 import { FILES, parseRelease } from "./lib/release";
 import { fillPage } from "./lib/render";
 
@@ -99,6 +100,26 @@ test("the script offers every download to Android, ChromeOS and Windows", () => 
 	]) {
 		expect(osFor(userAgent)).toBe("other");
 	}
+});
+
+test("the script, the hero and the stylesheet name the same systems", () => {
+	const systems = ["ios", "linux", "mac", "other"];
+	// Each value the script can give data-os is a quoted string in it.
+	const set = [...scripts[0].text.matchAll(/"([^"]*)"/g)].map(([, os]) => os);
+	expect(set.sort()).toEqual(systems);
+	expect(attributes(FILLED, ".os-pick", "data-for").sort()).toEqual(systems);
+	const shown = [
+		...styles.matchAll(/:root\[data-os="([^"]*)"\] \.os-pick\[data-for="([^"]*)"\]/g),
+	];
+	expect(shown.map(([, os]) => os).sort()).toEqual(systems);
+	for (const [, os, pick] of shown) {
+		expect(pick).toBe(os);
+	}
+	// Without the script, the link to every download shows.
+	expect(styles).toContain(':root:not([data-os]) .os-pick[data-for="other"]');
+	const picks = [...styles.matchAll(/\.os-pick\[data-for="([^"]*)"\]/g)].map(([, os]) => os);
+	expect(picks).toHaveLength(systems.length + 1);
+	expect(new Set(picks)).toEqual(new Set(systems));
 });
 
 test("the release fills every marker in the page", () => {
