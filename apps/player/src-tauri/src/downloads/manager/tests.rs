@@ -873,6 +873,35 @@ fn without_saved_settings_the_defaults_stay() {
 }
 
 #[test]
+fn a_saved_folder_inside_a_renamed_folder_follows_it() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    save_folder(&handle, "/data/old/Videos").unwrap();
+    move_saved_folder(&handle, Path::new("/data/old"), Path::new("/data/new")).unwrap();
+    restore_settings(&handle);
+    assert_eq!(app.downloads().root(), Path::new("/data/new/Videos"));
+}
+
+#[test]
+fn a_saved_folder_outside_a_renamed_folder_stays() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    // Shares the folder's name as text, but not as a path.
+    save_folder(&handle, "/data/older/Videos").unwrap();
+    move_saved_folder(&handle, Path::new("/data/old"), Path::new("/data/new")).unwrap();
+    restore_settings(&handle);
+    assert_eq!(app.downloads().root(), Path::new("/data/older/Videos"));
+}
+
+#[test]
+fn renaming_a_folder_saves_no_download_folder_when_none_was_saved() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    move_saved_folder(&handle, Path::new("/data/old"), Path::new("/data/new")).unwrap();
+    assert!(handle.store(SETTINGS_STORE_FILE).unwrap().get(FOLDER_KEY).is_none());
+}
+
+#[test]
 fn hand_edited_settings_stay_in_the_range_the_app_allows() {
     let app = TestApp::new();
     app.downloads().set_retention_days(Some(30));

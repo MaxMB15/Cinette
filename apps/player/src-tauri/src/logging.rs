@@ -39,7 +39,7 @@ pub fn init() {
     let file = std::env::var_os("HOME")
         .map(|home| std::path::PathBuf::from(home).join("Library/Caches/Logs"))
         .and_then(|dir| capped::CappedLog::open(&dir, MAX_BYTES).ok());
-    let sink = ios::Sink::new("com.maxvideoplayer.app", "rust", file);
+    let sink = ios::Sink::new("app.cinette", "rust", file);
     tracing_subscriber::registry()
         .with(filter())
         .with(

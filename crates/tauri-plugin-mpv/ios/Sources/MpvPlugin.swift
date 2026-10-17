@@ -402,7 +402,7 @@ private func onMain<T>(_ work: () -> T) -> T {
 
 /// Decodes lock screen artwork off the main thread. It's serial, so a clear
 /// and the logo after it reach the main thread in the order Rust sent them.
-private let artworkQueue = DispatchQueue(label: "com.maxvideoplayer.mpv.artwork", qos: .utility)
+private let artworkQueue = DispatchQueue(label: "app.cinette.mpv.artwork", qos: .utility)
 
 /// The lock screen never shows artwork much bigger than this, so a larger
 /// logo is scaled down while it's decoded rather than kept at full size.

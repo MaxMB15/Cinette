@@ -13,6 +13,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 - Max Video Player is now called Cinette. Updating keeps your playlists, favorites, settings and downloads. On a Mac, an update from inside the app keeps the old file name in Applications, and you can rename the app there. The installers' names now start with `Cinette_`, and on Linux the `cinette` package replaces the `max-video-player` package (#293).
 - The project moved to https://github.com/MaxMB15/Cinette. Links to github.com/MaxMB15/MaxVideoPlayer still work, and so do updates from older versions (#294).
 - Cinette has a new icon, and the website uses it too (#295).
+- The app's identifier is now `app.cinette`, so its folders have new names, such as `~/Library/Application Support/app.cinette` on macOS and `~/.local/share/app.cinette` on Linux. The first launch moves your playlists, favorites, settings, downloads and player preferences there from the old `com.maxvideoplayer.app` folders, so an older version opened afterwards starts empty. macOS may ask again to let the app find devices on your local network (#296).
 - The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
 
 ### Fixed

@@ -45,6 +45,9 @@ zbus = "5"
 oslog = { version = "0.2", default-features = false }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# The folders Tauri names after the identifier, found before the app is built.
+# The same version as Tauri's.
+dirs = "7"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"

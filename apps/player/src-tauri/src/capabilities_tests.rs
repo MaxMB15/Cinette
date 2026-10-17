@@ -21,7 +21,7 @@ fn app(dir: &TempDir) -> App<MockRuntime> {
     let mut context = tauri::generate_context!(test = true);
     // The real identifier would point the app's folders at the user's data
     // if the override below were ever dropped.
-    context.config_mut().identifier = "com.maxvideoplayer.test".into();
+    context.config_mut().identifier = "app.cinette.test".into();
     context.config_mut().app.app_directories_override =
         Some(AppDirectoriesOverride::Root(dir.path().join("app")));
     mock_builder()

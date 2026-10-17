@@ -157,7 +157,7 @@ No. There are no accounts, analytics or telemetry. The app connects to the provi
 
 <br>
 
-In `~/Library/Application Support/com.maxvideoplayer.app` on macOS and `~/.local/share/com.maxvideoplayer.app` on Linux. Downloads go to the `downloads` folder inside it.
+In `~/Library/Application Support/app.cinette` on macOS and `~/.local/share/app.cinette` on Linux. Downloads go to the `downloads` folder inside it. Before 0.8.0, these folders were named `com.maxvideoplayer.app`, and the first launch of 0.8.0 renames them.
 
 </details>
 
@@ -166,7 +166,7 @@ In `~/Library/Application Support/com.maxvideoplayer.app` on macOS and `~/.local
 
 <br>
 
-Yes. Max Video Player was renamed Cinette, and updating keeps your playlists, favorites, settings and downloads. They stay in the folders above.
+Yes. Max Video Player was renamed Cinette, and updating keeps your playlists, favorites, settings and downloads. They move to the folders above.
 
 On a Mac, an update from inside the app keeps the old file name, so the app is still called Max Video Player in Applications. You can rename it to Cinette there. If you install Cinette from the DMG instead, delete the old Max Video Player app. On Linux, installing the `cinette` package removes the `max-video-player` package.
 

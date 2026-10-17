@@ -1,6 +1,6 @@
 name: max-video-player
 options:
-  bundleIdPrefix: com.maxvideoplayer.app
+  bundleIdPrefix: app.cinette
   deploymentTarget:
     iOS: 17.5
 fileGroups: [../../src]
@@ -17,7 +17,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: Cinette
-      PRODUCT_BUNDLE_IDENTIFIER: com.maxvideoplayer.app
+      PRODUCT_BUNDLE_IDENTIFIER: app.cinette
       DEVELOPMENT_TEAM: 3MLC4VWP96
 targetTemplates:
   app:
