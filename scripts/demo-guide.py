@@ -6,8 +6,9 @@
 Writes docs/demo/guide.xml, a made-up XMLTV guide for the live test streams
 in docs/demo/playlist.m3u.
 
-The streams show the same test picture all day, so the guide splits each day
-into a few blocks whose titles say what the stream shows. The guide runs from
+Apple's entry is a 10-minute on-demand clip that stops at its end. The other
+two are live streams that show the same test content all day. The guide splits
+each day into a few blocks whose titles say what the entry shows. It runs from
 START to the day before END, in UTC. The output is the same on every run, so
 run it again after a change here and commit both files:
 
@@ -36,10 +37,20 @@ CHANNELS = [
         "name": "Apple HLS example",
         "hours": [0, 7, 12, 18],
         "shows": [
-            ("Bip-bop", "Apple's 10-minute HLS example. A circle flashes Bip! and Bop! over a frame counter."),
-            ("Bip-bop at 1080p60", "The same clip, in eight sizes up to 1920x1080 at 60 frames a second."),
-            ("Bip-bop with subtitles", "The same clip, with English subtitles and captions."),
-            ("Bip-bop in 5.1", "The same clip, with stereo and 5.1 sound."),
+            (
+                "Bip-bop",
+                "Apple's HLS example, a 10-minute clip that plays from the start and stops."
+                " A circle flashes Bip! and Bop! over a frame counter.",
+            ),
+            (
+                "Bip-bop at 1080p60",
+                "The same 10-minute clip, in six sizes up to 1920x1080 at 60 frames a second.",
+            ),
+            (
+                "Bip-bop with subtitles",
+                "The same 10-minute clip, with English subtitles and captions.",
+            ),
+            ("Bip-bop in 5.1", "The same 10-minute clip, with stereo and 5.1 sound."),
         ],
     },
     {
@@ -47,8 +58,14 @@ CHANNELS = [
         "name": "Amazon IVS test stream",
         "hours": [0, 7, 13, 18],
         "shows": [
-            ("Around Seattle", "Amazon IVS's 720p test stream. Short clips of Seattle, one after another."),
-            ("Seattle, day and night", "The same clips of Seattle's streets, market and waterfront."),
+            (
+                "Around Seattle",
+                "Amazon IVS's 720p test stream. Short clips of Seattle, one after another.",
+            ),
+            (
+                "Seattle, day and night",
+                "The same clips of Seattle's streets, market and waterfront.",
+            ),
         ],
     },
     {
@@ -56,8 +73,14 @@ CHANNELS = [
         "name": "Unified Streaming live test",
         "hours": [0, 8, 16],
         "shows": [
-            ("Color bars", "Unified Streaming's live test. Color bars with the date and time in UTC."),
-            ("Color bars and clock", "The same color bars, with a clock that shows the time in UTC."),
+            (
+                "Color bars",
+                "Unified Streaming's live test. Color bars with the date and time in UTC.",
+            ),
+            (
+                "Color bars and clock",
+                "The same color bars, with a clock that shows the time in UTC.",
+            ),
         ],
     },
 ]
@@ -74,7 +97,7 @@ def programmes(channel: dict, start: datetime.date, end: datetime.date):
     day = start
     while day < end:
         midnight = datetime.datetime.combine(day, datetime.time())
-        turn = (day - START).days
+        turn = (day - start).days
         for i, hour in enumerate(hours):
             begin = midnight + datetime.timedelta(hours=hour)
             stop = midnight + datetime.timedelta(hours=hours[i + 1] if i + 1 < len(hours) else 24)
@@ -107,7 +130,9 @@ def guide(start: datetime.date, end: datetime.date) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--out", type=Path, default=OUT, help="where to write the guide")
     args = parser.parse_args()
     args.out.write_text(guide(START, END), encoding="utf-8", newline="\n")
