@@ -648,8 +648,8 @@ them into `index.html`. A file the release doesn't have is left out, so the page
 never links a missing file. Each link names the release's tag, as in
 `releases/download/v0.7.0/<name>`, so it fetches the file whose size and checksum
 the page shows, even when a later deploy fails and the page stays on an older
-release. When the request fails to connect or GitHub answers with a 5xx, the build
-waits and tries again, three tries in all. After that, or after any other error
+release. When the request fails to connect, gets no answer within 30 seconds or
+gets a 5xx from GitHub, the build waits and tries again, three tries in all. After that, or after any other error
 answer, the build fails rather than make a page without sizes. `pnpm dev:site`
 shows the error and asks GitHub again on the next page load.
 `SITE_RELEASE_FIXTURE=1` builds with the made-up release in

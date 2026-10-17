@@ -80,7 +80,10 @@ export const parseRelease = (data: unknown): Release => {
 
 export type LoadOptions = {
 	env: Record<string, string | undefined>;
-	fetch: (url: string, init: { headers: Record<string, string> }) => Promise<Response>;
+	fetch: (
+		url: string,
+		init: { headers: Record<string, string>; signal: AbortSignal }
+	) => Promise<Response>;
 	readFixture: () => Promise<string>;
 	/** Resolves after the given number of milliseconds. */
 	wait: (ms: number) => Promise<unknown>;
@@ -93,27 +96,42 @@ export type LoadOptions = {
  */
 export const RETRY_DELAYS = [2000, 5000] as const;
 
+/**
+ * How long each try waits for GitHub, in milliseconds, before it gives up.
+ * Node's fetch can wait five minutes for an answer, so three tries could
+ * outlast the build job's 15 minutes before the build says why it failed.
+ */
+export const REQUEST_TIMEOUT = 30_000;
+
 const FIXTURE_HINT = `Set ${FIXTURE_ENV}=1 to build with the made-up release in fixtures/release.json.`;
 
 /**
  * Asks for the release, and asks again after each of `RETRY_DELAYS` while the
- * request doesn't reach GitHub or GitHub answers with a 5xx. It returns the
- * last answer, and the last try's network error reaches the caller.
+ * request doesn't reach GitHub, gets no answer within `REQUEST_TIMEOUT` or
+ * gets a 5xx. It returns the last answer, and the last try's error reaches
+ * the caller.
  */
 const fetchWithRetries = async (
 	{ fetch, wait }: LoadOptions,
 	headers: Record<string, string>
 ): Promise<Response> => {
+	// Each try gets a signal of its own, so each has the whole timeout.
+	const request = () =>
+		fetch(RELEASE_API_URL, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT) });
 	for (const delay of RETRY_DELAYS) {
 		try {
-			const response = await fetch(RELEASE_API_URL, { headers });
+			const response = await request();
 			if (response.status < 500) return response;
+			// Dropping the body frees the connection while the build waits.
+			// Stryker disable next-line OptionalChaining: a 5xx without a body throws here, and the catch below waits and tries again just the same.
+			await response.body?.cancel();
 		} catch {
-			// The last try reports the error when the network stays down.
+			// A timeout gets another try, as a dropped connection does. The last
+			// try reports the error when it happens again.
 		}
 		await wait(delay);
 	}
-	return fetch(RELEASE_API_URL, { headers }).catch((error: unknown) => {
+	return request().catch((error: unknown) => {
 		throw new Error(`GitHub's releases API couldn't be reached. ${FIXTURE_HINT}`, {
 			cause: error,
 		});

@@ -167,12 +167,15 @@ const wait = async () => {};
 /**
  * A fetch that gives these answers in turn, throwing each error, and a wait.
  * Both write to one log, so a test sees the order of tries and waits. Each
- * request's URL and headers go into `requests`.
+ * request's URL, headers and signal go into `requests`.
  */
 const answers = (...queue: (Response | Error)[]) => {
 	const log: string[] = [];
-	const requests: [string, { headers: Record<string, string> }][] = [];
-	const fetch = async (url: string, init: { headers: Record<string, string> }) => {
+	const requests: [string, { headers: Record<string, string>; signal: AbortSignal }][] = [];
+	const fetch = async (
+		url: string,
+		init: { headers: Record<string, string>; signal: AbortSignal }
+	) => {
 		log.push("fetch");
 		requests.push([url, init]);
 		const answer = queue.shift();
@@ -202,6 +205,7 @@ test("loadRelease asks GitHub for the latest release", async () => {
 				Accept: "application/vnd.github+json",
 				"X-GitHub-Api-Version": "2022-11-28",
 			},
+			signal: expect.any(AbortSignal),
 		}
 	);
 	expect(readFixture).not.toHaveBeenCalled();
@@ -222,6 +226,7 @@ test("loadRelease sends GITHUB_TOKEN when there is one", async () => {
 			"X-GitHub-Api-Version": "2022-11-28",
 			Authorization: "Bearer made-up-token",
 		},
+		signal: expect.any(AbortSignal),
 	});
 });
 
@@ -235,6 +240,7 @@ test("loadRelease sends no token when GITHUB_TOKEN is empty", async () => {
 				Accept: "application/vnd.github+json",
 				"X-GitHub-Api-Version": "2022-11-28",
 			},
+			signal: expect.any(AbortSignal),
 		},
 	]);
 });
@@ -276,9 +282,49 @@ test("loadRelease tries again after a dropped connection or a 5xx", async () => 
 				"X-GitHub-Api-Version": "2022-11-28",
 				Authorization: "Bearer made-up-token",
 			},
+			signal: expect.any(AbortSignal),
 		},
 	];
 	expect(tries.requests).toEqual([request, request, request]);
+});
+
+test("loadRelease gives each try 30 seconds of its own", async () => {
+	const timeout = vi.spyOn(AbortSignal, "timeout");
+	const tries = answers(response(502, {}), response(200, raw({})));
+	await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
+	expect(timeout.mock.calls).toEqual([[30_000], [30_000]]);
+	const signals = tries.requests.map(([, init]) => init.signal);
+	expect(signals).toHaveLength(2);
+	expect(signals[0]).toBe(timeout.mock.results[0]?.value);
+	expect(signals[1]).toBe(timeout.mock.results[1]?.value);
+	timeout.mockRestore();
+});
+
+test("loadRelease tries again when GitHub takes too long to answer", async () => {
+	const tries = answers(
+		new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+		response(200, raw({ tag_name: "v0.6.1" }))
+	);
+	const loaded = await loadRelease({ env: {}, readFixture: vi.fn(), ...tries });
+	expect(loaded.tag).toBe("v0.6.1");
+	expect(tries.log).toEqual(["fetch", "wait 2000", "fetch"]);
+});
+
+test("loadRelease drops a 5xx answer's body, when it has one, before it waits", async () => {
+	const failed = response(502, { message: "Bad Gateway" });
+	const tries = answers(failed, new Response(null, { status: 503 }), response(200, raw({})));
+	const dropped: boolean[] = [];
+	const loaded = await loadRelease({
+		env: {},
+		readFixture: vi.fn(),
+		fetch: tries.fetch,
+		wait: async () => {
+			dropped.push(failed.bodyUsed);
+		},
+	});
+	expect(loaded.tag).toBe("v1.2.3");
+	expect(dropped).toEqual([true, true]);
+	expect(tries.log).toEqual(["fetch", "fetch", "fetch"]);
 });
 
 test("loadRelease stops trying once GitHub answers", async () => {
