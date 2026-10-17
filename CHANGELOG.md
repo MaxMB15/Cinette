@@ -4,6 +4,10 @@ All notable changes to Max Video Player are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
+
 ### Fixed
 
 - After you added a playlist or an Xtream account, the Live tab showed no TV guide for it until you switched tabs, restarted the app or a few hours went by. The app now downloads the guide as soon as you add one, and the channel list shows it once it's in. The list now also shows a guide that refreshes at startup, on its schedule or with Refresh EPG in a playlist's settings, without switching tabs. Refresh EPG also puts off the next automatic refresh of that guide by a full interval (#290).
