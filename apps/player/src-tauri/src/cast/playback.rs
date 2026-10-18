@@ -33,7 +33,7 @@ use super::tls;
 use super::CastReceivers;
 use crate::commands::AppState;
 use crate::convert::{Conversion, ConvertError, Ended};
-use crate::streams::{fetch_urls, StreamsState, REFUSED};
+use crate::streams::{StreamsState, REFUSED};
 
 /// The event that carries each [`CastUpdate`], with its receiver's id.
 pub const UPDATE_EVENT: &str = "cast://update";
@@ -43,13 +43,32 @@ pub const UPDATE_EVENT: &str = "cast://update";
 #[serde(tag = "via", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CastRoute {
     /// The receiver fetches the item's URL at `source` itself.
-    Direct { source: usize, container: Container },
+    Direct {
+        generation: u64,
+        source: usize,
+        container: Container,
+    },
     /// This computer converts the URL at `source`.
     Converted {
+        generation: u64,
         source: usize,
         video: VideoChoice,
         audio: AudioChoice,
     },
+}
+
+impl CastRoute {
+    /// The URL list the route was worked out from, and its URL's place in it.
+    fn source(self) -> (u64, usize) {
+        match self {
+            CastRoute::Direct {
+                generation, source, ..
+            }
+            | CastRoute::Converted {
+                generation, source, ..
+            } => (generation, source),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -309,7 +328,7 @@ async fn start_conversion<R: Runtime>(
 /// Plays `channel` on `receiver_id` the way `route` says, from `start_at`
 /// seconds for an item with a length. Connects first when needed. Rejects
 /// with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
-/// `noEncoder`, `noRoute`, `converterFailed` or `noSource`, or, for a direct
+/// `noEncoder`, `noRoute`, `converterFailed` or `stale`, or, for a direct
 /// HLS route, `notPlaylist` or `cors`, after which the frontend routes the
 /// item again without that format.
 pub async fn load<R: Runtime>(
@@ -319,15 +338,12 @@ pub async fn load<R: Runtime>(
     route: CastRoute,
     start_at: Option<f64>,
 ) -> Result<(), String> {
-    let urls = {
-        let state = app.state::<AppState>();
-        let streams = app.state::<StreamsState>();
-        fetch_urls(&state, &streams, channel).await?
-    };
-    let source = match route {
-        CastRoute::Direct { source, .. } | CastRoute::Converted { source, .. } => source,
-    };
-    let url = urls.get(source).ok_or("noSource")?;
+    // The URL the route was worked out for, which a newer list of the
+    // item's URLs makes stale.
+    let (generation, source) = route.source();
+    let url = &app
+        .state::<StreamsState>()
+        .url(&channel.id, generation, source)?;
     let live = channel.content_type == "live";
     let mut request = LoadRequest {
         url: String::new(),

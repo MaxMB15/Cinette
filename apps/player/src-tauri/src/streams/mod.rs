@@ -78,7 +78,7 @@ pub struct StreamFormats {
 
 impl StreamsState {
     /// Keeps `urls` as `channel_id`'s list, and returns its generation.
-    fn remember(&self, channel_id: &str, urls: Vec<String>) -> u64 {
+    pub(crate) fn remember(&self, channel_id: &str, urls: Vec<String>) -> u64 {
         let generation = {
             let mut next = lock(&self.generation);
             *next += 1;

@@ -703,14 +703,14 @@ describe("backend commands", () => {
 				tauri.castLoad(
 					"cast:tv",
 					episode,
-					{ via: "direct", source: 1, container: "hls-ts" },
+					{ via: "direct", generation: 3, source: 1, container: "hls-ts" },
 					30
 				),
 			"cast_load",
 			{
 				receiverId: "cast:tv",
 				channel: episode,
-				route: { via: "direct", source: 1, container: "hls-ts" },
+				route: { via: "direct", generation: 3, source: 1, container: "hls-ts" },
 				startAt: 30,
 			},
 		],

@@ -9,6 +9,7 @@ import {
 	castRouteOf,
 	createCastDestination,
 	idleSnapshot,
+	STALE,
 	throughThisDevice,
 	type CastBackend,
 	type CastSnapshot,
@@ -39,7 +40,12 @@ const hls: StreamFormat = {
 const ts: StreamFormat = { ...hls, container: "ts" };
 
 /** Xtream live: `.m3u8` at place 0, `.ts` at place 1. */
-const xtream: StreamFormats = { formats: [hls, ts], sources: [0, 1], duration: null };
+const xtream: StreamFormats = {
+	formats: [hls, ts],
+	sources: [0, 1],
+	duration: null,
+	generation: 7,
+};
 
 type Media = NonNullable<Extract<CastUpdate, { kind: "media" }>["media"]>;
 
@@ -246,11 +252,13 @@ describe("castRouteOf and throughThisDevice", () => {
 		formats: [hls, { ...ts, video: null, audio: null }],
 		sources: [2, 5],
 		duration: null,
+		generation: 7,
 	};
 
 	it("names the format by its URL's place", () => {
 		expect(castRouteOf({ via: "direct", format: 0 }, formats)).toEqual({
 			via: "direct",
+			generation: 7,
 			source: 2,
 			container: "hls-ts",
 		});
@@ -264,6 +272,7 @@ describe("castRouteOf and throughThisDevice", () => {
 		};
 		expect(castRouteOf(converted, formats)).toEqual({
 			via: "converted",
+			generation: 7,
 			source: 5,
 			video: "transcode",
 			audio: "aac",
@@ -331,6 +340,7 @@ describe("createCastDestination", () => {
 			formats: [{ ...ts, audio: "ac3" }],
 			sources: [0],
 			duration: null,
+			generation: 7,
 		};
 		expect(await createCastDestination(receiver, backend(dolby)).route(item)).toMatchObject({
 			ok: true,
@@ -374,7 +384,7 @@ describe("createCastDestination", () => {
 		expect(fake.castLoad).toHaveBeenLastCalledWith(
 			"cast:tv",
 			channel,
-			{ via: "direct", source: 1, container: "ts" },
+			{ via: "direct", generation: 7, source: 1, container: "ts" },
 			20
 		);
 		expect(cast.getState()).toMatchObject({
@@ -390,7 +400,7 @@ describe("createCastDestination", () => {
 		expect(fake.castLoad).toHaveBeenLastCalledWith(
 			"cast:tv",
 			channel,
-			{ via: "direct", source: 0, container: "hls-ts" },
+			{ via: "direct", generation: 7, source: 0, container: "hls-ts" },
 			undefined
 		);
 		expect(seen).toEqual(["opening", "playing"]);
@@ -417,10 +427,21 @@ describe("createCastDestination", () => {
 		expect(fake.castLoad).toHaveBeenLastCalledWith(
 			"cast:tv",
 			channel,
-			{ via: "converted", source: 1, video: "copy", audio: "copy" },
+			{ via: "converted", generation: 7, source: 1, video: "copy", audio: "copy" },
 			undefined
 		);
 		expect(cast.getState().status).toBe("opening");
+	});
+
+	it("asks for the formats again after a stale load", async () => {
+		const fake = backend();
+		fake.castLoad.mockRejectedValueOnce(STALE);
+		const cast = createCastDestination(receiver, fake);
+		await expect(cast.load(item)).rejects.toBe("stale");
+		expect(fake.getStreamFormats).toHaveBeenCalledTimes(1);
+		await cast.route(item);
+		expect(fake.getStreamFormats).toHaveBeenCalledTimes(2);
+		expect(STALE).toBe("stale");
 	});
 
 	it("keeps the formats after any other failure", async () => {
@@ -464,12 +485,13 @@ describe("createCastDestination", () => {
 			formats: [{ ...ts, audio: "ac3" }],
 			sources: [4],
 			duration: 5400,
+			generation: 7,
 		};
 		const fake = backend(dolby);
 		const cast = createCastDestination(receiver, fake);
 		const film = { kind: "local" as const, channel: movie };
 		await cast.load(film, { startAt: 60 });
-		const route = { via: "converted", source: 4, video: "copy", audio: "aac" };
+		const route = { via: "converted", generation: 7, source: 4, video: "copy", audio: "aac" };
 		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState()).toMatchObject({ position: 65, duration: 5400 });

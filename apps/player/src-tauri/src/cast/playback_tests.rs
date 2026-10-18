@@ -79,13 +79,21 @@ fn updates(app: &TestApp) -> mpsc::Receiver<Value> {
     rx
 }
 
+/// Casts `channel` by `route`, after listing its own URL as the formats
+/// command does, with that list's generation in the route.
 fn load(
     app: &TestApp,
     receiver: &str,
     channel: &Channel,
-    route: Value,
+    mut route: Value,
     start_at: Option<f64>,
 ) -> Result<Value, Value> {
+    let handle = app.handle();
+    let streams = handle.state::<crate::streams::StreamsState>();
+    let generation = streams.remember(&channel.id, vec![channel.url.clone()]);
+    if let Some(route) = route.as_object_mut() {
+        route.entry("generation").or_insert(json!(generation));
+    }
     app.invoke(
         "cast_load",
         json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at }),
@@ -261,10 +269,16 @@ async fn says_why_a_receiver_couldnt_be_cast_to() {
 
     let (addr, _, _got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
+    // A URL that its list doesn't have, or a list that a newer one replaced.
     let route = json!({ "via": "direct", "source": 3, "container": "mp4" });
     assert_eq!(
         load(&app, "cast:tv", &movie, route, None),
-        Err(json!("noSource"))
+        Err(json!("stale"))
+    );
+    let route = json!({ "via": "direct", "generation": 0, "source": 0, "container": "mp4" });
+    assert_eq!(
+        load(&app, "cast:tv", &movie, route, None),
+        Err(json!("stale"))
     );
     assert!(load(&app, "cast:tv", &movie, json!({ "via": "elsewhere" }), None).is_err());
     assert!(control(&app, "cast:tv", json!({ "action": "dance" })).is_err());

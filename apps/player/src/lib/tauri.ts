@@ -636,12 +636,14 @@ export const getCastReceivers = (): Promise<CastReceiverList> => invoke("get_cas
 export const holdCastReceivers = (ids: string[]): Promise<void> =>
 	invoke("hold_cast_receivers", { ids });
 
-/** How a Cast receiver gets an item: the place of its URL among the item's
- *  URLs, from `StreamFormats.sources`, and the route `chooseRoute` gave. */
+/** How a Cast receiver gets an item: the URL list it was worked out from
+ *  (`StreamFormats.generation`), its URL's place in that list (from
+ *  `StreamFormats.sources`), and the route `chooseRoute` gave. */
 export type CastRoute =
-	| { via: "direct"; source: number; container: Container }
+	| { via: "direct"; generation: number; source: number; container: Container }
 	| {
 			via: "converted";
+			generation: number;
 			source: number;
 			video: "copy" | "transcode" | "none";
 			audio: "copy" | "aac" | "none";
