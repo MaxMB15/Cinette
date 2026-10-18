@@ -46,6 +46,11 @@ const downloads = vi.hoisted(() => ({
 	setRetentionDays: vi.fn(),
 }));
 
+// Remote control's card has tests of its own.
+vi.mock("@/components/settings/RemoteControlSettings", () => ({
+	RemoteControlSettings: () => <section aria-label="Remote control settings" />,
+}));
+
 vi.mock("@/lib/tauri", () => ({
 	getOmdbApiKey: vi.fn(),
 	setOmdbApiKey: vi.fn(),

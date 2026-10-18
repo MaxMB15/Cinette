@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
+import type { RemoteSettings } from "@/lib/tauri";
+
+vi.mock("@/lib/tauri", () => ({
+	remoteGetSettings: vi.fn(),
+	remoteSetSettings: vi.fn(),
+	remoteResetIdentity: vi.fn(),
+	remoteDisconnect: vi.fn(() => Promise.resolve()),
+}));
+
+const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
+vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
+
+import {
+	remoteDisconnect,
+	remoteGetSettings,
+	remoteResetIdentity,
+	remoteSetSettings,
+} from "@/lib/tauri";
+import { RemoteControlSettings } from "./RemoteControlSettings";
+
+const defaults: RemoteSettings = {
+	discoverable: true,
+	remoteControl: "ask",
+	deviceName: null,
+	defaultName: "Linux PC",
+	deviceId: "abc",
+};
+
+const shown = async (settings: RemoteSettings = defaults) => {
+	vi.mocked(remoteGetSettings).mockResolvedValue(settings);
+	render(<RemoteControlSettings />);
+	await screen.findByText("Remote control", { selector: "h3,div" });
+};
+
+beforeEach(() => {
+	vi.clearAllMocks();
+	sessions.list = [];
+	vi.mocked(remoteSetSettings).mockImplementation(async (s) => ({
+		...defaults,
+		...s,
+		deviceName: s.deviceName,
+	}));
+});
+
+describe("RemoteControlSettings", () => {
+	it("shows nothing where remote control doesn't run", async () => {
+		vi.mocked(remoteGetSettings).mockRejectedValue("unavailable");
+		const { container } = render(<RemoteControlSettings />);
+		await act(async () => {});
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("drops settings that load after it closed", async () => {
+		let resolve: (s: RemoteSettings) => void = () => {};
+		vi.mocked(remoteGetSettings).mockImplementation(() => new Promise((r) => (resolve = r)));
+		const { unmount, container } = render(<RemoteControlSettings />);
+		unmount();
+		await act(async () => resolve(defaults));
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("shows the defaults: discoverable, only when allowed, the type as name", async () => {
+		await shown();
+		expect(
+			screen.getByRole("button", { name: "Discoverable on this network" })
+		).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getByRole("button", { name: "Only when allowed" })).toHaveAttribute(
+			"aria-pressed",
+			"true"
+		);
+		expect(
+			screen.getByText(/asks each time another one wants to control it/)
+		).toBeInTheDocument();
+		expect(screen.getByLabelText("Device name")).toHaveAttribute("placeholder", "Linux PC");
+		expect(screen.getByLabelText("Device name")).toHaveValue("");
+		expect(screen.getByText(/Devices already connected stay connected/)).toBeInTheDocument();
+		expect(screen.getByText("No device is controlling this one.")).toBeInTheDocument();
+	});
+
+	it("turns discovery off and on", async () => {
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		expect(remoteSetSettings).toHaveBeenCalledWith({
+			discoverable: false,
+			remoteControl: "ask",
+			deviceName: null,
+		});
+		await waitFor(() =>
+			expect(
+				screen.getByRole("button", { name: "Discoverable on this network" })
+			).toHaveAttribute("aria-pressed", "false")
+		);
+		expect(
+			screen.getByRole("button", { name: "Discoverable on this network" })
+		).toHaveTextContent("Off");
+	});
+
+	it("changes who may control it and says what each choice means", async () => {
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		expect(remoteSetSettings).toHaveBeenCalledWith({
+			discoverable: true,
+			remoteControl: "never",
+			deviceName: null,
+		});
+		expect(await screen.findByText(/Choosing this ends every session now/)).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+		expect(
+			await screen.findByText(/without asking. Only choose this on a network you trust/)
+		).toBeInTheDocument();
+	});
+
+	it("saves the name when the field loses focus or on Enter, and only when it changed", async () => {
+		await shown({ ...defaults, deviceName: "Den" });
+		const field = screen.getByLabelText("Device name");
+		expect(field).toHaveValue("Den");
+		fireEvent.blur(field);
+		expect(remoteSetSettings).not.toHaveBeenCalled();
+		fireEvent.change(field, { target: { value: "  Living Room " } });
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(remoteSetSettings).toHaveBeenCalledWith({
+			discoverable: true,
+			remoteControl: "ask",
+			deviceName: "Living Room",
+		});
+		await waitFor(() => expect(field).toHaveValue("Living Room"));
+		fireEvent.keyDown(field, { key: "a" });
+		expect(remoteSetSettings).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes back to the default name when the field is cleared", async () => {
+		await shown({ ...defaults, deviceName: "Den" });
+		const field = screen.getByLabelText("Device name");
+		fireEvent.change(field, { target: { value: "   " } });
+		fireEvent.blur(field);
+		expect(remoteSetSettings).toHaveBeenCalledWith({
+			discoverable: true,
+			remoteControl: "ask",
+			deviceName: null,
+		});
+		await waitFor(() => expect(field).toHaveValue(""));
+	});
+
+	it("says when saving failed", async () => {
+		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save: disk full");
+		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+	});
+
+	it("lists the devices controlling it, each with Disconnect", async () => {
+		sessions.list = [
+			{
+				sessionId: "s1",
+				deviceId: "d1",
+				name: "Phone",
+				deviceType: "iphone",
+				connected: true,
+			},
+			{
+				sessionId: "s2",
+				deviceId: "d2",
+				name: "Laptop",
+				deviceType: "mac",
+				connected: false,
+			},
+		];
+		await shown();
+		expect(screen.getByText("Phone").closest("li")).toHaveTextContent("Phone · iPhone");
+		expect(screen.getByText("Laptop").closest("li")).toHaveTextContent(
+			"Laptop · Mac · reconnecting"
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Disconnect Laptop" }));
+		expect(remoteDisconnect).toHaveBeenCalledWith("s2");
+	});
+
+	it("keeps going when disconnecting fails", async () => {
+		vi.mocked(remoteDisconnect).mockRejectedValueOnce("gone");
+		sessions.list = [
+			{
+				sessionId: "s1",
+				deviceId: "d1",
+				name: "Phone",
+				deviceType: "iphone",
+				connected: true,
+			},
+		];
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Disconnect Phone" }));
+		await act(async () => {});
+		expect(screen.getByText("Phone")).toBeInTheDocument();
+	});
+
+	it("resets the identity after asking", async () => {
+		vi.mocked(remoteResetIdentity).mockResolvedValue({ ...defaults, deviceId: "new" });
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+		const dialog = screen.getByRole("dialog", { name: "Reset device identity?" });
+		expect(dialog).toHaveTextContent("Every device controlling this one is disconnected");
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(remoteResetIdentity).not.toHaveBeenCalled();
+		expect(screen.queryByRole("dialog")).toBeNull();
+
+		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reset" }));
+		expect(remoteResetIdentity).toHaveBeenCalledTimes(1);
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("says when resetting failed", async () => {
+		vi.mocked(remoteResetIdentity).mockRejectedValue("no key");
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reset" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't reset: no key");
+	});
+});

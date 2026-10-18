@@ -39,6 +39,7 @@ import {
 	countDownloadsDue,
 } from "@/lib/tauri";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
+import { RemoteControlSettings } from "@/components/settings/RemoteControlSettings";
 import { useDownloads } from "@/hooks/useDownloads";
 import { RETENTION_OPTIONS } from "@/lib/retention";
 import { MARGIN_OPTIONS, readMargins, writeMargins } from "@/lib/recordings";
@@ -699,6 +700,8 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						</CardContent>
 					</Card>
 				)}
+
+				<RemoteControlSettings />
 
 				{/* History section */}
 				<Card>
