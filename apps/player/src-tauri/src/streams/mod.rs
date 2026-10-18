@@ -324,14 +324,11 @@ async fn probe_within<R: Runtime>(
         .map_err(|_| ProbeError::Unreachable)?;
     let mut stderr = Vec::new();
     let read = async {
+        // The events end once ffmpeg has exited.
         while let Some(event) = events.recv().await {
-            match event {
-                CommandEvent::Stderr(line) => {
-                    stderr.extend(line);
-                    stderr.push(b'\n');
-                }
-                CommandEvent::Terminated(_) => break,
-                _ => {}
+            if let CommandEvent::Stderr(line) = event {
+                stderr.extend(line);
+                stderr.push(b'\n');
             }
         }
     };
