@@ -115,6 +115,23 @@ describe("useAirPlay", () => {
 		expect(result.current.available).toBe(false);
 	});
 
+	it("ignores a route asked for before it was turned off and on", async () => {
+		let answer: (r: typeof tv) => void = () => {};
+		tauri.airplayGetRoute
+			.mockReturnValueOnce(new Promise((r) => (answer = r)))
+			.mockResolvedValueOnce(null);
+		const { result, rerender } = renderHook(({ on }) => useAirPlay(on), {
+			initialProps: { on: true },
+		});
+		rerender({ on: false });
+		rerender({ on: true });
+		await flush();
+		expect(tauri.airplaySetDetection.mock.calls).toEqual([[true], [false], [true]]);
+		answer(tv);
+		await flush();
+		expect(result.current.available).toBe(false);
+	});
+
 	it("ignores a route that arrives after it's gone", async () => {
 		let answer: (r: typeof tv) => void = () => {};
 		tauri.airplayGetRoute.mockReturnValue(new Promise((r) => (answer = r)));
@@ -173,6 +190,7 @@ describe("useAirPlay", () => {
 		};
 		act(() => events.emit("airplay://state", native));
 		expect(result.current.state).toMatchObject({ status: "playing", position: 601 });
+		expect(result.current.state?.positionAt).toEqual(expect.any(Number));
 		// The picker's own listeners are gone.
 		expect(events.count("airplay://picker-closed")).toBe(0);
 	});
@@ -219,6 +237,8 @@ describe("useAirPlay", () => {
 		await act(async () => {
 			expect(await sent).toEqual({ sent: true });
 		});
+		// The grace timer went with the picker.
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it("gives up when the picker closes with nothing picked", async () => {

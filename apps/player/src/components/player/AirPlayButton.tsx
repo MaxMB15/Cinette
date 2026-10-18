@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { Airplay } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 /** How long a reason stays up. */
@@ -18,23 +18,21 @@ interface AirPlayButtonProps {
 
 /** The player's AirPlay button. Says why under it when an item can't go. */
 export const AirPlayButton = ({ onSend }: AirPlayButtonProps) => {
-	const ref = useRef<HTMLButtonElement>(null);
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
 
+	// A reason that's gone already has nothing to clear, which is harmless.
 	useEffect(() => {
-		if (notice === null) return;
 		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
 		return () => clearTimeout(timer);
 	}, [notice]);
 
-	const send = async () => {
-		const button = ref.current;
-		if (busy || !button) return;
+	// The button is disabled while a send runs, so one runs at a time.
+	const send = async (anchor: DOMRect) => {
 		setBusy(true);
 		setNotice(null);
 		try {
-			setNotice(await onSend(button.getBoundingClientRect()));
+			setNotice(await onSend(anchor));
 		} catch {
 			setNotice("Couldn't start AirPlay.");
 		} finally {
@@ -45,11 +43,10 @@ export const AirPlayButton = ({ onSend }: AirPlayButtonProps) => {
 	return (
 		<div className="relative">
 			<Button
-				ref={ref}
 				variant="ghost"
 				size="icon"
 				className="text-white hover:bg-white/20"
-				onClick={send}
+				onClick={(e) => void send(e.currentTarget.getBoundingClientRect())}
 				disabled={busy}
 				aria-label="AirPlay"
 			>

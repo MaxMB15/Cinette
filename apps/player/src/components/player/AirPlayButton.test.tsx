@@ -41,6 +41,23 @@ describe("AirPlayButton", () => {
 		expect(notice()).toBeNull();
 	});
 
+	it("keeps a new reason up for its own while", async () => {
+		vi.useFakeTimers();
+		const onSend = vi
+			.fn<(r: DOMRect) => Promise<string | null>>()
+			.mockResolvedValueOnce("First.")
+			.mockResolvedValueOnce("Second.");
+		render(<AirPlayButton onSend={onSend} />);
+		await act(async () => fireEvent.click(button()));
+		act(() => vi.advanceTimersByTime(3000));
+		await act(async () => fireEvent.click(button()));
+		expect(notice()).toBe("Second.");
+		act(() => vi.advanceTimersByTime(3000));
+		expect(notice()).toBe("Second.");
+		act(() => vi.advanceTimersByTime(3000));
+		expect(notice()).toBeNull();
+	});
+
 	it("clears the last reason when it tries again", async () => {
 		const second = deferred<string | null>();
 		const onSend = vi

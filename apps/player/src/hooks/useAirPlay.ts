@@ -51,8 +51,40 @@ const bridge: AirPlayBridge = {
 	now: () => performance.now(),
 };
 
+// Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.
 const noState = () => () => {};
 const getNull = () => null;
+
+/** The receiver the user picks, or `null` if they close the picker. */
+const choose = (anchor: DOMRect) =>
+	new Promise<AirPlayRoute | null>((resolve, reject) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const listeners = [
+			listen<AirPlayRoute | null>(AIRPLAY_ROUTE_EVENT, (e) => {
+				if (e.payload) finish(e.payload);
+			}),
+			listen(AIRPLAY_PICKER_CLOSED_EVENT, () => {
+				timer = setTimeout(() => finish(null), ROUTE_GRACE_MS);
+			}),
+		];
+		const unlisten = () => {
+			for (const p of listeners) void p.then((fn) => fn());
+		};
+		const finish = (picked: AirPlayRoute | null) => {
+			clearTimeout(timer);
+			unlisten();
+			resolve(picked);
+		};
+		airplayChoose({
+			x: anchor.x,
+			y: anchor.y,
+			width: anchor.width,
+			height: anchor.height,
+		}).catch((e) => {
+			unlisten();
+			reject(e);
+		});
+	});
 
 /** What sending the current item to AirPlay came to. */
 export type SendResult =
@@ -124,38 +156,6 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const getState = destination ? destination.getState : getNull;
 	const state = useSyncExternalStore(subscribe, getState);
 
-	/** The receiver the user picks, or `null` if they close the picker. */
-	const choose = useCallback(
-		(anchor: DOMRect) =>
-			new Promise<AirPlayRoute | null>((resolve, reject) => {
-				let timer: ReturnType<typeof setTimeout> | undefined;
-				const listeners = [
-					listen<AirPlayRoute | null>(AIRPLAY_ROUTE_EVENT, (e) => {
-						if (e.payload) finish(e.payload);
-					}),
-					listen(AIRPLAY_PICKER_CLOSED_EVENT, () => {
-						timer = setTimeout(() => finish(null), ROUTE_GRACE_MS);
-					}),
-				];
-				const finish = (picked: AirPlayRoute | null) => {
-					clearTimeout(timer);
-					for (const p of listeners) void p.then((fn) => fn());
-					resolve(picked);
-				};
-				airplayChoose({
-					x: anchor.x,
-					y: anchor.y,
-					width: anchor.width,
-					height: anchor.height,
-				}).catch((e) => {
-					clearTimeout(timer);
-					for (const p of listeners) void p.then((fn) => fn());
-					reject(e);
-				});
-			}),
-		[]
-	);
-
 	const send = useCallback<AirPlay["send"]>(
 		async (channel, { anchor, startAt, stopLocal }) => {
 			try {
@@ -176,18 +176,14 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 				return { sent: false, why: "failed", error };
 			}
 		},
-		[route, choose]
+		[route]
 	);
-
-	const stop = useCallback(async () => {
-		setDestination(null);
-	}, []);
 
 	return {
 		available: enabled && (available || route !== null),
 		destination,
-		state: destination ? state : null,
+		state,
 		send,
-		stop,
+		stop: async () => setDestination(null),
 	};
 };

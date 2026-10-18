@@ -151,6 +151,27 @@ describe("REFUSED", () => {
 });
 
 describe("AirPlay profiles", () => {
+	it("lists what each receiver plays", () => {
+		expect(appleTvProfile).toEqual({
+			containers: ["hls-ts", "hls-fmp4", "mp4"],
+			video: { h264: ["hls-ts", "hls-fmp4", "mp4"], hevc: ["hls-fmp4", "mp4"] },
+			audio: ["aac", "mp3", "ac3", "eac3"],
+			interlaced: false,
+			audioOnly: true,
+			hlsNeedsCors: false,
+			convertTo: "hls",
+		});
+		expect(airplayTvProfile).toEqual({
+			containers: ["hls-ts", "hls-fmp4", "mp4"],
+			video: { h264: ["hls-ts", "hls-fmp4", "mp4"] },
+			audio: ["aac", "mp3"],
+			interlaced: false,
+			audioOnly: false,
+			hlsNeedsCors: false,
+			convertTo: "hls",
+		});
+	});
+
 	const iphone = iosSender({ convert: true, hardwareEncoder: true }, { needsScreen: false });
 
 	it("plays H.264 in HLS and MP4 on every receiver, and never MKV or raw TS", () => {

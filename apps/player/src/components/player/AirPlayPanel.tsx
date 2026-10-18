@@ -121,6 +121,7 @@ export const AirPlayPanel = ({
 						<select
 							className="rounded bg-white/10 px-2 py-1 text-sm"
 							aria-label="Audio"
+							// Stryker disable next-line StringLiteral: No audio option has an empty id, so any string selects none of them.
 							value={state.audioId ?? ""}
 							onChange={(e) => onAudio(e.target.value)}
 						>

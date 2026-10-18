@@ -76,6 +76,22 @@ const receiver = { id: "airplay:AB-12", name: "Living Room TV" };
 /** Lets the bridge's `listen` promise settle. */
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
+describe("the idle state", () => {
+	it("has nothing playing", () => {
+		expect(IDLE_NATIVE_STATE).toEqual({
+			status: "idle",
+			position: 0,
+			duration: 0,
+			subtitles: [],
+			subtitleId: null,
+			audio: [],
+			audioId: null,
+			connection: "connected",
+			error: null,
+		});
+	});
+});
+
 describe("the AirPlay profiles", () => {
 	it("uses the AirPlay 2 TV profile, and doesn't convert yet", () => {
 		expect(AIRPLAY_RECEIVER).toBe(airplayTvProfile);
@@ -252,7 +268,9 @@ describe("createAirPlayDestination", () => {
 		const { bridge } = fakeBridge();
 		const d = createAirPlayDestination(receiver, bridge);
 		const film = { kind: "local" as const, channel: channel() };
-		await expect(d.load(film)).rejects.toBeInstanceOf(UnsupportedError);
+		await expect(d.load(film)).rejects.toThrow(
+			"Converting a stream on this device isn't supported here"
+		);
 		await expect(
 			d.load(film, {
 				route: {
@@ -307,17 +325,20 @@ describe("createAirPlayDestination", () => {
 		await d.selectSubtitle("2");
 		await d.selectSubtitle(null);
 		await d.selectAudio("1");
+		await d.selectAudio("0");
 		expect(bridge.play).toHaveBeenCalled();
 		expect(bridge.pause).toHaveBeenCalled();
 		expect(bridge.seek).toHaveBeenCalledWith(90);
 		expect(bridge.selectSubtitle.mock.calls).toEqual([[2], [null]]);
-		expect(bridge.selectAudio).toHaveBeenCalledWith(1);
+		expect(bridge.selectAudio.mock.calls).toEqual([[1], [0]]);
 	});
 
 	it("rejects the volume and track ids it never gave out", async () => {
 		const { bridge } = fakeBridge();
 		const d = createAirPlayDestination(receiver, bridge);
-		await expect(d.setVolume(50)).rejects.toBeInstanceOf(UnsupportedError);
+		await expect(d.setVolume(50)).rejects.toThrow(
+			"Setting the TV's volume isn't supported here"
+		);
 		await expect(d.selectSubtitle("x")).rejects.toThrow("No track x");
 		await expect(d.selectAudio("-1")).rejects.toThrow("No track -1");
 		await expect(d.selectAudio("1.5")).rejects.toThrow("No track 1.5");

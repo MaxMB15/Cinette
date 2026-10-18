@@ -19,10 +19,10 @@ import {
 	type PlaybackState,
 	type Track,
 } from "@/lib/destination";
-import { chooseRoute, type PlayRoute, type RouteDecision } from "@/lib/route";
+import { chooseRoute, type PlayRoute, type RouteDecision, type SenderProfile } from "@/lib/route";
 
 type Blocked = Extract<RouteDecision, { ok: false }>;
-import { airplayTvProfile, iosSender, type StreamFormats } from "@/lib/route-profiles";
+import { airplayTvProfile, type StreamFormats } from "@/lib/route-profiles";
 import type { Channel } from "@/lib/types";
 
 /** The receiver the audio route goes to, from the backend. */
@@ -73,11 +73,13 @@ export const IDLE_NATIVE_STATE: AirPlayNativeState = {
  */
 export const AIRPLAY_RECEIVER = airplayTvProfile;
 
-/** This iPhone or iPad. It doesn't convert yet, so only direct routes work. */
-export const AIRPLAY_SENDER = iosSender(
-	{ convert: false, hardwareEncoder: false },
-	{ needsScreen: false }
-);
+/** This iPhone or iPad. It doesn't convert yet, so only direct routes work.
+ *  Once it does, this becomes `iosSender` with the converter's support. */
+export const AIRPLAY_SENDER: SenderProfile = {
+	convert: false,
+	hardwareEncoder: false,
+	convertNeedsScreen: false,
+};
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
@@ -236,7 +238,7 @@ export const createAirPlayDestination = (
 		load: async (target: PlaybackItem, opts?: { startAt?: number; route?: PlayRoute }) => {
 			if (target.kind !== "local")
 				throw new UnsupportedError("Playing another device's item");
-			const route = opts?.route;
+			const { route, startAt } = opts ?? {};
 			if (route?.via !== "direct")
 				throw new UnsupportedError("Converting a stream on this device");
 			const source = sources.get(target.channel.id)?.[route.format];
@@ -246,7 +248,7 @@ export const createAirPlayDestination = (
 			item = { title: channel.name, contentType: channel.contentType, ref: channel.id };
 			native = { ...IDLE_NATIVE_STATE, status: "opening" };
 			publish();
-			await bridge.load(channel, source, live ? undefined : opts?.startAt);
+			await bridge.load(channel, source, live ? undefined : startAt);
 		},
 		play: () => bridge.play(),
 		pause: () => bridge.pause(),

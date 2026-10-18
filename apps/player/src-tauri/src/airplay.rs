@@ -30,6 +30,7 @@ pub async fn airplay_load<R: Runtime>(
     let url = urls
         .get(source)
         .ok_or_else(|| "That stream format is no longer offered".to_string())?;
+    // mutants: skip BinaryOperator: Only iOS reads live, and the plugin fails first elsewhere.
     let live = channel.content_type == "live";
     tracing::info!("[AirPlay] load source={source} live={live}");
     tauri_plugin_mpv::airplay::load(&app, url, &channel.name, start_at, live)
