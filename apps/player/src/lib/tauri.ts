@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { AirPlayNativeState, AirPlayRoute } from "@/lib/airplay";
-import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
+import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
 	Channel,
@@ -106,6 +106,9 @@ export const loadXtreamProvider = (
 ): Promise<Channel[]> => invoke("load_xtream_provider", { name, url, username, password });
 
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
+
+/** What this computer's bundled ffmpeg can convert for a receiver. */
+export const getConverterSupport = (): Promise<ConverterSupport> => invoke("get_converter_support");
 
 /**
  * The formats `channel` comes in, for Cast and AirPlay. Pass `playing` while

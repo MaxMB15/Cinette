@@ -2393,6 +2393,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2498,6 +2499,7 @@ name = "mvp-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "getrandom 0.3.4",
  "memmap2",
  "percent-encoding",
  "quick-xml 0.42.0",

@@ -108,10 +108,16 @@ and the other files an Xtream provider serves, such as AVI, FLV and WMV, or from
 radio station, into MP4, MOV, MKV, MPEG-TS, AVI or WebM. The build can also read
 RTSP, RTMP and UDP links, but the app can't download them yet. It passes
 `-reconnect`, which only HTTP takes, so ffmpeg stops with `Option reconnect not
-found`. The app never decodes or encodes with ffmpeg, so the build has a few
-decoders, which only read details such as the picture size, and only the ASS and
-WebVTT encoders, which decide which subtitle tracks ffmpeg keeps. It can't read
-DASH, which would need libxml2.
+found`. Downloads never decode or encode, so most of the build's decoders only read
+details such as the picture size, and the ASS and WebVTT encoders only decide which
+subtitle tracks ffmpeg keeps. Casting to a receiver that can't play a stream's audio
+converts it: the build has the AAC encoder, the decoders for the audio it converts
+(MP2, AC-3, E-AC-3, DTS and Opus) and the audio filters that turn any layout into
+stereo. On macOS it converts audio with Apple's `aac_at` encoder from AudioToolbox,
+and has VideoToolbox's H.264 encoder, with `bwdif` and `scale`, for MPEG-2 and
+interlaced channels. The `rawvideo` demuxer and decoder and the `null`
+muxer only serve the app's one-frame check that the hardware encoder works. It can't
+read DASH, which would need libxml2.
 
 HTTPS goes through OpenSSL 3. The macOS build has OpenSSL 3.5 built in. The Linux
 build uses the system's OpenSSL and zlib, except in the AppImage, which carries

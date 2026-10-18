@@ -34,7 +34,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_shell::process::CommandChild;
 #[cfg(desktop)]
 use {
-    crate::downloads::keep_awake,
+    crate::keep_awake,
     chrono::NaiveDateTime,
     mvp_core::downloads::ffmpeg::{fold_progress_line, ProgressUpdate},
     mvp_core::downloads::recording::{Action, Outcome, StreamError},
@@ -418,7 +418,7 @@ fn try_begin<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
         with_cache(app, |cache| unclaim(cache, id));
         return Ok(());
     }
-    keep_awake::hold_while_running(pid);
+    keep_awake::hold_while_running(pid, keep_awake::Reason::Recording);
     tauri::async_runtime::spawn(watch(app.clone(), id.to_string(), pid, claim.url, rx));
 
     // A stop that came while ffmpeg started found nothing to stop yet.

@@ -3,9 +3,13 @@
 
 mod airplay;
 mod commands;
+mod convert;
 mod downloads;
 #[cfg(desktop)]
 mod identifier;
+#[cfg(desktop)]
+mod keep_awake;
+mod lan_server;
 mod logging;
 mod progress;
 mod streams;
@@ -179,6 +183,7 @@ register_commands![
     progress::hand_off_progress,
     streams::get_stream_formats,
     airplay::airplay_load,
+    convert::get_converter_support,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,
     commands::delete_group_hierarchy,
