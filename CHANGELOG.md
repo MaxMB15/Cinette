@@ -7,6 +7,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 ### Added
 
 - The project has a website at https://maxmb15.github.io/Cinette/. It shows what the app does and links each download of the latest release with its size (#288).
+- The player answers a keyboard's media keys. Play/pause, play and pause work as you'd expect, fast forward and rewind skip by the lengths set in Settings, and next and previous change the episode (#312).
 
 ### Changed
 
