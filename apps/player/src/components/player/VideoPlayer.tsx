@@ -437,9 +437,14 @@ export const PlayerView = () => {
 		recordPlayEnd(ch.id, Math.floor((Date.now() - startedAt) / 1000)).catch(() => {});
 	}, [activeChannelRef]);
 
-	/** Actually start playing `ch` (optionally from `startPos`), replacing whatever is playing. */
+	/**
+	 * Actually start playing `ch` (optionally from `startPos`), replacing
+	 * whatever is playing. Resolves once mpv has opened the stream, or at once
+	 * if another item replaced this one first, and rejects if mpv couldn't
+	 * open it. The player shows that error itself, so callers can ignore it.
+	 */
 	const commitPlayback = useCallback(
-		(ch: Channel, startPos?: number, apply?: () => void) => {
+		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
 			recordEnd();
 			playStartTimeRef.current = Date.now();
 			recordPlayStart(ch.id, ch.name, ch.logoUrl ?? null, ch.contentType).catch(() => {});
@@ -452,7 +457,7 @@ export const PlayerView = () => {
 			// Prefer a completed download so playback works offline; fall back to
 			// the stream URL if there is none or the lookup fails.
 			const loadId = ++loadRequestRef.current;
-			resolveLocalDownload(ch.id)
+			const loaded = resolveLocalDownload(ch.id)
 				.catch(() => null)
 				.then((local) => {
 					if (loadId !== loadRequestRef.current) return;
@@ -463,17 +468,32 @@ export const PlayerView = () => {
 					// saved its subtitles with no stream. They're for this one.
 					if (!openRef.current) updateSubtitleSession(ch.id, null, { url: target });
 					return mpv.load(target, startPos);
-				})
-				.catch(() => {});
+				});
+			loaded.catch(() => {});
 			setActiveChannelName(ch.name);
 			setActiveChannel(ch);
 			apply?.();
+			return loaded;
 		},
 		[mpv, rememberLoadedUrl, recordEnd]
 	);
+
+	/**
+	 * Starts `ch` for the destination's `load`. The caller picked the start
+	 * position, so no resume prompt shows. As a press in the player does, it
+	 * saves the last item's progress first, and a start that's still looking
+	 * up its resume point, or a resume prompt on screen, gives way to it.
+	 * The destination keeps the newest one in a ref, so it needs no memo.
+	 */
+	const loadFromDestination = (ch: Channel, startAt?: number): Promise<void> => {
+		++startRequestRef.current;
+		setPendingResume(null);
+		flushProgress();
+		return commitPlayback(ch, startAt);
+	};
 	// The player's controls go through the active destination, which is
-	// always this device for now. It starts an item the way the player does.
-	const playback = useLocalPlayback(mpv, activeChannel, commitPlayback);
+	// always this device for now.
+	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
 	// AirPlay video on iOS, with its own panel until the device picker
 	// takes over.
 	const airplay = useAirPlay(platform === "ios");

@@ -23,7 +23,7 @@ import {
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { AirPlay } from "@/hooks/useAirPlay";
-import type { PlaybackState } from "@/lib/destination";
+import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -256,6 +256,26 @@ vi.mock("@/hooks/useAirPlay", async () => {
 vi.mock("@/hooks/useMpv", async () => {
 	const { useSyncExternalStore } = await import("react");
 	return { useMpv: () => useSyncExternalStore(fakeMpv.subscribe, fakeMpv.get) };
+});
+
+/** The destination the player last handed its controls. */
+const local = vi.hoisted(() => ({ destination: null as PlaybackDestination | null }));
+
+// The real hook, keeping the destination so a test can drive it the way
+// another device's controls will.
+vi.mock("@/hooks/useLocalPlayback", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/hooks/useLocalPlayback")>();
+	const { useEffect } = await import("react");
+	return {
+		...actual,
+		useLocalPlayback: (...args: Parameters<typeof actual.useLocalPlayback>) => {
+			const destination = actual.useLocalPlayback(...args);
+			useEffect(() => {
+				local.destination = destination;
+			}, [destination]);
+			return destination;
+		},
+	};
 });
 
 // The picker and the drawers have tests of their own. These stand-ins show
@@ -668,6 +688,7 @@ beforeEach(() => {
 	env.os = "macos";
 	nav.current = null;
 	pageOpens.run = null;
+	local.destination = null;
 });
 
 afterEach(() => {
@@ -1110,6 +1131,97 @@ describe("resuming", () => {
 		await flush();
 		expect(loadedUrls()).toEqual([ep2.url, ep1.url]);
 		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+	});
+});
+
+/** The player's destination, once the player has rendered. */
+const destination = () => {
+	if (!local.destination) throw new Error("The player hasn't rendered");
+	return local.destination;
+};
+
+/** Plays `channel` through the player's destination and lets it settle. */
+const loadThrough = async (channel: Channel, startAt?: number) => {
+	await act(() => destination().load({ kind: "local", channel }, { startAt }));
+	await flush();
+};
+
+describe("loading through the destination", () => {
+	it("starts where it's asked to, without offering to resume", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(harborLights());
+		await loadThrough(lanternKeeper(), 120);
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([harborLights().url, MOVIE_URL]);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MOVIE_URL, 120);
+		expect(tauri.recordPlayStart).toHaveBeenLastCalledWith(
+			"mv1",
+			"The Lantern Keeper",
+			null,
+			"movie"
+		);
+	});
+
+	it("takes over from a resume prompt on screen", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		expect(resumePrompt()).toBeInTheDocument();
+		await loadThrough(harborLights(), 30);
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([harborLights().url]);
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(harborLights().url, 30);
+	});
+
+	it("saves where the last item got to first", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		await loadThrough(harborLights());
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 700, 3600);
+	});
+
+	it("wins over a start still looking up its resume point, and later starts still work", async () => {
+		const slow = deferred<PlaybackPosition | null>();
+		tauri.getPlaybackPosition.mockImplementation(async (key) =>
+			key === MOVIE_KEY ? slow.promise : null
+		);
+		await openItem(harborLights());
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		await loadThrough(makeNewsChannel());
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await act(async () => slow.resolve(saved(MOVIE_KEY, 1800, 3600)));
+		await flush();
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([harborLights().url, NEWS_URL, harborLights().url]);
+	});
+
+	it("waits for mpv to open the item, and passes on a failure", async () => {
+		await openItem(harborLights());
+		const opening = deferred();
+		fakeMpv.actions.load.mockReturnValueOnce(opening.promise);
+		let done = false;
+		let loading: Promise<void> = Promise.resolve();
+		act(() => {
+			loading = destination()
+				.load({ kind: "local", channel: lanternKeeper() })
+				.then(() => {
+					done = true;
+				});
+		});
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MOVIE_URL, undefined);
+		expect(done).toBe(false);
+		await act(async () => {
+			opening.resolve();
+			await loading;
+		});
+		expect(done).toBe(true);
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("can't open it"));
+		await act(() =>
+			expect(destination().load({ kind: "local", channel: harborLights() })).rejects.toThrow(
+				"can't open it"
+			)
+		);
 	});
 });
 
