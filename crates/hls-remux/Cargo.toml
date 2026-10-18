@@ -1,0 +1,14 @@
+[package]
+name = "hls-remux"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Cuts a stream into MPEG-TS segments for HLS with FFmpeg's libraries"
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"
+
+[dev-dependencies]
+mvp-core = { path = "../core", features = ["test-util"] }
+tempfile = "3"

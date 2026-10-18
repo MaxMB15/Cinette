@@ -8,6 +8,7 @@
 //! Matroska to its standard output, which the app serves to the receiver
 //! over the local network.
 
+pub mod hls;
 pub mod mkv;
 pub mod serve;
 

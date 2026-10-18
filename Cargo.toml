@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/tauri-plugin-mpv",
+    "crates/hls-remux",
     "apps/player/src-tauri",
 ]
 
