@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use crate::log_url::origin_for_log;
-use crate::mpv::{MpvState, PlayerState};
+use crate::mpv::{MediaInfo, MpvState, PlayerState};
 use tauri::{command, AppHandle, Runtime, State};
 
 #[command]
@@ -174,6 +174,16 @@ pub async fn mpv_get_state<R: Runtime>(
     let s = state.get_state();
     tracing::trace!("[MPV cmd] get_state -> {s:?}");
     Ok(s)
+}
+
+/// What the item playing is made of. Logs nothing about it, since its
+/// codecs are no one else's business.
+#[command]
+pub async fn mpv_get_media_info<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, MpvState>,
+) -> Result<MediaInfo, String> {
+    Ok(state.media_info())
 }
 
 #[cfg(test)]

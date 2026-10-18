@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-use super::candidates;
 use super::format::{
     audio_codec, container_from_demuxer, video_codec, AudioCodec, Container, PlayingInfo,
     StreamFormat, VideoCodec,
 };
 use super::hls::{inspect, HlsError, HlsInfo};
 use super::probe::{self, ProbeError, Probed};
+use super::{candidates, formats_for, is_hls_url, HlsCheck};
 use crate::http::test_server::{self, password, route, serve_once, serve_routes};
 use crate::models::playlist::ProviderType;
 
@@ -476,4 +476,108 @@ async fn takes_playlists_up_to_1_mib() {
         let url = format!("{}/x.m3u8", serve_once("200 OK", body));
         assert!(inspect(&client, &url).await.is_ok(), "{size}");
     }
+}
+
+#[test]
+fn tells_hls_urls_by_their_path() {
+    for (url, hls) in [
+        ("http://srv/live/u/p/1.m3u8", true),
+        ("http://srv/x.M3U8?token=a.ts", true),
+        ("http://srv/x.m3u8#t", true),
+        ("http://srv/x.ts?list=.m3u8", false),
+        ("http://srv/x.m3u", false),
+        ("http://srv/x", false),
+    ] {
+        assert_eq!(is_hls_url(url), hls, "{url}");
+    }
+}
+
+fn codecs(container: Container) -> StreamFormat {
+    StreamFormat {
+        container,
+        video: Some(VideoCodec::H264),
+        interlaced: true,
+        audio: Some(AudioCodec::Mp2),
+        cors: true,
+    }
+}
+
+#[test]
+fn each_url_shares_the_codecs_with_its_own_container() {
+    let urls = allowed(&["http://s/live/u/p/1.m3u8", "http://s/live/u/p/1.ts"]);
+    let hls = HlsInfo {
+        container: Container::HlsFmp4,
+        cors: true,
+    };
+    let formats = formats_for(
+        &urls,
+        codecs(Container::Ts),
+        1,
+        &[HlsCheck::Checked(hls), HlsCheck::NotHls],
+    );
+    assert_eq!(
+        formats,
+        vec![
+            (
+                0,
+                StreamFormat {
+                    container: Container::HlsFmp4,
+                    ..codecs(Container::Ts)
+                }
+            ),
+            (
+                1,
+                StreamFormat {
+                    container: Container::Ts,
+                    cors: false,
+                    ..codecs(Container::Ts)
+                }
+            ),
+        ]
+    );
+    // A failed check drops that URL and keeps the others' indices.
+    let formats = formats_for(
+        &urls,
+        codecs(Container::Ts),
+        1,
+        &[HlsCheck::Failed, HlsCheck::NotHls],
+    );
+    assert_eq!(formats.iter().map(|(i, _)| *i).collect::<Vec<_>>(), vec![1]);
+}
+
+#[test]
+fn the_probe_names_its_own_urls_container_and_extensions_name_the_rest() {
+    let urls = allowed(&[
+        "http://s/a.php?id=1",
+        "http://s/b.mkv?x=1",
+        "http://s/c.MP4",
+        "http://s/d.m4v",
+        "http://s/e.mov",
+        "http://s/f.ts",
+        "http://s/g.avi",
+        "http://s/no-extension",
+    ]);
+    let checks = vec![HlsCheck::NotHls; urls.len()];
+    let containers: Vec<Container> = formats_for(&urls, codecs(Container::Mp4), 0, &checks)
+        .into_iter()
+        .map(|(_, f)| f.container)
+        .collect();
+    assert_eq!(
+        containers,
+        vec![
+            Container::Mp4,
+            Container::Mkv,
+            Container::Mp4,
+            Container::Mp4,
+            Container::Mp4,
+            Container::Ts,
+            Container::Mp4,
+            Container::Mp4,
+        ]
+    );
+    // The probe's container wins over its URL's extension.
+    let urls = allowed(&["http://s/really-hls.ts"]);
+    let formats = formats_for(&urls, codecs(Container::Mkv), 0, &[HlsCheck::NotHls]);
+    assert_eq!(formats[0].1.container, Container::Mkv);
+    assert!(!formats[0].1.cors);
 }

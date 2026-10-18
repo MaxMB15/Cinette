@@ -7,7 +7,7 @@
  * list and from what VLC sends the Default Media Receiver.
  */
 
-import type { Container, ReceiverProfile, SenderProfile } from "@/lib/route";
+import type { Container, ReceiverProfile, SenderProfile, StreamFormat } from "@/lib/route";
 
 /** Cast models that play HEVC. Others named just "Chromecast" may too, but
  *  the name doesn't tell a Chromecast with Google TV from an older one. */
@@ -56,3 +56,25 @@ export const desktopSender = (support: ConverterSupport): SenderProfile => ({
 	hardwareEncoder: support.convert && support.hardwareEncoder,
 	convertNeedsScreen: false,
 });
+
+/** What mpv says about the item it plays, from `mpvGetMediaInfo`. */
+export interface PlayingInfo {
+	fileFormat: string | null;
+	videoCodec: string | null;
+	audioCodec: string | null;
+	interlaced: boolean;
+}
+
+/** The formats an item comes in, best first, from `getStreamFormats`. */
+export interface StreamFormats {
+	formats: StreamFormat[];
+	/** For each format, its URL's place in the backend's list, which a load
+	 *  passes back. The URLs themselves stay in the backend. */
+	sources: number[];
+	/** Seconds, when the probe found a length. */
+	duration: number | null;
+}
+
+/** What `getStreamFormats` rejects with when the provider answered 401 or
+ *  403, so the login may have expired. */
+export const REFUSED = "refused";

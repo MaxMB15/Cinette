@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
 	Channel,
@@ -68,6 +69,9 @@ export const mpvSetVolume = (volume: number): Promise<void> =>
 
 export const mpvGetState = (): Promise<MpvPlayerState> => invoke("plugin:mpv|mpv_get_state");
 
+/** The playing item's container and codecs, for deciding how to cast it. */
+export const mpvGetMediaInfo = (): Promise<PlayingInfo> => invoke("plugin:mpv|mpv_get_media_info");
+
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
 
@@ -101,6 +105,14 @@ export const loadXtreamProvider = (
 ): Promise<Channel[]> => invoke("load_xtream_provider", { name, url, username, password });
 
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
+
+/**
+ * The formats `channel` comes in, for Cast and AirPlay. Pass `playing` while
+ * mpv plays it, so the provider isn't asked for a second connection.
+ * Rejects with `REFUSED` when the provider turns the login down.
+ */
+export const getStreamFormats = (channel: Channel, playing?: PlayingInfo): Promise<StreamFormats> =>
+	invoke("get_stream_formats", { channel, playing });
 
 export const removeProvider = (id: string): Promise<void> => invoke("remove_provider", { id });
 

@@ -195,7 +195,7 @@ fn sample(argument: &str) -> Value {
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
         | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt" => json!(1),
         "keep" => json!(true),
-        "episode" => serde_json::to_value(Channel::default()).unwrap(),
+        "episode" | "channel" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),
     }
 }

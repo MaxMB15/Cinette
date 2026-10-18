@@ -131,6 +131,7 @@ describe("backend commands", () => {
 		["mpvSeek", () => tauri.mpvSeek(42.5), "plugin:mpv|mpv_seek", { position: 42.5 }],
 		["mpvSetVolume", () => tauri.mpvSetVolume(80), "plugin:mpv|mpv_set_volume", { volume: 80 }],
 		["mpvGetState", () => tauri.mpvGetState(), "plugin:mpv|mpv_get_state"],
+		["mpvGetMediaInfo", () => tauri.mpvGetMediaInfo(), "plugin:mpv|mpv_get_media_info"],
 		[
 			"mpvSetVisible",
 			() => tauri.mpvSetVisible(false),
@@ -193,6 +194,12 @@ describe("backend commands", () => {
 			{ name: "Xt", url: "http://xt.example", username: "user", password: "secret" },
 		],
 		["getProviders", () => tauri.getProviders(), "get_providers"],
+		[
+			"getStreamFormats",
+			() => tauri.getStreamFormats(episode),
+			"get_stream_formats",
+			{ channel: episode, playing: undefined },
+		],
 		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
 		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],
 		[

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, expect, it } from "vitest";
-import { castProfile, desktopSender } from "@/lib/route-profiles";
+import { castProfile, desktopSender, REFUSED } from "@/lib/route-profiles";
 import { chooseRoute, type StreamFormat } from "@/lib/route";
 
 const format = (f: Partial<StreamFormat>): StreamFormat => ({
@@ -133,5 +133,12 @@ describe("Cast routes from the research table", () => {
 			ok: true,
 			route: { via: "direct", format: 0 },
 		});
+	});
+});
+
+describe("REFUSED", () => {
+	it("is the error get_stream_formats sends for a 401 or 403", () => {
+		// The same text as `REFUSED` in src-tauri/src/streams/mod.rs.
+		expect(REFUSED).toBe("refused");
 	});
 });

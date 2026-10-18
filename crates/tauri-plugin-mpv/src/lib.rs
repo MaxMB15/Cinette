@@ -63,6 +63,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::mpv_set_bounds,
             commands::mpv_set_visible,
             commands::mpv_get_state,
+            commands::mpv_get_media_info,
             commands::mpv_sub_add,
             commands::mpv_sub_remove,
             commands::mpv_set_sub_delay,
