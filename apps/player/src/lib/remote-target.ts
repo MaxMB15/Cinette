@@ -44,6 +44,9 @@ export interface RemotePlayerState {
 		seriesTitle: string | null;
 		season: number | null;
 		episode: number | null;
+		/** The hosts it streams from. Rust only uses them to drop a logo on
+		 *  the same site; they never go to a controller. */
+		streamHosts: string[];
 	} | null;
 	position: number;
 	duration: number;
@@ -90,6 +93,7 @@ export const remotePlayerState = (
 						seriesTitle: channel.seriesTitle ?? null,
 						season: channel.season ?? null,
 						episode: channel.episode ?? null,
+						streamHosts: hostsOf([channel.url, ...channel.sources]),
 					}
 				: null,
 		position,
@@ -112,14 +116,28 @@ export const remotePlayerState = (
 	};
 };
 
+/** The hosts of `urls`, leaving out what isn't a URL. */
+const hostsOf = (urls: string[]): string[] =>
+	urls.flatMap((url) => {
+		try {
+			const { hostname } = new URL(url);
+			return hostname ? [hostname.toLowerCase()] : [];
+		} catch {
+			return [];
+		}
+	});
+
 /** What carrying out a command needs. */
 export interface CommandTarget {
 	/** The mounted player's destination, or null when no player is open. */
 	player: PlaybackDestination | null;
 	/** This device's channel with this id, if it has one. */
 	findChannel: (id: string) => Channel | undefined;
-	/** Opens the player on a channel when none is open. */
-	openPlayer: (channel: Channel) => void;
+	/** Opens the player page when none is open. */
+	openPlayer: () => void;
+	/** The player's destination once the page has opened, or null if it
+	 *  didn't in time. */
+	waitForPlayer: () => Promise<PlaybackDestination | null>;
 }
 
 const outcomeOf = async (run: () => Promise<void>): Promise<CommandOutcome> => {
@@ -140,12 +158,17 @@ export const applyRemoteCommand = async (
 	if (command.action === "load") {
 		const channel = target.findChannel(command.itemId);
 		if (!channel) return "notFound";
-		if (!player) {
-			target.openPlayer(channel);
-			return "ok";
+		// The open page plays it, so it goes in this device's history and
+		// starts where the controller asked.
+		let destination = player;
+		if (!destination) {
+			target.openPlayer();
+			destination = await target.waitForPlayer();
 		}
+		if (!destination) return "failed";
 		const startAt = command.startAt;
-		return outcomeOf(() => player.load({ kind: "local", channel }, { startAt }));
+		const opened = destination;
+		return outcomeOf(() => opened.load({ kind: "local", channel }, { startAt }));
 	}
 	if (command.action === "stop") {
 		// With no player open, nothing plays, which is what stop asks for.
@@ -181,9 +204,32 @@ export const applyRemoteCommand = async (
 
 let mountedPlayer: PlaybackDestination | null = null;
 
+const waiting = new Set<(player: PlaybackDestination) => void>();
+
 /** The player page registers its destination while it's open. */
 export const setMountedPlayer = (player: PlaybackDestination | null): void => {
 	mountedPlayer = player;
+	if (!player) return;
+	for (const resolve of waiting) resolve(player);
+	waiting.clear();
+};
+
+/** How long a page that's opening has to register its player. */
+export const PLAYER_OPENS_WITHIN_MS = 5_000;
+
+/** The player's destination as soon as a page registers one, or null after
+ *  {@link PLAYER_OPENS_WITHIN_MS}. */
+export const waitForMountedPlayer = (): Promise<PlaybackDestination | null> => {
+	if (mountedPlayer) return Promise.resolve(mountedPlayer);
+	return new Promise((resolve) => {
+		const done = (player: PlaybackDestination | null) => {
+			clearTimeout(timer);
+			waiting.delete(done);
+			resolve(player);
+		};
+		const timer = setTimeout(() => done(null), PLAYER_OPENS_WITHIN_MS);
+		waiting.add(done);
+	});
 };
 
 /** The open player's destination, or null. */
