@@ -174,7 +174,6 @@ export const ChannelList = () => {
 	const [containerWidth, setContainerWidth] = useState<number | null>(null);
 	// The guide's window and its red line for now follow this clock.
 	const now = useNow();
-	/** Virtualizer scroll ref — kept for TanStack Virtual scroll element. */
 
 	/**
 	 * Ref callback for the root div. While the channels load, or before any
@@ -615,7 +614,8 @@ export const ChannelList = () => {
 	const countLabel = `${countNoun}s`;
 
 	// Pixel offset of the timeline column left edge within the virtualizer div.
-	// The virtualizer div already lives inside the px-3 padding of parentRef, so no extra 12px.
+	// The rows already sit inside the px-3 padding that ChannelList gives
+	// VirtualList's scroll element, so no extra 12px.
 	const timelineLeft = ROW_CARD_LEFT_WIDTH;
 
 	return (

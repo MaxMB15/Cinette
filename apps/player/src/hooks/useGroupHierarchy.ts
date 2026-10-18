@@ -28,8 +28,10 @@ export const useGroupHierarchy = (providerId: string | null, contentType: string
 	const entries = hierarchyResult.data ?? NO_ENTRIES;
 	const pinnedGroups = pinnedResult.data ?? NO_PINNED;
 	// A list that failed to load counts as loaded, with no groups. Without a
-	// provider both stay pending, so nothing counts as loaded.
-	const loaded = !hierarchyResult.isPending && !pinnedResult.isPending;
+	// provider neither loads, so nothing counts as loaded. isFetched stays true
+	// once a load has answered, where isPending comes back while a list that
+	// failed loads again.
+	const loaded = hierarchyResult.isFetched && pinnedResult.isFetched;
 
 	const failure = hierarchyResult.error ?? pinnedResult.error;
 	useEffect(() => {

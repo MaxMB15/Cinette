@@ -166,8 +166,11 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const providers = providersResult.data ?? NO_PROVIDERS;
 	const categories = useMemo<Category[]>(() => deriveCategories(channels), [channels]);
 	// Both lists must load, or fail to, before the splash screen can go, so it
-	// doesn't dismiss before the UI has data to display.
-	const initialized = !channelsResult.isPending && !providersResult.isPending;
+	// doesn't dismiss before the UI has data to display. isFetched stays true
+	// once a load has answered. isPending comes back while a list that failed
+	// its first load loads again, which would run the splash screen's steps
+	// again.
+	const initialized = channelsResult.isFetched && providersResult.isFetched;
 	const [loading, setLoading] = useState(false);
 	// An action's error. A list that failed to load shows its own error below.
 	const [actionError, setActionError] = useState<string | null>(null);
