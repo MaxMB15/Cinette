@@ -160,6 +160,10 @@ impl ConsentQueue {
 
     /// Takes out the requests that ran out.
     pub fn expire(&mut self, now: Instant) -> Vec<Resolved> {
+        // Only forgets denials whose cooldown is over. Keeping one until the
+        // moment after it ends changes nothing, since `submit` already lets
+        // the device in then.
+        // mutants: skip BinaryOperator: <= only keeps a denial that no longer refuses anything.
         self.denied_until.retain(|_, until| now < *until);
         let (gone, kept): (Vec<_>, Vec<_>) =
             self.waiting.drain(..).partition(|r| now >= r.expires_at);

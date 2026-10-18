@@ -261,3 +261,67 @@ fn a_code_prints_six_digits_and_debug_hides_it() {
         "VerificationCode(..)"
     );
 }
+
+#[test]
+fn handshake_hash_is_the_state_s_own_hash() {
+    let key = DeviceKey::generate();
+    let mut state = builder(&key).unwrap().build_initiator().unwrap();
+    write(&mut state, &[]).unwrap();
+    let hash = handshake_hash(&state);
+    assert_eq!(&hash[..], state.get_handshake_hash());
+    assert_ne!(hash, [0; 32]);
+    assert_ne!(hash, [1; 32]);
+}
+
+#[test]
+fn the_commitment_is_blake2s_of_its_label_the_hash_and_the_nonce() {
+    let expected: [u8; 32] = Blake2s256::new()
+        .chain_update(b"cinette-commit")
+        .chain_update([1u8; 32])
+        .chain_update([2u8; 32])
+        .finalize()
+        .into();
+    assert_eq!(commitment(&[1; 32], &[2; 32]), expected);
+    assert_ne!(commitment(&[1; 32], &[3; 32]), expected);
+}
+
+#[test]
+fn the_code_is_the_first_four_hash_bytes_mod_a_million() {
+    let digest = Blake2s256::new()
+        .chain_update(b"cinette-code")
+        .chain_update([1u8; 32])
+        .chain_update([2u8; 32])
+        .chain_update([3u8; 32])
+        .finalize();
+    let n = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
+    assert_eq!(code(&[1; 32], &[2; 32], &[3; 32]).value(), n % 1_000_000);
+}
+
+#[test]
+fn the_controller_hears_why_the_target_refused_the_version() {
+    // Both sides work out the same shared version, so only a controller that
+    // offers one list and checks another can get this far.
+    let ck = DeviceKey::generate();
+    let tk = DeviceKey::generate();
+    let offered = Hello {
+        versions: vec![99],
+        ..hello(&ck, "P", DeviceType::Iphone)
+    };
+    let (mut c, m1) = ControllerHandshake::start(&ck, offered, tk.device_id()).unwrap();
+    c.versions = vec![PROTOCOL_VERSION];
+    let t = TargetHandshake::new(&tk, hello(&tk, "T", DeviceType::FireTv)).unwrap();
+    let Ok((m2, Next::Continue(t))) = t.read(&unframe(&m1)) else {
+        panic!()
+    };
+    let Ok((m3, Next::Continue(c))) = c.read(&unframe(&m2.unwrap())) else {
+        panic!()
+    };
+    let Err(refusal) = t.read(&unframe(&m3.unwrap())) else {
+        panic!("the target took version 99")
+    };
+    assert_eq!(refusal.reason, CloseReason::Version);
+    let Err(failure) = c.read(&unframe(&refusal.send.unwrap())) else {
+        panic!()
+    };
+    assert_eq!(failure.reason, CloseReason::Version);
+}

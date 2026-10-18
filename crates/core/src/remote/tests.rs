@@ -381,6 +381,10 @@ fn both_screens_show_the_same_code() {
     let code = net.clients[phone].code().unwrap();
     assert_eq!(code.len(), 6);
     assert_eq!(net.prompt().unwrap().code, code);
+    // The controller knows which device it reached, before it's let in.
+    let target = net.clients[phone].controller.peer().unwrap();
+    assert_eq!(target.id, net.target.device_id());
+    assert_eq!(target.name, "Android TV");
 }
 
 #[test]
@@ -942,6 +946,21 @@ fn a_position_that_moves_as_expected_isnt_sent_every_second() {
 }
 
 #[test]
+fn a_position_off_by_up_to_two_seconds_waits_for_the_refresh() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    net.set_state(playing("movie-1", 0.0));
+    let before = net.clients[phone].states().len();
+    // Expected at 1.0 after a second; 2.5 and 3.0 are within two seconds.
+    net.now += Duration::from_secs(1);
+    net.set_state(playing("movie-1", 2.5));
+    net.set_state(playing("movie-1", 3.0));
+    assert_eq!(net.clients[phone].states().len(), before);
+    net.set_state(playing("movie-1", 3.5));
+    assert_eq!(net.clients[phone].states().len(), before + 1);
+}
+
+#[test]
 fn a_seek_on_the_target_is_sent_at_once() {
     let mut net = Net::with_mode(ControlMode::Always);
     let phone = net.connect("Phone");
@@ -1078,6 +1097,88 @@ fn more_than_eight_controllers_are_busy() {
     }
     let extra = net.connect("One too many");
     assert_eq!(net.clients[extra].closed_reason(), Some(CloseReason::Busy));
+}
+
+#[test]
+fn each_request_gets_the_next_id() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    let first = net.command(phone, Command::Stop);
+    let second = net.query(
+        phone,
+        CatalogQuery::Groups {
+            content_type: "live".into(),
+        },
+    );
+    let third = net.command(phone, Command::Stop);
+    assert_eq!([first, second, third], [1, 2, 3]);
+}
+
+#[test]
+fn a_waiting_request_survives_unrelated_settings_changes() {
+    let mut net = Net::new(RemoteSettings::default());
+    let phone = net.connect("Phone");
+    net.change_settings(RemoteSettings {
+        device_name: Some("Den".into()),
+        ..RemoteSettings::default()
+    });
+    net.set_mode(ControlMode::Always);
+    assert!(net.prompt().is_some());
+    net.answer(Answer::Allow);
+    assert!(net.clients[phone].connected());
+}
+
+#[test]
+fn a_command_sent_before_being_let_in_is_refused_by_its_id() {
+    let mut net = Net::new(RemoteSettings::default());
+    let phone = net.connect("Phone");
+    let bytes = net.clients[phone]
+        .controller
+        .seal_raw(&Message::Command {
+            id: 7,
+            command: Command::Stop,
+        })
+        .unwrap();
+    net.send(phone, bytes);
+    assert!(net.clients[phone].events.contains(&Event::Reply {
+        request: 7,
+        result: Err(ErrorCode::Unsupported)
+    }));
+    assert!(net.applied.is_empty());
+    assert!(net.prompt().is_some(), "the request still waits");
+}
+
+#[test]
+fn a_frame_that_doesnt_decrypt_ends_the_connection_but_not_the_session() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    let conn = net.clients[phone].conn;
+    let actions = net.target.receive(conn, b"not a noise message", net.now);
+    assert!(actions.contains(&Action::Close { conn }));
+    net.handle(actions);
+    assert!(!net.last_sessions().unwrap()[0].connected);
+    // Nothing more is read from it.
+    assert!(net.target.receive(conn, b"more", net.now).is_empty());
+}
+
+#[test]
+fn a_tick_with_nothing_due_does_nothing() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    net.connect("Phone");
+    assert!(net.target.tick(net.now + Duration::from_secs(1)).is_empty());
+}
+
+#[test]
+fn the_next_deadline_is_when_a_quiet_session_times_out() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    net.connect("Phone");
+    assert_eq!(net.target.next_deadline(), Some(net.now + IDLE_TIMEOUT));
+}
+
+#[test]
+fn shutting_down_with_no_controllers_only_stops_advertising() {
+    let mut net = Net::new(RemoteSettings::default());
+    assert_eq!(net.target.shutdown(), [Action::Advertise(None)]);
 }
 
 // Transfers

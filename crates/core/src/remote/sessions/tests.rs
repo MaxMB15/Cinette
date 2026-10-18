@@ -8,7 +8,9 @@ use crate::remote::tests::peer;
 fn a_session_gets_a_random_id_and_is_found_by_its_connection() {
     let now = Instant::now();
     let mut sessions = Sessions::new();
+    assert!(sessions.is_empty());
     let a = sessions.open(peer("A"), ConnId(1), now).unwrap();
+    assert!(!sessions.is_empty());
     let b = sessions.open(peer("B"), ConnId(2), now).unwrap();
     assert_eq!(a.id.len(), 32);
     assert_ne!(a.id, b.id);

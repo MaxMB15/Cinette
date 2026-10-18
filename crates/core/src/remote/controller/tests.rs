@@ -56,6 +56,7 @@ fn nothing_can_be_sent_before_control_is_granted() {
 #[test]
 fn junk_during_the_handshake_closes() {
     let mut c = controller();
+    assert!(!c.is_closed());
     let out = c.receive(b"junk");
     assert_eq!(out.events, [Event::Closed(CloseReason::Protocol)]);
     assert!(c.is_closed());

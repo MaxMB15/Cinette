@@ -254,7 +254,12 @@ impl Controller {
     /// Seals any message, for tests that send what a controller wouldn't.
     #[cfg(test)]
     pub(crate) fn seal_raw(&mut self, message: &Message) -> Result<Vec<u8>, NotConnected> {
-        self.channel()?.seal(message).map_err(|_| NotConnected)
+        match &mut self.stage {
+            Stage::Requesting { channel, .. } | Stage::InSession { channel, .. } => {
+                channel.seal(message).map_err(|_| NotConnected)
+            }
+            _ => Err(NotConnected),
+        }
     }
 
     /// Sends a playback command. The id comes back in [`Event::Reply`].

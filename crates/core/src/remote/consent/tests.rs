@@ -27,6 +27,7 @@ fn only_allow_grants() {
     ] {
         let mut queue = ConsentQueue::new();
         let id = submit(&mut queue, now, 1, &peer("P")).unwrap();
+        assert!(!queue.is_empty());
         assert_eq!(queue.answer(id, answer, now).unwrap().outcome, outcome);
         assert!(queue.is_empty());
     }
@@ -140,4 +141,19 @@ fn withdraw_and_refuse_all_grant_nothing() {
     assert_eq!(all[0].outcome, Outcome::Refused(CloseReason::NotAllowed));
     assert!(queue.is_empty());
     assert_eq!(queue.next_deadline(), None);
+}
+
+#[test]
+fn tidying_up_during_the_cooldown_keeps_the_denial() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let denied = peer("D");
+    let id = submit(&mut queue, now, 1, &denied).unwrap();
+    queue.answer(id, Answer::Deny, now);
+    queue.expire(now);
+    queue.expire(now + DENIAL_COOLDOWN / 2);
+    assert_eq!(
+        submit(&mut queue, now + DENIAL_COOLDOWN / 2, 2, &denied),
+        Err(CloseReason::Denied)
+    );
 }

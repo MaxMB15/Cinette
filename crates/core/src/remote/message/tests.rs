@@ -205,6 +205,12 @@ fn device_types_read_back_from_their_record_value() {
 }
 
 #[test]
+fn a_message_leaves_room_for_the_noise_tag() {
+    // Noise sends at most 65535 bytes, 16 of them its tag.
+    assert_eq!(MAX_MESSAGE, 65_519);
+}
+
+#[test]
 fn common_version_picks_the_highest_both_speak() {
     assert_eq!(common_version(&[1, 2, 3], &[2, 3, 4]), Some(3));
     assert_eq!(common_version(&[1], &[2]), None);

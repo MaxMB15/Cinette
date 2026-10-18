@@ -125,6 +125,7 @@ fn base32(bytes: &[u8]) -> String {
     let mut buffer: u32 = 0;
     let mut bits = 0;
     for &b in bytes {
+        // mutants: skip BinaryOperator: The shift leaves the low 8 bits zero, so ^ gives the same value.
         buffer = (buffer << 8) | u32::from(b);
         bits += 8;
         while bits >= 5 {

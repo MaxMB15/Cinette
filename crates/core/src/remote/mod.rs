@@ -74,6 +74,7 @@ pub(crate) fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
         .as_chunks::<2>()
         .0
         .iter()
+        // mutants: skip BinaryOperator: The two halves share no bits, so ^ makes the same byte.
         .map(|&[hi, lo]| Some((digit(hi)? << 4) | digit(lo)?))
         .collect::<Option<_>>()?;
     bytes.try_into().ok()

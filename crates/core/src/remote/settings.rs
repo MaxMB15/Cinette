@@ -113,6 +113,7 @@ pub fn clean_name(name: &str) -> Option<String> {
         .collect::<String>()
         .trim()
         .to_owned();
+    // mutants: skip BinaryOperator: Cutting a name of exactly MAX_NAME_BYTES to that length changes nothing.
     if cleaned.len() > MAX_NAME_BYTES {
         let mut end = MAX_NAME_BYTES;
         while !cleaned.is_char_boundary(end) {
