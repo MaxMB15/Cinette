@@ -39,7 +39,7 @@ import {
 	setDownloadConcurrency,
 	countDownloadsDue,
 } from "@/lib/tauri";
-import { historyKey } from "@/lib/queries";
+import { historyKey, reloadClearedCaches } from "@/lib/queries";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { useDownloads } from "@/hooks/useDownloads";
 import { RETENTION_OPTIONS } from "@/lib/retention";
@@ -271,6 +271,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		if (!confirmed) return;
 		try {
 			await clearAllCaches();
+			reloadClearedCaches(queryClient).catch(() => {});
 			setCacheStatus("cleared");
 			setCacheError(null);
 			if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);

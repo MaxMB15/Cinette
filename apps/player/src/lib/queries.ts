@@ -6,7 +6,7 @@
 // device can later answer the same queries when the remote control browses
 // its catalog.
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import {
 	getAllChannels,
 	getEpgForLiveChannels,
@@ -185,6 +185,17 @@ export const whatsonQuery = (imdbId: string, kind: "movie" | "series", source: S
 		queryFn: () => fetchWhatsonData(imdbId, kind === "series" ? "show" : "movie"),
 		staleTime: keepFound,
 	});
+
+/**
+ * Loads again, the next time they're shown, the details, ratings and guide
+ * data that Settings' "Clear All Caches" deletes from the backend's cache.
+ */
+export const reloadClearedCaches = (client: QueryClient, source: Source = LOCAL) =>
+	Promise.all(
+		(["omdb", "whatson", "guide", "schedule", "guideSearch"] as const).map((name) =>
+			client.invalidateQueries({ queryKey: [source, name] })
+		)
+	);
 
 /** The start of every watch history query's key, to mark them all stale at once. */
 export const historyKey = (source: Source = LOCAL) => [source, "history"] as const;
