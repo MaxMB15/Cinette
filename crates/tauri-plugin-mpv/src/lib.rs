@@ -23,6 +23,8 @@ mod test_support;
 
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(any(target_os = "android", test))]
+mod android_surface;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "linux")]

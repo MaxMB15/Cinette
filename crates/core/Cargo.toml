@@ -34,7 +34,8 @@ reqwest = { workspace = true, features = ["native-tls-no-alpn"] }
 
 # Android has no system OpenSSL. rustls checks certificates with Android's own
 # verifier through rustls-platform-verifier, so the system's CAs and, where the
-# network security config allows them, the user's CAs are trusted.
+# network security config allows them, the user's CAs are trusted. rustls
+# offers HTTP/2 over ALPN, so `http::build` keeps Android on HTTP/1.1 too.
 [target.'cfg(target_os = "android")'.dependencies]
 reqwest = { workspace = true, features = ["rustls"] }
 

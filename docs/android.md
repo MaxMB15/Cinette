@@ -140,6 +140,10 @@ Rust half is `src/android.rs`.
 - The view reports its surface to Rust through `MpvNative.surfaceChanged`. mpv gets
   it as `wid`, a JNI global reference, with `gpu-context=android`, and runs its own
   draw loop.
+- When the same surface only changes size, as on a rotation or a new frame for the
+  player, mpv only gets `android-surface-size`. A new `wid` would rebuild its video
+  output and make a live stream buffer again. Each callback brings a new JNI
+  reference, so the JVM's `IsSameObject` tells whether it's the same surface.
 - Android destroys the surface whenever the view hides or the app goes to the
   background. Before `surfaceDestroyed` returns, Rust sets `vo=null` and `wid=0` on
   the playing mpv. When a surface comes back, mpv gets it and `vo=gpu` again. That's
@@ -207,7 +211,8 @@ The verifier has a Kotlin half that comes from rustls' Maven repository. It must
 the version `rustls-platform-verifier-android` has in `Cargo.lock`, and
 `android_project_tests.rs` checks that `app/build.gradle.kts` names that version.
 After a cargo update that changes it, change the Gradle line to match.
-`src-tauri/src/android_tls.rs` hands the verifier the JVM when the app starts.
+`src-tauri/src/android_tls.rs` hands the verifier the JVM when the app starts. If that
+fails, the app stops there, since every HTTPS request would hang without it.
 
 ## Continuous integration
 
@@ -218,8 +223,9 @@ the crates or the build setup:
 2. Restores libmpv for Android from the Actions cache, or builds it. The cache key is
    the NDK version and the build scripts, which pin every source.
 3. Builds the debug APK for `aarch64` and `armv7`.
-4. Checks that the APK has the app's library, libmpv and FFmpeg for both ABIs, and
-   prints its package, SDK versions and TV launcher activity.
+4. Checks that the APK has the app's library, libmpv and FFmpeg for both ABIs, prints
+   what `aapt2 dump badging` reports, and fails unless the minimum SDK is 28 and
+   there's a TV launcher activity.
 5. Runs Clippy for both targets with `-D warnings`.
 
 Nothing is signed or uploaded.
