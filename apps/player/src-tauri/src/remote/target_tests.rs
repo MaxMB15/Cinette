@@ -333,6 +333,7 @@ async fn a_command_the_player_never_finishes_fails() {
     let mut phone = h.connect("Phone").await;
     phone.connected().await;
     let (id, bytes) = phone.controller.command(Command::Stop).unwrap();
+    let sent = std::time::Instant::now();
     phone.write(&bytes).await;
     let token = h
         .wait_for(|s| match s {
@@ -347,6 +348,12 @@ async fn a_command_the_player_never_finishes_fails() {
         })
         .await;
     assert_eq!(result, Some(Err(ErrorCode::Failed)));
+    // At its deadline, not at the next look at the clock 2 s later.
+    assert!(
+        sent.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        sent.elapsed()
+    );
     // A late answer changes nothing.
     h.handle.finish_command(token, Ok(()));
     assert!(h.handle.sessions().await.len() == 1);
@@ -538,4 +545,73 @@ async fn a_new_identity_ends_sessions_and_advertises_the_new_id() {
     // Connecting to the old id now fails the handshake.
     let mut stale = h.connect("Phone").await;
     assert_eq!(stale.closed().await, Some(CloseReason::IdentityMismatch));
+}
+
+#[tokio::test]
+async fn a_player_may_take_its_time_within_the_limit() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    let (id, bytes) = phone.controller.command(Command::Stop).unwrap();
+    phone.write(&bytes).await;
+    let token = h
+        .wait_for(|s| match s {
+            Seen::Apply(token, Command::Stop) => Some(*token),
+            _ => None,
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    h.handle.finish_command(token, Ok(()));
+    let result = phone
+        .wait_for(|e| match e {
+            Event::Reply { request, result } if *request == id => Some(*result),
+            _ => None,
+        })
+        .await;
+    assert!(matches!(result, Some(Ok(_))), "{result:?}");
+}
+
+#[tokio::test]
+async fn each_command_gets_its_own_answer_and_a_closed_connection_takes_only_its_own() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    let mut phone = h.connect("Phone").await;
+    let mut laptop = h.connect("Laptop").await;
+    let phone_session = phone.connected().await;
+    laptop.connected().await;
+
+    let (phone_id, bytes) = phone.controller.command(Command::Stop).unwrap();
+    phone.write(&bytes).await;
+    let phone_token = h
+        .wait_for(|s| match s {
+            Seen::Apply(token, Command::Stop) => Some(*token),
+            _ => None,
+        })
+        .await;
+    let (laptop_id, bytes) = laptop.controller.command(Command::Stop).unwrap();
+    laptop.write(&bytes).await;
+    let laptop_token = h
+        .wait_for(|s| match s {
+            Seen::Apply(token, Command::Stop) => Some(*token),
+            _ => None,
+        })
+        .await;
+    assert_ne!(phone_token, laptop_token);
+
+    // The phone's connection goes; the laptop's command still gets answered.
+    h.handle.disconnect(phone_session);
+    assert_eq!(phone.closed().await, Some(CloseReason::Revoked));
+    h.handle.finish_command(phone_token, Ok(()));
+    h.handle
+        .finish_command(laptop_token, Err(ErrorCode::Failed));
+    let result = laptop
+        .wait_for(|e| match e {
+            Event::Reply { request, result } if *request == laptop_id => Some(*result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(result, Some(Err(ErrorCode::Failed)));
+    assert!(!phone
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Reply { request, .. } if *request == phone_id)));
 }
