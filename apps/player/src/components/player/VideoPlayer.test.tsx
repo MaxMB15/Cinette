@@ -1574,6 +1574,60 @@ describe("keyboard shortcuts", () => {
 		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
 	});
 
+	it("plays and pauses with the media keys", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+		expect(await press("MediaPlay")).toBe(false);
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		expect(await press("MediaPause")).toBe(false);
+		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+	});
+
+	describe("on a TV", () => {
+		beforeEach(() => {
+			env.os = "android";
+			window.__CINETTE_TV__ = true;
+		});
+
+		afterEach(() => {
+			delete window.__CINETTE_TV__;
+		});
+
+		it("plays and pauses with the center button when there's nothing to skip", async () => {
+			await openItem(lanternKeeper());
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+			await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+			// Held down, it doesn't flip back and forth.
+			expect(await press("Enter", { repeat: true })).toBe(true);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+		});
+
+		it("leaves Up and Down to move focus, since the TV has its own volume", async () => {
+			await openItem(lanternKeeper());
+			expect(await press("ArrowUp")).toBe(true);
+			expect(await press("ArrowDown")).toBe(true);
+			expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
+		});
+
+		it("still seeks with Left and Right", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			expect(await press("ArrowRight")).toBe(false);
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+		});
+
+		it("leaves the arrows to move between the controls once one has focus", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+			expect(await press("ArrowRight")).toBe(true);
+			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+		});
+	});
+
 	it("goes full screen with F or a double click", async () => {
 		renderPlayer(null);
 		await flush();

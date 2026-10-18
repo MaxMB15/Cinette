@@ -33,6 +33,35 @@ describe("resolvePlayerHotkey", () => {
 		expect(resolvePlayerHotkey(key(" "))).toEqual({ type: "togglePlay" });
 		expect(resolvePlayerHotkey(key("k"))).toEqual({ type: "togglePlay" });
 	});
+	it("maps the media keys", () => {
+		const skip = { back: 7, forward: 12 };
+		expect(resolvePlayerHotkey(key("MediaPlayPause"))).toEqual({ type: "togglePlay" });
+		expect(resolvePlayerHotkey(key("MediaPlay"))).toEqual({ type: "play" });
+		expect(resolvePlayerHotkey(key("MediaPause"))).toEqual({ type: "pause" });
+		expect(resolvePlayerHotkey(key("MediaFastForward"), skip)).toEqual({
+			type: "seekBy",
+			seconds: 12,
+		});
+		expect(resolvePlayerHotkey(key("MediaRewind"), skip)).toEqual({
+			type: "seekBy",
+			seconds: -7,
+		});
+		expect(resolvePlayerHotkey(key("MediaTrackNext"))).toEqual({ type: "nextEpisode" });
+		expect(resolvePlayerHotkey(key("MediaTrackPrevious"))).toEqual({ type: "prevEpisode" });
+	});
+	it("leaves Up and Down to the D-pad on a TV and keeps the other keys", () => {
+		expect(resolvePlayerHotkey(key("ArrowUp"), undefined, true)).toBeNull();
+		expect(resolvePlayerHotkey(key("ArrowDown"), undefined, true)).toBeNull();
+		expect(resolvePlayerHotkey(key("ArrowUp"), undefined, false)).toEqual({
+			type: "volumeBy",
+			delta: 5,
+		});
+		expect(resolvePlayerHotkey(key("ArrowLeft"), undefined, true)).toEqual({
+			type: "seekBy",
+			seconds: -10,
+		});
+		expect(resolvePlayerHotkey(key("Enter"), undefined, true)).toEqual({ type: "skipSegment" });
+	});
 	it("maps Enter to skipping an intro or credits", () => {
 		expect(resolvePlayerHotkey(key("Enter"))).toEqual({ type: "skipSegment" });
 		expect(resolvePlayerHotkey(key("Enter", { metaKey: true }))).toBeNull();
@@ -214,6 +243,8 @@ describe("playerShortcuts", () => {
 		Enter: [key("Enter")],
 		"?": [key("?")],
 		Esc: [key("Escape")],
+		Play: [key("MediaPlay")],
+		Pause: [key("MediaPause")],
 	};
 
 	it("labels every entry and names only keys the player handles", () => {
@@ -238,6 +269,8 @@ describe("playerShortcuts", () => {
 		// The type makes tsc fail when an action is added without a key here.
 		const every: Record<PlayerAction["type"], true> = {
 			escape: true,
+			pause: true,
+			play: true,
 			nextEpisode: true,
 			prevEpisode: true,
 			seekBy: true,

@@ -84,7 +84,7 @@ import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
 import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
-import { isMobilePlatform } from "@/lib/platform";
+import { getPlatform, isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
@@ -1092,8 +1092,11 @@ export const PlayerView = () => {
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
+			// On a TV the D-pad moves between the controls once one has focus.
+			const remote = getPlatform() === "tv";
+			if (remote && isArrow && isKeyboardFocusedControl(e.target)) return;
 
-			const action = resolvePlayerHotkey(e, skip);
+			const action = resolvePlayerHotkey(e, skip, remote);
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
@@ -1101,6 +1104,12 @@ export const PlayerView = () => {
 			// still presses a button that has focus. Held down, it skips once.
 			if (action.type === "skipSegment") {
 				if (!e.repeat && skipSegment?.()) e.preventDefault();
+				// A remote's center button plays and pauses when there's nothing to skip.
+				else if (!e.repeat && remote) {
+					e.preventDefault();
+					if (mpv.state.isPaused || !mpv.state.isPlaying) mpv.play();
+					else mpv.pause();
+				}
 				return;
 			}
 			e.preventDefault();
@@ -1114,6 +1123,12 @@ export const PlayerView = () => {
 					} else {
 						mpv.pause();
 					}
+					break;
+				case "play":
+					mpv.play();
+					break;
+				case "pause":
+					mpv.pause();
 					break;
 				case "toggleFullscreen":
 					toggleFullscreen();

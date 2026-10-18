@@ -6,7 +6,8 @@ Rust crates. It's aimed at Android TV and Google TV, and later at Fire TV, which
 Fire OS 7 and 8 (Android 9 and 11). Phones aren't the target yet.
 
 Video plays through libmpv, as on desktop and iOS, built with FFmpeg for Android by
-`scripts/build-libmpv.sh android`. The TV remote doesn't drive the whole app yet.
+`scripts/build-libmpv.sh android`. On a TV the app has its own layout, driven by the
+remote. See [The TV remote](#the-tv-remote).
 
 ## How it differs from desktop
 
@@ -123,6 +124,9 @@ The arrow keys on a TV remote come through as D-pad events. You can send them wi
 - `app/proguard-rules.pro`: keeps the verifier's classes, which only JNI calls.
 - `app/src/main/res/mipmap-*`: the app icon from `src-tauri/icons/android`, which
   `pnpm tauri icon` writes. Copy it over after changing the icon.
+- `app/src/main/res/drawable-xhdpi/banner.png` and the manifest's `android:banner`
+  and `uses-feature` lines: the TV launcher banner.
+- `app/src/main/java/app/cinette/MainActivity.kt`: hands Back to the page.
 
 Running `pnpm tauri android init` again overwrites these. Check the diff afterwards.
 
@@ -155,6 +159,38 @@ libass and libplacebo. There's no Lua, so no on-screen controller, as in the oth
 builds. libass has no system font provider on Android, and mpv reads every file in
 its fonts folder when it starts, so at startup the plugin copies one system font,
 Roboto where there is one, into the app's cache and gives mpv that folder.
+
+## The TV remote
+
+On a TV, `getPlatform()` in `lib/platform.ts` returns `tv` and the app uses
+`TvLayout`. `android_device.rs` asks Android's package manager for the TV features
+(`android.software.leanback`, `android.hardware.type.television` or
+`amazon.hardware.fire_tv`) and passes the answer to the page in an init script, as
+`window.__CINETTE_TV__`, so it's known on the first render. Other Android devices are
+`android` and get the phone, tablet or desktop layout by size, as iOS does.
+
+- **D-pad:** the arrows reach the page as arrow keys. `useTvRemote` moves focus to the
+  nearest control in the arrow's direction (`lib/tv-focus.ts`, which scores with
+  `lib/spatial-nav.ts`), inside the open dialog if there is one. Text fields keep Left
+  and Right for the caret, and sliders keep their own axis. A focused element that
+  holds controls, like the player, is entered from the side the press comes from.
+- **Center:** it's Enter, so it presses the focused control. In the player it skips an
+  intro when the skip button shows, and otherwise plays or pauses.
+- **Player:** Left and Right seek, as on desktop. Up and Down move focus into the
+  controls, since the TV has its own volume, and once a control has focus the arrows
+  move between controls.
+- **Back:** `MainActivity.kt` hands it to `window.__cinetteBack`, which sends Escape to
+  the focused element (`lib/tv-back.ts`). Escape already closes the top layer: a
+  dialog, a player panel, full screen, then the player itself. When nothing takes
+  it, Back goes to the home page, and on the home page the app closes.
+- **Media keys:** play/pause, play, pause, fast forward, rewind, next and previous
+  work in the player.
+- **Size:** `html.tv` in `globals.css` makes every `rem` an eighth larger, and gives
+  the focused element a thick ring.
+
+The launcher shows `res/drawable-xhdpi/banner.png`, 320×180, drawn from `icon.svg`
+with the name in DejaVu Sans Bold. The manifest marks the Leanback and touch screen
+features as not required, so the app installs on TVs and phones.
 
 ## TLS
 
