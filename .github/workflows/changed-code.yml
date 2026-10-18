@@ -113,7 +113,7 @@ jobs:
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Upload the sidecar
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries/
@@ -164,7 +164,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the ffmpeg sidecar
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries
@@ -284,7 +284,7 @@ jobs:
       # The HTML report shows each mutant in its source file.
       - name: Upload the report
         if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stryker-report
           path: apps/player/reports/mutation/
@@ -339,7 +339,7 @@ jobs:
 
       - name: Download the ffmpeg sidecar
         if: matrix.package == 'max-video-player'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries
@@ -407,7 +407,7 @@ jobs:
       # the size. diff/ still shows what each mutant changed.
       - name: Upload the results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-${{ matrix.package }}-shard-${{ matrix.shard }}
           path: |
