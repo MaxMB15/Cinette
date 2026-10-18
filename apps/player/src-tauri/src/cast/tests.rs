@@ -445,3 +445,40 @@ async fn browses_once_and_again_after_the_browse_stops_or_fails() {
     assert_eq!(starts.load(Ordering::SeqCst), 4);
     assert!(senders.try_recv().is_ok());
 }
+
+#[test]
+fn a_browse_that_cant_start_says_so_once() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    let (browse, starts, _senders) = fake_browse(usize::MAX);
+    let state = handle.state::<CastReceivers>();
+    state.set_browse(browse);
+    let logged = crate::test_support::Logged::default();
+    let _guard = logged.start();
+    let warnings = || {
+        logged
+            .text()
+            .matches("Couldn't look for Cast receivers")
+            .count()
+    };
+    start_browsing(&handle, &state);
+    assert_eq!(warnings(), 1);
+    start_browsing(&handle, &state);
+    start_browsing(&handle, &state);
+    assert_eq!(starts.load(Ordering::SeqCst), 3);
+    assert_eq!(warnings(), 1);
+}
+
+#[test]
+fn held_receivers_that_went_away_count_toward_the_cap() {
+    let mut registry = Registry::default();
+    for i in 0..MAX_RECEIVERS {
+        registry.apply(found(&format!("tv-{i}"), &format!("{i}"), "TV"));
+    }
+    registry.hold(["cast:0".to_string()]);
+    registry.apply(removed("tv-0"));
+    // One fewer listed by discovery, but the held one is still shown.
+    assert_eq!(registry.list().len(), MAX_RECEIVERS);
+    assert!(!registry.apply(found("late", "late", "Late")));
+    assert!(registry.get("cast:late").is_none());
+}
