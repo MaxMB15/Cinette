@@ -217,7 +217,8 @@ fn put_varint_field(out: &mut Vec<u8>, number: u64, value: u64) {
 }
 
 fn put_bytes_field(out: &mut Vec<u8>, number: u64, bytes: &[u8]) {
-    put_varint(out, (number << 3) | 2);
+    // The field number, then wire type 2 in the low three bits.
+    put_varint(out, (number << 3) + 2);
     put_varint(out, bytes.len() as u64);
     out.extend_from_slice(bytes);
 }

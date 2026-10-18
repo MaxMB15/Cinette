@@ -357,7 +357,6 @@ impl Session {
                 let pong = self.send(&message.source, NS_HEARTBEAT, json!({ "type": "PONG" }));
                 out.send.push(pong);
             }
-            Incoming::Pong | Incoming::Other => {}
             Incoming::Close => {
                 if message.source == PLATFORM || from_app {
                     self.close(CloseReason::AppStopped, out);

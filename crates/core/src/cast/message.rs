@@ -192,7 +192,6 @@ pub struct MediaStatusEntry {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Incoming {
     Ping,
-    Pong,
     /// The virtual connection to the sender ended.
     Close,
     ReceiverStatus(ReceiverStatus),
@@ -243,7 +242,6 @@ pub fn parse(namespace: &str, text: &str) -> Option<Incoming> {
     let kind = envelope.kind.as_str();
     Some(match (namespace, kind) {
         (NS_HEARTBEAT, "PING") => Incoming::Ping,
-        (NS_HEARTBEAT, "PONG") => Incoming::Pong,
         (NS_CONNECTION, "CLOSE") => Incoming::Close,
         (NS_RECEIVER, "RECEIVER_STATUS") => {
             Incoming::ReceiverStatus(serde_json::from_value(envelope.status?).ok()?)

@@ -166,3 +166,22 @@ fn debug_leaves_the_payload_out() {
     };
     assert!(format!("{binary:?}").contains("5 bytes"));
 }
+
+#[test]
+fn takes_messages_up_to_64_kib() {
+    // A body of exactly the limit.
+    let empty = CastMessage::text("s", "d", "n", String::new())
+        .encode()
+        .len()
+        - 4;
+    // The payload's length takes three bytes instead of one.
+    let text = "x".repeat(MAX_MESSAGE - empty - 2);
+    let message = CastMessage::text("s", "d", "n", text);
+    let frame = message.encode();
+    assert_eq!(frame.len() - 4, MAX_MESSAGE);
+    assert_eq!(CastMessage::decode(&frame[4..]).unwrap(), message);
+    let mut reader = FrameReader::default();
+    reader.push(&frame);
+    assert_eq!(reader.next_message().unwrap().unwrap(), message);
+    assert_eq!(MAX_MESSAGE, 65536);
+}

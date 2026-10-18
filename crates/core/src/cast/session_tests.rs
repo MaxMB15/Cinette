@@ -571,28 +571,73 @@ fn a_status_answers_the_load() {
 #[test]
 fn a_cancelled_load_ends_quietly() {
     let now = Instant::now();
+    let later = now + LOAD_TIMEOUT;
+    let pong = from("receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" }));
+    let cancel = |source: &str, id: u64| {
+        from(
+            source,
+            NS_MEDIA,
+            json!({ "type": "LOAD_CANCELLED", "requestId": id }),
+        )
+    };
+    let load = |session: &mut Session| {
+        sent(&session.load(load_request(), now).unwrap().send)[0].2["requestId"]
+            .as_u64()
+            .unwrap()
+    };
+
     let mut session = ready(now);
+    let id = load(&mut session);
+    assert!(session.receive(&cancel("t1", id), now).events.is_empty());
+    session.receive(&pong, later);
+    assert!(session.tick(later).events.is_empty());
+
+    // Another request's cancellation, or one from outside the app, isn't the load's.
+    for (source, other) in [("t1", 1), ("t9", 0)] {
+        let mut session = ready(now);
+        let id = load(&mut session);
+        session.receive(&cancel(source, id + other), now);
+        session.receive(&pong, later);
+        assert_eq!(
+            session.tick(later).events,
+            vec![Event::LoadFailed {
+                detailed_error_code: None
+            }],
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn only_the_app_reports_load_and_playback_failures() {
+    let now = Instant::now();
+    let mut session = with_media(now);
     let id = sent(&session.load(load_request(), now).unwrap().send)[0].2["requestId"]
         .as_u64()
         .unwrap();
-    let cancelled = from(
-        "t1",
-        NS_MEDIA,
-        json!({ "type": "LOAD_CANCELLED", "requestId": id + 1 }),
+    for body in [
+        json!({ "type": "LOAD_FAILED", "requestId": id }),
+        json!({ "type": "ERROR", "detailedErrorCode": 103 }),
+        json!({ "type": "INVALID_REQUEST", "requestId": 9 }),
+    ] {
+        let out = session.receive(&from("t9", NS_MEDIA, body.clone()), now);
+        assert!(out.events.is_empty(), "{body}");
+    }
+    // The load is still waiting for its answer.
+    let out = session.receive(
+        &from(
+            "t1",
+            NS_MEDIA,
+            json!({ "type": "LOAD_FAILED", "requestId": id }),
+        ),
+        now,
     );
-    session.receive(&cancelled, now);
-    let cancelled = from(
-        "t1",
-        NS_MEDIA,
-        json!({ "type": "LOAD_CANCELLED", "requestId": id }),
+    assert_eq!(
+        out.events,
+        vec![Event::LoadFailed {
+            detailed_error_code: None
+        }]
     );
-    assert!(session.receive(&cancelled, now).events.is_empty());
-    let later = now + LOAD_TIMEOUT;
-    session.receive(
-        &from("receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" })),
-        later,
-    );
-    assert!(session.tick(later).events.is_empty());
 }
 
 #[test]
