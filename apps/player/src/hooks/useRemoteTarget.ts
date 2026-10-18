@@ -55,12 +55,14 @@ export const useRemoteTarget = (): void => {
 	const navigate = useNavigate();
 	const channelsRef = useLatestRef(channels);
 	const navigateRef = useLatestRef(navigate);
-	useTauriEvent<{ token: number; command: RemoteCommand }>(
+	useTauriEvent<{ token: number; command: RemoteCommand; channel?: Channel }>(
 		"remote://command",
-		({ token, command }) => {
+		({ token, command, channel }) => {
 			void applyRemoteCommand(command, {
 				player: getMountedPlayer(),
-				findChannel: (id) => channelsRef.current.find((c) => c.id === id),
+				// An episode comes with the command, since the channel list has none.
+				findChannel: (id) =>
+					channel?.id === id ? channel : channelsRef.current.find((c) => c.id === id),
 				openPlayer: (channel) =>
 					navigateRef.current("/player", {
 						state: { url: channel.url, channelName: channel.name, channel },

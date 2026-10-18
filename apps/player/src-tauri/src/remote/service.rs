@@ -15,6 +15,8 @@ use mvp_core::remote::message::{Command, DeviceType, ErrorCode};
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use serde::Serialize;
+use mvp_core::models::channel::Channel;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -123,7 +125,14 @@ impl From<&SessionInfo> for SessionEvent {
 pub struct CommandEvent<'a> {
     pub token: u64,
     pub command: &'a Command,
+    /// For a load of an episode, the episode: the player's channel list has
+    /// no episodes to find it in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<&'a Channel>,
 }
+
+/// How many series' episodes the target keeps for loads, newest last.
+const REMEMBERED_SERIES: usize = 4;
 
 /// Puts a record on the network, or doesn't.
 type Advertiser = Box<dyn Fn(&Registration) -> Option<Advertisement> + Send + Sync>;
@@ -132,6 +141,19 @@ struct TauriHost<R: Runtime> {
     app: AppHandle<R>,
     advertiser: Advertiser,
     advertisement: Mutex<Option<Advertisement>>,
+    /// The episodes of the series controllers opened last, by series id.
+    episodes: Mutex<VecDeque<(String, Vec<Channel>)>>,
+}
+
+impl<R: Runtime> TauriHost<R> {
+    fn remember(&self, series_id: String, episodes: Vec<Channel>) {
+        let mut remembered = lock(&self.episodes);
+        remembered.retain(|(id, _)| *id != series_id);
+        remembered.push_back((series_id, episodes));
+        if remembered.len() > REMEMBERED_SERIES {
+            remembered.pop_front();
+        }
+    }
 }
 
 impl<R: Runtime> TargetHost for TauriHost<R> {
@@ -165,13 +187,36 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 
     fn apply(&self, token: u64, command: &Command) {
-        let _ = self
-            .app
-            .emit("remote://command", CommandEvent { token, command });
+        let remembered = lock(&self.episodes);
+        let channel = match command {
+            Command::Load { item_id, .. } => remembered
+                .iter()
+                .rev()
+                .flat_map(|(_, episodes)| episodes)
+                .find(|episode| episode.id == *item_id),
+            _ => None,
+        };
+        let event = CommandEvent {
+            token,
+            command,
+            channel,
+        };
+        let _ = self.app.emit("remote://command", event);
     }
 
     fn catalog(&self, query: CatalogQuery) -> CatalogPage {
         let state = self.app.state::<AppState>();
+        if let CatalogQuery::Episodes { series_id } = query {
+            // This runs on a blocking thread, which can wait for the provider.
+            let episodes = tokio::runtime::Handle::current()
+                .block_on(super::catalog::episodes(&state.cache, &series_id))?;
+            let page = {
+                let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
+                super::catalog::episode_page(&cache, &episodes)?
+            };
+            self.remember(series_id, episodes);
+            return Ok(page);
+        }
         let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
         super::catalog::answer(&cache, query)
     }
@@ -230,6 +275,7 @@ fn start_on<R: Runtime>(
         app: app.clone(),
         advertiser,
         advertisement: Mutex::new(None),
+        episodes: Mutex::new(VecDeque::new()),
     });
     let device_id = key.device_id();
     let handle = target::start(listener, key, DEVICE_TYPE, settings.clone(), host)
