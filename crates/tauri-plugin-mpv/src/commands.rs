@@ -176,6 +176,5 @@ pub async fn mpv_get_state<R: Runtime>(
     Ok(s)
 }
 
-// They drive the real engine, which Android doesn't have yet.
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(test)]
 mod tests;

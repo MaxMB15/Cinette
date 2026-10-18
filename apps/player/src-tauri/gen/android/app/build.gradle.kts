@@ -58,6 +58,13 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    // libmpv and FFmpeg from scripts/build-libmpv.sh android, one folder
+    // per ABI.
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir("../../../../../../libs/android")
+        }
+    }
 }
 
 kotlin {

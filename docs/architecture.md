@@ -197,10 +197,13 @@ under 744 points.
 ### Android
 
 The Android build runs the same frontend and commands, and leaves out what iOS
-leaves out. It can't play yet: libmpv isn't built for Android, so the plugin's `mpv`
-module is `android_unsupported.rs` there, with the same methods as `mpv.rs`. A load
-fails with an error, and the rest do nothing. HTTPS goes through rustls with Android's
-certificate checks. [android.md](android.md) covers building and the Gradle project.
+leaves out. `AndroidSurfaceRenderer` in `android.rs` passes mpv the `Surface` of a
+`SurfaceView` as its `wid`, and mpv draws into it with `vo=gpu` and
+`gpu-context=android`. The view belongs to the Kotlin side of the plugin
+(`android/src/main/java/MpvPlugin.kt`), which keeps it under the transparent webview
+and reports each new or destroyed surface to Rust. HTTPS goes through rustls with
+Android's certificate checks. [android.md](android.md) covers building, the video
+surface and the Gradle project.
 
 ## Data flow
 

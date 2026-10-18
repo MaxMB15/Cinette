@@ -1,7 +1,8 @@
 name: Android
 
-# Builds a debug APK for 64-bit and 32-bit ARM. Nothing is signed or
-# uploaded; this catches changes that break the Android build.
+# Builds a debug APK for 64-bit and 32-bit ARM, with libmpv and FFmpeg from
+# scripts/build-libmpv.sh android. Nothing is signed or uploaded; this
+# catches changes that break the Android build.
 on:
   push:
     branches: [main, dev]
@@ -15,6 +16,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
+      - "scripts/build-libmpv.sh"
+      - "scripts/lib/libmpv-android.sh"
+      - "scripts/android-env.sh"
       - ".github/workflows/android.yml"
   pull_request:
     branches: [main, dev]
@@ -28,6 +32,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
+      - "scripts/build-libmpv.sh"
+      - "scripts/lib/libmpv-android.sh"
+      - "scripts/android-env.sh"
       - ".github/workflows/android.yml"
 
 permissions:
@@ -78,35 +85,59 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
           echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
+      # libmpv and FFmpeg take a while to build, so they're cached. The
+      # script pins every source, so it and the NDK make the key.
+      - name: Restore libmpv for Android
+        id: libmpv-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libs/android
+          key: libmpv-android-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/build-libmpv.sh', 'scripts/lib/libmpv-android.sh') }}
+
+      - name: Build libmpv for Android
+        if: steps.libmpv-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build
+          ./scripts/build-libmpv.sh android
+          rm -rf libs/android-build
+
+      - name: Save libmpv for Android
+        if: steps.libmpv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libs/android
+          key: ${{ steps.libmpv-cache.outputs.cache-primary-key }}
+
       - name: Set up the frontend
         uses: ./.github/actions/setup-frontend
 
       # Builds the frontend, the Rust library for both ABIs and the Gradle
       # project.
+      # android-env.sh sets what bindgen needs for armv7.
       - name: Build the APK
         working-directory: apps/player
-        run: pnpm tauri android build --debug --target aarch64 --target armv7 --apk --ci
+        run: |
+          . ../../scripts/android-env.sh
+          pnpm tauri android build --debug --target aarch64 --target armv7 --apk --ci
 
       - name: Check the APK
         run: |
           APK="apps/player/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
           test -f "$APK"
           for abi in arm64-v8a armeabi-v7a; do
-            unzip -l "$APK" | grep "lib/$abi/libmax_video_player_lib.so"
+            for lib in max_video_player_lib mpv avcodec avformat avutil; do
+              unzip -l "$APK" | grep "lib/$abi/lib$lib.so"
+            done
           done
           "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt2" dump badging "$APK" | grep -E "^(package|minSdkVersion|targetSdkVersion|leanback-launchable-activity)"
 
       # The build above shows warnings without failing. This lints the
       # workspace for both Android targets, including the code that only
-      # builds there, and fails on any warning. The NDK's clang builds the C
-      # code that some crates bundle.
+      # builds there, and fails on any warning.
       - name: Lint the workspace for Android with Clippy
         run: |
-          BIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export CC_aarch64_linux_android="$BIN/aarch64-linux-android28-clang"
-          export CC_armv7_linux_androideabi="$BIN/armv7a-linux-androideabi28-clang"
-          export AR_aarch64_linux_android="$BIN/llvm-ar"
-          export AR_armv7_linux_androideabi="$BIN/llvm-ar"
+          . scripts/android-env.sh
           for target in aarch64-linux-android armv7-linux-androideabi; do
             cargo clippy --locked --workspace --target "$target" --all-targets -- -D warnings
           done

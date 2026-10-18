@@ -4,36 +4,25 @@
 #[cfg(any(target_os = "ios", test))]
 mod artwork;
 mod commands;
-mod log_url;
-
-// libmpv isn't built for Android yet, so nothing that calls it builds there.
-#[cfg(not(target_os = "android"))]
 mod engine;
-#[cfg(not(target_os = "android"))]
 mod idle_inhibit;
-#[cfg(not(target_os = "android"))]
 mod loadfile;
-#[cfg(not(target_os = "android"))]
 mod lock;
-#[cfg(not(target_os = "android"))]
+mod log_url;
 pub mod mpv;
-#[cfg(not(target_os = "android"))]
 mod reconnect;
-#[cfg(not(target_os = "android"))]
 mod renderer;
-
-#[cfg(target_os = "android")]
-#[path = "android_unsupported.rs"]
-pub mod mpv;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gl_render;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod options;
 
-#[cfg(all(test, not(target_os = "android")))]
+#[cfg(test)]
 mod test_support;
 
+#[cfg(target_os = "android")]
+mod android;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "linux")]
@@ -90,6 +79,19 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             {
                 _api.register_ios_plugin(init_plugin_mpv)?;
                 ios::install(app);
+            }
+            #[cfg(target_os = "android")]
+            {
+                let handle = _api.register_android_plugin("app.cinette.mpv", "MpvPlugin")?;
+                let font_dir = app.path().app_cache_dir().ok().map(|dir| dir.join("mpv-fonts"));
+                android::install(
+                    Box::new(move |command, payload| {
+                        if let Err(e) = handle.run_mobile_plugin::<serde_json::Value>(command, payload) {
+                            tracing::warn!("[MPV android] {command} failed: {e}");
+                        }
+                    }),
+                    font_dir,
+                );
             }
             tracing::info!("MPV plugin initialized");
             Ok(())
