@@ -20,6 +20,28 @@ fn frames_split_however_the_bytes_arrive() {
 }
 
 #[test]
+fn many_frames_in_one_push_come_out_in_order() {
+    let mut bytes = Vec::new();
+    for i in 0..1000u16 {
+        bytes.extend(frame(&i.to_be_bytes()));
+    }
+    // Half of one more frame, which the next push finishes.
+    let last = frame(b"last");
+    bytes.extend(&last[..3]);
+    let mut reader = FrameReader::new();
+    reader.push(&bytes);
+    for i in 0..1000u16 {
+        assert_eq!(reader.next_frame(), Ok(Some(i.to_be_bytes().to_vec())));
+    }
+    assert_eq!(reader.next_frame(), Ok(None));
+    reader.push(&last[3..]);
+    // The frames read are gone, and only the last one is left.
+    assert_eq!(reader.buffer, last);
+    assert_eq!(reader.next_frame(), Ok(Some(b"last".to_vec())));
+    assert_eq!(reader.next_frame(), Ok(None));
+}
+
+#[test]
 fn a_frame_starts_with_its_big_endian_length() {
     assert_eq!(frame(&[9; 258])[..2], [1, 2]);
 }

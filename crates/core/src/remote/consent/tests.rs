@@ -113,15 +113,16 @@ fn a_denied_device_waits_out_the_cooldown_but_a_dismissed_one_doesnt() {
     let mut queue = ConsentQueue::new();
     let denied = peer("D");
     let dismissed = peer("X");
-    let id = submit(&mut queue, now, 1, &denied).unwrap();
-    queue.answer(id, Answer::Deny, now);
-    let id = submit(&mut queue, now, 2, &dismissed).unwrap();
-    queue.answer(id, Answer::Dismiss, now);
+    let first = submit(&mut queue, now, 1, &denied).unwrap();
+    let second = submit(&mut queue, now, 2, &dismissed).unwrap();
+    queue.answer(first, Answer::Deny, now);
+    queue.answer(second, Answer::Dismiss, now);
+    let after_backoff = now + DENIAL_BACKOFF;
     assert_eq!(
-        submit(&mut queue, now, 3, &denied),
+        submit(&mut queue, after_backoff, 3, &denied),
         Err(CloseReason::Denied)
     );
-    assert!(submit(&mut queue, now, 4, &dismissed).is_ok());
+    assert!(submit(&mut queue, after_backoff, 4, &dismissed).is_ok());
     let later = now + DENIAL_COOLDOWN;
     queue.expire(later);
     assert!(submit(&mut queue, later, 5, &denied).is_ok());
@@ -171,4 +172,97 @@ fn a_denied_device_may_ask_again_the_moment_the_cooldown_ends() {
         Err(CloseReason::Denied)
     );
     assert!(submit(&mut queue, end, 3, &denied).is_ok());
+}
+
+fn secs(n: u64) -> Duration {
+    Duration::from_secs(n)
+}
+
+/// Denies a request from a new device at `at`.
+fn deny_one(queue: &mut ConsentQueue, at: Instant) {
+    let id = submit(queue, at, 1, &peer("D")).unwrap();
+    assert!(queue.answer(id, Answer::Deny, at).is_some());
+}
+
+/// Checks that new devices are refused until `until` and let in then.
+fn quiet_until(queue: &mut ConsentQueue, until: Instant) {
+    let just_before = until - Duration::from_millis(1);
+    assert_eq!(
+        submit(queue, just_before, 2, &peer("N")),
+        Err(CloseReason::Busy)
+    );
+    submit(queue, until, 2, &peer("N")).unwrap();
+    queue.withdraw(ConnId(2)).unwrap();
+}
+
+#[test]
+fn after_a_denial_every_device_waits_longer_each_time() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let mut at = now;
+    for wait in [5, 10, 20, 40, 60, 60] {
+        deny_one(&mut queue, at);
+        quiet_until(&mut queue, at + secs(wait));
+        at += secs(wait);
+    }
+}
+
+#[test]
+fn a_request_already_waiting_stays_through_the_backoff() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let waiting = submit(&mut queue, now, 7, &peer("W")).unwrap();
+    deny_one(&mut queue, now);
+    assert_eq!(queue.showing().unwrap().id, waiting);
+    assert_eq!(
+        queue.answer(waiting, Answer::Allow, now).unwrap().outcome,
+        Outcome::Granted
+    );
+}
+
+#[test]
+fn allowing_a_request_ends_the_backoff() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let waiting = submit(&mut queue, now, 7, &peer("W")).unwrap();
+    deny_one(&mut queue, now);
+    let at = now + secs(5);
+    deny_one(&mut queue, at);
+    // The second wait runs to 15 s, but allowing ends it.
+    let at = at + secs(1);
+    queue.answer(waiting, Answer::Allow, at).unwrap();
+    assert!(submit(&mut queue, at, 4, &peer("B")).is_ok());
+    queue.withdraw(ConnId(4)).unwrap();
+    // And the next denial waits 5 s again.
+    deny_one(&mut queue, at);
+    quiet_until(&mut queue, at + secs(5));
+}
+
+#[test]
+fn a_quiet_minute_after_the_wait_starts_the_backoff_again() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    deny_one(&mut queue, now);
+    // The first wait ends at 5 s, so a minute later is 65 s.
+    let almost = now + secs(65) - Duration::from_millis(1);
+    deny_one(&mut queue, almost);
+    quiet_until(&mut queue, almost + secs(10));
+
+    let mut queue = ConsentQueue::new();
+    deny_one(&mut queue, now);
+    let then = now + secs(65);
+    deny_one(&mut queue, then);
+    quiet_until(&mut queue, then + secs(5));
+}
+
+#[test]
+fn dismissing_or_letting_a_request_run_out_starts_no_backoff() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let id = submit(&mut queue, now, 1, &peer("A")).unwrap();
+    queue.answer(id, Answer::Dismiss, now);
+    submit(&mut queue, now, 2, &peer("B")).unwrap();
+    let later = now + CONSENT_TIMEOUT;
+    assert_eq!(queue.expire(later).len(), 1);
+    assert!(submit(&mut queue, later, 3, &peer("C")).is_ok());
 }

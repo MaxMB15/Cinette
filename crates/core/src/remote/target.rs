@@ -14,12 +14,31 @@
 //! playing names that item, and fails with [`ErrorCode::StaleItem`] if
 //! something else is playing by then. Every state goes to every controller
 //! with a version one higher than the last.
+//!
+//! Each connection gets [`RATE`] messages a second once the handshake is
+//! done. A connection that hasn't been let in yet and sends more, or sends
+//! anything but a request, a ping or a goodbye, is closed. One that has been
+//! let in gets [`ErrorCode::RateLimited`] for its commands and queries, and
+//! no answer to anything else.
+//!
+//! The platform layer has its part too:
+//!
+//! - The target can't tell who is connecting until the handshake proves it.
+//!   The listener should cap how many connections one address has open, say
+//!   at 4, on top of [`MAX_HANDSHAKES`] and [`MAX_CONNECTIONS`].
+//! - The handshake shows the target's id, name and device type to anyone who
+//!   connects. A device that isn't discoverable should listen only while it
+//!   has a session, connected or waiting to resume ([`Target::sessions`]).
+//! - [`ControlMode::Always`] lets in any device on the network that asks,
+//!   with no dialog and no code to compare. The settings screen should say
+//!   so where the user picks it.
 
 use super::catalog::{CatalogItem, CatalogQuery};
 use super::channel::Channel;
 use super::consent::{Answer, ConsentQueue, Outcome, RequestId, Resolved};
 use super::handshake::{Established, Next, Peer, TargetHandshake, VerificationCode};
 use super::identity::{DeviceId, DeviceKey};
+use super::limit::TokenBucket;
 use super::message::{
     self, CloseReason, Command, DecodeError, DeviceType, ErrorCode, Feature, Hello, Message,
     PlaybackSnapshot, PlaybackStatus, RequestKind, VersionedState, PROTOCOL_VERSION,
@@ -35,17 +54,25 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// A connection that sends nothing for this long has dropped. Controllers
 /// ping every 10 s.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(25);
-/// The most connections still in the handshake at once.
+/// The most connections still in the handshake at once. See
+/// [`Target::accept`] for what happens to the next one.
 pub const MAX_HANDSHAKES: usize = 16;
 /// The most connections of any kind at once.
 pub const MAX_CONNECTIONS: usize = 32;
+/// How many handshakes may reach the step where the target sends its nonce
+/// at once, across all connections. After that, one a second. A device in
+/// the middle learns the target's code at that step, so this caps how many
+/// codes it can try (see [`super::handshake`]). A device that has a session
+/// isn't counted, and the rest get [`CloseReason::Busy`].
+pub const NONCE_BURST: u32 = 5;
+const NONCES_PER_SECOND: f64 = 1.0;
 /// How often a playing target sends its state, so positions don't drift.
 pub const STATE_REFRESH: Duration = Duration::from_secs(5);
 /// A position this far from where the last state said it would be is sent
 /// at once.
 const POSITION_JUMP: f64 = 2.0;
-/// Commands and catalog queries per second, per connection.
-const RATE: f64 = 20.0;
+/// Messages per second, per connection, after the handshake.
+pub const RATE: f64 = 20.0;
 /// The longest item or track id a command can name, in bytes.
 const MAX_ID_BYTES: usize = 256;
 /// The furthest one relative seek can move, in seconds.
@@ -135,23 +162,18 @@ struct Conn {
     stage: Stage,
     opened: Instant,
     last_heard: Instant,
-    tokens: f64,
-    tokens_at: Instant,
+    /// [`RATE`] for the messages after the handshake.
+    messages: TokenBucket,
 }
 
-impl Conn {
-    /// Takes one token from the connection's allowance. False when it's used up.
-    fn take_token(&mut self, now: Instant) -> bool {
-        let elapsed = now.duration_since(self.tokens_at).as_secs_f64();
-        self.tokens = (self.tokens + elapsed * RATE).min(RATE);
-        self.tokens_at = now;
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
+/// Still in the handshake.
+fn is_handshaking(c: &Conn) -> bool {
+    matches!(c.stage, Stage::Handshake(_))
+}
+
+/// Hasn't asked for control yet.
+fn has_not_asked(c: &Conn) -> bool {
+    matches!(c.stage, Stage::Handshake(_) | Stage::Ready(_))
 }
 
 pub struct Target {
@@ -168,6 +190,11 @@ pub struct Target {
     consent: ConsentQueue,
     shown: Option<RequestId>,
     sessions: Sessions,
+    /// [`NONCE_BURST`], shared by every connection.
+    nonces: TokenBucket,
+    /// Connections that made room for a newer one, and when. The next tick
+    /// closes them.
+    evicted: Vec<(ConnId, Instant)>,
 }
 
 impl Target {
@@ -185,6 +212,8 @@ impl Target {
             consent: ConsentQueue::new(),
             shown: None,
             sessions: Sessions::new(),
+            nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
+            evicted: Vec::new(),
         }
     }
 
@@ -227,18 +256,33 @@ impl Target {
         }
     }
 
-    /// A new connection arrived. `None` means close it at once: there are
-    /// too many already.
+    /// A new connection arrived. `None` means close it at once.
+    ///
+    /// With [`MAX_HANDSHAKES`] still in the handshake, the oldest of them
+    /// makes room. With [`MAX_CONNECTIONS`] open, the oldest that hasn't
+    /// asked for control does. Either closes on the next [`Target::tick`],
+    /// which [`Target::next_deadline`] makes due at once. That way
+    /// connections that sit there can't keep a controller from resuming its
+    /// session.
     pub fn accept(&mut self, now: Instant) -> Option<ConnId> {
-        let handshaking = self
-            .conns
-            .values()
-            .filter(|c| matches!(c.stage, Stage::Handshake(_)))
-            .count();
-        if handshaking >= MAX_HANDSHAKES || self.conns.len() >= MAX_CONNECTIONS {
-            return None;
-        }
         let handshake = TargetHandshake::new(&self.key, self.hello()).ok()?;
+        let handshaking = self.conns.values().filter(|c| is_handshaking(c)).count();
+        let make_room: Option<fn(&Conn) -> bool> = if handshaking >= MAX_HANDSHAKES {
+            Some(is_handshaking)
+        } else if self.conns.len() >= MAX_CONNECTIONS {
+            Some(has_not_asked)
+        } else {
+            None
+        };
+        if let Some(can_go) = make_room {
+            let (&oldest, _) = self
+                .conns
+                .iter()
+                .filter(|(_, c)| can_go(c))
+                .min_by_key(|(_, c)| c.opened)?;
+            self.conns.remove(&oldest);
+            self.evicted.push((oldest, now));
+        }
         self.next_conn += 1;
         let conn = ConnId(self.next_conn);
         self.conns.insert(
@@ -247,8 +291,7 @@ impl Target {
                 stage: Stage::Handshake(handshake),
                 opened: now,
                 last_heard: now,
-                tokens: RATE,
-                tokens_at: now,
+                messages: TokenBucket::new(RATE, RATE),
             },
         );
         Some(conn)
@@ -257,6 +300,7 @@ impl Target {
     /// The connection is gone, closed by the other side or by the network.
     pub fn disconnected(&mut self, conn: ConnId, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
+        self.evicted.retain(|&(evicted, _)| evicted != conn);
         if let Some(c) = self.conns.remove(&conn) {
             match c.stage {
                 Stage::Waiting(..) => {
@@ -282,45 +326,61 @@ impl Target {
         };
         c.last_heard = now;
         match std::mem::replace(&mut c.stage, Stage::Closed) {
-            Stage::Handshake(handshake) => match handshake.read(frame) {
-                Ok((send, next)) => {
-                    if let Some(bytes) = send {
-                        actions.push(Action::Send { conn, bytes });
+            Stage::Handshake(handshake) => {
+                let nonces = &mut self.nonces;
+                let sessions = &self.sessions;
+                // A device with a session got in once already, and can only
+                // come back as itself, so it doesn't wait for a nonce.
+                let admit = |peer: &Peer| {
+                    if sessions.list().iter().any(|s| s.peer.id == peer.id) || nonces.take(now) {
+                        Ok(())
+                    } else {
+                        Err(CloseReason::Busy)
                     }
-                    c.stage = match next {
-                        Next::Continue(handshake) => Stage::Handshake(handshake),
-                        Next::Done(established) => {
-                            let Established {
-                                channel,
-                                peer,
-                                code,
-                                ..
-                            } = *established;
-                            Stage::Ready(Authenticated {
-                                channel,
-                                peer,
-                                code,
-                            })
+                };
+                match handshake.read_admitting(frame, admit) {
+                    Ok((send, next)) => {
+                        if let Some(bytes) = send {
+                            actions.push(Action::Send { conn, bytes });
                         }
-                    };
-                }
-                Err(failure) => {
-                    if let Some(bytes) = failure.send {
-                        actions.push(Action::Send { conn, bytes });
+                        c.stage = match next {
+                            Next::Continue(handshake) => Stage::Handshake(handshake),
+                            Next::Done(established) => {
+                                let Established {
+                                    channel,
+                                    peer,
+                                    code,
+                                    ..
+                                } = *established;
+                                Stage::Ready(Authenticated {
+                                    channel,
+                                    peer,
+                                    code,
+                                })
+                            }
+                        };
                     }
-                    actions.push(Action::Close { conn });
-                    self.conns.remove(&conn);
+                    Err(failure) => {
+                        if let Some(bytes) = failure.send {
+                            actions.push(Action::Send { conn, bytes });
+                        }
+                        actions.push(Action::Close { conn });
+                        self.conns.remove(&conn);
+                    }
                 }
-            },
+            }
             Stage::Ready(mut auth) => {
+                let allowed = self.conn_token(conn, now);
                 let message = match open(&mut auth, conn, frame, &mut actions) {
-                    Opened::Message(message) => *message,
-                    Opened::Answered => {
-                        self.set_stage(conn, Stage::Ready(auth));
-                        return actions;
-                    }
                     Opened::Broken => {
                         self.drop_conn(conn, &mut actions);
+                        return actions;
+                    }
+                    Opened::Message(message) if allowed => *message,
+                    // Too many, or something it can't read.
+                    _ => {
+                        self.set_stage(conn, Stage::Ready(auth));
+                        self.close(conn, Some(CloseReason::Protocol), &mut actions);
                         return actions;
                     }
                 };
@@ -329,30 +389,44 @@ impl Target {
                         kind: RequestKind::Control,
                         resume,
                     } => self.request_control(conn, auth, resume, now, &mut actions),
+                    Message::Request { .. } => {
+                        reply_error(&mut auth, conn, &message, &mut actions);
+                        self.set_stage(conn, Stage::Ready(auth));
+                    }
                     Message::Ping => {
                         send(&mut auth, conn, &Message::Pong, &mut actions);
                         self.set_stage(conn, Stage::Ready(auth));
                     }
                     Message::Closed { .. } => self.close(conn, None, &mut actions),
-                    other => {
-                        reply_error(&mut auth, conn, &other, &mut actions);
+                    // Only a controller that was let in sends anything else.
+                    _ => {
                         self.set_stage(conn, Stage::Ready(auth));
+                        self.close(conn, Some(CloseReason::Protocol), &mut actions);
                     }
                 }
             }
             Stage::Waiting(mut auth, request) => {
+                let allowed = self.conn_token(conn, now);
                 let message = match open(&mut auth, conn, frame, &mut actions) {
-                    Opened::Message(message) => *message,
-                    Opened::Answered => {
-                        self.set_stage(conn, Stage::Waiting(auth, request));
-                        return actions;
-                    }
                     Opened::Broken => {
                         self.consent.withdraw(conn);
                         self.sync_prompt(&mut actions);
                         self.drop_conn(conn, &mut actions);
                         return actions;
                     }
+                    _ if !allowed => {
+                        self.consent.withdraw(conn);
+                        self.sync_prompt(&mut actions);
+                        self.set_stage(conn, Stage::Waiting(auth, request));
+                        self.close(conn, Some(CloseReason::Protocol), &mut actions);
+                        return actions;
+                    }
+                    Opened::Undecodable { id, code } => {
+                        error(&mut auth, conn, id, code, &mut actions);
+                        self.set_stage(conn, Stage::Waiting(auth, request));
+                        return actions;
+                    }
+                    Opened::Message(message) => *message,
                 };
                 match message {
                     Message::Cancel | Message::Closed { .. } => {
@@ -372,12 +446,8 @@ impl Target {
                 }
             }
             Stage::InSession(mut auth) => {
+                let allowed = self.conn_token(conn, now);
                 let message = match open(&mut auth, conn, frame, &mut actions) {
-                    Opened::Message(message) => *message,
-                    Opened::Answered => {
-                        self.set_stage(conn, Stage::InSession(auth));
-                        return actions;
-                    }
                     Opened::Broken => {
                         // A broken frame ends the connection, not the
                         // session, which the same controller can resume.
@@ -386,10 +456,25 @@ impl Target {
                         self.drop_conn(conn, &mut actions);
                         return actions;
                     }
+                    Opened::Undecodable { id, code } => {
+                        match (allowed, id) {
+                            (true, _) => error(&mut auth, conn, id, code, &mut actions),
+                            (false, Some(id)) => error(
+                                &mut auth,
+                                conn,
+                                Some(id),
+                                ErrorCode::RateLimited,
+                                &mut actions,
+                            ),
+                            (false, None) => {}
+                        }
+                        self.set_stage(conn, Stage::InSession(auth));
+                        return actions;
+                    }
+                    Opened::Message(message) => *message,
                 };
                 match message {
                     Message::Command { id, command } => {
-                        let allowed = self.conn_token(conn, now);
                         match (allowed, validate(&command, &self.state)) {
                             (false, _) => error(
                                 &mut auth,
@@ -410,7 +495,6 @@ impl Target {
                         self.set_stage(conn, Stage::InSession(auth));
                     }
                     Message::Catalog { id, query } => {
-                        let allowed = self.conn_token(conn, now);
                         match (allowed, query.validate()) {
                             (false, _) => error(
                                 &mut auth,
@@ -430,16 +514,18 @@ impl Target {
                         }
                         self.set_stage(conn, Stage::InSession(auth));
                     }
-                    Message::Ping => {
-                        send(&mut auth, conn, &Message::Pong, &mut actions);
-                        self.set_stage(conn, Stage::InSession(auth));
-                    }
                     Message::Closed { .. } => {
                         if let Some(id) = self.sessions.by_conn(conn).map(|s| s.id.clone()) {
                             self.sessions.end(&id);
                         }
                         actions.push(self.sessions_changed());
                         self.close(conn, None, &mut actions);
+                    }
+                    // Over the limit, nothing else gets an answer.
+                    _ if !allowed => self.set_stage(conn, Stage::InSession(auth)),
+                    Message::Ping => {
+                        send(&mut auth, conn, &Message::Pong, &mut actions);
+                        self.set_stage(conn, Stage::InSession(auth));
                     }
                     other => {
                         reply_error(&mut auth, conn, &other, &mut actions);
@@ -453,7 +539,9 @@ impl Target {
     }
 
     fn conn_token(&mut self, conn: ConnId, now: Instant) -> bool {
-        self.conns.get_mut(&conn).is_some_and(|c| c.take_token(now))
+        self.conns
+            .get_mut(&conn)
+            .is_some_and(|c| c.messages.take(now))
     }
 
     fn set_stage(&mut self, conn: ConnId, stage: Stage) {
@@ -668,8 +756,13 @@ impl Target {
 
     /// The player's state, whenever it's read. The target sends it on when
     /// something changed, when the position moved more than playing would
-    /// explain, and every [`STATE_REFRESH`] while playing.
-    pub fn set_state(&mut self, state: PlaybackSnapshot, now: Instant) -> Vec<Action> {
+    /// explain, and every [`STATE_REFRESH`] while playing. A position or
+    /// duration that isn't a finite number goes out as 0.
+    pub fn set_state(&mut self, mut state: PlaybackSnapshot, now: Instant) -> Vec<Action> {
+        // JSON has no NaN or infinity. They'd go out as null, and no
+        // controller would read the state.
+        state.position = finite_or_zero(state.position);
+        state.duration = finite_or_zero(state.duration);
         let changed = {
             let mut old = self.state.clone();
             old.position = state.position;
@@ -781,9 +874,13 @@ impl Target {
     }
 
     /// Time passed. Ends handshakes that took too long, connections that
-    /// went quiet, requests no one answered and sessions that didn't resume.
+    /// went quiet or made room for newer ones, requests no one answered and
+    /// sessions that didn't resume.
     pub fn tick(&mut self, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
+        for (conn, _) in std::mem::take(&mut self.evicted) {
+            actions.push(Action::Close { conn });
+        }
         let stale: Vec<ConnId> = self
             .conns
             .iter()
@@ -824,6 +921,7 @@ impl Target {
             _ => None,
         });
         conns
+            .chain(self.evicted.iter().map(|&(_, at)| at))
             .chain(self.consent.next_deadline())
             .chain(self.sessions.next_deadline())
             .min()
@@ -834,6 +932,9 @@ impl Target {
         let mut actions = Vec::new();
         self.consent.refuse_all(CloseReason::Shutdown);
         let had_sessions = !self.sessions.end_all().is_empty();
+        for (conn, _) in std::mem::take(&mut self.evicted) {
+            actions.push(Action::Close { conn });
+        }
         let conns: Vec<ConnId> = self.conns.keys().copied().collect();
         for conn in conns {
             self.close(conn, Some(CloseReason::Shutdown), &mut actions);
@@ -877,11 +978,24 @@ fn session_info(session: &Session) -> SessionInfo {
     }
 }
 
+/// A number for a state, which JSON can carry.
+fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
+}
+
 /// What reading a frame gave.
 enum Opened {
     Message(Box<Message>),
-    /// A message of an unknown type or with bad fields, already answered.
-    Answered,
+    /// A message of an unknown type or with bad fields. `code` is the
+    /// answer, if it gets one, and `id` the request it answers.
+    Undecodable {
+        id: Option<u64>,
+        code: ErrorCode,
+    },
     /// The frame didn't decrypt or wasn't a message. The connection closes.
     Broken,
 }
@@ -892,14 +1006,14 @@ fn open(auth: &mut Authenticated, conn: ConnId, frame: &[u8], actions: &mut Vec<
     };
     match message::decode(&plain) {
         Ok(message) => Opened::Message(Box::new(message)),
-        Err(DecodeError::UnknownType { id }) => {
-            error(auth, conn, id, ErrorCode::Unsupported, actions);
-            Opened::Answered
-        }
-        Err(DecodeError::Invalid { id }) => {
-            error(auth, conn, id, ErrorCode::Invalid, actions);
-            Opened::Answered
-        }
+        Err(DecodeError::UnknownType { id }) => Opened::Undecodable {
+            id,
+            code: ErrorCode::Unsupported,
+        },
+        Err(DecodeError::Invalid { id }) => Opened::Undecodable {
+            id,
+            code: ErrorCode::Invalid,
+        },
         Err(DecodeError::Version(_)) => {
             send(
                 auth,
