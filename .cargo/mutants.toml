@@ -76,6 +76,7 @@ exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
     "apps/player/src-tauri/src/android_tls.rs",
+    "crates/tauri-plugin-mpv/src/android_unsupported.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
 ]
