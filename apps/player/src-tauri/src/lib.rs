@@ -146,6 +146,7 @@ register_commands![
     remote_commands::remote_set_state,
     remote_commands::remote_finish_command,
     remote_commands::remote_devices,
+    remote_commands::remote_local_network_denied,
     remote_commands::remote_connect,
     remote_commands::remote_leave,
     remote_commands::remote_command,

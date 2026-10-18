@@ -657,6 +657,11 @@ describe("backend commands", () => {
 			{ token: 9, outcome: "staleItem" },
 		],
 		["remoteDevices", () => tauri.remoteDevices(), "remote_devices"],
+		[
+			"remoteLocalNetworkDenied",
+			() => tauri.remoteLocalNetworkDenied(),
+			"remote_local_network_denied",
+		],
 		["remoteConnect", () => tauri.remoteConnect("abc"), "remote_connect", { deviceId: "abc" }],
 		["remoteLeave", () => tauri.remoteLeave(), "remote_leave"],
 		[

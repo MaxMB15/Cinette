@@ -400,6 +400,20 @@ pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json:
     }
 }
 
+/// Whether macOS refuses this app the local network, so no device can be
+/// found. Always false elsewhere.
+#[command]
+pub async fn remote_local_network_denied() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        crate::discovery::local_network_denied()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
+}
+
 /// Asks a device for control. Progress comes as `remote://controller`.
 #[command]
 pub async fn remote_connect<R: Runtime>(

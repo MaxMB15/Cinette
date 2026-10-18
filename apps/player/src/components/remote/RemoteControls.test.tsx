@@ -22,10 +22,19 @@ vi.mock("@/hooks/useRemoteControl", () => ({
 
 const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
-vi.mock("@/lib/tauri", () => ({ remoteDisconnect: vi.fn(() => Promise.resolve()) }));
+vi.mock("@/lib/tauri", () => ({
+	remoteDisconnect: vi.fn(() => Promise.resolve()),
+	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
+}));
 
-import { remoteDisconnect } from "@/lib/tauri";
-import { ConnectStatusDialog, ControllersBar, DevicesButton, RemoteBar } from "./RemoteControls";
+import { remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import {
+	ConnectStatusDialog,
+	ControllersBar,
+	DevicesButton,
+	LOCAL_NETWORK_DENIED,
+	RemoteBar,
+} from "./RemoteControls";
 
 const tv: RemoteDevice = {
 	deviceId: "tv1",
@@ -88,6 +97,43 @@ describe("DevicesButton", () => {
 			"true"
 		);
 		expect(within(picker).getByRole("button", { name: /Den/ })).toBeDisabled();
+	});
+
+	it("says when macOS keeps it off the local network, checking at each opening", async () => {
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		render(<DevicesButton />);
+		const open = () =>
+			fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		open();
+		const picker = screen.getByRole("dialog", { name: "Play on" });
+		expect(await within(picker).findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
+		expect(LOCAL_NETWORK_DENIED).toMatch(/Local Network in System Settings/);
+		fireEvent.keyDown(picker, { key: "Escape" });
+		// Allowed meanwhile.
+		open();
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+	});
+
+	it("says nothing about the network until it knows, or when it can't tell", async () => {
+		vi.mocked(remoteLocalNetworkDenied)
+			.mockImplementationOnce(() => new Promise(() => {}))
+			.mockResolvedValueOnce(true)
+			.mockRejectedValueOnce("unavailable");
+		render(<DevicesButton />);
+		const open = () =>
+			fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		const close = () =>
+			fireEvent.keyDown(screen.getByRole("dialog", { name: "Play on" }), { key: "Escape" });
+		open();
+		expect(screen.queryByRole("status"), "not before it knows").toBeNull();
+		close();
+		open();
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
+		close();
+		open();
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(3));
+		await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
 	});
 
 	it("asks the device chosen for control", () => {
