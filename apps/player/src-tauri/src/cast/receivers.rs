@@ -26,6 +26,7 @@ use serde::Serialize;
 use crate::discovery::Event;
 
 /// The service type Cast receivers advertise.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub const SERVICE_TYPE: &str = "_googlecast._tcp";
 
 /// A receiver as the frontend sees it. Its address stays in Rust.
@@ -88,6 +89,7 @@ impl Registry {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn found(&mut self, instance: String, receiver: CastReceiver) -> bool {
         let id = receiver.id.clone();
         if let Some(old) = self.instances.insert(instance, id.clone())
@@ -98,6 +100,7 @@ impl Registry {
         self.receivers.insert(id, receiver.clone()) != Some(receiver)
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn removed(&mut self, instance: &str) -> bool {
         let Some(id) = self.instances.remove(instance) else {
             return false;
@@ -106,6 +109,7 @@ impl Registry {
     }
 
     /// Drops `id`, or marks it unavailable while it's held.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn forget(&mut self, id: &str) -> bool {
         if self.held.contains(id) {
             return self.unreachable(id);
@@ -114,6 +118,7 @@ impl Registry {
     }
 
     /// A connection to `id` failed.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn unreachable(&mut self, id: &str) -> bool {
         match self.receivers.get_mut(id) {
             Some(receiver) if receiver.available => {
@@ -141,6 +146,7 @@ impl Registry {
         !gone.is_empty()
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn get(&self, id: &str) -> Option<&CastReceiver> {
         self.receivers.get(id)
     }
