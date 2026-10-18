@@ -2,9 +2,12 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { makeHistoryEntry } from "@/test/channel-fixtures";
+import { watchHistoryQuery } from "@/lib/queries";
 
 vi.mock("@/lib/tauri", () => ({ getWatchHistory: vi.fn() }));
 
@@ -114,5 +117,26 @@ describe("useHistoryStaleOnLeave", () => {
 		expect(mockHistory).toHaveBeenCalledOnce();
 		renderHook(() => useWatchHistory(50, "live", "failed:"), { wrapper });
 		await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(2));
+	});
+
+	it("marks the history stale in the cache it used when the cache changes", async () => {
+		const first = createTestQueryClient();
+		await first.fetchQuery(watchHistoryQuery(50, "live"));
+		const Leaves = () => {
+			useHistoryStaleOnLeave();
+			return null;
+		};
+		const view = render(
+			createElement(QueryClientProvider, { client: first }, createElement(Leaves))
+		);
+		const second = createTestQueryClient();
+		view.rerender(
+			createElement(QueryClientProvider, { client: second }, createElement(Leaves))
+		);
+
+		expect(first.getQueryState(watchHistoryQuery(50, "live").queryKey)?.isInvalidated).toBe(
+			true
+		);
+		view.unmount();
 	});
 });

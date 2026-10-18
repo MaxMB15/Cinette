@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { wrapperFor } from "@/test/query";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
+import { historyKey } from "@/lib/queries";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -1278,6 +1279,18 @@ describe("ChannelList recently played", () => {
 		expect(state.navigate).toHaveBeenCalledExactlyOnceWith("/player", {
 			state: { url: news.url, channelName: "News 24 HD", channel: news },
 		});
+	});
+
+	it("marks the history stale when it closes", async () => {
+		const client = createTestQueryClient();
+		const view = render(<ChannelList />, { wrapper: wrapperFor(client) });
+		await flush();
+		const history = () => client.getQueryCache().findAll({ queryKey: historyKey() });
+		expect(history().length).toBeGreaterThan(0);
+		expect(history().some((q) => q.state.isInvalidated)).toBe(false);
+
+		view.unmount();
+		expect(history().every((q) => q.state.isInvalidated)).toBe(true);
 	});
 
 	it("does nothing for a channel that is no longer listed", async () => {
