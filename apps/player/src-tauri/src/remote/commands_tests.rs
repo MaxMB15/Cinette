@@ -104,3 +104,18 @@ fn a_blank_name_means_the_default() {
     assert_eq!(input(Some("  \n ")).into_settings().device_name, None);
     assert_eq!(input(None).into_settings().device_name, None);
 }
+
+#[test]
+fn an_episode_keeps_its_show_season_and_number() {
+    let state = player_state(json!({
+        "item": {
+            "id": "xt-ep-9-s1-2", "name": "Pilot", "contentType": "series", "group": "Drama",
+            "logoUrl": null, "seriesTitle": "The Show", "season": 1, "episode": 2
+        }
+    }));
+    let item = state.into_snapshot(&[]).item.unwrap();
+    assert_eq!(item.content_type, "series");
+    assert_eq!(item.series_title.as_deref(), Some("The Show"));
+    assert_eq!(item.season, Some(1));
+    assert_eq!(item.episode, Some(2));
+}
