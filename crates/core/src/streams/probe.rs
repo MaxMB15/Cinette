@@ -98,7 +98,7 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
         }
     }
     let Some(container) = container else {
-        return Err(http_error(stderr));
+        return Err(open_error(stderr));
     };
     if video.is_none() && audio.is_none() {
         return Err(ProbeError::NoStreams);
@@ -112,9 +112,10 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
     })
 }
 
-/// Why ffmpeg couldn't open the input. It names an HTTP status as
-/// `Server returned 403 Forbidden` or `HTTP error 403 Forbidden`.
-fn http_error(stderr: &str) -> ProbeError {
+/// Why ffmpeg couldn't open its input, from what it printed. It names an
+/// HTTP status as `Server returned 403 Forbidden` or `HTTP error 403
+/// Forbidden`. The converter reads its own ffmpeg's errors with this too.
+pub fn open_error(stderr: &str) -> ProbeError {
     for marker in ["Server returned ", "HTTP error "] {
         for (i, _) in stderr.match_indices(marker) {
             let code = stderr[i + marker.len()..]

@@ -41,7 +41,7 @@ FFMPEG_VERSION=8.1.3
 # it for a new build of the same ffmpeg, such as one with a new OpenSSL, and
 # set it back to 1 for a new ffmpeg. Older commits pin the archives already on
 # the pre-release, so a new build never replaces one.
-FFMPEG_BUILD=2
+FFMPEG_BUILD=3
 FFMPEG_SHA256=7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3
 # OpenSSL for macOS, from its 3.5 long-term support series.
 OPENSSL_VERSION=3.5.9
@@ -59,22 +59,31 @@ OPENSSL_SOURCES=(
 )
 
 # The containers the app writes, from muxer_for_container in
-# crates/core/src/downloads/ffmpeg.rs.
-MUXERS=avi,matroska,mov,mp4,mpegts,webm
+# crates/core/src/downloads/ffmpeg.rs, and Matroska for a stream converted for
+# a Cast receiver. null takes the hardware encoder check's one frame.
+MUXERS=avi,matroska,mov,mp4,mpegts,null,webm
 # The app may be given HLS, MPEG-TS, MP4, MKV and the other files an Xtream
 # provider serves, such as AVI, FLV and WMV, and audio-only streams such as
 # radio. The app's own download tests serve WAV. RTSP, RTMP and UDP links
 # from an M3U playlist fail for now, since the app passes -reconnect, which only
 # HTTP takes, but the build can read them.
-DEMUXERS=aac,ac3,asf,avi,eac3,flac,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rtp,rtsp,sdp,srt,wav,webvtt
+# rawvideo reads the hardware encoder check's blank frame.
+DEMUXERS=aac,ac3,asf,avi,eac3,flac,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rawvideo,rtp,rtsp,sdp,srt,wav,webvtt
 PROTOCOLS=crypto,data,file,http,httpproxy,https,pipe,rtmp,rtmps,rtp,tcp,tls,udp
 PARSERS=aac,aac_latm,ac3,av1,dca,dvbsub,dvdsub,flac,h264,hevc,mpeg4video,mpegaudio,mpegvideo,opus,vorbis,vp8,vp9,vvc
 BSFS=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,mpeg4_unpack_bframes,null,setts,vp9_superframe,vvc_mp4toannexb
-DECODERS=aac,aac_latm,ac3,ass,dvbsub,dvdsub,eac3,h264,hevc,movtext,mp2,mp3,mpeg2video,mpeg4,subrip,webvtt
+# Converting a stream for a Cast receiver decodes the audio it can't play,
+# DTS and Opus among it.
+DECODERS=aac,aac_latm,ac3,ass,dca,dvbsub,dvdsub,eac3,h264,hevc,movtext,mp2,mp3,mpeg2video,mpeg4,opus,rawvideo,subrip,webvtt
 # Without -map, ffmpeg only keeps a subtitle track when it has an encoder for
 # the container's own subtitle format, ASS for Matroska and WebVTT for WebM.
-# The app copies the track, so neither runs.
-ENCODERS=ass,webvtt
+# The app copies the track, so neither runs. Converting turns audio a receiver
+# can't play into AAC.
+ENCODERS=aac,ass,webvtt
+# Converting audio runs a filter graph with the format and resampling
+# filters that turn any layout into stereo. ffmpeg always builds in the
+# buffers at each end of a graph.
+FILTERS=aformat,anull,aresample,format,null
 
 OUT="${1:-}"
 if [[ -z "$OUT" ]]; then
@@ -102,7 +111,6 @@ CONFIGURE=(
   "--enable-parser=$PARSERS"
   "--enable-bsf=$BSFS"
   "--enable-decoder=$DECODERS"
-  "--enable-encoder=$ENCODERS"
 )
 case "$(uname -s)" in
   Darwin)
@@ -113,12 +121,20 @@ case "$(uname -s)" in
     # configure always links CoreMedia and CoreVideo, which nothing here uses.
     # -dead_strip leaves out the parts of OpenSSL that ffmpeg never calls.
     CONFIGURE+=(--enable-openssl --pkg-config-flags=--static "--extra-ldflags=-Wl,-dead_strip_dylibs -Wl,-dead_strip")
+    # A full video transcode for a Cast receiver runs on VideoToolbox, the
+    # Mac's hardware encoder. MPEG-2 and interlaced channels need it.
+    # Deinterlacing and turning 10-bit video into 8-bit take yadif, scale and
+    # swscale.
+    ENCODERS+=,h264_videotoolbox
+    FILTERS+=,scale,yadif
+    CONFIGURE+=(--enable-videotoolbox --enable-swscale)
     # On an Intel Mac, --disable-x86asm saves needing nasm, as on Linux below.
     if [[ "$(uname -m)" == x86_64 ]]; then
       CONFIGURE+=(--disable-x86asm)
     fi
     # libSystem and zlib.
-    ALLOWED_LIBS='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libz\.1\.dylib)$'
+    # libSystem, zlib, and the frameworks VideoToolbox needs.
+    ALLOWED_LIBS='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libz\.1\.dylib|/System/Library/Frameworks/(VideoToolbox|CoreMedia|CoreVideo|CoreFoundation|CoreServices)\.framework/Versions/A/[A-Za-z]+)$'
     ;;
   Linux)
     PLATFORM=linux
@@ -225,6 +241,8 @@ fetch "ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256" "${FFMPEG_SOURCES[@]}"
 # and those go into the program for its error messages.
 cd "$WORK/ffmpeg-$FFMPEG_VERSION"
 echo "Configuring ffmpeg $FFMPEG_VERSION for $PLATFORM: ${CONFIGURE[*]}"
+# The platform may have added encoders and filters above.
+CONFIGURE+=("--enable-encoder=$ENCODERS" "--enable-filter=$FILTERS")
 if ! ./configure "${CONFIGURE[@]}" > configure.log 2>&1; then
   tail -n 40 configure.log >&2
   tail -n 40 ffbuild/config.log >&2 || true
@@ -253,6 +271,7 @@ check_enabled parser "$PARSERS"
 check_enabled bsf "$BSFS"
 check_enabled decoder "$DECODERS"
 check_enabled encoder "$ENCODERS"
+check_enabled filter "$FILTERS"
 if [[ -n "$MISSING" ]]; then
   echo "configure didn't enable:$MISSING" >&2
   exit 1

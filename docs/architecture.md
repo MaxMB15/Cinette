@@ -54,12 +54,18 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 | `cache/store.rs` | SQLite storage (bundled `rusqlite`): providers, channels, EPG, watch history, playback positions, downloads and metadata caches |
 | `downloads/` | Download model, file paths, ffmpeg invocation, retention, and `recording.rs`, which names recording files and plans when each recording starts, merges, stops or is missed |
 | `models/` | `Channel`, `Playlist` and related types |
+| `streams/` | The URLs an item can be fetched from, and what each holds: the probe's parser, the HLS segment and CORS check, for Cast and AirPlay |
+| `convert/` | Converting a stream for a receiver that can't play it: ffmpeg's arguments, splitting live Matroska at its clusters, and the server's HTTP |
 
 ### `apps/player/src-tauri`
 
 The app itself. `lib.rs` opens the database in the app data folder and registers the
 plugins, and `commands.rs` exposes the core features to the frontend as Tauri commands.
-`downloads/` queues downloads and runs the bundled ffmpeg sidecar.
+`downloads/` queues downloads and runs the bundled ffmpeg sidecar. `streams/` tells the
+frontend which formats an item comes in, probing it with the sidecar when mpv isn't
+playing it. `convert/` runs the sidecar to convert a stream for a receiver and serves
+it from this computer's address on the local network, only to that receiver and under
+a random path.
 
 Recordings of live channels share the downloads table, with the kind `recording`.
 Besides `completed` and `failed`, they have three states of their own, `scheduled`,
@@ -76,8 +82,8 @@ starts. A recording whose stream fails tries again up to 3 times, after 30 secon
 minute and two minutes. Errors keep the provider's address but never the stream's,
 which holds the login. At launch, a recording cut off by a quit or crash keeps its file
 and is marked finished, and a new recording takes the rest when at least a minute of it
-is still ahead. `downloads/keep_awake.rs` keeps the computer awake while ffmpeg
-records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
+is still ahead. `keep_awake.rs` keeps the computer awake while ffmpeg records, or
+converts a stream for a TV, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
 `schedule_recording` and `stop_recording`, and both refuse on iOS and Android.
 
 ### `crates/tauri-plugin-mpv`

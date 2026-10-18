@@ -46,6 +46,10 @@ from pathlib import Path
 # lines no longer match.
 DOWNLOAD_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max 30 -i URL -c copy -movflags +faststart -f mp4 -progress pipe:1 -nostats -y DEST"
 RECORDING_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max 30 -rw_timeout 15000000 -reconnect_on_network_error 1 -stats_period 5 -i URL -c copy -f mpegts -progress pipe:1 -nostats -t 60 -y DEST"
+# What converting a stream for a Cast receiver runs, from mvp_core::convert::args,
+# copying the video and turning the audio into AAC. The app writes to pipe:1,
+# and the test writes to a file in its place.
+CONVERT_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -c:a aac -b:a 192k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
 
 # muxer_for_container in crates/core/src/downloads/ffmpeg.rs.
 MUXERS = {
@@ -90,7 +94,7 @@ DEMUXERS = {"hls", "live_flv", "rtp", "rtsp", "sdp"}
 
 def make_media(ffmpeg: str, folder: Path) -> None:
     www = folder / "www"
-    for path in (www, www / "hls", www / "hls-fmp4", www / "hls-aes"):
+    for path in (www, www / "hls", www / "hls-fmp4", www / "hls-aes", www / "hls-eac3"):
         path.mkdir(parents=True, exist_ok=True)
 
     def run(*args: object) -> None:
@@ -121,6 +125,8 @@ def make_media(ffmpeg: str, folder: Path) -> None:
     run(*av, "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
         "-c:a", "ac3", www / "hevc.ts")
     run(*av, "-c:v", "mpeg2video", "-c:a", "mp2", www / "mpeg2.ts")
+    # ffmpeg's own DTS encoder is marked experimental.
+    run(*av, *h264, "-c:a", "dca", "-strict", "-2", www / "dts.mkv")
     run(*av, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
         "-c:a", "libopus", www / "vp9.webm")
     run(*av, "-c:v", "mpeg4", "-c:a", "libmp3lame", www / "mpeg4.avi")
@@ -137,6 +143,8 @@ def make_media(ffmpeg: str, folder: Path) -> None:
         www / "hls" / "index.m3u8")
     run("-i", www / "av.mp4", *hls, "-hls_segment_type", "fmp4",
         "-hls_segment_filename", www / "hls-fmp4" / "seg%d.m4s", www / "hls-fmp4" / "index.m3u8")
+    run(*av, *h264, "-c:a", "eac3", "-f", "hls", "-hls_time", "1", "-hls_playlist_type", "vod",
+        "-hls_segment_filename", www / "hls-eac3" / "seg%d.ts", www / "hls-eac3" / "index.m3u8")
     key = www / "hls-aes" / "key.bin"
     key.write_bytes(os.urandom(16))
     key_info = folder / "key-info.txt"
@@ -320,6 +328,8 @@ class Case:
     # crates/core/src/downloads/recording.rs reads these lines.
     error: str = ""
     recording: bool = False
+    # Run CONVERT_ARGS instead of a download's or a recording's.
+    converting: bool = False
     # "http", "https", or "tls13" or "tls12", a server that only takes that
     # TLS version.
     server: str = "http"
@@ -355,6 +365,15 @@ def cases() -> list[Case]:
         Case("MPEG-TS into MP4", "/media/av.ts", "mp4", av),
         # The app's own download tests serve WAV.
         Case("WAV into MKV", "/media/sound.wav", "mkv", ["pcm_u8"]),
+        Case("Converting MPEG-2 and MP2 for Cast", "/media/mpeg2.ts", "mkv",
+             ["aac", "mpeg2video"], converting=True),
+        Case("Converting HEVC and AC-3 for Cast", "/media/hevc.ts", "mkv", ["aac", "hevc"],
+             converting=True),
+        Case("Converting DTS for Cast", "/media/dts.mkv", "mkv", av, converting=True),
+        Case("Converting Opus for Cast", "/media/vp9.webm", "mkv", ["aac", "vp9"],
+             converting=True),
+        Case("Converting E-AC-3 in HLS for Cast", "/media/hls-eac3/index.m3u8", "mkv", av,
+             converting=True),
         Case("HLS", "/media/hls/index.m3u8", "mkv", av),
         Case("HLS with fMP4 segments", "/media/hls-fmp4/index.m3u8", "mkv", av),
         Case("HLS with AES-128", "/media/hls-aes/index.m3u8", "mkv", av),
@@ -394,6 +413,9 @@ def cases() -> list[Case]:
 
 
 def app_args(case: Case, url: str, dest: Path) -> list[str]:
+    if case.converting:
+        args = CONVERT_ARGS.split()
+        return [url if arg == "URL" else str(dest) if arg == "pipe:1" else arg for arg in args]
     args = (RECORDING_ARGS if case.recording else DOWNLOAD_ARGS).split()
     muxer = MUXERS[case.container]
     if muxer not in ("mp4", "mov") and "-movflags" in args:
@@ -522,10 +544,11 @@ def check(ffmpeg: str, reader: str, case: Case, urls: dict[str, str], out: Path)
         return ""
     if run.code != 0:
         return f"ffmpeg exited with {run.code}: {errors}"
-    if "progress=end" not in run.stdout:
+    # A conversion writes no progress, since the app reads its output.
+    if not case.converting and "progress=end" not in run.stdout:
         return "the progress never said progress=end"
     sizes = re.findall(r"^total_size=(\d+)$", run.stdout, re.M)
-    if not sizes or int(sizes[-1]) <= 0:
+    if not case.converting and (not sizes or int(sizes[-1]) <= 0):
         return f"the progress gave no size above 0: {sizes}"
     if not dest.is_file() or dest.stat().st_size == 0:
         return "ffmpeg wrote nothing"

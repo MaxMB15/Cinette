@@ -2,9 +2,12 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 mod commands;
+mod convert;
 mod downloads;
 #[cfg(desktop)]
 mod identifier;
+#[cfg(desktop)]
+mod keep_awake;
 mod logging;
 mod progress;
 mod streams;
@@ -177,6 +180,7 @@ register_commands![
     commands::delete_playback_position,
     progress::hand_off_progress,
     streams::get_stream_formats,
+    convert::get_converter_support,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,
     commands::delete_group_hierarchy,
