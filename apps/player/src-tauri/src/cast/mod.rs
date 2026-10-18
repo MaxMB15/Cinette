@@ -298,3 +298,14 @@ pub fn cast_stop<R: Runtime>(app: AppHandle<R>, receiver_id: String) {
 /// What the commands say where casting isn't built yet.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const UNSUPPORTED: &str = "unsupported";
+
+/// Whether a VPN looks to hold the default route, for the pickers' hint
+/// when no receiver is found or one can't be reached. Phones and tablets
+/// say false until they check.
+#[tauri::command]
+pub fn get_vpn_active() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    return crate::vpn::vpn_active();
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    false
+}

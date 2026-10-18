@@ -28,6 +28,8 @@ mod streams;
 mod wifi;
 #[cfg(test)]
 mod android_project_tests;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vpn;
 #[cfg(test)]
 mod capabilities_tests;
 #[cfg(test)]
@@ -262,6 +264,7 @@ register_commands![
     cast::cast_load,
     cast::cast_control,
     cast::cast_stop,
+    cast::get_vpn_active,
 ];
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

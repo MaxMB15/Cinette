@@ -50,8 +50,9 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "crypt
 zbus = "5"
 # DNS-SD for Cinette devices and Cast receivers, without needing Avahi.
 mdns-sd = { version = "0.21", default-features = false }
-# The interfaces' subnets, so remote control only takes local peers. The
-# same version as mdns-sd's.
+# The interfaces' subnets, so remote control only takes local peers, and
+# the one that holds the default route, to tell when a VPN does. The same
+# version as mdns-sd's.
 if-addrs = "0.15"
 # The remote-control listener's dual-stack socket. The same version as tokio's.
 socket2 = "0.6"
@@ -63,7 +64,8 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 [target.'cfg(target_os = "macos")'.dependencies]
 # poll and the socket types for Bonjour's dns_sd.h.
 libc = "0.2"
-# The interfaces' subnets, so remote control only takes local peers.
+# The interfaces' subnets, so remote control only takes local peers, and
+# the one that holds the default route, to tell when a VPN does.
 if-addrs = "0.15"
 # The remote-control listener's dual-stack socket. The same version as tokio's.
 socket2 = "0.6"

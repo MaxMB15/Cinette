@@ -707,6 +707,13 @@ export const castControl = (receiverId: string, action: CastAction): Promise<voi
 /** End the cast. The receiver goes back to what it showed. */
 export const castStop = (receiverId: string): Promise<void> => invoke("cast_stop", { receiverId });
 
+/**
+ * Whether a VPN looks to hold this device's default route. The pickers
+ * show a hint with it when no receiver is found or one can't be reached,
+ * since many VPN apps block local devices unless "allow LAN" is on.
+ */
+export const getVpnActive = (): Promise<boolean> => invoke("get_vpn_active");
+
 /** Who may control this device from another Cinette device. */
 export type RemoteControlMode = "always" | "ask" | "never";
 
