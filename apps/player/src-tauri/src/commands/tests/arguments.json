@@ -103,5 +103,7 @@
 		"required": ["channelId", "startAt", "endAt"],
 		"optional": ["program"]
 	},
-	"stop_recording": { "required": ["id"] }
+	"stop_recording": { "required": ["id"] },
+	"get_cast_receivers": {},
+	"hold_cast_receivers": { "required": ["ids"] }
 }

@@ -65,6 +65,7 @@ impl TestApp {
         app.manage(DownloadManager::new(dir.path().join("downloads")));
         app.manage(Recorder::default());
         app.manage(MpvState::new());
+        app.manage(crate::cast::CastReceivers::new(false));
         Self { app, dir }
     }
 

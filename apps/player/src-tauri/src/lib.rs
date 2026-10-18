@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+mod cast;
 mod commands;
 /// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -216,6 +217,8 @@ register_commands![
     commands::count_downloads_due,
     commands::schedule_recording,
     commands::stop_recording,
+    cast::get_cast_receivers,
+    cast::hold_cast_receivers,
 ];
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -331,6 +334,7 @@ pub fn run() {
             let downloads_root = app_dir.join("downloads");
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             app.manage(crate::downloads::recordings::Recorder::default());
+            app.manage(crate::cast::CastReceivers::new(true));
             crate::downloads::manager::restore_settings(app.handle());
 
             #[cfg(desktop)]

@@ -595,6 +595,13 @@ describe("backend commands", () => {
 			},
 		],
 		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
+		["getCastReceivers", () => tauri.getCastReceivers(), "get_cast_receivers"],
+		[
+			"holdCastReceivers",
+			() => tauri.holdCastReceivers(["cast:tv"]),
+			"hold_cast_receivers",
+			{ ids: ["cast:tv"] },
+		],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));
@@ -616,6 +623,10 @@ describe("backend commands", () => {
 	it("passes a backend error on to the caller", async () => {
 		invoke.mockRejectedValueOnce("provider not found");
 		await expect(tauri.removeProvider("missing")).rejects.toBe("provider not found");
+	});
+
+	it("listens for receivers on the event cast/mod.rs emits", () => {
+		expect(tauri.CAST_RECEIVERS_EVENT).toBe("cast://receivers");
 	});
 
 	/**
