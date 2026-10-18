@@ -77,6 +77,15 @@ describe("createRemoteControl", () => {
 		for (const s of stops) expect(s).toHaveBeenCalledTimes(1);
 	});
 
+	it("takes anything but a list from the backend as no devices", async () => {
+		const { b } = backend();
+		b.devices.mockResolvedValueOnce(undefined as never);
+		const rc = createRemoteControl(b);
+		await rc.start();
+		await flush();
+		expect(rc.getState().devices).toStrictEqual([]);
+	});
+
 	it("keeps the list from events when the first fetch fails", async () => {
 		const { b, emit } = backend();
 		b.devices.mockRejectedValueOnce("unavailable");
@@ -99,8 +108,11 @@ describe("createRemoteControl", () => {
 		expect(link.phase).toStrictEqual({ phase: "connecting" });
 		expect(link.destination.id).toBe("cinette:tv1");
 
+		expect(link.code).toBeNull();
 		emit("remote://controller", { deviceId: "tv1", phase: "verifying", code: "123456" });
 		expect(rc.getState().link!.phase).toStrictEqual({ phase: "verifying", code: "123456" });
+		emit("remote://controller", { deviceId: "tv1", phase: "pending", expiresInMs: 30_000 });
+		expect(rc.getState().link!.code, "the code outlives the phase").toBe("123456");
 		emit("remote://controller", { deviceId: "tv1", phase: "connected" });
 		expect(link.destination.getState().connection).toBe("connected");
 

@@ -15,6 +15,7 @@ import {
 	type RemoteCommand,
 } from "@/lib/remote-target";
 import {
+	remoteAnswerConsent,
 	remoteFinishCommand,
 	remoteSessions,
 	remoteSetState,
@@ -81,7 +82,8 @@ export const useRemoteSessions = (): RemoteSession[] => {
 		let current = true;
 		remoteSessions()
 			.then((list) => {
-				if (current) setSessions(list);
+				// Anything but a list, as from a backend without remote control, is none.
+				if (current) setSessions(Array.isArray(list) ? list : []);
 			})
 			.catch(() => {});
 		return () => {
@@ -124,4 +126,45 @@ export const usePublishRemoteState = (
 		const unsubscribe = player.subscribe(send);
 		return unsubscribe;
 	}, [connected, player, channelRef]);
+};
+
+/** A device asking to control this one, as `remote://consent` brings it. */
+export interface ConsentRequest {
+	request: number;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	code: string;
+	/** `performance.now()` when the request runs out. */
+	expiresAt: number;
+	/** How long it had when it arrived, in milliseconds. */
+	expiresInMs: number;
+}
+
+type ConsentEvent = Omit<ConsentRequest, "expiresAt">;
+
+/**
+ * The request on screen, if any, and the way to answer it. The Rust side
+ * keeps the queue and says which one to show, so there's one at a time.
+ */
+export const useConsentRequest = (): {
+	request: ConsentRequest | null;
+	answer: (allow: boolean) => void;
+} => {
+	const [request, setRequest] = useState<ConsentRequest | null>(null);
+	useTauriEvent<ConsentEvent>("remote://consent", (event) =>
+		setRequest({ ...event, expiresAt: performance.now() + event.expiresInMs })
+	);
+	useTauriEvent<{ request: number }>("remote://consent-hidden", ({ request: hidden }) =>
+		setRequest((shown) => (shown?.request === hidden ? null : shown))
+	);
+	const requestRef = useLatestRef(request);
+	const answer = (allow: boolean) => {
+		const shown = requestRef.current;
+		if (!shown) return;
+		// Off screen at once; the Rust side shows the next one, if any.
+		setRequest(null);
+		remoteAnswerConsent(shown.request, allow).catch(() => {});
+	};
+	return { request, answer };
 };

@@ -184,6 +184,13 @@ describe("useRemoteSessions", () => {
 		expect(result.current).toEqual([session(false)]);
 	});
 
+	it("takes anything but a list from the backend as none", async () => {
+		vi.mocked(remoteSessions).mockResolvedValueOnce(undefined as never);
+		const { result } = renderHook(() => useRemoteSessions());
+		await act(async () => {});
+		expect(result.current).toEqual([]);
+	});
+
 	it("stays empty where remote control doesn't run", async () => {
 		vi.mocked(remoteSessions).mockRejectedValueOnce("unavailable");
 		const { result } = renderHook(() => useRemoteSessions());

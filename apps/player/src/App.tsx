@@ -4,12 +4,14 @@
 import { Routes, Route } from "react-router";
 import { AppLayout } from "./components/AppLayout";
 import { PlayerView } from "./components/player/VideoPlayer";
-import { ChannelList } from "./components/channels/ChannelList";
+import { ChannelsPage } from "./components/remote/ChannelsPage";
 import { PlaylistManager } from "./components/playlist/PlaylistManager";
 import { Settings } from "./components/settings/Settings";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { SplashScreen } from "./components/SplashScreen";
 import { DonationPopup } from "./components/DonationPopup";
+import { ConsentDialog } from "./components/remote/ConsentDialog";
+import { ConnectStatusDialog } from "./components/remote/RemoteControls";
 import { ChannelsContext, useChannels, useChannelsProvider } from "./hooks/useChannels";
 import { useUpdateChecker } from "./hooks/useUpdateChecker";
 import { useSplashScreen } from "./hooks/useSplashScreen";
@@ -68,7 +70,7 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 
 			<Routes>
 				<Route element={<AppLayout />}>
-					<Route path="/" element={<ChannelList />} />
+					<Route path="/" element={<ChannelsPage />} />
 					<Route path="/player" element={<PlayerView />} />
 					<Route path="/playlists" element={<PlaylistManager />} />
 					<Route path="/settings" element={<Settings updateState={updateState} />} />
@@ -76,6 +78,8 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 			</Routes>
 
 			<UpdateBanner state={updateState} hidden={!splash.dismissed} />
+			<ConsentDialog />
+			<ConnectStatusDialog />
 			{donation.shouldShow && !updateState.update && (
 				<DonationPopup onDismiss={donation.dismiss} />
 			)}

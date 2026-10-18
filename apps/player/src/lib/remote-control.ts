@@ -24,6 +24,8 @@ export interface Link {
 	deviceId: string;
 	name: string;
 	phase: LinkPhase;
+	/** The verification code, once the handshake is done. */
+	code: string | null;
 	destination: CinetteDestination;
 }
 
@@ -77,7 +79,8 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 		if (phase.phase === "closed") {
 			set({ link: null, ended: { name: link.name, reason: phase.reason } });
 		} else {
-			set({ link: { ...link, phase } });
+			const code = phase.phase === "verifying" ? phase.code : link.code;
+			set({ link: { ...link, phase, code } });
 		}
 	};
 
@@ -104,7 +107,8 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 			// Events that came before listening started are in this list.
 			backend
 				.devices()
-				.then((devices) => set({ devices }))
+				// Anything but a list, as from a backend without remote control, is none.
+				.then((devices) => set({ devices: Array.isArray(devices) ? devices : [] }))
 				.catch(() => {});
 			return () => {
 				for (const stop of stops) stop();
@@ -119,6 +123,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 					deviceId: device.deviceId,
 					name: device.name,
 					phase: { phase: "connecting" },
+					code: null,
 					destination,
 				},
 				ended: null,

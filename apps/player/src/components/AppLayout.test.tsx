@@ -7,7 +7,12 @@ import { useEffect } from "react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import type { LayoutMode } from "@/lib/types";
 
-const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode }));
+const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode, mobile: false }));
+
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	isMobilePlatform: () => platform.mobile,
+}));
 
 vi.mock("@/hooks/usePlatform", () => ({
 	usePlatform: () => ({ platform: "ios", layoutMode: platform.layoutMode }),
@@ -15,6 +20,13 @@ vi.mock("@/hooks/usePlatform", () => ({
 
 vi.mock("@/lib/tauri", () => ({
 	mpvSetVisible: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Remote control has tests of its own. These show where the layout puts it.
+vi.mock("@/components/remote/RemoteControls", () => ({
+	DevicesButton: () => <button type="button">Devices</button>,
+	RemoteBar: () => <p>Remote bar</p>,
+	ControllersBar: () => <p>Controllers bar</p>,
 }));
 
 import { AppLayout } from "./AppLayout";
@@ -132,5 +144,28 @@ describe("AppLayout", () => {
 		);
 		expect(screen.getByRole("link", { name: "Channels" })).not.toHaveAttribute("aria-current");
 		expect(mounts).toHaveBeenCalledTimes(1);
+	});
+
+	describe("remote control", () => {
+		afterEach(() => {
+			platform.mobile = false;
+			platform.layoutMode = "desktop";
+		});
+
+		it("puts the devices button in the sidebar and the bar above the page", () => {
+			render(tree("/"));
+			expect(screen.getByRole("button", { name: "Devices" })).toBeInTheDocument();
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+			expect(screen.getByText("page")).toBeInTheDocument();
+		});
+
+		it("leaves both out on a phone or tablet, where it doesn't run yet", () => {
+			platform.mobile = true;
+			render(tree("/"));
+			expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
+			expect(screen.queryByText("Remote bar")).toBeNull();
+			expect(screen.queryByText("Controllers bar")).toBeNull();
+		});
 	});
 });
