@@ -514,6 +514,7 @@ impl Task {
 /// epoch on top, so an answer from before a new identity can't answer a
 /// request of the new one.
 fn app_request(epoch: Epoch, request: RequestId) -> RequestId {
+    // mutants: skip BinaryOperator: the two halves share no bits, so | and ^ give the same.
     (epoch << 32) | (request & u64::from(u32::MAX))
 }
 

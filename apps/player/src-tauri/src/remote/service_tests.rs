@@ -584,3 +584,12 @@ fn commands_say_when_remote_control_did_not_start() {
         );
     }
 }
+
+#[test]
+fn consent_brings_the_window_up_at_most_every_thirty_seconds() {
+    let now = Instant::now() + Duration::from_secs(120);
+    assert!(may_raise(None, now));
+    assert!(!may_raise(Some(now - Duration::from_secs(29)), now));
+    assert!(may_raise(Some(now - RAISE_EVERY), now));
+    assert!(may_raise(Some(now - Duration::from_secs(31)), now));
+}

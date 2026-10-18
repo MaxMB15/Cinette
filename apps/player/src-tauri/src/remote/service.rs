@@ -165,25 +165,26 @@ struct Remembered {
 
 impl<R: Runtime> TauriHost<R> {
     /// The episodes of `series_id` if they were loaded in the last
-    /// [`FRESH_FOR`].
+    /// [`FRESH_FOR`]. They count as the newest again.
     fn fresh(&self, series_id: &str) -> Option<Vec<Channel>> {
-        lock(&self.episodes)
+        let mut remembered = lock(&self.episodes);
+        let at = remembered
             .iter()
-            .find(|r| r.series_id == series_id && r.loaded.elapsed() < FRESH_FOR)
-            .map(|r| r.episodes.clone())
+            // mutants: skip BinaryOperator: < and <= differ only at one instant of a clock that never stops.
+            .position(|r| r.series_id == series_id && r.loaded.elapsed() < FRESH_FOR)?;
+        let found = remembered.remove(at)?;
+        let episodes = found.episodes.clone();
+        remembered.push_back(found);
+        Some(episodes)
     }
 
+    /// Keeps episodes just loaded.
     fn remember(&self, series_id: String, episodes: Vec<Channel>) {
         let mut remembered = lock(&self.episodes);
-        // A series kept from earlier keeps its time, so it goes stale.
-        let loaded = remembered
-            .iter()
-            .find(|r| r.series_id == series_id && r.loaded.elapsed() < FRESH_FOR)
-            .map_or_else(Instant::now, |r| r.loaded);
         remembered.retain(|r| r.series_id != series_id);
         remembered.push_back(Remembered {
             series_id,
-            loaded,
+            loaded: Instant::now(),
             episodes,
         });
         if remembered.len() > REMEMBERED_SERIES {
@@ -209,8 +210,9 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         // A dialog behind other windows would time out unseen. Requests
         // can come again and again, so the window comes up only now and then.
         let mut raised = lock(&self.raised);
-        if raised.is_none_or(|at| at.elapsed() >= RAISE_EVERY) {
-            *raised = Some(Instant::now());
+        let now = Instant::now();
+        if may_raise(*raised, now) {
+            *raised = Some(now);
             crate::show_main_window(&self.app);
         }
     }
@@ -257,16 +259,16 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             // what was loaded, so paging doesn't ask the provider each time.
             let episodes = match self.fresh(&series_id) {
                 Some(episodes) => episodes,
-                // This runs on a blocking thread, which can wait for the provider.
-                None => tokio::runtime::Handle::current()
-                    .block_on(super::catalog::episodes(&state.cache, &series_id))?,
+                None => {
+                    // This runs on a blocking thread, which can wait for the provider.
+                    let loaded = tokio::runtime::Handle::current()
+                        .block_on(super::catalog::episodes(&state.cache, &series_id))?;
+                    self.remember(series_id, loaded.clone());
+                    loaded
+                }
             };
-            let page = {
-                let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
-                super::catalog::episode_page(&cache, &episodes, cursor, limit)?
-            };
-            self.remember(series_id, episodes);
-            return Ok(page);
+            let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
+            return super::catalog::episode_page(&cache, &episodes, cursor, limit);
         }
         let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
         super::catalog::answer(&cache, query)
@@ -280,6 +282,12 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             *current = (self.advertiser)(&registration);
         }
     }
+}
+
+/// Whether a consent request may bring the window up `now`, when one last
+/// did at `last`.
+fn may_raise(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|at| now.duration_since(at) >= RAISE_EVERY)
 }
 
 /// Advertises on the network this device is on.
