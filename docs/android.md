@@ -186,7 +186,9 @@ On a TV, `getPlatform()` in `lib/platform.ts` returns `tv` and the app uses
 - **Back:** `MainActivity.kt` hands it to `window.__cinetteBack`, which sends Escape to
   the focused element (`lib/tv-back.ts`). Escape already closes the top layer: a
   dialog, a player panel, full screen, then the player itself. When nothing takes
-  it, Back goes to the home page, and on the home page the app closes.
+  it, Back goes to the home page, and on the home page the app closes. Only the TV
+  layout sets `__cinetteBack`. Without it, on phones and tablets, Back goes back in
+  the page's history as in other Tauri apps, and closes the app when there's none.
 - **Media keys:** play/pause, play, pause, fast forward, rewind, next and previous
   work in the player.
 - **Size:** `html.tv` in `globals.css` makes every `rem` an eighth larger, and gives
