@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { wrapperFor } from "@/test/query";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { deferred } from "@/test/deferred";
+import { groupHierarchyQuery } from "@/lib/queries";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/lib/tauri", () => ({
@@ -15,7 +16,7 @@ vi.mock("@/lib/tauri", () => ({
 
 import { useGroupHierarchy } from "./useGroupHierarchy";
 import { getGroupHierarchy, getPinnedGroups, pinGroup, unpinGroup } from "@/lib/tauri";
-import type { PinnedGroup } from "@/lib/types";
+import type { GroupHierarchyEntry, PinnedGroup } from "@/lib/types";
 
 const mockGetHierarchy = vi.mocked(getGroupHierarchy);
 const mockGetPinned = vi.mocked(getPinnedGroups);
@@ -204,6 +205,65 @@ describe("useGroupHierarchy", () => {
 			expect(result.current.hasHierarchy).toBe(false);
 		} finally {
 			consoleError.mockRestore();
+		}
+	});
+
+	it("stays loaded while a hierarchy that failed its first load loads again", async () => {
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		mockGetHierarchy.mockRejectedValueOnce(new Error("database locked"));
+		const client = createTestQueryClient();
+		const seen: boolean[] = [];
+		try {
+			const { result } = renderHook(
+				() => {
+					const value = useGroupHierarchy("p1", "live");
+					seen.push(value.loaded);
+					return value;
+				},
+				{ wrapper: wrapperFor(client) }
+			);
+			await waitFor(() => expect(result.current.loaded).toBe(true));
+
+			const again = deferred<GroupHierarchyEntry[]>();
+			mockGetHierarchy.mockReturnValueOnce(again.promise);
+			let reload!: Promise<void>;
+			act(() => {
+				reload = client.invalidateQueries({
+					queryKey: groupHierarchyQuery("p1", "live").queryKey,
+				});
+			});
+			await waitFor(() => expect(mockGetHierarchy).toHaveBeenCalledTimes(2));
+			expect(result.current.loaded).toBe(true);
+			await act(async () => {
+				again.resolve([]);
+				await reload;
+			});
+
+			expect(seen.slice(seen.indexOf(true))).not.toContain(false);
+		} finally {
+			consoleError.mockRestore();
+		}
+	});
+
+	it("shows a group pinned while the computer is offline", async () => {
+		const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+			wrapper: wrapperFor(),
+		});
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		act(() => {
+			window.dispatchEvent(new Event("offline"));
+		});
+		try {
+			mockGetPinned.mockResolvedValueOnce([pinned("Misc", 0)]);
+
+			await act(() => result.current.pinGroup("Misc"));
+
+			expect(mockGetPinned).toHaveBeenCalledTimes(2);
+			expect(result.current.isPinned("Misc")).toBe(true);
+		} finally {
+			act(() => {
+				window.dispatchEvent(new Event("online"));
+			});
 		}
 	});
 });

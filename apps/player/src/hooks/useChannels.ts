@@ -21,7 +21,7 @@ import {
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import { channelsQuery, providersQuery } from "@/lib/queries";
+import { channelsQuery, historyKey, providersQuery } from "@/lib/queries";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -166,8 +166,11 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const providers = providersResult.data ?? NO_PROVIDERS;
 	const categories = useMemo<Category[]>(() => deriveCategories(channels), [channels]);
 	// Both lists must load, or fail to, before the splash screen can go, so it
-	// doesn't dismiss before the UI has data to display.
-	const initialized = !channelsResult.isPending && !providersResult.isPending;
+	// doesn't dismiss before the UI has data to display. isFetched stays true
+	// once a load has answered. isPending comes back while a list that failed
+	// its first load loads again, which would run the splash screen's steps
+	// again.
+	const initialized = channelsResult.isFetched && providersResult.isFetched;
 	const [loading, setLoading] = useState(false);
 	// An action's error. A list that failed to load shows its own error below.
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -194,9 +197,12 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const refreshChannels = useCallback(
 		async (): Promise<void> => {
 			await reload<Channel[]>(channelsQuery().queryKey);
+			// A playlist refresh moves the watch history to the channels' new
+			// ids, so the history lists load again too.
+			void queryClient.invalidateQueries({ queryKey: historyKey() });
 		},
-		// Stryker disable next-line ArrayDeclaration: reload stays the same function while the provider is mounted, so an empty list gives the same callback.
-		[reload]
+		// Stryker disable next-line ArrayDeclaration: reload and the query client stay the same objects while the provider is mounted, so an empty list gives the same callback.
+		[reload, queryClient]
 	);
 
 	const refreshProviders = useCallback(

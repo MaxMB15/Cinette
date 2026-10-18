@@ -391,13 +391,18 @@ import { ChannelsContext, useChannels } from "./useChannels";
 import { makeProvider } from "@/test/app-fixtures";
 import type { Provider } from "@/lib/types";
 import { deferred } from "@/test/deferred";
+import { makeHistoryEntry } from "@/test/channel-fixtures";
+import { watchHistoryQuery } from "@/lib/queries";
+import type { QueryClient } from "@tanstack/react-query";
+
+type Hook = ReturnType<typeof useChannelsProvider>;
 
 const channel = (id: string, isFavorite = false) =>
 	({ id, name: id.toUpperCase(), groupTitle: "News", isFavorite }) as never;
 
 /** Mounts the provider and waits for its first load. */
-const mountProvider = async () => {
-	const hook = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
+const mountProvider = async (client?: QueryClient) => {
+	const hook = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor(client) });
 	await waitFor(() => expect(hook.result.current.initialized).toBe(true));
 	return hook;
 };
@@ -434,6 +439,37 @@ describe("useChannelsProvider provider changes", () => {
 		expect(result.current.categories).toEqual([]);
 		await act(async () => channels.resolve([channel("c1")]));
 		expect(result.current.initialized).toBe(true);
+	});
+
+	it("stays loaded while channels that failed their first load load again", async () => {
+		mockGetAllChannels.mockRejectedValueOnce(new Error("database locked"));
+		const seen: boolean[] = [];
+		const { result } = renderHook(
+			() => {
+				const value = useChannelsProvider();
+				seen.push(value.initialized);
+				return value;
+			},
+			{ wrapper: wrapperFor() }
+		);
+		await waitFor(() => expect(result.current.initialized).toBe(true));
+		expect(result.current.error).toBe("Error: database locked");
+
+		const again = deferred<never[]>();
+		mockGetAllChannels.mockReturnValueOnce(again.promise);
+		let reload!: Promise<void>;
+		act(() => {
+			reload = result.current.refreshChannels();
+		});
+		await waitFor(() => expect(mockGetAllChannels).toHaveBeenCalledTimes(2));
+		expect(result.current.initialized).toBe(true);
+		await act(async () => {
+			again.resolve([channel("c1")]);
+			await reload;
+		});
+
+		expect(result.current.channels).toHaveLength(1);
+		expect(seen.slice(seen.indexOf(true))).not.toContain(false);
 	});
 
 	it("gives null for a reload when the list has left the cache", async () => {
@@ -574,6 +610,27 @@ describe("useChannelsProvider provider changes", () => {
 		expect(result.current.channels).toEqual([]);
 	});
 
+	it("reloads the lists after a removal while the computer is offline", async () => {
+		mockGetProviders.mockResolvedValueOnce([makeProvider()]);
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+		const { result } = await mountProvider();
+		act(() => {
+			window.dispatchEvent(new Event("offline"));
+		});
+		try {
+			await act(() => result.current.removeProvider("p1"));
+
+			expect(mockGetProviders).toHaveBeenCalledTimes(2);
+			expect(mockGetAllChannels).toHaveBeenCalledTimes(2);
+			expect(result.current.providers).toEqual([]);
+			expect(result.current.channels).toEqual([]);
+		} finally {
+			act(() => {
+				window.dispatchEvent(new Event("online"));
+			});
+		}
+	});
+
 	it("shows a failed removal without throwing", async () => {
 		mockGetProviders.mockResolvedValueOnce([makeProvider()]);
 		const { result } = await mountProvider();
@@ -584,6 +641,24 @@ describe("useChannelsProvider provider changes", () => {
 		expect(result.current.error).toBe("Error: locked");
 		expect(result.current.providers).toHaveLength(1);
 	});
+
+	it.each([
+		{ action: "reloading the channels", run: (r: Hook) => r.refreshChannels() },
+		{ action: "a playlist refresh", run: (r: Hook) => r.refreshProvider("p1") },
+	])(
+		"loads the watch history again after $action, which moves it to new ids",
+		async ({ run }) => {
+			const client = createTestQueryClient();
+			const history = watchHistoryQuery(200).queryKey;
+			client.setQueryData(history, [makeHistoryEntry()]);
+			const { result } = await mountProvider(client);
+			expect(client.getQueryState(history)?.isInvalidated).toBe(false);
+
+			await act(() => run(result.current));
+
+			expect(client.getQueryState(history)?.isInvalidated).toBe(true);
+		}
+	);
 
 	it("keeps the channels it has when reloading them fails", async () => {
 		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);

@@ -146,6 +146,39 @@ describe("LiveInfoDrawer", () => {
 		}
 	});
 
+	it("keeps the schedule on screen while a refreshed guide's loads, but not for another channel", async () => {
+		const refreshed = deferred<EpgProgram[]>();
+		const { container, rerender } = render(
+			<LiveInfoDrawer channel={channel} onClose={vi.fn()} />
+		);
+		await flush();
+		tauri.getEpgProgrammes.mockReturnValueOnce(refreshed.promise);
+		guide.version = 1;
+		try {
+			rerender(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+			await flush();
+			expect(tauri.getEpgProgrammes).toHaveBeenCalledTimes(2);
+			expect(row("Midday Report")).toBeInTheDocument();
+			expect(container.querySelectorAll(".animate-spin")).toHaveLength(0);
+			await act(async () => refreshed.resolve([makeProgramme("Late Lunch", T, T + HOUR)]));
+			expect(row("Late Lunch")).toBeInTheDocument();
+			expect(screen.queryByText("Midday Report")).toBeNull();
+
+			tauri.getEpgProgrammes.mockReturnValueOnce(new Promise(() => {}));
+			rerender(
+				<LiveInfoDrawer
+					channel={makeNewsChannel({ id: "ch2", name: "Sports 1", tvgId: "sports1.uk" })}
+					onClose={vi.fn()}
+				/>
+			);
+			await flush();
+			expect(screen.queryByText("Late Lunch")).toBeNull();
+			expect(container.querySelectorAll(".animate-spin")).toHaveLength(2);
+		} finally {
+			guide.version = 0;
+		}
+	});
+
 	it("asks by the channel id when the channel has no guide id", async () => {
 		render(<LiveInfoDrawer channel={makeNewsChannel()} onClose={vi.fn()} />);
 		await flush();

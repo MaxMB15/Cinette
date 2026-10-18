@@ -18,20 +18,25 @@ export const useWatchHistory = (
 	logPrefix: string
 ) => {
 	const queryClient = useQueryClient();
-	const query = watchHistoryQuery(limit, contentType);
-	const result = useQuery(query);
+	const result = useQuery(watchHistoryQuery(limit, contentType));
 
 	useEffect(() => {
 		if (result.error) console.error(logPrefix, result.error);
 	}, [result.error, logPrefix]);
 
 	/**
-	 * Shows a change the backend has already made: in this list now, without
-	 * loading it again, and in the other history lists when they next show.
+	 * Shows a change the backend has already made in every history list now,
+	 * without loading this one again. `edit` gets each list, so it must only
+	 * take out what the backend took out. A list may then hold fewer entries
+	 * than it would load, so each loads again the next time it shows.
 	 */
 	const change = (edit: (entries: WatchHistoryEntry[]) => WatchHistoryEntry[]) => {
+		queryClient.setQueriesData<WatchHistoryEntry[]>(
+			{ queryKey: historyKey() },
+			(prev) => prev && edit(prev)
+		);
+		// After the edit, which would mark them fresh again.
 		void queryClient.invalidateQueries({ queryKey: historyKey(), refetchType: "none" });
-		queryClient.setQueryData(query.queryKey, (prev) => prev && edit(prev));
 	};
 
 	return { entries: result.data ?? NO_ENTRIES, loading: result.isPending, change };

@@ -3,11 +3,10 @@
 
 import { cleanup, fireEvent, render as renderUi, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { wrapperFor } from "@/test/query";
-
-/** Each test gets a new cache, as each app does. */
-const render = (ui: ReactElement) => renderUi(ui, { wrapper: wrapperFor() });
+import type { QueryClient } from "@tanstack/react-query";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { watchHistoryQuery } from "@/lib/queries";
 import type { WatchHistoryEntry } from "@/lib/types";
 import {
 	clearWatchHistoryOfType,
@@ -23,6 +22,10 @@ vi.mock("@/lib/tauri", () => ({
 	deleteHistorySeries: vi.fn(),
 	clearWatchHistoryOfType: vi.fn(),
 }));
+
+/** Each test gets a new cache, as each app does, unless it passes one. */
+const render = (ui: ReactElement, client?: QueryClient) =>
+	renderUi(ui, { wrapper: wrapperFor(client) });
 
 const entry = (
 	channelId: string,
@@ -99,6 +102,23 @@ describe("RecentlyPlayedRow", () => {
 		expect(deleteHistoryEntry).not.toHaveBeenCalled();
 	});
 
+	it("takes only its own type out of the other history lists when it clears", async () => {
+		const client = createTestQueryClient();
+		const all = watchHistoryQuery(200).queryKey;
+		client.setQueryData(all, [entry("a", "Alpha"), entry("m", "Moonfall", "movie")]);
+		vi.mocked(getWatchHistory).mockResolvedValue([entry("a", "Alpha")]);
+		vi.mocked(clearWatchHistoryOfType).mockResolvedValue(undefined);
+		const { container } = render(
+			<RecentlyPlayedRow contentType="live" onPlay={() => {}} />,
+			client
+		);
+
+		fireEvent.click(await screen.findByText("Clear all"));
+
+		await waitFor(() => expect(container).toBeEmptyDOMElement());
+		expect(client.getQueryData(all)).toEqual([entry("m", "Moonfall", "movie")]);
+	});
+
 	it("keeps the row when clear all fails", async () => {
 		vi.mocked(getWatchHistory).mockResolvedValue([entry("a", "Alpha")]);
 		vi.mocked(clearWatchHistoryOfType).mockRejectedValue(new Error("db locked"));
@@ -158,5 +178,22 @@ describe("RecentlyPlayedRow", () => {
 		expect(deleteHistorySeries).toHaveBeenCalledExactlyOnceWith("Harbour Lights");
 		expect(deleteHistoryEntry).not.toHaveBeenCalled();
 		expect(screen.getByText("Dune Road")).toBeInTheDocument();
+	});
+
+	it("takes a dismissed show out of the other history lists, but not a movie of its name", async () => {
+		const client = createTestQueryClient();
+		const all = watchHistoryQuery(200).queryKey;
+		const harbour = entry("e1", "Harbour Lights S01E01", "series", "Harbour Lights");
+		const dune = entry("d1", "Dune Road S02E04", "series", "Dune Road");
+		const film = entry("m", "Harbour Lights", "movie");
+		client.setQueryData(all, [harbour, film, dune]);
+		vi.mocked(getWatchHistory).mockResolvedValue([harbour, dune]);
+		vi.mocked(deleteHistorySeries).mockResolvedValue(undefined);
+		render(<RecentlyPlayedRow contentType="series" onPlay={() => {}} />, client);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Dismiss Harbour Lights" }));
+
+		await waitFor(() => expect(screen.queryByText("Harbour Lights")).not.toBeInTheDocument());
+		expect(client.getQueryData(all)).toEqual([film, dune]);
 	});
 });
