@@ -199,14 +199,15 @@ describe("scheduleQuery", () => {
 	it("asks for 12 hours either side of the step, and one step more", async () => {
 		const client = createTestQueryClient();
 		expect(SCHEDULE_STEP).toBe(600);
-		expect(scheduleQuery("news24.uk", 60_000).queryKey).toEqual([
+		expect(scheduleQuery("news24.uk", 60_000, 3).queryKey).toEqual([
 			"local",
 			"schedule",
 			"news24.uk",
 			60_000,
+			3,
 		]);
-		expect(scheduleQuery("a", 1, LOCAL).queryKey).toEqual(scheduleQuery("a", 1).queryKey);
-		await expect(client.fetchQuery(scheduleQuery("news24.uk", 60_000))).resolves.toEqual([
+		expect(scheduleQuery("a", 1, 0, LOCAL).queryKey).toEqual(scheduleQuery("a", 1, 0).queryKey);
+		await expect(client.fetchQuery(scheduleQuery("news24.uk", 60_000, 0))).resolves.toEqual([
 			{ title: "News" },
 		]);
 		expect(getEpgProgrammes).toHaveBeenCalledExactlyOnceWith(

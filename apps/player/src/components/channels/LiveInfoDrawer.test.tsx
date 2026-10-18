@@ -36,7 +36,11 @@ vi.mock("@/lib/tauri", () => ({
 	stopRecording: tauri.stopRecording,
 }));
 vi.mock("@/hooks/useDownloads", () => ({ useDownloads: () => ({ downloads: state.downloads }) }));
-vi.mock("@/hooks/useChannels", () => ({ useProviderIds: () => ["xt-1"] }));
+const guide = vi.hoisted(() => ({ version: 0 }));
+vi.mock("@/hooks/useChannels", () => ({
+	useProviderIds: () => ["xt-1"],
+	useChannels: () => ({ guideVersion: guide.version }),
+}));
 
 import { LiveInfoDrawer } from "./LiveInfoDrawer";
 
@@ -125,6 +129,21 @@ describe("LiveInfoDrawer", () => {
 			NOW + 600 - 12 * HOUR,
 			NOW + 600 + 12 * HOUR + 600
 		);
+	});
+
+	it("loads the schedule again once a provider's guide refreshes", async () => {
+		const wrapper = wrapperFor();
+		const first = renderUi(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />, { wrapper });
+		await flush();
+		first.unmount();
+		guide.version = 1;
+		try {
+			renderUi(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />, { wrapper });
+			await flush();
+			expect(tauri.getEpgProgrammes).toHaveBeenCalledTimes(2);
+		} finally {
+			guide.version = 0;
+		}
 	});
 
 	it("asks by the channel id when the channel has no guide id", async () => {
