@@ -251,7 +251,10 @@ describe("RemoteCatalog", () => {
 		await waitFor(() =>
 			expect(remoteCatalog).toHaveBeenLastCalledWith({ kind: "groups", contentType: "live" })
 		);
-		expect(remoteCatalog.mock.calls[0][0]).toEqual({ kind: "groups", contentType: "live" });
+		expect(vi.mocked(remoteCatalog).mock.calls[0][0]).toEqual({
+			kind: "groups",
+			contentType: "live",
+		});
 	});
 
 	it("says when the first page fails", async () => {
