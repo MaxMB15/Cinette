@@ -247,6 +247,17 @@ describe("LiveInfoDrawer", () => {
 		expect(row("Evening News")).not.toHaveClass("bg-primary/15");
 	});
 
+	it("picks the programme that starts right now, not the one that just ended", async () => {
+		tauri.getEpgProgrammes.mockResolvedValue([
+			makeProgramme("Just Ended", NOW - 1800, NOW),
+			makeProgramme("Starting Now", NOW, NOW + 1800),
+		]);
+		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
+		await flush();
+		expect(row("Starting Now")).toHaveClass("bg-primary/15");
+		expect(row("Just Ended")).not.toHaveClass("bg-primary/15");
+	});
+
 	it("picks a programme from the timeline or the schedule", async () => {
 		render(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />);
 		await flush();

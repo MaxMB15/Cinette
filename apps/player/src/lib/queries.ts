@@ -110,6 +110,13 @@ export const loadChannelGuide = (range: TimeRange, id: string): Promise<EpgProgr
 };
 
 /** One live channel's programs over a range, by its guide id. */
+/** The start of the key of every guide query. */
+export const guideKey = (source: Source = LOCAL) => [source, "guide"] as const;
+
+/** The start of the key of every single channel's guide over a range. */
+export const channelGuideKey = (range: TimeRange, version: string, source: Source = LOCAL) =>
+	[...guideKey(source), range.from, range.to, version, "channel"] as const;
+
 export const channelGuideQuery = (
 	range: TimeRange,
 	version: string,
@@ -117,7 +124,7 @@ export const channelGuideQuery = (
 	source: Source = LOCAL
 ) =>
 	queryOptions({
-		queryKey: [source, "guide", range.from, range.to, version, "channel", id] as const,
+		queryKey: [...channelGuideKey(range, version, source), id] as const,
 		queryFn: () => loadChannelGuide(range, id),
 	});
 

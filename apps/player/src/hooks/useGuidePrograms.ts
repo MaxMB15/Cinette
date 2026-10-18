@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { TimeRange } from "@/lib/epg-window";
-import { channelGuideQuery, guideQuery } from "@/lib/queries";
+import { channelGuideKey, channelGuideQuery, guideKey, guideQuery } from "@/lib/queries";
 import type { EpgProgram } from "@/lib/types";
 
 /** Every channel's programs, or only those of the channels with these guide ids. */
@@ -44,6 +44,7 @@ const requestKey = (channels: GuideChannels | null): string | null =>
 const NO_IDS: string[] = [];
 const EMPTY: ReadonlyMap<string, EpgProgram[]> = new Map();
 // A range that is never loaded, for the queries while there is no range.
+// Stryker disable next-line ObjectLiteral: no query loads without a range, so its placeholder range is never seen.
 const NO_RANGE: TimeRange = { from: 0, to: 0 };
 
 /**
@@ -55,11 +56,31 @@ const channelsLoaded = (
 	range: TimeRange,
 	version: string
 ): EpgProgram[] | undefined => {
-	const prefix = channelGuideQuery(range, version, "").queryKey.slice(0, -1);
 	const found = client
-		.getQueriesData<EpgProgram[]>({ queryKey: prefix })
+		.getQueriesData<EpgProgram[]>({ queryKey: channelGuideKey(range, version) })
 		.flatMap(([, data]) => data ?? []);
+	// TanStack Query keeps showing a placeholder while the function that made
+	// it stays the same, as it does compiled, so an empty one would hide the
+	// programs that load later.
+	// Stryker disable next-line ConditionalExpression,EqualityOperator: only compiled code keeps the placeholder, and Stryker's runs leave the compiler out.
 	return found.length > 0 ? found : undefined;
+};
+
+/**
+ * The programs last loaded for one channel, over any range, which stand in
+ * while its programs load for a new one. A query that never loaded has no
+ * update time, so it sorts last.
+ */
+const lastLoaded = (client: QueryClient, id: string): EpgProgram[] | undefined => {
+	const newest = client
+		.getQueryCache()
+		.findAll({ queryKey: guideKey() })
+		.filter((q) => {
+			const key = q.queryKey;
+			return key[key.length - 2] === "channel" && key[key.length - 1] === id;
+		})
+		.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)[0];
+	return newest?.state.data as EpgProgram[] | undefined;
 };
 
 /**
@@ -109,7 +130,7 @@ export const useGuidePrograms = (
 		queries: ids.map((id) => ({
 			...channelGuideQuery(guideRange, version, id),
 			enabled: range !== null && !allLoaded,
-			placeholderData: (previous: EpgProgram[] | undefined) => previous,
+			placeholderData: () => lastLoaded(queryClient, id),
 		})),
 		combine: (results) => {
 			const programs = new Map<string, EpgProgram[]>();
@@ -124,7 +145,8 @@ export const useGuidePrograms = (
 
 	if (key === null) return { programs: allPrograms, isPending: () => false };
 	if (key === "all" || allLoaded) {
-		const waiting = key === "all" && !allLoaded && !all.isError;
+		// Every channel's programs are loading, unless they're in or failed.
+		const waiting = !allLoaded && !all.isError;
 		return {
 			programs: allPrograms,
 			isPending: () => waiting,
