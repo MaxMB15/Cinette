@@ -157,3 +157,18 @@ fn tidying_up_during_the_cooldown_keeps_the_denial() {
         Err(CloseReason::Denied)
     );
 }
+
+#[test]
+fn a_denied_device_may_ask_again_the_moment_the_cooldown_ends() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let denied = peer("D");
+    let id = submit(&mut queue, now, 1, &denied).unwrap();
+    queue.answer(id, Answer::Deny, now);
+    let end = now + DENIAL_COOLDOWN;
+    assert_eq!(
+        submit(&mut queue, end - Duration::from_millis(1), 2, &denied),
+        Err(CloseReason::Denied)
+    );
+    assert!(submit(&mut queue, end, 3, &denied).is_ok());
+}
