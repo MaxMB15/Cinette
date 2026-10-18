@@ -106,7 +106,6 @@ export const loadChannelGuide = (range: TimeRange, id: string): Promise<EpgProgr
 	return batch.answer.then((programs) => programs.filter((p) => p.channelId === id));
 };
 
-/** One live channel's programs over a range, by its guide id. */
 /** The start of the key of every guide query. */
 export const guideKey = (source: Source = LOCAL) => [source, "guide"] as const;
 
@@ -114,6 +113,7 @@ export const guideKey = (source: Source = LOCAL) => [source, "guide"] as const;
 export const channelGuideKey = (range: TimeRange, version: string, source: Source = LOCAL) =>
 	[...guideKey(source), range.from, range.to, version, "channel"] as const;
 
+/** One live channel's programs over a range, by its guide id. */
 export const channelGuideQuery = (
 	range: TimeRange,
 	version: string,

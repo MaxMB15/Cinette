@@ -136,8 +136,10 @@ export const CategoryManager = ({
 			})),
 		[channels, contentType, providerId]
 	);
-	// Empty while it loads, and when it can't be read.
-	const entries = !saved.isSuccess ? NO_ENTRIES : saved.data.length > 0 ? saved.data : unsorted;
+	// Empty while it loads, and when it can't be read. A reload that fails
+	// keeps the last list it read.
+	const entries =
+		saved.data === undefined ? NO_ENTRIES : saved.data.length > 0 ? saved.data : unsorted;
 
 	// Remove empty categories that now have groups in DB. It's cheap, and
 	// does nothing once they're gone, so it runs on every render.
