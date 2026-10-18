@@ -328,3 +328,23 @@ fn the_controller_hears_why_the_target_refused_the_version() {
     };
     assert_eq!(failure.reason, CloseReason::Version);
 }
+
+#[test]
+fn an_established_handshake_debugs_as_its_peer_and_version_only() {
+    let run = run(
+        standard("Phone", DeviceType::Iphone),
+        standard("TV", DeviceType::FireTv),
+    )
+    .unwrap();
+    let printed = format!("{:?}", run.controller);
+    assert!(printed.starts_with("Established {"), "{printed}");
+    assert!(printed.contains("\"TV\""), "{printed}");
+    assert!(
+        printed.contains(&format!("version: {PROTOCOL_VERSION}")),
+        "{printed}"
+    );
+    assert!(
+        !printed.contains(&run.controller.code.to_string()),
+        "{printed}"
+    );
+}

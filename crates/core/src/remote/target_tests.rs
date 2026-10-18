@@ -122,6 +122,16 @@ fn bad_fields_are_invalid() {
     );
     assert_eq!(
         validate(
+            &Command::Load {
+                item_id: "m".into(),
+                start_at: Some(0.0)
+            },
+            &state
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        validate(
             &Command::Seek {
                 item_id: "m".into(),
                 to: None,
