@@ -53,6 +53,7 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 | `ai/gemini.rs` | Optional category sorting with Google Gemini |
 | `cache/store.rs` | SQLite storage (bundled `rusqlite`): providers, channels, EPG, watch history, playback positions, downloads and metadata caches |
 | `downloads/` | Download model, file paths, ffmpeg invocation, retention, and `recording.rs`, which names recording files and plans when each recording starts, merges, stops or is missed |
+| `cast/` | Google Cast's CASTV2 protocol with no I/O: the length-prefixed frames, the CastMessage protobuf, and a session that connects to a receiver, launches the Default Media Receiver and loads, controls and follows the media. The app supplies the TLS connection |
 | `models/` | `Channel`, `Playlist` and related types |
 
 ### `apps/player/src-tauri`
