@@ -55,6 +55,9 @@ pub struct AudioTrack {
     /// The language tag, such as `eng`, when the stream has one.
     pub language: Option<String>,
     pub default: bool,
+    /// ffmpeg's name for the channel layout, such as `stereo` or
+    /// `5.1(side)`, when it gives one.
+    pub layout: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -106,6 +109,7 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
                     codec: first_word(rest).to_string(),
                     language: language(line),
                     default: line.ends_with("(default)"),
+                    layout: layout(rest),
                 });
             }
         }
@@ -153,6 +157,17 @@ pub fn open_error(stderr: &str) -> ProbeError {
         }
     }
     ProbeError::Unreachable
+}
+
+/// The channel layout in an audio stream's description, such as
+/// `ac3, 48000 Hz, 5.1(side), fltp, 384 kb/s`: the field after the sample
+/// rate.
+fn layout(audio: &str) -> Option<String> {
+    let mut fields = audio.split(", ");
+    fields.find(|f| f.ends_with(" Hz"))?;
+    let layout = fields.next()?.trim();
+    let layout = layout.strip_suffix(" (default)").unwrap_or(layout);
+    (!layout.is_empty()).then(|| layout.to_string())
 }
 
 fn after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
