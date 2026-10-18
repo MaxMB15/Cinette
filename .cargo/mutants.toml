@@ -39,6 +39,9 @@ exclude_re = [
     # helper like that sets a field on a line of its own, not in a struct
     # update.
     '\btests::',
+    # Test helpers in a file module such as cast/tests.rs, which the pattern
+    # above doesn't match.
+    'src-tauri/src/cast/tests\.rs:',
     # The app's entry point builds the whole Tauri app and opens its window.
     'src-tauri/src/lib\.rs:.*\b(run|show_main_window)\b',
     # Logging sets the process's one tracing subscriber and panic hook. The
