@@ -96,12 +96,14 @@ export const useGuidePrograms = (
 	const all = useQuery({
 		...guideQuery(at, version),
 		enabled: range !== null && key === "all",
-		select: byChannel,
 		// While it loads, the last range's programs, or else the single
 		// channels' already loaded for this one, keep the rows filled.
 		placeholderData: (previous) => previous ?? channelsLoaded(queryClient, at, version),
 	});
 	const allLoaded = all.isSuccess && !all.isPlaceholderData;
+	// Grouped here rather than in the query's select, which runs again on each
+	// read while a placeholder shows and would give a new map every time.
+	const allPrograms = useMemo(() => (all.data ? byChannel(all.data) : EMPTY), [all.data]);
 
 	const perChannel = useQueries({
 		queries: ids.map((id) => ({
@@ -120,11 +122,11 @@ export const useGuidePrograms = (
 		},
 	});
 
-	if (key === null) return { programs: all.data ?? EMPTY, isPending: () => false };
+	if (key === null) return { programs: allPrograms, isPending: () => false };
 	if (key === "all" || allLoaded) {
 		const waiting = key === "all" && !allLoaded && !all.isError;
 		return {
-			programs: all.data ?? EMPTY,
+			programs: allPrograms,
 			isPending: () => waiting,
 		};
 	}

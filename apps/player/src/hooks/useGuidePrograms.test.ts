@@ -341,6 +341,17 @@ describe("useGuidePrograms", () => {
 		expect(result.current.programs.size).toBe(0);
 	});
 
+	it("keeps showing what it had through a request for nothing over a new range", async () => {
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+		rerender({ range: evening, channels: null, resetKey: 1 });
+		await flush();
+
+		expect(mockLoad).toHaveBeenCalledOnce();
+		expect(result.current.programs.size).toBe(3);
+		expect(result.current.isPending("news.tv")).toBe(false);
+	});
+
 	it("keeps a load on its way through a request for nothing", async () => {
 		const first = deferred<EpgProgram[]>();
 		mockLoad.mockReturnValueOnce(first.promise);
