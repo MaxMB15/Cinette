@@ -383,6 +383,8 @@ async fn catalog_queries_read_the_cache() {
         .controller
         .catalog(CatalogQuery::Groups {
             content_type: "live".into(),
+            cursor: None,
+            limit: 100,
         })
         .unwrap();
     phone.write(&bytes).await;
