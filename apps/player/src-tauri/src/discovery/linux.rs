@@ -5,17 +5,78 @@
 //! and advertisement. It shares port 5353 with Avahi when Avahi runs.
 
 use super::{instance_name, DiscoveryError, Registration, Tracker, Txt};
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, TxtProperty};
-use std::sync::OnceLock;
+use mdns_sd::{DaemonEvent, ServiceDaemon, ServiceEvent, ServiceInfo, TxtProperty};
+use std::sync::{Mutex, MutexGuard};
 
-/// The daemon, started on first use. `None` when it couldn't start.
+/// The daemon while it runs. Its watcher clears this once the daemon's
+/// thread has stopped, so the next browse or advertisement starts another.
+static DAEMON: Mutex<Option<ServiceDaemon>> = Mutex::new(None);
+
+fn slot() -> MutexGuard<'static, Option<ServiceDaemon>> {
+    DAEMON.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The daemon, started on first use. When it can't start, the next call
+/// tries again.
 fn daemon() -> Result<ServiceDaemon, DiscoveryError> {
-    static DAEMON: OnceLock<Result<ServiceDaemon, DiscoveryError>> = OnceLock::new();
-    DAEMON
-        .get_or_init(|| {
-            ServiceDaemon::new().map_err(|e| DiscoveryError(format!("couldn't start mDNS: {e}")))
-        })
-        .clone()
+    let mut running = slot();
+    if let Some(daemon) = &*running {
+        return Ok(daemon.clone());
+    }
+    let daemon = start().map_err(|e| DiscoveryError(format!("couldn't start mDNS: {e}")))?;
+    let watched = daemon.monitor().and_then(|events| {
+        std::thread::Builder::new()
+            .name("mdns monitor".into())
+            .spawn(move || {
+                watch(events);
+                // The daemon's thread stopped, which closed the channel.
+                *slot() = None;
+            })
+            .map_err(|e| mdns_sd::Error::Msg(e.to_string()))
+    });
+    if let Err(e) = watched {
+        let _ = daemon.shutdown();
+        return Err(DiscoveryError(format!("couldn't watch mDNS: {e}")));
+    }
+    *running = Some(daemon.clone());
+    Ok(daemon)
+}
+
+/// The daemon for real use: every interface, on port 5353.
+#[cfg(not(test))]
+fn start() -> mdns_sd::Result<ServiceDaemon> {
+    ServiceDaemon::new()
+}
+
+/// The daemon for the tests, which keeps to the loopback interface.
+#[cfg(test)]
+fn start() -> mdns_sd::Result<ServiceDaemon> {
+    super::tests::loopback_daemon()
+}
+
+/// Logs the daemon's errors until it stops: the first as a warning, and
+/// every one when debugging, since an error that keeps happening, such as an
+/// interface that can't send, comes back on every packet. Returns how many
+/// there were.
+pub(super) fn watch(events: impl IntoIterator<Item = DaemonEvent>) -> usize {
+    let mut first = true;
+    let mut errors = 0;
+    for event in events {
+        if let DaemonEvent::Error(e) = event {
+            errors += 1;
+            if std::mem::take(&mut first) {
+                tracing::warn!("[discovery] mDNS reported an error; the details are logged when debugging");
+            }
+            tracing::debug!("[discovery] mDNS error: {e}");
+        }
+    }
+    errors
+}
+
+/// Whether the system refused the app local network access, which only
+/// macOS does. Always false here.
+pub fn local_network_denied() -> bool {
+    false
 }
 
 fn domain(service_type: &str) -> String {
