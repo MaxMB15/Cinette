@@ -8,6 +8,8 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { makeHistoryEntry } from "@/test/channel-fixtures";
 import { watchHistoryQuery } from "@/lib/queries";
+import { deferred } from "@/test/deferred";
+import type { WatchHistoryEntry } from "@/lib/types";
 
 vi.mock("@/lib/tauri", () => ({ getWatchHistory: vi.fn() }));
 
@@ -95,6 +97,55 @@ describe("useWatchHistory", () => {
 		renderHook(() => useWatchHistory(200, undefined, "failed:"), { wrapper });
 		await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(3));
 		expect(mockHistory).toHaveBeenLastCalledWith(200, undefined);
+	});
+
+	it("shows a change in the other lists too while they load again", async () => {
+		const client = createTestQueryClient();
+		const wrapper = wrapperFor(client);
+		const live = renderHook(() => useWatchHistory(50, "live", "failed:"), { wrapper });
+		const all = renderHook(() => useWatchHistory(200, undefined, "failed:"), { wrapper });
+		await waitFor(() => expect(all.result.current.loading).toBe(false));
+		all.unmount();
+		const answer = deferred<WatchHistoryEntry[]>();
+		mockHistory.mockReturnValue(answer.promise);
+
+		await act(async () => live.result.current.change((list) => list.filter((e) => e !== news)));
+		expect(live.result.current.entries).toEqual([]);
+		// A list that never loaded stays that way.
+		expect(client.getQueryData(watchHistoryQuery(50, "movie").queryKey)).toBeUndefined();
+
+		const again = renderHook(() => useWatchHistory(200, undefined, "failed:"), { wrapper });
+		expect(again.result.current.entries).toEqual([film]);
+		await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(3));
+		await act(async () => answer.resolve([film]));
+		expect(again.result.current.entries).toEqual([film]);
+	});
+
+	it("loads the history again while the computer is offline", async () => {
+		const wrapper = wrapperFor();
+		// TanStack Query only hears the offline event while a client is mounted.
+		renderHook(() => null, { wrapper });
+		const first = renderHook(
+			() => {
+				useHistoryStaleOnLeave();
+				return useWatchHistory(50, "live", "failed:");
+			},
+			{ wrapper }
+		);
+		await waitFor(() => expect(first.result.current.loading).toBe(false));
+		first.unmount();
+		act(() => {
+			window.dispatchEvent(new Event("offline"));
+		});
+		try {
+			const again = renderHook(() => useWatchHistory(50, "live", "failed:"), { wrapper });
+			await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(2));
+			expect(again.result.current.entries).toEqual([news]);
+		} finally {
+			act(() => {
+				window.dispatchEvent(new Event("online"));
+			});
+		}
 	});
 });
 

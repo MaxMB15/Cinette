@@ -58,7 +58,10 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 				change((prev) => prev.filter((e) => e.channelId !== entry.channelId));
 			} else {
 				await deleteHistorySeries(seriesTitle);
-				change((prev) => prev.filter((e) => showOf(e) !== seriesTitle));
+				// The backend only deletes series entries.
+				change((prev) =>
+					prev.filter((e) => e.contentType !== "series" || showOf(e) !== seriesTitle)
+				);
 			}
 		} catch (err) {
 			console.error("[RecentlyPlayedRow] failed to delete history:", err);
@@ -68,7 +71,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 	const handleClearAll = async () => {
 		try {
 			await clearWatchHistoryOfType(contentType);
-			change(() => []);
+			change((prev) => prev.filter((e) => e.contentType !== contentType));
 		} catch (err) {
 			console.error("[RecentlyPlayedRow] failed to clear history:", err);
 		}
