@@ -125,8 +125,12 @@ pub struct CommandEvent<'a> {
     pub command: &'a Command,
 }
 
+/// Puts a record on the network, or doesn't.
+type Advertiser = Box<dyn Fn(&Registration) -> Option<Advertisement> + Send + Sync>;
+
 struct TauriHost<R: Runtime> {
     app: AppHandle<R>,
+    advertiser: Advertiser,
     advertisement: Mutex<Option<Advertisement>>,
 }
 
@@ -177,12 +181,16 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         // The old record goes first, with a goodbye, so the name is free.
         *current = None;
         if let Some(registration) = registration {
-            match discovery::advertise(&registration) {
-                Ok(ad) => *current = Some(ad),
-                Err(e) => tracing::warn!("[remote] couldn't advertise: {e}"),
-            }
+            *current = (self.advertiser)(&registration);
         }
     }
+}
+
+/// Advertises on the network this device is on.
+fn advertise_on_network(registration: &Registration) -> Option<Advertisement> {
+    discovery::advertise(registration)
+        .inspect_err(|e| tracing::warn!("[remote] couldn't advertise: {e}"))
+        .ok()
 }
 
 /// The saved settings, or the defaults.
@@ -194,43 +202,51 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
         .unwrap_or_default()
 }
 
-/// Starts the target and manages a [`RemoteService`]. A failure is logged
-/// and the app carries on without remote control.
+/// Starts the target on every address and advertises it, and manages a
+/// [`RemoteService`]. A failure is logged and the app carries on without
+/// remote control.
 pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
-    let key = match identity::load_or_create(&key_dir) {
-        Ok(key) => key,
-        Err(e) => {
-            tracing::error!("[remote] couldn't load the device key: {e}");
-            return;
-        }
-    };
+    let started = tauri::async_runtime::block_on(async {
+        let listener = target::bind_default().await.map_err(|e| e.to_string())?;
+        start_on(app, key_dir, listener, Box::new(advertise_on_network))
+    });
+    if let Err(e) = started {
+        tracing::error!("[remote] remote control didn't start: {e}");
+    }
+}
+
+/// [`start`] on `listener`, advertising through `advertiser`. Call it inside
+/// the async runtime.
+fn start_on<R: Runtime>(
+    app: &AppHandle<R>,
+    key_dir: PathBuf,
+    listener: tokio::net::TcpListener,
+    advertiser: Advertiser,
+) -> Result<(), String> {
+    let key = identity::load_or_create(&key_dir)
+        .map_err(|e| format!("couldn't load the device key: {e}"))?;
     let settings = load_settings(app);
     let host = Arc::new(TauriHost {
         app: app.clone(),
+        advertiser,
         advertisement: Mutex::new(None),
     });
     let device_id = key.device_id();
-    let started = tauri::async_runtime::block_on(async {
-        let listener = target::bind_default().await?;
-        target::start(listener, key, DEVICE_TYPE, settings.clone(), host)
+    let handle = target::start(listener, key, DEVICE_TYPE, settings.clone(), host)
+        .map_err(|e| format!("couldn't listen: {e}"))?;
+    tracing::info!(
+        "[remote] listening on port {} as {device_id}",
+        handle.port()
+    );
+    app.manage(RemoteService {
+        handle,
+        key_dir,
+        state: Mutex::new(Saved {
+            settings,
+            device_id,
+        }),
     });
-    match started {
-        Ok(handle) => {
-            tracing::info!(
-                "[remote] listening on port {} as {device_id}",
-                handle.port()
-            );
-            app.manage(RemoteService {
-                handle,
-                key_dir,
-                state: Mutex::new(Saved {
-                    settings,
-                    device_id,
-                }),
-            });
-        }
-        Err(e) => tracing::error!("[remote] couldn't listen: {e}"),
-    }
+    Ok(())
 }
 
 /// Closes every connection with `shutdown` and withdraws the record.
@@ -239,3 +255,7 @@ pub fn stop_for_exit<R: Runtime>(app: &AppHandle<R>) {
         tauri::async_runtime::block_on(service.handle.shutdown());
     }
 }
+
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;

@@ -1,0 +1,443 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+//! The target as the app runs it, through the mock app: its commands, its
+//! events and its settings file, with a phone on a loopback connection.
+//! Nothing is advertised on the network; the advertiser only records.
+
+use super::*;
+use crate::remote::test_client::{self, Client, WAIT};
+use crate::test_support::TestApp;
+use mvp_core::models::channel::Channel;
+use mvp_core::models::playlist::{Provider, ProviderType};
+use mvp_core::remote::controller::Event;
+use mvp_core::remote::message::CloseReason;
+use serde_json::{json, Value};
+use tauri::test::MockRuntime;
+use tauri::Listener;
+use tokio::sync::mpsc;
+use tokio::time::timeout;
+
+struct Running {
+    app: TestApp,
+    events: mpsc::UnboundedReceiver<(String, Value)>,
+    /// Events read while waiting for another, oldest first.
+    unclaimed: Vec<(String, Value)>,
+    advertised: Arc<Mutex<Vec<Registration>>>,
+    port: u16,
+}
+
+const EVENTS: [&str; 4] = [
+    "remote://consent",
+    "remote://consent-hidden",
+    "remote://sessions",
+    "remote://command",
+];
+
+impl Running {
+    /// The app with remote control started, after `before` has had the
+    /// chance to save settings.
+    async fn start(before: impl FnOnce(&TestApp)) -> Self {
+        let app = TestApp::new();
+        before(&app);
+        let (tx, events) = mpsc::unbounded_channel();
+        for name in EVENTS {
+            let tx = tx.clone();
+            app.handle().listen_any(name, move |event| {
+                let payload = serde_json::from_str(event.payload()).unwrap();
+                let _ = tx.send((name.to_owned(), payload));
+            });
+        }
+        let advertised = Arc::new(Mutex::new(Vec::new()));
+        let record = advertised.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        start_on(
+            &app.handle(),
+            app.app_dir(),
+            listener,
+            Box::new(move |r: &Registration| {
+                lock(&record).push(r.clone());
+                None
+            }),
+        )
+        .unwrap();
+        Self {
+            app,
+            events,
+            unclaimed: Vec::new(),
+            advertised,
+            port,
+        }
+    }
+
+    fn invoke(&self, command: &str, args: Value) -> Result<Value, Value> {
+        self.app.invoke(command, args)
+    }
+
+    fn service_settings(&self) -> RemoteSettings {
+        self.app.handle().state::<RemoteService>().settings()
+    }
+
+    fn service_device_id(&self) -> DeviceId {
+        self.app.handle().state::<RemoteService>().device_id()
+    }
+
+    fn device_id(&self) -> DeviceId {
+        DeviceId::parse(
+            self.invoke("remote_get_settings", json!({})).unwrap()["deviceId"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    async fn phone(&self) -> Client {
+        test_client::connect(
+            self.port,
+            self.device_id(),
+            DeviceKey::generate(),
+            "Phone",
+            None,
+        )
+        .await
+    }
+
+    /// The oldest event called `name` not yet taken, waiting for one.
+    async fn event(&mut self, name: &str) -> Value {
+        if let Some(i) = self.unclaimed.iter().position(|(got, _)| got == name) {
+            return self.unclaimed.remove(i).1;
+        }
+        loop {
+            let (got, payload) = timeout(WAIT, self.events.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no {name} event came"))
+                .unwrap();
+            if got == name {
+                return payload;
+            }
+            self.unclaimed.push((got, payload));
+        }
+    }
+
+    fn last_advertised(&self) -> Option<Registration> {
+        lock(&self.advertised).last().cloned()
+    }
+}
+
+fn saved_settings(app: &TestApp) -> Value {
+    let text = std::fs::read_to_string(app.app_dir().join(SETTINGS_STORE_FILE)).unwrap();
+    serde_json::from_str::<Value>(&text).unwrap()[SETTINGS_KEY].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn starts_with_the_defaults_and_a_saved_key() {
+    let running = Running::start(|_| {}).await;
+    let view = running.invoke("remote_get_settings", json!({})).unwrap();
+    assert_eq!(view["discoverable"], json!(true));
+    assert_eq!(view["remoteControl"], json!("ask"));
+    assert_eq!(view["deviceName"], Value::Null);
+    assert_eq!(view["defaultName"], json!("Linux PC"));
+    let key = std::fs::read(running.app.app_dir().join(identity::KEY_FILE)).unwrap();
+    let key = DeviceKey::from_private(key.try_into().unwrap());
+    assert_eq!(view["deviceId"], json!(key.device_id().to_string()));
+    assert_eq!(running.service_device_id(), key.device_id());
+
+    // The first record goes out as the target starts.
+    let deadline = std::time::Instant::now() + WAIT;
+    while running.last_advertised().is_none() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let record = running.last_advertised().expect("advertised");
+    assert_eq!(record.port, running.port);
+    assert_eq!(record.instance, "Linux PC");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn uses_the_settings_saved_last_time() {
+    let running = Running::start(|app| {
+        let store = app.handle().store(SETTINGS_STORE_FILE).unwrap();
+        store.set(
+            SETTINGS_KEY,
+            json!({ "discoverable": true, "remoteControl": "never", "deviceName": "Den" }),
+        );
+        store.save().unwrap();
+    })
+    .await;
+    let view = running.invoke("remote_get_settings", json!({})).unwrap();
+    assert_eq!(view["remoteControl"], json!("never"));
+    assert_eq!(view["deviceName"], json!("Den"));
+    let mut phone = running.phone().await;
+    assert_eq!(phone.closed().await, Some(CloseReason::NotAllowed));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saving_settings_writes_them_and_tells_the_target() {
+    let running = Running::start(|_| {}).await;
+    let view = running
+        .invoke(
+            "remote_set_settings",
+            json!({ "settings": { "discoverable": true, "remoteControl": "always", "deviceName": "  Den  " } }),
+        )
+        .unwrap();
+    assert_eq!(view["remoteControl"], json!("always"));
+    assert_eq!(view["deviceName"], json!("Den"));
+    assert_eq!(
+        saved_settings(&running.app),
+        json!({ "discoverable": true, "remoteControl": "always", "deviceName": "Den" })
+    );
+    assert_eq!(
+        running.service_settings().device_name.as_deref(),
+        Some("Den")
+    );
+    // Always allow lets the phone straight in.
+    let mut phone = running.phone().await;
+    phone.connected().await;
+    let deadline = std::time::Instant::now() + WAIT;
+    while running.last_advertised().map(|r| r.instance) != Some("Den".into())
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(running.last_advertised().unwrap().instance, "Den");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn consent_goes_to_the_webview_and_its_answer_comes_back() {
+    let mut running = Running::start(|_| {}).await;
+    let mut phone = running.phone().await;
+    let code = phone.code().await;
+    phone.pending().await;
+    let consent = running.event("remote://consent").await;
+    assert_eq!(consent["name"], json!("Phone"));
+    assert_eq!(consent["deviceType"], json!("iphone"));
+    assert_eq!(consent["code"], json!(code));
+    assert_eq!(
+        consent["deviceId"],
+        json!(phone.key.device_id().to_string())
+    );
+    let expires = consent["expiresInMs"].as_u64().unwrap();
+    assert!((25_000..=30_000).contains(&expires), "{expires}");
+
+    running
+        .invoke(
+            "remote_answer_consent",
+            json!({ "request": consent["request"], "allow": true }),
+        )
+        .unwrap();
+    phone.connected().await;
+    assert_eq!(
+        running.event("remote://consent-hidden").await,
+        json!({ "request": consent["request"] })
+    );
+    let sessions = running.event("remote://sessions").await;
+    assert_eq!(sessions[0]["name"], json!("Phone"));
+    assert_eq!(sessions[0]["deviceType"], json!("iphone"));
+    assert_eq!(sessions[0]["connected"], json!(true));
+    assert_eq!(
+        sessions[0]["deviceId"],
+        json!(phone.key.device_id().to_string())
+    );
+    let listed = running.invoke("remote_sessions", json!({})).unwrap();
+    assert_eq!(listed, sessions);
+
+    running
+        .invoke(
+            "remote_disconnect",
+            json!({ "sessionId": sessions[0]["sessionId"] }),
+        )
+        .unwrap();
+    assert_eq!(phone.closed().await, Some(CloseReason::Revoked));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_request_grants_nothing() {
+    let mut running = Running::start(|_| {}).await;
+    let mut phone = running.phone().await;
+    phone.pending().await;
+    let consent = running.event("remote://consent").await;
+    running
+        .invoke(
+            "remote_answer_consent",
+            json!({ "request": consent["request"], "allow": false }),
+        )
+        .unwrap();
+    assert_eq!(phone.closed().await, Some(CloseReason::Denied));
+}
+
+async fn connected(running: &Running) -> Client {
+    running
+        .invoke(
+            "remote_set_settings",
+            json!({ "settings": { "discoverable": true, "remoteControl": "always", "deviceName": null } }),
+        )
+        .unwrap();
+    let mut phone = running.phone().await;
+    phone.connected().await;
+    phone
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn commands_reach_the_webview_and_its_outcome_reaches_the_phone() {
+    let mut running = Running::start(|_| {}).await;
+    let mut phone = connected(&running).await;
+    let (id, bytes) = phone.controller.command(Command::Stop).unwrap();
+    phone.write(&bytes).await;
+    let command = running.event("remote://command").await;
+    assert_eq!(command["command"], json!({ "action": "stop" }));
+    running
+        .invoke(
+            "remote_finish_command",
+            json!({ "token": command["token"], "outcome": "failed" }),
+        )
+        .unwrap();
+    let reply = phone
+        .wait_for(|e| match e {
+            Event::Reply { request, result } if *request == id => Some(*result),
+            _ => None,
+        })
+        .await;
+    assert_eq!(reply, Some(Err(ErrorCode::Failed)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_players_state_reaches_the_phone_without_provider_logos() {
+    let running = Running::start(|app| {
+        app.state()
+            .cache
+            .lock()
+            .unwrap()
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Mine".into(),
+                provider_type: ProviderType::Xtream,
+                url: "http://iptv.example:8080".into(),
+                username: Some("user".into()),
+                password: Some("pass".into()),
+                last_updated: None,
+                channel_count: 0,
+                epg_url: None,
+            })
+            .unwrap();
+    })
+    .await;
+    let mut phone = connected(&running).await;
+    running
+        .invoke(
+            "remote_set_state",
+            json!({ "state": {
+                "status": "playing",
+                "item": { "id": "p1-live-1", "name": "News", "contentType": "live",
+                          "logoUrl": "http://iptv.example:8080/logo.png" },
+                "position": 3, "duration": 0, "volume": 20,
+                "subtitleId": null, "audioId": null, "error": null
+            } }),
+        )
+        .unwrap();
+    let state = phone
+        .wait_for(|e| match e {
+            Event::State(s) if s.state.item.is_some() => Some(s.clone()),
+            _ => None,
+        })
+        .await
+        .unwrap();
+    let item = state.state.item.unwrap();
+    assert_eq!(item.id, "p1-live-1");
+    assert_eq!(item.logo, None);
+    assert_eq!(state.state.volume, Some(20));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn catalog_queries_read_the_cache() {
+    let running = Running::start(|app| {
+        let channel = Channel {
+            id: "p1-live-1".into(),
+            name: "News".into(),
+            url: "http://iptv.example/live/u/p/1.ts".into(),
+            group_title: "UK".into(),
+            content_type: "live".into(),
+            ..Channel::default()
+        };
+        let state = app.state();
+        let cache = state.cache.lock().unwrap();
+        cache
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Mine".into(),
+                provider_type: ProviderType::M3u,
+                url: "http://iptv.example/list.m3u".into(),
+                username: None,
+                password: None,
+                last_updated: None,
+                channel_count: 1,
+                epg_url: None,
+            })
+            .unwrap();
+        cache.save_channels("p1", &[channel]).unwrap();
+    })
+    .await;
+    let mut phone = connected(&running).await;
+    let (id, bytes) = phone
+        .controller
+        .catalog(CatalogQuery::Groups {
+            content_type: "live".into(),
+        })
+        .unwrap();
+    phone.write(&bytes).await;
+    let items = phone
+        .wait_for(|e| match e {
+            Event::Page { request, items, .. } if *request == id => Some(items.clone()),
+            _ => None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "UK");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_identity_is_saved_and_ends_sessions() {
+    let running = Running::start(|_| {}).await;
+    let mut phone = connected(&running).await;
+    let before = running.device_id();
+    let view = running.invoke("remote_reset_identity", json!({})).unwrap();
+    let after = view["deviceId"].as_str().unwrap().to_owned();
+    assert_ne!(after, before.to_string());
+    let key = std::fs::read(running.app.app_dir().join(identity::KEY_FILE)).unwrap();
+    let key = DeviceKey::from_private(key.try_into().unwrap());
+    assert_eq!(key.device_id().to_string(), after);
+    assert_eq!(phone.closed().await, Some(CloseReason::Shutdown));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quitting_tells_the_phone() {
+    let running = Running::start(|_| {}).await;
+    let mut phone = connected(&running).await;
+    let handle: tauri::AppHandle<MockRuntime> = running.app.handle();
+    tokio::task::spawn_blocking(move || stop_for_exit(&handle))
+        .await
+        .unwrap();
+    assert_eq!(phone.closed().await, Some(CloseReason::Shutdown));
+}
+
+#[test]
+fn quitting_without_remote_control_does_nothing() {
+    let app = TestApp::new();
+    stop_for_exit(&app.handle());
+}
+
+#[test]
+fn commands_say_when_remote_control_did_not_start() {
+    let app = TestApp::new();
+    for (command, args) in [
+        ("remote_get_settings", json!({})),
+        ("remote_sessions", json!({})),
+        ("remote_disconnect", json!({ "sessionId": "s" })),
+    ] {
+        assert_eq!(
+            app.invoke(command, args),
+            Err(json!("Remote control didn't start on this device.")),
+            "{command}"
+        );
+    }
+}

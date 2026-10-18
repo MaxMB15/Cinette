@@ -27,6 +27,8 @@ pub mod identity;
 mod service;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod target;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod test_client;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use service::{start, stop_for_exit, RemoteService};
