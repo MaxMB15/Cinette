@@ -41,6 +41,39 @@ export const castProfile = (model: string): ReceiverProfile => ({
 	convertTo: "matroska",
 });
 
+/** What AirPlay plays from a URL. Never MKV, and never an endless raw TS. */
+const AIRPLAY_CONTAINERS: readonly Container[] = ["hls-ts", "hls-fmp4", "mp4"];
+
+/**
+ * An Apple TV. It plays HEVC in fMP4, and AC-3 and E-AC-3 itself. Nothing
+ * on iOS tells an Apple TV from another receiver, so this isn't used yet.
+ */
+export const appleTvProfile: ReceiverProfile = {
+	containers: AIRPLAY_CONTAINERS,
+	video: { h264: AIRPLAY_CONTAINERS, hevc: ["hls-fmp4", "mp4"] },
+	audio: ["aac", "mp3", "ac3", "eac3"],
+	interlaced: false,
+	audioOnly: true,
+	hlsNeedsCors: false,
+	convertTo: "hls",
+};
+
+/**
+ * An AirPlay 2 TV, such as a Samsung, LG or Sony. Their makers publish
+ * nothing, so this keeps to what every one is reported to play: H.264 with
+ * AAC or MP3, and never audio alone. It's the profile for every AirPlay
+ * receiver, since apps can't tell which kind they picked.
+ */
+export const airplayTvProfile: ReceiverProfile = {
+	containers: AIRPLAY_CONTAINERS,
+	video: { h264: AIRPLAY_CONTAINERS },
+	audio: ["aac", "mp3"],
+	interlaced: false,
+	audioOnly: false,
+	hlsNeedsCors: false,
+	convertTo: "hls",
+};
+
 /** What the backend says this computer's ffmpeg can do. */
 export interface ConverterSupport {
 	/** It can remux and convert audio to AAC. */
@@ -78,3 +111,15 @@ export interface StreamFormats {
 /** What `getStreamFormats` rejects with when the provider answered 401 or
  *  403, so the login may have expired. */
 export const REFUSED = "refused";
+
+/** An iPhone or iPad. It converts in the app, with MPVKit's libraries.
+ *  `needsScreen` is for Cast, which stops when Cinette leaves the screen.
+ *  AirPlay keeps going with the screen locked. */
+export const iosSender = (
+	support: ConverterSupport,
+	{ needsScreen }: { needsScreen: boolean }
+): SenderProfile => ({
+	convert: support.convert,
+	hardwareEncoder: support.convert && support.hardwareEncoder,
+	convertNeedsScreen: needsScreen,
+});

@@ -22,6 +22,8 @@ import {
 } from "react-router";
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
+import type { AirPlay } from "@/hooks/useAirPlay";
+import type { PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -208,6 +210,46 @@ vi.mock("@/hooks/useDownloads", async (importOriginal) => {
 			downloads: env.downloads,
 			...actual.groupDownloads(env.downloads),
 		}),
+	};
+});
+
+/** Stands in for useAirPlay, which has tests of its own. */
+const fakeAirPlay = vi.hoisted(() => {
+	const initial = (): AirPlay => ({
+		available: false,
+		destination: null,
+		state: null,
+		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
+		stop: vi.fn<AirPlay["stop"]>(async () => {}),
+	});
+	let current = initial();
+	const listeners = new Set<() => void>();
+	return {
+		enabled: [] as boolean[],
+		get: () => current,
+		subscribe: (listener: () => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		reset: () => {
+			current = initial();
+		},
+		set: (patch: Partial<AirPlay>) => {
+			current = { ...current, ...patch };
+			listeners.forEach((listener) => listener());
+		},
+	};
+});
+
+vi.mock("@/hooks/useAirPlay", async () => {
+	const { useSyncExternalStore } = await import("react");
+	return {
+		useAirPlay: (enabled: boolean) => {
+			fakeAirPlay.enabled.push(enabled);
+			return useSyncExternalStore(fakeAirPlay.subscribe, fakeAirPlay.get);
+		},
 	};
 });
 
@@ -618,6 +660,8 @@ beforeEach(() => {
 	localStorage.clear();
 	sessionStorage.clear();
 	fakeMpv.reset();
+	fakeAirPlay.reset();
+	fakeAirPlay.enabled = [];
 	env.channels = [];
 	env.downloads = [];
 	env.layoutMode = "desktop";
@@ -3286,5 +3330,184 @@ describe("phones, tablets and TV boxes", () => {
 		expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+	});
+});
+
+describe("AirPlay", () => {
+	const tvState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
+		status: "playing",
+		item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
+		position: 600,
+		positionAt: 0,
+		duration: 5400,
+		volume: 100,
+		subtitles: [{ id: "0", label: "English" }],
+		subtitleId: null,
+		audio: [
+			{ id: "0", label: "Main" },
+			{ id: "1", label: "Commentary" },
+		],
+		audioId: "0",
+		connection: "connected",
+		error: null,
+		...patch,
+	});
+
+	const tv = () => ({
+		id: "airplay:tv",
+		kind: "airplay" as const,
+		name: "Living Room TV",
+		catalog: { kind: "local" as const },
+		capabilities: {
+			seek: true,
+			pause: true,
+			volume: "none" as const,
+			subtitles: "select" as const,
+			externalSubtitles: false,
+			audioTracks: true,
+			resumeAt: true,
+			catalog: false,
+		},
+		route: vi.fn(),
+		load: vi.fn(),
+		play: vi.fn(async () => {}),
+		pause: vi.fn(async () => {}),
+		seek: vi.fn(async () => {}),
+		setVolume: vi.fn(),
+		selectSubtitle: vi.fn(async () => {}),
+		selectAudio: vi.fn(async () => {}),
+		stop: vi.fn(),
+		getState: vi.fn(),
+		subscribe: vi.fn(),
+		dispose: vi.fn(),
+	});
+
+	const airplayButton = () => screen.queryByRole("button", { name: "AirPlay" });
+
+	it("is only on for iOS", async () => {
+		await openItem(lanternKeeper());
+		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
+		setUpTouchScreen();
+		fakeAirPlay.enabled = [];
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(fakeAirPlay.enabled[fakeAirPlay.enabled.length - 1]).toBe(true);
+	});
+
+	it("shows its button only while a receiver is in reach", async () => {
+		await openItem(lanternKeeper());
+		expect(airplayButton()).toBeNull();
+		act(() => fakeAirPlay.set({ available: true }));
+		expect(airplayButton()).not.toBeNull();
+	});
+
+	it("sends the movie from where it is, after stopping it here", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 600, 5400) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const send = vi.mocked(fakeAirPlay.get().send);
+		expect(send).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "mv1" }),
+			expect.objectContaining({ startAt: 600 })
+		);
+		expect(send.mock.calls[0][1].anchor).toBeDefined();
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		await act(() => send.mock.calls[0][1].stopLocal());
+		expect(fakeMpv.actions.stop).toHaveBeenCalled();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalled();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("sends live from now", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(makeNewsChannel());
+		await setMpv({ state: playing(NEWS_URL, 30, 0) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(vi.mocked(fakeAirPlay.get().send).mock.calls[0][1].startAt).toBeUndefined();
+	});
+
+	it("says why it can't send, and nothing when the picker is closed", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		const send = vi.mocked(fakeAirPlay.get().send);
+		send.mockResolvedValueOnce({ sent: false, why: "cancelled" });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		send.mockResolvedValueOnce({
+			sent: false,
+			why: "blocked",
+			decision: { ok: false, reason: "container", detail: "mkv" },
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
+
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		send.mockResolvedValueOnce({ sent: false, why: "failed", error: new Error("x") });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't start AirPlay.");
+	});
+
+	it("covers the player with its own controls while the TV plays", async () => {
+		await openItem(lanternKeeper());
+		const destination = tv();
+		act(() => fakeAirPlay.set({ available: true, destination, state: tvState() }));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		expect(within(panel).getByText("Playing on Living Room TV")).toBeTruthy();
+		expect(airplayButton()).toBeNull();
+		expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+
+		fireEvent.click(within(panel).getByRole("button", { name: "Pause" }));
+		expect(destination.pause).toHaveBeenCalled();
+		act(() => fakeAirPlay.set({ state: tvState({ status: "paused" }) }));
+		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
+		expect(destination.play).toHaveBeenCalled();
+		fireEvent.change(within(panel).getByRole("slider", { name: "Position" }), {
+			target: { value: "900" },
+		});
+		expect(destination.seek).toHaveBeenCalledWith(900);
+		fireEvent.change(within(panel).getByRole("combobox", { name: "Subtitles" }), {
+			target: { value: "0" },
+		});
+		expect(destination.selectSubtitle).toHaveBeenCalledWith("0");
+		fireEvent.change(within(panel).getByRole("combobox", { name: "Audio" }), {
+			target: { value: "1" },
+		});
+		expect(destination.selectAudio).toHaveBeenCalledWith("1");
+	});
+
+	it("plays here again from where the TV was", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockClear();
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
+		await flush();
+		expect(fakeAirPlay.get().stop).toHaveBeenCalled();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 600);
+	});
+
+	it("plays live here again from now", async () => {
+		await openItem(makeNewsChannel());
+		fakeMpv.actions.load.mockClear();
+		const destination = { ...tv(), capabilities: { ...tv().capabilities, resumeAt: false } };
+		act(() => fakeAirPlay.set({ destination, state: tvState({ duration: 0 }) }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(NEWS_URL, undefined);
+	});
+
+	it("stops AirPlay and leaves the player", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		fireEvent.click(within(panel).getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(fakeAirPlay.get().stop).toHaveBeenCalled();
+		expect(screen.getByText("Channel list")).toBeTruthy();
 	});
 });

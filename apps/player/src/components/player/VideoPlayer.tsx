@@ -17,6 +17,10 @@ import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } fr
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
+import { useAirPlay } from "@/hooks/useAirPlay";
+import { airplayBlockedMessage } from "@/lib/airplay";
+import { AirPlayButton } from "@/components/player/AirPlayButton";
+import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -209,7 +213,7 @@ export const PlayerView = () => {
 	useLeaveFullscreenOnUnmount();
 	// The phone layout hides the tab bar on this route, so the player needs
 	// its own way back.
-	const { layoutMode } = usePlatform();
+	const { layoutMode, platform } = usePlatform();
 	const showBack = layoutMode === "mobile";
 	// Phones and tablets set the volume with the hardware buttons. An Android
 	// TV box has no touch screen, so it keeps the volume and shortcut
@@ -470,6 +474,9 @@ export const PlayerView = () => {
 	// The player's controls go through the active destination, which is
 	// always this device for now. It starts an item the way the player does.
 	const playback = useLocalPlayback(mpv, activeChannel, commitPlayback);
+	// AirPlay video on iOS, with its own panel until the device picker
+	// takes over.
+	const airplay = useAirPlay(platform === "ios");
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with
@@ -1255,6 +1262,28 @@ export const PlayerView = () => {
 		/>
 	) : undefined;
 
+	/** Sends what plays to AirPlay. Resolves to why it couldn't, if it couldn't. */
+	const sendToAirPlay = async (anchor: DOMRect): Promise<string | null> => {
+		if (!activeChannel) return null;
+		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
+		const result = await airplay.send(activeChannel, {
+			anchor,
+			startAt,
+			stopLocal: async () => {
+				flushProgress();
+				await mpv.stop();
+			},
+		});
+		if (result.sent || result.why === "cancelled") return null;
+		if (result.why === "blocked") return airplayBlockedMessage(result.decision);
+		console.warn("[VideoPlayer] AirPlay failed:", result.error);
+		return "Couldn't start AirPlay.";
+	};
+	const castSlot =
+		airplay.available && activeChannel && !airplay.destination ? (
+			<AirPlayButton onSend={sendToAirPlay} />
+		) : undefined;
+
 	// Resumes where the stream broke, not from the start of the movie or episode.
 	const retryStream = () => {
 		mpv.reload().catch(() => {});
@@ -1374,7 +1403,32 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{!mpv.fallbackActive && (
+			{airplay.destination && airplay.state && (
+				<AirPlayPanel
+					name={airplay.destination.name}
+					state={airplay.state}
+					capabilities={airplay.destination.capabilities}
+					onPlay={() => void airplay.destination?.play()}
+					onPause={() => void airplay.destination?.pause()}
+					onSeek={(position) => void airplay.destination?.seek(position)}
+					onSubtitle={(id) => void airplay.destination?.selectSubtitle(id)}
+					onAudio={(id) => void airplay.destination?.selectAudio(id)}
+					onPlayHere={(position) => {
+						void airplay.stop();
+						if (activeChannel)
+							void playback.load(
+								{ kind: "local", channel: activeChannel },
+								{ startAt: position > 0 ? position : undefined }
+							);
+					}}
+					onStop={() => {
+						void airplay.stop();
+						handleStop();
+					}}
+				/>
+			)}
+
+			{!mpv.fallbackActive && !airplay.destination && (
 				<Controls
 					state={{
 						isPlaying: mpv.state.isPlaying,
@@ -1415,6 +1469,7 @@ export const PlayerView = () => {
 					onShortcuts={touchDevice ? undefined : () => setShowShortcuts((v) => !v)}
 					showVolumeSlider={!touchDevice}
 					downloadSlot={downloadSlot}
+					castSlot={castSlot}
 				/>
 			)}
 

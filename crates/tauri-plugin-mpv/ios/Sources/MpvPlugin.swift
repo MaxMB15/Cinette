@@ -108,7 +108,8 @@ final class MpvVideoView: UIView {
 final class MpvHost: NSObject {
   static let shared = MpvHost()
 
-  private weak var webview: WKWebView?
+  /// The app's web view. AirPlay puts its route picker beside it.
+  private(set) weak var webview: WKWebView?
   private var videoView: MpvVideoView?
   private var lifecycleCallback: MvpLifecycleCallback?
   private var remoteCallback: MvpRemoteCallback?
@@ -241,6 +242,8 @@ final class MpvHost: NSObject {
   // MARK: Audio session and Now Playing
 
   func setAudioActive(_ active: Bool) {
+    // mpv stopping must not turn the session off under AirPlay.
+    if !active && AirPlayHost.shared.isActive { return }
     let session = AVAudioSession.sharedInstance()
     do {
       if active {
@@ -290,6 +293,8 @@ final class MpvHost: NSObject {
   }
 
   func clearNowPlaying() {
+    // AirPlay keeps Now Playing up while it plays.
+    if AirPlayHost.shared.isActive { return }
     let center = MPNowPlayingInfoCenter.default()
     center.nowPlayingInfo = nil
     center.playbackState = .stopped
@@ -341,6 +346,7 @@ final class MpvHost: NSObject {
   private func sendRemote(_ command: MvpRemoteCommand, _ value: Double = 0)
     -> MPRemoteCommandHandlerStatus
   {
+    if AirPlayHost.shared.handleRemote(command, value) { return .success }
     guard let remoteCallback else { return .commandFailed }
     remoteCallback(command.rawValue, value)
     return .success

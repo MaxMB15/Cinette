@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+mod airplay;
 mod commands;
 mod downloads;
 #[cfg(desktop)]
@@ -177,6 +178,7 @@ register_commands![
     commands::delete_playback_position,
     progress::hand_off_progress,
     streams::get_stream_formats,
+    airplay::airplay_load,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,
     commands::delete_group_hierarchy,

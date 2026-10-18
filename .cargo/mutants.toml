@@ -74,6 +74,10 @@ gitignore = true
 exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
+    "crates/tauri-plugin-mpv/src/airplay/ios.rs",
+    # AirPlay's stand-in for other platforms. Every command checks ensure()
+    # first, which fails, so nothing else in it ever runs.
+    "crates/tauri-plugin-mpv/src/airplay/unavailable.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
 ]

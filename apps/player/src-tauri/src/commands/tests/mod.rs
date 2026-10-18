@@ -193,7 +193,10 @@ fn sample(argument: &str) -> Value {
         "groupsWithSamples" | "uncategorizedGroups" | "existingCategories" => json!([]),
         "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
-        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt" => json!(1),
+        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt"
+        | "source" => {
+            json!(1)
+        }
         "keep" => json!(true),
         "episode" | "channel" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),

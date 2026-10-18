@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-airplay-select-audio"
+description = "Enables the airplay_select_audio command without any pre-configured scope."
+commands.allow = ["airplay_select_audio"]
+
+[[permission]]
+identifier = "deny-airplay-select-audio"
+description = "Denies the airplay_select_audio command without any pre-configured scope."
+commands.deny = ["airplay_select_audio"]

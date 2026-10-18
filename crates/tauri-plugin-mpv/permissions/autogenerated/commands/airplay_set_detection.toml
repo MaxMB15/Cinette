@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-airplay-set-detection"
+description = "Enables the airplay_set_detection command without any pre-configured scope."
+commands.allow = ["airplay_set_detection"]
+
+[[permission]]
+identifier = "deny-airplay-set-detection"
+description = "Denies the airplay_set_detection command without any pre-configured scope."
+commands.deny = ["airplay_set_detection"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-airplay-seek"
+description = "Enables the airplay_seek command without any pre-configured scope."
+commands.allow = ["airplay_seek"]
+
+[[permission]]
+identifier = "deny-airplay-seek"
+description = "Denies the airplay_seek command without any pre-configured scope."
+commands.deny = ["airplay_seek"]
