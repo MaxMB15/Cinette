@@ -4,6 +4,7 @@
 use super::*;
 use crate::remote::channel::FrameReader;
 use crate::remote::message::{decode, PROTOCOL_VERSION};
+use crate::remote::random_bytes;
 use crate::remote::tests::hello;
 
 /// The contents of the one frame in `bytes`.
@@ -208,7 +209,7 @@ fn a_reveal_that_doesnt_match_the_commitment_fails() {
     let forged = controller
         .channel
         .seal(&Message::Reveal {
-            nonce: crate::remote::to_hex(&[7u8; 32]),
+            nonce: crate::remote::to_hex(&random_bytes::<32>()),
         })
         .unwrap();
     let Err(failure) = t.read(&unframe(&forged)) else {
@@ -244,12 +245,12 @@ fn garbage_instead_of_a_handshake_fails() {
 
 #[test]
 fn the_code_comes_from_both_nonces() {
-    let hash = [1u8; 32];
-    let a = code(&hash, &[2; 32], &[3; 32]);
-    assert_eq!(a, code(&hash, &[2; 32], &[3; 32]));
-    assert_ne!(a, code(&hash, &[2; 32], &[4; 32]));
-    assert_ne!(a, code(&hash, &[5; 32], &[3; 32]));
-    assert_ne!(a, code(&[9; 32], &[2; 32], &[3; 32]));
+    let [hash, controller, target, other] = [(); 4].map(|_| random_bytes::<32>());
+    let a = code(&hash, &controller, &target);
+    assert_eq!(a, code(&hash, &controller, &target));
+    assert_ne!(a, code(&hash, &controller, &other));
+    assert_ne!(a, code(&hash, &other, &target));
+    assert_ne!(a, code(&other, &controller, &target));
     assert!(a.value() < 1_000_000);
 }
 
@@ -275,26 +276,28 @@ fn handshake_hash_is_the_state_s_own_hash() {
 
 #[test]
 fn the_commitment_is_blake2s_of_its_label_the_hash_and_the_nonce() {
+    let [hash, nonce, other] = [(); 3].map(|_| random_bytes::<32>());
     let expected: [u8; 32] = Blake2s256::new()
         .chain_update(b"cinette-commit")
-        .chain_update([1u8; 32])
-        .chain_update([2u8; 32])
+        .chain_update(hash)
+        .chain_update(nonce)
         .finalize()
         .into();
-    assert_eq!(commitment(&[1; 32], &[2; 32]), expected);
-    assert_ne!(commitment(&[1; 32], &[3; 32]), expected);
+    assert_eq!(commitment(&hash, &nonce), expected);
+    assert_ne!(commitment(&hash, &other), expected);
 }
 
 #[test]
 fn the_code_is_the_first_four_hash_bytes_mod_a_million() {
+    let [hash, controller, target] = [(); 3].map(|_| random_bytes::<32>());
     let digest = Blake2s256::new()
         .chain_update(b"cinette-code")
-        .chain_update([1u8; 32])
-        .chain_update([2u8; 32])
-        .chain_update([3u8; 32])
+        .chain_update(hash)
+        .chain_update(controller)
+        .chain_update(target)
         .finalize();
     let n = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
-    assert_eq!(code(&[1; 32], &[2; 32], &[3; 32]).value(), n % 1_000_000);
+    assert_eq!(code(&hash, &controller, &target).value(), n % 1_000_000);
 }
 
 #[test]
