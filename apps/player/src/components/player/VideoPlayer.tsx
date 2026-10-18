@@ -1177,7 +1177,7 @@ export const PlayerView = () => {
 						// The unmount cleanup records the elapsed time when the route changes.
 						flushProgress();
 						stoppedRef.current = true;
-						playback.stop();
+						mpv.stop();
 						navigate("/");
 					}
 					break;
@@ -1214,10 +1214,9 @@ export const PlayerView = () => {
 		recordEnd();
 		flushProgress();
 		stoppedRef.current = true;
-		playback.stop();
+		mpv.stop();
 		navigate("/");
-		// Stryker disable next-line ArrayDeclaration: The first render's values do the same: useMpv's stop and the progress callbacks never change, and navigate goes to the absolute path / either way.
-	}, [playback, navigate, flushProgress, recordEnd]);
+	}, [mpv, navigate, flushProgress, recordEnd]);
 
 	// Closing mpv's own window stops playback, like the stop button.
 	const handleStopRef = useLatestRef(handleStop);
