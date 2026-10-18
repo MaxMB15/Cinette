@@ -622,6 +622,18 @@ fn a_message_it_cant_read_before_asking_closes_the_connection() {
 }
 
 #[test]
+fn a_frame_that_doesnt_decrypt_before_asking_drops_the_connection() {
+    let mut target = target();
+    let now = Instant::now();
+    let (conn, channel) = shake(&mut target, now);
+    assert!(channel.is_ok());
+    // The channel can't be trusted any more, so nothing goes out on it.
+    let actions = target.receive(conn, b"not sealed", now);
+    assert_eq!(actions, [Action::Close { conn }]);
+    assert!(target.receive(conn, b"not sealed", now).is_empty());
+}
+
+#[test]
 fn before_asking_a_controller_can_ping_and_hear_what_isnt_offered() {
     let mut target = target();
     let now = Instant::now();
