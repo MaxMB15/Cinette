@@ -16,6 +16,7 @@ import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
+import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -202,6 +203,9 @@ export const PlayerView = () => {
 	const [showInfoDrawer, setShowInfoDrawer] = useState(false);
 	const [activeChannelName, setActiveChannelName] = useState<string | null>(null);
 	const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
+	// The player's controls go through the active destination, which is
+	// always this device for now.
+	const playback = useLocalPlayback(mpv, activeChannel);
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
 	const [seriesEpisodes, setSeriesEpisodes] = useState<Channel[]>([]);
 	const { isFullscreen, setFullscreen } = useFullscreen();
@@ -483,7 +487,7 @@ export const PlayerView = () => {
 			if (saved && shouldOfferResume(saved.positionSeconds, saved.durationSeconds)) {
 				const s = mpvStateRef.current;
 				const wasPlaying = s.isPlaying && !s.isPaused;
-				if (wasPlaying) mpv.pause();
+				if (wasPlaying) playback.pause();
 				setPendingResume({
 					channel: ch,
 					position: saved.positionSeconds,
@@ -496,7 +500,7 @@ export const PlayerView = () => {
 			}
 			commitPlayback(ch, undefined, apply);
 		},
-		[mpv, mpvStateRef, flushProgress, commitPlayback]
+		[playback, mpvStateRef, flushProgress, commitPlayback]
 	);
 
 	const resolveResume = useCallback(
@@ -506,7 +510,7 @@ export const PlayerView = () => {
 			setPendingResume(null);
 			containerRef.current?.focus();
 			if (choice === "cancel") {
-				if (pending.wasPlaying) mpv.play();
+				if (pending.wasPlaying) playback.play();
 				if (pending.origin === "nav") navigate(-1);
 				return;
 			}
@@ -522,7 +526,7 @@ export const PlayerView = () => {
 				pending.apply
 			);
 		},
-		[pendingResume, mpv, navigate, commitPlayback]
+		[pendingResume, playback, navigate, commitPlayback]
 	);
 
 	// When the player is re-entered with a new item while the previous one kept
@@ -982,10 +986,10 @@ export const PlayerView = () => {
 			const s = mpvStateRef.current;
 			const run = nextSkip(lastSkipRef.current, s.position, s.duration, seconds, Date.now());
 			lastSkipRef.current = run;
-			mpv.seek(run.target);
+			playback.seek(run.target);
 			return run.total;
 		},
-		[mpv, mpvStateRef]
+		[playback, mpvStateRef]
 	);
 	// The tap layer keeps its clicks from the player, so a double-tap skip
 	// restarts the hide timer here, as a press on a skip button does. Hidden
@@ -1000,9 +1004,9 @@ export const PlayerView = () => {
 	const seekTo = useCallback(
 		(position: number) => {
 			lastSkipRef.current = null;
-			mpv.seek(position);
+			playback.seek(position);
 		},
-		[mpv]
+		[playback]
 	);
 
 	// --- Intros, recaps, credits and previews ---
@@ -1110,9 +1114,9 @@ export const PlayerView = () => {
 			switch (action.type) {
 				case "togglePlay":
 					if (s.isPaused || !s.isPlaying) {
-						mpv.play();
+						playback.play();
 					} else {
-						mpv.pause();
+						playback.pause();
 					}
 					break;
 				case "toggleFullscreen":
@@ -1137,7 +1141,7 @@ export const PlayerView = () => {
 						MAX_VOLUME,
 						Math.max(0, Math.round(s.volume + action.delta))
 					);
-					mpv.setVolume(v);
+					playback.setVolume(v);
 					flashOsd(`Volume ${v}%`);
 					break;
 				}
@@ -1171,7 +1175,7 @@ export const PlayerView = () => {
 						// The unmount cleanup records the elapsed time when the route changes.
 						flushProgress();
 						stoppedRef.current = true;
-						mpv.stop();
+						playback.stop();
 						navigate("/");
 					}
 					break;
@@ -1180,6 +1184,7 @@ export const PlayerView = () => {
 		},
 		[
 			mpv,
+			playback,
 			pendingResume,
 			showShortcuts,
 			isFullscreen,
@@ -1207,9 +1212,9 @@ export const PlayerView = () => {
 		recordEnd();
 		flushProgress();
 		stoppedRef.current = true;
-		mpv.stop();
+		playback.stop();
 		navigate("/");
-	}, [mpv, navigate, flushProgress, recordEnd]);
+	}, [playback, navigate, flushProgress, recordEnd]);
 
 	// Closing mpv's own window stops playback, like the stop button.
 	const handleStopRef = useLatestRef(handleStop);
@@ -1379,8 +1384,8 @@ export const PlayerView = () => {
 					}}
 					visible={showControls}
 					isFullscreen={isFullscreen}
-					onPlay={mpv.play}
-					onPause={mpv.pause}
+					onPlay={playback.play}
+					onPause={playback.pause}
 					onStop={handleStop}
 					onSeek={seekTo}
 					skip={seekable ? skip : undefined}
@@ -1390,7 +1395,7 @@ export const PlayerView = () => {
 					// or after it fails, and the spinner or the error has the middle
 					// to itself.
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
-					onVolumeChange={mpv.setVolume}
+					onVolumeChange={playback.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
 					onInfo={hasInfo ? () => setShowInfoDrawer(true) : undefined}
