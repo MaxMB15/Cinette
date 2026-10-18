@@ -9,9 +9,9 @@ fn a_session_gets_a_random_id_and_is_found_by_its_connection() {
     let now = Instant::now();
     let mut sessions = Sessions::new();
     assert!(sessions.is_empty());
-    let a = sessions.open(peer("A"), ConnId(1), now).unwrap();
+    let a = sessions.open(peer("A"), ConnId(1), now).unwrap().0;
     assert!(!sessions.is_empty());
-    let b = sessions.open(peer("B"), ConnId(2), now).unwrap();
+    let b = sessions.open(peer("B"), ConnId(2), now).unwrap().0;
     assert_eq!(a.id.len(), 32);
     assert_ne!(a.id, b.id);
     assert_eq!(sessions.by_conn(ConnId(2)).unwrap().id, b.id);
@@ -22,8 +22,10 @@ fn a_device_with_a_session_gets_a_new_one_in_its_place() {
     let now = Instant::now();
     let mut sessions = Sessions::new();
     let p = peer("P");
-    let first = sessions.open(p.clone(), ConnId(1), now).unwrap();
-    let second = sessions.open(p, ConnId(2), now).unwrap();
+    let (first, none) = sessions.open(p.clone(), ConnId(1), now).unwrap();
+    assert_eq!(none, None);
+    let (second, old) = sessions.open(p, ConnId(2), now).unwrap();
+    assert_eq!(old, Some(ConnId(1)));
     assert_ne!(first.id, second.id);
     assert_eq!(sessions.list().len(), 1);
 }
@@ -46,7 +48,7 @@ fn only_the_same_device_resumes_and_only_in_time() {
     let now = Instant::now();
     let mut sessions = Sessions::new();
     let p = peer("P");
-    let s = sessions.open(p.clone(), ConnId(1), now).unwrap();
+    let s = sessions.open(p.clone(), ConnId(1), now).unwrap().0;
     sessions.detach(ConnId(1), now);
     let other = peer("Q");
     assert_eq!(
@@ -78,7 +80,7 @@ fn resuming_a_session_still_connected_hands_back_the_old_connection() {
     let now = Instant::now();
     let mut sessions = Sessions::new();
     let p = peer("P");
-    let s = sessions.open(p.clone(), ConnId(1), now).unwrap();
+    let s = sessions.open(p.clone(), ConnId(1), now).unwrap().0;
     assert_eq!(
         sessions.resume(&s.id, &p.id, ConnId(2), now),
         Ok(Some(ConnId(1)))
@@ -107,7 +109,7 @@ fn dropped_sessions_end_after_the_grace_period() {
 fn end_and_end_all() {
     let now = Instant::now();
     let mut sessions = Sessions::new();
-    let a = sessions.open(peer("A"), ConnId(1), now).unwrap();
+    let a = sessions.open(peer("A"), ConnId(1), now).unwrap().0;
     sessions.open(peer("B"), ConnId(2), now).unwrap();
     assert_eq!(sessions.end(&a.id).unwrap().id, a.id);
     assert!(sessions.end(&a.id).is_none());

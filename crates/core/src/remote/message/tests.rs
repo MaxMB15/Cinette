@@ -205,6 +205,34 @@ fn device_types_read_back_from_their_record_value() {
 }
 
 #[test]
+fn values_from_a_newer_version_read_as_unknown() {
+    let read = |value: &str| serde_json::Value::String(value.into());
+    assert_eq!(
+        serde_json::from_value::<Feature>(read("transfer")).unwrap(),
+        Feature::Unknown
+    );
+    assert_eq!(
+        serde_json::from_value::<Vec<Feature>>(json!(["control", "transfer"])).unwrap(),
+        [Feature::Control, Feature::Unknown]
+    );
+    assert_eq!(
+        serde_json::from_value::<DeviceType>(read("windows-tablet")).unwrap(),
+        DeviceType::Other
+    );
+    assert_eq!(DeviceType::Other.as_str(), "other");
+    assert_eq!(
+        decode(&bytes(json!({"v": 1, "type": "closed", "reason": "sleeping"}))),
+        Ok(Message::Closed {
+            reason: CloseReason::Unknown
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ErrorCode>(read("too_hot")).unwrap(),
+        ErrorCode::Unknown
+    );
+}
+
+#[test]
 fn a_message_leaves_room_for_the_noise_tag() {
     // Noise sends at most 65535 bytes, 16 of them its tag.
     assert_eq!(MAX_MESSAGE, 65_519);

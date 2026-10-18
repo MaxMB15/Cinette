@@ -81,6 +81,7 @@ fn the_default_name_is_the_device_type() {
     let settings = RemoteSettings::default();
     assert_eq!(settings.name(DeviceType::Mac), "Mac");
     assert_eq!(settings.name(DeviceType::FireTv), "Fire TV");
+    assert_eq!(settings.name(DeviceType::Other), "Device");
     let blank = RemoteSettings {
         device_name: Some("  \n ".into()),
         ..RemoteSettings::default()

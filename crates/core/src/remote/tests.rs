@@ -777,6 +777,26 @@ fn another_device_cant_take_over_a_session() {
 }
 
 #[test]
+fn a_new_session_from_the_same_device_closes_its_old_connection() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let key = DeviceKey::generate();
+    let a = net.connect_with(key.clone(), "Phone", None);
+    let b = net.connect_with(key, "Phone", None);
+    assert_eq!(net.clients[a].closed_reason(), Some(CloseReason::Cancelled));
+    assert!(net.clients[b].connected());
+    assert_eq!(net.target.sessions().len(), 1);
+
+    // Only the new connection gets state, and Never allow leaves nothing open.
+    let before = net.clients[a].states().len();
+    net.set_state(playing("m", 1.0));
+    assert_eq!(net.clients[a].states().len(), before);
+    assert_eq!(net.clients[b].last_state().map(|s| s.position), Some(1.0));
+    net.set_mode(ControlMode::Never);
+    assert_eq!(net.clients[b].closed_reason(), Some(CloseReason::Revoked));
+    assert!(net.target.sessions().is_empty());
+}
+
+#[test]
 fn a_quiet_connection_times_out_and_can_resume() {
     let mut net = Net::with_mode(ControlMode::Always);
     let key = DeviceKey::generate();

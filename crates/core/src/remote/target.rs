@@ -541,9 +541,12 @@ impl Target {
                 self.set_stage(conn, Stage::Ready(auth));
                 self.close(conn, Some(reason), actions);
             }
-            Ok(session) => {
-                // A device that had a dropped session got a new one, and the
-                // old connection, if any, is gone.
+            Ok((session, old)) => {
+                // A device that had a session got a new one. Its old
+                // connection, if it still has one, mustn't keep control.
+                if let Some(old) = old {
+                    self.close(old, Some(CloseReason::Cancelled), actions);
+                }
                 let state = self.versioned();
                 send(
                     &mut auth,

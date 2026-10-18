@@ -56,14 +56,19 @@ impl Sessions {
 
     /// Starts a session for a controller that was let in. A controller that
     /// already has one, say a dropped one, gets a new session in its place.
-    pub fn open(&mut self, peer: Peer, conn: ConnId, now: Instant) -> Result<Session, CloseReason> {
+    /// Also returns the connection the replaced session was on, if it still
+    /// had one, which should be closed.
+    pub fn open(
+        &mut self,
+        peer: Peer,
+        conn: ConnId,
+        now: Instant,
+    ) -> Result<(Session, Option<ConnId>), CloseReason> {
         let replaced = self.list.iter().position(|s| s.peer.id == peer.id);
         if replaced.is_none() && self.list.len() >= MAX_SESSIONS {
             return Err(CloseReason::Busy);
         }
-        if let Some(i) = replaced {
-            self.list.remove(i);
-        }
+        let old = replaced.and_then(|i| self.list.remove(i).conn);
         let session = Session {
             id: super::to_hex(&super::random_bytes::<16>()),
             peer,
@@ -72,7 +77,7 @@ impl Sessions {
             dropped_at: None,
         };
         self.list.push(session.clone());
-        Ok(session)
+        Ok((session, old))
     }
 
     pub fn by_conn(&self, conn: ConnId) -> Option<&Session> {

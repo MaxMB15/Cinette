@@ -37,6 +37,9 @@ pub enum DeviceType {
     AndroidTablet,
     AndroidTv,
     FireTv,
+    /// A type from a newer version of Cinette.
+    #[serde(other)]
+    Other,
 }
 
 impl DeviceType {
@@ -64,6 +67,7 @@ impl DeviceType {
             DeviceType::AndroidTablet => "android-tablet",
             DeviceType::AndroidTv => "android-tv",
             DeviceType::FireTv => "fire-tv",
+            DeviceType::Other => "other",
         }
     }
 
@@ -82,6 +86,9 @@ pub enum Feature {
     History,
     /// Sending providers to the target, answer 4 to spec 5. Not handled yet.
     Providers,
+    /// A feature from a newer version of Cinette, which this one ignores.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Who a device says it is, sent inside the handshake.
@@ -149,6 +156,9 @@ pub enum CloseReason {
     Timeout,
     /// The app is quitting, or reset its identity.
     Shutdown,
+    /// A reason from a newer version of Cinette.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Why a single command or query failed. The session goes on.
@@ -163,6 +173,9 @@ pub enum ErrorCode {
     RateLimited,
     /// The target couldn't carry it out, for example because its player failed.
     Failed,
+    /// A code from a newer version of Cinette.
+    #[serde(other)]
+    Unknown,
 }
 
 /// What the target is doing.

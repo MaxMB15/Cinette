@@ -100,6 +100,7 @@ pub fn default_name(device_type: DeviceType) -> &'static str {
         DeviceType::AndroidTablet => "Android tablet",
         DeviceType::AndroidTv => "Android TV",
         DeviceType::FireTv => "Fire TV",
+        DeviceType::Other => "Device",
     }
 }
 
