@@ -2,16 +2,19 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! Converting a stream on this device for a receiver that can't play it as
-//! it is. The video is copied, and only the audio the receiver can't play
-//! becomes AAC. A full video transcode only runs on a hardware encoder.
-//! ffmpeg writes live Matroska to its standard output, which the app serves
-//! to the receiver over the local network.
+//! it is. The video is copied, and an audio track the receiver plays is
+//! copied too when there is one. Otherwise the audio becomes stereo AAC. A
+//! full video transcode only runs on a hardware encoder. ffmpeg writes live
+//! Matroska to its standard output, which the app serves to the receiver
+//! over the local network.
 
 pub mod mkv;
 pub mod serve;
 
 #[cfg(test)]
 mod tests;
+
+use crate::streams::probe::AudioTrack;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoPlan {
@@ -30,8 +33,44 @@ pub enum AudioPlan {
     /// The stream has no audio.
     None,
     Copy,
-    /// Stereo AAC.
-    Aac,
+    /// Stereo AAC. `downmix` asks the decoder for stereo, which AC-3,
+    /// E-AC-3 and DTS decoders do with the mix levels in the stream.
+    Aac {
+        downmix: bool,
+    },
+}
+
+/// The codecs a Cast receiver plays as they are, by ffmpeg's names. A track
+/// in one of these is copied rather than converted.
+const PLAYABLE_AUDIO: [&str; 4] = ["aac", "mp3", "opus", "vorbis"];
+/// The codecs whose decoders mix down to stereo themselves.
+const DECODER_DOWNMIX: [&str; 3] = ["ac3", "eac3", "dts"];
+
+/// Which audio track to keep, and how. A track in `language` comes first
+/// when there is one, and among those, one the receiver plays as it is, so
+/// there's no second lossy pass. Otherwise the default track is converted.
+pub fn pick_audio(tracks: &[AudioTrack], language: Option<&str>) -> (usize, AudioPlan) {
+    let in_language: Vec<usize> = (0..tracks.len())
+        .filter(|&i| language.is_some_and(|l| tracks[i].language.as_deref() == Some(l)))
+        .collect();
+    let mut ordered = if in_language.is_empty() {
+        (0..tracks.len()).collect()
+    } else {
+        in_language
+    };
+    // The default track first, then the rest in order.
+    ordered.sort_by_key(|&i| !tracks[i].default);
+    let Some(&first) = ordered.first() else {
+        return (0, AudioPlan::None);
+    };
+    if let Some(&copy) = ordered
+        .iter()
+        .find(|&&i| PLAYABLE_AUDIO.contains(&tracks[i].codec.as_str()))
+    {
+        return (copy, AudioPlan::Copy);
+    }
+    let downmix = DECODER_DOWNMIX.contains(&tracks[first].codec.as_str());
+    (first, AudioPlan::Aac { downmix })
 }
 
 /// A hardware H.264 encoder the bundled ffmpeg can use.
@@ -47,6 +86,34 @@ impl HardwareEncoder {
             HardwareEncoder::VideoToolbox => "h264_videotoolbox",
         }
     }
+}
+
+/// The AAC encoder the bundled ffmpeg uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AacEncoder {
+    /// ffmpeg's own, on Linux.
+    Ffmpeg,
+    /// Apple's, from AudioToolbox, on macOS. It's rated above ffmpeg's and
+    /// ran faster in a test on a Mac.
+    AudioToolbox,
+}
+
+impl AacEncoder {
+    /// The arguments for stereo at 256 kbps. A second lossy pass needs the
+    /// headroom, and the local network has the bandwidth.
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            AacEncoder::Ffmpeg => &["-c:a", "aac", "-b:a", "256k"],
+            AacEncoder::AudioToolbox => &["-c:a", "aac_at", "-aac_at_mode", "cvbr", "-b:a", "256k"],
+        }
+    }
+}
+
+/// The encoders this device's ffmpeg has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Encoders {
+    pub video: Option<HardwareEncoder>,
+    pub aac: AacEncoder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,11 +133,7 @@ pub struct NoEncoder;
 
 /// The ffmpeg arguments that convert `url` by `plan` and write live
 /// Matroska to standard output.
-pub fn args(
-    url: &str,
-    plan: &Plan,
-    encoder: Option<HardwareEncoder>,
-) -> Result<Vec<String>, NoEncoder> {
+pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, NoEncoder> {
     let mut args: Vec<String> = [
         "-hide_banner",
         "-nostdin",
@@ -89,6 +152,9 @@ pub fn args(
     ]
     .map(String::from)
     .to_vec();
+    if let AudioPlan::Aac { downmix: true } = plan.audio {
+        args.extend(["-downmix".into(), "stereo".into()]);
+    }
     if let Some(at) = plan.start_at.filter(|at| *at > 0.0) {
         args.extend(["-ss".into(), format!("{at:.3}")]);
     }
@@ -106,10 +172,11 @@ pub fn args(
         VideoPlan::None => {}
         VideoPlan::Copy => args.extend(["-c:v".into(), "copy".into()]),
         VideoPlan::Transcode { deinterlace } => {
-            let encoder = encoder.ok_or(NoEncoder)?;
-            // 8-bit 4:2:0, which every H.264 receiver plays.
+            let encoder = encoders.video.ok_or(NoEncoder)?;
+            // bwdif makes a frame of each field, so 50i stays 50 frames a
+            // second. Then 8-bit 4:2:0, which every H.264 receiver plays.
             let filters = if deinterlace {
-                "yadif=mode=send_frame,format=yuv420p"
+                "bwdif=mode=send_field,format=yuv420p"
             } else {
                 "format=yuv420p"
             };
@@ -119,16 +186,18 @@ pub fn args(
                     filters,
                     "-c:v",
                     encoder.name(),
+                    // Enough for 1080p50.
                     "-b:v",
-                    "6M",
+                    "10M",
                     "-maxrate",
-                    "8M",
-                    "-bufsize",
                     "12M",
-                    // A keyframe every 2 s at 25 fps, so a receiver that
-                    // joins late waits little for the next cluster.
-                    "-g",
-                    "50",
+                    "-bufsize",
+                    "20M",
+                    // A keyframe every 2 s whatever the frame rate, so a
+                    // receiver that joins late waits little for the next
+                    // cluster.
+                    "-force_key_frames",
+                    "expr:gte(t,n_forced*2)",
                 ]
                 .map(String::from),
             );
@@ -137,8 +206,12 @@ pub fn args(
     match plan.audio {
         AudioPlan::None => {}
         AudioPlan::Copy => args.extend(["-c:a".into(), "copy".into()]),
-        AudioPlan::Aac => {
-            args.extend(["-c:a", "aac", "-b:a", "192k", "-ac", "2"].map(String::from))
+        AudioPlan::Aac { .. } => {
+            args.extend(encoders.aac.args().iter().map(|a| a.to_string()));
+            // Stereo whatever the decoder gave, until a receiver is shown to
+            // play 5.1 AAC with sound. After a decoder's own downmix this
+            // changes nothing.
+            args.extend(["-ac".into(), "2".into()]);
         }
     }
     args.extend(

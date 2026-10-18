@@ -133,12 +133,12 @@ fn element_head(bytes: &[u8]) -> Result<Option<(u32, Option<u64>, usize)>, MkvEr
     };
     let id = head[..id_len]
         .iter()
-        .fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
+        .fold(0u32, |acc, &b| acc * 256 + u32::from(b));
     // The size without its length marker.
     let marker_free = u64::from(size_first) & (0xFF >> size_len);
     let size = head[id_len + 1..]
         .iter()
-        .fold(marker_free, |acc, &b| (acc << 8) | u64::from(b));
+        .fold(marker_free, |acc, &b| acc * 256 + u64::from(b));
     let unknown = size == (1u64 << (7 * size_len)) - 1;
     Ok(Some((id, (!unknown).then_some(size), id_len + size_len)))
 }

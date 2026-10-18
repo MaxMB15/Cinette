@@ -46,10 +46,12 @@ from pathlib import Path
 # lines no longer match.
 DOWNLOAD_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max 30 -i URL -c copy -movflags +faststart -f mp4 -progress pipe:1 -nostats -y DEST"
 RECORDING_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max 30 -rw_timeout 15000000 -reconnect_on_network_error 1 -stats_period 5 -i URL -c copy -f mpegts -progress pipe:1 -nostats -t 60 -y DEST"
-# What converting a stream for a Cast receiver runs, from mvp_core::convert::args,
-# copying the video and turning the audio into AAC. The app writes to pipe:1,
+# What converting a stream for a Cast receiver runs on Linux, from
+# mvp_core::convert::args, copying the video and turning the audio into AAC. The app writes to pipe:1,
 # and the test writes to a file in its place.
-CONVERT_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -c:a aac -b:a 192k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+# The same for AC-3, E-AC-3 and DTS, whose decoders mix down to stereo.
+CONVERT_DOWNMIX_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -downmix stereo -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
 
 # muxer_for_container in crates/core/src/downloads/ffmpeg.rs.
 MUXERS = {
@@ -328,8 +330,10 @@ class Case:
     # crates/core/src/downloads/recording.rs reads these lines.
     error: str = ""
     recording: bool = False
-    # Run CONVERT_ARGS instead of a download's or a recording's.
+    # Run CONVERT_ARGS instead of a download's or a recording's, or
+    # CONVERT_DOWNMIX_ARGS with downmix.
     converting: bool = False
+    downmix: bool = False
     # "http", "https", or "tls13" or "tls12", a server that only takes that
     # TLS version.
     server: str = "http"
@@ -368,12 +372,13 @@ def cases() -> list[Case]:
         Case("Converting MPEG-2 and MP2 for Cast", "/media/mpeg2.ts", "mkv",
              ["aac", "mpeg2video"], converting=True),
         Case("Converting HEVC and AC-3 for Cast", "/media/hevc.ts", "mkv", ["aac", "hevc"],
-             converting=True),
-        Case("Converting DTS for Cast", "/media/dts.mkv", "mkv", av, converting=True),
+             converting=True, downmix=True),
+        Case("Converting DTS for Cast", "/media/dts.mkv", "mkv", av, converting=True,
+             downmix=True),
         Case("Converting Opus for Cast", "/media/vp9.webm", "mkv", ["aac", "vp9"],
              converting=True),
         Case("Converting E-AC-3 in HLS for Cast", "/media/hls-eac3/index.m3u8", "mkv", av,
-             converting=True),
+             converting=True, downmix=True),
         Case("HLS", "/media/hls/index.m3u8", "mkv", av),
         Case("HLS with fMP4 segments", "/media/hls-fmp4/index.m3u8", "mkv", av),
         Case("HLS with AES-128", "/media/hls-aes/index.m3u8", "mkv", av),
@@ -414,7 +419,7 @@ def cases() -> list[Case]:
 
 def app_args(case: Case, url: str, dest: Path) -> list[str]:
     if case.converting:
-        args = CONVERT_ARGS.split()
+        args = (CONVERT_DOWNMIX_ARGS if case.downmix else CONVERT_ARGS).split()
         return [url if arg == "URL" else str(dest) if arg == "pipe:1" else arg for arg in args]
     args = (RECORDING_ARGS if case.recording else DOWNLOAD_ARGS).split()
     muxer = MUXERS[case.container]

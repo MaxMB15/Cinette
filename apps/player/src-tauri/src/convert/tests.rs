@@ -5,11 +5,16 @@
 //! to a "receiver" on loopback. The copies here need nothing the pinned
 //! sidecar lacks.
 
-use super::support::{read_encoders, test_encode_args};
+use super::support::{choose, read_encoders, test_encode_args, Listed};
 use super::*;
-use crate::downloads::test_support::{missing_url, video_url};
+use crate::downloads::test_support::{missing_url, process_runs, video_url};
 use crate::test_support::TestApp;
-use mvp_core::convert::{AudioPlan, VideoPlan};
+use mvp_core::convert::{AacEncoder, AudioPlan, Encoders, HardwareEncoder, VideoPlan};
+
+const NO_HARDWARE: Encoders = Encoders {
+    video: None,
+    aac: AacEncoder::Ffmpeg,
+};
 use mvp_core::http::test_server::{self, serve_once};
 
 const LOOPBACK: IpAddr = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
@@ -30,7 +35,7 @@ async fn start_copy(
     source: &str,
     receiver: IpAddr,
 ) -> Result<Conversion, ConvertError> {
-    let conversion = start(&app.handle(), source, &copy_audio(), None, receiver).await?;
+    let conversion = start(&app.handle(), source, &copy_audio(), NO_HARDWARE, receiver).await?;
     conversion
         .server
         .files
@@ -41,9 +46,7 @@ async fn start_copy(
 #[tokio::test]
 async fn serves_live_matroska_from_this_computers_address() {
     let app = TestApp::new();
-    let conversion = start_copy(&app, &video_url("convert"), LOOPBACK)
-        .await
-        .unwrap();
+    let conversion = start_copy(&app, &live_wav(false), LOOPBACK).await.unwrap();
     let path = conversion.url.strip_prefix("http://127.0.0.1:").unwrap();
     let (_, path) = path.split_once('/').unwrap();
     let token = path
@@ -61,24 +64,17 @@ async fn serves_live_matroska_from_this_computers_address() {
     assert_eq!(headers["content-type"], "video/x-matroska");
     assert!(headers.get("content-length").is_none());
     assert_eq!(headers["access-control-allow-origin"], "*");
-    // The header, then at least one cluster.
-    let mut body = Vec::new();
-    while body.len() < 64 * 1024 {
-        body.extend_from_slice(&response.chunk().await.unwrap().unwrap());
-    }
-    assert_eq!(&body[..4], &[0x1A, 0x45, 0xDF, 0xA3]);
-    assert!(body.windows(4).any(|w| w == [0x1F, 0x43, 0xB6, 0x75]));
+    let pieces = header_and_a_cluster(&mut response).await;
+    let Piece::Header(header) = &pieces[0] else {
+        panic!("the stream starts with its header");
+    };
+    assert_eq!(&header[..4], &[0x1A, 0x45, 0xDF, 0xA3]);
 
     // A second request, as a receiver makes after a first look, gets the
-    // header and starts at a cluster.
+    // header too, then starts at a cluster.
     let mut again = client.get(&conversion.url).send().await.unwrap();
-    let mut body = Vec::new();
-    while body.len() < 64 * 1024 {
-        body.extend_from_slice(&again.chunk().await.unwrap().unwrap());
-    }
-    let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
-    let pieces = splitter.push(&body).unwrap();
-    assert!(matches!(pieces[0], Piece::Header(_)));
+    let pieces = header_and_a_cluster(&mut again).await;
+    assert_eq!(pieces[0], Piece::Header(header.clone()));
     assert!(matches!(&pieces[1], Piece::Element { cluster: true, .. }));
 }
 
@@ -198,7 +194,7 @@ async fn a_transcode_without_an_encoder_never_starts() {
         video: VideoPlan::Transcode { deinterlace: true },
         ..copy_audio()
     };
-    let err = start(&app.handle(), &video_url("x"), &plan, None, LOOPBACK)
+    let err = start(&app.handle(), &video_url("x"), &plan, NO_HARDWARE, LOOPBACK)
         .await
         .err()
         .unwrap();
@@ -211,13 +207,55 @@ async fn a_transcode_without_an_encoder_never_starts() {
 
 #[test]
 fn reads_the_encoders_ffmpeg_lists() {
-    let list = "Encoders:\n V....D = Video\n ------\n A....D aac                  AAC (Advanced Audio Coding)\n V....D h264_videotoolbox    VideoToolbox H.264 Encoder\n S..... webvtt               WebVTT subtitle\n";
-    let (aac, encoder) = read_encoders(list);
-    assert!(aac);
-    assert_eq!(encoder.is_some(), cfg!(target_os = "macos"));
-    let (aac, encoder) = read_encoders(" S..... webvtt  WebVTT\n A....D aac_at  AudioToolbox\n");
-    assert!(!aac);
-    assert_eq!(encoder, None);
+    let list = "Encoders:\n V....D = Video\n ------\n A....D aac                  AAC (Advanced Audio Coding)\n A....D aac_at               aac (AudioToolbox)\n V....D h264_videotoolbox    VideoToolbox H.264 Encoder\n S..... webvtt               WebVTT subtitle\n";
+    assert_eq!(
+        read_encoders(list),
+        Listed {
+            aac: true,
+            aac_at: true,
+            videotoolbox: true
+        }
+    );
+    assert_eq!(
+        read_encoders(" S..... webvtt  WebVTT\n A....D aac_latm  x\n"),
+        Listed::default()
+    );
+}
+
+#[test]
+fn chooses_apples_encoders_on_a_mac_and_ffmpegs_elsewhere() {
+    let all = Listed {
+        aac: true,
+        aac_at: true,
+        videotoolbox: true,
+    };
+    assert_eq!(
+        choose(all, true),
+        Some(Encoders {
+            video: Some(HardwareEncoder::VideoToolbox),
+            aac: AacEncoder::AudioToolbox
+        })
+    );
+    assert_eq!(choose(all, false), Some(NO_HARDWARE));
+    let no_aac_at = Listed {
+        aac_at: false,
+        ..all
+    };
+    assert_eq!(choose(no_aac_at, true).unwrap().aac, AacEncoder::Ffmpeg);
+    let only_aac_at = Listed {
+        aac: false,
+        videotoolbox: false,
+        ..all
+    };
+    assert_eq!(
+        choose(only_aac_at, true),
+        Some(Encoders {
+            video: None,
+            aac: AacEncoder::AudioToolbox
+        })
+    );
+    assert_eq!(choose(only_aac_at, false), None);
+    assert_eq!(choose(Listed::default(), true), None);
 }
 
 #[test]
@@ -236,10 +274,93 @@ async fn reports_what_this_computers_ffmpeg_can_convert() {
     // Only a Mac has a hardware encoder the app uses.
     if !cfg!(target_os = "macos") {
         assert!(!support.hardware_encoder);
-        assert_eq!(support.encoder, None);
+        assert!(support.encoders.is_none_or(|e| e.video.is_none()));
     }
+    assert_eq!(support.convert, support.encoders.is_some());
     assert!(support.convert || !support.hardware_encoder);
     let json = serde_json::to_value(support).unwrap();
     assert_eq!(json.as_object().unwrap().len(), 2);
     assert_eq!(json["convert"], support.convert);
+}
+
+/// A live WAV, like a radio channel: a header with no end, then audio at
+/// four times real time for as long as the connection stays open. With
+/// `pause`, it sends half a second of audio and then nothing more, so
+/// ffmpeg waits with the stream open.
+fn live_wav(pause: bool) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let mut wav = b"RIFF\xff\xff\xff\x7fWAVEfmt ".to_vec();
+                wav.extend_from_slice(&16u32.to_le_bytes());
+                wav.extend_from_slice(&1u16.to_le_bytes());
+                wav.extend_from_slice(&1u16.to_le_bytes());
+                wav.extend_from_slice(&8000u32.to_le_bytes());
+                wav.extend_from_slice(&8000u32.to_le_bytes());
+                wav.extend_from_slice(&1u16.to_le_bytes());
+                wav.extend_from_slice(&8u16.to_le_bytes());
+                wav.extend_from_slice(b"data\xff\xff\xff\x7f");
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\n\r\n";
+                if stream.write_all(head.as_bytes()).is_err() || stream.write_all(&wav).is_err() {
+                    return;
+                }
+                // Half a second of audio every eighth of a second.
+                let chunk = [0x80u8; 4000];
+                loop {
+                    if stream.write_all(&chunk).is_err() {
+                        return;
+                    }
+                    if pause {
+                        // Keep the connection open without a word.
+                        std::thread::sleep(Duration::from_secs(120));
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(125));
+                }
+            });
+        }
+    });
+    format!("http://{address}/live.wav")
+}
+
+/// Reads a response until it has given the header and a whole cluster.
+async fn header_and_a_cluster(response: &mut reqwest::Response) -> Vec<Piece> {
+    let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
+    let mut pieces = Vec::new();
+    while !pieces
+        .iter()
+        .any(|p| matches!(p, Piece::Element { cluster: true, .. }))
+    {
+        let chunk = tokio::time::timeout(Duration::from_secs(20), response.chunk())
+            .await
+            .expect("a cluster within 20 s")
+            .unwrap()
+            .expect("more of the stream");
+        pieces.extend(splitter.push(&chunk).unwrap());
+    }
+    pieces
+}
+
+#[tokio::test]
+async fn dropping_a_conversion_ends_its_ffmpeg() {
+    let app = TestApp::new();
+    let conversion = start_copy(&app, &live_wav(true), LOOPBACK).await.unwrap();
+    let pid = conversion.pid.unwrap();
+    assert!(process_runs(pid));
+    assert!(conversion.ended.borrow().is_none());
+    drop(conversion);
+    // The reader task kills ffmpeg on this runtime, so wait without
+    // blocking it.
+    for _ in 0..100 {
+        if !process_runs(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("ffmpeg still runs after the conversion was dropped");
 }

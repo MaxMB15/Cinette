@@ -123,18 +123,20 @@ case "$(uname -s)" in
     CONFIGURE+=(--enable-openssl --pkg-config-flags=--static "--extra-ldflags=-Wl,-dead_strip_dylibs -Wl,-dead_strip")
     # A full video transcode for a Cast receiver runs on VideoToolbox, the
     # Mac's hardware encoder. MPEG-2 and interlaced channels need it.
-    # Deinterlacing and turning 10-bit video into 8-bit take yadif, scale and
-    # swscale.
-    ENCODERS+=,h264_videotoolbox
-    FILTERS+=,scale,yadif
-    CONFIGURE+=(--enable-videotoolbox --enable-swscale)
+    # Deinterlacing to a frame per field and turning 10-bit video into 8-bit
+    # take bwdif, scale and swscale. Audio for a receiver becomes AAC with
+    # Apple's encoder, aac_at, which is part of the system and ran faster
+    # than ffmpeg's own in a test on a Mac.
+    ENCODERS+=,aac_at,h264_videotoolbox
+    FILTERS+=,bwdif,scale
+    CONFIGURE+=(--enable-audiotoolbox --enable-videotoolbox --enable-swscale)
     # On an Intel Mac, --disable-x86asm saves needing nasm, as on Linux below.
     if [[ "$(uname -m)" == x86_64 ]]; then
       CONFIGURE+=(--disable-x86asm)
     fi
     # libSystem and zlib.
-    # libSystem, zlib, and the frameworks VideoToolbox needs.
-    ALLOWED_LIBS='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libz\.1\.dylib|/System/Library/Frameworks/(VideoToolbox|CoreMedia|CoreVideo|CoreFoundation|CoreServices)\.framework/Versions/A/[A-Za-z]+)$'
+    # libSystem, zlib, and the frameworks AudioToolbox and VideoToolbox need.
+    ALLOWED_LIBS='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libz\.1\.dylib|/System/Library/Frameworks/(AudioToolbox|CoreAudio|VideoToolbox|CoreMedia|CoreVideo|CoreFoundation|CoreServices)\.framework/Versions/A/[A-Za-z]+)$'
     ;;
   Linux)
     PLATFORM=linux

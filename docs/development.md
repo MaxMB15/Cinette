@@ -113,8 +113,9 @@ details such as the picture size, and the ASS and WebVTT encoders only decide wh
 subtitle tracks ffmpeg keeps. Casting to a receiver that can't play a stream's audio
 converts it: the build has the AAC encoder, the decoders for the audio it converts
 (MP2, AC-3, E-AC-3, DTS and Opus) and the audio filters that turn any layout into
-stereo. On macOS it also has VideoToolbox's H.264 encoder, with `yadif` and `scale`,
-for MPEG-2 and interlaced channels. The `rawvideo` demuxer and decoder and the `null`
+stereo. On macOS it converts audio with Apple's `aac_at` encoder from AudioToolbox,
+and has VideoToolbox's H.264 encoder, with `bwdif` and `scale`, for MPEG-2 and
+interlaced channels. The `rawvideo` demuxer and decoder and the `null`
 muxer only serve the app's one-frame check that the hardware encoder works. It can't
 read DASH, which would need libxml2.
 

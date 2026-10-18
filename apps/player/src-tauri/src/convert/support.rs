@@ -8,7 +8,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use mvp_core::convert::HardwareEncoder;
+use mvp_core::convert::{AacEncoder, Encoders, HardwareEncoder};
 use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tokio::sync::OnceCell;
@@ -19,24 +19,45 @@ use tokio::sync::OnceCell;
 pub struct Support {
     /// It can remux and turn audio into AAC.
     pub convert: bool,
+    /// The encoders to convert with, when it can.
     #[serde(skip)]
-    pub encoder: Option<HardwareEncoder>,
+    pub encoders: Option<Encoders>,
     /// A hardware H.264 encoder works.
     pub hardware_encoder: bool,
 }
 
-/// The encoders `ffmpeg -encoders` lists: AAC, and the hardware encoder
-/// this platform would use.
-pub fn read_encoders(list: &str) -> (bool, Option<HardwareEncoder>) {
+/// What `ffmpeg -encoders` lists, of the encoders a conversion uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Listed {
+    pub aac: bool,
+    pub aac_at: bool,
+    pub videotoolbox: bool,
+}
+
+pub fn read_encoders(list: &str) -> Listed {
     let names: Vec<&str> = list
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1))
         .collect();
-    let aac = names.contains(&"aac");
-    let encoder = (cfg!(target_os = "macos")
-        && names.contains(&HardwareEncoder::VideoToolbox.name()))
-    .then_some(HardwareEncoder::VideoToolbox);
-    (aac, encoder)
+    Listed {
+        aac: names.contains(&"aac"),
+        aac_at: names.contains(&"aac_at"),
+        videotoolbox: names.contains(&HardwareEncoder::VideoToolbox.name()),
+    }
+}
+
+/// The encoders to use from what's listed, on macOS or elsewhere, or `None`
+/// when there's no AAC encoder. A hardware encoder still has to pass a test.
+pub fn choose(listed: Listed, macos: bool) -> Option<Encoders> {
+    let aac = if macos && listed.aac_at {
+        AacEncoder::AudioToolbox
+    } else if listed.aac {
+        AacEncoder::Ffmpeg
+    } else {
+        return None;
+    };
+    let video = (macos && listed.videotoolbox).then_some(HardwareEncoder::VideoToolbox);
+    Some(Encoders { video, aac })
 }
 
 /// The arguments that encode one blank 64x64 frame, read from standard
@@ -78,38 +99,35 @@ pub async fn support<R: Runtime>(app: &AppHandle<R>) -> Support {
             let app = app.clone();
             tokio::task::spawn_blocking(move || check(&app))
                 .await
-                .unwrap_or(Support {
-                    convert: false,
-                    encoder: None,
-                    hardware_encoder: false,
-                })
+                .unwrap_or(NONE)
         })
         .await
 }
 
+const NONE: Support = Support {
+    convert: false,
+    encoders: None,
+    hardware_encoder: false,
+};
+
 fn check<R: Runtime>(app: &AppHandle<R>) -> Support {
-    let none = Support {
-        convert: false,
-        encoder: None,
-        hardware_encoder: false,
-    };
     let Some(list) = run(app, &["-hide_banner", "-encoders"], None) else {
-        return none;
+        return NONE;
     };
-    let (aac, encoder) = read_encoders(&String::from_utf8_lossy(&list));
-    if !aac {
-        return none;
-    }
+    let listed = read_encoders(&String::from_utf8_lossy(&list));
+    let Some(mut encoders) = choose(listed, cfg!(target_os = "macos")) else {
+        return NONE;
+    };
     // A listed hardware encoder can still fail, as in a virtual machine.
-    let encoder = encoder.filter(|e| {
+    encoders.video = encoders.video.filter(|e| {
         let args = test_encode_args(*e);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         run(app, &args, Some(&[0; FRAME_BYTES])).is_some()
     });
     Support {
         convert: true,
-        encoder,
-        hardware_encoder: encoder.is_some(),
+        encoders: Some(encoders),
+        hardware_encoder: encoders.video.is_some(),
     }
 }
 
