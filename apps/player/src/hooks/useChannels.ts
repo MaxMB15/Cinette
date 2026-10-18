@@ -176,26 +176,32 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const guideVersion = useSyncExternalStore(subscribeToGuide, getGuideVersion);
 
 	/**
-	 * Loads a list again with a new backend call, cancelling one already on
-	 * the way, which could answer from before a change. Returns the list, or
-	 * null when the call fails. A failure leaves the last list in place and
-	 * shows as the list's error.
+	 * Loads a list again with a new backend call. refetchQueries cancels a
+	 * call already on its way, which could answer from before a change.
+	 * Returns the list, or null when the call fails. A failure leaves the last
+	 * list in place and shows as the list's error.
 	 */
 	const reload = useCallback(
 		async <T>(queryKey: QueryKey): Promise<T | null> => {
-			await queryClient.refetchQueries({ queryKey, exact: true }, { cancelRefetch: true });
+			await queryClient.refetchQueries({ queryKey });
 			const state = queryClient.getQueryState<T>(queryKey);
 			return state?.status === "success" ? (state.data ?? null) : null;
 		},
+		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
 		[queryClient]
 	);
 
-	const refreshChannels = useCallback(async (): Promise<void> => {
-		await reload<Channel[]>(channelsQuery().queryKey);
-	}, [reload]);
+	const refreshChannels = useCallback(
+		async (): Promise<void> => {
+			await reload<Channel[]>(channelsQuery().queryKey);
+		},
+		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
+		[reload]
+	);
 
 	const refreshProviders = useCallback(
 		(): Promise<Provider[] | null> => reload<Provider[]>(providersQuery().queryKey),
+		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
 		[reload]
 	);
 
@@ -300,17 +306,16 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			try {
 				const newFavorite = await toggleFavoriteApi(channelId);
 				// Only this channel changes, so the list isn't loaded again.
-				queryClient.setQueryData(channelsQuery().queryKey, (prev) => {
-					const idx = prev?.findIndex((ch) => ch.id === channelId) ?? -1;
-					if (!prev || idx === -1) return prev;
-					const next = [...prev];
-					next[idx] = { ...next[idx], isFavorite: newFavorite };
-					return next;
-				});
+				queryClient.setQueryData(channelsQuery().queryKey, (prev) =>
+					prev?.map((ch) =>
+						ch.id === channelId ? { ...ch, isFavorite: newFavorite } : ch
+					)
+				);
 			} catch (e) {
 				setError(String(e));
 			}
 		},
+		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
 		[queryClient]
 	);
 

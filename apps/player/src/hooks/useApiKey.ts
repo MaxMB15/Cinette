@@ -178,15 +178,15 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		if (!key || testStatus === "testing") return;
 		const started = generation.current;
 		setTestStatus("testing");
-		// No ternary inside the try, which the React Compiler can't compile yet.
-		let valid = false;
-		let reached = true;
-		try {
-			valid = await service.test(key);
-		} catch {
-			reached = false;
-		}
-		const result: KeyTestStatus = !reached ? "unreachable" : valid ? "valid" : "invalid";
+		// Promise callbacks in place of a try, which the React Compiler can't
+		// compile with the ternary. Starting from a promise catches a check
+		// that throws before it returns one, as the try did.
+		const result = await Promise.resolve()
+			.then(() => service.test(key))
+			.then(
+				(valid): KeyTestStatus => (valid ? "valid" : "invalid"),
+				(): KeyTestStatus => "unreachable"
+			);
 		// An edit already cleared Testing, and the new text may have a check of
 		// its own on the way.
 		if (generation.current !== started) return;
