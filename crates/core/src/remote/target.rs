@@ -20,6 +20,18 @@
 //! anything but a request, a ping or a goodbye, is closed. One that has been
 //! let in gets [`ErrorCode::RateLimited`] for its commands and queries, and
 //! no answer to anything else.
+//!
+//! The platform layer has its part too:
+//!
+//! - The target can't tell who is connecting until the handshake proves it.
+//!   The listener should cap how many connections one address has open, say
+//!   at 4, on top of [`MAX_HANDSHAKES`] and [`MAX_CONNECTIONS`].
+//! - The handshake shows the target's id, name and device type to anyone who
+//!   connects. A device that isn't discoverable should listen only while it
+//!   has a session, connected or waiting to resume ([`Target::sessions`]).
+//! - [`ControlMode::Always`] lets in any device on the network that asks,
+//!   with no dialog and no code to compare. The settings screen should say
+//!   so where the user picks it.
 
 use super::catalog::{CatalogItem, CatalogQuery};
 use super::channel::Channel;

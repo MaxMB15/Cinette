@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ControlMode {
-    /// Accept requests without asking.
+    /// Accept every request without asking. That lets in any device on the
+    /// network that asks, with no dialog and no code to compare, so it suits
+    /// only a network the user trusts. The settings screen should say so.
     Always,
     /// Ask on this device for each new connection.
     #[default]
