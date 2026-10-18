@@ -22,7 +22,11 @@ pub mod commands;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod conn;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod devices;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod identity;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod link;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod service;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

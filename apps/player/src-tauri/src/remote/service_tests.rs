@@ -25,13 +25,18 @@ struct Running {
     unclaimed: Vec<(String, Value)>,
     advertised: Arc<Mutex<Vec<Registration>>>,
     port: u16,
+    /// Stands in for discovery: what's sent here is what browsing found.
+    found: mpsc::UnboundedSender<discovery::Event>,
 }
 
-const EVENTS: [&str; 4] = [
+const EVENTS: [&str; 7] = [
     "remote://consent",
     "remote://consent-hidden",
     "remote://sessions",
     "remote://command",
+    "remote://devices",
+    "remote://controller",
+    "remote://state",
 ];
 
 impl Running {
@@ -52,6 +57,7 @@ impl Running {
         let record = advertised.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
+        let (found, found_rx) = mpsc::unbounded_channel();
         start_on(
             &app.handle(),
             app.app_dir(),
@@ -60,6 +66,7 @@ impl Running {
                 lock(&record).push(r.clone());
                 None
             }),
+            found_rx,
         )
         .unwrap();
         Self {
@@ -68,6 +75,7 @@ impl Running {
             unclaimed: Vec::new(),
             advertised,
             port,
+            found,
         }
     }
 
@@ -438,6 +446,265 @@ fn commands_say_when_remote_control_did_not_start() {
             app.invoke(command, args),
             Err(json!("Remote control didn't start on this device.")),
             "{command}"
+        );
+    }
+}
+
+/// Two app instances in one process: `mac` finds `tv` as discovery would.
+async fn pair(tv_mode: &str) -> (Running, Running) {
+    let mac = Running::start(|_| {}).await;
+    let tv = Running::start(|_| {}).await;
+    tv.invoke(
+        "remote_set_settings",
+        json!({ "settings": { "discoverable": true, "remoteControl": tv_mode, "deviceName": "TV" } }),
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + WAIT;
+    let record = loop {
+        match tv.last_advertised() {
+            Some(r) if r.instance == "TV" && r.txt.get_str("rc").is_some() => {
+                let allowed =
+                    r.txt.get_str("rc") == Some(if tv_mode == "never" { "0" } else { "1" });
+                if allowed {
+                    break r;
+                }
+            }
+            _ => {}
+        }
+        assert!(std::time::Instant::now() < deadline, "tv never advertised");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    mac.found
+        .send(discovery::Event::Found {
+            instance: record.instance.clone(),
+            host: format!("{}.local.", record.host_label),
+            addrs: vec![std::net::IpAddr::from([127, 0, 0, 1])],
+            port: record.port,
+            txt: record.txt.clone(),
+        })
+        .unwrap();
+    (mac, tv)
+}
+
+async fn phase(running: &mut Running, wanted: &str) -> Value {
+    loop {
+        let event = running.event("remote://controller").await;
+        if event["phase"] == json!(wanted) {
+            return event;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_instance_controls_another() {
+    let (mut mac, mut tv) = pair("ask").await;
+    let devices = mac.event("remote://devices").await;
+    let tv_id = tv.device_id().to_string();
+    assert_eq!(
+        devices,
+        json!([{ "deviceId": tv_id, "name": "TV", "deviceType": "linux-pc",
+                 "controlAllowed": true, "available": true }])
+    );
+    assert_eq!(mac.invoke("remote_devices", json!({})).unwrap(), devices);
+
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+        .unwrap();
+    let verifying = phase(&mut mac, "verifying").await;
+    assert_eq!(verifying["deviceId"], json!(tv_id));
+    let consent = tv.event("remote://consent").await;
+    assert_eq!(
+        consent["code"], verifying["code"],
+        "both screens show one code"
+    );
+    assert_eq!(consent["name"], json!("Linux PC"));
+    phase(&mut mac, "pending").await;
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    phase(&mut mac, "connected").await;
+    let first = mac.event("remote://state").await;
+    assert_eq!(first["deviceId"], json!(tv_id));
+
+    // A command goes to the TV's player and its answer comes back.
+    let reply = {
+        let handle = mac.app.handle();
+        tokio::task::spawn_blocking(move || {
+            crate::test_support::invoke_on(
+                &handle,
+                "remote_command",
+                json!({ "command": { "action": "stop" } }),
+            )
+        })
+    };
+    let command = tv.event("remote://command").await;
+    tv.invoke(
+        "remote_finish_command",
+        json!({ "token": command["token"], "outcome": "ok" }),
+    )
+    .unwrap();
+    assert!(reply.await.unwrap().unwrap().is_u64());
+
+    // A state from the TV reaches the Mac.
+    tv.invoke(
+        "remote_set_state",
+        json!({ "state": {
+            "status": "paused", "item": null, "position": 1, "duration": 0,
+            "volume": null, "subtitleId": null, "audioId": null, "error": null
+        } }),
+    )
+    .unwrap();
+    loop {
+        let state = mac.event("remote://state").await;
+        if state["state"]["state"]["status"] == json!("paused") {
+            break;
+        }
+    }
+
+    // A catalog page from the TV's cache.
+    let page = mac
+        .invoke(
+            "remote_catalog",
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live" } }),
+        )
+        .unwrap();
+    assert_eq!(page, json!({ "items": [], "next": null }));
+
+    // Leaving ends the session on both sides. The webview asked, so no
+    // event tells it.
+    mac.invoke("remote_leave", json!({})).unwrap();
+    let deadline = std::time::Instant::now() + WAIT;
+    while tv.invoke("remote_sessions", json!({})).unwrap() != json!([]) {
+        assert!(std::time::Instant::now() < deadline);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        mac.invoke("remote_command", json!({ "command": { "action": "stop" } })),
+        Err(json!("notConnected"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_target_disconnecting_ends_the_link() {
+    let (mut mac, mut tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    let sessions = tv.event("remote://sessions").await;
+    tv.invoke(
+        "remote_disconnect",
+        json!({ "sessionId": sessions[0]["sessionId"] }),
+    )
+    .unwrap();
+    assert_eq!(
+        phase(&mut mac, "closed").await["reason"],
+        json!({ "target": "revoked" })
+    );
+    assert_eq!(
+        mac.invoke(
+            "remote_catalog",
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live" } })
+        ),
+        Err(json!("notConnected"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_command_names_its_code() {
+    let (mut mac, tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    assert_eq!(
+        mac.invoke(
+            "remote_command",
+            json!({ "command": { "action": "pause", "itemId": "nothing" } })
+        ),
+        Err(json!("stale_item"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_devices_on_the_network_that_allow_control_can_be_asked() {
+    let (mut mac, tv) = pair("never").await;
+    mac.event("remote://devices").await;
+    assert_eq!(
+        mac.invoke(
+            "remote_connect",
+            json!({ "deviceId": tv.device_id().to_string() })
+        ),
+        Err(json!("That device doesn't allow remote control."))
+    );
+    assert_eq!(
+        mac.invoke(
+            "remote_connect",
+            json!({ "deviceId": DeviceKey::generate().device_id().to_string() })
+        ),
+        Err(json!("That device isn't on the network now."))
+    );
+    assert_eq!(
+        mac.invoke("remote_connect", json!({ "deviceId": "nope" })),
+        Err(json!("That isn't a device id."))
+    );
+    assert_eq!(
+        mac.invoke("remote_command", json!({ "command": { "action": "stop" } })),
+        Err(json!("notConnected"))
+    );
+    // Leaving with nothing to leave is fine.
+    mac.invoke("remote_leave", json!({})).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_device_that_goes_away_leaves_the_list() {
+    let (mut mac, _tv) = pair("ask").await;
+    mac.event("remote://devices").await;
+    mac.found
+        .send(discovery::Event::Removed {
+            instance: "TV".into(),
+        })
+        .unwrap();
+    assert_eq!(mac.event("remote://devices").await, json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connecting_again_is_not_undone_by_the_old_link_ending() {
+    let (mut mac, mut tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    // The new session works, and the old one's end said nothing.
+    let reply = {
+        let handle = mac.app.handle();
+        tokio::task::spawn_blocking(move || {
+            crate::test_support::invoke_on(
+                &handle,
+                "remote_command",
+                json!({ "command": { "action": "stop" } }),
+            )
+        })
+    };
+    let command = tv.event("remote://command").await;
+    tv.invoke(
+        "remote_finish_command",
+        json!({ "token": command["token"], "outcome": "ok" }),
+    )
+    .unwrap();
+    assert!(reply.await.unwrap().is_ok());
+    while let Ok((name, payload)) = mac.events.try_recv() {
+        assert!(
+            !(name == "remote://controller" && payload["phase"] == json!("closed")),
+            "{payload}"
         );
     }
 }

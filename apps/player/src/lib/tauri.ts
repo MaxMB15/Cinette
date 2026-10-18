@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { CommandOutcome, RemotePlayerState } from "@/lib/remote-target";
+import type { CatalogItem } from "@/lib/cinette-destination";
+import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
 import type {
 	MpvPlayerState,
 	Channel,
@@ -560,3 +561,42 @@ export const remoteSetState = (state: RemotePlayerState): Promise<void> =>
 
 export const remoteFinishCommand = (token: number, outcome: CommandOutcome): Promise<void> =>
 	invoke("remote_finish_command", { token, outcome });
+
+/** Another Cinette device on the network. */
+export interface RemoteDevice {
+	deviceId: string;
+	name: string;
+	/** Like `mac`, `linux-pc` or `fire-tv`. */
+	deviceType: string;
+	/** False when that device is set to Never allow. */
+	controlAllowed: boolean;
+	/** False when discovery lost it. */
+	available: boolean;
+}
+
+export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devices");
+
+/** Asks a device for control. Progress comes as `remote://controller`. */
+export const remoteConnect = (deviceId: string): Promise<void> =>
+	invoke("remote_connect", { deviceId });
+
+/** Ends the session with the controlled device. It keeps playing. */
+export const remoteLeave = (): Promise<void> => invoke("remote_leave");
+
+/** Resolves with the other device's state version once it carried the
+ *  command out. Rejects with the protocol's error code, like `stale_item`,
+ *  or `notConnected`. */
+export const remoteCommand = (command: RemoteCommand): Promise<number> =>
+	invoke("remote_command", { command });
+
+/** A query for the controlled device's catalog. */
+export type CatalogQuery =
+	| { kind: "groups"; contentType: string }
+	| { kind: "items"; contentType: string; group: string; cursor?: string; limit: number }
+	| { kind: "search"; query: string; contentType?: string; limit: number }
+	| { kind: "episodes"; seriesId: string };
+
+export const remoteCatalog = (
+	catalogQuery: CatalogQuery
+): Promise<{ items: CatalogItem[]; next: string | null }> =>
+	invoke("remote_catalog", { catalogQuery });

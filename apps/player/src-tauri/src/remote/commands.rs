@@ -203,6 +203,21 @@ mod imp {
             .collect()
     }
 
+    pub fn not_connected() -> String {
+        "notConnected".to_owned()
+    }
+
+    /// The error code the webview gets, as the protocol spells it.
+    pub fn link_error(e: crate::remote::link::LinkError) -> String {
+        match e {
+            crate::remote::link::LinkError::NotConnected => not_connected(),
+            crate::remote::link::LinkError::Refused(code) => serde_json::to_value(code)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "failed".to_owned()),
+        }
+    }
+
     pub fn provider_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
         let state = app.state::<crate::commands::AppState>();
         let Ok(cache) = state.cache.lock() else {
@@ -361,6 +376,95 @@ pub async fn remote_finish_command<R: Runtime>(
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (app, token, outcome);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The other Cinette devices on the network.
+#[command]
+pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        serde_json::to_value(imp::service(&app)?.devices()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Asks a device for control. Progress comes as `remote://controller`.
+#[command]
+pub async fn remote_connect<R: Runtime>(
+    app: AppHandle<R>,
+    device_id: String,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let id = mvp_core::remote::identity::DeviceId::parse(&device_id)
+            .ok_or_else(|| "That isn't a device id.".to_owned())?;
+        imp::service(&app)?.connect(id)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, device_id);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Ends the session with the controlled device, or stops asking. That
+/// device keeps playing.
+#[command]
+pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        imp::service(&app)?.leave().await;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Sends a playback command to the controlled device. Resolves with that
+/// device's state version once it carried the command out; fails with an
+/// error code as the protocol spells it, such as `stale_item`, or
+/// `notConnected` when there is no session.
+#[command]
+pub async fn remote_command<R: Runtime>(
+    app: AppHandle<R>,
+    command: mvp_core::remote::message::Command,
+) -> Result<u64, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let link = imp::service(&app)?.link().ok_or_else(imp::not_connected)?;
+        link.command(command).await.map_err(imp::link_error)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, command);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// A page of the controlled device's catalog.
+#[command]
+pub async fn remote_catalog<R: Runtime>(
+    app: AppHandle<R>,
+    catalog_query: mvp_core::remote::catalog::CatalogQuery,
+) -> Result<serde_json::Value, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let link = imp::service(&app)?.link().ok_or_else(imp::not_connected)?;
+        let (items, next) = link.catalog(catalog_query).await.map_err(imp::link_error)?;
+        Ok(serde_json::json!({ "items": items, "next": next }))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, catalog_query);
         Err(UNAVAILABLE.into())
     }
 }
