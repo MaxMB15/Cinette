@@ -163,11 +163,16 @@ fn validate_keeps_good_queries_and_caps_the_page() {
     assert_eq!(groups(Some(""), 5).validate(), Some(groups(Some(""), 5)));
     let longest = "g".repeat(MAX_ID_BYTES);
     assert!(groups(Some(&longest), 5).validate().is_some());
-    assert!(CatalogQuery::Episodes {
-        series_id: "series-1".into()
-    }
-    .validate()
-    .is_some());
+    let episodes = |cursor: Option<&str>, limit| CatalogQuery::Episodes {
+        series_id: "series-1".into(),
+        cursor: cursor.map(str::to_owned),
+        limit,
+    };
+    assert_eq!(episodes(None, 0).validate(), Some(episodes(None, 1)));
+    assert_eq!(
+        episodes(Some("ep-101"), 900).validate(),
+        Some(episodes(Some("ep-101"), MAX_PAGE as u32))
+    );
 }
 
 #[test]
@@ -212,9 +217,18 @@ fn validate_refuses_bad_queries() {
         },
         CatalogQuery::Episodes {
             series_id: String::new(),
+            cursor: None,
+            limit: 10,
         },
         CatalogQuery::Episodes {
             series_id: "s".repeat(MAX_ID_BYTES + 1),
+            cursor: None,
+            limit: 10,
+        },
+        CatalogQuery::Episodes {
+            series_id: "s".into(),
+            cursor: Some(String::new()),
+            limit: 10,
         },
     ];
     for query in bad {
