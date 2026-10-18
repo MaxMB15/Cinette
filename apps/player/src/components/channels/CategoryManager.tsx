@@ -179,10 +179,21 @@ export const CategoryManager = ({
 	const toggleMoving = (groupName: string) =>
 		setMovingGroup(movingGroup === groupName ? null : groupName);
 
-	const handleRecategorize = async () => {
-		setCategorizing(true);
+	/**
+	 * Runs a Gemini action with its spinner on, and shows what went wrong.
+	 * Promise callbacks stand in for try and finally, which the React Compiler
+	 * can't compile yet.
+	 */
+	const runBusy = (setBusy: (busy: boolean) => void, action: () => Promise<void>) => {
+		setBusy(true);
 		setError(null);
-		try {
+		return action()
+			.catch((e) => setError(String(e)))
+			.finally(() => setBusy(false));
+	};
+
+	const handleRecategorize = async () => {
+		await runBusy(setCategorizing, async () => {
 			const apiKey = await requireGeminiKey();
 			if (!apiKey) return;
 			const groupsWithSamples = groupSamples(
@@ -199,18 +210,12 @@ export const CategoryManager = ({
 			);
 			setEntries(result);
 			onHierarchyChanged();
-		} catch (e) {
-			setError(String(e));
-		} finally {
-			setCategorizing(false);
-		}
+		});
 	};
 
 	const handleFixUncategorized = async () => {
 		if (uncategorized.length === 0 || superCats.length === 0) return;
-		setFixingUncategorized(true);
-		setError(null);
-		try {
+		await runBusy(setFixingUncategorized, async () => {
 			const apiKey = await requireGeminiKey();
 			if (!apiKey) return;
 			const uncatGroups = groupSamples(
@@ -228,18 +233,12 @@ export const CategoryManager = ({
 			);
 			setEntries(result);
 			onHierarchyChanged();
-		} catch (e) {
-			setError(String(e));
-		} finally {
-			setFixingUncategorized(false);
-		}
+		});
 	};
 
 	const handleAiPromptSubmit = async () => {
 		if (!aiPromptCategory) return;
-		setAiPromptLoading(true);
-		setError(null);
-		try {
+		await runBusy(setAiPromptLoading, async () => {
 			const apiKey = await requireGeminiKey();
 			if (!apiKey) return;
 			// Send ALL groups not already in the target category
@@ -266,11 +265,7 @@ export const CategoryManager = ({
 			setEntries(result);
 			onHierarchyChanged();
 			setAiPromptCategory(null);
-		} catch (e) {
-			setError(String(e));
-		} finally {
-			setAiPromptLoading(false);
-		}
+		});
 	};
 
 	const handleMoveGroup = async (groupName: string, targetCategory: string | null) => {
@@ -329,24 +324,26 @@ export const CategoryManager = ({
 
 		// Reassign sort_order for ALL groups, so the category at position i gets block i
 		await applyChange(async () => {
-			for (let catIdx = 0; catIdx < newOrder.length; catIdx++) {
-				const groups = entries.filter((e) => e.superCategory === newOrder[catIdx]);
-				for (let gi = 0; gi < groups.length; gi++) {
+			// Loops over entries(), since the React Compiler can't compile a
+			// counter's ++ inside a function.
+			for (const [catIdx, cat] of newOrder.entries()) {
+				const groups = entries.filter((e) => e.superCategory === cat);
+				for (const [gi, group] of groups.entries()) {
 					await reorderGroupHierarchyEntry(
 						providerId,
 						contentType,
-						groups[gi].groupName,
+						group.groupName,
 						catIdx * CATEGORY_SORT_BLOCK + gi
 					);
 				}
 			}
 			// Uncategorized groups go at the end
 			const uncatEntries = entries.filter((e) => !e.superCategory);
-			for (let i = 0; i < uncatEntries.length; i++) {
+			for (const [i, entry] of uncatEntries.entries()) {
 				await reorderGroupHierarchyEntry(
 					providerId,
 					contentType,
-					uncatEntries[i].groupName,
+					entry.groupName,
 					newOrder.length * CATEGORY_SORT_BLOCK + i
 				);
 			}

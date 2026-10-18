@@ -16,9 +16,11 @@ const brokenImageUrls = new Set<string>();
  * than keeping the old one's failure.
  */
 export const useImageFailed = (url?: string): [boolean, () => void] => {
-	// Only re-renders after a failure. The set is the record of what failed.
-	const [, setFailedUrl] = useState<string>();
-	const failed = !!url && brokenImageUrls.has(url);
+	// Only re-renders after a failure. The set is the record of what failed
+	// before this card mounted. The state covers a failure since, which the
+	// React Compiler sees change, where it can't see the set change.
+	const [failedUrl, setFailedUrl] = useState<string>();
+	const failed = !!url && (failedUrl === url || brokenImageUrls.has(url));
 	const markFailed = () => {
 		if (!url) return;
 		brokenImageUrls.add(url);

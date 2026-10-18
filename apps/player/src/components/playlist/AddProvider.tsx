@@ -122,11 +122,11 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 		setFileName(null);
 	}, []);
 
-	const handleSubmit = async (e: React.SubmitEvent) => {
+	const handleSubmit = (e: React.SubmitEvent): Promise<void> => {
 		e.preventDefault();
 		setLoading(true);
 		setError(null);
-		try {
+		const add = async () => {
 			if (tab === "m3u") {
 				if (m3uMode === "file" && filePath) {
 					await onAddM3uFile(name || fileName || "M3U File", filePath);
@@ -141,11 +141,12 @@ export const AddProvider = ({ onAddM3u, onAddM3uFile, onAddXtream }: AddProvider
 			setUrl("");
 			setUsername("");
 			setPassword("");
-		} catch (e) {
-			setError(String(e));
-		} finally {
-			setLoading(false);
-		}
+		};
+		// Promise callbacks in place of try and finally, which the React
+		// Compiler can't compile yet.
+		return add()
+			.catch((err) => setError(String(err)))
+			.finally(() => setLoading(false));
 	};
 
 	const canSubmit =
