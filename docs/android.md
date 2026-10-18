@@ -122,7 +122,8 @@ The verifier has a Kotlin half that comes from rustls' Maven repository. It must
 the version `rustls-platform-verifier-android` has in `Cargo.lock`, and
 `android_project_tests.rs` checks that `app/build.gradle.kts` names that version.
 After a cargo update that changes it, change the Gradle line to match.
-`src-tauri/src/android_tls.rs` hands the verifier the JVM when the app starts.
+`src-tauri/src/android_tls.rs` hands the verifier the JVM when the app starts. If that
+fails, the app stops there, since every HTTPS request would hang without it.
 
 ## Continuous integration
 
@@ -131,8 +132,8 @@ the crates or the build setup:
 
 1. Installs NDK r30 on Ubuntu's Android SDK.
 2. Builds the debug APK for `aarch64` and `armv7`.
-3. Checks that the APK has both libraries, and prints its package, SDK versions and
-   TV launcher activity.
+3. Checks that the APK has both libraries, prints what `aapt2 dump badging` reports,
+   and fails unless the minimum SDK is 28 and there's a TV launcher activity.
 4. Runs Clippy for both targets with `-D warnings`.
 
 Nothing is signed or uploaded.
