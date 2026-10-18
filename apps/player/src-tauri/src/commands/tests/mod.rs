@@ -194,7 +194,16 @@ fn sample(argument: &str) -> Value {
         "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
         | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt" => json!(1),
-        "keep" => json!(true),
+        "keep" | "allow" => json!(true),
+        "request" | "token" => json!(1),
+        "outcome" => json!("ok"),
+        "command" => json!({ "action": "stop" }),
+        "catalogQuery" => json!({ "kind": "groups", "contentType": "live" }),
+        "settings" => json!({ "discoverable": true, "remoteControl": "ask", "deviceName": null }),
+        "state" => json!({
+            "status": "idle", "item": null, "position": 0, "duration": 0, "volume": null,
+            "subtitleId": null, "audioId": null, "error": null
+        }),
         "episode" | "channel" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),
     }

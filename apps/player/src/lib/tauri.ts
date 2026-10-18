@@ -3,6 +3,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
+import type { CatalogItem } from "@/lib/cinette-destination";
+import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
 import type {
 	MpvPlayerState,
 	Channel,
@@ -551,3 +553,91 @@ export const getCastReceivers = (): Promise<CastReceiver[]> => invoke("get_cast_
  */
 export const holdCastReceivers = (ids: string[]): Promise<void> =>
 	invoke("hold_cast_receivers", { ids });
+
+/** Who may control this device from another Cinette device. */
+export type RemoteControlMode = "always" | "ask" | "never";
+
+/** The remote-control settings and this device's id. */
+export interface RemoteSettings {
+	discoverable: boolean;
+	remoteControl: RemoteControlMode;
+	/** The name the user gave this device, or null for the default. */
+	deviceName: string | null;
+	/** The name used when none is given: the device type, like "Mac". */
+	defaultName: string;
+	deviceId: string;
+}
+
+/** A device controlling this one, connected or waiting to resume. */
+export interface RemoteSession {
+	sessionId: string;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	connected: boolean;
+}
+
+export const remoteGetSettings = (): Promise<RemoteSettings> => invoke("remote_get_settings");
+
+/** Never allow ends every session at once. */
+export const remoteSetSettings = (settings: {
+	discoverable: boolean;
+	remoteControl: RemoteControlMode;
+	deviceName: string | null;
+}): Promise<RemoteSettings> => invoke("remote_set_settings", { settings });
+
+/** A new device id. Every session ends. */
+export const remoteResetIdentity = (): Promise<RemoteSettings> => invoke("remote_reset_identity");
+
+export const remoteAnswerConsent = (request: number, allow: boolean): Promise<void> =>
+	invoke("remote_answer_consent", { request, allow });
+
+export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
+
+export const remoteDisconnect = (sessionId: string): Promise<void> =>
+	invoke("remote_disconnect", { sessionId });
+
+export const remoteSetState = (state: RemotePlayerState): Promise<void> =>
+	invoke("remote_set_state", { state });
+
+export const remoteFinishCommand = (token: number, outcome: CommandOutcome): Promise<void> =>
+	invoke("remote_finish_command", { token, outcome });
+
+/** Another Cinette device on the network. */
+export interface RemoteDevice {
+	deviceId: string;
+	name: string;
+	/** Like `mac`, `linux-pc` or `fire-tv`. */
+	deviceType: string;
+	/** False when that device is set to Never allow. */
+	controlAllowed: boolean;
+	/** False when discovery lost it. */
+	available: boolean;
+}
+
+export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devices");
+
+/** Asks a device for control. Progress comes as `remote://controller`. */
+export const remoteConnect = (deviceId: string): Promise<void> =>
+	invoke("remote_connect", { deviceId });
+
+/** Ends the session with the controlled device. It keeps playing. */
+export const remoteLeave = (): Promise<void> => invoke("remote_leave");
+
+/** Resolves with the other device's state version once it carried the
+ *  command out. Rejects with the protocol's error code, like `stale_item`,
+ *  or `notConnected`. */
+export const remoteCommand = (command: RemoteCommand): Promise<number> =>
+	invoke("remote_command", { command });
+
+/** A query for the controlled device's catalog. */
+export type CatalogQuery =
+	| { kind: "groups"; contentType: string }
+	| { kind: "items"; contentType: string; group: string; cursor?: string; limit: number }
+	| { kind: "search"; query: string; contentType?: string; limit: number }
+	| { kind: "episodes"; seriesId: string };
+
+export const remoteCatalog = (
+	catalogQuery: CatalogQuery
+): Promise<{ items: CatalogItem[]; next: string | null }> =>
+	invoke("remote_catalog", { catalogQuery });

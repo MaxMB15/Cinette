@@ -17,6 +17,7 @@ import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } fr
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
+import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -470,6 +471,8 @@ export const PlayerView = () => {
 	// The player's controls go through the active destination, which is
 	// always this device for now. It starts an item the way the player does.
 	const playback = useLocalPlayback(mpv, activeChannel, commitPlayback);
+	// Other Cinette devices control this player and see what it plays.
+	usePublishRemoteState(playback, activeChannel);
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with

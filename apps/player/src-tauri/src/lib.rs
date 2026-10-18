@@ -15,6 +15,7 @@ mod keep_awake;
 mod lan_server;
 mod logging;
 mod progress;
+mod remote;
 mod streams;
 #[cfg(test)]
 mod capabilities_tests;
@@ -22,6 +23,7 @@ mod capabilities_tests;
 mod test_support;
 
 use commands::AppState;
+use remote::commands as remote_commands;
 use mvp_core::cache::store::CacheStore;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -141,6 +143,19 @@ macro_rules! register_commands {
 }
 
 register_commands![
+    remote_commands::remote_get_settings,
+    remote_commands::remote_set_settings,
+    remote_commands::remote_reset_identity,
+    remote_commands::remote_answer_consent,
+    remote_commands::remote_sessions,
+    remote_commands::remote_disconnect,
+    remote_commands::remote_set_state,
+    remote_commands::remote_finish_command,
+    remote_commands::remote_devices,
+    remote_commands::remote_connect,
+    remote_commands::remote_leave,
+    remote_commands::remote_command,
+    remote_commands::remote_catalog,
     commands::load_m3u_playlist,
     commands::load_m3u_file,
     commands::load_xtream_provider,
@@ -345,6 +360,10 @@ pub fn run() {
             app.manage(crate::cast::CastReceivers::on_network());
             crate::downloads::manager::restore_settings(app.handle());
 
+            // Listens for other Cinette devices and advertises this one.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            crate::remote::start(app.handle(), app_dir.clone());
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_shell::ShellExt;
@@ -405,6 +424,8 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 crate::downloads::manager::stop_all_for_exit(app);
                 crate::downloads::recordings::stop_all_for_exit(app);
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                crate::remote::stop_for_exit(app);
             }
         });
 }

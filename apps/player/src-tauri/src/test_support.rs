@@ -102,23 +102,7 @@ impl TestApp {
     /// would get. An error is the message the frontend would be shown. The
     /// mock runtime's webview opens no real window.
     pub(crate) fn invoke(&self, command: &str, args: Value) -> Result<Value, Value> {
-        let webview = match self.app.get_webview_window("main") {
-            Some(webview) => webview,
-            None => WebviewWindowBuilder::new(&self.app, "main", Default::default())
-                .build()
-                .expect("open a mock webview"),
-        };
-        let request = InvokeRequest {
-            cmd: command.into(),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
-            body: InvokeBody::Json(args),
-            headers: Default::default(),
-            invoke_key: INVOKE_KEY.into(),
-        };
-        get_ipc_response(&webview, request)
-            .map(|reply| reply.deserialize().expect("read the command's reply"))
+        invoke_on(self.app.handle(), command, args)
     }
 }
 
@@ -211,4 +195,30 @@ mod tests {
         drop(app);
         assert!(!file.exists());
     }
+}
+
+/// [`TestApp::invoke`] through a handle, for a call made from another
+/// thread while the test does something else.
+pub(crate) fn invoke_on(
+    app: &AppHandle<MockRuntime>,
+    command: &str,
+    args: Value,
+) -> Result<Value, Value> {
+    let webview = match app.get_webview_window("main") {
+        Some(webview) => webview,
+        None => WebviewWindowBuilder::new(app, "main", Default::default())
+            .build()
+            .expect("open a mock webview"),
+    };
+    let request = InvokeRequest {
+        cmd: command.into(),
+        callback: CallbackFn(0),
+        error: CallbackFn(1),
+        url: "tauri://localhost".parse().unwrap(),
+        body: InvokeBody::Json(args),
+        headers: Default::default(),
+        invoke_key: INVOKE_KEY.into(),
+    };
+    get_ipc_response(&webview, request)
+        .map(|reply| reply.deserialize().expect("read the command's reply"))
 }
