@@ -525,3 +525,29 @@ export const scheduleRecording = (
 
 /** Stop a recording and keep what it recorded, or cancel one that hasn't started. */
 export const stopRecording = (id: string): Promise<void> => invoke("stop_recording", { id });
+
+/** A Cast receiver on the local network, as `_googlecast._tcp` browsing found it. */
+export interface CastReceiver {
+	/** `cast:` and the receiver's own id, which stays the same across renames. */
+	id: string;
+	name: string;
+	/** Such as "Chromecast Ultra", for `castProfile`. */
+	model: string;
+	/** What it shows now, such as "YouTube", when it says. */
+	status: string | null;
+	/** False once it went away while held, or couldn't be reached. */
+	available: boolean;
+}
+
+/** The event that carries the whole receiver list after each change. */
+export const CAST_RECEIVERS_EVENT = "cast://receivers";
+
+/** The Cast receivers found so far. The first call starts looking for them. */
+export const getCastReceivers = (): Promise<CastReceiver[]> => invoke("get_cast_receivers");
+
+/**
+ * Keep these receivers listed, as unavailable, if they go away: the active
+ * destination and the rows an open picker shows. Each call replaces the last.
+ */
+export const holdCastReceivers = (ids: string[]): Promise<void> =>
+	invoke("hold_cast_receivers", { ids });

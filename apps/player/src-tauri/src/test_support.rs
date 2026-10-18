@@ -66,6 +66,7 @@ impl TestApp {
         app.manage(Recorder::default());
         app.manage(crate::streams::StreamsState::default());
         app.manage(MpvState::new());
+        app.manage(crate::cast::CastReceivers::idle());
         Self { app, dir }
     }
 
