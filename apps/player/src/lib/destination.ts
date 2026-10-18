@@ -7,6 +7,7 @@
  * The player's controls talk only to the active destination.
  */
 
+import type { RouteDecision } from "@/lib/route";
 import type { Channel, PolledMpvState } from "@/lib/types";
 
 export type DestinationKind = "local" | "cast" | "airplay" | "cinette";
@@ -71,13 +72,6 @@ export interface PlaybackCapabilities {
 	catalog: boolean;
 }
 
-/** Why a destination can't play an item. Cast and AirPlay go direct or not
- *  at all, so these come from probing the stream before sending it. */
-export type PlayBlocker =
-	"container" | "videoCodec" | "audioCodec" | "cors" | "unreachable" | "notFound";
-
-export type PlayCheck = { ok: true } | { ok: false; reason: PlayBlocker; detail?: string };
-
 /** A method a destination doesn't support rejects with this. */
 export class UnsupportedError extends Error {
 	readonly code = "unsupported";
@@ -94,8 +88,9 @@ export interface PlaybackDestination {
 	readonly catalog: CatalogSource;
 	readonly capabilities: PlaybackCapabilities;
 
-	/** Whether this destination can play the item. Called before `load`. */
-	canPlay(item: PlaybackItem): Promise<PlayCheck>;
+	/** How the item would reach this destination, or why it can't. Called
+	 *  before `load`, so the UI can warn about a converted route first. */
+	route(item: PlaybackItem): Promise<RouteDecision>;
 	load(item: PlaybackItem, opts?: { startAt?: number }): Promise<void>;
 	play(): Promise<void>;
 	pause(): Promise<void>;

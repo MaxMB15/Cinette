@@ -81,8 +81,10 @@ export const useLocalPlayback = (
 			catalog: { kind: "local" },
 			capabilities: localCapabilities(duration),
 			// mpv plays everything this device's catalog holds.
-			canPlay: async (item) =>
-				item.kind === "local" ? { ok: true } : { ok: false, reason: "notFound" },
+			route: async (item) =>
+				item.kind === "local"
+					? { ok: true, route: { via: "local" } }
+					: { ok: false, reason: "notFound" },
 			load: async (item, opts) => {
 				if (item.kind !== "local")
 					throw new UnsupportedError("Playing another device's item");

@@ -87,12 +87,13 @@ describe("useLocalPlayback", () => {
 		const p = player();
 		const { result } = renderHook(() => useLocalPlayback(p, null));
 		const remote = { kind: "remote", itemId: "movie-1", title: "Film" } as const;
-		await expect(result.current.canPlay(remote)).resolves.toEqual({
+		await expect(result.current.route(remote)).resolves.toEqual({
 			ok: false,
 			reason: "notFound",
 		});
-		await expect(result.current.canPlay({ kind: "local", channel })).resolves.toEqual({
+		await expect(result.current.route({ kind: "local", channel })).resolves.toEqual({
 			ok: true,
+			route: { via: "local" },
 		});
 		await expect(result.current.load(remote)).rejects.toBeInstanceOf(UnsupportedError);
 		await expect(result.current.load(remote)).rejects.toThrow(
