@@ -15,9 +15,10 @@ use url::Url;
 
 use super::format::Container;
 
-/// The origin the check sends. A server that allows any origin, or echoes
-/// the one it's sent, would let a receiver's page fetch it too.
-const CHECK_ORIGIN: &str = "https://cast.cinette.invalid";
+/// The origin the check sends: the one the Default Media Receiver's page
+/// sends, as a device test showed. A server that allows any origin, this
+/// one, or echoes the one it's sent, lets the receiver fetch the stream.
+const CHECK_ORIGIN: &str = "https://www.gstatic.com";
 /// A playlist larger than this isn't one.
 const MAX_PLAYLIST: usize = 1024 * 1024;
 

@@ -6,7 +6,7 @@ use super::format::{
     StreamFormat, VideoCodec,
 };
 use super::hls::{inspect, HlsError, HlsInfo};
-use super::probe::{self, ProbeError, Probed};
+use super::probe::{self, AudioTrack, ProbeError, Probed};
 use super::{candidates, formats_for, is_hls_url, HlsCheck};
 use crate::http::test_server::{self, password, route, serve_once, serve_routes};
 use crate::models::playlist::ProviderType;
@@ -208,6 +208,18 @@ fn parses_a_live_ts_probe() {
             video: Some(VideoCodec::H264),
             interlaced: true,
             audio: Some(AudioCodec::Mp2),
+            audio_tracks: vec![
+                AudioTrack {
+                    codec: "mp2".into(),
+                    language: Some("deu".into()),
+                    default: false
+                },
+                AudioTrack {
+                    codec: "ac3".into(),
+                    language: Some("eng".into()),
+                    default: false
+                },
+            ],
             duration: None,
         }
     );
@@ -231,6 +243,21 @@ At least one output file must be specified
     assert_eq!(probed.video, Some(VideoCodec::Hevc));
     assert!(!probed.interlaced);
     assert_eq!(probed.audio, Some(AudioCodec::Eac3));
+    assert_eq!(
+        probed.audio_tracks,
+        vec![
+            AudioTrack {
+                codec: "dts".into(),
+                language: Some("eng".into()),
+                default: false
+            },
+            AudioTrack {
+                codec: "eac3".into(),
+                language: Some("eng".into()),
+                default: true
+            },
+        ]
+    );
     assert_eq!(probed.duration, Some(6130.5));
 }
 
@@ -342,10 +369,7 @@ async fn reads_a_media_playlist_with_ts_segments_and_cors() {
         }
     );
     let first = requests.recv().unwrap().to_ascii_lowercase();
-    assert!(
-        first.contains("origin: https://cast.cinette.invalid"),
-        "{first}"
-    );
+    assert!(first.contains("origin: https://www.gstatic.com"), "{first}");
     let segment = requests.recv().unwrap().to_ascii_lowercase();
     assert!(segment.starts_with("get /live/u/p/seg-1.ts"), "{segment}");
     assert!(segment.contains("range: bytes=0-1"), "{segment}");
@@ -407,7 +431,7 @@ async fn cors_needs_every_part() {
         .unwrap();
     assert!(!info.cors);
     // An origin echoed back counts, any other doesn't.
-    let echo = "200 OK\r\nAccess-Control-Allow-Origin: https://cast.cinette.invalid";
+    let echo = "200 OK\r\nAccess-Control-Allow-Origin: https://www.gstatic.com";
     let other = "200 OK\r\nAccess-Control-Allow-Origin: https://example.com";
     for (status, expected) in [(echo, true), (other, false)] {
         let (base, _) = serve_routes(vec![
@@ -580,4 +604,24 @@ fn the_probe_names_its_own_urls_container_and_extensions_name_the_rest() {
     let formats = formats_for(&urls, codecs(Container::Mkv), 0, &[HlsCheck::NotHls]);
     assert_eq!(formats[0].1.container, Container::Mkv);
     assert!(!formats[0].1.cors);
+}
+
+#[test]
+fn reads_each_audio_tracks_language() {
+    let text = "Input #0, matroska,webm, from 'x':
+  Stream #0:0: Video: h264, yuv420p(progressive)
+  Stream #0:1(und): Audio: aac (LC), 48000 Hz, stereo
+  Stream #0:2: Audio: vorbis, 48000 Hz, stereo
+  Stream #0:3[0x1](fre): Audio: ac3, 48000 Hz, 5.1 (default)
+  Stream #0:4(): Audio: mp3, 48000 Hz, stereo
+";
+    let probed = probe::parse(text).unwrap();
+    let languages: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.language.as_deref())
+        .collect();
+    assert_eq!(languages, vec![None, None, Some("fre"), None]);
+    assert_eq!(probed.audio, Some(AudioCodec::Ac3));
+    assert_eq!(probed.audio_tracks[1].codec, "vorbis");
 }
