@@ -52,6 +52,7 @@ export interface RemoteSnapshot {
 		audioTracks: boolean;
 		resumeAt: boolean;
 	};
+	/** A playback error's code; one from a newer Cinette reads as "unknown". */
 	error: string | null;
 }
 
@@ -73,6 +74,12 @@ const contentTypes: readonly Channel["contentType"][] = ["movie", "series", "rec
 const contentTypeOf = (t: string): Channel["contentType"] =>
 	contentTypes.find((known) => known === t) ?? "live";
 
+/** The error codes besides failed, which is what anything else shows as. */
+const errorCodes: readonly PlaybackError["code"][] = ["openFailed", "loadFailed", "refused"];
+
+const errorCodeOf = (code: string): PlaybackError["code"] =>
+	errorCodes.find((known) => known === code) ?? "failed";
+
 /** The other device's state in the destination's terms. `at` is
  *  `performance.now()` when it arrived. */
 export const remotePlaybackState = (
@@ -81,7 +88,7 @@ export const remotePlaybackState = (
 	at: number
 ): PlaybackState => {
 	const error: PlaybackError | null = snapshot.error
-		? { code: "failed", message: snapshot.error }
+		? { code: errorCodeOf(snapshot.error) }
 		: null;
 	return {
 		status: snapshot.status,

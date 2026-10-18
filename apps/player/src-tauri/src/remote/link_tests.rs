@@ -9,10 +9,13 @@ use crate::discovery::Registration;
 use crate::remote::target::{self, CatalogPage, TargetHandle, TargetHost};
 use crate::remote::test_client::WAIT;
 use mvp_core::remote::consent::{Answer, RequestId};
+use mvp_core::remote::controller::GIVE_UP_AFTER;
 use mvp_core::remote::message::{DeviceType, Feature, PlaybackSnapshot, PROTOCOL_VERSION};
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -21,13 +24,16 @@ use tokio::time::timeout;
 struct Player {
     target: Mutex<Option<TargetHandle>>,
     prompts: mpsc::UnboundedSender<(RequestId, String)>,
+    hidden: mpsc::UnboundedSender<RequestId>,
 }
 
 impl TargetHost for Player {
     fn show_consent(&self, prompt: &ConsentPrompt) {
         let _ = self.prompts.send((prompt.request, prompt.code.clone()));
     }
-    fn hide_consent(&self, _: RequestId) {}
+    fn hide_consent(&self, request: RequestId) {
+        let _ = self.hidden.send(request);
+    }
     fn sessions_changed(&self, _: &[SessionInfo]) {}
     fn apply(&self, token: u64, _: &Command) {
         if let Some(target) = self.target.lock().unwrap().as_ref() {
@@ -52,6 +58,7 @@ struct Target {
     key: DeviceKey,
     port: u16,
     prompts: mpsc::UnboundedReceiver<(RequestId, String)>,
+    hidden: mpsc::UnboundedReceiver<RequestId>,
 }
 
 async fn target(mode: ControlMode) -> Target {
@@ -59,9 +66,11 @@ async fn target(mode: ControlMode) -> Target {
     let port = listener.local_addr().unwrap().port();
     let key = DeviceKey::generate();
     let (tx, prompts) = mpsc::unbounded_channel();
+    let (hide, hidden) = mpsc::unbounded_channel();
     let player = Arc::new(Player {
         target: Mutex::new(None),
         prompts: tx,
+        hidden: hide,
     });
     let settings = RemoteSettings {
         remote_control: mode,
@@ -81,6 +90,7 @@ async fn target(mode: ControlMode) -> Target {
         key,
         port,
         prompts,
+        hidden,
     }
 }
 
@@ -90,6 +100,8 @@ struct Proxy {
     port: u16,
     accepting: Arc<Mutex<bool>>,
     pipes: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// The bytes the link sent through so far.
+    sent: Arc<AtomicUsize>,
 }
 
 impl Proxy {
@@ -98,7 +110,8 @@ impl Proxy {
         let port = listener.local_addr().unwrap().port();
         let accepting = Arc::new(Mutex::new(true));
         let pipes: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::default();
-        let (open, list) = (accepting.clone(), pipes.clone());
+        let sent = Arc::new(AtomicUsize::new(0));
+        let (open, list, count) = (accepting.clone(), pipes.clone(), sent.clone());
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
                 if !*open.lock().unwrap() {
@@ -106,9 +119,30 @@ impl Proxy {
                     drop(inbound);
                     continue;
                 }
+                let count = count.clone();
                 let pipe = tokio::spawn(async move {
-                    let mut outbound = TcpStream::connect(("127.0.0.1", to)).await.unwrap();
-                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    let outbound = TcpStream::connect(("127.0.0.1", to)).await.unwrap();
+                    let (mut from_link, mut to_link) = inbound.split();
+                    let (mut from_target, mut to_target) = tokio::io::split(outbound);
+                    let up = async {
+                        let mut buf = [0u8; 4096];
+                        loop {
+                            match from_link.read(&mut buf).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => {
+                                    count.fetch_add(n, Ordering::SeqCst);
+                                    if to_target.write_all(&buf[..n]).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    let down = tokio::io::copy(&mut from_target, &mut to_link);
+                    tokio::select! {
+                        _ = up => {}
+                        _ = down => {}
+                    }
                 });
                 list.lock().unwrap().push(pipe);
             }
@@ -117,6 +151,7 @@ impl Proxy {
             port,
             accepting,
             pipes,
+            sent,
         }
     }
 
@@ -205,6 +240,26 @@ fn link_to(target: &Target, port: u16, grace: Duration) -> Link {
 }
 
 fn link_with(target: &Target, addresses: Addresses, grace: Duration) -> Link {
+    link_timed(target, addresses, grace, Timeouts::STANDARD)
+}
+
+fn link_timed(target: &Target, addresses: Addresses, grace: Duration, timeouts: Timeouts) -> Link {
+    link_clocked(
+        target,
+        addresses,
+        grace,
+        timeouts,
+        Arc::new(crate::remote::clock::now),
+    )
+}
+
+fn link_clocked(
+    target: &Target,
+    addresses: Addresses,
+    grace: Duration,
+    timeouts: Timeouts,
+    clock: Clock,
+) -> Link {
     let (tx, changes) = mpsc::unbounded_channel();
     let recorder = Arc::new(Recorder {
         seen: Mutex::default(),
@@ -226,6 +281,8 @@ fn link_with(target: &Target, addresses: Addresses, grace: Duration) -> Link {
             addresses,
             grace,
             generation: 7,
+            timeouts,
+            clock,
         },
         recorder.clone(),
     );
@@ -522,4 +579,168 @@ async fn phases_read_as_the_webview_expects() {
         }),
         serde_json::json!({ "phase": "closed", "reason": "lost" })
     );
+}
+
+#[test]
+fn the_waits_between_attempts_grow_and_then_repeat() {
+    let waits: Vec<u64> = (0..7).map(|a| backoff(a).as_secs()).collect();
+    assert_eq!(waits, [1, 2, 4, 8, 8, 8, 8]);
+}
+
+#[tokio::test]
+async fn it_waits_longer_before_each_attempt() {
+    let t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let mut link = link_to(&t, proxy.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    proxy.cut(true);
+    link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
+    let first = Instant::now();
+    link.until_phase(Phase::Reconnecting { attempt: 2 }).await;
+    // The second wait is two seconds.
+    assert!(
+        first.elapsed() >= Duration::from_millis(1500),
+        "{:?}",
+        first.elapsed()
+    );
+    link.handle.leave().await;
+}
+
+#[tokio::test]
+async fn a_device_missing_from_discovery_for_a_while_is_tried_again() {
+    let t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let found = Arc::new(Mutex::new(vec![SocketAddr::from((
+        [127, 0, 0, 1],
+        proxy.port,
+    ))]));
+    let list = found.clone();
+    let mut link = link_with(&t, Arc::new(move || list.lock().unwrap().clone()), GRACE);
+    link.until_phase(Phase::Connected).await;
+    let addresses = std::mem::take(&mut *found.lock().unwrap());
+    proxy.cut(false);
+    link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
+    *found.lock().unwrap() = addresses;
+    link.until(|l| {
+        l.phases()
+            .iter()
+            .filter(|p| **p == Phase::Connected)
+            .count()
+            == 2
+    })
+    .await;
+    assert!(!link
+        .phases()
+        .iter()
+        .any(|p| matches!(p, Phase::Closed { .. })));
+}
+
+#[tokio::test]
+async fn a_device_that_takes_the_connection_but_never_answers_is_unreachable() {
+    let t = target(ControlMode::Always).await;
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((stream, _)) = silent.accept().await {
+            open.push(stream);
+        }
+    });
+    let timeouts = Timeouts {
+        handshake: Duration::from_millis(300),
+        ..Timeouts::STANDARD
+    };
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        timeouts,
+    );
+    assert_eq!(link.closed().await, Ended::Unreachable);
+    held.abort();
+}
+
+#[tokio::test]
+async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
+    let mut t = target(ControlMode::Ask).await;
+    let timeouts = Timeouts {
+        handshake: Duration::from_millis(300),
+        ..Timeouts::STANDARD
+    };
+    let port = t.port;
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        timeouts,
+    );
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    // Longer than the handshake may take, and longer than a nap.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    t.handle.answer(request, Answer::Allow);
+    link.until_phase(Phase::Connected).await;
+    assert!(!link
+        .phases()
+        .iter()
+        .any(|p| matches!(p, Phase::Closed { .. })));
+}
+
+#[tokio::test]
+async fn it_pings_only_after_a_quiet_spell() {
+    let t = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    let timeouts = Timeouts {
+        ping: Duration::from_secs(4),
+        ..Timeouts::STANDARD
+    };
+    let port = proxy.port;
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        timeouts,
+    );
+    link.until_phase(Phase::Connected).await;
+    let before = proxy.sent.load(Ordering::SeqCst);
+    // More than a nap, less than the ping interval.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(
+        proxy.sent.load(Ordering::SeqCst),
+        before,
+        "nothing to say yet"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        proxy.sent.load(Ordering::SeqCst) > before,
+        "a ping after four seconds"
+    );
+}
+
+#[tokio::test]
+async fn gives_up_on_a_device_that_never_answers_and_withdraws_the_request() {
+    let mut t = target(ControlMode::Ask).await;
+    // A clock the test can move on.
+    let skew = Arc::new(Mutex::new(Duration::ZERO));
+    let ahead = skew.clone();
+    let clock: Clock = Arc::new(move || crate::remote::clock::now() + *ahead.lock().unwrap());
+    let port = t.port;
+    let mut link = link_clocked(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        Timeouts::STANDARD,
+        clock,
+    );
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    link.until(|l| {
+        l.phases()
+            .iter()
+            .any(|p| matches!(p, Phase::Pending { .. }))
+    })
+    .await;
+    *skew.lock().unwrap() = GIVE_UP_AFTER;
+    assert_eq!(link.closed().await, Ended::Target(CloseReason::Timeout));
+    // The target hears the request withdrawn, so its dialog goes.
+    let hidden = timeout(WAIT, t.hidden.recv()).await.unwrap().unwrap();
+    assert_eq!(hidden, request);
 }

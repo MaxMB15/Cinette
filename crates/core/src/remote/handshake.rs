@@ -8,10 +8,31 @@
 //! key against the device id it meant to reach.
 //!
 //! Then both work out a 6-digit code from the handshake and a nonce from each
-//! side. The controller commits to its nonce before it sees the target's, so
-//! someone in the middle, who has to run a separate handshake with each side,
-//! can't pick keys that make the two codes match. The user compares the codes
-//! on both screens.
+//! side, and the user compares the codes on both screens. Someone in the
+//! middle has to run a separate handshake with each side and make the two
+//! codes match.
+//!
+//! The controller commits to its nonce before it sees the target's, so a
+//! device posing as the target can't steer the code the controller shows.
+//! A device posing as a controller can't steer the target's code either, but
+//! it learns that code as soon as the target's nonce arrives, before the
+//! target shows anything. It could hang up and try again until a code
+//! matches the one on the real controller's screen. The handshake alone
+//! doesn't stop that. Two limits around it do:
+//!
+//! - [`Target`](super::target::Target) sends at most
+//!   [`NONCE_BURST`](super::target::NONCE_BURST) nonces at once and one a
+//!   second after that, across all connections. It checks through
+//!   [`TargetHandshake::read_admitting`].
+//! - A [`Controller`](super::controller::Controller) gives up on a target
+//!   that hasn't let it in after
+//!   [`GIVE_UP_AFTER`](super::controller::GIVE_UP_AFTER), whatever the target
+//!   says.
+//!
+//! An unanswered handshake also ends after
+//! [`HANDSHAKE_TIMEOUT`](super::target::HANDSHAKE_TIMEOUT). So each time the
+//! user connects, a device in the middle gets about 55 of the million codes,
+//! a chance of about 1 in 18,000.
 
 use super::channel::{self, Channel};
 use super::identity::{DeviceId, DeviceKey};
@@ -182,6 +203,14 @@ fn code(
         .finalize();
     let n = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
     VerificationCode(n % 1_000_000)
+}
+
+/// A failed handshake that tells the controller why over the new channel.
+fn refuse(channel: &mut Channel, reason: CloseReason) -> Failure {
+    Failure {
+        reason,
+        send: channel.seal(&Message::Closed { reason }).ok(),
+    }
 }
 
 /// Reads the one message expected at this point of the handshake.
@@ -361,7 +390,22 @@ impl TargetHandshake {
         })
     }
 
+    /// Reads the next frame. Lets in every controller the handshake proves,
+    /// so code that takes connections from the network uses
+    /// [`TargetHandshake::read_admitting`].
     pub fn read(self, frame: &[u8]) -> Step<Self> {
+        self.read_admitting(frame, |_| Ok(()))
+    }
+
+    /// Reads the next frame. Once the handshake has proved who the
+    /// controller is, and before the target sends its nonce, `admit` decides
+    /// whether to go on. A refusal tells the controller why and fails the
+    /// handshake with that reason. `admit` is called at most once.
+    pub fn read_admitting(
+        self,
+        frame: &[u8],
+        admit: impl FnOnce(&Peer) -> Result<(), CloseReason>,
+    ) -> Step<Self> {
         match self.stage {
             TargetStage::Started { mut state, hello } => {
                 read(&mut state, frame)?;
@@ -395,15 +439,9 @@ impl TargetHandshake {
                 );
                 let Some(version) = message::common_version(&versions, &controller.hello.versions)
                 else {
-                    return Err(Failure {
-                        reason: CloseReason::Version,
-                        send: channel
-                            .seal(&Message::Closed {
-                                reason: CloseReason::Version,
-                            })
-                            .ok(),
-                    });
+                    return Err(refuse(&mut channel, CloseReason::Version));
                 };
+                admit(&peer).map_err(|reason| refuse(&mut channel, reason))?;
                 let nonce = super::random_bytes::<NONCE_LEN>();
                 let send = channel
                     .seal(&Message::Nonce {

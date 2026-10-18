@@ -12,7 +12,9 @@
 #![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 
 use mvp_core::models::channel::Channel;
-use mvp_core::remote::message::{Capabilities, ErrorCode, PlaybackSnapshot, PlaybackStatus, Track};
+use mvp_core::remote::message::{
+    Capabilities, ErrorCode, PlaybackError, PlaybackSnapshot, PlaybackStatus, Track,
+};
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Runtime};
@@ -76,7 +78,7 @@ pub struct PlayerState {
     pub audio_id: Option<String>,
     #[serde(default)]
     pub capabilities: Capabilities,
-    pub error: Option<String>,
+    pub error: Option<PlaybackError>,
 }
 
 /// The playing channel's fields that a controller may see, plus its logo,

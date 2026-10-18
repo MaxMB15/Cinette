@@ -75,13 +75,14 @@ describe("remotePlaybackState", () => {
 		expect(state.volume).toBe(0);
 	});
 
-	it("turns the other device's error into a failed error", () => {
-		const state = remotePlaybackState(
-			snapshot({ status: "error", error: "Stream ended" }),
-			"connected",
-			0
-		);
-		expect(state.error).toStrictEqual({ code: "failed", message: "Stream ended" });
+	it("takes the other device's error code, and an unknown one as failed", () => {
+		const errorOf = (error: string) =>
+			remotePlaybackState(snapshot({ status: "error", error }), "connected", 0).error;
+		expect(errorOf("refused")).toStrictEqual({ code: "refused" });
+		expect(errorOf("openFailed")).toStrictEqual({ code: "openFailed" });
+		expect(errorOf("loadFailed")).toStrictEqual({ code: "loadFailed" });
+		expect(errorOf("failed")).toStrictEqual({ code: "failed" });
+		expect(errorOf("unknown")).toStrictEqual({ code: "failed" });
 	});
 
 	it("says how the connection stands", () => {

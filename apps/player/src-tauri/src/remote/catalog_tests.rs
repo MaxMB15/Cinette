@@ -230,3 +230,126 @@ fn episodes_are_not_answered_from_the_channel_list() {
         Err(ErrorCode::Unsupported)
     );
 }
+
+mod loading_episodes {
+    use super::*;
+    use mvp_core::http::test_server::{self, route, serve_routes};
+    use mvp_core::models::playlist::{Provider, ProviderType};
+
+    const SERIES_INFO: &str = r#"{"info":{"name":"The Show"},"episodes":{"1":[
+        {"id":"9001","episode_num":1,"title":"First"}]}}"#;
+
+    /// A cache with the Xtream series `p1-series-7` from a panel at `url`,
+    /// with `cached` saved as its episodes.
+    fn series_on(url: &str, cached: &[Channel]) -> Mutex<CacheStore> {
+        let cache = CacheStore::open_in_memory().unwrap();
+        cache
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Panel".into(),
+                provider_type: ProviderType::Xtream,
+                url: url.into(),
+                username: Some("user".into()),
+                password: Some(test_server::password()),
+                last_updated: None,
+                channel_count: 1,
+                epg_url: None,
+            })
+            .unwrap();
+        let mut series = channel("p1-series-7", "The Show", "series", "Drama");
+        series.url = "xtream://series/7".into();
+        cache.save_channels("p1", &[series]).unwrap();
+        cache.save_series_episodes("p1-series-7", cached).unwrap();
+        Mutex::new(cache)
+    }
+
+    fn cached_episode() -> Channel {
+        let mut ep = channel("p1-xt-ep-7-s1-5", "Cached", "series", "Drama");
+        ep.season = Some(1);
+        ep.episode = Some(6);
+        ep
+    }
+
+    fn names(episodes: &[Channel]) -> Vec<&str> {
+        episodes.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn an_xtream_series_is_loaded_from_its_provider() {
+        let (url, requests) =
+            serve_routes(vec![route("action=get_series_info", "200 OK", SERIES_INFO)]);
+        let cache = series_on(&url, &[cached_episode()]);
+        let episodes = episodes(&cache, "p1-series-7").await.unwrap();
+        assert_eq!(names(&episodes), ["The Show S01E01 First"]);
+        assert_eq!(episodes[0].id, "p1-xt-ep-7-s1-0");
+        assert!(requests
+            .try_iter()
+            .any(|r| r.contains("action=get_series_info&series_id=7 ")));
+    }
+
+    #[tokio::test]
+    async fn the_cached_episodes_stand_in_when_the_provider_fails() {
+        let (url, _requests) = serve_routes(vec![route("action=", "500 Oops", "")]);
+        let cache = series_on(&url, &[cached_episode()]);
+        let episodes = episodes(&cache, "p1-series-7").await.unwrap();
+        assert_eq!(names(&episodes), ["Cached"]);
+    }
+
+    #[tokio::test]
+    async fn the_cached_episodes_stand_in_when_the_provider_has_none() {
+        let (url, _requests) = serve_routes(vec![route(
+            "action=get_series_info",
+            "200 OK",
+            r#"{"info":{},"episodes":{}}"#,
+        )]);
+        let cache = series_on(&url, &[cached_episode()]);
+        let episodes = episodes(&cache, "p1-series-7").await.unwrap();
+        assert_eq!(names(&episodes), ["Cached"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_load_with_nothing_cached_fails() {
+        let (url, _requests) = serve_routes(vec![route("action=", "500 Oops", "")]);
+        let cache = series_on(&url, &[]);
+        assert_eq!(
+            episodes(&cache, "p1-series-7").await,
+            Err(ErrorCode::Failed)
+        );
+    }
+
+    #[tokio::test]
+    async fn other_series_come_from_the_cache_without_asking_anyone() {
+        // Nothing listens here, so a request would fail the load.
+        let cache = series_on("http://127.0.0.1:9", &[cached_episode()]);
+        {
+            let store = cache.lock().unwrap();
+            let mut series = channel("p1-series-8", "Other", "series", "Drama");
+            series.url = "http://iptv.example/series/8.m3u8".into();
+            store.save_channels("p1", &[series]).unwrap();
+            store
+                .save_series_episodes("p1-series-8", &[cached_episode()])
+                .unwrap();
+        }
+        let loaded = episodes(&cache, "p1-series-8").await.unwrap();
+        assert_eq!(names(&loaded), ["Cached"]);
+        let unknown = episodes(&cache, "p1-series-404").await.unwrap();
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn a_page_of_episodes_hides_provider_logos_and_stops_at_a_page() {
+        let cache = series_on("http://iptv.example:8080", &[]);
+        let cache = cache.lock().unwrap();
+        let many: Vec<Channel> = (0..MAX_PAGE + 3)
+            .map(|i| {
+                let mut ep = channel(&format!("ep{i}"), "x", "series", "Drama");
+                ep.logo_url = Some("http://iptv.example:8080/logo.png".into());
+                ep
+            })
+            .collect();
+        let (items, next) = episode_page(&cache, &many).unwrap();
+        assert_eq!(items.len(), MAX_PAGE);
+        assert_eq!(next, None);
+        assert!(items.iter().all(|i| i.logo.is_none()));
+    }
+}

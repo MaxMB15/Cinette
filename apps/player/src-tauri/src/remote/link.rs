@@ -12,7 +12,6 @@
 //! (30 s, counted with time asleep). After that it gives up: control never
 //! comes back silently once a session has ended.
 
-use super::clock;
 use super::conn::{self, Read, Writer};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::controller::{Controller, Event, PING_INTERVAL};
@@ -29,8 +28,6 @@ use tokio::sync::{mpsc, oneshot};
 
 /// How long one connection attempt may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the handshake may take once connected.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The waits between reconnection attempts. The last one repeats.
 const BACKOFF: [Duration; 4] = [
     Duration::from_secs(1),
@@ -38,6 +35,28 @@ const BACKOFF: [Duration; 4] = [
     Duration::from_secs(4),
     Duration::from_secs(8),
 ];
+
+/// The wait before reconnection attempt `attempt + 1`.
+fn backoff(attempt: u32) -> Duration {
+    let last = BACKOFF[BACKOFF.len() - 1];
+    BACKOFF.get(attempt as usize).copied().unwrap_or(last)
+}
+
+/// How long a connection waits for things.
+#[derive(Debug, Clone, Copy)]
+pub struct Timeouts {
+    /// How long the handshake may take once connected.
+    pub handshake: Duration,
+    /// How long the link stays quiet before it pings.
+    pub ping: Duration,
+}
+
+impl Timeouts {
+    pub const STANDARD: Self = Self {
+        handshake: Duration::from_secs(10),
+        ping: PING_INTERVAL,
+    };
+}
 /// The longest the task sleeps without looking at the clock, so a sleep of
 /// the whole computer is noticed soon after it wakes.
 const MAX_NAP: Duration = Duration::from_secs(2);
@@ -94,6 +113,9 @@ pub trait LinkHost: Send + Sync + 'static {
 /// Where to reach the target. Asked again before each attempt, since its
 /// address may change while the connection is down.
 pub type Addresses = Arc<dyn Fn() -> Vec<SocketAddr> + Send + Sync>;
+
+/// The time now, counting time asleep: [`super::clock::now`] outside tests.
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 /// A catalog page, or why there isn't one.
 pub type Page = Result<(Vec<CatalogItem>, Option<String>), LinkError>;
@@ -154,6 +176,15 @@ impl LinkHandle {
     }
 }
 
+#[cfg(test)]
+impl LinkHandle {
+    /// A handle with no link behind it, for tests of what holds one.
+    pub(crate) fn detached(generation: u64) -> Self {
+        let (inbox, _) = mpsc::unbounded_channel();
+        Self { inbox, generation }
+    }
+}
+
 /// Everything a link needs to connect.
 pub struct LinkConfig {
     pub key: DeviceKey,
@@ -165,6 +196,8 @@ pub struct LinkConfig {
     pub grace: Duration,
     /// A number that tells this link from earlier ones to the same device.
     pub generation: u64,
+    pub timeouts: Timeouts,
+    pub clock: Clock,
 }
 
 /// Starts connecting to a target.
@@ -229,9 +262,9 @@ async fn run(
             Outcome::Ended(ended) => Some(ended),
             Outcome::Dropped if session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
-                let since = *dropped_at.get_or_insert_with(clock::now);
-                let wait = BACKOFF[(attempt as usize).min(BACKOFF.len() - 1)];
-                if clock::now() + wait >= since + config.grace {
+                let since = *dropped_at.get_or_insert_with(|| (config.clock)());
+                let wait = backoff(attempt);
+                if (config.clock)() + wait >= since + config.grace {
                     Some(Ended::Lost)
                 } else {
                     attempt += 1;
@@ -261,23 +294,10 @@ async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input
                     let _ = done.send(());
                     return true;
                 }
-                Some(input) => refuse(input),
+                // Dropping a request answers it with NotConnected.
+                Some(_) => {}
             },
             () = tokio::time::sleep_until(until) => return false,
-        }
-    }
-}
-
-fn refuse(input: Input) {
-    match input {
-        Input::Command(_, reply) => {
-            let _ = reply.send(Err(LinkError::NotConnected));
-        }
-        Input::Catalog(_, reply) => {
-            let _ = reply.send(Err(LinkError::NotConnected));
-        }
-        Input::Leave(done) => {
-            let _ = done.send(());
         }
     }
 }
@@ -315,6 +335,7 @@ async fn connection(
         config.hello.clone(),
         config.target.clone(),
         session.clone(),
+        (config.clock)(),
     ) {
         Ok(started) => started,
         Err(reason) => return Outcome::Ended(Ended::Target(reason)),
@@ -322,7 +343,7 @@ async fn connection(
     let (reads_tx, mut reads) = mpsc::unbounded_channel();
     let writer: Writer = conn::spawn(stream, (), reads_tx);
     let _ = writer.send(first);
-    let opened = clock::now();
+    let opened = (config.clock)();
     let mut last_heard = opened;
     let mut last_sent = opened;
     let mut verified = false;
@@ -351,11 +372,11 @@ async fn connection(
                         return Outcome::Dropped;
                     }
                 };
-                last_heard = clock::now();
+                last_heard = (config.clock)();
                 let output = controller.receive(&frame);
                 for bytes in output.send {
                     let _ = writer.send(bytes);
-                    last_sent = clock::now();
+                    last_sent = (config.clock)();
                 }
                 for event in output.events {
                     match event {
@@ -418,7 +439,7 @@ async fn connection(
                 Some(Input::Command(command, reply)) => match controller.command(command) {
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
-                        last_sent = clock::now();
+                        last_sent = (config.clock)();
                         waiting.insert(id, Waiting::Command(reply));
                     }
                     Err(_) => {
@@ -428,7 +449,7 @@ async fn connection(
                 Some(Input::Catalog(query, reply)) => match controller.catalog(query) {
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
-                        last_sent = clock::now();
+                        last_sent = (config.clock)();
                         waiting.insert(id, Waiting::Catalog(reply));
                     }
                     Err(_) => {
@@ -436,10 +457,23 @@ async fn connection(
                     }
                 },
             },
-            () = tokio::time::sleep(MAX_NAP.min(PING_INTERVAL)) => {}
+            () = tokio::time::sleep(MAX_NAP.min(config.timeouts.ping)) => {}
         }
-        let now = clock::now();
-        if !verified && now.duration_since(opened) >= HANDSHAKE_TIMEOUT {
+        let now = (config.clock)();
+        // The core gives up on a handshake or an answer that takes too long.
+        let given_up = controller.tick(now);
+        for bytes in given_up.send {
+            let _ = writer.send(bytes);
+        }
+        if !given_up.events.is_empty() {
+            finish(waiting);
+            return Outcome::Ended(if verified {
+                Ended::Target(CloseReason::Timeout)
+            } else {
+                Ended::Unreachable
+            });
+        }
+        if !verified && now.duration_since(opened) >= config.timeouts.handshake {
             finish(waiting);
             return Outcome::Ended(Ended::Unreachable);
         }
@@ -447,7 +481,7 @@ async fn connection(
             finish(waiting);
             return Outcome::Dropped;
         }
-        if now.duration_since(last_sent) >= PING_INTERVAL
+        if now.duration_since(last_sent) >= config.timeouts.ping
             && let Some(bytes) = controller.ping()
         {
             let _ = writer.send(bytes);
