@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useEffect, useState } from "react";
-import { useLatestRef } from "@/hooks/useLatestRef";
 import { ChevronLeft, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { useLatestRef } from "@/hooks/useLatestRef";
 import type { CatalogItem } from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
@@ -29,7 +29,15 @@ type Place =
 	| { kind: "group"; group: string }
 	| { kind: "episodes"; series: CatalogItem; from: Place };
 
-/** The query for what's on screen, or the next page of it. */
+/** What the list shows. */
+type View =
+	| { status: "loading" }
+	| { status: "failed" }
+	| { status: "ready"; items: CatalogItem[]; next: string | null };
+
+const LOADING: View = { status: "loading" };
+
+/** The query for what's on screen, or the page of it from `cursor`. */
 const queryFor = (
 	type: ContentType,
 	place: Place,
@@ -41,15 +49,14 @@ const queryFor = (
 		case "groups":
 			return { kind: "groups", contentType: type };
 		case "group":
-			return cursor === undefined
-				? { kind: "items", contentType: type, group: place.group, limit: PAGE }
-				: { kind: "items", contentType: type, group: place.group, cursor, limit: PAGE };
+			return { kind: "items", contentType: type, group: place.group, cursor, limit: PAGE };
 		case "episodes":
 			return { kind: "episodes", seriesId: place.series.id };
 	}
 };
 
-const episodeLabel = (item: CatalogItem): string | null =>
+/** "S1 E2" for an episode, or null for anything else. */
+export const episodeLabel = (item: CatalogItem): string | null =>
 	item.season !== undefined && item.episode !== undefined
 		? `S${item.season} E${item.episode}`
 		: null;
@@ -64,10 +71,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	const [place, setPlace] = useState<Place>({ kind: "groups" });
 	const [typed, setTyped] = useState("");
 	const [search, setSearch] = useState("");
-	const [items, setItems] = useState<CatalogItem[]>([]);
-	const [next, setNext] = useState<string | null>(null);
-	const [loading, setLoading] = useState(true);
-	const [failed, setFailed] = useState(false);
+	const [view, setView] = useState<View>(LOADING);
 	const [message, setMessage] = useState<string | null>(null);
 
 	const searchRef = useLatestRef(search);
@@ -75,8 +79,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		const timer = setTimeout(() => {
 			const wanted = typed.trim();
 			if (wanted === searchRef.current) return;
-			setLoading(true);
-			setItems([]);
+			setView(LOADING);
 			setSearch(wanted);
 		}, SEARCH_DELAY_MS);
 		return () => clearTimeout(timer);
@@ -85,17 +88,11 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	useEffect(() => {
 		let current = true;
 		remoteCatalog(queryFor(type, place, search))
-			.then((page) => {
-				if (!current) return;
-				setItems(page.items);
-				setNext(page.next);
-				setFailed(false);
+			.then(({ items, next }) => {
+				if (current) setView({ status: "ready", items, next });
 			})
 			.catch(() => {
-				if (current) setFailed(true);
-			})
-			.finally(() => {
-				if (current) setLoading(false);
+				if (current) setView({ status: "failed" });
 			});
 		return () => {
 			current = false;
@@ -103,19 +100,16 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	}, [type, place, search]);
 
 	const go = (to: Place) => {
-		setLoading(true);
-		setItems([]);
+		setView(LOADING);
 		setPlace(to);
 	};
 
-	const more = () => {
-		if (next === null) return;
-		remoteCatalog(queryFor(type, place, search, next))
-			.then((page) => {
-				setItems((shown) => [...shown, ...page.items]);
-				setNext(page.next);
-			})
-			.catch(() => setFailed(true));
+	const more = (shown: CatalogItem[], cursor: string) => {
+		remoteCatalog(queryFor(type, place, search, cursor))
+			.then(({ items, next }) =>
+				setView({ status: "ready", items: [...shown, ...items], next })
+			)
+			.catch(() => setView({ status: "failed" }));
 	};
 
 	const play = (item: CatalogItem) => {
@@ -128,31 +122,34 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	const choose = (item: CatalogItem) => {
 		if (search === "" && place.kind === "groups") go({ kind: "group", group: item.id });
 		else if (item.contentType === "series" && episodeLabel(item) === null)
-			go({
-				kind: "episodes",
-				series: item,
-				from: search === "" ? place : { kind: "groups" },
-			});
+			// From search results, going back leaves the search for the groups.
+			go({ kind: "episodes", series: item, from: search ? { kind: "groups" } : place });
 		else play(item);
 	};
 
-	const back: Place = place.kind === "episodes" ? place.from : { kind: "groups" };
 	const title =
 		place.kind === "group"
 			? place.group
 			: place.kind === "episodes"
 				? place.series.name
 				: `On ${link.name}`;
+	const canGoBack = place.kind !== "groups" && search === "";
+	const nextPage =
+		view.status === "ready" && view.next !== null
+			? { shown: view.items, cursor: view.next }
+			: null;
 
 	return (
 		<div className="h-full flex flex-col">
 			<div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-border">
-				{place.kind !== "groups" && search === "" && (
+				{canGoBack && (
 					<button
 						type="button"
 						aria-label="Back"
 						className="p-1 rounded hover:bg-accent"
-						onClick={() => go(back)}
+						onClick={() =>
+							go(place.kind === "episodes" ? place.from : { kind: "groups" })
+						}
 					>
 						<ChevronLeft className="h-4 w-4" aria-hidden />
 					</button>
@@ -186,55 +183,60 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 				</p>
 			)}
 			<div className="flex-1 min-h-0 overflow-y-auto">
-				{failed ? (
+				{view.status === "failed" ? (
 					<p className="p-4 text-sm text-muted-foreground">
 						Couldn&apos;t load this from {link.name}.
 					</p>
-				) : loading ? (
+				) : view.status === "loading" ? (
 					<p className="p-4 text-sm text-muted-foreground">Loading…</p>
-				) : items.length === 0 ? (
+				) : view.items.length === 0 ? (
 					<p className="p-4 text-sm text-muted-foreground">
 						{search ? `Nothing on ${link.name} matches.` : "Nothing here."}
 					</p>
 				) : (
 					<ul aria-label={title}>
-						{items.map((item) => (
-							<li key={item.id}>
-								<button
-									type="button"
-									className="w-full flex items-center gap-3 px-4 py-2 text-left hover:bg-accent focus-visible:outline-hidden focus-visible:bg-accent"
-									onClick={() => choose(item)}
-								>
-									{item.logo ? (
-										<img
-											src={item.logo}
-											alt=""
-											className="h-8 w-8 object-contain shrink-0"
-										/>
-									) : (
-										<span
-											className="h-8 w-8 shrink-0 rounded bg-muted"
-											aria-hidden
-										/>
-									)}
-									<span className="flex-1 min-w-0">
-										<span className="block text-sm truncate">{item.name}</span>
-										{(item.nowPlaying || episodeLabel(item)) && (
-											<span className="block text-xs text-muted-foreground truncate">
-												{episodeLabel(item) ?? item.nowPlaying}
-											</span>
+						{view.items.map((item) => {
+							const line = episodeLabel(item) ?? item.nowPlaying;
+							return (
+								<li key={item.id}>
+									<button
+										type="button"
+										className="w-full flex items-center gap-3 px-4 py-2 text-left hover:bg-accent focus-visible:outline-hidden focus-visible:bg-accent"
+										onClick={() => choose(item)}
+									>
+										{item.logo ? (
+											<img
+												src={item.logo}
+												alt=""
+												className="h-8 w-8 object-contain shrink-0"
+											/>
+										) : (
+											<span
+												className="h-8 w-8 shrink-0 rounded bg-muted"
+												aria-hidden
+											/>
 										)}
-									</span>
-								</button>
-							</li>
-						))}
+										<span className="flex-1 min-w-0">
+											<span className="block text-sm truncate">
+												{item.name}
+											</span>
+											{line && (
+												<span className="block text-xs text-muted-foreground truncate">
+													{line}
+												</span>
+											)}
+										</span>
+									</button>
+								</li>
+							);
+						})}
 					</ul>
 				)}
-				{next !== null && !failed && !loading && (
+				{nextPage && (
 					<button
 						type="button"
 						className="m-4 px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80"
-						onClick={more}
+						onClick={() => more(nextPage.shown, nextPage.cursor)}
 					>
 						Load more
 					</button>

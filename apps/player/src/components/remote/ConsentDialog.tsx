@@ -4,11 +4,13 @@
 import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { Dialog } from "@/components/ui/dialog";
-import { useConsentRequest } from "@/hooks/useRemoteTarget";
+import { useConsentRequest, type ConsentRequest } from "@/hooks/useRemoteTarget";
+import { cn } from "@/lib/utils";
 import { deviceTypeName, formatCode, secondsLeft } from "@/lib/remote-devices";
 
-const BUTTON =
-	"px-4 py-2 text-sm rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
+const BUTTON = cn(
+	"px-4 py-2 text-sm rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+);
 
 /**
  * Asks whether another device may control this one, under "Only when
@@ -19,17 +21,34 @@ const BUTTON =
  */
 export const ConsentDialog = () => {
 	const { request, answer } = useConsentRequest();
+	// A new request gets a dialog, and a clock, of its own.
+	return request ? (
+		<ConsentPrompt
+			key={request.request}
+			request={request}
+			answer={(allow) => answer(request, allow)}
+		/>
+	) : null;
+};
+
+const ConsentPrompt = ({
+	request,
+	answer,
+}: {
+	request: ConsentRequest;
+	answer: (allow: boolean) => void;
+}) => {
 	const titleId = useId();
 	const [now, setNow] = useState(() => performance.now());
-	useEffect(() => {
-		if (!request) return;
-		const timer = setInterval(() => setNow(performance.now()), 250);
-		return () => clearInterval(timer);
-	}, [request]);
-	if (!request) return null;
-	// The clock last ticked before the request came, so it can't count more
-	// than the request had.
-	const left = Math.min(secondsLeft(request.expiresAt, now), secondsLeft(request.expiresInMs, 0));
+	useEffect(
+		() => {
+			const timer = setInterval(() => setNow(performance.now()), 250);
+			return () => clearInterval(timer);
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
+	);
+	const left = secondsLeft(request.expiresAt, now);
 	return createPortal(
 		<Dialog
 			onClose={() => answer(false)}

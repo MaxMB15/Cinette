@@ -37,11 +37,12 @@ export type Ended = { target: string } | "unreachable" | "lost" | "left";
 
 /** A sentence for a link that ended, or null when this device left. */
 export const endedText = (name: string, reason: Ended): string | null => {
-	if (reason === "left") return null;
-	if (reason === "lost") return `Lost the connection to ${name}.`;
-	if (reason === "unreachable")
-		return `Couldn't reach ${name}. A firewall on that device may be blocking Cinette.`;
-	switch (reason.target) {
+	const code = typeof reason === "string" ? reason : reason.target;
+	switch (code) {
+		case "left":
+			return null;
+		case "unreachable":
+			return `Couldn't reach ${name}. A firewall on that device may be blocking Cinette.`;
 		case "denied":
 			return `${name} didn't allow it.`;
 		case "expired":
@@ -63,6 +64,7 @@ export const endedText = (name: string, reason: Ended): string | null => {
 		case "identity_mismatch":
 			return `The device that answered isn't ${name}. Nothing was sent to it.`;
 		default:
+			// Lost, timed out, broke the protocol, or a reason from a newer version.
 			return `Lost the connection to ${name}.`;
 	}
 };

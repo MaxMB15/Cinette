@@ -31,11 +31,12 @@ interface DevicePickerProps {
 	onOpen?: () => void;
 }
 
-const BUTTON =
-	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
+const BUTTON = cn(
+	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+);
 
 const EntryIcon = ({ entry }: { entry: PickerEntry }) => {
-	const className = "h-5 w-5 shrink-0";
+	const className = cn("h-5 w-5 shrink-0");
 	switch (entry.kind) {
 		case "local":
 			return <Laptop className={className} aria-hidden />;
@@ -75,10 +76,6 @@ export const DevicePicker = ({
 	}, [open, onOpenRef]);
 	if (!open) return null;
 
-	const close = () => {
-		setConfirming(null);
-		onClose();
-	};
 	const choose = (entry: PickerEntry) => {
 		if (entry.opens) {
 			onOpenEntry?.(entry.id);
@@ -94,7 +91,7 @@ export const DevicePicker = ({
 	const warning = confirming && keepWarning(confirming);
 	return createPortal(
 		<Dialog
-			onClose={() => (confirming ? setConfirming(null) : close())}
+			onClose={() => (confirming ? setConfirming(null) : onClose())}
 			labelledBy={titleId}
 			// Above the full screen player, which sits at z-9999.
 			overlayClassName="z-10000"

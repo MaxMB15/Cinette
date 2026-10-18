@@ -100,6 +100,22 @@ describe("ConsentDialog", () => {
 		expect(remoteAnswerConsent).toHaveBeenCalledTimes(3);
 	});
 
+	it("ignores a hidden request when none is shown", async () => {
+		await shown();
+		hide(9);
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("stops its clock once it's answered", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+		render(<ConsentDialog />);
+		await act(async () => {});
+		ask(1);
+		expect(vi.getTimerCount()).toBe(1);
+		fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
 	it("goes away when its request is hidden, but not for another one", async () => {
 		await shown();
 		ask(5);

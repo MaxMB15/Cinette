@@ -14,8 +14,9 @@ import type { CinetteDestination } from "@/lib/cinette-destination";
 import { endedText, formatCode } from "@/lib/remote-devices";
 import { cn } from "@/lib/utils";
 
-const BUTTON =
-	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
+const BUTTON = cn(
+	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+);
 
 /**
  * Opens the device picker. While another device is controlled, it shows in
@@ -34,8 +35,8 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 			void leave();
 			return;
 		}
-		const device = devices.find((d) => cinetteId(d.deviceId) === id);
-		if (!device) return;
+		// The picker's rows come from this list, so the device is in it.
+		const device = devices.find((d) => cinetteId(d.deviceId) === id)!;
 		setError(null);
 		connect(device).catch((e: unknown) => setError(String(e)));
 	};
@@ -93,8 +94,8 @@ const Notice = ({ message, onDismiss }: { message: string; onDismiss: () => void
 export const ConnectStatusDialog = () => {
 	const { link, leave } = useRemoteControl();
 	const titleId = useId();
-	const phase = link?.phase;
-	if (!link || !phase) return null;
+	if (!link) return null;
+	const { phase } = link;
 	if (phase.phase !== "connecting" && phase.phase !== "verifying" && phase.phase !== "pending")
 		return null;
 	const code = link.code;

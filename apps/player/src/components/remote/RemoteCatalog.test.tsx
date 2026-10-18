@@ -2,12 +2,12 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 
 vi.mock("@/lib/tauri", () => ({ remoteCatalog: vi.fn() }));
 
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
-import { RemoteCatalog, PAGE, SEARCH_DELAY_MS } from "./RemoteCatalog";
+import { RemoteCatalog, PAGE, SEARCH_DELAY_MS, episodeLabel } from "./RemoteCatalog";
 import { createCinetteDestination, type CatalogItem } from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 
@@ -224,5 +224,139 @@ describe("RemoteCatalog", () => {
 		await screen.findByRole("button", { name: "Film" });
 		await act(async () => late({ items: [item("UK", "UK")], next: null }));
 		expect(screen.queryByRole("button", { name: "UK" })).toBeNull();
+	});
+
+	it("starts on the groups with an empty search box and no way back", async () => {
+		answer({ [groups("live")]: { items: [item("UK", "UK")], next: null } });
+		render(<RemoteCatalog link={link()} />);
+		await screen.findByRole("button", { name: "UK" });
+		const box = screen.getByRole("textbox", { name: "Search Living Room" });
+		expect(box).toHaveValue("");
+		expect(box).toHaveAttribute("placeholder", "Search Living Room");
+		expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+		for (const label of ["Live", "Movies", "Series"]) {
+			expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+		}
+	});
+
+	it("asks for each content type's groups", async () => {
+		vi.mocked(remoteCatalog).mockResolvedValue({ items: [], next: null });
+		render(<RemoteCatalog link={link()} />);
+		await screen.findByText("Nothing here.");
+		fireEvent.click(screen.getByRole("button", { name: "Movies" }));
+		await waitFor(() =>
+			expect(remoteCatalog).toHaveBeenLastCalledWith({ kind: "groups", contentType: "movie" })
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Live" }));
+		await waitFor(() =>
+			expect(remoteCatalog).toHaveBeenLastCalledWith({ kind: "groups", contentType: "live" })
+		);
+		expect(remoteCatalog.mock.calls[0][0]).toEqual({ kind: "groups", contentType: "live" });
+	});
+
+	it("says when the first page fails", async () => {
+		vi.mocked(remoteCatalog).mockRejectedValue("notConnected");
+		render(<RemoteCatalog link={link()} />);
+		expect(await screen.findByText("Couldn't load this from Living Room.")).toBeInTheDocument();
+	});
+
+	it("ignores a failure that comes after it moved on", async () => {
+		let fail: (e: unknown) => void = () => {};
+		vi.mocked(remoteCatalog)
+			.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)))
+			.mockResolvedValue({ items: [item("Film", "Film")], next: null });
+		render(<RemoteCatalog link={link()} />);
+		fireEvent.click(screen.getByRole("button", { name: "Movies" }));
+		await screen.findByRole("button", { name: "Film" });
+		await act(async () => fail("late"));
+		expect(screen.queryByText("Couldn't load this from Living Room.")).toBeNull();
+	});
+
+	it("shows a series' name over its episodes, and no line for an item without one", async () => {
+		const show = item("series-1", "The Show", { contentType: "series", group: "Drama" });
+		vi.mocked(remoteCatalog).mockImplementation(async (q: CatalogQuery) => {
+			if (q.kind === "groups") return { items: [item("Drama", "Drama")], next: null };
+			if (q.kind === "items") return { items: [show], next: null };
+			return { items: [item("ep-1", "Pilot", { contentType: "series" })], next: null };
+		});
+		render(<RemoteCatalog link={link()} />);
+		fireEvent.click(screen.getByRole("button", { name: "Series" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Drama" }));
+		const series = await screen.findByRole("button", { name: "The Show" });
+		expect(series.querySelectorAll("span > span")).toHaveLength(1);
+		fireEvent.click(series);
+		await screen.findByRole("button", { name: /Pilot/ });
+		expect(screen.getByRole("heading")).toHaveTextContent("The Show");
+	});
+
+	it("opens a series found by search, and goes back to the groups from it", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const show = item("series-1", "The Show", { contentType: "series" });
+		vi.mocked(remoteCatalog).mockImplementation(async (q: CatalogQuery) => {
+			if (q.kind === "groups") return { items: [item("UK", "UK")], next: null };
+			if (q.kind === "items") return { items: [item("live-1", "One")], next: null };
+			if (q.kind === "search") return { items: [show], next: null };
+			return { items: [item("ep-1", "Pilot", { season: 1, episode: 1 })], next: null };
+		});
+		render(<RemoteCatalog link={link()} />);
+		await act(async () => {});
+		fireEvent.click(screen.getByRole("button", { name: "UK" }));
+		await act(async () => {});
+		expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+		fireEvent.change(screen.getByRole("textbox"), { target: { value: "show" } });
+		await act(async () => vi.advanceTimersByTime(SEARCH_DELAY_MS));
+		await act(async () => {});
+		expect(screen.queryByRole("button", { name: "Back" }), "not while searching").toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "The Show" }));
+		fireEvent.change(screen.getByRole("textbox"), { target: { value: "" } });
+		await act(async () => vi.advanceTimersByTime(SEARCH_DELAY_MS));
+		await act(async () => {});
+		fireEvent.click(screen.getByRole("button", { name: "Back" }));
+		await act(async () => {});
+		expect(screen.getByRole("button", { name: "UK" })).toBeInTheDocument();
+		expect(screen.getByRole("heading")).toHaveTextContent("On Living Room");
+	});
+
+	it("waits for typing to pause for the whole delay", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		vi.mocked(remoteCatalog).mockResolvedValue({ items: [], next: null });
+		render(<RemoteCatalog link={link()} />);
+		await act(async () => {});
+		const box = screen.getByRole("textbox");
+		fireEvent.change(box, { target: { value: "bb" } });
+		await act(async () => vi.advanceTimersByTime(200));
+		fireEvent.change(box, { target: { value: "bbc" } });
+		await act(async () => vi.advanceTimersByTime(200));
+		expect(remoteCatalog).toHaveBeenCalledTimes(1);
+		await act(async () => vi.advanceTimersByTime(100));
+		expect(remoteCatalog).toHaveBeenCalledTimes(2);
+		expect(remoteCatalog).toHaveBeenLastCalledWith(
+			expect.objectContaining({ kind: "search", query: "bbc" })
+		);
+	});
+
+	it("clears a failed play's message when the next one works", async () => {
+		send.mockRejectedValueOnce("not_found");
+		answer({
+			[groups("live")]: { items: [item("UK", "UK")], next: null },
+			[groupItems("UK")]: { items: [item("live-1", "BBC One")], next: null },
+		});
+		render(<RemoteCatalog link={link()} />);
+		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
+		const channel = await screen.findByRole("button", { name: /BBC One/ });
+		fireEvent.click(channel);
+		await screen.findByRole("alert");
+		fireEvent.click(channel);
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+		expect(within(screen.getByRole("list")).getAllByRole("button")).toHaveLength(1);
+	});
+});
+
+describe("episodeLabel", () => {
+	it("needs both the season and the episode", () => {
+		expect(episodeLabel(item("a", "A", { season: 2, episode: 5 }))).toBe("S2 E5");
+		expect(episodeLabel(item("a", "A", { season: 2 }))).toBeNull();
+		expect(episodeLabel(item("a", "A", { episode: 5 }))).toBeNull();
+		expect(episodeLabel(item("a", "A", { season: 0, episode: 0 }))).toBe("S0 E0");
 	});
 });

@@ -54,6 +54,51 @@ describe("DevicePicker", () => {
 		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
+	it("says when it opens later, each time", () => {
+		const { onOpen, view } = picker({ open: false });
+		const props = {
+			entries,
+			activeId: "local",
+			onClose: () => {},
+			onSelect: () => {},
+			onOpen,
+		};
+		view.rerender(<DevicePicker open {...props} />);
+		expect(onOpen).toHaveBeenCalledTimes(1);
+		view.rerender(<DevicePicker open={false} {...props} />);
+		view.rerender(<DevicePicker open {...props} />);
+		expect(onOpen).toHaveBeenCalledTimes(2);
+	});
+
+	it("gives each kind of device its icon", () => {
+		picker();
+		const icon = (name: RegExp) => row(name).querySelector("svg")?.getAttribute("class");
+		expect(icon(/This device/)).toContain("lucide-laptop");
+		expect(icon(/Living Room/)).toContain("lucide-tv");
+		expect(icon(/Den/)).toContain("lucide-monitor-smartphone");
+		expect(icon(/Bedroom TV/)).toContain("lucide-cast");
+		expect(icon(/Samsung/)).toContain("lucide-airplay");
+	});
+
+	it("gives a Cinette device of unknown type the general icon", () => {
+		picker({ entries: [{ id: "cinette:x", kind: "cinette", name: "Odd" }] });
+		expect(row(/Odd/).querySelector("svg")?.getAttribute("class")).toContain(
+			"lucide-monitor-smartphone"
+		);
+	});
+
+	it("shows a spinner only while a row is checking", () => {
+		picker();
+		expect(row(/Attic/).querySelector("svg.animate-spin")).not.toBeNull();
+		expect(row(/Bedroom TV/).querySelector("svg.animate-spin")).toBeNull();
+	});
+
+	it("puts each row's status on a line of its own", () => {
+		picker();
+		expect(screen.getByText("Fire TV")).toBeInTheDocument();
+		expect(screen.getByText("Plays directly")).toBeInTheDocument();
+	});
+
 	it("groups the rows under their headings, TVs first among Cinette devices", () => {
 		picker();
 		const dialog = screen.getByRole("dialog", { name: "Play on" });
@@ -70,6 +115,9 @@ describe("DevicePicker", () => {
 				.map((b) => b.textContent)
 		).toEqual(["Living RoomFire TV", "DenMac"]);
 		expect(within(groups[0]).queryByRole("heading")).toBeNull();
+		for (const heading of ["Cinette devices", "Google Cast", "AirPlay"]) {
+			expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+		}
 	});
 
 	it("marks the row that plays now", () => {
@@ -104,6 +152,8 @@ describe("DevicePicker", () => {
 		expect(dialog).toHaveTextContent("needs this computer to stay on");
 		fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 		expect(onSelect).toHaveBeenCalledWith("cast:2");
+		// The parent here leaves it open, so the list comes back.
+		expect(screen.getByRole("dialog", { name: "Play on" })).toBeInTheDocument();
 	});
 
 	it("goes back to the list from the confirm step", () => {
