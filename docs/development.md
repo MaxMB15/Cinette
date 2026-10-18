@@ -112,8 +112,9 @@ found`. Downloads never decode or encode, so most of the build's decoders only r
 details such as the picture size, and the ASS and WebVTT encoders only decide which
 subtitle tracks ffmpeg keeps. Casting to a receiver that can't play a stream's audio
 converts it: the build has the AAC encoder, the decoders for the audio it converts
-(MP2, AC-3, E-AC-3, DTS and Opus) and the audio filters that turn any layout into
-stereo. On macOS it converts audio with Apple's `aac_at` encoder from AudioToolbox,
+(MP2, AC-3, E-AC-3, DTS and Opus), the audio filters that turn any layout into
+stereo, and `channelmap`, which renames the `5.1(side)` layout that Dolby and DTS
+decode to as standard 5.1 for the AAC encoder. On macOS it converts audio with Apple's `aac_at` encoder from AudioToolbox,
 and has VideoToolbox's H.264 encoder, with `bwdif` and `scale`, for MPEG-2 and
 interlaced channels. The `rawvideo` demuxer and decoder and the `null`
 muxer only serve the app's one-frame check that the hardware encoder works. It can't

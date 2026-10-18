@@ -68,6 +68,7 @@ fn lock_screen_details_are_accepted_on_the_desktop() {
     let skips = mpv_set_skip_intervals(app.handle(), app.state(), 10.0, 30.0);
     assert_eq!(block_on(skips), Ok(()));
     assert_eq!(get_state(&app).current_url, None);
+    assert!(app.state().playing().is_none());
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -95,6 +96,9 @@ mod with_a_stream {
         let info = block_on(mpv_get_media_info(h(), s())).unwrap();
         assert_eq!(info.file_format.as_deref(), Some("wav"));
         assert_eq!(info.audio_codec.as_deref(), Some("pcm_s16le"));
+        let (url, playing) = app.state().playing().unwrap();
+        assert_eq!(url, path);
+        assert_eq!(playing.file_format.as_deref(), Some("wav"));
 
         block_on(mpv_pause(h(), s())).unwrap();
         assert!(get_state(&app).is_paused);

@@ -5,7 +5,7 @@ use super::format::{
     audio_codec, container_from_demuxer, video_codec, AudioCodec, Container, PlayingInfo,
     StreamFormat, VideoCodec,
 };
-use super::hls::{inspect, HlsError, HlsInfo};
+use super::hls::{could_be_playlist, inspect, inspect_within, HlsError, HlsInfo};
 use super::probe::{self, AudioTrack, ProbeError, Probed};
 use super::{candidates, formats_for, is_hls_url, HlsCheck};
 use crate::http::test_server::{self, password, route, serve_once, serve_routes};
@@ -107,7 +107,7 @@ fn names_containers_and_codecs() {
     }
     for (name, codec) in [
         ("aac", AudioCodec::Aac),
-        ("aac_latm", AudioCodec::Aac),
+        ("aac_latm", AudioCodec::Other),
         ("mp3", AudioCodec::Mp3),
         ("mp3float", AudioCodec::Mp3),
         ("ac3", AudioCodec::Ac3),
@@ -212,12 +212,14 @@ fn parses_a_live_ts_probe() {
                 AudioTrack {
                     codec: "mp2".into(),
                     language: Some("deu".into()),
-                    default: false
+                    default: false,
+                    layout: Some("stereo".into())
                 },
                 AudioTrack {
                     codec: "ac3".into(),
                     language: Some("eng".into()),
-                    default: false
+                    default: false,
+                    layout: Some("5.1(side)".into())
                 },
             ],
             duration: None,
@@ -249,12 +251,14 @@ At least one output file must be specified
             AudioTrack {
                 codec: "dts".into(),
                 language: Some("eng".into()),
-                default: false
+                default: false,
+                layout: Some("5.1(side)".into())
             },
             AudioTrack {
                 codec: "eac3".into(),
                 language: Some("eng".into()),
-                default: true
+                default: true,
+                layout: Some("5.1(side)".into())
             },
         ]
     );
@@ -624,4 +628,79 @@ fn reads_each_audio_tracks_language() {
     assert_eq!(languages, vec![None, None, Some("fre"), None]);
     assert_eq!(probed.audio, Some(AudioCodec::Ac3));
     assert_eq!(probed.audio_tracks[1].codec, "vorbis");
+    let layouts: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.layout.as_deref())
+        .collect();
+    assert_eq!(
+        layouts,
+        vec![Some("stereo"), Some("stereo"), Some("5.1"), Some("stereo")]
+    );
+    // A layout ffmpeg doesn't name, or a stream with no rate.
+    let odd = "Input #0, wav, from 'x':
+  Stream #0:0: Audio: pcm_s16le, 48000 Hz, 3 channels, s16, 2304 kb/s
+  Stream #0:1: Audio: opus
+  Stream #0:2: Audio: aac, 48000 Hz
+  Stream #0:3: Audio: aac, 48000 Hz, , fltp
+";
+    let probed = probe::parse(odd).unwrap();
+    let layouts: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.layout.as_deref())
+        .collect();
+    assert_eq!(layouts, vec![Some("3 channels"), None, None, None]);
+}
+
+#[test]
+fn turns_down_a_body_that_starts_unlike_a_playlist() {
+    for start in [
+        &b""[..],
+        b"#",
+        b"#EXT",
+        b"#EXTM3U",
+        b"#EXTM3U\n#EXT-X-VERSION:3",
+    ] {
+        assert!(could_be_playlist(start), "{start:?}");
+    }
+    // A byte-order mark, even cut short by a read.
+    for start in [
+        &b"\xef"[..],
+        b"\xef\xbb",
+        b"\xef\xbb\xbf",
+        b"\xef\xbb\xbf#EXT",
+    ] {
+        assert!(could_be_playlist(start), "{start:?}");
+    }
+    for start in [
+        &b"<"[..],
+        b"<html>",
+        b"\x47\x40\x00",
+        b"#EXTINF",
+        b"\xef\xbb\xbf<",
+    ] {
+        assert!(!could_be_playlist(start), "{start:?}");
+    }
+}
+
+#[tokio::test]
+async fn gives_up_on_a_server_that_never_answers() {
+    // It takes the connection and says nothing.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let mut open = Vec::new();
+        for stream in listener.incoming().flatten() {
+            open.push(stream);
+        }
+    });
+    let url = format!("http://{address}/live/u/SECRET/1.m3u8");
+    let started = std::time::Instant::now();
+    let limit = std::time::Duration::from_millis(300);
+    assert_eq!(
+        inspect_within(&test_server::client(), &url, limit).await,
+        Err(HlsError::Unreachable)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

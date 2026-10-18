@@ -221,7 +221,7 @@ describe("backend commands", () => {
 			"getStreamFormats",
 			() => tauri.getStreamFormats(episode),
 			"get_stream_formats",
-			{ channel: episode, playing: undefined },
+			{ channel: episode },
 		],
 		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
 		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],

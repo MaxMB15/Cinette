@@ -652,6 +652,14 @@ impl MpvState {
         lock_or_recover(&self.inner).media_info()
     }
 
+    /// The URL loaded now and what mpv says about it, read together so they
+    /// belong to the same item. `None` when nothing is loaded.
+    pub fn playing(&self) -> Option<(String, MediaInfo)> {
+        let engine = lock_or_recover(&self.inner);
+        let url = engine.current_url()?.to_string();
+        Some((url, engine.media_info()))
+    }
+
     pub fn get_state(&self) -> PlayerState {
         let mut state = lock_or_recover(&self.inner).get_state();
         state.fallback_active = self.fallback_active.load(Ordering::Acquire);

@@ -81,9 +81,10 @@ DECODERS=aac,aac_latm,ac3,ass,dca,dvbsub,dvdsub,eac3,h264,hevc,movtext,mp2,mp3,m
 # can't play into AAC.
 ENCODERS=aac,ass,webvtt
 # Converting audio runs a filter graph with the format and resampling
-# filters that turn any layout into stereo. ffmpeg always builds in the
-# buffers at each end of a graph.
-FILTERS=aformat,anull,aresample,format,null
+# filters that turn any layout into stereo, and channelmap, which renames
+# 5.1(side) as 5.1 for the AAC encoder. ffmpeg always builds in the buffers
+# at each end of a graph.
+FILTERS=aformat,anull,aresample,channelmap,format,null
 
 OUT="${1:-}"
 if [[ -z "$OUT" ]]; then
