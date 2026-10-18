@@ -133,7 +133,9 @@ describe("RemoteControlSettings", () => {
 		expect(await screen.findByText(/Choosing this ends every session now/)).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
 		expect(
-			await screen.findByText(/without asking. Only choose this on a network you trust/)
+			await screen.findByText(
+				/Any device on this network can control playback here, with no dialog and no code to compare. Only choose this on a network you trust/
+			)
 		).toBeInTheDocument();
 	});
 

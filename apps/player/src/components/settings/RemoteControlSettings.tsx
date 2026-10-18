@@ -25,7 +25,7 @@ const MODES: { value: RemoteControlMode; label: string }[] = [
 ];
 
 const MODE_TEXT: Record<RemoteControlMode, string> = {
-	always: "Any device on this network can control playback here without asking. Only choose this on a network you trust.",
+	always: "Any device on this network can control playback here, with no dialog and no code to compare. Only choose this on a network you trust.",
 	ask: "This device asks each time another one wants to control it, and shows a code to compare.",
 	never: "No device can control this one. Choosing this ends every session now.",
 };
