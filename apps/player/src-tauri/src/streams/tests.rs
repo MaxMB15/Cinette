@@ -65,17 +65,18 @@ fn playing_ts() -> PlayingInfo {
     }
 }
 
+/// The login part of a stream's path. Only its shape matters here, so it's
+/// not the provider's password: a password in a URL to the plain-HTTP test
+/// server reads to CodeQL as one sent in the clear.
+const ACCOUNT: &str = "user/abc";
+
 const PANEL_FORMATS: &str = r#"{"user_info":{"auth":1,"allowed_output_formats":["m3u8","ts"]}}"#;
 
 #[tokio::test]
 async fn xtream_live_playing_here_offers_hls_then_ts_without_asking_the_stream() {
     let app = TestApp::new();
     let (panel, requests) = serve_routes(vec![route("player_api.php", "200 OK", PANEL_FORMATS)]);
-    let live = channel(
-        "p-live-7",
-        &format!("{panel}/live/user/{}/7.ts", password()),
-        "live",
-    );
+    let live = channel("p-live-7", &format!("{panel}/live/{ACCOUNT}/7.ts"), "live");
     add_provider(
         &app,
         ProviderType::Xtream,
@@ -124,7 +125,7 @@ async fn hls_checked_once_remembers_its_servers_cors_answer() {
         route(".m3u8", cors, media),
         route("/s.ts", cors, "ab"),
     ]);
-    let url = format!("{server}/live/user/{}/7.m3u8", password());
+    let url = format!("{server}/live/{ACCOUNT}/7.m3u8");
     let live = channel("p-live-7", &url, "live");
     add_provider(
         &app,
@@ -163,11 +164,7 @@ async fn probes_a_film_with_the_bundled_ffmpeg() {
 #[tokio::test]
 async fn a_refused_stream_says_so_and_an_unreachable_one_offers_nothing() {
     let app = TestApp::new();
-    let url = format!(
-        "{}/movie/user/{}/1.mkv",
-        serve_once("403 Forbidden", ""),
-        password()
-    );
+    let url = format!("{}/movie/{ACCOUNT}/1.mkv", serve_once("403 Forbidden", ""));
     let err = formats(&app, channel("m-1", &url, "movie"), None)
         .await
         .unwrap_err();
@@ -236,11 +233,7 @@ async fn a_panel_that_cant_be_asked_keeps_the_channels_own_url() {
         "500 Internal Server Error",
         "",
     )]);
-    let live = channel(
-        "p-live-7",
-        &format!("{panel}/live/user/{}/7.ts", password()),
-        "live",
-    );
+    let live = channel("p-live-7", &format!("{panel}/live/{ACCOUNT}/7.ts"), "live");
     add_provider(
         &app,
         ProviderType::Xtream,
@@ -284,7 +277,7 @@ async fn only_xtream_live_asks_the_panel_for_its_formats() {
     let (panel, requests) = serve_routes(vec![route("player_api.php", "200 OK", PANEL_FORMATS)]);
     let film = channel(
         "p-movie-9",
-        &format!("{panel}/movie/user/{}/9.mkv", password()),
+        &format!("{panel}/movie/{ACCOUNT}/9.mkv"),
         "movie",
     );
     add_provider(
@@ -306,11 +299,7 @@ async fn probes_the_first_url_when_the_channels_own_isnt_offered() {
         route("player_api.php", "200 OK", only_hls),
         route("/7.m3u8", "403 Forbidden", ""),
     ]);
-    let live = channel(
-        "p-live-7",
-        &format!("{panel}/live/user/{}/7.ts", password()),
-        "live",
-    );
+    let live = channel("p-live-7", &format!("{panel}/live/{ACCOUNT}/7.ts"), "live");
     add_provider(
         &app,
         ProviderType::Xtream,

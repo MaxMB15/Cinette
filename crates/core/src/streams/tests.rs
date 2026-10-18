@@ -459,10 +459,10 @@ async fn reads_why_the_check_failed() {
         ("403 Forbidden", HlsError::Refused(403)),
         ("404 Not Found", HlsError::Unreachable),
     ] {
-        let url = format!("{}/live/u/{}/1.m3u8", serve_once(status, ""), password());
+        let url = format!("{}/live/u/SECRET/1.m3u8", serve_once(status, ""));
         let err = inspect(&client, &url).await.unwrap_err();
         assert_eq!(err, expected, "{status}");
-        test_server::assert_hides(&err, &password());
+        test_server::assert_hides(&err, "SECRET");
     }
     let url = format!("{}/x.m3u8", test_server::refused_url());
     assert_eq!(inspect(&client, &url).await, Err(HlsError::Unreachable));
