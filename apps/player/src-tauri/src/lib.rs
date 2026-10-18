@@ -5,6 +5,8 @@ mod airplay;
 mod commands;
 mod convert;
 mod downloads;
+#[cfg(any(target_os = "ios", all(test, target_os = "linux")))]
+mod hls_out;
 #[cfg(desktop)]
 mod identifier;
 #[cfg(desktop)]
@@ -13,6 +15,8 @@ mod lan_server;
 mod logging;
 mod progress;
 mod streams;
+#[cfg(any(target_os = "ios", test))]
+mod wifi;
 #[cfg(test)]
 mod capabilities_tests;
 #[cfg(test)]
@@ -183,6 +187,9 @@ register_commands![
     progress::hand_off_progress,
     streams::get_stream_formats,
     airplay::airplay_load,
+    airplay::airplay_load_converted,
+    airplay::airplay_end_conversion,
+    airplay::airplay_converter_support,
     convert::get_converter_support,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,
@@ -338,6 +345,7 @@ pub fn run() {
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             app.manage(crate::downloads::recordings::Recorder::default());
             app.manage(crate::streams::StreamsState::default());
+            crate::airplay::install(app.handle());
             crate::downloads::manager::restore_settings(app.handle());
 
             #[cfg(desktop)]

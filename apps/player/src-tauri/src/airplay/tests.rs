@@ -67,3 +67,51 @@ async fn refuses_a_format_the_item_no_longer_has() {
         Err("That stream format is no longer offered".to_string())
     );
 }
+
+#[tokio::test]
+async fn converting_is_only_on_ios() {
+    let app = TestApp::new();
+    let channel = add_m3u_channel(&app);
+    let handle = app.handle();
+    let converted = airplay_load_converted(
+        handle.clone(),
+        app.state(),
+        handle.state::<StreamsState>(),
+        channel.clone(),
+        0,
+        None,
+    )
+    .await;
+    assert_eq!(
+        converted,
+        Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string())
+    );
+    // The format is checked first, as for a direct load.
+    let gone = airplay_load_converted(
+        handle.clone(),
+        app.state(),
+        handle.state::<StreamsState>(),
+        channel,
+        3,
+        None,
+    )
+    .await;
+    assert_eq!(
+        gone,
+        Err("That stream format is no longer offered".to_string())
+    );
+    assert_eq!(airplay_end_conversion().await, Ok(()));
+    assert_eq!(
+        airplay_converter_support().await,
+        Ok(ConverterSupport {
+            convert: false,
+            hardware_encoder: false
+        })
+    );
+    install(&handle);
+}
+
+#[test]
+fn copies_the_audio_airplay_plays() {
+    assert_eq!(AIRPLAY_AUDIO, ["aac", "mp3"]);
+}

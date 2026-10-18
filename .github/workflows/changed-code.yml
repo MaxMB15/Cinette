@@ -30,11 +30,13 @@ concurrency:
 # coverage-rust and the full job in mutants.yml for rust-mutants.
 env:
   CARGO_TERM_COLOR: always
-  # The plugin links libmpv, and the app also links GTK and WebKitGTK. These
+  # The plugin links libmpv, and the app also links GTK and WebKitGTK.
+  # hls-remux's C builds against FFmpeg for its tests and the app's. These
   # are the packages mutants.yml installs.
   APT_PACKAGES: >-
     libmpv-dev libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev
     libsoup-3.0-dev libegl-dev libwayland-dev libssl-dev pkg-config
+    libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
 
 jobs:
   # A pull request checks out its merge into dev. The first parent is dev, so

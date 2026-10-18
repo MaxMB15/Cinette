@@ -2384,6 +2384,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures-util",
+ "hls-remux",
  "libc",
  "mvp-core",
  "oslog",
