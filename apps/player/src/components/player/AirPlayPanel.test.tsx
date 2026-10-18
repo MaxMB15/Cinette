@@ -85,6 +85,7 @@ describe("AirPlayPanel", () => {
 
 	it("says it stopped, and why, with only the way back", () => {
 		const cases: [Partial<PlaybackState>, string][] = [
+			[{ connection: "lost" }, "Lost the connection to the TV."],
 			[
 				{ connection: "lost", error: { code: "failed", message: "x" } },
 				"Lost the connection to the TV.",
@@ -154,9 +155,9 @@ describe("AirPlayPanel", () => {
 
 	it("shows no subtitle picked as none", () => {
 		show(state({ subtitleId: null, audioId: null }));
-		expect(
-			(screen.getByRole("combobox", { name: "Subtitles" }) as HTMLSelectElement).value
-		).toBe("");
+		const subtitles = screen.getByRole("combobox", { name: "Subtitles" }) as HTMLSelectElement;
+		expect(subtitles.value).toBe("");
+		expect(subtitles.selectedIndex).toBe(0);
 	});
 
 	it("leaves out what the TV can't do", () => {
