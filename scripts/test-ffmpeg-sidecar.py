@@ -52,6 +52,9 @@ RECORDING_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max
 CONVERT_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
 # The same for AC-3, E-AC-3 and DTS, whose decoders mix down to stereo.
 CONVERT_DOWNMIX_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -downmix stereo -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+# The same for a 5.1 source, which stays 5.1. The side channels that
+# decoders give are renamed back ones, which ffmpeg's AAC encoder needs.
+CONVERT_SURROUND_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -i URL -map 0:v:0 -map 0:a:0? -sn -dn -c:v copy -af channelmap=channel_layout=5.1 -c:a aac -b:a 448k -f matroska -live 1 -flush_packets 1 pipe:1"
 
 # muxer_for_container in crates/core/src/downloads/ffmpeg.rs.
 MUXERS = {
@@ -127,6 +130,9 @@ def make_media(ffmpeg: str, folder: Path) -> None:
     run(*av, "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
         "-c:a", "ac3", www / "hevc.ts")
     run(*av, "-c:v", "mpeg2video", "-c:a", "mp2", www / "mpeg2.ts")
+    # The tone in all six channels, laid out as AC-3 decodes 5.1.
+    six = "pan=5.1(side)|" + "|".join(f"c{i}=c0" for i in range(6))
+    run(*av, *h264, "-af", six, "-c:a", "ac3", www / "ac3-51.mkv")
     # ffmpeg's own DTS encoder is marked experimental.
     run(*av, *h264, "-c:a", "dca", "-strict", "-2", www / "dts.mkv")
     run(*av, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
@@ -330,10 +336,12 @@ class Case:
     # crates/core/src/downloads/recording.rs reads these lines.
     error: str = ""
     recording: bool = False
-    # Run CONVERT_ARGS instead of a download's or a recording's, or
-    # CONVERT_DOWNMIX_ARGS with downmix.
+    # Run CONVERT_ARGS instead of a download's or a recording's,
+    # CONVERT_DOWNMIX_ARGS with downmix, or CONVERT_SURROUND_ARGS with
+    # surround, which also checks that the AAC is standard 5.1.
     converting: bool = False
     downmix: bool = False
+    surround: bool = False
     # "http", "https", or "tls13" or "tls12", a server that only takes that
     # TLS version.
     server: str = "http"
@@ -377,6 +385,8 @@ def cases() -> list[Case]:
              downmix=True),
         Case("Converting Opus for Cast", "/media/vp9.webm", "mkv", ["aac", "vp9"],
              converting=True),
+        Case("Converting AC-3 5.1 to 5.1 AAC for Cast", "/media/ac3-51.mkv", "mkv", av,
+             converting=True, surround=True),
         Case("Converting E-AC-3 in HLS for Cast", "/media/hls-eac3/index.m3u8", "mkv", av,
              converting=True, downmix=True),
         Case("HLS", "/media/hls/index.m3u8", "mkv", av),
@@ -419,7 +429,11 @@ def cases() -> list[Case]:
 
 def app_args(case: Case, url: str, dest: Path) -> list[str]:
     if case.converting:
-        args = (CONVERT_DOWNMIX_ARGS if case.downmix else CONVERT_ARGS).split()
+        args = (
+            CONVERT_SURROUND_ARGS if case.surround
+            else CONVERT_DOWNMIX_ARGS if case.downmix
+            else CONVERT_ARGS
+        ).split()
         return [url if arg == "URL" else str(dest) if arg == "pipe:1" else arg for arg in args]
     args = (RECORDING_ARGS if case.recording else DOWNLOAD_ARGS).split()
     muxer = MUXERS[case.container]
@@ -566,6 +580,8 @@ def check(ffmpeg: str, reader: str, case: Case, urls: dict[str, str], out: Path)
     codecs, seconds, listing = read_back(reader, dest)
     if codecs != sorted(case.codecs):
         return f"the file holds {codecs}, not {sorted(case.codecs)}:\n{listing}"
+    if case.surround and not re.search(r"Audio: aac.*, 5\.1,", listing):
+        return f"the AAC isn't standard 5.1:\n{listing}"
     if case.length is not None and (seconds is None or abs(seconds - case.length) > 0.5):
         return f"the file runs {seconds} seconds, not {case.length}"
     return ""

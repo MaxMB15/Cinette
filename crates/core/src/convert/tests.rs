@@ -128,10 +128,21 @@ fn a_transcode_needs_a_hardware_encoder() {
 }
 
 fn track(codec: &str, language: Option<&str>, default: bool) -> AudioTrack {
+    let layout = Some("stereo".to_string());
     AudioTrack {
         codec: codec.into(),
         language: language.map(String::from),
         default,
+        layout,
+    }
+}
+
+/// A track with the channel layout `layout`, as ffmpeg names it.
+fn laid_out(codec: &str, layout: Option<&str>) -> AudioTrack {
+    let layout = layout.map(String::from);
+    AudioTrack {
+        layout,
+        ..track(codec, None, true)
     }
 }
 
@@ -144,24 +155,27 @@ fn copies_a_playable_track_in_the_chosen_language() {
         track("mp3", Some("deu"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &CAST_AUDIO),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, true),
         (1, AudioPlan::Copy)
     );
     assert_eq!(
-        pick_audio(&tracks, Some("deu"), &CAST_AUDIO),
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, true),
         (3, AudioPlan::Copy)
     );
     // No language asked, or none matches: any playable track, the default
     // first.
-    assert_eq!(pick_audio(&tracks, None, &CAST_AUDIO), (1, AudioPlan::Copy));
     assert_eq!(
-        pick_audio(&tracks, Some("fre"), &CAST_AUDIO),
+        pick_audio(&tracks, None, &CAST_AUDIO, true),
+        (1, AudioPlan::Copy)
+    );
+    assert_eq!(
+        pick_audio(&tracks, Some("fre"), &CAST_AUDIO, true),
         (1, AudioPlan::Copy)
     );
     for codec in ["opus", "vorbis"] {
         let tracks = [track("dts", None, true), track(codec, None, false)];
         assert_eq!(
-            pick_audio(&tracks, None, &CAST_AUDIO),
+            pick_audio(&tracks, None, &CAST_AUDIO, true),
             (1, AudioPlan::Copy),
             "{codec}"
         );
@@ -177,17 +191,68 @@ fn copies_only_what_the_receivers_own_list_plays() {
         track("mp3", Some("eng"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &airplay),
+        pick_audio(&tracks, Some("eng"), &airplay, true),
         (1, AudioPlan::Copy)
     );
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &CAST_AUDIO),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, true),
         (0, AudioPlan::Copy)
     );
     let opus = [track("opus", None, false)];
     assert_eq!(
-        pick_audio(&opus, None, &airplay),
+        pick_audio(&opus, None, &airplay, true),
         (0, AudioPlan::Aac { downmix: false })
+    );
+}
+
+#[test]
+fn keeps_5_1_as_5_1_aac_where_the_receiver_takes_it() {
+    for layout in ["5.1(side)", "5.1"] {
+        for codec in ["ac3", "eac3", "dts", "mp2"] {
+            let tracks = [laid_out(codec, Some(layout))];
+            assert_eq!(
+                pick_audio(&tracks, None, &CAST_AUDIO, true),
+                (0, AudioPlan::Surround),
+                "{codec} {layout}"
+            );
+        }
+    }
+    // The stereo fallback.
+    let dolby = [laid_out("ac3", Some("5.1(side)"))];
+    assert_eq!(
+        pick_audio(&dolby, None, &CAST_AUDIO, false),
+        (0, AudioPlan::Aac { downmix: true })
+    );
+    // 5.1 AAC plays as it is.
+    let aac = [laid_out("aac", Some("5.1"))];
+    assert_eq!(
+        pick_audio(&aac, None, &CAST_AUDIO, true),
+        (0, AudioPlan::Copy)
+    );
+    // Anything but 5.1 becomes stereo.
+    for layout in [Some("7.1"), Some("stereo"), Some("6.0"), None] {
+        assert_eq!(
+            pick_audio(&[laid_out("ac3", layout)], None, &CAST_AUDIO, true),
+            (0, AudioPlan::Aac { downmix: true }),
+            "{layout:?}"
+        );
+    }
+}
+
+#[test]
+fn converts_5_1_to_5_1_aac_at_448k() {
+    let surround = plan(VideoPlan::Copy, AudioPlan::Surround);
+    let linux = joined(&args(URL, &surround, LINUX).unwrap());
+    assert!(
+        linux
+            .contains("-c:v copy -af channelmap=channel_layout=5.1 -c:a aac -b:a 448k -f matroska"),
+        "{linux}"
+    );
+    assert!(!linux.contains("-downmix"), "{linux}");
+    let mac = joined(&args(URL, &surround, MAC).unwrap());
+    assert!(
+        mac.contains("-c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 448k -f matroska"),
+        "{mac}"
     );
 }
 
@@ -199,28 +264,28 @@ fn converts_the_default_track_when_none_plays() {
         track("aac_latm", Some("eng"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("deu"), &CAST_AUDIO),
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, true),
         (1, AudioPlan::Aac { downmix: true })
     );
     // In the chosen language, though it isn't the default.
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &CAST_AUDIO),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, true),
         (2, AudioPlan::Aac { downmix: false })
     );
     let plain = [track("mp2", None, false), track("eac3", None, false)];
     assert_eq!(
-        pick_audio(&plain, None, &CAST_AUDIO),
+        pick_audio(&plain, None, &CAST_AUDIO, true),
         (0, AudioPlan::Aac { downmix: false })
     );
     for codec in ["ac3", "eac3", "dts"] {
         assert_eq!(
-            pick_audio(&[track(codec, None, false)], None, &CAST_AUDIO),
+            pick_audio(&[track(codec, None, false)], None, &CAST_AUDIO, true),
             (0, AudioPlan::Aac { downmix: true }),
             "{codec}"
         );
     }
     assert_eq!(
-        pick_audio(&[], Some("eng"), &CAST_AUDIO),
+        pick_audio(&[], Some("eng"), &CAST_AUDIO, true),
         (0, AudioPlan::None)
     );
 }
@@ -436,8 +501,12 @@ fn the_sidecar_test_runs_the_converters_arguments() {
     // scripts/test-ffmpeg-sidecar.py tests each ffmpeg build with a copy of
     // the arguments a conversion uses.
     let script = include_str!("../../../../scripts/test-ffmpeg-sidecar.py");
-    for (name, downmix) in [("CONVERT_ARGS", false), ("CONVERT_DOWNMIX_ARGS", true)] {
-        let plan = plan(VideoPlan::Copy, AudioPlan::Aac { downmix });
+    for (name, audio) in [
+        ("CONVERT_ARGS", AudioPlan::Aac { downmix: false }),
+        ("CONVERT_DOWNMIX_ARGS", AudioPlan::Aac { downmix: true }),
+        ("CONVERT_SURROUND_ARGS", AudioPlan::Surround),
+    ] {
+        let plan = plan(VideoPlan::Copy, audio);
         let convert = args("URL", &plan, LINUX).unwrap().join(" ");
         let line = format!("{name} = \"{convert}\"");
         assert!(

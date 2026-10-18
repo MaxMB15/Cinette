@@ -3,7 +3,8 @@
 
 //! Converting a stream on this device for a receiver that can't play it as
 //! it is. The video is copied, and an audio track the receiver plays is
-//! copied too when there is one. Otherwise the audio becomes stereo AAC. A
+//! copied too when there is one. Otherwise the audio becomes AAC: 5.1 from a
+//! 5.1 source when the receiver takes it, and stereo from anything else. A
 //! full video transcode only runs on a hardware encoder. ffmpeg writes live
 //! Matroska to its standard output, which the app serves to the receiver
 //! over the local network.
@@ -38,6 +39,8 @@ pub enum AudioPlan {
     Aac {
         downmix: bool,
     },
+    /// 5.1 AAC from a 5.1 source.
+    Surround,
 }
 
 /// The audio codecs a Cast receiver plays as they are, by ffmpeg's names,
@@ -49,11 +52,15 @@ const DECODER_DOWNMIX: [&str; 3] = ["ac3", "eac3", "dts"];
 /// Which audio track to keep, and how. A track in `language` comes first
 /// when there is one, and among those, one whose codec is in `playable`,
 /// the ffmpeg names of what the receiver plays as it is, so there's no
-/// second lossy pass. Otherwise the default track is converted.
+/// second lossy pass. Otherwise the default track is converted, to 5.1 AAC
+/// when it's 5.1 and the receiver takes `surround`, and to stereo AAC
+/// otherwise. Stereo is the fallback for a receiver that plays 5.1 AAC
+/// without sound.
 pub fn pick_audio(
     tracks: &[AudioTrack],
     language: Option<&str>,
     playable: &[&str],
+    surround: bool,
 ) -> (usize, AudioPlan) {
     let in_language: Vec<usize> = (0..tracks.len())
         .filter(|&i| language.is_some_and(|l| tracks[i].language.as_deref() == Some(l)))
@@ -74,7 +81,17 @@ pub fn pick_audio(
     {
         return (copy, AudioPlan::Copy);
     }
-    let downmix = DECODER_DOWNMIX.contains(&tracks[first].codec.as_str());
+    let track = &tracks[first];
+    // `5.1` or `5.1(side)`, which AC-3, E-AC-3 and DTS decode to.
+    if surround
+        && track
+            .layout
+            .as_deref()
+            .is_some_and(|l| l.starts_with("5.1"))
+    {
+        return (first, AudioPlan::Surround);
+    }
+    let downmix = DECODER_DOWNMIX.contains(&track.codec.as_str());
     (first, AudioPlan::Aac { downmix })
 }
 
@@ -110,6 +127,24 @@ impl AacEncoder {
         match self {
             AacEncoder::Ffmpeg => &["-c:a", "aac", "-b:a", "256k"],
             AacEncoder::AudioToolbox => &["-c:a", "aac_at", "-aac_at_mode", "cvbr", "-b:a", "256k"],
+        }
+    }
+
+    /// The arguments for 5.1 at 448 kbps. Decoders give `5.1(side)`, which
+    /// ffmpeg's encoder writes with no standard channel configuration, so
+    /// the side channels are renamed back ones first. Nothing is mixed.
+    /// Apple's encoder maps the layout itself.
+    fn surround_args(self) -> &'static [&'static str] {
+        match self {
+            AacEncoder::Ffmpeg => &[
+                "-af",
+                "channelmap=channel_layout=5.1",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "448k",
+            ],
+            AacEncoder::AudioToolbox => &["-c:a", "aac_at", "-aac_at_mode", "cvbr", "-b:a", "448k"],
         }
     }
 }
@@ -213,10 +248,12 @@ pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, N
         AudioPlan::Copy => args.extend(["-c:a".into(), "copy".into()]),
         AudioPlan::Aac { .. } => {
             args.extend(encoders.aac.args().iter().map(|a| a.to_string()));
-            // Stereo whatever the decoder gave, until a receiver is shown to
-            // play 5.1 AAC with sound. After a decoder's own downmix this
-            // changes nothing.
+            // Stereo whatever the decoder gave. After a decoder's own
+            // downmix this changes nothing.
             args.extend(["-ac".into(), "2".into()]);
+        }
+        AudioPlan::Surround => {
+            args.extend(encoders.aac.surround_args().iter().map(|a| a.to_string()));
         }
     }
     args.extend(
