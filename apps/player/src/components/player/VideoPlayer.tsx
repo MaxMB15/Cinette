@@ -214,6 +214,8 @@ export const PlayerView = () => {
 	// TV box has no touch screen, so it keeps the volume and shortcut
 	// controls for its remote.
 	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
+	// A TV is driven by its remote's D-pad.
+	const remote = getPlatform() === "tv";
 	const fullscreenButton = hasFullscreenButton(touchDevice, layoutMode);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
@@ -1092,8 +1094,10 @@ export const PlayerView = () => {
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
+			// The remote is a TV's only way to the controls, so any key shows
+			// them, and each one keeps them up while focus moves between them.
+			if (remote) revealControls();
 			// On a TV the D-pad moves between the controls once one has focus.
-			const remote = getPlatform() === "tv";
 			if (remote && isArrow && isKeyboardFocusedControl(e.target)) return;
 
 			const action = resolvePlayerHotkey(e, skip, remote);
@@ -1215,6 +1219,8 @@ export const PlayerView = () => {
 			skipBy,
 			seekTo,
 			skipSegment,
+			remote,
+			revealControls,
 		]
 	);
 
@@ -1405,6 +1411,7 @@ export const PlayerView = () => {
 					// or after it fails, and the spinner or the error has the middle
 					// to itself.
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
+					onHideWithFocus={remote ? () => containerRef.current?.focus() : undefined}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}

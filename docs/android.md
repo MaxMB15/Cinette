@@ -182,7 +182,8 @@ On a TV, `getPlatform()` in `lib/platform.ts` returns `tv` and the app uses
   intro when the skip button shows, and otherwise plays or pauses.
 - **Player:** Left and Right seek, as on desktop. Up and Down move focus into the
   controls, since the TV has its own volume, and once a control has focus the arrows
-  move between controls.
+  move between controls. Any key shows the controls and keeps them up. When they hide
+  with a control focused, the player takes focus back, so Left and Right seek again.
 - **Back:** `MainActivity.kt` hands it to `window.__cinetteBack`, which sends Escape to
   the focused element (`lib/tv-back.ts`). Escape already closes the top layer: a
   dialog, a player panel, full screen, then the player itself. When nothing takes

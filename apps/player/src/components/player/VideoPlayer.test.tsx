@@ -1634,6 +1634,41 @@ describe("keyboard shortcuts", () => {
 			expect(await press("ArrowRight")).toBe(true);
 			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
 		});
+
+		describe("as the controls show and hide", () => {
+			beforeEach(() => {
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			});
+
+			it("shows them on any key, and keeps them up while focus moves between them", async () => {
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+				act(() => vi.advanceTimersByTime(4000));
+				expect(controlBar()).toHaveClass("opacity-0");
+				// Down moves focus into the controls, so they show.
+				await press("ArrowDown");
+				expect(controlBar()).toHaveClass("opacity-100");
+
+				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+				act(() => vi.advanceTimersByTime(3000));
+				await press("ArrowLeft");
+				act(() => vi.advanceTimersByTime(3000));
+				expect(controlBar()).toHaveClass("opacity-100");
+				act(() => vi.advanceTimersByTime(1000));
+				expect(controlBar()).toHaveClass("opacity-0");
+			});
+
+			it("gives the player focus back as they hide, so Left and Right seek again", async () => {
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+				act(() => vi.advanceTimersByTime(4000));
+				expect(controlBar()).toHaveClass("opacity-0");
+				expect(document.activeElement).toBe(playerArea());
+				expect(await press("ArrowRight")).toBe(false);
+				expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+			});
+		});
 	});
 
 	it("goes full screen with F or a double click", async () => {
@@ -1877,6 +1912,22 @@ describe("showing and hiding the controls", () => {
 		act(() => vi.advanceTimersByTime(4000));
 		await press("ArrowUp");
 		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+	});
+
+	it("stays hidden on a desktop for a key that isn't a shortcut", async () => {
+		await openItem(lanternKeeper());
+		act(() => vi.advanceTimersByTime(4000));
+		await press("x");
+		expect(controlBar()).toHaveClass("opacity-0");
+	});
+
+	it("leaves keyboard focus on a control as they hide on a desktop", async () => {
+		await openItem(lanternKeeper());
+		const stop = screen.getByRole("button", { name: "Stop" });
+		stop.focus();
+		act(() => vi.advanceTimersByTime(4000));
+		expect(controlBar()).toHaveClass("opacity-0");
+		expect(document.activeElement).toBe(stop);
 	});
 
 	describe("on a touch screen", () => {

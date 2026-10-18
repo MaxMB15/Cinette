@@ -27,6 +27,7 @@ import type { PlayerState } from "@/lib/types";
 import type { SkipIntervals } from "@/lib/player-prefs";
 import { useState, useEffect, useRef } from "react";
 import { useChanged } from "@/hooks/useChanged";
+import { useLatestRef } from "@/hooks/useLatestRef";
 import { CenterControls } from "./CenterControls";
 import { SkipIcon } from "./SkipIcon";
 
@@ -71,6 +72,13 @@ interface ControlsProps {
 	 * the middle row, and on desktop it takes them out of the bar.
 	 */
 	hideCenterControls?: boolean;
+	/**
+	 * Called when the bar hides while one of its controls has focus, or while
+	 * nothing has, as when the focused control went away with the bar. On a TV
+	 * the player takes focus here, so the remote doesn't move between controls
+	 * nobody can see.
+	 */
+	onHideWithFocus?: () => void;
 }
 
 export const Controls = ({
@@ -101,6 +109,7 @@ export const Controls = ({
 	onSkip,
 	touchLayout = false,
 	hideCenterControls = false,
+	onHideWithFocus,
 }: ControlsProps) => {
 	// Set while a pointer presses the seek bar. `pointerId` is that pointer,
 	// so another finger's release doesn't end the press. `to` is where a drag
@@ -128,6 +137,19 @@ export const Controls = ({
 
 	// Hiding the controls closes the menu with them.
 	if (!visible && sourceMenuOpen) setSourceMenuOpen(false);
+
+	// Focus on the page itself is focus that went away, as it does with the
+	// source menu when the bar hides.
+	const barRef = useRef<HTMLDivElement>(null);
+	const onHideWithFocusRef = useLatestRef(onHideWithFocus);
+	useEffect(() => {
+		if (visible) return;
+		const active = document.activeElement;
+		// Stryker disable next-line OptionalChaining: the bar is always on the page when this runs, so the ref is never null.
+		if (active === document.body || barRef.current?.contains(active)) {
+			onHideWithFocusRef.current?.();
+		}
+	}, [visible, onHideWithFocusRef]);
 
 	const hasDuration = state.duration > 0;
 	// A new stream starts from its own position, and a drag that began on the
@@ -182,6 +204,7 @@ export const Controls = ({
 				/>
 			)}
 			<div
+				ref={barRef}
 				className={cn(
 					"absolute bottom-0 left-0 right-0 bg-linear-to-t from-black/80 to-transparent p-4 pt-12 pb-[calc(1rem+env(safe-area-inset-bottom))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] transition-opacity duration-300",
 					visible ? "opacity-100" : "opacity-0 pointer-events-none"
