@@ -1188,6 +1188,8 @@ fn each_request_gets_the_next_id() {
         phone,
         CatalogQuery::Groups {
             content_type: "live".into(),
+            cursor: None,
+            limit: 10,
         },
     );
     let third = net.command(phone, Command::Stop);

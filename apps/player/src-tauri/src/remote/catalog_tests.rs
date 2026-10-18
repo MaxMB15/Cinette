@@ -37,13 +37,7 @@ fn ids(page: &CatalogPage) -> Vec<&str> {
 
 #[test]
 fn groups_are_listed_once_each_in_name_order_for_one_type() {
-    let page = answer_from(
-        &channels(),
-        &[],
-        CatalogQuery::Groups {
-            content_type: "live".into(),
-        },
-    );
+    let page = answer_from(&channels(), &[], groups_query(None, 10));
     let (items, next) = page.as_ref().unwrap();
     assert_eq!(ids(&page), ["News", "news", "UK"]);
     assert_eq!(items[2].name, "UK");
@@ -52,19 +46,42 @@ fn groups_are_listed_once_each_in_name_order_for_one_type() {
     assert_eq!(*next, None);
 }
 
+fn groups_query(cursor: Option<&str>, limit: u32) -> CatalogQuery {
+    CatalogQuery::Groups {
+        content_type: "live".into(),
+        cursor: cursor.map(str::to_owned),
+        limit,
+    }
+}
+
 #[test]
-fn groups_stop_at_a_page() {
+fn groups_come_a_page_at_a_time() {
     let many: Vec<Channel> = (0..MAX_PAGE + 5)
         .map(|i| channel(&format!("c{i}"), "x", "live", &format!("g{i:03}")))
         .collect();
-    let page = answer_from(
-        &many,
-        &[],
-        CatalogQuery::Groups {
-            content_type: "live".into(),
-        },
+    let first = answer_from(&many, &[], groups_query(None, 500)).unwrap();
+    assert_eq!(first.0.len(), MAX_PAGE, "no more than a page");
+    assert_eq!(first.0[0].id, "g000");
+    assert_eq!(first.1.as_deref(), Some("g100"));
+
+    let rest = answer_from(&many, &[], groups_query(Some("g100"), 10)).unwrap();
+    let names: Vec<&str> = rest.0.iter().map(|g| g.id.as_str()).collect();
+    assert_eq!(names, ["g100", "g101", "g102", "g103", "g104"]);
+    assert_eq!(rest.1, None, "the last page has no next");
+
+    let two = answer_from(&many, &[], groups_query(Some("g001"), 2)).unwrap();
+    assert_eq!(two.0.len(), 2);
+    assert_eq!(two.1.as_deref(), Some("g003"));
+    let one = answer_from(&many, &[], groups_query(None, 0)).unwrap();
+    assert_eq!(one.0.len(), 1, "at least one");
+}
+
+#[test]
+fn a_group_that_is_gone_is_not_found() {
+    assert_eq!(
+        answer_from(&channels(), &[], groups_query(Some("Sport"), 10)),
+        Err(ErrorCode::NotFound)
     );
-    assert_eq!(page.unwrap().0.len(), MAX_PAGE);
 }
 
 fn items_query(cursor: Option<&str>, limit: u32) -> CatalogQuery {

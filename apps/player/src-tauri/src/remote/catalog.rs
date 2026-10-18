@@ -96,7 +96,11 @@ pub(crate) fn answer_from(
 ) -> CatalogPage {
     let limit = |limit: u32| (limit as usize).clamp(1, MAX_PAGE);
     match query {
-        CatalogQuery::Groups { content_type } => {
+        CatalogQuery::Groups {
+            content_type,
+            cursor,
+            limit: wanted,
+        } => {
             let mut groups: Vec<&str> = channels
                 .iter()
                 .filter(|c| c.content_type == content_type)
@@ -104,12 +108,19 @@ pub(crate) fn answer_from(
                 .collect();
             groups.sort_by_cached_key(|g| (g.to_lowercase(), g.to_string()));
             groups.dedup();
+            let start = match cursor {
+                None => 0,
+                Some(name) => groups
+                    .iter()
+                    .position(|g| *g == name)
+                    .ok_or(ErrorCode::NotFound)?,
+            };
+            let end = (start + limit(wanted)).min(groups.len());
             // A group goes out as an item whose id and name are the group's
             // name, which `items` takes back.
-            let page = groups
-                .into_iter()
-                .take(MAX_PAGE)
-                .map(|g| CatalogItem {
+            let page = groups[start..end]
+                .iter()
+                .map(|&g| CatalogItem {
                     id: g.to_owned(),
                     name: g.to_owned(),
                     content_type: content_type.clone(),
@@ -117,7 +128,8 @@ pub(crate) fn answer_from(
                     ..CatalogItem::default()
                 })
                 .collect();
-            Ok((page, None))
+            let next = groups.get(end).map(|g| (*g).to_owned());
+            Ok((page, next))
         }
         CatalogQuery::Items {
             content_type,

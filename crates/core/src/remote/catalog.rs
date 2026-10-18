@@ -98,8 +98,14 @@ pub fn provider_host(server: &str) -> Option<String> {
     rename_all_fields = "camelCase"
 )]
 pub enum CatalogQuery {
-    /// The groups of one content type.
-    Groups { content_type: String },
+    /// The groups of one content type, a page at a time, in name order.
+    /// The cursor is the name of the first group on the page.
+    Groups {
+        content_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        limit: u32,
+    },
     /// The items in one group, a page at a time.
     Items {
         content_type: String,
@@ -125,7 +131,17 @@ impl CatalogQuery {
         let content_type_ok = |t: &str| matches!(t, "live" | "movie" | "series");
         let id_ok = |s: &str| !s.is_empty() && s.len() <= MAX_ID_BYTES;
         match &mut self {
-            CatalogQuery::Groups { content_type } => content_type_ok(content_type).then_some(()),
+            CatalogQuery::Groups {
+                content_type,
+                cursor,
+                limit,
+            } => {
+                *limit = (*limit).clamp(1, MAX_PAGE as u32);
+                // A group's name can be empty, so its cursor can be too.
+                (content_type_ok(content_type)
+                    && cursor.as_deref().is_none_or(|c| c.len() <= MAX_ID_BYTES))
+                .then_some(())
+            }
             CatalogQuery::Items {
                 content_type,
                 group,
