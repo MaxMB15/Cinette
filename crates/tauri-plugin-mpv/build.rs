@@ -19,10 +19,11 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
-    // iOS gets libmpv from MPVKit, which the Xcode project links. The
-    // `#[cfg]` blocks in `link_libmpv` check the host, not the target, so
-    // they'd point an iOS build at the macOS dylib.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("ios") {
+    // iOS gets libmpv from MPVKit, which the Xcode project links, and
+    // Android has none yet. The `#[cfg]` blocks in `link_libmpv` check the
+    // host, not the target, so they'd point these builds at the host's.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS");
+    if !matches!(target_os.as_deref(), Ok("ios" | "android")) {
         link_libmpv();
     }
     tauri_plugin::Builder::new(COMMANDS).ios_path("ios").build();

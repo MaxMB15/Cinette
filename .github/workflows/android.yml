@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
+name: Android
+
+# Builds a debug APK for 64-bit and 32-bit ARM. Nothing is signed or
+# uploaded; this catches changes that break the Android build.
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "apps/player/**"
+      - "crates/**"
+      - ".cargo/config*"
+      - ".github/actions/setup-frontend/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/android.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "apps/player/**"
+      - "crates/**"
+      - ".cargo/config*"
+      - ".github/actions/setup-frontend/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The NDK docs/android.md names. The runner's SDK has its own, which can
+  # change under the build.
+  NDK_VERSION: 30.0.16248370
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android,armv7-linux-androideabi
+          components: clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target"
+          shared-key: android
+          # Pull requests restore from dev. Only dev saves, since a copy saved
+          # from main would only take up room in the 10 GB cache.
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+
+      - name: Install Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # The runner comes with the Android SDK. This adds the NDK version above.
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up the frontend
+        uses: ./.github/actions/setup-frontend
+
+      # Builds the frontend, the Rust library for both ABIs and the Gradle
+      # project.
+      - name: Build the APK
+        working-directory: apps/player
+        run: pnpm tauri android build --debug --target aarch64 --target armv7 --apk --ci
+
+      - name: Check the APK
+        run: |
+          APK="apps/player/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
+          test -f "$APK"
+          for abi in arm64-v8a armeabi-v7a; do
+            unzip -l "$APK" | grep "lib/$abi/libmax_video_player_lib.so"
+          done
+          AAPT2="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt2"
+          BADGING="$RUNNER_TEMP/badging.txt"
+          "$AAPT2" dump badging "$APK" > "$BADGING"
+          cat "$BADGING"
+          # minSdk is set in app/build.gradle.kts. aapt2 from build-tools 34
+          # and older calls the line sdkVersion.
+          if ! grep -Eq "^(minSdkVersion|sdkVersion):'28'$" "$BADGING"; then
+            echo "::error::The APK's minimum SDK isn't 28"
+            exit 1
+          fi
+          if ! grep -q "^leanback-launchable-activity:" "$BADGING"; then
+            echo "::error::The APK has no TV launcher activity"
+            exit 1
+          fi
+
+      # The build above shows warnings without failing. This lints the
+      # workspace for both Android targets, including the code that only
+      # builds there, and fails on any warning. The NDK's clang builds the C
+      # code that some crates bundle.
+      - name: Lint the workspace for Android with Clippy
+        run: |
+          BIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$BIN/aarch64-linux-android28-clang"
+          export CC_armv7_linux_androideabi="$BIN/armv7a-linux-androideabi28-clang"
+          export AR_aarch64_linux_android="$BIN/llvm-ar"
+          export AR_armv7_linux_androideabi="$BIN/llvm-ar"
+          for target in aarch64-linux-android armv7-linux-androideabi; do
+            cargo clippy --locked --workspace --target "$target" --all-targets -- -D warnings
+          done

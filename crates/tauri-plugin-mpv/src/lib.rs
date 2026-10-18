@@ -4,21 +4,34 @@
 #[cfg(any(target_os = "ios", test))]
 mod artwork;
 mod commands;
-mod engine;
-mod idle_inhibit;
-mod loadfile;
-mod lock;
 mod log_url;
+
+// libmpv isn't built for Android yet, so nothing that calls it builds there.
+#[cfg(not(target_os = "android"))]
+mod engine;
+#[cfg(not(target_os = "android"))]
+mod idle_inhibit;
+#[cfg(not(target_os = "android"))]
+mod loadfile;
+#[cfg(not(target_os = "android"))]
+mod lock;
+#[cfg(not(target_os = "android"))]
 pub mod mpv;
+#[cfg(not(target_os = "android"))]
 mod reconnect;
+#[cfg(not(target_os = "android"))]
 mod renderer;
+
+#[cfg(target_os = "android")]
+#[path = "android_unsupported.rs"]
+pub mod mpv;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gl_render;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod options;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "android")))]
 mod test_support;
 
 #[cfg(target_os = "ios")]

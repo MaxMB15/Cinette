@@ -18,7 +18,8 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon and Intel) and Linux (x86_64). Windows
-isn't supported yet. For the iPhone and iPad app, see [ios.md](ios.md).
+isn't supported yet. For the iPhone and iPad app, see [ios.md](ios.md), and for
+Android TV, [android.md](android.md).
 
 ### macOS
 

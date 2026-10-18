@@ -195,6 +195,14 @@ View, Stage Manager and rotation switch between them:
 on every resize. A device counts as an iPhone when the short side of its screen is
 under 744 points.
 
+### Android
+
+The Android build runs the same frontend and commands, and leaves out what iOS
+leaves out. It can't play yet: libmpv isn't built for Android, so the plugin's `mpv`
+module is `android_unsupported.rs` there, with the same methods as `mpv.rs`. A load
+fails with an error, and the rest do nothing. HTTPS goes through rustls with Android's
+certificate checks. [android.md](android.md) covers building and the Gradle project.
+
 ## Data flow
 
 ```
