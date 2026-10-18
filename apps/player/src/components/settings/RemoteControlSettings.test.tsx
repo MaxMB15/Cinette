@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { RemoteSettings } from "@/lib/tauri";
 
 vi.mock("@/lib/tauri", () => ({
@@ -64,8 +65,28 @@ describe("RemoteControlSettings", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
+	it("shows the settings that loaded last when an earlier load answers late", async () => {
+		let late: (s: RemoteSettings) => void = () => {};
+		vi.mocked(remoteGetSettings)
+			.mockImplementationOnce(() => new Promise((r) => (late = r)))
+			.mockResolvedValueOnce({ ...defaults, deviceName: "Den" });
+		render(<RemoteControlSettings />, { wrapper: StrictMode });
+		await waitFor(() => expect(screen.getByLabelText("Device name")).toHaveValue("Den"));
+		await act(async () => late({ ...defaults, deviceName: "Old" }));
+		expect(screen.getByLabelText("Device name")).toHaveValue("Den");
+	});
+
+	it("saves nothing when the default name is left empty", async () => {
+		await shown();
+		fireEvent.blur(screen.getByLabelText("Device name"));
+		expect(remoteSetSettings).not.toHaveBeenCalled();
+	});
+
 	it("shows the defaults: discoverable, only when allowed, the type as name", async () => {
 		await shown();
+		const discoverable = screen.getByRole("button", { name: "Discoverable on this network" });
+		expect(discoverable).toHaveTextContent("On");
+		expect(discoverable).toHaveClass("bg-primary");
 		expect(
 			screen.getByRole("button", { name: "Discoverable on this network" })
 		).toHaveAttribute("aria-pressed", "true");
@@ -129,8 +150,9 @@ describe("RemoteControlSettings", () => {
 			deviceName: "Living Room",
 		});
 		await waitFor(() => expect(field).toHaveValue("Living Room"));
+		fireEvent.change(field, { target: { value: "Living Room 2" } });
 		fireEvent.keyDown(field, { key: "a" });
-		expect(remoteSetSettings).toHaveBeenCalledTimes(1);
+		expect(remoteSetSettings, "only Enter saves").toHaveBeenCalledTimes(1);
 	});
 
 	it("goes back to the default name when the field is cleared", async () => {
@@ -173,7 +195,9 @@ describe("RemoteControlSettings", () => {
 			},
 		];
 		await shown();
-		expect(screen.getByText("Phone").closest("li")).toHaveTextContent("Phone · iPhone");
+		expect(screen.getByText("Phone").closest("li")?.textContent).toBe(
+			"Phone · iPhoneDisconnect"
+		);
 		expect(screen.getByText("Laptop").closest("li")).toHaveTextContent(
 			"Laptop · Mac · reconnecting"
 		);

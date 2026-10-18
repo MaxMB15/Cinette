@@ -36,27 +36,34 @@ const MODE_TEXT: Record<RemoteControlMode, string> = {
  * a new identity. Shows nothing where remote control doesn't run.
  */
 export const RemoteControlSettings = () => {
-	const [settings, setSettings] = useState<RemoteSettings | null>(null);
-	const [name, setName] = useState("");
+	// The saved settings, and the name as typed so far.
+	const [form, setForm] = useState<{ settings: RemoteSettings; name: string } | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
 	const sessions = useRemoteSessions();
 
-	useEffect(() => {
-		let current = true;
-		remoteGetSettings()
-			.then((loaded) => {
-				if (!current) return;
-				setSettings(loaded);
-				setName(loaded.deviceName ?? "");
-			})
-			.catch(() => {});
-		return () => {
-			current = false;
-		};
-	}, []);
+	const show = (settings: RemoteSettings) =>
+		setForm({ settings, name: settings.deviceName ?? "" });
 
-	if (!settings) return null;
+	useEffect(
+		() => {
+			let current = true;
+			remoteGetSettings()
+				.then((loaded) => {
+					if (current) show(loaded);
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
+	);
+
+	if (!form) return null;
+	const { settings, name } = form;
+	const setName = (typed: string) => setForm({ settings, name: typed });
 
 	const save = (
 		change: Partial<Pick<RemoteSettings, "discoverable" | "remoteControl" | "deviceName">>
@@ -68,10 +75,7 @@ export const RemoteControlSettings = () => {
 			deviceName: settings.deviceName,
 			...change,
 		})
-			.then((saved) => {
-				setSettings(saved);
-				setName(saved.deviceName ?? "");
-			})
+			.then(show)
 			.catch((e: unknown) => setError(`Couldn't save: ${String(e)}`));
 	};
 
@@ -203,7 +207,7 @@ export const RemoteControlSettings = () => {
 				onConfirm={() => {
 					setConfirmReset(false);
 					remoteResetIdentity()
-						.then(setSettings)
+						.then(show)
 						.catch((e: unknown) => setError(`Couldn't reset: ${String(e)}`));
 				}}
 			/>
