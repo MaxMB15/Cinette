@@ -8,9 +8,9 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
-	useRef,
 	useSyncExternalStore,
 } from "react";
+import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import type { Channel, Category, Provider } from "@/lib/types";
 import {
 	createRefreshTracker,
@@ -21,13 +21,12 @@ import {
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { useLatestRef } from "@/hooks/useLatestRef";
+import { channelsQuery, providersQuery } from "@/lib/queries";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
 	loadXtreamProvider,
-	getProviders,
 	removeProvider as removeProviderApi,
-	getAllChannels,
 	refreshProvider as refreshProviderApi,
 	refreshEpg as refreshEpgApi,
 	updateProvider as updateProviderApi,
@@ -155,40 +154,50 @@ interface ChannelsContextValue {
 
 export const ChannelsContext = createContext<ChannelsContextValue | null>(null);
 
+// The lists before their first load, kept the same between renders.
+const NO_CHANNELS: Channel[] = [];
+const NO_PROVIDERS: Provider[] = [];
+
 export const useChannelsProvider = (): ChannelsContextValue => {
-	const [channels, setChannels] = useState<Channel[]>([]);
-	const [categories, setCategories] = useState<Category[]>([]);
-	const [providers, setProviders] = useState<Provider[]>([]);
-	const [initialized, setInitialized] = useState(false);
+	const queryClient = useQueryClient();
+	const channelsResult = useQuery(channelsQuery());
+	const providersResult = useQuery(providersQuery());
+	const channels = channelsResult.data ?? NO_CHANNELS;
+	const providers = providersResult.data ?? NO_PROVIDERS;
+	const categories = useMemo<Category[]>(() => deriveCategories(channels), [channels]);
+	// Both lists must load, or fail to, before the splash screen can go, so it
+	// doesn't dismiss before the UI has data to display.
+	const initialized = !channelsResult.isPending && !providersResult.isPending;
 	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	// An action's error. A list that failed to load shows its own error below.
+	const [actionError, setError] = useState<string | null>(null);
+	const loadError = providersResult.error ?? channelsResult.error;
+	const error = actionError ?? (loadError ? String(loadError) : null);
 	const guideVersion = useSyncExternalStore(subscribeToGuide, getGuideVersion);
-	const channelIndex = useMemo(() => {
-		const m = new Map<string, number>();
-		channels.forEach((ch, i) => m.set(ch.id, i));
-		return m;
-	}, [channels]);
 
-	const refreshChannels = useCallback(async () => {
-		try {
-			const chs = await getAllChannels();
-			setChannels(chs);
-			setCategories(deriveCategories(chs));
-		} catch (e) {
-			setError(String(e));
-		}
-	}, []);
+	/**
+	 * Loads a list again with a new backend call, cancelling one already on
+	 * the way, which could answer from before a change. Returns the list, or
+	 * null when the call fails. A failure leaves the last list in place and
+	 * shows as the list's error.
+	 */
+	const reload = useCallback(
+		async <T>(queryKey: QueryKey): Promise<T | null> => {
+			await queryClient.refetchQueries({ queryKey, exact: true }, { cancelRefetch: true });
+			const state = queryClient.getQueryState<T>(queryKey);
+			return state?.status === "success" ? (state.data ?? null) : null;
+		},
+		[queryClient]
+	);
 
-	const refreshProviders = useCallback(async () => {
-		try {
-			const list = await getProviders();
-			setProviders(list);
-			return list;
-		} catch (e) {
-			setError(String(e));
-			return null;
-		}
-	}, []);
+	const refreshChannels = useCallback(async (): Promise<void> => {
+		await reload<Channel[]>(channelsQuery().queryKey);
+	}, [reload]);
+
+	const refreshProviders = useCallback(
+		(): Promise<Provider[] | null> => reload<Provider[]>(providersQuery().queryKey),
+		[reload]
+	);
 
 	const refreshProvider = useCallback(
 		async (id: string) => {
@@ -290,9 +299,10 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		async (channelId: string) => {
 			try {
 				const newFavorite = await toggleFavoriteApi(channelId);
-				setChannels((prev) => {
-					const idx = channelIndex.get(channelId);
-					if (idx === undefined) return prev;
+				// Only this channel changes, so the list isn't loaded again.
+				queryClient.setQueryData(channelsQuery().queryKey, (prev) => {
+					const idx = prev?.findIndex((ch) => ch.id === channelId) ?? -1;
+					if (!prev || idx === -1) return prev;
 					const next = [...prev];
 					next[idx] = { ...next[idx], isFavorite: newFavorite };
 					return next;
@@ -301,20 +311,8 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				setError(String(e));
 			}
 		},
-		[channelIndex]
+		[queryClient]
 	);
-
-	// Initial load — ref guard prevents StrictMode double-mount from firing twice.
-	// Both providers and channels must load before `initialized` is set so the
-	// splash screen does not dismiss before the UI has data to display.
-	const didInit = useRef(false);
-	useEffect(() => {
-		if (didInit.current) return;
-		didInit.current = true;
-		Promise.all([refreshProviders(), refreshChannels()]).finally(() => {
-			setInitialized(true);
-		});
-	}, [refreshProviders, refreshChannels]);
 
 	// Poll every 60s to check if any provider/EPG is due for refresh.
 	// Using a ref-based approach avoids resetting timers on every providers update.

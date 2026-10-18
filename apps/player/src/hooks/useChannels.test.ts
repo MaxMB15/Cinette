@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { wrapperFor } from "@/test/query";
 import {
 	loadProviderSettings,
 	saveProviderSettings,
@@ -224,7 +225,7 @@ describe("useChannelsProvider", () => {
 		mockGetProviders.mockResolvedValue(providers);
 		mockGetAllChannels.mockResolvedValue(channels);
 
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		expect(result.current.providers).toEqual(providers);
@@ -238,7 +239,7 @@ describe("useChannelsProvider", () => {
 			{ id: "c3", name: "ESPN", groupTitle: "Sports", isFavorite: false },
 		] as never[]);
 
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		expect(result.current.categories).toHaveLength(2);
@@ -255,7 +256,7 @@ describe("useChannelsProvider", () => {
 		] as never[]);
 		mockToggleFavorite.mockResolvedValue(true as never);
 
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.channels.length).toBe(2));
 
 		await act(async () => {
@@ -269,14 +270,14 @@ describe("useChannelsProvider", () => {
 	it("sets error when getProviders fails", async () => {
 		mockGetProviders.mockRejectedValue(new Error("network"));
 
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		expect(result.current.error).toContain("network");
 	});
 
 	it("loadM3u sets loading state and refreshes after", async () => {
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		mockGetProviders.mockClear();
@@ -295,7 +296,7 @@ describe("useChannelsProvider", () => {
 	it("loadM3u sets error and rethrows on failure", async () => {
 		mockLoadM3u.mockRejectedValue(new Error("bad playlist"));
 
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		let caught: Error | null = null;
@@ -313,7 +314,7 @@ describe("useChannelsProvider", () => {
 	});
 
 	it("refreshProvider calls API then refreshes providers and channels", async () => {
-		const { result } = renderHook(() => useChannelsProvider());
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));
 
 		mockRefreshProvider.mockClear();
@@ -344,7 +345,7 @@ describe("useChannelsProvider", () => {
 		]);
 		mockRefreshEpg.mockRejectedValue(new Error("login failed"));
 		try {
-			renderHook(() => useChannelsProvider());
+			renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 			// The poll on mount runs before the providers load, so the first try is a minute in.
 			await act(() => vi.advanceTimersByTimeAsync(0));
 			expect(mockRefreshEpg).not.toHaveBeenCalled();
@@ -372,6 +373,7 @@ import {
 } from "@/lib/tauri";
 import { ChannelsContext, useChannels } from "./useChannels";
 import { makeProvider } from "@/test/app-fixtures";
+import type { Provider } from "@/lib/types";
 import { deferred } from "@/test/deferred";
 
 const channel = (id: string, isFavorite = false) =>
@@ -379,7 +381,7 @@ const channel = (id: string, isFavorite = false) =>
 
 /** Mounts the provider and waits for its first load. */
 const mountProvider = async () => {
-	const hook = renderHook(() => useChannelsProvider());
+	const hook = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 	await waitFor(() => expect(hook.result.current.initialized).toBe(true));
 	return hook;
 };
@@ -401,6 +403,49 @@ describe("useChannelsProvider provider changes", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
 		localStorage.clear();
+	});
+
+	it("makes a new call when it reloads during a load, and keeps the newer list", async () => {
+		mockGetProviders.mockResolvedValueOnce([makeProvider({ name: "First" })]);
+		const { result } = await mountProvider();
+		const older = deferred<Provider[]>();
+		const newer = makeProvider({ name: "Newer" });
+		mockGetProviders.mockReturnValueOnce(older.promise).mockResolvedValueOnce([newer]);
+
+		let first!: Promise<Provider[] | null>;
+		let second!: Promise<Provider[] | null>;
+		await act(async () => {
+			first = result.current.refreshProviders();
+			second = result.current.refreshProviders();
+			await second;
+		});
+		await act(async () => {
+			older.resolve([makeProvider({ name: "Older" })]);
+			await first;
+		});
+
+		expect(mockGetProviders).toHaveBeenCalledTimes(3);
+		await expect(second).resolves.toEqual([newer]);
+		expect(result.current.providers).toEqual([newer]);
+	});
+
+	it("reloads the providers and returns them, or null when the call fails", async () => {
+		const { result } = await mountProvider();
+		const p = makeProvider();
+		mockGetProviders.mockResolvedValueOnce([p]);
+		let list: Provider[] | null = null;
+		await act(async () => {
+			list = await result.current.refreshProviders();
+		});
+		expect(list).toEqual([p]);
+
+		mockGetProviders.mockRejectedValueOnce("store locked");
+		await act(async () => {
+			list = await result.current.refreshProviders();
+		});
+		expect(list).toBeNull();
+		expect(result.current.providers).toEqual([p]);
+		expect(result.current.error).toBe("store locked");
 	});
 
 	it("saves an edited provider and reloads the provider list", async () => {
@@ -544,7 +589,7 @@ describe("useChannelsProvider provider changes", () => {
 			mockGetProviders.mockResolvedValue([
 				makeProvider({ lastUpdated: new Date(0).toISOString() }),
 			]);
-			renderHook(() => useChannelsProvider());
+			renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 
 			// The poll on mount runs before the providers load.
 			await act(() => vi.advanceTimersByTimeAsync(0));
@@ -570,7 +615,7 @@ describe("useChannelsProvider guide refreshes", () => {
 	/** Mounts the provider with fake timers and lets its first load finish. */
 	const mountWithFakeTimers = async () => {
 		vi.useFakeTimers();
-		const hook = renderHook(() => useChannelsProvider());
+		const hook = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await act(() => vi.advanceTimersByTimeAsync(0));
 		return hook;
 	};
