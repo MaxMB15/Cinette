@@ -9,6 +9,12 @@ fn main() {
         embed_macos_rpath();
     }
 
+    // Cargo builds every crate type, and nothing uses the cdylib on iOS. It
+    // can't find libmpv there, so its mpv symbols are left for the loader.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
+        println!("cargo:rustc-link-arg-cdylib=-Wl,-undefined,dynamic_lookup");
+    }
+
     tauri_build::build();
 }
 
