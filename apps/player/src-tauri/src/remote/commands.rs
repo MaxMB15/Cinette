@@ -7,6 +7,10 @@
 //! same everywhere. Where remote control doesn't run yet (iOS) they fail
 //! with [`UNAVAILABLE`].
 
+// Only the error path builds where remote control doesn't run, so the
+// types it would read go unused there.
+#![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+
 use mvp_core::models::channel::Channel;
 use mvp_core::remote::message::{Capabilities, ErrorCode, PlaybackSnapshot, PlaybackStatus, Track};
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
