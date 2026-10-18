@@ -107,12 +107,13 @@ export const loadXtreamProvider = (
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
 
 /**
- * The formats `channel` comes in, for Cast and AirPlay. Pass `playing` while
- * mpv plays it, so the provider isn't asked for a second connection.
- * Rejects with `REFUSED` when the provider turns the login down.
+ * The formats `channel` comes in, for Cast and AirPlay. While mpv plays it,
+ * the backend asks mpv, so the provider isn't asked for a second
+ * connection. Rejects with `REFUSED` when the provider turns the login
+ * down, and with `NOT_READY` while mpv is still opening it.
  */
-export const getStreamFormats = (channel: Channel, playing?: PlayingInfo): Promise<StreamFormats> =>
-	invoke("get_stream_formats", { channel, playing });
+export const getStreamFormats = (channel: Channel): Promise<StreamFormats> =>
+	invoke("get_stream_formats", { channel });
 
 export const removeProvider = (id: string): Promise<void> => invoke("remove_provider", { id });
 
