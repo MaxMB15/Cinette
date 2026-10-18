@@ -162,6 +162,38 @@ async fn answers_nothing_outside_its_token() {
     assert!(raw(&server, b"").await.is_empty());
 }
 
+/// What a request sent in two parts gets back, with a pause between them.
+async fn in_two_parts(server: &LanServer, first: &[u8], rest: &[u8]) -> Vec<u8> {
+    let mut socket = TcpStream::connect(address(server)).await.unwrap();
+    socket.write_all(first).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The server may have closed the connection already.
+    let _ = socket.write_all(rest).await;
+    let mut reply = Vec::new();
+    let _ = socket.read_to_end(&mut reply).await;
+    reply
+}
+
+#[tokio::test]
+async fn answers_a_head_that_arrives_in_parts_up_to_its_limit() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    server.files.put("a.vtt", "text/vtt", b"WEBVTT\n".to_vec());
+    let host = format!("http://{}", address(&server));
+    let line = format!(
+        "GET {} HTTP/1.1\r\n",
+        server.url("a.vtt").replacen(&host, "", 1)
+    );
+    let reply = in_two_parts(&server, line.as_bytes(), b"\r\n").await;
+    assert!(reply.ends_with(b"WEBVTT\n"));
+    // The limit is how much may arrive before the head ends.
+    let mut full = format!("{line}X-Pad: ").into_bytes();
+    full.resize(MAX_HEAD, b'a');
+    let reply = in_two_parts(&server, &full, b"\r\n\r\n").await;
+    assert!(reply.ends_with(b"WEBVTT\n"));
+    full.push(b'a');
+    assert!(in_two_parts(&server, &full, b"\r\n\r\n").await.is_empty());
+}
+
 #[tokio::test]
 async fn stops_when_dropped_and_ends_its_requests() {
     let server = LanServer::start(LOOPBACK).await.unwrap();

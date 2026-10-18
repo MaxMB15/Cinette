@@ -5,7 +5,7 @@
 //! to a "receiver" on loopback. The copies here need nothing the pinned
 //! sidecar lacks.
 
-use super::support::{choose, read_encoders, test_encode_args, Listed};
+use super::support::{choose, read_encoders, run, test_encode_args, Listed};
 use super::*;
 use crate::downloads::test_support::{missing_url, process_runs, video_url};
 use crate::test_support::TestApp;
@@ -281,6 +281,14 @@ async fn reports_what_this_computers_ffmpeg_can_convert() {
     let json = serde_json::to_value(support).unwrap();
     assert_eq!(json.as_object().unwrap().len(), 2);
     assert_eq!(json["convert"], support.convert);
+}
+
+#[test]
+fn runs_the_sidecar_and_keeps_its_output_only_when_it_succeeds() {
+    let app = TestApp::new();
+    let version = run(&app.handle(), &["-version"], None).unwrap();
+    assert!(version.starts_with(b"ffmpeg version "));
+    assert_eq!(run(&app.handle(), &["-no-such-option"], Some(b"x")), None);
 }
 
 /// A live WAV, like a radio channel: a header with no end, then audio at

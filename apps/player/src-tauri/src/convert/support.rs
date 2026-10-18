@@ -88,8 +88,9 @@ pub fn test_encode_args(encoder: HardwareEncoder) -> Vec<String> {
     .to_vec()
 }
 
-/// One blank 64x64 frame in 4:2:0.
-const FRAME_BYTES: usize = 64 * 64 * 3 / 2;
+/// One blank 64x64 frame in 4:2:0: a full-size plane of brightness and two
+/// quarter-size planes of color.
+const FRAME_BYTES: usize = 6144;
 
 /// What this computer's ffmpeg can do, asked once a run.
 pub async fn support<R: Runtime>(app: &AppHandle<R>) -> Support {
@@ -133,7 +134,11 @@ fn check<R: Runtime>(app: &AppHandle<R>) -> Support {
 
 /// Runs the sidecar and returns its standard output, or `None` when it
 /// can't start or fails.
-fn run<R: Runtime>(app: &AppHandle<R>, args: &[&str], input: Option<&[u8]>) -> Option<Vec<u8>> {
+pub(super) fn run<R: Runtime>(
+    app: &AppHandle<R>,
+    args: &[&str],
+    input: Option<&[u8]>,
+) -> Option<Vec<u8>> {
     use tauri_plugin_shell::ShellExt;
     let sidecar = app
         .shell()

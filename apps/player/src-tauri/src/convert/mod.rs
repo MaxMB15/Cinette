@@ -24,7 +24,6 @@ use tauri::{AppHandle, Runtime};
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::sync::{broadcast, oneshot, watch};
-use tokio::task::JoinHandle;
 
 use crate::lan_server::{LanServer, LivePipe};
 
@@ -86,20 +85,9 @@ pub struct Conversion {
     pub ended: watch::Receiver<Option<Ended>>,
     /// ffmpeg's process id, while it runs.
     pub(crate) pid: Option<u32>,
-    /// Tells the reader task to kill ffmpeg and wait for it.
-    stop: Option<oneshot::Sender<()>>,
-    errors_task: JoinHandle<()>,
-}
-
-impl Drop for Conversion {
-    fn drop(&mut self) {
-        // The reader task kills ffmpeg and waits for it, so no process is
-        // left behind. It may have ended already, which is fine.
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
-        self.errors_task.abort();
-    }
+    /// Dropping it tells the reader task to kill ffmpeg and wait for it, so
+    /// no process is left behind. The error reader then ends with ffmpeg.
+    _stop: oneshot::Sender<()>,
 }
 
 /// Starts converting `source` by `plan` for the receiver at `receiver`.
@@ -133,7 +121,7 @@ pub async fn start<R: Runtime>(
     let (ended_tx, mut ended) = watch::channel::<Option<Ended>>(None);
 
     let (stop, stopped) = oneshot::channel();
-    let errors_task = tokio::spawn(collect_errors(stderr, errors.clone()));
+    tokio::spawn(collect_errors(stderr, errors.clone()));
     tokio::spawn(read_output(
         child,
         stdout,
@@ -165,8 +153,7 @@ pub async fn start<R: Runtime>(
     let header = match header {
         Ok(Ok(header)) => header,
         failed => {
-            let _ = stop.send(());
-            errors_task.abort();
+            drop(stop);
             return Err(failed
                 .unwrap_or(Err(ConvertError::Unreachable))
                 .unwrap_err());
@@ -186,8 +173,7 @@ pub async fn start<R: Runtime>(
         server,
         ended,
         pid,
-        stop: Some(stop),
-        errors_task,
+        _stop: stop,
     })
 }
 
@@ -235,7 +221,7 @@ async fn collect_errors(mut stderr: tokio::process::ChildStderr, errors: Arc<Mut
 }
 
 /// Reads ffmpeg's output into pieces until it exits, then says how it
-/// ended. `stop` kills ffmpeg and waits for it, and ends the task.
+/// ended. `stop` closing kills ffmpeg and waits for it, and ends the task.
 async fn read_output(
     mut child: Child,
     mut stdout: tokio::process::ChildStdout,
