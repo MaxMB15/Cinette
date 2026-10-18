@@ -2556,6 +2556,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures-util",
+ "if-addrs",
  "libc",
  "mdns-sd",
  "mvp-core",

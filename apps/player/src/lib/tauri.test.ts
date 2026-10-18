@@ -650,6 +650,7 @@ describe("backend commands", () => {
 			{ receiverId: "cast:tv", action: { action: "seek", to: 12 } },
 		],
 		["castStop", () => tauri.castStop("cast:tv"), "cast_stop", { receiverId: "cast:tv" }],
+		["getVpnActive", () => tauri.getVpnActive(), "get_vpn_active"],
 		[
 			"holdCastReceivers",
 			() => tauri.holdCastReceivers(["cast:tv"]),
