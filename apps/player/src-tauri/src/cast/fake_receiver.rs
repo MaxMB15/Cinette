@@ -144,10 +144,10 @@ pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
                 (_, "CLOSE") if message.destination == "receiver-0" => return,
                 _ => None,
             };
-            if let Some(answer) = answer {
-                if stream.write_all(&answer).await.is_err() {
-                    return;
-                }
+            if let Some(answer) = answer
+                && stream.write_all(&answer).await.is_err()
+            {
+                return;
             }
         }
     }

@@ -6,7 +6,7 @@
 use std::net::SocketAddr;
 use std::sync::mpsc;
 
-use mvp_core::http::test_server::{refused_url, serve_once};
+use mvp_core::http::test_server::{refused_url, route, serve_once, serve_routes};
 use mvp_core::models::channel::Channel;
 use serde_json::{json, Value};
 use tauri::{Listener, Manager};
@@ -41,6 +41,28 @@ fn channel(id: &str, url: &str, content_type: &str) -> Channel {
         content_type: content_type.into(),
         ..Channel::default()
     }
+}
+
+/// A live channel's `.m3u8` that redirects to a playlist on another host,
+/// as Xtream panels do, both with CORS headers. Returns the original link.
+fn redirected_playlist(cors: bool) -> String {
+    let allow = if cors {
+        "\r\nAccess-Control-Allow-Origin: *"
+    } else {
+        ""
+    };
+    let (target, _) = serve_routes(vec![
+        route(
+            ".m3u8",
+            &format!("200 OK{allow}"),
+            "#EXTM3U\n#EXTINF:4.0,\ns.ts\n",
+        ),
+        route("/s.ts", &format!("200 OK{allow}"), "ab"),
+    ]);
+    let moved =
+        format!("302 Found\r\nLocation: {target}/hls/token-for-this-address/index.m3u8{allow}");
+    let (panel, _) = serve_routes(vec![route("/live/", &moved, "")]);
+    format!("{panel}/live/u/SECRET/7.m3u8")
 }
 
 fn direct(container: &str) -> Value {
@@ -83,13 +105,15 @@ async fn plays_an_item_directly_and_controls_it() {
     let events = updates(&app);
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    let movie = channel("m-1", "http://192.0.2.1/movie/u/SECRET/1.m3u8", "movie");
+    let link = redirected_playlist(true);
+    let movie = channel("m-1", &link, "movie");
     add_channel(&app, &movie);
 
     load(&app, "cast:tv", &movie, direct("hls-ts"), Some(30.0)).unwrap();
     let loaded = next_of(&mut got, "LOAD").await;
     let media = &loaded.body["media"];
-    assert_eq!(media["contentId"], "http://192.0.2.1/movie/u/SECRET/1.m3u8");
+    // The original link, not where it redirects.
+    assert_eq!(media["contentId"], link.as_str());
     assert_eq!(media["contentType"], "application/x-mpegURL");
     assert_eq!(media["hlsSegmentFormat"], "ts");
     assert_eq!(media["streamType"], "BUFFERED");
@@ -182,6 +206,36 @@ async fn a_live_channel_starts_at_the_live_edge_with_its_logo_when_it_may_leave(
     let loaded = next_of(&mut got, "LOAD").await;
     assert_eq!(loaded.body["media"]["contentType"], "video/x-matroska");
     assert_eq!(loaded.body["media"]["metadata"].get("images"), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_direct_playlist_is_checked_when_it_is_cast() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let not_playlist = serve_once("200 OK\r\nAccess-Control-Allow-Origin: *", "<html>");
+    let missing = serve_once("404 Not Found", "");
+    let refused = serve_once("403 Forbidden", "");
+    for (base, expected) in [
+        (not_playlist, "notPlaylist"),
+        (missing, "notPlaylist"),
+        (refused, "refused"),
+    ] {
+        let live = channel("l-1", &format!("{base}/live/u/SECRET/7.m3u8"), "live");
+        add_channel(&app, &live);
+        assert_eq!(
+            load(&app, "cast:tv", &live, direct("hls-ts"), None),
+            Err(json!(expected))
+        );
+    }
+    let live = channel("l-2", &redirected_playlist(false), "live");
+    add_channel(&app, &live);
+    assert_eq!(
+        load(&app, "cast:tv", &live, direct("hls-fmp4"), None),
+        Err(json!("cors"))
+    );
+    // Nothing reached the receiver.
+    assert!(got.try_recv().is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]
