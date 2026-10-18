@@ -74,6 +74,8 @@ gitignore = true
 exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
+    # Bonjour discovery, likewise macOS only.
+    "apps/player/src-tauri/src/discovery/macos.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
 ]
