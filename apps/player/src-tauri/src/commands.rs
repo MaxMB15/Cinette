@@ -310,14 +310,23 @@ pub async fn get_xtream_series_episodes(
     state: State<'_, AppState>,
     channel_id: String,
 ) -> Result<Vec<Channel>, String> {
+    fetch_series_episodes(&state.cache, &channel_id).await
+}
+
+/// The episodes of the Xtream series `channel_id`, from its provider. The
+/// cache is only locked while the series and its provider are read.
+pub(crate) async fn fetch_series_episodes(
+    cache: &Mutex<CacheStore>,
+    channel_id: &str,
+) -> Result<Vec<Channel>, String> {
     let (channel, provider) = {
-        let cache = state.cache.lock().map_err(|e| e.to_string())?;
+        let cache = cache.lock().map_err(|e| e.to_string())?;
         let ch = cache
-            .get_channel_by_id(&channel_id)
+            .get_channel_by_id(channel_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Channel not found: {channel_id}"))?;
         let p = cache
-            .get_provider_for_channel(&channel_id)
+            .get_provider_for_channel(channel_id)
             .map_err(|e| e.to_string())?
             .ok_or("Provider not found for channel")?;
         (ch, p)

@@ -29,20 +29,24 @@ import type { Channel } from "@/lib/types";
  */
 const useTauriEvent = <T>(event: string, handler: (payload: T) => void): void => {
 	const handlerRef = useLatestRef(handler);
-	useEffect(() => {
-		let current = true;
-		let unlisten: (() => void) | undefined;
-		listen<T>(event, ({ payload }) => handlerRef.current(payload))
-			.then((stop) => {
-				if (current) unlisten = stop;
-				else stop();
-			})
-			.catch(() => {});
-		return () => {
-			current = false;
-			unlisten?.();
-		};
-	}, [event, handlerRef]);
+	useEffect(
+		() => {
+			let current = true;
+			let unlisten: (() => void) | undefined;
+			listen<T>(event, ({ payload }) => handlerRef.current(payload))
+				.then((stop) => {
+					if (current) unlisten = stop;
+					else stop();
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+				unlisten?.();
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: every caller passes a fixed event name, and the ref never changes, so the effect runs once either way.
+		[event, handlerRef]
+	);
 };
 
 /**
@@ -55,12 +59,14 @@ export const useRemoteTarget = (): void => {
 	const navigate = useNavigate();
 	const channelsRef = useLatestRef(channels);
 	const navigateRef = useLatestRef(navigate);
-	useTauriEvent<{ token: number; command: RemoteCommand }>(
+	useTauriEvent<{ token: number; command: RemoteCommand; channel?: Channel }>(
 		"remote://command",
-		({ token, command }) => {
+		({ token, command, channel }) => {
 			void applyRemoteCommand(command, {
 				player: getMountedPlayer(),
-				findChannel: (id) => channelsRef.current.find((c) => c.id === id),
+				// An episode comes with the command, since the channel list has none.
+				findChannel: (id) =>
+					channel?.id === id ? channel : channelsRef.current.find((c) => c.id === id),
 				openPlayer: (channel) =>
 					navigateRef.current("/player", {
 						state: { url: channel.url, channelName: channel.name, channel },
@@ -77,17 +83,22 @@ export const useRemoteTarget = (): void => {
 export const useRemoteSessions = (): RemoteSession[] => {
 	const [sessions, setSessions] = useState<RemoteSession[]>([]);
 	useTauriEvent<RemoteSession[]>("remote://sessions", setSessions);
-	useEffect(() => {
-		let current = true;
-		remoteSessions()
-			.then((list) => {
-				if (current) setSessions(list);
-			})
-			.catch(() => {});
-		return () => {
-			current = false;
-		};
-	}, []);
+	useEffect(
+		() => {
+			let current = true;
+			remoteSessions()
+				.then((list) => {
+					// Anything but a list, as from a backend without remote control, is none.
+					if (current) setSessions(Array.isArray(list) ? list : []);
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
+	);
 	return sessions;
 };
 

@@ -36,7 +36,8 @@ pub async fn connect(
         versions: vec![PROTOCOL_VERSION],
         features: vec![Feature::Control, Feature::Catalog],
     };
-    let (controller, first) = Controller::connect(&key, hello, target, resume).unwrap();
+    let (controller, first) =
+        Controller::connect(&key, hello, target, resume, std::time::Instant::now()).unwrap();
     let mut client = Client {
         stream,
         controller,

@@ -330,6 +330,38 @@ fn the_controller_hears_why_the_target_refused_the_version() {
 }
 
 #[test]
+fn a_target_that_doesnt_admit_the_controller_says_why_and_sends_no_nonce() {
+    let ck = DeviceKey::generate();
+    let tk = DeviceKey::generate();
+    let (c, m1) =
+        ControllerHandshake::start(&ck, hello(&ck, "Phone", DeviceType::Iphone), tk.device_id())
+            .unwrap();
+    let t = TargetHandshake::new(&tk, hello(&tk, "TV", DeviceType::FireTv)).unwrap();
+    let Ok((m2, Next::Continue(t))) = t.read(&unframe(&m1)) else {
+        panic!()
+    };
+    let Ok((m3, Next::Continue(c))) = c.read(&unframe(&m2.unwrap())) else {
+        panic!()
+    };
+    let mut asked = None;
+    let Err(refusal) = t.read_admitting(&unframe(&m3.unwrap()), |peer| {
+        asked = Some(peer.clone());
+        Err(CloseReason::Busy)
+    }) else {
+        panic!("the target sent its nonce")
+    };
+    // It decides knowing who the controller is.
+    let asked = asked.unwrap();
+    assert_eq!(asked.id, ck.device_id());
+    assert_eq!(asked.name, "Phone");
+    assert_eq!(refusal.reason, CloseReason::Busy);
+    let Err(failure) = c.read(&unframe(&refusal.send.unwrap())) else {
+        panic!("the controller got a nonce")
+    };
+    assert_eq!(failure.reason, CloseReason::Busy);
+}
+
+#[test]
 fn an_established_handshake_debugs_as_its_peer_and_version_only() {
     let run = run(
         standard("Phone", DeviceType::Iphone),

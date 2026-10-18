@@ -7,25 +7,38 @@
 //! It runs the handshake, asks for control, and keeps the newest state the
 //! target sent. A state that isn't newer than the last one, by the target's
 //! epoch and version, is dropped.
+//!
+//! It also keeps its own clock on getting in. A device in the middle could
+//! hold the code on screen while it tries handshakes with the real target,
+//! so a controller doesn't wait for the target past [`GIVE_UP_AFTER`],
+//! whatever the target says.
 
 use super::catalog::{CatalogItem, CatalogQuery};
 use super::channel::Channel;
+use super::consent::CONSENT_TIMEOUT;
 use super::handshake::{ControllerHandshake, Next, Peer, VerificationCode};
 use super::identity::{DeviceId, DeviceKey};
 use super::message::{
     self, CloseReason, Command, DecodeError, ErrorCode, Hello, Message, RequestKind, VersionedState,
 };
-use std::time::Duration;
+use super::target::HANDSHAKE_TIMEOUT;
+use std::time::{Duration, Instant};
 
 /// How often a controller pings a quiet connection.
 pub const PING_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long after connecting a controller gives up if it isn't in: the
+/// target's time for the handshake, then its time for the user to answer.
+pub const GIVE_UP_AFTER: Duration =
+    Duration::from_secs(HANDSHAKE_TIMEOUT.as_secs() + CONSENT_TIMEOUT.as_secs());
 
 /// Something the controller's UI should know about.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// The handshake is done. Show the code while the target decides.
     Verified { peer: Peer, code: VerificationCode },
-    /// The target is asking its user, for this many seconds at most.
+    /// The target is asking its user, for this many seconds at most. It's
+    /// never more than [`CONSENT_TIMEOUT`], whatever the target said.
     Pending { expires_in: u32 },
     /// Control was granted. `state` is what the target is playing now.
     Connected {
@@ -47,7 +60,8 @@ pub enum Event {
     },
     /// An error not tied to a request.
     Error(ErrorCode),
-    /// The connection ended. Close the socket.
+    /// The connection ended. Close the socket. [`CloseReason::Timeout`]
+    /// means the controller gave up on the target itself.
     Closed(CloseReason),
 }
 
@@ -79,6 +93,8 @@ pub struct NotConnected;
 
 pub struct Controller {
     stage: Stage,
+    /// When [`Controller::connect`] ran.
+    opened: Instant,
     resume: Option<String>,
     next_request: u64,
     /// The epoch and version of the newest state applied.
@@ -87,18 +103,21 @@ pub struct Controller {
 
 impl Controller {
     /// Starts connecting to the device with id `target`, to resume
-    /// `resume` if it's set. Returns the first frame to send.
+    /// `resume` if it's set. Returns the first frame to send. `now` starts
+    /// the clock that [`Controller::tick`] gives up by.
     pub fn connect(
         key: &DeviceKey,
         hello: Hello,
         target: DeviceId,
         resume: Option<String>,
+        now: Instant,
     ) -> Result<(Self, Vec<u8>), CloseReason> {
         let (handshake, first) =
             ControllerHandshake::start(key, hello, target).map_err(|f| f.reason)?;
         Ok((
             Self {
                 stage: Stage::Handshake(handshake),
+                opened: now,
                 resume,
                 next_request: 0,
                 latest: None,
@@ -170,7 +189,10 @@ impl Controller {
                 };
                 match message {
                     Message::Pending { expires_in } => {
-                        out.events.push(Event::Pending { expires_in });
+                        let most = CONSENT_TIMEOUT.as_secs() as u32;
+                        out.events.push(Event::Pending {
+                            expires_in: expires_in.min(most),
+                        });
                         self.stage = Stage::Requesting { channel, peer };
                     }
                     Message::Accepted { session_id, state } => {
@@ -223,6 +245,32 @@ impl Controller {
             Stage::Closed => {}
         }
         out
+    }
+
+    /// Time passed. Gives up on a target that hasn't finished the handshake
+    /// within [`HANDSHAKE_TIMEOUT`] of connecting, or let the controller in
+    /// within [`GIVE_UP_AFTER`]. Giving up withdraws the request, so send the
+    /// bytes, then close the socket.
+    pub fn tick(&mut self, now: Instant) -> Output {
+        if self.next_deadline().is_none_or(|deadline| now < deadline) {
+            return Output::default();
+        }
+        let out = Output {
+            send: self.leave().into_iter().collect(),
+            events: Vec::new(),
+        };
+        self.stage = Stage::Closed;
+        closed(out, CloseReason::Timeout)
+    }
+
+    /// When [`Controller::tick`] next has something to do: never once the
+    /// controller is in or closed.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        match self.stage {
+            Stage::Handshake(_) => Some(self.opened + HANDSHAKE_TIMEOUT),
+            Stage::Requesting { .. } => Some(self.opened + GIVE_UP_AFTER),
+            Stage::InSession { .. } | Stage::Closed => None,
+        }
     }
 
     /// A state is newer when it has a higher version, or comes from a new

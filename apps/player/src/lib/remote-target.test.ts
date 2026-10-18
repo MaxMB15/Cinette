@@ -159,13 +159,13 @@ describe("remotePlayerState", () => {
 		expect(remote.volume, "no volume where it can't be set").toBeNull();
 	});
 
-	it("sends an error's message, or its code without one", () => {
+	it("sends an error's code and never its message", () => {
 		const withMessage = state({
 			status: "error",
-			error: { code: "failed", message: "Stream ended" },
+			error: { code: "failed", message: "http://iptv.example/user/pass/1.ts ended" },
 		});
 		expect(remotePlayerState(withMessage, channel, localCapabilities(false), 0).error).toBe(
-			"Stream ended"
+			"failed"
 		);
 		const bare = state({ status: "error", error: { code: "refused" } });
 		expect(remotePlayerState(bare, channel, localCapabilities(false), 0).error).toBe("refused");

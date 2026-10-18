@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { EventCallback } from "@tauri-apps/api/event";
 
 const handlers = vi.hoisted(() => new Map<string, EventCallback<unknown>>());
@@ -141,6 +142,35 @@ describe("useRemoteTarget", () => {
 		expect(mocks.play).toHaveBeenCalledTimes(1);
 	});
 
+	it("plays an episode that comes with the command", async () => {
+		const episode = { ...channel, id: "ep-1", name: "Pilot", url: "http://x.test/ep1.mkv" };
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
+		emit("remote://command", {
+			token: 8,
+			command: { action: "load", itemId: "ep-1" },
+			channel: episode,
+		});
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(8, "ok"));
+		expect(navigate).toHaveBeenCalledWith("/player", {
+			state: { url: episode.url, channelName: "Pilot", channel: episode },
+		});
+	});
+
+	it("looks in the channel list when the episode is another one", async () => {
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
+		emit("remote://command", {
+			token: 9,
+			command: { action: "load", itemId: "live-1" },
+			channel: { ...channel, id: "ep-1", name: "Pilot" },
+		});
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(9, "ok"));
+		expect(navigate).toHaveBeenCalledWith("/player", {
+			state: { url: channel.url, channelName: "News", channel },
+		});
+	});
+
 	it("reports what wasn't found", async () => {
 		renderHook(() => useRemoteTarget());
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
@@ -184,11 +214,31 @@ describe("useRemoteSessions", () => {
 		expect(result.current).toEqual([session(false)]);
 	});
 
+	it("takes anything but a list from the backend as none", async () => {
+		vi.mocked(remoteSessions).mockResolvedValueOnce(undefined as never);
+		const { result } = renderHook(() => useRemoteSessions());
+		await act(async () => {});
+		expect(result.current).toEqual([]);
+	});
+
 	it("stays empty where remote control doesn't run", async () => {
 		vi.mocked(remoteSessions).mockRejectedValueOnce("unavailable");
 		const { result } = renderHook(() => useRemoteSessions());
 		await act(async () => {});
 		expect(result.current).toEqual([]);
+	});
+
+	it("keeps the newest list when a first load answers late", async () => {
+		// StrictMode mounts twice, so the first load's answer comes for a
+		// mount that has gone.
+		let late: (list: ReturnType<typeof session>[]) => void = () => {};
+		vi.mocked(remoteSessions)
+			.mockImplementationOnce(() => new Promise((r) => (late = r)))
+			.mockResolvedValueOnce([session(true)]);
+		const { result } = renderHook(() => useRemoteSessions(), { wrapper: StrictMode });
+		await waitFor(() => expect(result.current).toEqual([session(true)]));
+		await act(async () => late([session(false)]));
+		expect(result.current).toEqual([session(true)]);
 	});
 
 	it("ignores a list that arrives after unmounting", async () => {
@@ -208,6 +258,17 @@ describe("usePublishRemoteState", () => {
 		expect(getMountedPlayer()).toBe(destination);
 		view.unmount();
 		expect(getMountedPlayer()).toBeNull();
+	});
+
+	it("registers the player the page uses now", () => {
+		const first = fakeDestination().destination;
+		const second = fakeDestination().destination;
+		const view = renderHook(({ player }) => usePublishRemoteState(player, channel), {
+			initialProps: { player: first },
+		});
+		view.rerender({ player: second });
+		expect(getMountedPlayer()).toBe(second);
+		view.unmount();
 	});
 
 	it("leaves a newer player registered when an older one unmounts", () => {

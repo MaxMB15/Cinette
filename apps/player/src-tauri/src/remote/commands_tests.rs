@@ -119,3 +119,14 @@ fn an_episode_keeps_its_show_season_and_number() {
     assert_eq!(item.season, Some(1));
     assert_eq!(item.episode, Some(2));
 }
+
+#[test]
+fn an_error_goes_on_as_its_code() {
+    let refused = player_state(json!({ "status": "error", "error": "refused" }));
+    assert_eq!(
+        refused.into_snapshot(&[]).error,
+        Some(PlaybackError::Refused)
+    );
+    let newer = player_state(json!({ "status": "error", "error": "notYetInvented" }));
+    assert_eq!(newer.into_snapshot(&[]).error, Some(PlaybackError::Unknown));
+}

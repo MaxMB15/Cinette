@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { check } from "@tauri-apps/plugin-updater";
+import { listen } from "@tauri-apps/api/event";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import type { Provider } from "@/lib/types";
@@ -122,6 +123,13 @@ describe("App", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss donation prompt" }));
 		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 		expect(localStorage.getItem("donation-last-shown")).toMatch(/^\d+$/);
+	});
+
+	it("takes commands from other Cinette devices", async () => {
+		renderApp();
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://command", expect.any(Function))
+		);
 	});
 
 	it("skips the start screen for the rest of the session", async () => {

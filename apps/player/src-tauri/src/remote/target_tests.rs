@@ -10,6 +10,7 @@ use mvp_core::remote::controller::Event;
 use mvp_core::remote::message::{CloseReason, PlaybackStatus};
 use mvp_core::remote::settings::ControlMode;
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -614,4 +615,79 @@ async fn each_command_gets_its_own_answer_and_a_closed_connection_takes_only_its
         .events
         .iter()
         .any(|e| matches!(e, Event::Reply { request, .. } if *request == phone_id)));
+}
+
+#[tokio::test]
+async fn a_hidden_device_with_no_session_closes_connections_before_saying_who_it_is() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    h.handle.update_settings(RemoteSettings {
+        discoverable: false,
+        remote_control: ControlMode::Always,
+        device_name: None,
+    });
+    h.wait_for(|s| matches!(s, Seen::Advertise(None)).then_some(()))
+        .await;
+    let mut phone = h.connect("Phone").await;
+    assert_eq!(phone.closed().await, None, "closed without a word");
+    assert!(
+        !phone
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Verified { .. })),
+        "{:?}",
+        phone.events
+    );
+}
+
+/// A connection that sends nothing, so the core waits for its handshake.
+async fn quiet_connection(port: u16) -> tokio::net::TcpStream {
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap()
+}
+
+/// Whether the target closed `stream` within a moment.
+async fn was_closed(stream: &mut tokio::net::TcpStream) -> bool {
+    let mut buf = [0u8; 64];
+    matches!(
+        timeout(Duration::from_millis(300), stream.read(&mut buf)).await,
+        Ok(Ok(0) | Err(_))
+    )
+}
+
+/// Opens connections until one stays open, which shows a slot is free.
+async fn until_one_stays_open(port: u16) -> tokio::net::TcpStream {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let mut stream = quiet_connection(port).await;
+        if !was_closed(&mut stream).await {
+            return stream;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no slot came free");
+    }
+}
+
+#[tokio::test]
+async fn one_address_gets_four_connections_at_a_time() {
+    let h = Harness::start(ControlMode::Always).await;
+    let port = h.handle.port();
+    let mut open = Vec::new();
+    for _ in 0..MAX_PER_ADDRESS {
+        open.push(until_one_stays_open(port).await);
+    }
+    let mut fifth = quiet_connection(port).await;
+    assert!(was_closed(&mut fifth).await, "the fifth is turned away");
+    for stream in &mut open {
+        assert!(!was_closed(stream).await, "the first four stay open");
+    }
+
+    // One that goes frees its slot.
+    drop(open.pop());
+    open.push(until_one_stays_open(port).await);
+
+    // So does one the core closes, here for a frame that's no handshake.
+    let mut broken = open.pop().unwrap();
+    broken.write_all(&[0, 3, 1, 2, 3]).await.unwrap();
+    assert!(was_closed(&mut broken).await);
+    open.push(until_one_stays_open(port).await);
 }

@@ -44,6 +44,7 @@ import { makeEpisode, makeMovie, makeNewsChannel, makeOmdb } from "@/test/detail
 import { deferred } from "@/test/deferred";
 import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
+import { getMountedPlayer } from "@/lib/remote-target";
 import { PlayerView } from "./VideoPlayer";
 
 type Mpv = ReturnType<typeof useMpv>;
@@ -3289,5 +3290,14 @@ describe("phones, tablets and TV boxes", () => {
 		expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+	});
+});
+
+describe("remote control", () => {
+	it("is the player other devices' commands go to while it's open", async () => {
+		const view = await openItem(makeNewsChannel());
+		expect(getMountedPlayer()?.getState().item?.ref).toBe("ch1");
+		view.unmount();
+		expect(getMountedPlayer()).toBeNull();
 	});
 });

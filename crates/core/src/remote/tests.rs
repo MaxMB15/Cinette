@@ -6,10 +6,10 @@
 //! playback and synchronization.
 
 use super::catalog::{CatalogItem, CatalogQuery};
-use super::channel::FrameReader;
+use super::channel::{Channel, FrameReader};
 use super::consent::{Answer, CONSENT_TIMEOUT, DENIAL_COOLDOWN};
-use super::controller::{Controller, Event};
-use super::handshake::Peer;
+use super::controller::{Controller, Event, Output, GIVE_UP_AFTER};
+use super::handshake::{Next, Peer, TargetHandshake};
 use super::identity::DeviceKey;
 use super::message::{
     Capabilities, CloseReason, Command, DeviceType, ErrorCode, Feature, Hello, Message,
@@ -79,6 +79,45 @@ pub(crate) fn playing(id: &str, position: f64) -> PlaybackSnapshot {
             resume_at: true,
         },
         ..PlaybackSnapshot::default()
+    }
+}
+
+/// The contents of the one frame in `bytes`.
+fn unframe(bytes: &[u8]) -> Vec<u8> {
+    let mut reader = FrameReader::new();
+    reader.push(bytes);
+    let frame = reader.next_frame().unwrap().unwrap();
+    assert!(reader.next_frame().unwrap().is_none());
+    frame
+}
+
+/// A controller let through by a bare target handshake, for tests that
+/// play the target by hand. Returns the target's side of the channel.
+fn controller_and_bare_target(now: Instant) -> (Controller, Channel) {
+    let key = DeviceKey::generate();
+    let target_key = DeviceKey::generate();
+    let (mut controller, first) = Controller::connect(
+        &key,
+        hello(&key, "Phone", DeviceType::Iphone),
+        target_key.device_id(),
+        None,
+        now,
+    )
+    .unwrap();
+    let mut target =
+        TargetHandshake::new(&target_key, hello(&target_key, "TV", DeviceType::FireTv)).unwrap();
+    let mut to_target = VecDeque::from([first]);
+    loop {
+        let bytes = to_target.pop_front().unwrap();
+        let (reply, next) = target.read(&unframe(&bytes)).unwrap();
+        match next {
+            Next::Continue(handshake) => {
+                target = handshake;
+                let out = controller.receive(&unframe(&reply.unwrap()));
+                to_target.extend(out.send);
+            }
+            Next::Done(established) => return (controller, established.channel),
+        }
     }
 }
 
@@ -172,6 +211,7 @@ impl Net {
             hello(&key, name, DeviceType::Iphone),
             self.target.device_id(),
             resume,
+            self.now,
         )
         .unwrap();
         let conn = self
@@ -392,6 +432,8 @@ fn each_connection_gets_its_own_code() {
     let mut net = Net::with_mode(ControlMode::Always);
     let codes: std::collections::HashSet<_> = (0..6)
         .map(|i| {
+            // A second apart, so the target has a nonce for each.
+            net.advance(Duration::from_secs(1));
             let c = net.connect(&format!("Phone {i}"));
             net.clients[c].code().unwrap()
         })
@@ -561,6 +603,20 @@ fn a_denied_device_is_refused_without_a_dialog_for_a_minute() {
     net.advance(DENIAL_COOLDOWN);
     net.connect_with(key, "Neighbor", None);
     assert!(net.prompt().is_some());
+}
+
+#[test]
+fn after_a_denial_a_new_device_waits_before_it_can_ask() {
+    let mut net = Net::new(RemoteSettings::default());
+    net.connect("Neighbor");
+    net.answer(Answer::Deny);
+    // A device that made up a new id is turned away too.
+    let other = net.connect("Neighbor again");
+    assert_eq!(net.clients[other].closed_reason(), Some(CloseReason::Busy));
+    assert_eq!(net.prompt(), None);
+    net.advance(super::consent::DENIAL_BACKOFF);
+    net.connect("Phone");
+    assert_eq!(net.prompt().unwrap().name, "Phone");
 }
 
 #[test]
@@ -1102,7 +1158,8 @@ fn a_flood_of_commands_is_rate_limited() {
             )
         })
         .count();
-    assert_eq!(limited, 5);
+    // The request for control took one of the 20 a second.
+    assert_eq!(limited, 6);
     net.advance(Duration::from_secs(1));
     let id = net.command(phone, Command::Stop);
     assert!(net.applied.iter().any(|(_, r, _)| *r == id));
@@ -1112,9 +1169,12 @@ fn a_flood_of_commands_is_rate_limited() {
 fn more_than_eight_controllers_are_busy() {
     let mut net = Net::with_mode(ControlMode::Always);
     for i in 0..super::sessions::MAX_SESSIONS {
+        // A second apart, so the target has a nonce for each.
+        net.advance(Duration::from_secs(1));
         let c = net.connect(&format!("Phone {i}"));
         assert!(net.clients[c].connected());
     }
+    net.advance(Duration::from_secs(1));
     let extra = net.connect("One too many");
     assert_eq!(net.clients[extra].closed_reason(), Some(CloseReason::Busy));
 }
@@ -1179,6 +1239,69 @@ fn a_frame_that_doesnt_decrypt_ends_the_connection_but_not_the_session() {
     assert!(!net.last_sessions().unwrap()[0].connected);
     // Nothing more is read from it.
     assert!(net.target.receive(conn, b"more", net.now).is_empty());
+}
+
+#[test]
+fn a_controller_never_waits_longer_than_the_consent_timeout() {
+    let (mut controller, mut target) = controller_and_bare_target(Instant::now());
+    for (said, shown) in [(3600, 30), (30, 30), (12, 12)] {
+        let bytes = target.seal(&Message::Pending { expires_in: said }).unwrap();
+        let out = controller.receive(&unframe(&bytes));
+        assert_eq!(out.events, [Event::Pending { expires_in: shown }]);
+    }
+}
+
+#[test]
+fn a_controller_kept_waiting_gives_up_and_withdraws_its_request() {
+    let mut net = Net::new(RemoteSettings::default());
+    let started = net.now;
+    let phone = net.connect("Phone");
+    assert!(net.prompt().is_some());
+    let deadline = started + GIVE_UP_AFTER;
+    let controller = &mut net.clients[phone].controller;
+    assert_eq!(controller.next_deadline(), Some(deadline));
+    assert_eq!(
+        controller.tick(deadline - Duration::from_millis(1)),
+        Output::default()
+    );
+    let out = controller.tick(deadline);
+    assert_eq!(out.events, [Event::Closed(CloseReason::Timeout)]);
+    let [bytes] = &out.send[..] else {
+        panic!("{out:?}")
+    };
+    net.send(phone, bytes.clone());
+    assert_eq!(net.prompt(), None);
+    assert!(net.clients[phone].closed);
+}
+
+#[test]
+fn a_controller_that_got_in_has_no_deadline() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    let controller = &mut net.clients[phone].controller;
+    assert_eq!(controller.next_deadline(), None);
+    assert_eq!(controller.tick(net.now + GIVE_UP_AFTER), Output::default());
+    assert!(net.clients[phone].connected());
+}
+
+#[test]
+fn a_position_or_duration_that_isnt_a_number_goes_out_as_zero() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    for (id, position, duration, sent) in [
+        ("movie-1", f64::NAN, f64::INFINITY, (0.0, 0.0)),
+        ("movie-2", f64::NEG_INFINITY, f64::NAN, (0.0, 0.0)),
+        ("movie-3", 12.5, 3600.0, (12.5, 3600.0)),
+    ] {
+        net.set_state(PlaybackSnapshot {
+            position,
+            duration,
+            ..playing(id, 0.0)
+        });
+        let state = net.clients[phone].last_state().unwrap();
+        assert_eq!(state.item.as_ref().unwrap().id, id);
+        assert_eq!((state.position, state.duration), sent);
+    }
 }
 
 #[test]
@@ -1292,6 +1415,7 @@ fn a_controller_and_target_talk_over_loopback_tcp() {
         hello(&key, "Laptop", DeviceType::LinuxPc),
         target_id,
         None,
+        Instant::now(),
     )
     .unwrap();
     let mut stream = TcpStream::connect(addr).unwrap();

@@ -8,7 +8,9 @@
 use super::*;
 use crate::remote::test_client::{self, Client, WAIT};
 use crate::test_support::TestApp;
+use mvp_core::http::test_server::{self, route, serve_routes};
 use mvp_core::models::channel::Channel;
+use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::models::playlist::{Provider, ProviderType};
 use mvp_core::remote::controller::Event;
 use mvp_core::remote::message::CloseReason;
@@ -401,6 +403,135 @@ async fn catalog_queries_read_the_cache() {
         .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "UK");
+}
+
+/// The items of the episodes page of `series_id`, as the phone gets them.
+async fn ask_for_episodes(phone: &mut Client, series_id: &str) -> Vec<CatalogItem> {
+    let (id, bytes) = phone
+        .controller
+        .catalog(CatalogQuery::Episodes {
+            series_id: series_id.into(),
+        })
+        .unwrap();
+    phone.write(&bytes).await;
+    phone
+        .wait_for(|e| match e {
+            Event::Page { request, items, .. } if *request == id => Some(items.clone()),
+            _ => None,
+        })
+        .await
+        .unwrap()
+}
+
+/// The channel the webview gets with a load of `item_id`, if any. The load
+/// is finished, so the next can come.
+async fn channel_with_load(running: &mut Running, phone: &mut Client, item_id: &str) -> Value {
+    let (id, bytes) = phone
+        .controller
+        .command(Command::Load {
+            item_id: item_id.into(),
+            start_at: None,
+        })
+        .unwrap();
+    phone.write(&bytes).await;
+    let event = running.event("remote://command").await;
+    running
+        .invoke(
+            "remote_finish_command",
+            json!({ "token": event["token"], "outcome": "ok" }),
+        )
+        .unwrap();
+    phone
+        .wait_for(|e| matches!(e, Event::Reply { request, .. } if *request == id).then_some(()))
+        .await
+        .unwrap();
+    event.get("channel").cloned().unwrap_or(Value::Null)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() {
+    let (url, _requests) = serve_routes(vec![route(
+        "action=get_series_info",
+        "200 OK",
+        r#"{"info":{"name":"The Show"},"episodes":{"1":[
+            {"id":"9001","episode_num":1,"title":"First"}]}}"#,
+    )]);
+    let mut running = Running::start(|app| {
+        let state = app.state();
+        let cache = state.cache.lock().unwrap();
+        cache
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Panel".into(),
+                provider_type: ProviderType::Xtream,
+                url: url.clone(),
+                username: Some("user".into()),
+                password: Some(test_server::password()),
+                last_updated: None,
+                channel_count: 1,
+                epg_url: None,
+            })
+            .unwrap();
+        let series = Channel {
+            id: "p1-series-7".into(),
+            name: "The Show".into(),
+            url: "xtream://series/7".into(),
+            group_title: "Drama".into(),
+            content_type: "series".into(),
+            ..Channel::default()
+        };
+        cache.save_channels("p1", &[series]).unwrap();
+    })
+    .await;
+    let mut phone = connected(&running).await;
+    let items = ask_for_episodes(&mut phone, "p1-series-7").await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, "p1-xt-ep-7-s1-0");
+    assert_eq!(items[0].episode, Some(1));
+
+    let channel = channel_with_load(&mut running, &mut phone, "p1-xt-ep-7-s1-0").await;
+    assert_eq!(channel["id"], "p1-xt-ep-7-s1-0");
+    assert_eq!(channel["name"], "The Show S01E01 First");
+    assert!(channel["url"].as_str().unwrap().starts_with(&url));
+    let other = channel_with_load(&mut running, &mut phone, "p1-live-1").await;
+    assert_eq!(other, Value::Null, "only episodes come with a channel");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn loads_find_the_episodes_of_the_last_four_series_asked_for() {
+    let series = |n: u32| format!("p1-series-{n}");
+    let episode = |n: u32| format!("p1-ep-{n}");
+    let mut running = Running::start(|app| {
+        let state = app.state();
+        let cache = state.cache.lock().unwrap();
+        for n in 1..=5 {
+            let ep = Channel {
+                id: episode(n),
+                name: format!("Episode {n}"),
+                url: format!("http://iptv.example/series/user/pass/{n}.mkv"),
+                content_type: "series".into(),
+                season: Some(1),
+                episode: Some(n),
+                ..Channel::default()
+            };
+            cache.save_series_episodes(&series(n), &[ep]).unwrap();
+        }
+    })
+    .await;
+    let mut phone = connected(&running).await;
+    // The second ask for series 1 moves it to the newest, and keeps one copy.
+    for n in [1, 2, 3, 4, 1, 1] {
+        ask_for_episodes(&mut phone, &series(n)).await;
+    }
+    for n in [2, 3, 4, 1] {
+        let channel = channel_with_load(&mut running, &mut phone, &episode(n)).await;
+        assert_eq!(channel["id"], episode(n), "series {n} is kept");
+    }
+    ask_for_episodes(&mut phone, &series(5)).await;
+    let oldest = channel_with_load(&mut running, &mut phone, &episode(2)).await;
+    assert_eq!(oldest, Value::Null, "series 2 is forgotten");
+    let next = channel_with_load(&mut running, &mut phone, &episode(3)).await;
+    assert_eq!(next["id"], episode(3));
 }
 
 #[tokio::test(flavor = "multi_thread")]
