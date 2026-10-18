@@ -7,7 +7,7 @@
  * The player's controls talk only to the active destination.
  */
 
-import type { RouteDecision } from "@/lib/route";
+import type { PlayRoute, RouteDecision } from "@/lib/route";
 import type { Channel, PolledMpvState } from "@/lib/types";
 
 export type DestinationKind = "local" | "cast" | "airplay" | "cinette";
@@ -34,8 +34,9 @@ export interface Track {
 
 export interface PlaybackError {
 	/** `openFailed`: the stream stopped before it ever played. `loadFailed`:
-	 *  reconnecting ran out of tries. `failed`: anything else. */
-	code: "openFailed" | "loadFailed" | "failed";
+	 *  reconnecting ran out of tries. `refused`: the provider answered 401 or
+	 *  403, so the login may have expired. `failed`: anything else. */
+	code: "openFailed" | "loadFailed" | "refused" | "failed";
 	message?: string;
 }
 
@@ -91,7 +92,9 @@ export interface PlaybackDestination {
 	/** How the item would reach this destination, or why it can't. Called
 	 *  before `load`, so the UI can warn about a converted route first. */
 	route(item: PlaybackItem): Promise<RouteDecision>;
-	load(item: PlaybackItem, opts?: { startAt?: number }): Promise<void>;
+	/** `route` is what `route()` gave for this item, so the destination plays
+	 *  the format the UI warned about. */
+	load(item: PlaybackItem, opts?: { startAt?: number; route?: PlayRoute }): Promise<void>;
 	play(): Promise<void>;
 	pause(): Promise<void>;
 	/** To an absolute position, in seconds. */
@@ -162,8 +165,8 @@ export const localPlaybackState = (
 
 /** What this device's player can do. Seeking needs a known length, so live
  *  channels can't seek. */
-export const localCapabilities = (duration: number): PlaybackCapabilities => ({
-	seek: duration > 0,
+export const localCapabilities = (seekable: boolean): PlaybackCapabilities => ({
+	seek: seekable,
 	pause: true,
 	volume: "absolute",
 	subtitles: "none",

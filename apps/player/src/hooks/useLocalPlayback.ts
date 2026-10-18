@@ -23,7 +23,6 @@ export type LocalPlayer = Pick<
 	| "reconnecting"
 	| "loadFailed"
 	| "openFailed"
-	| "load"
 	| "play"
 	| "pause"
 	| "seek"
@@ -32,13 +31,16 @@ export type LocalPlayer = Pick<
 >;
 
 /**
- * This device's mpv as a {@link PlaybackDestination}. Every method does what
- * the matching `useMpv` function does. `channel` is what's playing, for the
+ * This device's mpv as a {@link PlaybackDestination}. Every method but
+ * `load` does what the matching `useMpv` function does. `load` goes through
+ * `loadChannel`, the player's own way of starting an item, so a download is
+ * preferred and the play is recorded. `channel` is what's playing, for the
  * state's item.
  */
 export const useLocalPlayback = (
 	player: LocalPlayer,
-	channel: Channel | null
+	channel: Channel | null,
+	loadChannel: (channel: Channel, startAt?: number) => void
 ): PlaybackDestination => {
 	const {
 		state: mpvState,
@@ -71,15 +73,15 @@ export const useLocalPlayback = (
 		for (const listener of listeners) listener(state);
 	}, [state, listeners]);
 
-	const { load, play, pause, seek, setVolume, stop } = player;
-	const duration = mpvState.duration;
+	const { play, pause, seek, setVolume, stop } = player;
+	const seekable = mpvState.duration > 0;
 	return useMemo<PlaybackDestination>(
 		() => ({
 			id: "local",
 			kind: "local",
 			name: "This device",
 			catalog: { kind: "local" },
-			capabilities: localCapabilities(duration),
+			capabilities: localCapabilities(seekable),
 			// mpv plays everything this device's catalog holds.
 			route: async (item) =>
 				item.kind === "local"
@@ -88,7 +90,7 @@ export const useLocalPlayback = (
 			load: async (item, opts) => {
 				if (item.kind !== "local")
 					throw new UnsupportedError("Playing another device's item");
-				await load(item.channel.url, opts?.startAt);
+				loadChannel(item.channel, opts?.startAt);
 			},
 			play,
 			pause,
@@ -105,6 +107,6 @@ export const useLocalPlayback = (
 				};
 			},
 		}),
-		[duration, load, play, pause, seek, setVolume, stop, stateRef, listeners]
+		[seekable, loadChannel, play, pause, seek, setVolume, stop, stateRef, listeners]
 	);
 };

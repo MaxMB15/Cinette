@@ -15,20 +15,22 @@ const format = (over: Partial<StreamFormat> = {}): StreamFormat => ({
 
 // Close to a Chromecast with Google TV, from cast-airplay-formats.md.
 const cast: ReceiverProfile = {
-	containers: ["hls", "mp4", "mkv"],
-	video: ["h264", "hevc"],
+	containers: ["hls-ts", "hls-fmp4", "mp4", "mkv"],
+	video: { h264: ["hls-ts", "hls-fmp4", "mp4", "mkv"], hevc: ["hls-fmp4", "mp4", "mkv"] },
 	audio: ["aac", "mp3", "opus"],
 	interlaced: false,
+	audioOnly: true,
 	hlsNeedsCors: true,
 	convertTo: "matroska",
 };
 
 // Close to an Apple TV.
 const airplay: ReceiverProfile = {
-	containers: ["hls", "mp4"],
-	video: ["h264", "hevc"],
+	containers: ["hls-ts", "hls-fmp4", "mp4"],
+	video: { h264: ["hls-ts", "hls-fmp4", "mp4"], hevc: ["hls-fmp4", "mp4"] },
 	audio: ["aac", "mp3", "ac3", "eac3"],
 	interlaced: false,
+	audioOnly: true,
 	hlsNeedsCors: false,
 	convertTo: "hls",
 };
@@ -64,7 +66,7 @@ describe("chooseRoute", () => {
 	});
 
 	it("prefers any direct format over converting the first", () => {
-		const live = [format({ container: "ts" }), format({ container: "hls" })];
+		const live = [format({ container: "ts" }), format({ container: "hls-ts" })];
 		expect(chooseRoute(live, airplay, desktop)).toEqual({
 			ok: true,
 			route: { via: "direct", format: 1 },
@@ -72,7 +74,7 @@ describe("chooseRoute", () => {
 	});
 
 	it("needs CORS for HLS only where the receiver does", () => {
-		const hls = format({ container: "hls" });
+		const hls = format({ container: "hls-ts" });
 		expect(chooseRoute([hls], cast, none)).toEqual({ ok: false, reason: "cors" });
 		expect(chooseRoute([{ ...hls, cors: true }], cast, none).ok).toBe(true);
 		expect(chooseRoute([hls], airplay, none).ok).toBe(true);
@@ -103,10 +105,13 @@ describe("chooseRoute", () => {
 		});
 		const steps = [
 			[all, "container"],
-			[{ ...all, container: "hls" }, "videoCodec"],
-			[{ ...all, container: "hls", video: "h264" }, "interlaced"],
-			[{ ...all, container: "hls", video: "h264", interlaced: false }, "audioCodec"],
-			[{ ...all, container: "hls", video: "h264", interlaced: false, audio: "aac" }, "cors"],
+			[{ ...all, container: "hls-ts" }, "videoCodec"],
+			[{ ...all, container: "hls-ts", video: "h264" }, "interlaced"],
+			[{ ...all, container: "hls-ts", video: "h264", interlaced: false }, "audioCodec"],
+			[
+				{ ...all, container: "hls-ts", video: "h264", interlaced: false, audio: "aac" },
+				"cors",
+			],
 		] as const;
 		for (const [f, reason] of steps)
 			expect(chooseRoute([f], cast, none)).toMatchObject({ ok: false, reason });
@@ -197,5 +202,75 @@ describe("chooseRoute", () => {
 			reason: "container",
 			detail: "ts",
 		});
+	});
+
+	it("plays HEVC only in the containers the receiver takes it in", () => {
+		const hevc = format({ video: "hevc", container: "hls-ts", cors: true });
+		expect(chooseRoute([hevc], cast, none)).toEqual({
+			ok: false,
+			reason: "videoCodec",
+			detail: "hevc",
+		});
+		expect(chooseRoute([{ ...hevc, container: "hls-fmp4" }], cast, none).ok).toBe(true);
+		// Remuxed into Matroska, it plays with the video copied.
+		expect(chooseRoute([hevc], cast, desktop)).toEqual(converted());
+		// Without HEVC at all, it needs a transcode.
+		const old = { ...cast, video: { h264: cast.video.h264 } };
+		expect(chooseRoute([hevc], old, desktop)).toMatchObject({ ok: false, detail: "hevc" });
+	});
+
+	it("needs CORS for HLS with fMP4 segments too", () => {
+		const f = format({ container: "hls-fmp4" });
+		expect(chooseRoute([f], cast, none)).toEqual({ ok: false, reason: "cors" });
+	});
+
+	it("checks the copied video against what this device serves", () => {
+		// HLS out of the converter uses fMP4 segments, where AirPlay plays HEVC.
+		const f = format({ video: "hevc", container: "mkv" });
+		expect(chooseRoute([f], airplay, desktop)).toEqual(converted({ output: "hls" }));
+		const tsOnly = { ...airplay, video: { hevc: ["hls-ts"] as const } };
+		expect(chooseRoute([f], tsOnly, desktop)).toMatchObject({
+			ok: false,
+			reason: "videoCodec",
+		});
+	});
+
+	it("serves progressive fMP4 as MP4", () => {
+		const fmp4 = { ...cast, convertTo: "fmp4" as const, video: { h264: ["mp4"] as const } };
+		expect(chooseRoute([format({ container: "ts" })], fmp4, desktop)).toEqual(
+			converted({ output: "fmp4" })
+		);
+	});
+
+	it("can't route a stream with neither video nor audio", () => {
+		const empty = format({ video: null, audio: null });
+		expect(chooseRoute([empty], cast, desktop)).toEqual({ ok: false, reason: "unreachable" });
+		expect(chooseRoute([empty], cast, none)).toEqual({ ok: false, reason: "unreachable" });
+	});
+
+	it("doesn't send audio alone to a receiver that won't play it", () => {
+		const tv = { ...airplay, audioOnly: false };
+		const radio = format({ video: null });
+		expect(chooseRoute([radio], tv, none)).toEqual({ ok: false, reason: "audioOnly" });
+		expect(chooseRoute([radio], tv, desktop)).toEqual({ ok: false, reason: "audioOnly" });
+		expect(chooseRoute([radio], airplay, none).ok).toBe(true);
+		expect(chooseRoute([format()], tv, none).ok).toBe(true);
+	});
+
+	it("converts the format that costs least, the earlier one on a tie", () => {
+		const hw = { ...desktop, hardwareEncoder: true };
+		const transcode = format({ container: "ts", interlaced: true });
+		const audio = format({ container: "ts", audio: "dts" });
+		const remux = format({ container: "ts" });
+		expect(chooseRoute([transcode, audio, remux], cast, hw)).toEqual(converted({ format: 2 }));
+		expect(chooseRoute([transcode, audio], cast, hw)).toEqual(
+			converted({ format: 1, audio: "aac" })
+		);
+		// A transcode costs more than converting the audio as well.
+		const both = format({ container: "ts", interlaced: true, audio: "dts" });
+		expect(chooseRoute([both, transcode], cast, hw)).toEqual(
+			converted({ format: 1, video: "transcode" })
+		);
+		expect(chooseRoute([remux, format({ container: "ts" })], cast, hw)).toEqual(converted());
 	});
 });

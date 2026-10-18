@@ -8,7 +8,8 @@
  * it, which means this device has to stay on for as long as it plays.
  */
 
-export type Container = "hls" | "mp4" | "mkv" | "ts" | "other";
+/** HLS is split by its segments, since receivers play HEVC only in fMP4 ones. */
+export type Container = "hls-ts" | "hls-fmp4" | "mp4" | "mkv" | "ts" | "other";
 export type VideoCodec = "h264" | "hevc" | "mpeg2" | "other";
 export type AudioCodec = "aac" | "mp3" | "ac3" | "eac3" | "mp2" | "dts" | "opus" | "other";
 
@@ -28,12 +29,17 @@ export interface StreamFormat {
 /** What a Cast or AirPlay receiver plays from a URL. */
 export interface ReceiverProfile {
 	containers: readonly Container[];
-	video: readonly VideoCodec[];
+	/** The containers each video codec plays in. A codec that isn't listed
+	 *  doesn't play at all. */
+	video: Partial<Record<VideoCodec, readonly Container[]>>;
 	audio: readonly AudioCodec[];
 	interlaced: boolean;
+	/** Whether it plays a stream with no video, which AirPlay 2 TVs don't. */
+	audioOnly: boolean;
 	/** Chromecast only fetches HLS from servers that send CORS headers. */
 	hlsNeedsCors: boolean;
-	/** What this device serves the receiver when it converts. */
+	/** What this device serves the receiver when it converts. HLS output
+	 *  uses fMP4 segments. */
 	convertTo: "hls" | "fmp4" | "matroska";
 }
 
@@ -65,22 +71,49 @@ export type PlayRoute =
 
 /** Why no route works. `detail` names the format, like `mkv` or `dts`. */
 export type PlayBlocker =
-	"container" | "videoCodec" | "interlaced" | "audioCodec" | "cors" | "unreachable" | "notFound";
+	| "container"
+	| "videoCodec"
+	| "interlaced"
+	| "audioCodec"
+	| "audioOnly"
+	| "cors"
+	| "unreachable"
+	| "notFound";
 
 export type RouteDecision =
 	{ ok: true; route: PlayRoute } | { ok: false; reason: PlayBlocker; detail?: string };
 
 type Blocked = Extract<RouteDecision, { ok: false }>;
+type Converted = Extract<PlayRoute, { via: "converted" }>;
+
+const OUTPUT: Record<ReceiverProfile["convertTo"], Container> = {
+	hls: "hls-fmp4",
+	fmp4: "mp4",
+	matroska: "mkv",
+};
+
+const playsVideo = (r: ReceiverProfile, video: VideoCodec, container: Container) =>
+	r.video[video]?.includes(container) ?? false;
+
+/** Blockers that no conversion changes. */
+const contentBlocker = (f: StreamFormat, r: ReceiverProfile): Blocked | null => {
+	if (f.video === null && f.audio === null) return { ok: false, reason: "unreachable" };
+	if (f.video === null && !r.audioOnly) return { ok: false, reason: "audioOnly" };
+	return null;
+};
 
 const directBlocker = (f: StreamFormat, r: ReceiverProfile): Blocked | null => {
+	const content = contentBlocker(f, r);
+	if (content) return content;
 	if (!r.containers.includes(f.container))
 		return { ok: false, reason: "container", detail: f.container };
-	if (f.video !== null && !r.video.includes(f.video))
+	if (f.video !== null && !playsVideo(r, f.video, f.container))
 		return { ok: false, reason: "videoCodec", detail: f.video };
 	if (f.interlaced && !r.interlaced) return { ok: false, reason: "interlaced" };
 	if (f.audio !== null && !r.audio.includes(f.audio))
 		return { ok: false, reason: "audioCodec", detail: f.audio };
-	if (f.container === "hls" && r.hlsNeedsCors && !f.cors) return { ok: false, reason: "cors" };
+	if (f.container.startsWith("hls") && r.hlsNeedsCors && !f.cors)
+		return { ok: false, reason: "cors" };
 	return null;
 };
 
@@ -90,16 +123,19 @@ const convert = (
 	r: ReceiverProfile,
 	s: SenderProfile
 ): RouteDecision => {
-	let video: "copy" | "transcode" | "none" = "none";
+	const content = contentBlocker(f, r);
+	if (content) return content;
+	let video: Converted["video"] = "none";
 	if (f.video !== null) {
-		const plays = r.video.includes(f.video) && (r.interlaced || !f.interlaced);
+		const plays =
+			playsVideo(r, f.video, OUTPUT[r.convertTo]) && (r.interlaced || !f.interlaced);
 		if (!plays && !s.hardwareEncoder)
 			return f.interlaced && !r.interlaced
 				? { ok: false, reason: "interlaced" }
 				: { ok: false, reason: "videoCodec", detail: f.video };
 		video = plays ? "copy" : "transcode";
 	}
-	let audio: "copy" | "aac" | "none" = "none";
+	let audio: Converted["audio"] = "none";
 	if (f.audio !== null) audio = r.audio.includes(f.audio) ? "copy" : "aac";
 	return {
 		ok: true,
@@ -114,12 +150,16 @@ const convert = (
 	};
 };
 
+/** A remux costs least, then converting the audio, then a video transcode. */
+const cost = (route: Converted) =>
+	(route.video === "transcode" ? 2 : 0) + (route.audio === "aac" ? 1 : 0);
+
 /**
  * The route to a Cast or AirPlay receiver. `formats` are the ways of
- * fetching the item, best first. Any format the receiver plays directly
- * wins, then any this device can convert. When neither works, the reason
- * comes from the first format, so the UI can say why and keep playing
- * locally.
+ * fetching the item, best first. The first format the receiver plays
+ * directly wins. Otherwise this device converts the format that costs it
+ * least, the earlier one on a tie. When neither works, the reason comes
+ * from the first format, so the UI can say why and keep playing locally.
  */
 export const chooseRoute = (
 	formats: readonly StreamFormat[],
@@ -129,8 +169,11 @@ export const chooseRoute = (
 	if (formats.length === 0) return { ok: false, reason: "unreachable" };
 	const direct = formats.findIndex((f) => directBlocker(f, receiver) === null);
 	if (direct >= 0) return { ok: true, route: { via: "direct", format: direct } };
-	const first = directBlocker(formats[0], receiver) as Blocked;
-	if (!sender.convert) return first;
-	const converted = formats.map((f, i) => convert(f, i, receiver, sender));
-	return converted.find((d) => d.ok) ?? converted[0];
+	if (!sender.convert) return directBlocker(formats[0], receiver) as Blocked;
+	const decisions = formats.map((f, i) => convert(f, i, receiver, sender));
+	let best: Converted | null = null;
+	for (const d of decisions)
+		if (d.ok && (best === null || cost(d.route as Converted) < cost(best)))
+			best = d.route as Converted;
+	return best ? { ok: true, route: best } : decisions[0];
 };
