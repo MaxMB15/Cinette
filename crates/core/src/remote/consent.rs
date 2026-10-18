@@ -9,6 +9,13 @@
 //! one the controller withdrew all refuse. After a denial, the same device
 //! is refused without a dialog for [`DENIAL_COOLDOWN`], so it can't keep a
 //! dialog on screen.
+//!
+//! A device can make up a new id for each request, so a denial also turns
+//! away every new request for a while, from any device, with
+//! [`CloseReason::Busy`]. That's [`DENIAL_BACKOFF`] at first, twice as long
+//! after each denial that follows, and never more than [`DENIAL_COOLDOWN`].
+//! Allowing a request, or a cooldown's time with no denial after the wait
+//! ends, starts it again from the beginning. Requests already waiting stay.
 
 use super::handshake::{Peer, VerificationCode};
 use super::identity::DeviceId;
@@ -23,6 +30,8 @@ pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_WAITING: usize = 4;
 /// How long a denied device is refused without a dialog.
 pub const DENIAL_COOLDOWN: Duration = Duration::from_secs(60);
+/// How long every new request is refused after the first denial.
+pub const DENIAL_BACKOFF: Duration = Duration::from_secs(5);
 
 pub type RequestId = u64;
 
@@ -63,6 +72,10 @@ pub struct Resolved {
 pub struct ConsentQueue {
     waiting: VecDeque<ConsentRequest>,
     denied_until: HashMap<DeviceId, Instant>,
+    /// Denials since the backoff last started again.
+    denials: u32,
+    /// Until when every new request is refused.
+    quiet_until: Option<Instant>,
     next_id: RequestId,
 }
 
@@ -73,7 +86,8 @@ impl ConsentQueue {
 
     /// Adds a request. A device asking again replaces its earlier request,
     /// which comes back as cancelled. Refuses a device denied a moment ago,
-    /// and any request when the queue is full.
+    /// any request right after a denial, and any request when the queue is
+    /// full.
     pub fn submit(
         &mut self,
         now: Instant,
@@ -88,6 +102,9 @@ impl ConsentQueue {
             .is_some_and(|&until| now < until)
         {
             return Err(CloseReason::Denied);
+        }
+        if self.quiet_until.is_some_and(|until| now < until) {
+            return Err(CloseReason::Busy);
         }
         let earlier = self.waiting.iter().position(|r| r.peer.id == peer.id);
         let others = self.waiting.len() - usize::from(earlier.is_some());
@@ -137,15 +154,36 @@ impl ConsentQueue {
         }
         let request = self.waiting.remove(i).expect("the index was just found");
         let outcome = match answer {
-            Answer::Allow => Outcome::Granted,
+            Answer::Allow => {
+                self.denials = 0;
+                self.quiet_until = None;
+                Outcome::Granted
+            }
             Answer::Deny => {
                 self.denied_until
                     .insert(request.peer.id.clone(), now + DENIAL_COOLDOWN);
+                self.back_off(now);
                 Outcome::Refused(CloseReason::Denied)
             }
             Answer::Dismiss => Outcome::Refused(CloseReason::Denied),
         };
         Some(Resolved { request, outcome })
+    }
+
+    /// Refuses new requests for a while after a denial.
+    fn back_off(&mut self, now: Instant) {
+        if self
+            .quiet_until
+            .is_some_and(|until| now >= until + DENIAL_COOLDOWN)
+        {
+            self.denials = 0;
+        }
+        // 5 s, 10 s, 20 s, 40 s, then the cooldown.
+        let wait = DENIAL_BACKOFF
+            .saturating_mul(1 << self.denials.min(4))
+            .min(DENIAL_COOLDOWN);
+        self.denials = self.denials.saturating_add(1);
+        self.quiet_until = Some(now + wait);
     }
 
     /// The controller on `conn` stopped asking or hung up.

@@ -606,6 +606,20 @@ fn a_denied_device_is_refused_without_a_dialog_for_a_minute() {
 }
 
 #[test]
+fn after_a_denial_a_new_device_waits_before_it_can_ask() {
+    let mut net = Net::new(RemoteSettings::default());
+    net.connect("Neighbor");
+    net.answer(Answer::Deny);
+    // A device that made up a new id is turned away too.
+    let other = net.connect("Neighbor again");
+    assert_eq!(net.clients[other].closed_reason(), Some(CloseReason::Busy));
+    assert_eq!(net.prompt(), None);
+    net.advance(super::consent::DENIAL_BACKOFF);
+    net.connect("Phone");
+    assert_eq!(net.prompt().unwrap().name, "Phone");
+}
+
+#[test]
 fn requests_queue_one_dialog_at_a_time() {
     let mut net = Net::new(RemoteSettings::default());
     let first = net.connect("First");
