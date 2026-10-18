@@ -136,6 +136,10 @@ Rust half is `src/android.rs`.
 - The view reports its surface to Rust through `MpvNative.surfaceChanged`. mpv gets
   it as `wid`, a JNI global reference, with `gpu-context=android`, and runs its own
   draw loop.
+- When the same surface only changes size, as on a rotation or a new frame for the
+  player, mpv only gets `android-surface-size`. A new `wid` would rebuild its video
+  output and make a live stream buffer again. Each callback brings a new JNI
+  reference, so the JVM's `IsSameObject` tells whether it's the same surface.
 - Android destroys the surface whenever the view hides or the app goes to the
   background. Before `surfaceDestroyed` returns, Rust sets `vo=null` and `wid=0` on
   the playing mpv. When a surface comes back, mpv gets it and `vo=gpu` again. That's

@@ -8,6 +8,8 @@
 //! the view and reports its surface through `MpvNative.surfaceChanged`. mpv
 //! gets the surface as `wid`, a JNI global reference, and runs its own draw
 //! loop with `gpu-context=android`, so there's no render context to drive.
+//! When only the size changes, mpv only gets `android-surface-size`, because
+//! a new `wid` rebuilds its video output.
 //!
 //! Android destroys the surface whenever the view hides or the app goes to
 //! the background. The callback then sets `vo=null` and `wid=0` before it
@@ -17,6 +19,7 @@
 //! client handle of its own, never `MpvState`'s locks, since a load can hold
 //! those while it waits for the UI thread.
 
+use crate::android_surface::{only_resized, surface_size};
 use crate::lock::lock_or_recover;
 use crate::renderer::PlatformRenderer;
 use jni::objects::{Global, JObject};
@@ -191,27 +194,30 @@ fn apply_surface(client: &Mpv, state: &SurfaceState) {
     }
 }
 
-/// Called on the UI thread from `surfaceCreated`, `surfaceChanged` and,
-/// with no surface, `surfaceDestroyed`. mpv lets go of an old surface
-/// before this returns.
-fn surface_changed(surface: Option<Global<JObject<'static>>>, width: i32, height: i32) {
-    let mut state = lock_or_recover(&SURFACE);
-    let same = match (&state.surface, &surface) {
-        (Some(old), Some(new)) => old.wid() == new.as_obj().as_raw() as i64,
-        _ => false,
-    };
-    state.size = surface.as_ref().map(|_| format!("{width}x{height}"));
-    if same {
-        // Only the size changed.
-        if let (Some(client), Some(size)) = (&state.client, &state.size) {
+/// Called on the UI thread from `surfaceChanged` and, with no surface,
+/// `surfaceDestroyed`. `resized` means the surface is the one mpv has, at a
+/// new size. Otherwise mpv gets `surface`, or none, and lets go of the old
+/// one before this returns.
+fn surface_changed(
+    state: &mut SurfaceState,
+    resized: bool,
+    surface: Option<Global<JObject<'static>>>,
+    width: i32,
+    height: i32,
+) {
+    if resized {
+        let size = surface_size(width, height);
+        if let Some(client) = &state.client {
             let _ = client.set_property("android-surface-size", size.as_str());
         }
+        state.size = Some(size);
         return;
     }
+    state.size = surface.as_ref().map(|_| surface_size(width, height));
     let old = state.surface.take();
     state.surface = surface.map(|surface| Arc::new(SurfaceRef { surface }));
     if let Some(client) = &state.client {
-        apply_surface(client, &state);
+        apply_surface(client, state);
     }
     if state.surface.is_some() {
         SURFACE_READY.notify_all();
@@ -229,18 +235,25 @@ pub extern "system" fn Java_app_cinette_mpv_MpvNative_surfaceChanged<'local>(
     width: jni::sys::jint,
     height: jni::sys::jint,
 ) {
-    let global = env
+    let mut state = lock_or_recover(&SURFACE);
+    let (resized, global) = env
         .with_env(|env| -> jni::errors::Result<_> {
-            if surface.is_null() {
-                Ok(None)
-            } else {
-                Ok(Some(env.new_global_ref(&surface)?))
-            }
+            let reported = (!surface.is_null()).then_some(&surface);
+            // A check that fails counts as a new surface, which costs a
+            // rebuild of the video output but never leaves mpv on an old one.
+            let resized = only_resized(state.surface.as_deref(), reported, |current, reported| {
+                env.is_same_object(current.surface.as_obj(), reported).unwrap_or(false)
+            });
+            let global = match reported {
+                Some(surface) if !resized => Some(env.new_global_ref(surface)?),
+                _ => None,
+            };
+            Ok((resized, global))
         })
         .resolve::<jni::errors::LogErrorAndDefault>();
     // A surface that couldn't be referenced counts as none, so mpv never
     // draws into one it can't keep.
-    surface_changed(global, width, height);
+    surface_changed(&mut state, resized, global, width, height);
 }
 
 /// The surface below the web view. The view outlives this value: Kotlin
