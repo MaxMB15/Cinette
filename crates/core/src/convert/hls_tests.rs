@@ -201,3 +201,13 @@ fn the_pacer_ignores_a_clock_going_backwards_and_negative_segments() {
     pacer.resume(5.0);
     assert_eq!(pacer.wait(5.0), Some(5.0));
 }
+
+#[test]
+fn the_pacer_waits_for_a_resume_at_exactly_the_lead() {
+    let mut pacer = Pacer::new(0.0);
+    pacer.made(LEAD);
+    pacer.pause(0.0);
+    assert_eq!(pacer.wait(0.0), None);
+    pacer.resume(0.0);
+    assert_eq!(pacer.wait(0.0), Some(0.0));
+}

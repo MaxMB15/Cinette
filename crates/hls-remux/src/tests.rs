@@ -338,3 +338,68 @@ fn errors_read_plainly_and_never_carry_the_url() {
     assert_eq!(check(-4), Err(RemuxError::Cancelled));
     assert_eq!(check(-99), Err(RemuxError::Failed));
 }
+
+#[test]
+fn reads_the_c_answers() {
+    let codec = CString::new("ac3").unwrap();
+    let language = CString::new("eng").unwrap();
+    let raw = ffi::CinetteAudioTrack {
+        codec: codec.as_ptr(),
+        language: language.as_ptr(),
+        is_default: 1,
+    };
+    assert_eq!(
+        audio_track(&raw),
+        AudioTrack {
+            codec: "ac3".into(),
+            language: Some("eng".into()),
+            default: true,
+        }
+    );
+    let bare = ffi::CinetteAudioTrack {
+        codec: std::ptr::null(),
+        language: std::ptr::null(),
+        is_default: 0,
+    };
+    assert_eq!(
+        audio_track(&bare),
+        AudioTrack {
+            codec: String::new(),
+            language: None,
+            default: false,
+        }
+    );
+
+    assert_eq!(video_kind(-1), Video::None);
+    assert_eq!(video_kind(0), Video::Other);
+    assert_eq!(video_kind(1), Video::H264);
+    assert_eq!(video_kind(2), Video::Hevc);
+    assert_eq!(video_kind(7), Video::Other);
+
+    let data = [1u8, 100, 0, 31];
+    assert_eq!(copy_bytes(data.as_ptr(), 4), data.to_vec());
+    assert_eq!(copy_bytes(data.as_ptr(), 2), vec![1, 100]);
+    assert_eq!(copy_bytes(data.as_ptr(), 0), Vec::<u8>::new());
+    assert_eq!(copy_bytes(data.as_ptr(), -1), Vec::<u8>::new());
+    assert_eq!(copy_bytes(std::ptr::null(), 4), Vec::<u8>::new());
+
+    assert_eq!(length(5.5), Some(5.5));
+    assert_eq!(length(0.0), None);
+    assert_eq!(length(-1.0), None);
+    assert_eq!(NO_TRACK, -1);
+}
+
+#[test]
+fn a_sink_gets_every_byte_but_none_from_nowhere() {
+    let mut out = Collected::default();
+    let mut sink: &mut dyn Sink = &mut out;
+    let ctx = (&mut sink as *mut &mut dyn Sink).cast::<c_void>();
+    let bytes = [0x47u8, 1, 2];
+    on_write(ctx, bytes.as_ptr(), 3);
+    on_write(ctx, bytes.as_ptr(), 0);
+    on_write(ctx, std::ptr::null(), 3);
+    on_write(ctx, bytes.as_ptr(), -1);
+    assert_eq!(on_cut(ctx, 2.0), 0);
+    assert_eq!(out.bytes, vec![0x47, 1, 2]);
+    assert_eq!(out.segments, vec![(3, 2.0)]);
+}

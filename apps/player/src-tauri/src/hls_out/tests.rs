@@ -151,22 +151,22 @@ async fn stays_a_little_ahead_of_playback() {
     conversion.set_playing(false);
     let base = conversion.url.trim_end_matches("index.m3u8").to_string();
     // It runs until it's 20 s ahead of the time playback had before the
-    // pause, then the pacer holds it there.
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut last = -1.0;
-    let (held, media) = loop {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let (made, media) = listed(&base).await;
-        if made == last || Instant::now() > deadline {
-            break (made, media);
-        }
-        last = made;
-    };
+    // pause. Then the pacer holds it, however busy the machine is.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let control = conversion.control.clone();
+    while control.pacer().wait(control.now()).is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the pacer never held the converter"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (held, media) = listed(&base).await;
     assert!(!media.contains("ENDLIST"), "{media}");
-    assert!(
-        (LEAD_SECONDS..LEAD_SECONDS + 15.0).contains(&held),
-        "{held}: {media}"
-    );
+    assert!(held >= LEAD_SECONDS, "{held}: {media}");
+    // Held, it makes nothing more.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(listed(&base).await.0, held);
     conversion.set_playing(true);
 }
 

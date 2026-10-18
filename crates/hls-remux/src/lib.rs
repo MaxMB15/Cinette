@@ -76,6 +76,8 @@ const UNREACHABLE: c_int = -1;
 const REFUSED: c_int = -2;
 const CANCELLED: c_int = -4;
 const AUDIO_COPY: c_int = 0;
+/// The audio stream number that means none.
+const NO_TRACK: c_int = -1;
 const AUDIO_AAC: c_int = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +165,7 @@ unsafe impl Send for Handle {}
 unsafe impl Sync for Handle {}
 
 impl Drop for Handle {
+    // mutants: skip FnValue: Closing frees the C's memory and the source's connection, which no test can see go.
     fn drop(&mut self) {
         unsafe { ffi::cinette_remux_close(self.0.as_ptr()) };
     }
@@ -212,14 +215,7 @@ impl Source {
     pub fn audio_tracks(&self) -> Vec<AudioTrack> {
         let count = unsafe { ffi::cinette_remux_audio_count(self.raw()) };
         (0..count)
-            .map(|i| {
-                let t = unsafe { ffi::cinette_remux_audio_track(self.raw(), i) };
-                AudioTrack {
-                    codec: text(t.codec).unwrap_or_default(),
-                    language: text(t.language),
-                    default: t.is_default != 0,
-                }
-            })
+            .map(|i| audio_track(&unsafe { ffi::cinette_remux_audio_track(self.raw(), i) }))
             .collect()
     }
 
@@ -228,25 +224,12 @@ impl Source {
         let mut data = std::ptr::null();
         let mut size: c_int = 0;
         let kind = unsafe { ffi::cinette_remux_video(self.raw(), &mut data, &mut size) };
-        let extradata = match usize::try_from(size) {
-            Ok(len) if !data.is_null() && len > 0 => unsafe {
-                std::slice::from_raw_parts(data, len).to_vec()
-            },
-            _ => Vec::new(),
-        };
-        let video = match kind {
-            -1 => Video::None,
-            1 => Video::H264,
-            2 => Video::Hevc,
-            _ => Video::Other,
-        };
-        (video, extradata)
+        (video_kind(kind), copy_bytes(data, size))
     }
 
     /// The source's length in seconds, or `None` for a live stream.
     pub fn duration(&self) -> Option<f64> {
-        let d = unsafe { ffi::cinette_remux_duration(self.raw()) };
-        (d > 0.0).then_some(d)
+        length(unsafe { ffi::cinette_remux_duration(self.raw()) })
     }
 
     pub fn canceller(&self) -> Canceller {
@@ -262,7 +245,7 @@ impl Source {
         sink: &mut dyn Sink,
     ) -> Result<(), RemuxError> {
         let (track, mode, downmix) = match audio {
-            Audio::None => (-1, AUDIO_COPY, 0),
+            Audio::None => (NO_TRACK, AUDIO_COPY, 0),
             Audio::Copy(track) => (track_index(track)?, AUDIO_COPY, 0),
             Audio::Aac { track, downmix } => (track_index(track)?, AUDIO_AAC, c_int::from(downmix)),
         };
@@ -274,6 +257,39 @@ impl Source {
         })?;
         check(unsafe { ffi::cinette_remux_run(raw) })
     }
+}
+
+/// An audio track as the C describes it.
+fn audio_track(raw: &ffi::CinetteAudioTrack) -> AudioTrack {
+    AudioTrack {
+        codec: text(raw.codec).unwrap_or_default(),
+        language: text(raw.language),
+        default: raw.is_default != 0,
+    }
+}
+
+/// What `cinette_remux_video`'s answer means.
+fn video_kind(kind: c_int) -> Video {
+    match kind {
+        -1 => Video::None,
+        1 => Video::H264,
+        2 => Video::Hevc,
+        _ => Video::Other,
+    }
+}
+
+/// A copy of `size` bytes at `data`, or nothing for a null pointer or a
+/// size below zero.
+fn copy_bytes(data: *const u8, size: c_int) -> Vec<u8> {
+    match usize::try_from(size) {
+        Ok(len) if !data.is_null() => unsafe { std::slice::from_raw_parts(data, len) }.to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+/// A length in seconds, or `None` for a live stream, which has none.
+fn length(seconds: f64) -> Option<f64> {
+    (seconds > 0.0).then_some(seconds)
 }
 
 fn track_index(track: usize) -> Result<c_int, RemuxError> {
@@ -304,7 +320,7 @@ extern "C" fn on_write(ctx: *mut c_void, data: *const u8, size: c_int) {
     let Ok(len) = usize::try_from(size) else {
         return;
     };
-    if data.is_null() || len == 0 {
+    if data.is_null() {
         return;
     }
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
