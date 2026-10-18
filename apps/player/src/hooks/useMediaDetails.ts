@@ -74,14 +74,19 @@ export const useMediaDetails = (request: MediaDetailsRequest | null): MediaDetai
  * player still uses useMediaDetails, until its own tests give it a cache.
  */
 export const useCachedMediaDetails = (request: MediaDetailsRequest | null): MediaDetails => {
+	// Without a request, or an IMDb id for Whatson, a query loads nothing, so
+	// its key's placeholder values are never seen.
 	const omdb = useQuery({
+		// Stryker disable next-line StringLiteral: no query loads without a request.
 		...omdbQuery(request?.id ?? "", request?.title ?? "", request?.kind ?? "movie"),
 		enabled: request !== null,
 	});
 	const imdbId = omdb.data?.imdbId;
 	const whatson = useQuery({
+		// Stryker disable next-line StringLiteral: no query loads without an IMDb id, which needs a request.
 		...whatsonQuery(imdbId ?? "", request?.kind ?? "movie"),
-		enabled: request !== null && !!imdbId,
+		// OMDb only gives an IMDb id for a request.
+		enabled: !!imdbId,
 	});
 	if (!request) return NOTHING;
 	// An OMDb call that fails counts as an answer with no details.

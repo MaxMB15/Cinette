@@ -896,6 +896,22 @@ describe("ChannelList search", () => {
 		expect(startOf("Weekend Review")).toBe(`${weekend} ${formatHHMM(NOW + 3 * 24 * 3600)}`);
 	});
 
+	it("searches the guide once for a search typed quickly", async () => {
+		tauri.searchEpgProgrammes.mockResolvedValue([]);
+		await renderList();
+		typeSearch("ma");
+		typeSearch("mar");
+		typeSearch("market");
+		await waitFor(() => expect(tauri.searchEpgProgrammes).toHaveBeenCalled(), {
+			timeout: 3000,
+		});
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 400));
+		});
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledWith("market", expect.any(Number));
+	});
+
 	it("plays the channel a program result is on", async () => {
 		tauri.searchEpgProgrammes.mockResolvedValue([
 			{
