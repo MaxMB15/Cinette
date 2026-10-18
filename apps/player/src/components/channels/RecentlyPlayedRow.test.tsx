@@ -59,7 +59,12 @@ describe("RecentlyPlayedRow", () => {
 		vi.mocked(getWatchHistory).mockRejectedValue(new Error("db locked"));
 		const { container } = render(<RecentlyPlayedRow contentType="live" onPlay={() => {}} />);
 
-		await waitFor(() => expect(console.error).toHaveBeenCalled());
+		await waitFor(() =>
+			expect(console.error).toHaveBeenCalledWith(
+				"[RecentlyPlayedRow] failed to load watch history:",
+				expect.any(Error)
+			)
+		);
 		expect(container).toBeEmptyDOMElement();
 	});
 

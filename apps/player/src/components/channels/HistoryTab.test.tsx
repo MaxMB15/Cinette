@@ -125,7 +125,10 @@ describe("HistoryTab list", () => {
 		vi.mocked(getWatchHistory).mockRejectedValue(new Error("db locked"));
 		render(<HistoryTab onPlay={vi.fn()} />);
 		expect(await screen.findByText(/No watch history yet/)).toBeInTheDocument();
-		expect(console.error).toHaveBeenCalled();
+		expect(console.error).toHaveBeenCalledWith(
+			"[HistoryTab] failed to fetch history:",
+			expect.any(Error)
+		);
 	});
 
 	it("labels each entry with its type, plays and total time", async () => {
