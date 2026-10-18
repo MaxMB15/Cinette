@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderUi, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { wrapperFor } from "@/test/query";
+
+/** Each test gets a new cache, as each app does. */
+const render = (ui: ReactElement) => renderUi(ui, { wrapper: wrapperFor() });
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WatchHistoryEntry } from "@/lib/types";
 import {
@@ -113,6 +118,24 @@ describe("RecentlyPlayedRow", () => {
 
 		expect(screen.getAllByRole("button", { name: /^Dismiss/ })).toHaveLength(2);
 		expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ channelId: "e2" }));
+	});
+
+	it("dismisses one channel's card and keeps the others", async () => {
+		vi.mocked(getWatchHistory).mockResolvedValue([
+			entry("ch1", "News 24"),
+			entry("ch2", "Sport One"),
+		]);
+		vi.mocked(deleteHistoryEntry).mockResolvedValue(undefined);
+		render(<RecentlyPlayedRow contentType="live" onPlay={() => {}} />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Dismiss News 24" }));
+
+		await waitFor(() => expect(screen.queryByText("News 24")).not.toBeInTheDocument());
+		expect(deleteHistoryEntry).toHaveBeenCalledExactlyOnceWith("ch1");
+		expect(deleteHistorySeries).not.toHaveBeenCalled();
+		expect(screen.getByText("Sport One")).toBeInTheDocument();
+		// The card goes without loading the history again.
+		expect(getWatchHistory).toHaveBeenCalledOnce();
 	});
 
 	it("dismisses a series card by show, so older episodes go too", async () => {

@@ -19,6 +19,7 @@ import { CategoryFilter } from "./CategoryFilter";
 import { ChannelCard, COMPACT_ROW_HEIGHT, ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
 import { ChannelLogo } from "./ChannelLogo";
 import { useGroupHierarchy } from "@/hooks/useGroupHierarchy";
+import { useHistoryStaleOnLeave } from "@/hooks/useWatchHistory";
 import { RecentlyPlayedRow } from "./RecentlyPlayedRow";
 import { PinnedGroupsRow } from "./PinnedGroupsRow";
 import { CategoryBrowser } from "./CategoryBrowser";
@@ -153,6 +154,7 @@ export const ChannelList = () => {
 	const contentType =
 		activeTab === "movie" ? "movie" : activeTab === "series" ? "series" : "live";
 	const hierarchy = useGroupHierarchy(activeProviderId, contentType);
+	useHistoryStaleOnLeave();
 	const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 	const [showDownloadsOnly, setShowDownloadsOnly] = useState(false);
 	const [seriesModalData, setSeriesModalData] = useState<{
