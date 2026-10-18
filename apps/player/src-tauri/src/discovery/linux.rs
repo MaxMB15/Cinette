@@ -28,6 +28,7 @@ pub struct BrowseHandle {
 }
 
 impl Drop for BrowseHandle {
+    // mutants: skip FnValue: Without it mdns-sd keeps querying the network, which no test sees. The forwarding thread still ends at its next event, once the Browser is gone.
     fn drop(&mut self) {
         // The forwarding thread ends when the daemon reports SearchStopped.
         let _ = self.daemon.stop_browse(&domain(&self.service_type));
@@ -69,6 +70,7 @@ pub fn browse(service_type: &str, mut tracker: Tracker) -> Result<BrowseHandle, 
                             None => true,
                         }
                     }
+                    // mutants: skip MatchArm: mdns-sd drops its sender after SearchStopped, so recv fails next and the loop ends either way.
                     ServiceEvent::SearchStopped(_) => false,
                     _ => true,
                 };

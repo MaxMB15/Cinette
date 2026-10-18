@@ -340,6 +340,34 @@ fn advertise_refuses_bad_registrations() {
 }
 
 #[test]
+fn registrations_are_checked_up_to_their_limits() {
+    let ok = |r: Registration| check_registration(&r).is_ok();
+    assert!(ok(registration()));
+    assert!(ok(Registration {
+        instance: "x".repeat(63),
+        host_label: "a".repeat(63),
+        ..registration()
+    }));
+    assert!(ok(Registration {
+        instance: "x".into(),
+        host_label: "a-1".into(),
+        ..registration()
+    }));
+    assert!(!ok(Registration {
+        host_label: "a_b".into(),
+        ..registration()
+    }));
+}
+
+#[test]
+fn errors_print_their_message() {
+    let e = DiscoveryError("couldn't start mDNS".into());
+    assert_eq!(e.to_string(), "couldn't start mDNS");
+    let as_error: &dyn std::error::Error = &e;
+    assert_eq!(format!("{as_error}"), "couldn't start mDNS");
+}
+
+#[test]
 fn a_type_can_only_be_browsed_once_at_a_time() {
     let first = BrowseGuard::take("_onlyonce._tcp").unwrap();
     assert!(BrowseGuard::take("_onlyonce._tcp").is_err());
@@ -369,7 +397,28 @@ async fn advertising_and_browsing_find_each_other() {
     })
     .unwrap();
 
-    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    // A daemon of mdns-sd's own, outside the module, says whether multicast
+    // works here at all. Where it does, the module must find the record too.
+    let raw = mdns_sd::ServiceDaemon::new().unwrap();
+    let raw_events = raw.browse(&format!("{service_type}.local.")).unwrap();
+    let multicast_works = tokio::task::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            if let Ok(mdns_sd::ServiceEvent::ServiceResolved(_)) = raw_events.recv_timeout(left) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap();
+    let _ = raw.shutdown();
+    if !multicast_works {
+        // No interface here takes multicast, as in some containers.
+        eprintln!("skipped: mDNS itself found nothing over multicast");
+        return;
+    }
+    let found = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             match browser.next().await {
                 Some(Event::Found {
@@ -387,11 +436,7 @@ async fn advertising_and_browsing_find_each_other() {
         }
     })
     .await;
-    let Ok((host, addrs, port, txt)) = found else {
-        // No interface here takes multicast, as in some containers.
-        eprintln!("skipped: nothing found over multicast");
-        return;
-    };
+    let (host, addrs, port, txt) = found.expect("mDNS works here, but the browse found nothing");
     assert_eq!(host, "abcdefghijklmnopqrstuvwxyz.local.");
     assert!(!addrs.is_empty());
     assert_eq!(port, 47130);
