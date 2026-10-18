@@ -184,8 +184,5 @@ export const historyKey = (source: Source = LOCAL) => [source, "history"] as con
 export const watchHistoryQuery = (limit: number, contentType?: string, source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [...historyKey(source), contentType ?? "all", limit] as const,
-		queryFn: () =>
-			contentType === undefined
-				? getWatchHistory(limit)
-				: getWatchHistory(limit, contentType),
+		queryFn: () => getWatchHistory(limit, contentType),
 	});

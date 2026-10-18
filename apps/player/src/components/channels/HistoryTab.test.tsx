@@ -106,7 +106,7 @@ describe("HistoryTab list", () => {
 		vi.mocked(getWatchHistory).mockReturnValue(new Promise((r) => (resolve = r)));
 		const { container } = render(<HistoryTab onPlay={vi.fn()} />);
 
-		expect(getWatchHistory).toHaveBeenCalledWith(200);
+		expect(getWatchHistory).toHaveBeenCalledWith(200, undefined);
 		expect(container.querySelector(".animate-spin")).not.toBeNull();
 
 		resolve([entry]);
