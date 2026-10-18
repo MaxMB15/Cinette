@@ -369,7 +369,9 @@ localStorage.setItem("cinette-perf", "1");
 Then `cinettePerf.print()` prints the counts since the page loaded or since the last
 `cinettePerf.reset()`, and `cinettePerf.report()` returns them. Remove the key to stop.
 StrictMode runs each effect twice in a dev build, so some backend calls count twice
-there. A production build leaves the counters out.
+there. The backend calls are the commands in `src/lib/tauri.ts`, which all go through
+`src/lib/invoke.ts`. Calls that Tauri's own packages make, such as event listeners and
+dialogs, aren't counted. A production build leaves the counters out.
 
 The render counter reads React's fiber tree the way React DevTools does, through a
 `<Profiler>` around the app (`src/dev/render-counts.ts`). A React upgrade could change

@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { Profiler, type ReactNode } from "react";
+import { setInvokeListener } from "@/lib/invoke";
 import { readStorage } from "@/lib/storage";
 import { createRenderCounter } from "./render-counts";
-import { createTally, type Tally } from "./tally";
+import { createTally } from "./tally";
 
 /** Set this key to "1" in local storage, then reload, to count in a dev build. */
 export const PERF_SWITCH_KEY = "cinette-perf";
@@ -30,17 +31,6 @@ declare global {
 	}
 }
 
-type Invoke = (cmd: string, ...rest: unknown[]) => Promise<unknown>;
-
-/** Counts each call through `target.invoke` by its command name. */
-export const countInvokes = (target: { invoke: Invoke }, tally: Tally): void => {
-	const original = target.invoke;
-	target.invoke = (cmd, ...rest) => {
-		tally.add(cmd);
-		return original.call(target, cmd, ...rest);
-	};
-};
-
 /**
  * Wraps `app` so it counts renders per component and backend calls per
  * command, when the switch in local storage is on. `container` is the element
@@ -50,9 +40,8 @@ export const withPerfCounters = (app: ReactNode, container: Element): ReactNode 
 	if (readStorage(PERF_SWITCH_KEY) !== "1") return app;
 	const renders = createRenderCounter(container);
 	const invokes = createTally();
-	// Every backend call from @tauri-apps/api goes through this object.
-	const internals = (window as { __TAURI_INTERNALS__?: { invoke: Invoke } }).__TAURI_INTERNALS__;
-	if (internals) countInvokes(internals, invokes);
+	// Every command in src/lib/tauri.ts goes through src/lib/invoke.ts.
+	setInvokeListener(invokes.add);
 
 	const report = (): PerfReport => ({
 		commits: renders.commits(),
