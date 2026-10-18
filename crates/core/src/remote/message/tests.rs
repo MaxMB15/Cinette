@@ -233,6 +233,40 @@ fn values_from_a_newer_version_read_as_unknown() {
 }
 
 #[test]
+fn a_playback_error_goes_out_as_its_code() {
+    for (error, code) in [
+        (PlaybackError::OpenFailed, "openFailed"),
+        (PlaybackError::LoadFailed, "loadFailed"),
+        (PlaybackError::Refused, "refused"),
+        (PlaybackError::Failed, "failed"),
+    ] {
+        let state = PlaybackSnapshot {
+            status: PlaybackStatus::Error,
+            error: Some(error),
+            ..PlaybackSnapshot::default()
+        };
+        let value = serde_json::to_value(&state).unwrap();
+        assert_eq!(value["error"], code);
+        assert_eq!(
+            serde_json::from_value::<PlaybackSnapshot>(value).unwrap(),
+            state
+        );
+    }
+    assert_eq!(
+        serde_json::from_value::<PlaybackError>(json!("overheated")).unwrap(),
+        PlaybackError::Unknown
+    );
+    // Free text reads as a code it doesn't know.
+    let old = json!({"status": "error", "error": "http://user:pass@host/live.ts failed"});
+    assert_eq!(
+        serde_json::from_value::<PlaybackSnapshot>(old)
+            .unwrap()
+            .error,
+        Some(PlaybackError::Unknown)
+    );
+}
+
+#[test]
 fn a_message_leaves_room_for_the_noise_tag() {
     // Noise sends at most 65535 bytes, 16 of them its tag.
     assert_eq!(MAX_MESSAGE, 65_519);
