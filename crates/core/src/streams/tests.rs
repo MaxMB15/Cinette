@@ -320,8 +320,9 @@ fn with_cors(status: &str) -> String {
 
 #[tokio::test]
 async fn reads_a_media_playlist_with_ts_segments_and_cors() {
+    // A blank line between a tag and its URI is allowed.
     let playlist =
-        "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg-1.ts\n#EXTINF:4.0,\nseg-2.ts\n";
+        "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\n\nseg-1.ts\n#EXTINF:4.0,\nseg-2.ts\n";
     let (base, requests) = serve_routes(vec![
         route("/live/u/p/1.m3u8", &with_cors("200 OK"), playlist),
         route(
@@ -464,4 +465,15 @@ async fn reads_why_the_check_failed() {
         inspect(&client, &format!("{base}/m.m3u8")).await,
         Err(HlsError::Refused(403))
     );
+}
+
+#[tokio::test]
+async fn takes_playlists_up_to_1_mib() {
+    let client = test_server::client();
+    for size in [4096, 1024 * 1024] {
+        let body = format!("#EXTM3U\n{}", "#".repeat(size - 8));
+        assert_eq!(body.len(), size);
+        let url = format!("{}/x.m3u8", serve_once("200 OK", body));
+        assert!(inspect(&client, &url).await.is_ok(), "{size}");
+    }
 }
