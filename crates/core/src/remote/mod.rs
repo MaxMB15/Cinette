@@ -68,9 +68,13 @@ pub(crate) fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
             _ => None,
         }
     };
-    let mut out = [0u8; N];
-    for (i, pair) in text.as_chunks::<2>().0.iter().enumerate() {
-        out[i] = (digit(pair[0])? << 4) | digit(pair[1])?;
-    }
-    Some(out)
+    // Built from the text alone, with no filler bytes, since the result
+    // becomes a nonce.
+    let bytes: Vec<u8> = text
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[hi, lo]| Some((digit(hi)? << 4) | digit(lo)?))
+        .collect::<Option<_>>()?;
+    bytes.try_into().ok()
 }

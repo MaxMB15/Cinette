@@ -342,6 +342,23 @@ impl Net {
     }
 }
 
+#[test]
+fn hex_reads_back_in_either_case() {
+    let bytes = [0x00, 0x7f, 0xa5, 0xff];
+    assert_eq!(super::to_hex(&bytes), "007fa5ff");
+    assert_eq!(super::from_hex::<4>("007fa5ff"), Some(bytes));
+    assert_eq!(super::from_hex::<4>("007FA5FF"), Some(bytes));
+}
+
+#[test]
+fn hex_refuses_the_wrong_length_or_digits() {
+    assert_eq!(super::from_hex::<2>("abc"), None);
+    assert_eq!(super::from_hex::<2>("abcdef"), None);
+    assert_eq!(super::from_hex::<2>("abzz"), None);
+    assert_eq!(super::from_hex::<1>("g0"), None);
+    assert_eq!(super::from_hex::<0>(""), Some([]));
+}
+
 // Permission defaults
 
 #[test]
