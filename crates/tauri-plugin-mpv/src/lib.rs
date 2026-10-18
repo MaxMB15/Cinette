@@ -33,6 +33,7 @@ use tauri::{
     Manager, Runtime,
 };
 
+pub use engine::MediaInfo;
 pub use mpv::MpvState;
 
 // The Swift half of the plugin, in `ios/Sources/MpvPlugin.swift`.

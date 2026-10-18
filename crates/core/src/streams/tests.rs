@@ -5,7 +5,7 @@ use super::format::{
     audio_codec, container_from_demuxer, video_codec, AudioCodec, Container, PlayingInfo,
     StreamFormat, VideoCodec,
 };
-use super::hls::{inspect, HlsError, HlsInfo};
+use super::hls::{could_be_playlist, inspect, inspect_within, HlsError, HlsInfo};
 use super::probe::{self, AudioTrack, ProbeError, Probed};
 use super::{candidates, formats_for, is_hls_url, HlsCheck};
 use crate::http::test_server::{self, password, route, serve_once, serve_routes};
@@ -107,7 +107,7 @@ fn names_containers_and_codecs() {
     }
     for (name, codec) in [
         ("aac", AudioCodec::Aac),
-        ("aac_latm", AudioCodec::Aac),
+        ("aac_latm", AudioCodec::Other),
         ("mp3", AudioCodec::Mp3),
         ("mp3float", AudioCodec::Mp3),
         ("ac3", AudioCodec::Ac3),
@@ -651,4 +651,56 @@ fn reads_each_audio_tracks_language() {
         .map(|t| t.layout.as_deref())
         .collect();
     assert_eq!(layouts, vec![Some("3 channels"), None, None, None]);
+}
+
+#[test]
+fn turns_down_a_body_that_starts_unlike_a_playlist() {
+    for start in [
+        &b""[..],
+        b"#",
+        b"#EXT",
+        b"#EXTM3U",
+        b"#EXTM3U\n#EXT-X-VERSION:3",
+    ] {
+        assert!(could_be_playlist(start), "{start:?}");
+    }
+    // A byte-order mark, even cut short by a read.
+    for start in [
+        &b"\xef"[..],
+        b"\xef\xbb",
+        b"\xef\xbb\xbf",
+        b"\xef\xbb\xbf#EXT",
+    ] {
+        assert!(could_be_playlist(start), "{start:?}");
+    }
+    for start in [
+        &b"<"[..],
+        b"<html>",
+        b"\x47\x40\x00",
+        b"#EXTINF",
+        b"\xef\xbb\xbf<",
+    ] {
+        assert!(!could_be_playlist(start), "{start:?}");
+    }
+}
+
+#[tokio::test]
+async fn gives_up_on_a_server_that_never_answers() {
+    // It takes the connection and says nothing.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let mut open = Vec::new();
+        for stream in listener.incoming().flatten() {
+            open.push(stream);
+        }
+    });
+    let url = format!("http://{address}/live/u/SECRET/1.m3u8");
+    let started = std::time::Instant::now();
+    let limit = std::time::Duration::from_millis(300);
+    assert_eq!(
+        inspect_within(&test_server::client(), &url, limit).await,
+        Err(HlsError::Unreachable)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }

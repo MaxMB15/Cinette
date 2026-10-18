@@ -9,6 +9,8 @@
 //! lists variants, and two bytes of the first segment. Errors never carry
 //! the URL, which has the login in it.
 
+use std::time::Duration;
+
 use reqwest::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN, RANGE};
 use reqwest::{Client, Response, StatusCode};
 use url::Url;
@@ -21,7 +23,11 @@ use super::format::Container;
 const CHECK_ORIGIN: &str = "https://www.gstatic.com";
 /// A playlist larger than this isn't one.
 const MAX_PLAYLIST: usize = 1024 * 1024;
+/// How long each request of the check gets, its body included, the same
+/// as the probe's limit without data.
+const REQUEST_LIMIT: Duration = Duration::from_secs(15);
 
+/// What the check found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HlsInfo {
     /// [`Container::HlsTs`] or [`Container::HlsFmp4`].
@@ -42,11 +48,21 @@ pub enum HlsError {
 
 /// Reads the playlist at `url`.
 pub async fn inspect(client: &Client, url: &str) -> Result<HlsInfo, HlsError> {
-    let (base, text, mut cors) = playlist(client, url).await?;
+    inspect_within(client, url, REQUEST_LIMIT).await
+}
+
+/// [`inspect`] with `limit` for each request, which tests shorten.
+pub(crate) async fn inspect_within(
+    client: &Client,
+    url: &str,
+    limit: Duration,
+) -> Result<HlsInfo, HlsError> {
+    let get = |url: String, first_bytes: bool| get(client, url, first_bytes, limit);
+    let (base, text, mut cors) = playlist(get(url.to_string(), false).await?).await?;
     let (base, text) = match first_uri_after(&text, "#EXT-X-STREAM-INF") {
         Some(variant) => {
             let variant = base.join(&variant).map_err(|_| HlsError::NotHls)?;
-            let (base, text, variant_cors) = playlist(client, variant.as_str()).await?;
+            let (base, text, variant_cors) = playlist(get(variant.into(), false).await?).await?;
             cors &= variant_cors;
             (base, text)
         }
@@ -59,7 +75,7 @@ pub async fn inspect(client: &Client, url: &str) -> Result<HlsInfo, HlsError> {
     };
     if cors && let Some(segment) = first_uri_after(&text, "#EXTINF") {
         let segment = base.join(&segment).map_err(|_| HlsError::NotHls)?;
-        cors = match get(client, segment.as_str(), true).await {
+        cors = match get(segment.into(), true).await {
             Ok(response) => allows_other_origins(&response),
             // The playlist was fine, so a segment that fails is a CORS
             // question the check can't answer. Say no.
@@ -69,15 +85,16 @@ pub async fn inspect(client: &Client, url: &str) -> Result<HlsInfo, HlsError> {
     Ok(HlsInfo { container, cors })
 }
 
-/// The playlist's final URL after redirects, its text, and its CORS answer.
-async fn playlist(client: &Client, url: &str) -> Result<(Url, String, bool), HlsError> {
-    let mut response = get(client, url, false).await?;
+/// A playlist's final URL after redirects, its text, and its CORS answer,
+/// from the `response` to asking for it.
+async fn playlist(mut response: Response) -> Result<(Url, String, bool), HlsError> {
     let base = response.url().clone();
     let cors = allows_other_origins(&response);
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| HlsError::Unreachable)? {
         body.extend_from_slice(&chunk);
-        if body.len() > MAX_PLAYLIST {
+        // Something else, such as a video, is turned down at once.
+        if body.len() > MAX_PLAYLIST || !could_be_playlist(&body) {
             return Err(HlsError::NotHls);
         }
     }
@@ -88,8 +105,25 @@ async fn playlist(client: &Client, url: &str) -> Result<(Url, String, bool), Hls
     Ok((base, text, cors))
 }
 
-async fn get(client: &Client, url: &str, first_bytes: bool) -> Result<Response, HlsError> {
-    let mut request = client.get(url).header(ORIGIN, CHECK_ORIGIN);
+/// Whether `start`, the first bytes of a body, could begin a playlist.
+pub(crate) fn could_be_playlist(start: &[u8]) -> bool {
+    const TAG: &[u8] = b"#EXTM3U";
+    const BOM: &[u8] = b"\xef\xbb\xbf";
+    if BOM.starts_with(start) {
+        return true;
+    }
+    let start = start.strip_prefix(BOM).unwrap_or(start);
+    let n = start.len().min(TAG.len());
+    start[..n] == TAG[..n]
+}
+
+async fn get(
+    client: &Client,
+    url: String,
+    first_bytes: bool,
+    limit: Duration,
+) -> Result<Response, HlsError> {
+    let mut request = client.get(url).header(ORIGIN, CHECK_ORIGIN).timeout(limit);
     if first_bytes {
         request = request.header(RANGE, "bytes=0-1");
     }

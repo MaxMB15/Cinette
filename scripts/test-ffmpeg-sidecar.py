@@ -338,7 +338,8 @@ class Case:
     recording: bool = False
     # Run CONVERT_ARGS instead of a download's or a recording's,
     # CONVERT_DOWNMIX_ARGS with downmix, or CONVERT_SURROUND_ARGS with
-    # surround, which also checks that the AAC is standard 5.1.
+    # surround, which also checks that the AAC is standard 5.1. Conversions
+    # write live Matroska, which records no length, so they set length=None.
     converting: bool = False
     downmix: bool = False
     surround: bool = False
@@ -378,17 +379,17 @@ def cases() -> list[Case]:
         # The app's own download tests serve WAV.
         Case("WAV into MKV", "/media/sound.wav", "mkv", ["pcm_u8"]),
         Case("Converting MPEG-2 and MP2 for Cast", "/media/mpeg2.ts", "mkv",
-             ["aac", "mpeg2video"], converting=True),
+             ["aac", "mpeg2video"], converting=True, length=None),
         Case("Converting HEVC and AC-3 for Cast", "/media/hevc.ts", "mkv", ["aac", "hevc"],
-             converting=True, downmix=True),
+             converting=True, length=None, downmix=True),
         Case("Converting DTS for Cast", "/media/dts.mkv", "mkv", av, converting=True,
-             downmix=True),
+             length=None, downmix=True),
         Case("Converting Opus for Cast", "/media/vp9.webm", "mkv", ["aac", "vp9"],
-             converting=True),
+             converting=True, length=None),
         Case("Converting AC-3 5.1 to 5.1 AAC for Cast", "/media/ac3-51.mkv", "mkv", av,
-             converting=True, surround=True),
+             converting=True, length=None, surround=True),
         Case("Converting E-AC-3 in HLS for Cast", "/media/hls-eac3/index.m3u8", "mkv", av,
-             converting=True, downmix=True),
+             converting=True, length=None, downmix=True),
         Case("HLS", "/media/hls/index.m3u8", "mkv", av),
         Case("HLS with fMP4 segments", "/media/hls-fmp4/index.m3u8", "mkv", av),
         Case("HLS with AES-128", "/media/hls-aes/index.m3u8", "mkv", av),

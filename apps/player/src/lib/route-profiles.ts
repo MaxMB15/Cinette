@@ -26,7 +26,14 @@ const HEVC_CONTAINERS: readonly Container[] = ["hls-fmp4", "mp4", "mkv"];
  *   count as unplayable and get converted to AAC.
  * - Interlaced video is undocumented, so it counts as unplayable until a
  *   device test says otherwise.
- * - Converted streams go out as live Matroska, as VLC sends them.
+ * - Converted streams go out as live Matroska, as VLC sends them. MKV
+ *   isn't on Google's list of supported containers; it plays because VLC
+ *   relies on it and a device test showed it.
+ * - H.264 counts as playable at any level, but Google lists 1st and 2nd
+ *   generation Chromecasts at level 4.1 (1080p30 or 720p60) and the 3rd at
+ *   4.2 (1080p60). `md` is "Chromecast" for all three, so 1080p50 or 60 may
+ *   stutter on the older two. `StreamFormat` doesn't carry the resolution
+ *   and frame rate yet, which a cap for them would need.
  */
 export const castProfile = (model: string): ReceiverProfile => ({
 	containers: H264_CONTAINERS,
@@ -73,8 +80,15 @@ export interface StreamFormats {
 	sources: number[];
 	/** Seconds, when the probe found a length. */
 	duration: number | null;
+	/** Names the backend's list that `sources` point into. A load passes it
+	 *  back, and fails as stale once a newer list replaced it. */
+	generation: number;
 }
 
 /** What `getStreamFormats` rejects with when the provider answered 401 or
  *  403, so the login may have expired. */
 export const REFUSED = "refused";
+
+/** What `getStreamFormats` rejects with while mpv is still opening the
+ *  item and doesn't know its codecs. Ask again shortly. */
+export const NOT_READY = "notReady";

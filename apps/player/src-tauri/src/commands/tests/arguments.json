@@ -4,7 +4,7 @@
 	"load_xtream_provider": { "required": ["name", "url", "username", "password"] },
 	"get_providers": {},
 	"get_converter_support": {},
-	"get_stream_formats": { "required": ["channel"], "optional": ["playing"] },
+	"get_stream_formats": { "required": ["channel"] },
 	"remove_provider": { "required": ["id"] },
 	"get_all_channels": {},
 	"toggle_favorite": { "required": ["channelId"] },
