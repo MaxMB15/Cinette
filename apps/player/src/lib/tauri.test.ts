@@ -194,6 +194,7 @@ describe("backend commands", () => {
 			{ name: "Xt", url: "http://xt.example", username: "user", password: "secret" },
 		],
 		["getProviders", () => tauri.getProviders(), "get_providers"],
+		["getConverterSupport", () => tauri.getConverterSupport(), "get_converter_support"],
 		[
 			"getStreamFormats",
 			() => tauri.getStreamFormats(episode),
