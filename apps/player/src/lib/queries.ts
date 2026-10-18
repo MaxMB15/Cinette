@@ -125,11 +125,12 @@ export const SCHEDULE_STEP = 600;
 /**
  * One channel's schedule from 12 hours before `at` through 12 hours after.
  * `at` is the start of a step, so the schedule runs one step longer, which
- * covers the 12 hours ahead of any moment in it.
+ * covers the 12 hours ahead of any moment in it. `version` goes up when a
+ * provider's guide refreshes, which makes it a new query.
  */
-export const scheduleQuery = (epgId: string, at: number, source: Source = LOCAL) =>
+export const scheduleQuery = (epgId: string, at: number, version: number, source: Source = LOCAL) =>
 	queryOptions({
-		queryKey: [source, "schedule", epgId, at] as const,
+		queryKey: [source, "schedule", epgId, at, version] as const,
 		queryFn: () => getEpgProgrammes(epgId, at - 12 * 3600, at + 12 * 3600 + SCHEDULE_STEP),
 	});
 
@@ -145,6 +146,14 @@ export const guideSearchQuery = (term: string, source: Source = LOCAL) =>
 	});
 
 /**
+ * Keeps details that were found until the app loads them again. No details,
+ * as when no API key is saved yet, are asked for again the next time, since a
+ * key saved in Settings since then may find them.
+ */
+const keepFound = (query: { state: { data: unknown } }) =>
+	query.state.data == null ? 0 : Infinity;
+
+/**
  * OMDb's details for a movie or show, by the channel the backend saves them
  * for and the title it searches.
  */
@@ -157,6 +166,7 @@ export const omdbQuery = (
 	queryOptions({
 		queryKey: [source, "omdb", id, title, kind] as const,
 		queryFn: () => fetchOmdbData(id, title, kind),
+		staleTime: keepFound,
 	});
 
 /** Whatson's ratings for an IMDb id. A series is a "show" there. */
@@ -164,6 +174,7 @@ export const whatsonQuery = (imdbId: string, kind: "movie" | "series", source: S
 	queryOptions({
 		queryKey: [source, "whatson", imdbId, kind] as const,
 		queryFn: () => fetchWhatsonData(imdbId, kind === "series" ? "show" : "movie"),
+		staleTime: keepFound,
 	});
 
 /** The start of every watch history query's key, to mark them all stale at once. */
