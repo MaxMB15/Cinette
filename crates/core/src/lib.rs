@@ -6,6 +6,8 @@
 
 /// Optional AI helpers for organizing playlists.
 pub mod ai;
+/// Playing on a Google Cast receiver.
+pub mod cast;
 /// The SQLite store for providers, channels, guides, metadata and watch history.
 pub mod cache;
 /// Movie and episode downloads, their file paths and the ffmpeg arguments they
