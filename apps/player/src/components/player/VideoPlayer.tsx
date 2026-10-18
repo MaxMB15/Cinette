@@ -989,6 +989,7 @@ export const PlayerView = () => {
 			playback.seek(run.target);
 			return run.total;
 		},
+		// Stryker disable next-line ArrayDeclaration: The seek it calls is the one useMpv keeps with useCallback, and mpvStateRef is a ref.
 		[playback, mpvStateRef]
 	);
 	// The tap layer keeps its clicks from the player, so a double-tap skip
@@ -1006,6 +1007,7 @@ export const PlayerView = () => {
 			lastSkipRef.current = null;
 			playback.seek(position);
 		},
+		// Stryker disable next-line ArrayDeclaration: The seek it calls is the one useMpv keeps with useCallback, so the first render's works as well as the last.
 		[playback]
 	);
 
@@ -1214,6 +1216,7 @@ export const PlayerView = () => {
 		stoppedRef.current = true;
 		playback.stop();
 		navigate("/");
+		// Stryker disable next-line ArrayDeclaration: The first render's values do the same: useMpv's stop and the progress callbacks never change, and navigate goes to the absolute path / either way.
 	}, [playback, navigate, flushProgress, recordEnd]);
 
 	// Closing mpv's own window stops playback, like the stop button.
