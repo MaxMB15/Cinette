@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
 	AIRPLAY_AVAILABLE_EVENT,
@@ -55,13 +55,22 @@ const bridge: AirPlayBridge = {
 const noState = () => () => {};
 const getNull = () => null;
 
-/** The receiver the user picks, or `null` if they close the picker. */
-const choose = (anchor: DOMRect) =>
+/** Where AirPlay's route check runs before a receiver is known. The route
+ *  doesn't depend on the receiver, since every one gets the same profile. */
+// Stryker disable next-line ObjectLiteral, StringLiteral: Nothing shows this receiver or plays on it: it only checks the route, which is the same for every receiver.
+const ANY_RECEIVER: AirPlayRoute = { id: "airplay", name: "AirPlay" };
+
+/**
+ * Opens the system picker and resolves once the audio route goes where
+ * `done` wants, or with `null` when the picker closes without that. A route
+ * change can come just after the picker closes, so it waits a moment.
+ */
+const pick = (anchor: DOMRect, done: (route: AirPlayRoute | null) => boolean) =>
 	new Promise<AirPlayRoute | null>((resolve, reject) => {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const listeners = [
 			listen<AirPlayRoute | null>(AIRPLAY_ROUTE_EVENT, (e) => {
-				if (e.payload) finish(e.payload);
+				if (done(e.payload)) finish(e.payload);
 			}),
 			listen(AIRPLAY_PICKER_CLOSED_EVENT, () => {
 				timer = setTimeout(() => finish(null), ROUTE_GRACE_MS);
@@ -86,12 +95,20 @@ const choose = (anchor: DOMRect) =>
 		});
 	});
 
-/** What sending the current item to AirPlay came to. */
+/** The receiver the user picks, or `null` if they close the picker. */
+const choose = (anchor: DOMRect) => pick(anchor, (route) => route !== null);
+
+/** The picker again, for the user to pick this device, so the sound comes
+ *  back with the picture. */
+const chooseHere = (anchor: DOMRect) => pick(anchor, (route) => route === null);
+
+/** What sending the current item to AirPlay came to. `stopped` says local
+ *  playback was already stopped when it failed, so nothing plays. */
 export type SendResult =
 	| { sent: true }
 	| { sent: false; why: "cancelled" }
 	| { sent: false; why: "blocked"; decision: Extract<RouteDecision, { ok: false }> }
-	| { sent: false; why: "failed"; error: unknown };
+	| { sent: false; why: "failed"; error: unknown; stopped: boolean };
 
 export interface AirPlay {
 	/** A receiver is in reach, so the AirPlay button shows. */
@@ -110,8 +127,14 @@ export interface AirPlay {
 		channel: Channel,
 		opts: { anchor: DOMRect; startAt?: number; stopLocal: () => Promise<void> }
 	) => Promise<SendResult>;
-	/** Stops AirPlay video. */
+	/** Stops AirPlay video, and resolves once it has. */
 	stop: () => Promise<void>;
+	/**
+	 * Opens the system picker for the user to pick this device, so the sound
+	 * comes back too, then stops AirPlay. Stopping AirPlay alone leaves the
+	 * sound on the receiver.
+	 */
+	returnHere: (anchor: DOMRect) => Promise<void>;
 }
 
 /**
@@ -122,9 +145,26 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const [available, setAvailable] = useState(false);
 	const [route, setRoute] = useState<AirPlayRoute | null>(null);
 	const [destination, setDestination] = useState<AirPlayDestination | null>(null);
+	// The destination AirPlay plays on, for the cleanup when the page goes
+	// and for sends that finish after it has.
+	const active = useRef<AirPlayDestination | null>(null);
+	// Stryker disable next-line BooleanLiteral: The effect below sets it before any send can run.
+	const mounted = useRef(false);
 
 	useEffect(() => {
-		if (!enabled) return;
+		mounted.current = true;
+		// Leaving the page ends AirPlay, as the stop button ends local
+		// playback.
+		const leave = () => {
+			mounted.current = false;
+			const left = active.current;
+			active.current = null;
+			if (left) {
+				void left.stop().catch(() => {});
+				left.dispose();
+			}
+		};
+		if (!enabled) return leave;
 		let current = true;
 		const unlisten = [
 			listen<boolean>(AIRPLAY_AVAILABLE_EVENT, (e) => setAvailable(e.payload)),
@@ -140,50 +180,87 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 			current = false;
 			for (const p of unlisten) void p.then((fn) => fn());
 			void airplaySetDetection(false).catch(() => {});
+			leave();
 		};
 	}, [enabled]);
-
-	// Leaving the page ends AirPlay, as the stop button ends local playback.
-	useEffect(() => {
-		if (!destination) return;
-		return () => {
-			void destination.stop().catch(() => {});
-			destination.dispose();
-		};
-	}, [destination]);
 
 	const subscribe = destination ? destination.subscribe : noState;
 	const getState = destination ? destination.getState : getNull;
 	const state = useSyncExternalStore(subscribe, getState);
 
+	/** Stops `target`, the one playing, and forgets it. */
+	const end = async (target: AirPlayDestination) => {
+		active.current = null;
+		setDestination(null);
+		await target.stop().catch(() => {});
+		target.dispose();
+	};
+
 	const send = useCallback<AirPlay["send"]>(
 		async (channel, { anchor, startAt, stopLocal }) => {
+			const item = { kind: "local" as const, channel };
+			let stopped = false;
 			try {
+				// The item is checked before the picker opens: picking a TV
+				// moves this device's sound there, even for an item it can't
+				// play.
+				const check = createAirPlayDestination(ANY_RECEIVER, bridge);
+				const decision = await check.route(item).finally(() => check.dispose());
+				if (!decision.ok) return { sent: false, why: "blocked", decision };
+				if (!mounted.current) return { sent: false, why: "cancelled" };
 				const picked = route ?? (await choose(anchor));
-				if (!picked) return { sent: false, why: "cancelled" };
+				if (!picked || !mounted.current) return { sent: false, why: "cancelled" };
 				const target = createAirPlayDestination(picked, bridge);
-				const item = { kind: "local" as const, channel };
-				const decision = await target.route(item);
-				if (!decision.ok) {
+				const settled = await target.route(item);
+				// The page went while the check ran: nothing starts, and this
+				// device keeps playing.
+				if (!mounted.current || !settled.ok) {
 					target.dispose();
-					return { sent: false, why: "blocked", decision };
+					return settled.ok
+						? { sent: false, why: "cancelled" }
+						: { sent: false, why: "blocked", decision: settled };
 				}
 				await stopLocal();
+				stopped = true;
+				if (!mounted.current) {
+					target.dispose();
+					return { sent: false, why: "cancelled" };
+				}
+				active.current = target;
 				setDestination(target);
-				await target.load(item, { route: decision.route, startAt });
+				try {
+					await target.load(item, { route: settled.route, startAt });
+				} catch (error) {
+					// Nothing plays on the TV, so the panel goes, and the player
+					// says why.
+					await end(target);
+					throw error;
+				}
 				return { sent: true };
 			} catch (error) {
-				return { sent: false, why: "failed", error };
+				return { sent: false, why: "failed", error, stopped };
 			}
 		},
 		[route]
 	);
+
+	const stop = async () => {
+		const playing = active.current;
+		if (playing) await end(playing);
+	};
+
+	const returnHere = async (anchor: DOMRect) => {
+		// Only an AirPlay route has the sound somewhere else.
+		if (route) await chooseHere(anchor).catch(() => {});
+		await stop();
+	};
 
 	return {
 		available: enabled && (available || route !== null),
 		destination,
 		state,
 		send,
-		stop: async () => setDestination(null),
+		stop,
+		returnHere,
 	};
 };

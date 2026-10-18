@@ -170,15 +170,24 @@ describe("AirPlayPanel", () => {
 	it("plays here from the TV's position, or from now for live", () => {
 		let props = show(state());
 		fireEvent.click(screen.getByRole("button", { name: "Play here from 2:05" }));
-		expect(props.onPlayHere).toHaveBeenCalledWith(125);
+		expect(props.onPlayHere).toHaveBeenCalledWith(125, expect.any(Object));
 		document.body.innerHTML = "";
 		props = show(state(), { ...all, resumeAt: false });
 		fireEvent.click(screen.getByRole("button", { name: "Play here" }));
-		expect(props.onPlayHere).toHaveBeenCalledWith(0);
+		expect(props.onPlayHere).toHaveBeenCalledWith(0, expect.any(Object));
 		document.body.innerHTML = "";
 		props = show(state({ position: 0 }));
 		fireEvent.click(screen.getByRole("button", { name: "Play here" }));
-		expect(props.onPlayHere).toHaveBeenCalledWith(0);
+		expect(props.onPlayHere).toHaveBeenCalledWith(0, expect.any(Object));
+	});
+
+	it("says how to bring the sound back", () => {
+		show(state());
+		expect(
+			screen.getByText(
+				"Play here opens the AirPlay list. Choose this iPhone so the sound comes back too."
+			)
+		).toBeTruthy();
 	});
 
 	it("stops", () => {
