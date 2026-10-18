@@ -251,10 +251,14 @@ export const createCastDestination = (
 	const now = options.now ?? (() => performance.now());
 	let snapshot = idleSnapshot;
 	let state = castPlaybackState(snapshot);
+	// The same object until the state changes, which every capabilities
+	// change comes with.
+	let capabilities = castCapabilities(snapshot);
 	const listeners = new Set<(state: PlaybackState) => void>();
 	const publish = (next: CastSnapshot) => {
 		snapshot = next;
 		state = castPlaybackState(snapshot);
+		capabilities = castCapabilities(snapshot);
 		for (const listener of listeners) listener(state);
 	};
 	/** Each channel's formats, without those that failed at cast time. */
@@ -320,7 +324,7 @@ export const createCastDestination = (
 		name: receiver.name,
 		catalog: { kind: "local" },
 		get capabilities() {
-			return castCapabilities(snapshot);
+			return capabilities;
 		},
 		route: async (item) => decide(channelOf(item)),
 		load: async (item, opts) => {

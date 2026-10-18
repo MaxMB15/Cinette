@@ -303,6 +303,12 @@ describe("createCastDestination", () => {
 			catalog: { kind: "local" },
 		});
 		expect(cast.capabilities.catalog).toBe(false);
+		// The same object until the state changes.
+		const before = cast.capabilities;
+		expect(cast.capabilities).toBe(before);
+		cast.receive({ kind: "media", media: media() });
+		expect(cast.capabilities).not.toBe(before);
+		expect(cast.capabilities.pause).toBe(true);
 	});
 
 	it("routes HLS with CORS directly, asking for the formats once", async () => {
