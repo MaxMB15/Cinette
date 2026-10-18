@@ -211,7 +211,7 @@ fn format_of(probed: &Probed) -> StreamFormat {
 /// Runs the bundled ffmpeg on `url`. Its output names the URL, so none of
 /// it is logged. Phones and tablets have no ffmpeg to probe with, so only
 /// what mpv says while it plays is known there.
-async fn probe<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<Probed, ProbeError> {
+pub(crate) async fn probe<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<Probed, ProbeError> {
     #[cfg(desktop)]
     {
         use tauri_plugin_shell::ShellExt;

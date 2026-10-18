@@ -1,20 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Google Cast from this computer. For now, the receivers on the local
-//! network: one `_googlecast._tcp` browse runs from the first time the
-//! frontend asks for them until the app quits, and each change is sent to
-//! the frontend as `cast://receivers`.
+//! Google Cast from this computer.
+//!
+//! - The receivers on the local network: one `_googlecast._tcp` browse runs
+//!   from the first time the frontend asks for them until the app quits,
+//!   and each change is sent to the frontend as `cast://receivers`.
+//! - Casting to one of them ([`playback`]), over TLS ([`tls`]) through the
+//!   session loop ([`link`]). macOS and Linux only for now.
 
 use std::sync::{Mutex, MutexGuard};
 
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod link;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod playback;
 pub mod receivers;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod tls;
 
 // The tests use discovery's events, which only desktop builds have.
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod fake_receiver;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod link_tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod playback_tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tls_tests;
 
 use receivers::{CastReceiver, Registry};
 
@@ -149,3 +166,57 @@ pub fn get_cast_receivers<R: Runtime>(
 pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
     update(&app, |registry| registry.hold(ids));
 }
+
+/// Plays `channel` on the receiver `receiverId`, the way `route` says: the
+/// route the frontend's `chooseRoute` gave, with the place of its URL.
+#[tauri::command]
+pub async fn cast_load<R: Runtime>(
+    app: AppHandle<R>,
+    receiver_id: String,
+    channel: mvp_core::models::channel::Channel,
+    route: serde_json::Value,
+    start_at: Option<f64>,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let route = serde_json::from_value(route).map_err(|e| e.to_string())?;
+        playback::load(&app, &receiver_id, &channel, route, start_at).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, receiver_id, channel, route, start_at);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// Play, pause, seek or set the volume on the receiver being cast to.
+#[tauri::command]
+pub fn cast_control<R: Runtime>(
+    app: AppHandle<R>,
+    receiver_id: String,
+    action: serde_json::Value,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let action = serde_json::from_value(action).map_err(|e| e.to_string())?;
+        playback::control(&app.state::<playback::CastPlayback>(), &receiver_id, action)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, receiver_id, action);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// Ends the cast to `receiverId`. The receiver goes back to what it showed.
+#[tauri::command]
+pub fn cast_stop<R: Runtime>(app: AppHandle<R>, receiver_id: String) {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    playback::stop(&app.state::<playback::CastPlayback>(), &receiver_id);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (app, receiver_id);
+}
+
+/// What the commands say where casting isn't built yet.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const UNSUPPORTED: &str = "unsupported";

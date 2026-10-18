@@ -241,6 +241,9 @@ register_commands![
     commands::stop_recording,
     cast::get_cast_receivers,
     cast::hold_cast_receivers,
+    cast::cast_load,
+    cast::cast_control,
+    cast::cast_stop,
 ];
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -358,6 +361,8 @@ pub fn run() {
             app.manage(crate::downloads::recordings::Recorder::default());
             app.manage(crate::streams::StreamsState::default());
             app.manage(crate::cast::CastReceivers::on_network());
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            app.manage(crate::cast::playback::CastPlayback::default());
             crate::downloads::manager::restore_settings(app.handle());
 
             // Listens for other Cinette devices and advertises this one.
