@@ -708,3 +708,30 @@ async fn connecting_again_is_not_undone_by_the_old_link_ending() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_current_link_reaches_the_webview() {
+    let mut running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let host = TauriLinkHost {
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(2)))),
+    };
+    let device = DeviceKey::generate().device_id();
+    let state = VersionedState {
+        epoch: "e".into(),
+        version: 1,
+        state: mvp_core::remote::message::PlaybackSnapshot::default(),
+    };
+    // Link 1 was replaced by link 2.
+    host.phase(1, &device, &Phase::Reconnecting { attempt: 1 });
+    host.state(1, &device, &state);
+    host.phase(2, &device, &Phase::Connected);
+    host.state(2, &device, &VersionedState { version: 2, ..state });
+    // Events come in order, so the first of each is link 2's.
+    let controller = running.event("remote://controller").await;
+    assert_eq!(controller["phase"], json!("connected"));
+    let shown = running.event("remote://state").await;
+    assert_eq!(shown["state"]["version"], json!(2));
+}

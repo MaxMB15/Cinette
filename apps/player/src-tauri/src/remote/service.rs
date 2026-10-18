@@ -41,7 +41,7 @@ pub struct RemoteService {
     devices: Arc<Mutex<Devices>>,
     link: Arc<Mutex<Option<LinkHandle>>>,
     link_host: Arc<dyn LinkHost>,
-    /// The last link's generation.
+    /// The next link's generation.
     links: std::sync::atomic::AtomicU64,
 }
 
@@ -104,8 +104,8 @@ impl RemoteService {
             grace: RESUME_GRACE,
             generation: self
                 .links
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                + 1,
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            timeouts: link::Timeouts::STANDARD,
         };
         lock(&self.devices).keep(Some(device));
         // The slot stays locked until the new link is in it, so the link's
