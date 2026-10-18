@@ -12,6 +12,8 @@ import {
 	getEpgForLiveChannels,
 	getEpgProgrammes,
 	getWatchHistory,
+	getDownloadRetention,
+	listDownloads,
 	fetchOmdbData,
 	fetchWhatsonData,
 	getGroupHierarchy,
@@ -177,4 +179,21 @@ export const watchHistoryQuery = (limit: number, contentType?: string, source: S
 			contentType === undefined
 				? getWatchHistory(limit)
 				: getWatchHistory(limit, contentType),
+	});
+
+/**
+ * Every download and recording. The backend's progress and removal events
+ * keep the cached list up to date between loads.
+ */
+export const downloadsQuery = (source: Source = LOCAL) =>
+	queryOptions({
+		queryKey: [source, "downloads"] as const,
+		queryFn: () => listDownloads(),
+	});
+
+/** Days finished downloads are kept, or null to keep them until removed. */
+export const downloadRetentionQuery = (source: Source = LOCAL) =>
+	queryOptions({
+		queryKey: [source, "downloadRetention"] as const,
+		queryFn: () => getDownloadRetention(),
 	});
