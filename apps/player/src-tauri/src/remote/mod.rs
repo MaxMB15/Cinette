@@ -34,6 +34,8 @@ mod test_client;
 pub use service::{start, stop_for_exit, RemoteService};
 
 /// Where remote-control settings are kept, beside the app's other settings.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub const SETTINGS_STORE_FILE: &str = "settings.json";
 /// Their key in the store.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub const SETTINGS_KEY: &str = "remote";
