@@ -3,6 +3,7 @@
 
 import { invoke } from "./invoke";
 import type { AirPlayRoute } from "@/lib/airplay";
+import type { Container } from "@/lib/route";
 import type { CatalogItem } from "@/lib/cinette-destination";
 import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
 import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
@@ -634,6 +635,77 @@ export const getCastReceivers = (): Promise<CastReceiverList> => invoke("get_cas
  */
 export const holdCastReceivers = (ids: string[]): Promise<void> =>
 	invoke("hold_cast_receivers", { ids });
+
+/** How a Cast receiver gets an item: the place of its URL among the item's
+ *  URLs, from `StreamFormats.sources`, and the route `chooseRoute` gave. */
+export type CastRoute =
+	| { via: "direct"; source: number; container: Container }
+	| {
+			via: "converted";
+			source: number;
+			video: "copy" | "transcode" | "none";
+			audio: "copy" | "aac" | "none";
+	  };
+
+/** A control for the receiver being cast to. */
+export type CastAction =
+	| { action: "play" }
+	| { action: "pause" }
+	| { action: "seek"; to: number }
+	| { action: "volume"; level: number };
+
+/** What a Cast receiver reports, as `cast://update` carries it. */
+export type CastUpdate =
+	| { kind: "ready" }
+	| { kind: "volume"; level: number; muted: boolean; fixed: boolean }
+	| {
+			kind: "media";
+			media: {
+				player: "idle" | "buffering" | "playing" | "paused";
+				idleReason: "finished" | "cancelled" | "interrupted" | "error" | null;
+				position: number;
+				duration: number | null;
+				live: boolean;
+				canPause: boolean;
+				canSeek: boolean;
+			} | null;
+	  }
+	| { kind: "loadFailed"; code: number | null }
+	| { kind: "playbackError"; code: number | null }
+	| { kind: "rejected"; reason: string | null }
+	| { kind: "conversionFailed"; refused: boolean }
+	| {
+			kind: "closed";
+			reason:
+				| "stopped"
+				| "appStopped"
+				| "launchFailed"
+				| "timeout"
+				| "protocol"
+				| "connectionLost";
+	  };
+
+/** The event that carries each receiver's `CastUpdate`. */
+export const CAST_UPDATE_EVENT = "cast://update";
+
+/**
+ * Play `channel` on a Cast receiver, connecting first when needed. Rejects
+ * with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
+ * `noEncoder`, `noRoute`, `converterFailed` or `noSource`.
+ */
+export const castLoad = (
+	receiverId: string,
+	channel: Channel,
+	route: CastRoute,
+	startAt?: number
+): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt });
+
+/** Rejects with `notConnected` when nothing is cast to that receiver. */
+export const castControl = (receiverId: string, action: CastAction): Promise<void> =>
+	invoke("cast_control", { receiverId, action });
+
+/** End the cast. The receiver goes back to what it showed. */
+export const castStop = (receiverId: string): Promise<void> => invoke("cast_stop", { receiverId });
 
 /** Who may control this device from another Cinette device. */
 export type RemoteControlMode = "always" | "ask" | "never";
