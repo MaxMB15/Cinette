@@ -313,6 +313,22 @@ describe("useChannelsProvider", () => {
 		expect(result.current.loading).toBe(false);
 	});
 
+	it("clears the last add's error when the next add starts", async () => {
+		mockLoadM3u.mockRejectedValueOnce(new Error("bad playlist"));
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
+		await waitFor(() => expect(result.current.initialized).toBe(true));
+		await act(() => result.current.loadM3u("test", "http://bad.url").catch(() => {}));
+		expect(result.current.error).toContain("bad playlist");
+
+		const next = deferred<void>();
+		mockLoadM3u.mockReturnValueOnce(next.promise as never);
+		act(() => {
+			void result.current.loadM3u("test", "http://good.url");
+		});
+		expect(result.current.error).toBeNull();
+		await act(async () => next.resolve());
+	});
+
 	it("refreshProvider calls API then refreshes providers and channels", async () => {
 		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
 		await waitFor(() => expect(result.current.initialized).toBe(true));

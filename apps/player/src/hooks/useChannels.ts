@@ -170,7 +170,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const initialized = !channelsResult.isPending && !providersResult.isPending;
 	const [loading, setLoading] = useState(false);
 	// An action's error. A list that failed to load shows its own error below.
-	const [actionError, setError] = useState<string | null>(null);
+	const [actionError, setActionError] = useState<string | null>(null);
 	const loadError = providersResult.error ?? channelsResult.error;
 	const error = actionError ?? (loadError ? String(loadError) : null);
 	const guideVersion = useSyncExternalStore(subscribeToGuide, getGuideVersion);
@@ -187,7 +187,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			const state = queryClient.getQueryState<T>(queryKey);
 			return state?.status === "success" ? (state.data ?? null) : null;
 		},
-		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
+		// Stryker disable next-line ArrayDeclaration: the query client stays the same object while the provider is mounted, so an empty list gives the same callback.
 		[queryClient]
 	);
 
@@ -195,13 +195,13 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 		async (): Promise<void> => {
 			await reload<Channel[]>(channelsQuery().queryKey);
 		},
-		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
+		// Stryker disable next-line ArrayDeclaration: reload stays the same function while the provider is mounted, so an empty list gives the same callback.
 		[reload]
 	);
 
 	const refreshProviders = useCallback(
 		(): Promise<Provider[] | null> => reload<Provider[]>(providersQuery().queryKey),
-		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
+		// Stryker disable next-line ArrayDeclaration: reload stays the same function while the provider is mounted, so an empty list gives the same callback.
 		[reload]
 	);
 
@@ -212,7 +212,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				await refreshProviders();
 				await refreshChannels();
 			} catch (e) {
-				setError(String(e));
+				setActionError(String(e));
 				throw e;
 			}
 		},
@@ -225,7 +225,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				await updateProviderApi(id, name, url, username, password);
 				await refreshProviders();
 			} catch (e) {
-				setError(String(e));
+				setActionError(String(e));
 				throw e;
 			}
 		},
@@ -244,7 +244,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const addProvider = useCallback(
 		(add: () => Promise<unknown>): Promise<void> => {
 			setLoading(true);
-			setError(null);
+			setActionError(null);
 			const known = new Set(providersRef.current.map((p) => p.id));
 			const steps = async () => {
 				await add();
@@ -263,7 +263,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 			// Compiler can't compile yet.
 			return steps()
 				.catch((e) => {
-					setError(String(e));
+					setActionError(String(e));
 					throw e;
 				})
 				.finally(() => setLoading(false));
@@ -295,7 +295,7 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 				await refreshProviders();
 				await refreshChannels();
 			} catch (e) {
-				setError(String(e));
+				setActionError(String(e));
 			}
 		},
 		[refreshProviders, refreshChannels]
@@ -312,10 +312,10 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 					)
 				);
 			} catch (e) {
-				setError(String(e));
+				setActionError(String(e));
 			}
 		},
-		// Stryker disable next-line ArrayDeclaration: the query client and the reload made from it stay the same object while the provider is mounted, so an empty list gives the same callback.
+		// Stryker disable next-line ArrayDeclaration: the query client stays the same object while the provider is mounted, so an empty list gives the same callback.
 		[queryClient]
 	);
 
