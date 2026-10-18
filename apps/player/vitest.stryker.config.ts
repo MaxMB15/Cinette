@@ -54,5 +54,9 @@ const withoutCompiler = {
 
 export default mergeConfig(
 	withoutCompiler,
-	defineConfig({ plugins: [matchVitestTestNames()], test: { reporters: ["default"] } })
+	defineConfig({
+		plugins: [matchVitestTestNames()],
+		// Without the compiler, the test that checks it runs would fail.
+		test: { reporters: ["default"], exclude: ["src/dev/react-compiler.test.tsx"] },
+	})
 );
