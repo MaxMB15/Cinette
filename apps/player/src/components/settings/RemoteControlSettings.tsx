@@ -101,7 +101,7 @@ export const RemoteControlSettings = () => {
 						</p>
 					</div>
 					<Button
-						variant={settings.discoverable ? "default" : "secondary"}
+						variant={settings.discoverable ? undefined : "secondary"}
 						size="sm"
 						aria-label="Discoverable on this network"
 						aria-pressed={settings.discoverable}

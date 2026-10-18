@@ -116,9 +116,10 @@ describe("RemoteControlSettings", () => {
 				screen.getByRole("button", { name: "Discoverable on this network" })
 			).toHaveAttribute("aria-pressed", "false")
 		);
-		expect(
-			screen.getByRole("button", { name: "Discoverable on this network" })
-		).toHaveTextContent("Off");
+		const off = screen.getByRole("button", { name: "Discoverable on this network" });
+		expect(off).toHaveTextContent("Off");
+		expect(off).toHaveClass("bg-secondary");
+		expect(off).not.toHaveClass("bg-primary");
 	});
 
 	it("changes who may control it and says what each choice means", async () => {
