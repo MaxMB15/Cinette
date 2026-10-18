@@ -506,6 +506,7 @@ pub async fn remote_catalog<R: Runtime>(
             .link(link)
             .ok_or_else(imp::not_connected)?;
         let (items, next) = link.catalog(catalog_query).await.map_err(imp::link_error)?;
+        let items: Vec<_> = items.into_iter().map(super::logos::checked).collect();
         Ok(serde_json::json!({ "items": items, "next": next }))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

@@ -1007,3 +1007,91 @@ async fn a_new_identity_tells_the_webview_its_link_ended() {
     assert_eq!(closed["deviceId"], json!(tv_id));
     mac.event("remote://devices").await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn logos_another_device_sends_reach_the_webview_only_from_public_hosts() {
+    let mut running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let host = TauriLinkHost {
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+    };
+    let with_logo = |logo: &str| VersionedState {
+        epoch: "e".into(),
+        version: 1,
+        state: mvp_core::remote::message::PlaybackSnapshot {
+            item: Some(CatalogItem {
+                id: "live-1".into(),
+                logo: Some(logo.into()),
+                ..CatalogItem::default()
+            }),
+            ..Default::default()
+        },
+    };
+    host.state(1, &device, &with_logo("http://192.168.1.1/admin.png"));
+    let shown = running.event("remote://state").await;
+    assert_eq!(shown["state"]["state"]["item"]["id"], json!("live-1"));
+    assert_eq!(shown["state"]["state"]["item"].get("logo"), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_page_keeps_only_logos_this_device_may_load() {
+    let (mut mac, tv) = pair("always").await;
+    {
+        let state = tv.app.state();
+        let cache = state.cache.lock().unwrap();
+        cache
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Mine".into(),
+                provider_type: ProviderType::M3u,
+                url: "http://iptv.example/list.m3u".into(),
+                username: None,
+                password: None,
+                last_updated: None,
+                channel_count: 2,
+                epg_url: None,
+            })
+            .unwrap();
+        let channel = |id: &str, logo: &str| Channel {
+            id: id.into(),
+            name: id.into(),
+            url: format!("http://iptv.example/{id}.ts"),
+            logo_url: Some(logo.into()),
+            group_title: "UK".into(),
+            content_type: "live".into(),
+            ..Channel::default()
+        };
+        cache
+            .save_channels(
+                "p1",
+                &[
+                    channel("a", "http://10.1.1.1/a.png"),
+                    channel("b", "https://logos.example/b.png"),
+                ],
+            )
+            .unwrap();
+    }
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 3 }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    let query = json!({ "kind": "items", "contentType": "live", "group": "UK", "limit": 10 });
+    let page = mac
+        .invoke(
+            "remote_catalog",
+            json!({ "catalogQuery": query, "link": 3 }),
+        )
+        .unwrap();
+    let logos: Vec<Value> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i.get("logo").cloned().unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(logos, [Value::Null, json!("https://logos.example/b.png")]);
+}

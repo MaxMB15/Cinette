@@ -120,6 +120,7 @@ describe("createRemoteControl", () => {
 		expect(rc.getState().link!.name, "the name its key vouches for").toBe("Lounge TV");
 		emit("remote://controller", { deviceId: "tv1", link: id, phase: "connected" });
 		expect(link.destination.getState().connection).toBe("connected");
+		expect(rc.getState().link!.phase).toStrictEqual({ phase: "connected" });
 		expect(rc.getState().link!.name).toBe("Lounge TV");
 
 		emit("remote://state", {

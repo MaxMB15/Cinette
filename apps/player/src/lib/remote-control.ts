@@ -100,6 +100,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 
 	/** Ends `link` here: its destination hears it closed. */
 	const drop = (link: Link | null) => {
+		// Stryker disable next-line StringLiteral: a destination reads only that the phase is closed, not why.
 		link?.destination.setPhase({ phase: "closed", reason: "left" });
 	};
 

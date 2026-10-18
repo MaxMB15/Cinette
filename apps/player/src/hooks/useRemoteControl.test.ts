@@ -16,17 +16,21 @@ vi.mock("@tauri-apps/api/event", () => ({
 	}),
 }));
 
-vi.mock("@/lib/tauri", () => ({
+const bridge = vi.hoisted(() => ({
 	remoteDevices: vi.fn(() => Promise.resolve([])),
 	remoteConnect: vi.fn(() => Promise.resolve()),
 	remoteLink: vi.fn(() => Promise.resolve(null)),
 	remoteLeave: vi.fn(() => Promise.resolve()),
 	remoteCommand: vi.fn(() => Promise.resolve(4)),
 }));
+vi.mock("@/lib/tauri", () => bridge);
 
 import { listen } from "@tauri-apps/api/event";
-import { remoteCommand, remoteConnect, remoteLeave } from "@/lib/tauri";
-import { remoteControl, useRemoteControl } from "./useRemoteControl";
+
+const { remoteCommand, remoteConnect, remoteLeave } = bridge;
+// The store is the module's own, so each test loads the module afresh.
+let remoteControl: typeof import("./useRemoteControl").remoteControl;
+let useRemoteControl: typeof import("./useRemoteControl").useRemoteControl;
 
 const tv = {
 	deviceId: "tv1",
@@ -36,10 +40,12 @@ const tv = {
 	available: true,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
 	handlers.clear();
 	stops.length = 0;
 	vi.clearAllMocks();
+	vi.resetModules();
+	({ remoteControl, useRemoteControl } = await import("./useRemoteControl"));
 });
 
 describe("useRemoteControl", () => {

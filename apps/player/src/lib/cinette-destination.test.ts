@@ -6,7 +6,6 @@ import {
 	commandError,
 	connectionOf,
 	createCinetteDestination,
-	LOAD_SHOWS_WITHIN_MS,
 	RemoteCommandError,
 	remoteCapabilities,
 	remotePlaybackState,
@@ -265,65 +264,39 @@ describe("createCinetteDestination", () => {
 		expect(new RemoteCommandError("busy").name).toBe("RemoteCommandError");
 	});
 
-	it("finishes a load once the other device's state is as new as its answer", async () => {
-		let answer = 0;
-		const send = vi.fn(async (): Promise<unknown> => answer);
-		const d = createCinetteDestination("dev1", "TV", send);
-		d.receive(versioned(snapshot(), 4), 0);
-		answer = 6;
-		let done = false;
-		const load = d.load({ kind: "remote", itemId: "movie-2", title: "Film" }).then(() => {
-			done = true;
+	it("names a loaded item until the other device's next state", async () => {
+		const { d } = destination();
+		d.receive(versioned(snapshot({ status: "paused", error: "failed" })), 0);
+		const seen: string[] = [];
+		d.subscribe((s) => seen.push(`${s.status}/${s.item?.ref ?? "-"}`));
+		const before = performance.now();
+		await d.load({ kind: "remote", itemId: "movie-2", title: "Film" }, { startAt: 90 });
+		expect(d.getState()).toMatchObject({
+			status: "opening",
+			item: { ref: "movie-2", title: "Film" },
+			position: 90,
+			duration: 0,
+			error: null,
+			volume: 55,
 		});
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		d.receive(versioned(snapshot(), 5), 10);
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(done, "version 5 is older than the answer").toBe(false);
-		d.receive(versioned(snapshot({ item: null }), 6), 20);
-		await load;
-		expect(done).toBe(true);
-		// An answer the state already reached doesn't wait.
-		answer = 3;
-		await d.load({ kind: "remote", itemId: "movie-2", title: "Film" });
+		expect(d.getState().positionAt).toBeGreaterThanOrEqual(before);
+		expect(seen).toStrictEqual(["opening/movie-2"]);
+		// A command now names the new item.
+		await d.pause();
+		await d.load({ kind: "remote", itemId: "live-1", title: "One" });
+		expect(d.getState().position, "from the start").toBe(0);
+		d.receive(versioned(snapshot(), 2), 10);
+		expect(d.getState().item?.ref).toBe("live-7");
 	});
 
-	it("finishes a load when the other device starts again, or the link ends", async () => {
-		const send = vi.fn(async (): Promise<unknown> => 9);
+	it("leaves the state as it was when a load is refused", async () => {
+		const send = vi.fn(() => Promise.reject("not_found"));
 		const d = createCinetteDestination("dev1", "TV", send);
-		d.receive(versioned(snapshot(), 1, "old"), 0);
-		const restarted = d.load({ kind: "remote", itemId: "a", title: "A" });
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		d.receive(versioned(snapshot(), 1, "new"), 5);
-		await restarted;
-		const closed = d.load({ kind: "remote", itemId: "b", title: "B" });
-		// Until the answer is in, nothing waits.
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		d.receive(versioned(snapshot(), 2, "new"), 6);
-		d.setPhase({ phase: "closed", reason: "lost" });
-		await closed;
-		// Over the closed link, a load doesn't wait at all.
-		await d.load({ kind: "remote", itemId: "c", title: "C" });
-	});
-
-	it("finishes a load whose state never comes, after a while", async () => {
-		vi.useFakeTimers();
-		try {
-			const send = vi.fn(async (): Promise<unknown> => 9);
-			const d = createCinetteDestination("dev1", "TV", send);
-			let done = false;
-			const load = d.load({ kind: "remote", itemId: "a", title: "A" }).then(() => {
-				done = true;
-			});
-			await vi.advanceTimersByTimeAsync(LOAD_SHOWS_WITHIN_MS - 1);
-			expect(done).toBe(false);
-			await vi.advanceTimersByTimeAsync(1);
-			await load;
-			expect(done).toBe(true);
-			// A state that comes later finds nothing waiting.
-			d.receive(versioned(snapshot(), 9), 0);
-		} finally {
-			vi.useRealTimers();
-		}
+		d.receive(versioned(snapshot()), 0);
+		await expect(
+			d.load({ kind: "remote", itemId: "gone", title: "Gone" })
+		).rejects.toMatchObject({ code: "not_found" });
+		expect(d.getState().item?.ref).toBe("live-7");
 	});
 
 	it("keeps its capabilities the same object until they change", () => {

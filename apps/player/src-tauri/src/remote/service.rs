@@ -493,10 +493,12 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
         if !self.current(link) {
             return;
         }
+        let mut state = state.clone();
+        state.state.item = state.state.item.map(super::logos::checked);
         let event = StateEvent {
             device_id: device.to_string(),
             link,
-            state: state.clone(),
+            state,
         };
         let mut throttle = lock(&self.throttle);
         let now = Instant::now();

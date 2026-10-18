@@ -166,6 +166,7 @@ impl Devices {
         let mut newest: BTreeMap<&DeviceId, &Entry> = BTreeMap::new();
         for entry in self.entries.values() {
             let slot = newest.entry(&entry.id).or_insert(entry);
+            // mutants: skip BinaryOperator: no two entries have the same count, so > and >= pick the same.
             if entry.seen > slot.seen {
                 *slot = entry;
             }

@@ -274,6 +274,18 @@ fn the_list_stops_at_its_limit_until_one_goes() {
 }
 
 #[test]
+fn the_record_found_last_is_shown_whatever_its_instance_name() {
+    let tv = id();
+    let mut devices = Devices::new(id());
+    devices.apply(found("A room", &tv, &[("n", "Old name")]));
+    devices.apply(found("B room", &tv, &[("n", "New name")]));
+    assert_eq!(devices.list()[0].name, "New name");
+    devices.apply(found("A room", &tv, &[("n", "Newest name")]));
+    assert_eq!(devices.list()[0].name, "Newest name");
+    assert_eq!(devices.get(&tv).unwrap().name, "Newest name");
+}
+
+#[test]
 fn the_same_record_again_changes_nothing() {
     let tv = id();
     let mut devices = Devices::new(id());

@@ -17,33 +17,30 @@ let shared: RemoteControl | null = null;
 let users = 0;
 let stopping: Promise<() => void> | null = null;
 
-/** Stops following events once no one uses the store and no link is open. */
+/** Stops following events once no one uses the store and no link is open.
+ *  It's checked when a user goes and whenever the store changes, which is
+ *  how a link that ends with no one looking is seen. */
 const stopWhenIdle = (control: RemoteControl) => {
-	if (users > 0 || !stopping) return;
-	if (control.getState().link) {
-		const unsubscribe = control.subscribe(() => {
-			if (users > 0 || !control.getState().link) {
-				unsubscribe();
-				stopWhenIdle(control);
-			}
-		});
-		return;
-	}
+	if (users > 0 || !stopping || control.getState().link) return;
 	const done = stopping;
 	stopping = null;
 	void done.then((stop) => stop());
 };
 
 export const remoteControl = (): RemoteControl => {
-	shared ??= createRemoteControl({
-		devices: remoteDevices,
-		connect: remoteConnect,
-		current: remoteLink,
-		leave: remoteLeave,
-		command: remoteCommand,
-		listen: (event, handler) => listen(event, ({ payload }) => handler(payload as never)),
-		now: performance.now.bind(performance),
-	});
+	if (!shared) {
+		const control = createRemoteControl({
+			devices: remoteDevices,
+			connect: remoteConnect,
+			current: remoteLink,
+			leave: remoteLeave,
+			command: remoteCommand,
+			listen: (event, handler) => listen(event, ({ payload }) => handler(payload as never)),
+			now: performance.now.bind(performance),
+		});
+		control.subscribe(() => stopWhenIdle(control));
+		shared = control;
+	}
 	return shared;
 };
 

@@ -189,9 +189,6 @@ export const commandError = (e: unknown): Error => {
 		: new RemoteCommandError(code);
 };
 
-/** How long a load waits for the other device's state to show the new item. */
-export const LOAD_SHOWS_WITHIN_MS = 3_000;
-
 /** A destination for another Cinette device, and the way to feed it. */
 export interface CinetteDestination extends PlaybackDestination {
 	/** A newer state from the other device. */
@@ -212,7 +209,6 @@ export const createCinetteDestination = (
 ): CinetteDestination => {
 	let snapshot = nothingPlaying;
 	let capabilities = remoteCapabilities(snapshot);
-	let seen = { epoch: "", version: -1 };
 	// Not connected yet.
 	let connection: PlaybackState["connection"] = "reconnecting";
 	let arrived = 0;
@@ -221,32 +217,6 @@ export const createCinetteDestination = (
 	const publish = () => {
 		state = remotePlaybackState(snapshot, connection, arrived);
 		for (const listener of listeners) listener(state);
-	};
-	// Loads waiting for a state at least as new as their answer.
-	const waiting = new Set<{ epoch: string; version: number; done: () => void }>();
-	const settle = (all: boolean) => {
-		for (const w of waiting) {
-			if (all || seen.epoch !== w.epoch || seen.version >= w.version) {
-				waiting.delete(w);
-				w.done();
-			}
-		}
-	};
-	const shown = (version: unknown): Promise<void> => {
-		if (typeof version !== "number" || seen.version >= version || connection === "lost")
-			return Promise.resolve();
-		return new Promise((resolve) => {
-			const w = { epoch: seen.epoch, version, done: () => {} };
-			const timer = setTimeout(() => {
-				waiting.delete(w);
-				resolve();
-			}, LOAD_SHOWS_WITHIN_MS);
-			w.done = () => {
-				clearTimeout(timer);
-				resolve();
-			};
-			waiting.add(w);
-		});
 	};
 	const sent = async (command: RemoteCommand): Promise<unknown> => {
 		try {
@@ -279,14 +249,25 @@ export const createCinetteDestination = (
 			if (item.kind !== "remote")
 				throw new UnsupportedError("Playing this device's channel on another device");
 			const startAt = opts?.startAt;
-			const version = await sent(
+			await sent(
 				startAt === undefined
 					? { action: "load", itemId: item.itemId }
 					: { action: "load", itemId: item.itemId, startAt }
 			);
-			// Resolves once the state names the new item, so a command right
-			// after names it too.
-			await shown(version);
+			// It's opening there now. Until that device's next state says
+			// more, this one names the new item, so a command right after
+			// names it too.
+			snapshot = {
+				...snapshot,
+				status: "opening",
+				// Stryker disable next-line StringLiteral: an empty type reads as live too, and the group shows nowhere.
+				item: { id: item.itemId, name: item.title, contentType: "live", group: "" },
+				position: startAt ?? 0,
+				duration: 0,
+				error: null,
+			};
+			arrived = performance.now();
+			publish();
 		},
 		play: () => run(() => ({ action: "play", itemId: current() })),
 		pause: () => run(() => ({ action: "pause", itemId: current() })),
@@ -305,16 +286,13 @@ export const createCinetteDestination = (
 		},
 		receive: (next, at) => {
 			snapshot = next.state;
-			seen = { epoch: next.epoch, version: next.version };
 			const now = remoteCapabilities(snapshot);
 			// The same object until something in it changes.
 			if (JSON.stringify(now) !== JSON.stringify(capabilities)) capabilities = now;
 			arrived = at;
 			publish();
-			settle(false);
 		},
 		setPhase: (next) => {
-			if (next.phase === "closed") settle(true);
 			const changed = connectionOf(next);
 			if (changed === connection) return;
 			connection = changed;
