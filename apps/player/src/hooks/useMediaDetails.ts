@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { fetchOmdbData, fetchWhatsonData } from "@/lib/tauri";
+import { omdbQuery, whatsonQuery } from "@/lib/queries";
 import type { OmdbData, WhatsonData } from "@/lib/types";
 import { useOmdbInfoState } from "@/hooks/useHasOmdbKey";
 
@@ -67,6 +69,31 @@ export const useMediaDetails = (request: MediaDetailsRequest | null): MediaDetai
 };
 
 /**
+ * What useMediaDetails loads, through the query cache, so a movie or show
+ * opened again shows its details without asking OMDb or Whatson again. The
+ * player still uses useMediaDetails, until its own tests give it a cache.
+ */
+export const useCachedMediaDetails = (request: MediaDetailsRequest | null): MediaDetails => {
+	const omdb = useQuery({
+		...omdbQuery(request?.id ?? "", request?.title ?? "", request?.kind ?? "movie"),
+		enabled: request !== null,
+	});
+	const imdbId = omdb.data?.imdbId;
+	const whatson = useQuery({
+		...whatsonQuery(imdbId ?? "", request?.kind ?? "movie"),
+		enabled: request !== null && !!imdbId,
+	});
+	if (!request) return NOTHING;
+	// An OMDb call that fails counts as an answer with no details.
+	if (omdb.isPending) return LOADING;
+	return {
+		omdbData: omdb.data ?? null,
+		whatsonData: (imdbId && whatson.data) || null,
+		loading: false,
+	};
+};
+
+/**
  * The details a movie or series sheet shows. The player hands over what it
  * already loaded, with `prefetchedOmdbData` left undefined until OMDb has
  * answered. Until then, or when opened from the channel list, the sheet
@@ -78,7 +105,7 @@ export const useSheetDetails = (
 	prefetchedWhatsonData: WhatsonData | null | undefined
 ) => {
 	const prefetched = prefetchedOmdbData !== undefined;
-	const own = useMediaDetails(prefetched ? null : request);
+	const own = useCachedMediaDetails(prefetched ? null : request);
 	const omdbData = prefetched ? prefetchedOmdbData : own.omdbData;
 	const whatsonData = prefetched ? (prefetchedWhatsonData ?? null) : own.whatsonData;
 	const { hasOmdbKey, infoLoading } = useOmdbInfoState(omdbData, own.loading);

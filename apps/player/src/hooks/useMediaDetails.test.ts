@@ -13,7 +13,13 @@ vi.mock("@/lib/tauri", () => ({
 
 import { fetchOmdbData, fetchWhatsonData, getOmdbApiKey } from "@/lib/tauri";
 import { rememberHasOmdbKey } from "./useHasOmdbKey";
-import { useMediaDetails, useSheetDetails, type MediaDetailsRequest } from "./useMediaDetails";
+import {
+	useCachedMediaDetails,
+	useMediaDetails,
+	useSheetDetails,
+	type MediaDetailsRequest,
+} from "./useMediaDetails";
+import { wrapperFor } from "@/test/query";
 
 const mockOmdb = vi.mocked(fetchOmdbData);
 const mockWhatson = vi.mocked(fetchWhatsonData);
@@ -35,14 +41,22 @@ const deferred = <T>() => {
 	return { promise, resolve, reject };
 };
 
-describe("useMediaDetails", () => {
+// The player loads with useMediaDetails, and the sheets through the cache.
+// Both answer the same way.
+describe.each([
+	{ name: "useMediaDetails", useDetails: useMediaDetails, cached: false },
+	{ name: "useCachedMediaDetails", useDetails: useCachedMediaDetails, cached: true },
+])("$name", ({ useDetails, cached }) => {
+	const renderDetails: typeof renderHook = (hook, options) =>
+		renderHook(hook, { ...options, wrapper: cached ? wrapperFor() : undefined });
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockWhatson.mockResolvedValue(null);
 	});
 
 	it("loads nothing for a null request", () => {
-		const { result } = renderHook(() => useMediaDetails(null));
+		const { result } = renderDetails(() => useDetails(null));
 		expect(result.current).toEqual({ omdbData: null, whatsonData: null, loading: false });
 		expect(mockOmdb).not.toHaveBeenCalled();
 	});
@@ -51,7 +65,7 @@ describe("useMediaDetails", () => {
 		const whatson = deferred<WhatsonData | null>();
 		mockOmdb.mockResolvedValue(sintelOmdb);
 		mockWhatson.mockReturnValue(whatson.promise);
-		const { result } = renderHook(() => useMediaDetails(sintel));
+		const { result } = renderDetails(() => useDetails(sintel));
 		expect(result.current.loading).toBe(true);
 
 		await waitFor(() => expect(result.current.loading).toBe(false));
@@ -66,21 +80,21 @@ describe("useMediaDetails", () => {
 
 	it("looks a series up on Whatson as a show", async () => {
 		mockOmdb.mockResolvedValue(sintelOmdb);
-		renderHook(() => useMediaDetails({ ...sintel, kind: "series" }));
+		renderDetails(() => useDetails({ ...sintel, kind: "series" }));
 		await waitFor(() => expect(mockWhatson).toHaveBeenCalledWith("tt1727587", "show"));
 		expect(mockOmdb).toHaveBeenCalledWith("mv1", "Sintel", "series");
 	});
 
 	it("skips Whatson when OMDb has no IMDb id", async () => {
 		mockOmdb.mockResolvedValue(tearsOmdb);
-		const { result } = renderHook(() => useMediaDetails(tears));
+		const { result } = renderDetails(() => useDetails(tears));
 		await waitFor(() => expect(result.current.omdbData).toBe(tearsOmdb));
 		expect(mockWhatson).not.toHaveBeenCalled();
 	});
 
 	it("stops loading with no details when OMDb fails", async () => {
 		mockOmdb.mockRejectedValue(new Error("offline"));
-		const { result } = renderHook(() => useMediaDetails(sintel));
+		const { result } = renderDetails(() => useDetails(sintel));
 		await waitFor(() => expect(result.current.loading).toBe(false));
 		expect(result.current.omdbData).toBeNull();
 	});
@@ -89,7 +103,7 @@ describe("useMediaDetails", () => {
 		const first = deferred<OmdbData | null>();
 		const second = deferred<OmdbData | null>();
 		mockOmdb.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-		const { result, rerender } = renderHook(({ request }) => useMediaDetails(request), {
+		const { result, rerender } = renderDetails(({ request }) => useDetails(request), {
 			initialProps: { request: sintel },
 		});
 
@@ -107,9 +121,9 @@ describe("useMediaDetails", () => {
 	it("doesn't show the last item's details on the render that switches", async () => {
 		mockOmdb.mockResolvedValueOnce(sintelOmdb).mockReturnValueOnce(new Promise(() => {}));
 		const seen: (OmdbData | null)[] = [];
-		const { result, rerender } = renderHook(
+		const { result, rerender } = renderDetails(
 			({ request }) => {
-				const details = useMediaDetails(request);
+				const details = useDetails(request);
 				seen.push(details.omdbData);
 				return details;
 			},
@@ -124,13 +138,46 @@ describe("useMediaDetails", () => {
 
 	it("doesn't load again for an equal request in a new object", async () => {
 		mockOmdb.mockResolvedValue(sintelOmdb);
-		const { result, rerender } = renderHook(({ request }) => useMediaDetails(request), {
+		const { result, rerender } = renderDetails(({ request }) => useDetails(request), {
 			initialProps: { request: { ...sintel } },
 		});
 		await waitFor(() => expect(result.current.loading).toBe(false));
 		rerender({ request: { ...sintel } });
 		expect(result.current.omdbData).toBe(sintelOmdb);
 		expect(mockOmdb).toHaveBeenCalledOnce();
+	});
+});
+
+describe("useCachedMediaDetails", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockWhatson.mockResolvedValue(certified);
+	});
+
+	it("shows a movie opened again from the cache, without asking again", async () => {
+		mockOmdb.mockResolvedValue(sintelOmdb);
+		const wrapper = wrapperFor();
+		const first = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(first.result.current.whatsonData).toBe(certified));
+		first.unmount();
+
+		const again = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		expect(again.result.current).toEqual({
+			omdbData: sintelOmdb,
+			whatsonData: certified,
+			loading: false,
+		});
+		expect(mockOmdb).toHaveBeenCalledOnce();
+		expect(mockWhatson).toHaveBeenCalledOnce();
+	});
+
+	it("keeps no Whatson ratings for a movie OMDb has no IMDb id for", async () => {
+		mockOmdb.mockResolvedValue(tearsOmdb);
+		const { result } = renderHook(() => useCachedMediaDetails(tears), {
+			wrapper: wrapperFor(),
+		});
+		await waitFor(() => expect(result.current.loading).toBe(false));
+		expect(result.current.whatsonData).toBeNull();
 	});
 });
 
@@ -143,7 +190,9 @@ describe("useSheetDetails", () => {
 	});
 
 	it("shows what the player loaded without loading it again", () => {
-		const { result } = renderHook(() => useSheetDetails(sintel, sintelOmdb, certified));
+		const { result } = renderHook(() => useSheetDetails(sintel, sintelOmdb, certified), {
+			wrapper: wrapperFor(),
+		});
 		expect(result.current).toMatchObject({
 			omdbData: sintelOmdb,
 			whatsonData: certified,
@@ -158,7 +207,7 @@ describe("useSheetDetails", () => {
 		const { result, rerender } = renderHook(
 			({ prefetched }: { prefetched?: OmdbData | null }) =>
 				useSheetDetails(sintel, prefetched, undefined),
-			{ initialProps: {} }
+			{ initialProps: {}, wrapper: wrapperFor() }
 		);
 		expect(result.current.omdbLoading).toBe(true);
 		expect(mockOmdb).toHaveBeenCalledOnce();
@@ -172,7 +221,9 @@ describe("useSheetDetails", () => {
 	});
 
 	it("loads nothing without an item to look up", () => {
-		const { result } = renderHook(() => useSheetDetails(null, undefined, undefined));
+		const { result } = renderHook(() => useSheetDetails(null, undefined, undefined), {
+			wrapper: wrapperFor(),
+		});
 		expect(result.current.omdbLoading).toBe(false);
 		expect(mockOmdb).not.toHaveBeenCalled();
 	});
