@@ -233,7 +233,7 @@ impl Tracker {
             status: Status::Opening,
             position: report.position.max(0.0),
             duration: match report.duration {
-                Some(d) if !self.live && d.is_finite() && d > 0.0 => d,
+                Some(d) if !self.live && d.is_finite() => d.max(0.0),
                 _ => 0.0,
             },
             subtitle_id: report
@@ -390,8 +390,13 @@ pub fn load<R: Runtime>(
 ) -> Result<(), String> {
     backend::ensure()?;
     app.state::<AirPlay>().begin(live);
-    let start = start_at.filter(|_| !live).unwrap_or(0.0);
-    backend::load(url, title, start, live)
+    backend::load(url, title, start_position(start_at, live), live)
+}
+
+/// Where AVPlayer starts: `start_at` for a movie or an episode, and the
+/// live edge for a live channel.
+fn start_position(start_at: Option<f64>, live: bool) -> f64 {
+    start_at.filter(|_| !live).unwrap_or(0.0)
 }
 
 /// Turns receiver detection on while the player is open. It costs power,

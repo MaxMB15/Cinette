@@ -269,6 +269,29 @@ fn progress_or_playing_resets_the_wait() {
 }
 
 #[test]
+fn half_a_second_of_progress_counts() {
+    let start = Instant::now();
+    let mut tracker = Tracker::new(false);
+    tracker.update(&report("playing"), start);
+    tracker.update(&report("waiting"), start);
+    let moved = Report {
+        position: 12.5,
+        ..report("waiting")
+    };
+    assert_eq!(
+        tracker.update(&moved, start + secs(12)).connection,
+        Connection::Connected
+    );
+}
+
+#[test]
+fn starts_vod_where_asked_and_live_at_the_edge() {
+    assert_eq!(start_position(Some(41.5), false), 41.5);
+    assert_eq!(start_position(None, false), 0.0);
+    assert_eq!(start_position(Some(41.5), true), 0.0);
+}
+
+#[test]
 fn a_receiver_that_never_gets_the_item_ready_is_lost_without_reconnecting() {
     let start = Instant::now();
     let mut tracker = Tracker::new(false);
