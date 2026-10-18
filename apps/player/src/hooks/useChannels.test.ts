@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { wrapperFor } from "@/test/query";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
 import {
 	loadProviderSettings,
 	saveProviderSettings,
@@ -403,6 +403,46 @@ describe("useChannelsProvider provider changes", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
 		localStorage.clear();
+	});
+
+	it("waits for both lists before it counts as loaded, and starts with none", async () => {
+		const channels = deferred<never[]>();
+		mockGetProviders.mockResolvedValue([makeProvider()]);
+		mockGetAllChannels.mockReturnValue(channels.promise);
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
+		expect(result.current.providers).toEqual([]);
+		await waitFor(() => expect(result.current.providers).toHaveLength(1));
+
+		expect(result.current.initialized).toBe(false);
+		expect(result.current.channels).toEqual([]);
+		expect(result.current.categories).toEqual([]);
+		await act(async () => channels.resolve([channel("c1")]));
+		expect(result.current.initialized).toBe(true);
+	});
+
+	it("gives null for a reload when the list has left the cache", async () => {
+		const client = createTestQueryClient();
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor(client) });
+		await waitFor(() => expect(result.current.initialized).toBe(true));
+		client.clear();
+
+		let list: Provider[] | null = [];
+		await act(async () => {
+			list = await result.current.refreshProviders();
+		});
+		expect(list).toBeNull();
+	});
+
+	it("keeps a favorite picked while the channels still load from failing", async () => {
+		mockGetAllChannels.mockReturnValue(new Promise(() => {}));
+		mockToggleFavorite.mockResolvedValue(true as never);
+		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
+
+		await act(() => result.current.toggleFavorite("c1"));
+
+		expect(mockToggleFavorite).toHaveBeenCalledWith("c1");
+		expect(result.current.error).toBeNull();
+		expect(result.current.channels).toEqual([]);
 	});
 
 	it("makes a new call when it reloads during a load, and keeps the newer list", async () => {

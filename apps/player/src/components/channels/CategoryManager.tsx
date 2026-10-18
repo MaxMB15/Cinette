@@ -33,7 +33,6 @@ import { groupSamples, groupTitles, superCategoryNames } from "@/lib/group-hiera
 import type { Channel, GroupHierarchyEntry } from "@/lib/types";
 import { formatCount } from "@/lib/format";
 import { groupHierarchyQuery } from "@/lib/queries";
-import { useChanged } from "@/hooks/useChanged";
 import { cn } from "@/lib/utils";
 
 // Enough channel names for Gemini to tell what a group holds.
@@ -132,6 +131,7 @@ export const CategoryManager = ({
 				groupName: g,
 				superCategory: null,
 				sortOrder: i,
+				// Stryker disable next-line BooleanLiteral: only categorized groups show the badge, and these are all uncategorized.
 				isUserOverride: false,
 			})),
 		[channels, contentType, providerId]
@@ -139,8 +139,9 @@ export const CategoryManager = ({
 	// Empty while it loads, and when it can't be read.
 	const entries = !saved.isSuccess ? NO_ENTRIES : saved.data.length > 0 ? saved.data : unsorted;
 
-	// Remove empty categories that now have groups in DB
-	if (useChanged(saved.data) && saved.data) {
+	// Remove empty categories that now have groups in DB. It's cheap, and
+	// does nothing once they're gone, so it runs on every render.
+	if (saved.data) {
 		const dbCatNames = new Set(superCategoryNames(saved.data));
 		const stillEmpty = emptyCategories.filter((c) => !dbCatNames.has(c));
 		if (stillEmpty.length !== emptyCategories.length) setEmptyCategories(stillEmpty);
