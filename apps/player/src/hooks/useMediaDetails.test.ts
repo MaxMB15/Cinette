@@ -184,6 +184,22 @@ describe("useCachedMediaDetails", () => {
 		expect(mockOmdb).toHaveBeenCalledTimes(2);
 	});
 
+	it("shows loading while it asks OMDb again for a movie it had nothing for", async () => {
+		const later = deferred<OmdbData | null>();
+		mockOmdb.mockResolvedValueOnce(null).mockReturnValueOnce(later.promise);
+		const wrapper = wrapperFor();
+		const first = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(first.result.current.loading).toBe(false));
+		first.unmount();
+
+		const again = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(mockOmdb).toHaveBeenCalledTimes(2));
+		expect(again.result.current).toEqual({ omdbData: null, whatsonData: null, loading: true });
+		await act(async () => later.resolve(sintelOmdb));
+		expect(again.result.current.loading).toBe(false);
+		expect(again.result.current.omdbData).toBe(sintelOmdb);
+	});
+
 	it("asks Whatson again for ratings it had nothing for", async () => {
 		mockOmdb.mockResolvedValue(sintelOmdb);
 		mockWhatson.mockResolvedValueOnce(null).mockResolvedValueOnce(certified);

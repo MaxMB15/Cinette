@@ -41,7 +41,13 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	// of its ten minutes, so opening the same channel again soon reads the cache.
 	const [opened] = useState(() => Math.floor(Date.now() / 1000 / SCHEDULE_STEP) * SCHEDULE_STEP);
 	const { guideVersion } = useChannels();
-	const schedule = useQuery(scheduleQuery(epgId, opened, guideVersion));
+	const schedule = useQuery({
+		...scheduleQuery(epgId, opened, guideVersion),
+		// A refreshed guide keeps this channel's schedule on screen until the
+		// new one arrives. The key's third part is the guide id.
+		placeholderData: (previous, previousQuery) =>
+			previousQuery?.queryKey[2] === epgId ? previous : undefined,
+	});
 	// Each channel's schedule has its own query, so a new channel shows the
 	// spinner until its own schedule arrives. One that can't load shows none.
 	const loading = schedule.isPending;

@@ -1031,6 +1031,30 @@ describe("ChannelList search", () => {
 		expect(await screen.findByText("3 channels")).toBeInTheDocument();
 	});
 
+	it("searches the guide again for a term typed again once its answer is old", async () => {
+		freezeClock();
+		tauri.searchEpgProgrammes.mockResolvedValue([]);
+		await renderList();
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+
+		// Typed again soon after, it shows the cached answer.
+		typeSearch("");
+		await flush();
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+
+		typeSearch("");
+		await flush();
+		vi.setSystemTime((NOW + 61) * 1000);
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledTimes(2);
+		expect(tauri.searchEpgProgrammes).toHaveBeenLastCalledWith("market", NOW + 61);
+	});
+
 	it("searches no programs outside the live tab", async () => {
 		saveBrowseTab("movie");
 		await renderList();

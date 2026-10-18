@@ -2,7 +2,13 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useMemo } from "react";
-import { useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+	useQueries,
+	useQuery,
+	useQueryClient,
+	type QueryClient,
+	type QueryKey,
+} from "@tanstack/react-query";
 import type { TimeRange } from "@/lib/epg-window";
 import { channelGuideKey, channelGuideQuery, guideKey, guideQuery } from "@/lib/queries";
 import type { EpgProgram } from "@/lib/types";
@@ -67,21 +73,44 @@ const channelsLoaded = (
 };
 
 /**
- * The programs last loaded for one channel, over any range, which stand in
- * while its programs load for a new one. A query that never loaded has no
- * update time, so it sorts last.
+ * The programs of the guide query that loaded last among those whose key
+ * `matches` picks. A query that never loaded has no update time, so it sorts
+ * last.
  */
-const lastLoaded = (client: QueryClient, id: string): EpgProgram[] | undefined => {
+const newestLoaded = (
+	client: QueryClient,
+	matches: (key: QueryKey) => boolean
+): EpgProgram[] | undefined => {
 	const newest = client
 		.getQueryCache()
 		.findAll({ queryKey: guideKey() })
-		.filter((q) => {
-			const key = q.queryKey;
-			return key[key.length - 2] === "channel" && key[key.length - 1] === id;
-		})
+		.filter((q) => matches(q.queryKey))
 		.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)[0];
 	return newest?.state.data as EpgProgram[] | undefined;
 };
+
+/**
+ * The programs last loaded for one channel, over any range, which stand in
+ * while its programs load for a new one, and stay when that load fails.
+ */
+const lastLoaded = (client: QueryClient, id: string): EpgProgram[] | undefined =>
+	newestLoaded(client, (key) => key[key.length - 2] === "channel" && key[key.length - 1] === id);
+
+// How long every channel's key is, which tells it from a single channel's.
+const ALL_KEY_LENGTH = guideQuery(NO_RANGE, "").queryKey.length;
+
+/**
+ * What every channel's rows showed before a load for a new range or guide
+ * failed: the programs every channel's load found last, over any range, or
+ * else the single channels' already loaded for this one.
+ */
+const lastShown = (
+	client: QueryClient,
+	range: TimeRange,
+	version: string
+): EpgProgram[] | undefined =>
+	newestLoaded(client, (key) => key.length === ALL_KEY_LENGTH && key[key.length - 1] === "all") ??
+	channelsLoaded(client, range, version);
 
 /**
  * The guide's programs over `range` by guide id, for `channels`. With null it
@@ -96,7 +125,9 @@ const lastLoaded = (client: QueryClient, id: string): EpgProgram[] | undefined =
  * Answers are cached by range and `resetKey`, so coming back to a tab shows
  * them again without a call. A new range or `resetKey` loads again, and the
  * programs stay until its answer replaces them, so the rows keep showing what
- * they had while the guide loads again.
+ * they had while the guide loads again. When that load fails, they keep
+ * showing it. TanStack Query only shows a placeholder while a query is
+ * pending, so the hook finds those programs in the cache again.
  */
 export const useGuidePrograms = (
 	range: TimeRange | null,
@@ -122,9 +153,11 @@ export const useGuidePrograms = (
 		placeholderData: (previous) => previous ?? channelsLoaded(queryClient, guideRange, version),
 	});
 	const allLoaded = all.isSuccess && !all.isPlaceholderData;
+	const allData =
+		all.data ?? (all.isError ? lastShown(queryClient, guideRange, version) : undefined);
 	// Grouped here rather than in the query's select, which runs again on each
 	// read while a placeholder shows and would give a new map every time.
-	const allPrograms = useMemo(() => (all.data ? byChannel(all.data) : EMPTY), [all.data]);
+	const allPrograms = useMemo(() => (allData ? byChannel(allData) : EMPTY), [allData]);
 
 	const perChannel = useQueries({
 		queries: ids.map((id) => ({
@@ -136,7 +169,8 @@ export const useGuidePrograms = (
 			const programs = new Map<string, EpgProgram[]>();
 			const waiting = new Set<string>();
 			results.forEach((r, i) => {
-				if (r.data && r.data.length > 0) programs.set(ids[i], r.data);
+				const data = r.data ?? (r.isError ? lastLoaded(queryClient, ids[i]) : undefined);
+				if (data && data.length > 0) programs.set(ids[i], data);
 				if (r.isPending || r.isPlaceholderData) waiting.add(ids[i]);
 			});
 			return { programs, waiting };

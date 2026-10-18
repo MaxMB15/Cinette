@@ -33,13 +33,15 @@ Cinette/
   backend call behind it, is in `lib/queries.ts`. Each key starts with where the data
   comes from, `"local"` for now, so another device can later answer the same queries
   for the remote control. `lib/query-client.ts` sets the cache up: an answer stays
-  until the app changes that data and loads it again, and a failed call isn't retried.
+  until the app changes that data and loads it again, a failed call isn't retried, and
+  calls go out while the computer is offline, since the backend is on this device.
   Tests make a new client with `createTestQueryClient` or `wrapperFor` from
   `test/query.tsx`.
 - `useMpv` polls the player state from Rust every second, and again as soon as the
   video stops or starts moving. It also listens for `mpv://` events such as
   buffering and reconnecting.
-- `lib/tauri.ts` is the only file that calls `invoke()`. Player commands use the
+- `lib/tauri.ts` is the only file that calls `invoke()`, through `lib/invoke.ts`,
+  where a dev build counts the calls. Player commands use the
   `plugin:mpv|<command>` namespace; everything else uses the bare command name.
 - Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 4.
   There is no Tailwind config file. The theme and the custom utilities are in

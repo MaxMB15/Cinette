@@ -89,8 +89,11 @@ export const useCachedMediaDetails = (request: MediaDetailsRequest | null): Medi
 		enabled: !!imdbId,
 	});
 	if (!request) return NOTHING;
-	// An OMDb call that fails counts as an answer with no details.
-	if (omdb.isPending) return LOADING;
+	// An OMDb call that fails counts as an answer with no details. No details
+	// are asked for again each time, as a key saved since may find them, and
+	// that counts as loading too. Whatson has no loading state, and shows no
+	// ratings until they come either way.
+	if (omdb.isPending || (omdb.data == null && omdb.isFetching)) return LOADING;
 	return {
 		omdbData: omdb.data ?? null,
 		whatsonData: (imdbId && whatson.data) || null,

@@ -436,6 +436,37 @@ describe("useChannelsProvider provider changes", () => {
 		expect(result.current.initialized).toBe(true);
 	});
 
+	it("stays loaded while channels that failed their first load load again", async () => {
+		mockGetAllChannels.mockRejectedValueOnce(new Error("database locked"));
+		const seen: boolean[] = [];
+		const { result } = renderHook(
+			() => {
+				const value = useChannelsProvider();
+				seen.push(value.initialized);
+				return value;
+			},
+			{ wrapper: wrapperFor() }
+		);
+		await waitFor(() => expect(result.current.initialized).toBe(true));
+		expect(result.current.error).toBe("Error: database locked");
+
+		const again = deferred<never[]>();
+		mockGetAllChannels.mockReturnValueOnce(again.promise);
+		let reload!: Promise<void>;
+		act(() => {
+			reload = result.current.refreshChannels();
+		});
+		await waitFor(() => expect(mockGetAllChannels).toHaveBeenCalledTimes(2));
+		expect(result.current.initialized).toBe(true);
+		await act(async () => {
+			again.resolve([channel("c1")]);
+			await reload;
+		});
+
+		expect(result.current.channels).toHaveLength(1);
+		expect(seen.slice(seen.indexOf(true))).not.toContain(false);
+	});
+
 	it("gives null for a reload when the list has left the cache", async () => {
 		const client = createTestQueryClient();
 		const { result } = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor(client) });
@@ -572,6 +603,27 @@ describe("useChannelsProvider provider changes", () => {
 		expect(removeProviderApi).toHaveBeenCalledWith("p1");
 		expect(result.current.providers).toEqual([]);
 		expect(result.current.channels).toEqual([]);
+	});
+
+	it("reloads the lists after a removal while the computer is offline", async () => {
+		mockGetProviders.mockResolvedValueOnce([makeProvider()]);
+		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);
+		const { result } = await mountProvider();
+		act(() => {
+			window.dispatchEvent(new Event("offline"));
+		});
+		try {
+			await act(() => result.current.removeProvider("p1"));
+
+			expect(mockGetProviders).toHaveBeenCalledTimes(2);
+			expect(mockGetAllChannels).toHaveBeenCalledTimes(2);
+			expect(result.current.providers).toEqual([]);
+			expect(result.current.channels).toEqual([]);
+		} finally {
+			act(() => {
+				window.dispatchEvent(new Event("online"));
+			});
+		}
 	});
 
 	it("shows a failed removal without throwing", async () => {

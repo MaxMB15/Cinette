@@ -438,6 +438,77 @@ describe("useGuidePrograms", () => {
 		expect(result.current.programs.size).toBe(3);
 	});
 
+	it("keeps every channel's programs when they fail to load for a new range or guide", async () => {
+		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+		mockLoad.mockRejectedValue(new Error("offline"));
+		rerender({ range: evening, channels: "all", resetKey: 1 });
+		await flush();
+		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000);
+		expect(result.current.programs.size).toBe(3);
+		expect(result.current.isPending("news.tv")).toBe(false);
+
+		rerender({ range: evening, channels: "all", resetKey: 2 });
+		await flush();
+		expect(mockLoad).toHaveBeenCalledTimes(3);
+		expect(titles(result.current.programs)).toEqual({
+			"arts.tv": ["Gallery Hour"],
+			"news.tv": ["Noon News", "Weather"],
+			"sport.tv": ["Match Day"],
+		});
+		expect(result.current.isPending("news.tv")).toBe(false);
+	});
+
+	it("keeps the favorites' programs when every channel's load fails", async () => {
+		const { result, rerender } = renderGuide({
+			range: morning,
+			channels: ["news.tv"],
+			resetKey: 1,
+		});
+		await flush();
+		mockLoad.mockRejectedValueOnce(new Error("offline"));
+		rerender({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Noon News", "Weather"] });
+		expect(result.current.isPending("news.tv")).toBe(false);
+	});
+
+	it("shows every channel's newest programs from another range when a load fails", async () => {
+		const client = createTestQueryClient();
+		const later = { from: 9000, to: 16000 };
+		const seed = (key: readonly unknown[], data: EpgProgram[], updatedAt: number) =>
+			client.setQueryData(key, data, { updatedAt });
+		seed(guideQuery(morning, "1").queryKey, [program("arts.tv", "Old")], 1);
+		seed(guideQuery(evening, "1").queryKey, [program("news.tv", "New")], 3);
+		// Newer, but a single channel's guide, for a channel whose id is "all".
+		seed(channelGuideQuery(evening, "1", "all").queryKey, [program("all", "One")], 5);
+		mockLoad.mockRejectedValue(new Error("offline"));
+
+		const { result } = renderHook(() => useGuidePrograms(later, "all", 1), {
+			wrapper: wrapperFor(client),
+		});
+		await flush();
+
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["New"] });
+	});
+
+	it("keeps a favorite's programs when they fail to load for a new range", async () => {
+		const { result, rerender } = renderGuide({
+			range: morning,
+			channels: ["news.tv"],
+			resetKey: 1,
+		});
+		await flush();
+		mockLoad.mockRejectedValueOnce(new Error("offline"));
+		rerender({ range: evening, channels: ["news.tv"], resetKey: 1 });
+		await flush();
+
+		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000, ["news.tv"]);
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Noon News", "Weather"] });
+		expect(result.current.isPending("news.tv")).toBe(false);
+	});
+
 	it("keeps its programs when a load fails, and asks for those ids again with the next guide", async () => {
 		const { result, rerender } = renderGuide({
 			range: morning,

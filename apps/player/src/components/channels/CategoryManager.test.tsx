@@ -197,6 +197,17 @@ describe("CategoryManager counts", () => {
 		await flush();
 		expect(screen.getByText("movie · 0 groups · 0 categories")).toBeInTheDocument();
 	});
+	it("keeps the groups it has when loading them again after a change fails", async () => {
+		await renderManager();
+		vi.mocked(getGroupHierarchy).mockRejectedValue(new Error("db locked"));
+		fireEvent.click(within(card("Family")).getByRole("button", { name: "Rename" }));
+		fireEvent.change(screen.getByDisplayValue("Family"), { target: { value: "Kids" } });
+		await click("Save name");
+
+		expect(loads()).toBe(2);
+		expect(screen.getByText("movie · 4 groups · 2 categories")).toBeInTheDocument();
+		expect(within(card("Films")).getByText("2 groups")).toBeInTheDocument();
+	});
 });
 
 describe("CategoryManager categories", () => {
