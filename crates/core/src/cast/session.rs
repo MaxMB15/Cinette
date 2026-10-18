@@ -9,6 +9,7 @@
 //! layer then opens a new connection with [`Session::rejoin`], which picks
 //! the same receiver app back up without loading anything again.
 
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -118,10 +119,22 @@ pub enum Event {
 }
 
 /// What to send, then what happened.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Default, PartialEq)]
 pub struct Output {
     pub send: Vec<Vec<u8>>,
     pub events: Vec<Event>,
+}
+
+/// The frames' sizes only. A `LOAD` frame holds the stream's URL, which
+/// carries the login.
+impl fmt::Debug for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sizes: Vec<usize> = self.send.iter().map(Vec::len).collect();
+        f.debug_struct("Output")
+            .field("send_sizes", &sizes)
+            .field("events", &self.events)
+            .finish()
+    }
 }
 
 /// Why a command can't be sent now.
@@ -140,6 +153,7 @@ enum Stage {
     /// pick back up, which must still be running.
     Connecting {
         rejoin: Option<String>,
+        since: Instant,
     },
     Launching {
         since: Instant,
@@ -181,7 +195,7 @@ impl Session {
     fn open(sender: String, rejoin: Option<String>, now: Instant) -> (Self, Vec<Vec<u8>>) {
         let mut session = Self {
             sender,
-            stage: Stage::Connecting { rejoin },
+            stage: Stage::Connecting { rejoin, since: now },
             reader: FrameReader::default(),
             next_request: 0,
             last_received: now,
@@ -244,6 +258,13 @@ impl Session {
             && now.duration_since(since) >= LAUNCH_TIMEOUT
         {
             self.close(CloseReason::LaunchFailed(None), &mut out);
+            return out;
+        }
+        // A receiver that answers heartbeats but never a usable status.
+        if let Stage::Connecting { since, .. } = self.stage
+            && now.duration_since(since) >= LAUNCH_TIMEOUT
+        {
+            self.close(CloseReason::Timeout, &mut out);
             return out;
         }
         if let Some((_, sent)) = self.loading
@@ -388,11 +409,30 @@ impl Session {
                     self.loading = None;
                 }
             }
+            // The receiver turning the load down fails it at once.
+            Incoming::Rejected { request_id, .. }
+                if from_app && self.loading.is_some_and(|(id, _)| id == request_id) =>
+            {
+                self.loading = None;
+                out.events.push(Event::LoadFailed {
+                    detailed_error_code: None,
+                });
+            }
             Incoming::Rejected { request_id, reason } if from_app => {
                 out.events.push(Event::Rejected { request_id, reason });
             }
             Incoming::Error {
+                request_id,
                 detailed_error_code,
+            } if from_app && self.loading.is_some_and(|(id, _)| id == request_id) => {
+                self.loading = None;
+                out.events.push(Event::LoadFailed {
+                    detailed_error_code,
+                });
+            }
+            Incoming::Error {
+                detailed_error_code,
+                ..
             } if from_app => out.events.push(Event::PlaybackError {
                 detailed_error_code,
             }),
@@ -413,7 +453,7 @@ impl Session {
             .into_iter()
             .find(|a| a.app_id == DEFAULT_MEDIA_RECEIVER);
         match std::mem::replace(&mut self.stage, Stage::Closed) {
-            Stage::Connecting { rejoin } => match (running, rejoin) {
+            Stage::Connecting { rejoin, .. } => match (running, rejoin) {
                 (Some(app), None) => self.ready(app, now, out),
                 (Some(app), Some(id)) if app.session_id == id => self.ready(app, now, out),
                 (_, Some(_)) => self.close(CloseReason::AppStopped, out),
@@ -478,8 +518,13 @@ impl Session {
             .media
             .as_ref()
             .is_none_or(|m| m.media_session_id != entry.media_session_id);
+        // A reply to another request, such as the media `GET_STATUS` sent
+        // on joining, describes the receiver from before the load.
         if self.loading.is_some_and(|(id, _)| id == request_id)
-            || (self.loading.is_some() && new_media && !matches!(player, PlayerState::Idle(_)))
+            || (request_id == 0
+                && self.loading.is_some()
+                && new_media
+                && !matches!(player, PlayerState::Idle(_)))
         {
             self.loading = None;
         }

@@ -1004,3 +1004,163 @@ fn a_broken_frame_ends_the_session() {
     );
     assert!(session.is_closed());
 }
+
+/// The request ids of a media `GET_STATUS` and a `LOAD` among `frames`.
+fn status_and_load_ids(frames: &[Vec<u8>]) -> (u64, u64) {
+    let sent = sent(frames);
+    let id = |kind: &str| {
+        sent.iter()
+            .find(|(_, ns, body)| ns == NS_MEDIA && body["type"] == kind)
+            .and_then(|(_, _, body)| body["requestId"].as_u64())
+            .unwrap()
+    };
+    (id("GET_STATUS"), id("LOAD"))
+}
+
+#[test]
+fn a_reply_to_another_request_doesnt_answer_the_load() {
+    // The receiver already plays something when the session joins it, and
+    // the load goes out with the media GET_STATUS.
+    let now = Instant::now();
+    let (mut session, _) = Session::start(SENDER.into(), now);
+    session.load(load_request(), now).unwrap();
+    let out = session.receive(&receiver_status(dmr("s1")), now);
+    let (status_id, load_id) = status_and_load_ids(&out.send);
+    session.receive(&media_status(status_id, playing(7, 10.0)), now);
+    let failed = from(
+        "t1",
+        NS_MEDIA,
+        json!({ "type": "LOAD_FAILED", "requestId": load_id, "detailedErrorCode": 104 }),
+    );
+    assert_eq!(
+        session.receive(&failed, now).events,
+        vec![Event::LoadFailed {
+            detailed_error_code: Some(104)
+        }]
+    );
+}
+
+#[test]
+fn a_load_the_receiver_turns_down_fails_at_once() {
+    let now = Instant::now();
+    let later = now + LOAD_TIMEOUT;
+    let pong = from("receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" }));
+    let load = |session: &mut Session| {
+        sent(&session.load(load_request(), now).unwrap().send)[0].2["requestId"]
+            .as_u64()
+            .unwrap()
+    };
+
+    let mut session = with_media(now);
+    let id = load(&mut session);
+    let invalid = json!({ "type": "INVALID_REQUEST", "requestId": id, "reason": "INVALID_PARAMS" });
+    assert_eq!(
+        session.receive(&from("t1", NS_MEDIA, invalid), now).events,
+        vec![Event::LoadFailed {
+            detailed_error_code: None
+        }]
+    );
+    // No second failure when the time runs out.
+    session.receive(&pong, later);
+    assert!(session.tick(later).events.is_empty());
+
+    // An ERROR about the load fails it with its code.
+    let mut session = with_media(now);
+    let id = load(&mut session);
+    let error = json!({ "type": "ERROR", "requestId": id, "detailedErrorCode": 110 });
+    assert_eq!(
+        session.receive(&from("t1", NS_MEDIA, error), now).events,
+        vec![Event::LoadFailed {
+            detailed_error_code: Some(110)
+        }]
+    );
+
+    // Another request turned down, or an error in playback, is reported as
+    // it is, and the load keeps waiting.
+    let mut session = with_media(now);
+    let id = load(&mut session);
+    let other = json!({ "type": "INVALID_REQUEST", "requestId": id + 1, "reason": "X" });
+    assert_eq!(
+        session.receive(&from("t1", NS_MEDIA, other), now).events,
+        vec![Event::Rejected {
+            request_id: id + 1,
+            reason: Some("X".into())
+        }]
+    );
+    let playback = json!({ "type": "ERROR", "detailedErrorCode": 103 });
+    assert_eq!(
+        session.receive(&from("t1", NS_MEDIA, playback), now).events,
+        vec![Event::PlaybackError {
+            detailed_error_code: Some(103)
+        }]
+    );
+    session.receive(&pong, later);
+    assert_eq!(
+        session.tick(later).events,
+        vec![Event::LoadFailed {
+            detailed_error_code: None
+        }]
+    );
+}
+
+#[test]
+fn printing_the_output_hides_the_frames() {
+    let now = Instant::now();
+    let mut session = ready(now);
+    let out = session.load(load_request(), now).unwrap();
+    let printed = format!("{out:?}");
+    assert!(printed.contains("send_sizes"), "{printed}");
+    assert!(!printed.contains("secret"), "{printed}");
+    // Not even as the bytes of "secret".
+    assert!(!printed.contains("115, 101, 99"), "{printed}");
+    assert_eq!(
+        format!("{:?}", Output::default()),
+        "Output { send_sizes: [], events: [] }"
+    );
+}
+
+#[test]
+fn a_receiver_that_never_gives_a_usable_status_times_out() {
+    let now = Instant::now();
+    let (mut session, _) = Session::start(SENDER.into(), now);
+    let pong = from("receiver-0", NS_HEARTBEAT, json!({ "type": "PONG" }));
+    let almost = now + LAUNCH_TIMEOUT - Duration::from_secs(1);
+    session.receive(&pong, almost);
+    assert!(session.tick(almost).events.is_empty());
+    let late = now + LAUNCH_TIMEOUT;
+    session.receive(&pong, late);
+    assert_eq!(
+        session.tick(late).events,
+        vec![Event::Closed(CloseReason::Timeout)]
+    );
+}
+
+#[test]
+fn an_app_entry_it_cant_read_doesnt_hide_the_rest() {
+    let now = Instant::now();
+    let (mut session, _) = Session::start(SENDER.into(), now);
+    let apps = json!([
+        { "appId": "E8C28D3C", "displayName": "Backdrop" },
+        { "appId": "CC1AD845", "sessionId": "s1", "transportId": "t1" }
+    ]);
+    let out = session.receive(&receiver_status(apps), now);
+    assert!(out.events.contains(&Event::Ready {
+        session_id: "s1".into()
+    }));
+}
+
+#[test]
+fn a_null_time_or_request_id_reads_as_zero() {
+    let now = Instant::now();
+    let mut session = ready(now);
+    let status = from(
+        "t1",
+        NS_MEDIA,
+        json!({ "type": "MEDIA_STATUS", "requestId": null, "status": [{
+            "mediaSessionId": 3, "playerState": "PLAYING", "currentTime": null,
+            "supportedMediaCommands": null }] }),
+    );
+    let media = media_event(&session.receive(&status, now));
+    assert_eq!(media.current_time, 0.0);
+    assert!(!media.can_pause);
+}

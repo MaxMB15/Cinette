@@ -185,3 +185,33 @@ fn takes_messages_up_to_64_kib() {
     assert_eq!(reader.next_message().unwrap().unwrap(), message);
     assert_eq!(MAX_MESSAGE, 65536);
 }
+
+#[test]
+fn the_reader_reads_many_frames_from_one_read_and_keeps_the_rest() {
+    let frame = sample().encode();
+    let mut bytes: Vec<u8> = std::iter::repeat_n(frame.clone(), 1000).flatten().collect();
+    bytes.extend_from_slice(&frame[..7]);
+    let mut reader = FrameReader::default();
+    reader.push(&bytes);
+    for _ in 0..1000 {
+        assert_eq!(reader.next_message(), Some(Ok(sample())));
+    }
+    assert_eq!(reader.next_message(), None);
+    // The part frame stays for the next read.
+    reader.push(&frame[7..]);
+    assert_eq!(reader.next_message(), Some(Ok(sample())));
+    assert_eq!(reader.next_message(), None);
+}
+
+#[test]
+fn printing_the_reader_shows_only_how_much_it_holds() {
+    let mut reader = FrameReader::default();
+    let mut text = sample();
+    text.payload = Payload::Text("http://host/live/user/secret/1.m3u8".into());
+    let frame = text.encode();
+    reader.push(&frame);
+    reader.push(&frame[..10]);
+    assert_eq!(reader.next_message().map(|m| m.is_ok()), Some(true));
+    let printed = format!("{reader:?}");
+    assert_eq!(printed, "FrameReader { buffered: 10 }");
+}
