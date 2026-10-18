@@ -6,7 +6,7 @@ use super::format::{
     StreamFormat, VideoCodec,
 };
 use super::hls::{inspect, HlsError, HlsInfo};
-use super::probe::{self, ProbeError, Probed};
+use super::probe::{self, AudioTrack, ProbeError, Probed};
 use super::{candidates, formats_for, is_hls_url, HlsCheck};
 use crate::http::test_server::{self, password, route, serve_once, serve_routes};
 use crate::models::playlist::ProviderType;
@@ -208,6 +208,20 @@ fn parses_a_live_ts_probe() {
             video: Some(VideoCodec::H264),
             interlaced: true,
             audio: Some(AudioCodec::Mp2),
+            audio_tracks: vec![
+                AudioTrack {
+                    codec: "mp2".into(),
+                    language: Some("deu".into()),
+                    default: false,
+                    layout: Some("stereo".into())
+                },
+                AudioTrack {
+                    codec: "ac3".into(),
+                    language: Some("eng".into()),
+                    default: false,
+                    layout: Some("5.1(side)".into())
+                },
+            ],
             duration: None,
         }
     );
@@ -231,6 +245,23 @@ At least one output file must be specified
     assert_eq!(probed.video, Some(VideoCodec::Hevc));
     assert!(!probed.interlaced);
     assert_eq!(probed.audio, Some(AudioCodec::Eac3));
+    assert_eq!(
+        probed.audio_tracks,
+        vec![
+            AudioTrack {
+                codec: "dts".into(),
+                language: Some("eng".into()),
+                default: false,
+                layout: Some("5.1(side)".into())
+            },
+            AudioTrack {
+                codec: "eac3".into(),
+                language: Some("eng".into()),
+                default: true,
+                layout: Some("5.1(side)".into())
+            },
+        ]
+    );
     assert_eq!(probed.duration, Some(6130.5));
 }
 
@@ -342,10 +373,7 @@ async fn reads_a_media_playlist_with_ts_segments_and_cors() {
         }
     );
     let first = requests.recv().unwrap().to_ascii_lowercase();
-    assert!(
-        first.contains("origin: https://cast.cinette.invalid"),
-        "{first}"
-    );
+    assert!(first.contains("origin: https://www.gstatic.com"), "{first}");
     let segment = requests.recv().unwrap().to_ascii_lowercase();
     assert!(segment.starts_with("get /live/u/p/seg-1.ts"), "{segment}");
     assert!(segment.contains("range: bytes=0-1"), "{segment}");
@@ -407,7 +435,7 @@ async fn cors_needs_every_part() {
         .unwrap();
     assert!(!info.cors);
     // An origin echoed back counts, any other doesn't.
-    let echo = "200 OK\r\nAccess-Control-Allow-Origin: https://cast.cinette.invalid";
+    let echo = "200 OK\r\nAccess-Control-Allow-Origin: https://www.gstatic.com";
     let other = "200 OK\r\nAccess-Control-Allow-Origin: https://example.com";
     for (status, expected) in [(echo, true), (other, false)] {
         let (base, _) = serve_routes(vec![
@@ -435,10 +463,10 @@ async fn reads_why_the_check_failed() {
         ("403 Forbidden", HlsError::Refused(403)),
         ("404 Not Found", HlsError::Unreachable),
     ] {
-        let url = format!("{}/live/u/{}/1.m3u8", serve_once(status, ""), password());
+        let url = format!("{}/live/u/SECRET/1.m3u8", serve_once(status, ""));
         let err = inspect(&client, &url).await.unwrap_err();
         assert_eq!(err, expected, "{status}");
-        test_server::assert_hides(&err, &password());
+        test_server::assert_hides(&err, "SECRET");
     }
     let url = format!("{}/x.m3u8", test_server::refused_url());
     assert_eq!(inspect(&client, &url).await, Err(HlsError::Unreachable));
@@ -580,4 +608,47 @@ fn the_probe_names_its_own_urls_container_and_extensions_name_the_rest() {
     let formats = formats_for(&urls, codecs(Container::Mkv), 0, &[HlsCheck::NotHls]);
     assert_eq!(formats[0].1.container, Container::Mkv);
     assert!(!formats[0].1.cors);
+}
+
+#[test]
+fn reads_each_audio_tracks_language() {
+    let text = "Input #0, matroska,webm, from 'x':
+  Stream #0:0: Video: h264, yuv420p(progressive)
+  Stream #0:1(und): Audio: aac (LC), 48000 Hz, stereo
+  Stream #0:2: Audio: vorbis, 48000 Hz, stereo
+  Stream #0:3[0x1](fre): Audio: ac3, 48000 Hz, 5.1 (default)
+  Stream #0:4(): Audio: mp3, 48000 Hz, stereo
+";
+    let probed = probe::parse(text).unwrap();
+    let languages: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.language.as_deref())
+        .collect();
+    assert_eq!(languages, vec![None, None, Some("fre"), None]);
+    assert_eq!(probed.audio, Some(AudioCodec::Ac3));
+    assert_eq!(probed.audio_tracks[1].codec, "vorbis");
+    let layouts: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.layout.as_deref())
+        .collect();
+    assert_eq!(
+        layouts,
+        vec![Some("stereo"), Some("stereo"), Some("5.1"), Some("stereo")]
+    );
+    // A layout ffmpeg doesn't name, or a stream with no rate.
+    let odd = "Input #0, wav, from 'x':
+  Stream #0:0: Audio: pcm_s16le, 48000 Hz, 3 channels, s16, 2304 kb/s
+  Stream #0:1: Audio: opus
+  Stream #0:2: Audio: aac, 48000 Hz
+  Stream #0:3: Audio: aac, 48000 Hz, , fltp
+";
+    let probed = probe::parse(odd).unwrap();
+    let layouts: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.layout.as_deref())
+        .collect();
+    assert_eq!(layouts, vec![Some("3 channels"), None, None, None]);
 }

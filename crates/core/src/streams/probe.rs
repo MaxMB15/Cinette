@@ -38,9 +38,26 @@ pub struct Probed {
     pub container: Container,
     pub video: Option<VideoCodec>,
     pub interlaced: bool,
+    /// The default audio track's codec, which a receiver plays when it
+    /// fetches the stream itself.
     pub audio: Option<AudioCodec>,
+    /// Every audio track, in order, so a converter can pick one to copy.
+    pub audio_tracks: Vec<AudioTrack>,
     /// Seconds, when the input has a length.
     pub duration: Option<f64>,
+}
+
+/// One audio track, the `n`th of them as ffmpeg's `0:a:n` counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioTrack {
+    /// ffmpeg's name for the codec, such as `ac3` or `vorbis`.
+    pub codec: String,
+    /// The language tag, such as `eng`, when the stream has one.
+    pub language: Option<String>,
+    pub default: bool,
+    /// ffmpeg's name for the channel layout, such as `stereo` or
+    /// `5.1(side)`, when it gives one.
+    pub layout: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -61,8 +78,7 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
     let mut duration = None;
     let mut video = None;
     let mut interlaced = false;
-    let mut audio = None;
-    let mut default_audio = None;
+    let mut audio_tracks: Vec<AudioTrack> = Vec::new();
     for line in stderr.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("Input #0, ") {
@@ -89,32 +105,47 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
                     .any(|order| rest.contains(order));
                 }
             } else if let Some(rest) = after(line, "Audio: ") {
-                let codec = audio_codec(first_word(rest));
-                audio.get_or_insert(codec);
-                if line.ends_with("(default)") {
-                    default_audio.get_or_insert(codec);
-                }
+                audio_tracks.push(AudioTrack {
+                    codec: first_word(rest).to_string(),
+                    language: language(line),
+                    default: line.ends_with("(default)"),
+                    layout: layout(rest),
+                });
             }
         }
     }
     let Some(container) = container else {
-        return Err(http_error(stderr));
+        return Err(open_error(stderr));
     };
-    if video.is_none() && audio.is_none() {
+    if video.is_none() && audio_tracks.is_empty() {
         return Err(ProbeError::NoStreams);
     }
+    let played = audio_tracks
+        .iter()
+        .find(|t| t.default)
+        .or(audio_tracks.first());
     Ok(Probed {
         container,
         video,
         interlaced,
-        audio: default_audio.or(audio),
+        audio: played.map(|t| audio_codec(&t.codec)),
+        audio_tracks,
         duration,
     })
 }
 
-/// Why ffmpeg couldn't open the input. It names an HTTP status as
-/// `Server returned 403 Forbidden` or `HTTP error 403 Forbidden`.
-fn http_error(stderr: &str) -> ProbeError {
+/// The language in a stream line such as `Stream #0:1[0x101](deu): Audio: …`.
+fn language(line: &str) -> Option<String> {
+    let id = line.split(": ").next()?;
+    let (_, rest) = id.rsplit_once('(')?;
+    let tag = rest.strip_suffix(')')?;
+    (!tag.is_empty() && tag != "und").then(|| tag.to_string())
+}
+
+/// Why ffmpeg couldn't open its input, from what it printed. It names an
+/// HTTP status as `Server returned 403 Forbidden` or `HTTP error 403
+/// Forbidden`. The converter reads its own ffmpeg's errors with this too.
+pub fn open_error(stderr: &str) -> ProbeError {
     for marker in ["Server returned ", "HTTP error "] {
         for (i, _) in stderr.match_indices(marker) {
             let code = stderr[i + marker.len()..]
@@ -126,6 +157,17 @@ fn http_error(stderr: &str) -> ProbeError {
         }
     }
     ProbeError::Unreachable
+}
+
+/// The channel layout in an audio stream's description, such as
+/// `ac3, 48000 Hz, 5.1(side), fltp, 384 kb/s`: the field after the sample
+/// rate.
+fn layout(audio: &str) -> Option<String> {
+    let mut fields = audio.split(", ");
+    fields.find(|f| f.ends_with(" Hz"))?;
+    let layout = fields.next()?.trim();
+    let layout = layout.strip_suffix(" (default)").unwrap_or(layout);
+    (!layout.is_empty()).then(|| layout.to_string())
 }
 
 fn after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
