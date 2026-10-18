@@ -145,11 +145,15 @@ const TvLayout = () => {
 	}, [isPlayer]);
 
 	// The TV sizes and focus ring in globals.css.
-	useEffect(() => {
-		const root = document.documentElement;
-		root.classList.add("tv");
-		return () => root.classList.remove("tv");
-	}, []);
+	useEffect(
+		() => {
+			const root = document.documentElement;
+			root.classList.add("tv");
+			return () => root.classList.remove("tv");
+		},
+		// Stryker disable next-line ArrayDeclaration: any constant list runs the effect once, as an empty one does.
+		[]
+	);
 
 	return (
 		<div className="flex h-screen overflow-hidden">

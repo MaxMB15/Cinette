@@ -117,8 +117,12 @@ describe("useTvRemote", () => {
 		renderAt("/");
 		cleanup();
 		expect(window.__cinetteBack).toBeUndefined();
+		// Two buttons, so a listener left behind would have somewhere to move focus.
 		const outside = document.createElement("button");
-		document.body.appendChild(outside);
+		const below = document.createElement("button");
+		document.body.append(outside, below);
+		place(outside, 0);
+		place(below, 50);
 		outside.focus();
 		const event = new KeyboardEvent("keydown", {
 			key: "ArrowDown",
@@ -127,6 +131,8 @@ describe("useTvRemote", () => {
 		});
 		outside.dispatchEvent(event);
 		expect(event.defaultPrevented).toBe(false);
+		expect(document.activeElement).toBe(outside);
 		outside.remove();
+		below.remove();
 	});
 });

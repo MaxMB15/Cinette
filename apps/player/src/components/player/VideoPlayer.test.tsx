@@ -1583,6 +1583,14 @@ describe("keyboard shortcuts", () => {
 		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
 	});
 
+	it("seeks with the arrows on a desktop even while a control has keyboard focus", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+		expect(await press("ArrowRight")).toBe(false);
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+	});
+
 	describe("on a TV", () => {
 		beforeEach(() => {
 			env.os = "android";

@@ -28,19 +28,23 @@ export const useTvRemote = (): void => {
 	const { pathname } = useLocation();
 	const atHomeRef = useLatestRef(pathname === "/");
 
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-			const direction = directionForKey(e.key);
-			if (!direction || keepsArrow(e.target, direction)) return;
-			if (moveFocus(direction)) e.preventDefault();
-		};
-		window.addEventListener("keydown", onKey);
-		window.__cinetteBack = () =>
-			handleBack(document, atHomeRef.current, () => navigate("/")) !== "exit";
-		return () => {
-			window.removeEventListener("keydown", onKey);
-			delete window.__cinetteBack;
-		};
-	}, [navigate, atHomeRef]);
+	useEffect(
+		() => {
+			const onKey = (e: KeyboardEvent) => {
+				if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+				const direction = directionForKey(e.key);
+				if (!direction || keepsArrow(e.target, direction)) return;
+				if (moveFocus(direction)) e.preventDefault();
+			};
+			window.addEventListener("keydown", onKey);
+			window.__cinetteBack = () =>
+				handleBack(document, atHomeRef.current, () => navigate("/")) !== "exit";
+			return () => {
+				window.removeEventListener("keydown", onKey);
+				delete window.__cinetteBack;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: navigate and the ref keep their identity for the router's life, so the effect runs once either way.
+		[navigate, atHomeRef]
+	);
 };
