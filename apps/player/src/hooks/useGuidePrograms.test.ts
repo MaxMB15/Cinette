@@ -7,7 +7,8 @@ import type { TimeRange } from "@/lib/epg-window";
 import type { EpgProgram } from "@/lib/types";
 import { deferred } from "@/test/deferred";
 import { answerFrom } from "@/test/guide-answers";
-import { wrapperFor } from "@/test/query";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
+import { channelGuideQuery, guideQuery } from "@/lib/queries";
 
 vi.mock("@/lib/tauri", () => ({ getEpgForLiveChannels: vi.fn() }));
 
@@ -350,6 +351,76 @@ describe("useGuidePrograms", () => {
 		expect(mockLoad).toHaveBeenCalledOnce();
 		expect(result.current.programs.size).toBe(3);
 		expect(result.current.isPending("news.tv")).toBe(false);
+	});
+
+	it("keeps a favorite's programs on screen while they load for a new range", async () => {
+		const { result, rerender } = renderGuide({
+			range: morning,
+			channels: ["news.tv"],
+			resetKey: 1,
+		});
+		await flush();
+		const later = deferred<EpgProgram[]>();
+		mockLoad.mockReturnValueOnce(later.promise);
+		rerender({ range: evening, channels: ["news.tv"], resetKey: 1 });
+		await flush();
+
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Noon News", "Weather"] });
+		expect(result.current.isPending("news.tv")).toBe(true);
+		await act(async () => later.resolve([program("news.tv", "Late News", 5000)]));
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Late News"] });
+	});
+
+	it("fills every channel's rows from the favorites loaded for that range only", async () => {
+		const all = deferred<EpgProgram[]>();
+		const { result, rerender } = renderGuide({
+			range: evening,
+			channels: ["arts.tv"],
+			resetKey: 1,
+		});
+		await flush();
+		rerender({ range: morning, channels: ["news.tv"], resetKey: 1 });
+		await flush();
+		mockLoad.mockReturnValueOnce(all.promise);
+		rerender({ range: morning, channels: "all", resetKey: 1 });
+		await flush();
+
+		// While every channel loads, the rows show news.tv's programs for this
+		// range, and not arts.tv's for the evening.
+		expect(Object.keys(titles(result.current.programs))).toEqual(["news.tv"]);
+		expect(result.current.isPending("arts.tv")).toBe(true);
+		await act(async () => all.resolve(guide));
+		expect(result.current.programs.size).toBe(3);
+	});
+
+	it("shows a favorite's newest programs from another range, and no other channel's", async () => {
+		const client = createTestQueryClient();
+		const later = { from: 9000, to: 16000 };
+		const seed = (key: readonly unknown[], data: EpgProgram[], updatedAt: number) =>
+			client.setQueryData(key, data, { updatedAt });
+		seed(channelGuideQuery(morning, "1", "all").queryKey, [program("all", "Old All")], 1);
+		seed(channelGuideQuery(evening, "1", "all").queryKey, [program("all", "New All")], 3);
+		seed(channelGuideQuery(evening, "1", "news.tv").queryKey, [program("news.tv", "Late")], 4);
+		// Newer, but every channel's guide, and another channel's.
+		seed(guideQuery(evening, "1").queryKey, [program("all", "Everyone")], 5);
+		seed(
+			channelGuideQuery(morning, "1", "sport.tv").queryKey,
+			[program("sport.tv", "Match")],
+			6
+		);
+		// Newest of all, but not a guide query.
+		seed(["local", "elsewhere", "channel", "news.tv"], [program("news.tv", "Not Guide")], 7);
+		mockLoad.mockReturnValue(new Promise(() => {}));
+
+		const { result } = renderHook(() => useGuidePrograms(later, ["all", "news.tv"], 1), {
+			wrapper: wrapperFor(client),
+		});
+		await flush();
+
+		expect(titles(result.current.programs)).toEqual({
+			all: ["New All"],
+			"news.tv": ["Late"],
+		});
 	});
 
 	it("keeps a load on its way through a request for nothing", async () => {
