@@ -34,8 +34,9 @@ export interface Track {
 
 export interface PlaybackError {
 	/** `openFailed`: the stream stopped before it ever played. `loadFailed`:
-	 *  reconnecting ran out of tries. `failed`: anything else. */
-	code: "openFailed" | "loadFailed" | "failed";
+	 *  reconnecting ran out of tries. `refused`: the provider answered 401 or
+	 *  403, so the login may have expired. `failed`: anything else. */
+	code: "openFailed" | "loadFailed" | "refused" | "failed";
 	message?: string;
 }
 
