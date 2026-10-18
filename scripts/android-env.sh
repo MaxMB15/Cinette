@@ -8,8 +8,11 @@
 #
 # - CC and AR for each target, for crates that bundle C code, such as SQLite
 #   and aws-lc. The Tauri CLI sets these itself.
-# - LIBCLANG_PATH and BINDGEN_EXTRA_CLANG_ARGS for armv7, where libmpv2-sys
-#   generates its bindings with the NDK's libclang.
+# - LIBCLANG_PATH, CLANG_PATH and BINDGEN_EXTRA_CLANG_ARGS for armv7, where
+#   libmpv2-sys generates its bindings with the NDK's libclang. bindgen asks
+#   the clang in CLANG_PATH, or else the first one on PATH, for the system
+#   headers. A build machine's own clang names its own, and glibc's stdint.h
+#   then hides Android's.
 
 if [ -z "${NDK_HOME:-}" ]; then
   echo "Set NDK_HOME to the NDK, such as \$ANDROID_HOME/ndk/30.0.16248370" >&2
@@ -33,6 +36,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
 export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$CC_armv7_linux_androideabi"
 
 export LIBCLANG_PATH="$_cinette_tc/lib"
+export CLANG_PATH="$_cinette_tc/bin/clang"
 _cinette_resources="$("$_cinette_tc/bin/clang" -print-resource-dir)"
 export BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi="--target=armv7a-linux-androideabi$_cinette_api --sysroot=$_cinette_tc/sysroot -isystem $_cinette_resources/include"
 

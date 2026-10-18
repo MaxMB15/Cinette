@@ -122,6 +122,7 @@ jobs:
           set -o pipefail
           . scripts/android-env.sh
           echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+          echo "CLANG_PATH=$CLANG_PATH"
           echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=$BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi"
           ls "$LIBCLANG_PATH"/libclang*
           cargo build --locked -vv -p libmpv2-sys --target armv7-linux-androideabi 2>&1 | grep -vE '^\s+(Fresh|Compiling)' | tail -40
