@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+#[cfg(desktop)]
 use std::time::Duration;
 
 use mvp_core::http::origin_for_log;
@@ -34,6 +35,7 @@ pub const REFUSED: &str = "refused";
 
 /// The longest a probe runs. ffmpeg gives up on its own after 10 s without
 /// data, so this only stops one that keeps trickling.
+#[cfg(desktop)]
 const PROBE_LIMIT: Duration = Duration::from_secs(30);
 
 /// What the app learned about providers while it runs.
@@ -163,11 +165,9 @@ async fn check_hls(
         let check = if !is_hls_url(url) && !(i == source && source_is_hls) {
             HlsCheck::NotHls
         } else if playing {
-            let container = if i == source && source_is_hls {
-                codecs.container
-            } else {
-                Container::HlsTs
-            };
+            // mpv calls all HLS `hls`, so its segments are taken to be
+            // MPEG-TS, as Xtream's are.
+            let container = Container::HlsTs;
             let cors = lock(&streams.cors)
                 .get(&origin_for_log(url))
                 .copied()
@@ -209,27 +209,28 @@ fn format_of(probed: &Probed) -> StreamFormat {
 }
 
 /// Runs the bundled ffmpeg on `url`. Its output names the URL, so none of
-/// it is logged.
-#[cfg(desktop)]
+/// it is logged. Phones and tablets have no ffmpeg to probe with, so only
+/// what mpv says while it plays is known there.
 async fn probe<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<Probed, ProbeError> {
-    use tauri_plugin_shell::ShellExt;
-    let command = app
-        .shell()
-        .sidecar(crate::downloads::FFMPEG_SIDECAR)
-        .map_err(|_| ProbeError::Unreachable)?
-        .args(mvp_core::streams::probe::args(url));
-    let output = tokio::time::timeout(PROBE_LIMIT, command.output())
-        .await
-        .map_err(|_| ProbeError::Unreachable)?
-        .map_err(|_| ProbeError::Unreachable)?;
-    mvp_core::streams::probe::parse(&String::from_utf8_lossy(&output.stderr))
-}
-
-/// Phones and tablets have no ffmpeg to probe with, so only what mpv says
-/// while it plays is known there.
-#[cfg(mobile)]
-async fn probe<R: Runtime>(_app: &AppHandle<R>, _url: &str) -> Result<Probed, ProbeError> {
-    Err(ProbeError::Unreachable)
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_shell::ShellExt;
+        let command = app
+            .shell()
+            .sidecar(crate::downloads::FFMPEG_SIDECAR)
+            .map_err(|_| ProbeError::Unreachable)?
+            .args(mvp_core::streams::probe::args(url));
+        let output = tokio::time::timeout(PROBE_LIMIT, command.output())
+            .await
+            .map_err(|_| ProbeError::Unreachable)?
+            .map_err(|_| ProbeError::Unreachable)?;
+        mvp_core::streams::probe::parse(&String::from_utf8_lossy(&output.stderr))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = (app, url);
+        Err(ProbeError::Unreachable)
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

@@ -558,21 +558,21 @@ fn the_probe_names_its_own_urls_container_and_extensions_name_the_rest() {
         "http://s/no-extension",
     ]);
     let checks = vec![HlsCheck::NotHls; urls.len()];
-    let containers: Vec<Container> = formats_for(&urls, codecs(Container::Mp4), 0, &checks)
+    let containers: Vec<Container> = formats_for(&urls, codecs(Container::Other), 0, &checks)
         .into_iter()
         .map(|(_, f)| f.container)
         .collect();
     assert_eq!(
         containers,
         vec![
-            Container::Mp4,
+            Container::Other,
             Container::Mkv,
             Container::Mp4,
             Container::Mp4,
             Container::Mp4,
             Container::Ts,
-            Container::Mp4,
-            Container::Mp4,
+            Container::Other,
+            Container::Other,
         ]
     );
     // The probe's container wins over its URL's extension.

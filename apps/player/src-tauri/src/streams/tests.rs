@@ -9,6 +9,7 @@ use crate::downloads::test_support::video_url;
 use crate::test_support::TestApp;
 use mvp_core::http::test_server::{password, route, serve_once, serve_routes};
 use mvp_core::streams::format::{AudioCodec, VideoCodec};
+use std::time::Duration;
 use tauri::Manager;
 
 fn channel(id: &str, url: &str, content_type: &str) -> Channel {
@@ -274,4 +275,48 @@ async fn m3u_channels_and_episodes_keep_their_own_url() {
     );
     let result = formats(&app, episode, Some(playing_ts())).await.unwrap();
     assert_eq!(result.sources, vec![0]);
+}
+
+#[tokio::test]
+async fn only_xtream_live_asks_the_panel_for_its_formats() {
+    let app = TestApp::new();
+    let (panel, requests) = serve_routes(vec![route("player_api.php", "200 OK", PANEL_FORMATS)]);
+    let film = channel(
+        "p-movie-9",
+        &format!("{panel}/movie/user/{}/9.mkv", password()),
+        "movie",
+    );
+    add_provider(
+        &app,
+        ProviderType::Xtream,
+        &panel,
+        std::slice::from_ref(&film),
+    );
+    let result = formats(&app, film, Some(playing_ts())).await.unwrap();
+    assert_eq!(result.sources, vec![0]);
+    assert!(requests.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+#[tokio::test]
+async fn probes_the_first_url_when_the_channels_own_isnt_offered() {
+    let app = TestApp::new();
+    let only_hls = r#"{"user_info":{"auth":1,"allowed_output_formats":["m3u8"]}}"#;
+    let (panel, requests) = serve_routes(vec![
+        route("player_api.php", "200 OK", only_hls),
+        route("/7.m3u8", "403 Forbidden", ""),
+    ]);
+    let live = channel(
+        "p-live-7",
+        &format!("{panel}/live/user/{}/7.ts", password()),
+        "live",
+    );
+    add_provider(
+        &app,
+        ProviderType::Xtream,
+        &panel,
+        std::slice::from_ref(&live),
+    );
+    assert_eq!(formats(&app, live, None).await.unwrap_err(), REFUSED);
+    assert!(requests.recv().unwrap().contains("player_api.php"));
+    assert!(requests.recv().unwrap().contains("/7.m3u8"));
 }

@@ -92,6 +92,9 @@ mod with_a_stream {
         assert_eq!(log.lock().unwrap().frames, [[0.0, 0.0, 640.0, 360.0]]);
         wait_until("playback to start", || get_state(&app).playback_started);
         assert_eq!(get_state(&app).current_url.as_deref(), Some(path.as_str()));
+        let info = block_on(mpv_get_media_info(h(), s())).unwrap();
+        assert_eq!(info.file_format.as_deref(), Some("wav"));
+        assert_eq!(info.audio_codec.as_deref(), Some("pcm_s16le"));
 
         block_on(mpv_pause(h(), s())).unwrap();
         assert!(get_state(&app).is_paused);
