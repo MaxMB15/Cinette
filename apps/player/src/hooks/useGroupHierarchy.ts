@@ -15,6 +15,7 @@ const NO_PINNED: PinnedGroup[] = [];
 export const useGroupHierarchy = (providerId: string | null, contentType: string) => {
 	const queryClient = useQueryClient();
 	// No provider is chosen yet, so nothing loads. The key is never fetched.
+	// Stryker disable next-line StringLiteral: no query loads without a provider, so its placeholder id is never seen.
 	const id = providerId ?? "";
 	const hierarchyResult = useQuery({
 		...groupHierarchyQuery(id, contentType),
@@ -26,8 +27,9 @@ export const useGroupHierarchy = (providerId: string | null, contentType: string
 	});
 	const entries = hierarchyResult.data ?? NO_ENTRIES;
 	const pinnedGroups = pinnedResult.data ?? NO_PINNED;
-	// A list that failed to load counts as loaded, with no groups.
-	const loaded = providerId !== null && !hierarchyResult.isPending && !pinnedResult.isPending;
+	// A list that failed to load counts as loaded, with no groups. Without a
+	// provider both stay pending, so nothing counts as loaded.
+	const loaded = !hierarchyResult.isPending && !pinnedResult.isPending;
 
 	const failure = hierarchyResult.error ?? pinnedResult.error;
 	useEffect(() => {

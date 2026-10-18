@@ -282,6 +282,32 @@ describe("useApiKey loading", () => {
 });
 
 describe("useApiKey saving", () => {
+	it("saves for a service that doesn't ask to hear about saves", async () => {
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		const service: ApiKeyService = { ...makeService(), onSaved: undefined };
+		const view = await renderKey(service);
+		type(view, "new-key");
+
+		await save(view);
+
+		expect(service.save).toHaveBeenCalledExactlyOnceWith("new-key");
+		expect(view.result.current.saveStatus).toBe("saved");
+		expect(logged).not.toHaveBeenCalled();
+		logged.mockRestore();
+	});
+
+	it("says the service can't be reached when its check throws before it starts", async () => {
+		const service = makeService("saved-key");
+		service.test.mockImplementation(() => {
+			throw new Error("no network");
+		});
+		const view = await renderKey(service);
+
+		await act(() => view.result.current.test());
+
+		expect(view.result.current.testStatus).toBe("unreachable");
+	});
+
 	it("saves the trimmed key, says Saved for a moment and reports the save", async () => {
 		vi.useFakeTimers();
 		const service = makeService();
