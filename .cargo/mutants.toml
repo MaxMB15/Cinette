@@ -69,6 +69,9 @@ exclude_re = [
     # Browses for Cast receivers on the real network. The tests pass a fake
     # browse to everything around it.
     'src-tauri/src/cast/mod\.rs:.*\bbrowse_network\b',
+    # Asks macOS whether it refuses local network access. On Linux, where
+    # the mutation runs build, it's always false.
+    'src-tauri/src/cast/mod\.rs:.*\blocal_network_denied\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
