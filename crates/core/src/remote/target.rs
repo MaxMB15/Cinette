@@ -1051,5 +1051,8 @@ pub fn validate(command: &Command, state: &PlaybackSnapshot) -> Result<(), Error
     }
 }
 
+// `target/` is ignored as Cargo's build folder, so the tests sit beside
+// this file rather than in `target/tests.rs`.
 #[cfg(test)]
+#[path = "target_tests.rs"]
 mod tests;
