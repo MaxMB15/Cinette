@@ -4,16 +4,27 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { useState } from "react";
 import { render, fireEvent, screen } from "@testing-library/react";
-import { PERF_SWITCH_KEY, countInvokes, withPerfCounters } from "./perf";
-import { createTally } from "./tally";
+import { setInvokeListener } from "@/lib/invoke";
+import { getProviders, getWatchHistory } from "@/lib/tauri";
+import { PERF_SWITCH_KEY, withPerfCounters } from "./perf";
 
 type Internals = { invoke: (cmd: string, ...rest: unknown[]) => Promise<unknown> };
 const win = window as { __TAURI_INTERNALS__?: Internals };
+
+/**
+ * Sets up the object Tauri's webview defines, whose `invoke` can't be
+ * written or redefined.
+ */
+const defineTauriInternals = (invoke: Internals["invoke"]) => {
+	const internals = Object.defineProperty({}, "invoke", { value: invoke }) as Internals;
+	Object.defineProperty(window, "__TAURI_INTERNALS__", { value: internals, configurable: true });
+};
 
 afterEach(() => {
 	localStorage.clear();
 	delete window.cinettePerf;
 	delete win.__TAURI_INTERNALS__;
+	setInvokeListener(null);
 	vi.restoreAllMocks();
 });
 
@@ -26,28 +37,6 @@ const renderWithCounters = () => {
 	const container = document.body.appendChild(document.createElement("div"));
 	render(<>{withPerfCounters(<Clicker />, container)}</>, { container });
 };
-
-describe("countInvokes", () => {
-	it("counts each command and passes the call through", async () => {
-		const original = vi.fn(async (cmd: string) => `answer to ${cmd}`);
-		const target: Internals = { invoke: original };
-		const tally = createTally();
-		countInvokes(target, tally);
-
-		await expect(target.invoke("get_providers", { a: 1 }, { headers: {} })).resolves.toBe(
-			"answer to get_providers"
-		);
-		await target.invoke("get_providers");
-		await target.invoke("get_all_channels");
-
-		expect(original).toHaveBeenNthCalledWith(1, "get_providers", { a: 1 }, { headers: {} });
-		expect(original.mock.contexts[0]).toBe(target);
-		expect(tally.entries()).toEqual([
-			["get_providers", 2],
-			["get_all_channels", 1],
-		]);
-	});
-});
 
 describe("withPerfCounters", () => {
 	it("reads its switch from the cinette-perf key", () => {
@@ -64,10 +53,11 @@ describe("withPerfCounters", () => {
 
 	it("counts renders and backend calls while the switch is on", async () => {
 		localStorage.setItem(PERF_SWITCH_KEY, "1");
-		win.__TAURI_INTERNALS__ = { invoke: async () => null };
+		const backend = vi.fn(async () => []);
+		defineTauriInternals(backend);
 		renderWithCounters();
 		const perf = window.cinettePerf!;
-		await win.__TAURI_INTERNALS__.invoke("get_watch_history");
+		await getWatchHistory(20);
 		expect(perf.report()).toEqual({
 			commits: 1,
 			renders: { Clicker: 1 },
@@ -76,12 +66,27 @@ describe("withPerfCounters", () => {
 
 		perf.reset();
 		fireEvent.click(screen.getByRole("button"));
-		await win.__TAURI_INTERNALS__.invoke("get_providers");
+		await getProviders();
+		await getProviders();
 		expect(perf.report()).toEqual({
 			commits: 1,
 			renders: { Clicker: 1 },
-			invokes: { get_providers: 1 },
+			invokes: { get_providers: 2 },
 		});
+		expect(backend).toHaveBeenCalledTimes(3);
+	});
+
+	it("renders and counts with Tauri's read-only invoke", async () => {
+		localStorage.setItem(PERF_SWITCH_KEY, "1");
+		const backend = vi.fn(async () => [{ id: "p1" }]);
+		defineTauriInternals(backend);
+		renderWithCounters();
+		expect(screen.getByRole("button")).toHaveTextContent("clicked 0");
+
+		await expect(getProviders()).resolves.toEqual([{ id: "p1" }]);
+		expect(win.__TAURI_INTERNALS__!.invoke).toBe(backend);
+		expect(backend).toHaveBeenCalledWith("get_providers", {}, undefined);
+		expect(window.cinettePerf!.report().invokes).toEqual({ get_providers: 1 });
 	});
 
 	it("prints the report", () => {

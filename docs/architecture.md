@@ -39,7 +39,8 @@ Cinette/
 - `useMpv` polls the player state from Rust every second, and again as soon as the
   video stops or starts moving. It also listens for `mpv://` events such as
   buffering and reconnecting.
-- `lib/tauri.ts` is the only file that calls `invoke()`. Player commands use the
+- `lib/tauri.ts` is the only file that calls `invoke()`, through `lib/invoke.ts`,
+  where a dev build counts the calls. Player commands use the
   `plugin:mpv|<command>` namespace; everything else uses the bare command name.
 - Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 4.
   There is no Tailwind config file. The theme and the custom utilities are in
