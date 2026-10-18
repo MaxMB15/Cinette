@@ -1285,6 +1285,26 @@ fn a_controller_that_got_in_has_no_deadline() {
 }
 
 #[test]
+fn a_position_or_duration_that_isnt_a_number_goes_out_as_zero() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    for (id, position, duration, sent) in [
+        ("movie-1", f64::NAN, f64::INFINITY, (0.0, 0.0)),
+        ("movie-2", f64::NEG_INFINITY, f64::NAN, (0.0, 0.0)),
+        ("movie-3", 12.5, 3600.0, (12.5, 3600.0)),
+    ] {
+        net.set_state(PlaybackSnapshot {
+            position,
+            duration,
+            ..playing(id, 0.0)
+        });
+        let state = net.clients[phone].last_state().unwrap();
+        assert_eq!(state.item.as_ref().unwrap().id, id);
+        assert_eq!((state.position, state.duration), sent);
+    }
+}
+
+#[test]
 fn a_tick_with_nothing_due_does_nothing() {
     let mut net = Net::with_mode(ControlMode::Always);
     net.connect("Phone");

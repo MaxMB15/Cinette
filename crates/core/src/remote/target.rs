@@ -744,8 +744,13 @@ impl Target {
 
     /// The player's state, whenever it's read. The target sends it on when
     /// something changed, when the position moved more than playing would
-    /// explain, and every [`STATE_REFRESH`] while playing.
-    pub fn set_state(&mut self, state: PlaybackSnapshot, now: Instant) -> Vec<Action> {
+    /// explain, and every [`STATE_REFRESH`] while playing. A position or
+    /// duration that isn't a finite number goes out as 0.
+    pub fn set_state(&mut self, mut state: PlaybackSnapshot, now: Instant) -> Vec<Action> {
+        // JSON has no NaN or infinity. They'd go out as null, and no
+        // controller would read the state.
+        state.position = finite_or_zero(state.position);
+        state.duration = finite_or_zero(state.duration);
         let changed = {
             let mut old = self.state.clone();
             old.position = state.position;
@@ -958,6 +963,15 @@ fn session_info(session: &Session) -> SessionInfo {
         name: session.peer.name.clone(),
         device_type: session.peer.device_type,
         connected: session.conn.is_some(),
+    }
+}
+
+/// A number for a state, which JSON can carry.
+fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
     }
 }
 
