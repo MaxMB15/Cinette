@@ -7,7 +7,7 @@
 use super::*;
 use crate::remote::test_client::{connect, Client, WAIT};
 use mvp_core::remote::controller::Event;
-use mvp_core::remote::message::{CloseReason, PlaybackStatus};
+use mvp_core::remote::message::{CloseReason, PlaybackStatus, Track};
 use mvp_core::remote::settings::ControlMode;
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -25,6 +25,15 @@ enum Seen {
 struct FakeHost {
     seen: mpsc::UnboundedSender<Seen>,
     catalog_calls: Mutex<Vec<CatalogQuery>>,
+    /// While set, catalog queries wait until it's cleared.
+    held: (Mutex<bool>, std::sync::Condvar),
+}
+
+impl FakeHost {
+    fn hold(&self, on: bool) {
+        *self.held.0.lock().unwrap() = on;
+        self.held.1.notify_all();
+    }
 }
 
 impl TargetHost for FakeHost {
@@ -47,11 +56,20 @@ impl TargetHost for FakeHost {
         let _ = self.seen.send(Seen::Apply(token, command.clone()));
     }
     fn catalog(&self, query: CatalogQuery) -> CatalogPage {
-        self.catalog_calls.lock().unwrap().push(query);
+        self.catalog_calls.lock().unwrap().push(query.clone());
+        let mut held = self.held.0.lock().unwrap();
+        while *held {
+            held = self.held.1.wait(held).unwrap();
+        }
+        // A search's answer is named after it, so tests can tell answers apart.
+        let name = match &query {
+            CatalogQuery::Search { query, .. } => query.clone(),
+            _ => "News".into(),
+        };
         Ok((
             vec![CatalogItem {
                 id: "live-1".into(),
-                name: "News".into(),
+                name,
                 content_type: "live".into(),
                 group: "UK".into(),
                 ..CatalogItem::default()
@@ -66,6 +84,7 @@ impl TargetHost for FakeHost {
 
 struct Harness {
     handle: TargetHandle,
+    host: Arc<FakeHost>,
     key: DeviceKey,
     seen: mpsc::UnboundedReceiver<Seen>,
 }
@@ -76,12 +95,21 @@ impl Harness {
     }
 
     async fn start_with_timeout(mode: ControlMode, command_timeout: Duration) -> Self {
+        let limits = Limits {
+            command_timeout,
+            per_address: MAX_PER_ADDRESS,
+        };
+        Self::start_with_limits(mode, limits).await
+    }
+
+    async fn start_with_limits(mode: ControlMode, limits: Limits) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let key = DeviceKey::generate();
         let (tx, seen) = mpsc::unbounded_channel();
         let host = Arc::new(FakeHost {
             seen: tx,
             catalog_calls: Mutex::new(Vec::new()),
+            held: (Mutex::new(false), std::sync::Condvar::new()),
         });
         let settings = RemoteSettings {
             remote_control: mode,
@@ -92,11 +120,16 @@ impl Harness {
             key.clone(),
             DeviceType::LinuxPc,
             settings,
-            host,
-            command_timeout,
+            host.clone(),
+            limits,
         )
         .unwrap();
-        let mut harness = Self { handle, key, seen };
+        let mut harness = Self {
+            handle,
+            host,
+            key,
+            seen,
+        };
         let first = harness.next_seen().await;
         assert!(matches!(first, Seen::Advertise(Some(_))), "{first:?}");
         harness
@@ -156,6 +189,7 @@ async fn advertises_the_cores_record_under_the_device_id() {
     let host = Arc::new(FakeHost {
         seen: tx,
         catalog_calls: Mutex::new(Vec::new()),
+        held: (Mutex::new(false), std::sync::Condvar::new()),
     });
     let _handle = start(
         listener,
@@ -690,4 +724,235 @@ async fn one_address_gets_four_connections_at_a_time() {
     broken.write_all(&[0, 3, 1, 2, 3]).await.unwrap();
     assert!(was_closed(&mut broken).await);
     open.push(until_one_stays_open(port).await);
+}
+
+/// Sends a search and returns its request id.
+async fn search(phone: &mut Client) -> u64 {
+    search_for(phone, "news").await
+}
+
+async fn search_for(phone: &mut Client, text: &str) -> u64 {
+    let (id, bytes) = phone
+        .controller
+        .catalog(CatalogQuery::Search {
+            query: text.into(),
+            content_type: None,
+            limit: 10,
+        })
+        .unwrap();
+    phone.write(&bytes).await;
+    id
+}
+
+/// What the target answered request `id` with: a page's item count, or an
+/// error.
+async fn answer_to(phone: &mut Client, id: u64) -> Result<usize, ErrorCode> {
+    phone
+        .wait_for(|e| match e {
+            Event::Page { request, items, .. } if *request == id => Some(Ok(items.len())),
+            Event::Reply { request, result } if *request == id => Some(result.map(|_| 0)),
+            _ => None,
+        })
+        .await
+        .expect("an answer")
+}
+
+#[tokio::test]
+async fn a_connection_gets_one_catalog_answer_at_a_time() {
+    let h = Harness::start(ControlMode::Always).await;
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    h.host.hold(true);
+    let first = search(&mut phone).await;
+    let second = search(&mut phone).await;
+    assert_eq!(
+        answer_to(&mut phone, second).await,
+        Err(ErrorCode::RateLimited)
+    );
+    h.host.hold(false);
+    assert_eq!(answer_to(&mut phone, first).await, Ok(1));
+    // Once it's answered, the next goes ahead.
+    let third = search(&mut phone).await;
+    assert_eq!(answer_to(&mut phone, third).await, Ok(1));
+}
+
+#[tokio::test]
+async fn only_a_few_catalog_answers_are_worked_on_at_once() {
+    // Every phone here comes from 127.0.0.1.
+    let limits = Limits {
+        command_timeout: COMMAND_TIMEOUT,
+        per_address: MAX_CATALOG_JOBS + 1,
+    };
+    let h = Harness::start_with_limits(ControlMode::Always, limits).await;
+    let mut phones = Vec::new();
+    for n in 0..=MAX_CATALOG_JOBS {
+        let mut phone = h.connect(&format!("Phone {n}")).await;
+        phone.connected().await;
+        phones.push(phone);
+    }
+    h.host.hold(true);
+    let mut asked = Vec::new();
+    for phone in &mut phones[..MAX_CATALOG_JOBS] {
+        asked.push(search(phone).await);
+    }
+    // Wait for every job to start before the one too many.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while h.host.catalog_calls.lock().unwrap().len() < MAX_CATALOG_JOBS {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let last = phones.last_mut().unwrap();
+    let extra = search(last).await;
+    assert_eq!(answer_to(last, extra).await, Err(ErrorCode::RateLimited));
+    h.host.hold(false);
+    for (phone, id) in phones.iter_mut().zip(asked) {
+        assert_eq!(answer_to(phone, id).await, Ok(1));
+    }
+}
+
+#[tokio::test]
+async fn an_answer_from_before_a_new_identity_goes_to_no_one() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    h.host.hold(true);
+    let asked = search(&mut phone).await;
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while h.host.catalog_calls.lock().unwrap().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let new_key = DeviceKey::generate();
+    h.handle.reset_identity(new_key.clone());
+    assert_eq!(phone.closed().await, Some(CloseReason::Shutdown));
+    h.wait_for(|s| matches!(s, Seen::Advertise(Some(_))).then_some(()))
+        .await;
+    // The first connection after the reset has the old one's number again.
+    let mut tablet = connect(
+        h.handle.port(),
+        new_key.device_id(),
+        DeviceKey::generate(),
+        "Tablet",
+        None,
+    )
+    .await;
+    tablet.connected().await;
+    h.host.hold(false);
+    // Time for the old answer to come back, and go nowhere.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The old answer was for the same connection number and request id.
+    let own = search_for(&mut tablet, "tablet").await;
+    assert_eq!(own, asked);
+    assert_eq!(answer_to(&mut tablet, own).await, Ok(1));
+    let next = search_for(&mut tablet, "again").await;
+    assert_eq!(answer_to(&mut tablet, next).await, Ok(1));
+    let names: Vec<&str> = tablet
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Page { items, .. } => Some(items[0].name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, ["tablet", "again"], "only its own answers");
+}
+
+#[tokio::test]
+async fn an_answer_to_a_request_from_before_a_new_identity_answers_nothing() {
+    let mut h = Harness::start(ControlMode::Ask).await;
+    let mut phone = h.connect("Phone").await;
+    phone.pending().await;
+    let old = h
+        .wait_for(|s| match s {
+            Seen::Consent(r, _) => Some(*r),
+            _ => None,
+        })
+        .await;
+    let new_key = DeviceKey::generate();
+    h.handle.reset_identity(new_key.clone());
+    let hidden = h
+        .wait_for(|s| match s {
+            Seen::Hidden(r) => Some(*r),
+            _ => None,
+        })
+        .await;
+    assert_eq!(hidden, old, "the old dialog goes under its own id");
+    let mut tablet = connect(
+        h.handle.port(),
+        new_key.device_id(),
+        DeviceKey::generate(),
+        "Tablet",
+        None,
+    )
+    .await;
+    tablet.pending().await;
+    let new = h
+        .wait_for(|s| match s {
+            Seen::Consent(r, _) => Some(*r),
+            _ => None,
+        })
+        .await;
+    assert_ne!(new, old);
+    // A click on the old dialog that comes late.
+    h.handle.answer(old, Answer::Allow);
+    h.handle.answer(new, Answer::Deny);
+    assert_eq!(tablet.closed().await, Some(CloseReason::Denied));
+}
+
+#[test]
+fn request_ids_carry_the_epoch() {
+    assert_eq!(app_request(0, 7), 7);
+    assert_eq!(app_request(2, 7), (2 << 32) | 7);
+    assert_eq!(core_request(2, app_request(2, 7)), Some(7));
+    assert_eq!(core_request(1, app_request(2, 7)), None);
+    assert_eq!(core_request(0, 7), Some(7));
+    assert_eq!(app_request(1, u64::MAX), (1 << 32) | u64::from(u32::MAX));
+}
+
+#[test]
+fn an_ipv6_slash_64_counts_as_one_address() {
+    let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+    let b: IpAddr = "2001:db8:1:2:bbbb::9".parse().unwrap();
+    let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+    assert_eq!(address_group(a), address_group(b));
+    assert_ne!(address_group(a), address_group(other));
+    let v4: IpAddr = "192.0.2.7".parse().unwrap();
+    assert_eq!(address_group(v4), v4);
+    let mapped: IpAddr = "::ffff:192.0.2.7".parse().unwrap();
+    assert_eq!(address_group(mapped), v4);
+}
+
+#[tokio::test]
+async fn a_controller_that_stops_reading_is_let_go() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    h.wait_for(|s| match s {
+        Seen::Sessions(list) if list == &[("Phone".to_owned(), true)] => Some(()),
+        _ => None,
+    })
+    .await;
+    // The phone reads nothing more, so states pile up: first in the
+    // socket's buffers, then in the queue, which then gives up.
+    let tracks: Vec<Track> = (0..400)
+        .map(|n| Track {
+            id: format!("t{n}"),
+            label: "x".repeat(100),
+            language: None,
+        })
+        .collect();
+    for position in 0..3000 {
+        h.handle.set_state(PlaybackSnapshot {
+            // Each one a jump, so the core sends it.
+            position: f64::from(position) * 100.0,
+            subtitles: tracks.clone(),
+            ..playing("live-1")
+        });
+    }
+    h.wait_for(|s| match s {
+        Seen::Sessions(list) if list == &[("Phone".to_owned(), false)] => Some(()),
+        _ => None,
+    })
+    .await;
+    drop(phone);
 }

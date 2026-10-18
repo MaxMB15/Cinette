@@ -4,9 +4,10 @@
 //! Answers a controller's catalog queries from this device's cache, and
 //! loads a series' episodes from its provider.
 //!
-//! Every item goes through [`CatalogItem::from_channel`], which has no field
-//! for a URL and drops logos that could point at a provider.
+//! Every item goes through [`item`], which has no field for a URL and drops
+//! logos that could point at a provider.
 
+use super::logos::on_a_provider_site;
 use super::target::CatalogPage;
 use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::models::channel::Channel;
@@ -19,27 +20,44 @@ use std::sync::Mutex;
 /// here they're only the ones already cached.
 pub fn answer(cache: &CacheStore, query: CatalogQuery) -> CatalogPage {
     match query {
-        CatalogQuery::Episodes { series_id } => {
+        CatalogQuery::Episodes {
+            series_id,
+            cursor,
+            limit,
+        } => {
             let episodes = cache.get_series_episodes(&series_id).map_err(failed)?;
-            episode_page(cache, &episodes)
+            episode_page(cache, &episodes, cursor, limit)
         }
         query => {
-            let hosts = hosts(cache)?;
             let channels = cache.get_all_channels().map_err(failed)?;
+            let hosts = hosts(cache, &channels)?;
             answer_from(&channels, &hosts, query)
         }
     }
 }
 
-/// The page that answers an episodes query with `episodes`.
-pub fn episode_page(cache: &CacheStore, episodes: &[Channel]) -> CatalogPage {
-    let hosts = hosts(cache)?;
-    let page = episodes
+/// The page of `episodes` from `cursor`, the id of its first episode.
+pub fn episode_page(
+    cache: &CacheStore,
+    episodes: &[Channel],
+    cursor: Option<String>,
+    limit: u32,
+) -> CatalogPage {
+    let hosts = hosts(cache, episodes)?;
+    let start = match cursor {
+        None => 0,
+        Some(id) => episodes
+            .iter()
+            .position(|e| e.id == id)
+            .ok_or(ErrorCode::NotFound)?,
+    };
+    let end = (start + page_size(limit)).min(episodes.len());
+    let page = episodes[start..end]
         .iter()
-        .take(MAX_PAGE)
-        .map(|c| CatalogItem::from_channel(c, &hosts))
+        .map(|c| item(c, &hosts))
         .collect();
-    Ok((page, None))
+    let next = episodes.get(end).map(|e| e.id.clone());
+    Ok((page, next))
 }
 
 /// The episodes of `series_id`, loaded the way the series list loads them
@@ -52,17 +70,28 @@ pub async fn episodes(
     let (series, cached) = {
         let cache = cache.lock().map_err(|_| ErrorCode::Failed)?;
         let series = cache.get_channel_by_id(series_id).map_err(failed)?;
-        (series, cache.get_series_episodes(series_id).map_err(failed)?)
+        (
+            series,
+            cache.get_series_episodes(series_id).map_err(failed)?,
+        )
     };
-    let from_provider = series.is_some_and(|s| s.url.starts_with("xtream://series/"));
-    if !from_provider {
+    // A downloaded series can keep its episodes after its channel went.
+    let Some(series) = series else {
+        return if cached.is_empty() {
+            Err(ErrorCode::NotFound)
+        } else {
+            Ok(cached)
+        };
+    };
+    if !series.url.starts_with("xtream://series/") {
         return Ok(cached);
     }
     match crate::commands::fetch_series_episodes(cache, series_id).await {
         Ok(loaded) if !loaded.is_empty() => Ok(loaded),
         Ok(_) => Ok(cached),
         Err(e) => {
-            tracing::warn!("[remote] couldn't load the episodes of {series_id}: {e}");
+            // The id came from the controller, so it's quoted.
+            tracing::warn!("[remote] couldn't load the episodes of {series_id:?}: {e}");
             if cached.is_empty() {
                 Err(ErrorCode::Failed)
             } else {
@@ -77,15 +106,42 @@ fn failed(e: CacheError) -> ErrorCode {
     ErrorCode::Failed
 }
 
-/// The hosts of this device's providers, which no logo may point at.
-fn hosts(cache: &CacheStore) -> Result<Vec<String>, ErrorCode> {
+/// A limit kept between one and a page.
+fn page_size(limit: u32) -> usize {
+    (limit as usize).clamp(1, MAX_PAGE)
+}
+
+/// The hosts no logo may be on: those of this device's providers, their
+/// guides, and every stream in `channels`. A provider often keeps its logos
+/// next to its streams, on a host its playlist's address doesn't name.
+pub(crate) fn hosts(cache: &CacheStore, channels: &[Channel]) -> Result<Vec<String>, ErrorCode> {
     let providers = cache.get_providers().map_err(failed)?;
-    Ok(providers
+    let servers = providers
         .iter()
         .flat_map(|p| [Some(p.url.as_str()), p.epg_url.as_deref()])
-        .flatten()
-        .filter_map(provider_host)
-        .collect())
+        .flatten();
+    let streams = channels
+        .iter()
+        .flat_map(|c| std::iter::once(c.url.as_str()).chain(c.sources.iter().map(String::as_str)));
+    let mut hosts: Vec<String> = servers.chain(streams).filter_map(provider_host).collect();
+    hosts.sort_unstable();
+    hosts.dedup();
+    Ok(hosts)
+}
+
+/// `channel` as a controller sees it. The core drops a logo on one of
+/// `hosts`; this also drops one elsewhere on the same site, such as
+/// `logos.panel.example` next to `panel.example`.
+pub(crate) fn item(channel: &Channel, hosts: &[String]) -> CatalogItem {
+    let mut item = CatalogItem::from_channel(channel, hosts);
+    if item
+        .logo
+        .as_deref()
+        .is_some_and(|logo| on_a_provider_site(logo, hosts))
+    {
+        item.logo = None;
+    }
+    item
 }
 
 /// The answer from a list of channels, in the order the cache gives them.
@@ -94,7 +150,7 @@ pub(crate) fn answer_from(
     hosts: &[String],
     query: CatalogQuery,
 ) -> CatalogPage {
-    let limit = |limit: u32| (limit as usize).clamp(1, MAX_PAGE);
+    let limit = page_size;
     match query {
         CatalogQuery::Groups {
             content_type,
@@ -151,7 +207,7 @@ pub(crate) fn answer_from(
             let end = (start + limit(wanted)).min(in_group.len());
             let page = in_group[start..end]
                 .iter()
-                .map(|c| CatalogItem::from_channel(c, hosts))
+                .map(|c| item(c, hosts))
                 .collect();
             let next = in_group.get(end).map(|c| c.id.clone());
             Ok((page, next))
@@ -168,7 +224,7 @@ pub(crate) fn answer_from(
                 .filter(|c| content_type.as_ref().is_none_or(|t| c.content_type == *t))
                 .filter(|c| c.name.to_lowercase().contains(&query))
                 .take(limit(wanted))
-                .map(|c| CatalogItem::from_channel(c, hosts))
+                .map(|c| item(c, hosts))
                 .collect();
             Ok((page, None))
         }

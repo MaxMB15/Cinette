@@ -14,7 +14,7 @@
 //! The app's host does that through Tauri; tests use a fake one.
 
 use super::clock;
-use super::conn::{self, Read, Writer};
+use super::conn::{self, Backlogged, Read, Writer};
 use crate::discovery::{Registration, Txt};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::consent::{Answer, RequestId};
@@ -25,7 +25,7 @@ use mvp_core::remote::target::{
     Action, ConsentPrompt, DiscoveryRecord, SessionInfo, Target, SERVICE_TYPE,
 };
 use mvp_core::remote::ConnId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -36,8 +36,16 @@ use tokio::sync::{mpsc, oneshot};
 /// hears `failed`.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// The most connections one address may have open, so one device can't
-/// take every slot the core has.
+/// take every slot the core has. All of an IPv6 /64 counts as one address.
 const MAX_PER_ADDRESS: usize = 4;
+/// The most catalog queries answered at once, over all connections. Each
+/// takes a blocking thread, and an episodes query asks the provider.
+const MAX_CATALOG_JOBS: usize = 4;
+
+/// One run of the core [`Target`]. A new identity starts a new one, whose
+/// connection and request numbers start again, so anything still on its way
+/// from the old one is told apart by this.
+type Epoch = u64;
 /// The longest the task sleeps without looking at the clock. Timers don't
 /// count time asleep, so after a wake this is how soon the deadlines that
 /// passed during the sleep are seen.
@@ -73,7 +81,7 @@ enum Input {
     ResetIdentity(DeviceKey),
     State(Box<PlaybackSnapshot>),
     Finished(u64, Result<(), ErrorCode>),
-    CatalogDone(ConnId, u64, CatalogPage),
+    CatalogDone(Epoch, ConnId, u64, CatalogPage),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
     Shutdown(oneshot::Sender<()>),
 }
@@ -168,17 +176,21 @@ pub fn start(
     settings: RemoteSettings,
     host: Arc<dyn TargetHost>,
 ) -> std::io::Result<TargetHandle> {
-    start_with(listener, key, device_type, settings, host, COMMAND_TIMEOUT)
+    let limits = Limits {
+        command_timeout: COMMAND_TIMEOUT,
+        per_address: MAX_PER_ADDRESS,
+    };
+    start_with(listener, key, device_type, settings, host, limits)
 }
 
-/// [`start`], with the time the player has for each command.
+/// [`start`], with other limits.
 fn start_with(
     listener: TcpListener,
     key: DeviceKey,
     device_type: DeviceType,
     settings: RemoteSettings,
     host: Arc<dyn TargetHost>,
-    command_timeout: Duration,
+    limits: Limits,
 ) -> std::io::Result<TargetHandle> {
     let port = listener.local_addr()?.port();
     let (inbox, rx) = mpsc::unbounded_channel();
@@ -210,12 +222,14 @@ fn start_with(
         host,
         port,
         inbox: inbox.clone(),
+        epoch: 0,
         writers: HashMap::new(),
         peers: HashMap::new(),
+        catalog_jobs: HashSet::new(),
         reads,
         pending: HashMap::new(),
         next_token: 0,
-        command_timeout,
+        limits,
     };
     tokio::spawn(task.run(rx, read_rx, accept));
     Ok(TargetHandle { inbox, port })
@@ -234,21 +248,34 @@ struct Task {
     host: Arc<dyn TargetHost>,
     port: u16,
     inbox: mpsc::UnboundedSender<Input>,
+    epoch: Epoch,
     writers: HashMap<ConnId, Writer>,
     /// Where each open connection comes from.
     peers: HashMap<ConnId, IpAddr>,
-    reads: mpsc::UnboundedSender<(ConnId, Read)>,
+    /// The connections with a catalog query being answered, which may be
+    /// from an earlier epoch.
+    catalog_jobs: HashSet<(Epoch, ConnId)>,
+    reads: mpsc::UnboundedSender<((Epoch, ConnId), Read)>,
     /// Commands the player hasn't finished, by token.
     pending: HashMap<u64, Pending>,
     next_token: u64,
+    limits: Limits,
+}
+
+/// What [`start`] sets and tests change.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    /// The time the player has for each command.
     command_timeout: Duration,
+    /// See [`MAX_PER_ADDRESS`].
+    per_address: usize,
 }
 
 impl Task {
     async fn run(
         mut self,
         mut inbox: mpsc::UnboundedReceiver<Input>,
-        mut reads: mpsc::UnboundedReceiver<(ConnId, Read)>,
+        mut reads: mpsc::UnboundedReceiver<((Epoch, ConnId), Read)>,
         accept: tokio::task::JoinHandle<()>,
     ) {
         self.advertise(self.target.discovery_record());
@@ -275,7 +302,11 @@ impl Task {
                         return;
                     }
                 },
-                Some((conn, read)) = reads.recv() => {
+                Some(((epoch, conn), read)) = reads.recv() => {
+                    if epoch != self.epoch {
+                        // A connection from before a new identity.
+                        continue;
+                    }
                     let now = clock::now();
                     let actions = match read {
                         Read::Frame(frame) => self.target.receive(conn, &frame, now),
@@ -324,17 +355,19 @@ impl Task {
             tracing::info!("[remote] not discoverable; turned a connection away");
             return;
         }
+        let from = address_group(from);
         let open = self.peers.values().filter(|&&ip| ip == from).count();
-        if open >= MAX_PER_ADDRESS {
+        if open >= self.limits.per_address {
             tracing::info!(
-                "[remote] {MAX_PER_ADDRESS} connections from one address; turned one away"
+                "[remote] {} connections from one address; turned one away",
+                self.limits.per_address
             );
             return;
         }
         // The core makes room for this one by closing the oldest that
         // hasn't asked yet; that close comes from its next tick.
         if let Some(conn) = self.target.accept(now) {
-            let writer = conn::spawn(stream, conn, self.reads.clone());
+            let writer = conn::spawn(stream, (self.epoch, conn), self.reads.clone());
             self.writers.insert(conn, writer);
             self.peers.insert(conn, from);
         }
@@ -354,26 +387,40 @@ impl Task {
                 self.accept(stream, from, now);
                 Vec::new()
             }
-            Input::Answer(request, answer) => self.target.answer(request, answer, now),
+            Input::Answer(request, answer) => match core_request(self.epoch, request) {
+                Some(request) => self.target.answer(request, answer, now),
+                // Asked before a new identity.
+                None => Vec::new(),
+            },
             Input::Disconnect(session_id) => self.target.disconnect(&session_id),
             Input::Settings(settings) => self.target.update_settings(settings, now),
             Input::ResetIdentity(key) => {
-                let mut actions = self.target.shutdown();
+                // The old target's goodbyes and hidden dialogs go out under
+                // its own epoch.
+                let goodbye = self.target.shutdown();
+                self.carry_out(goodbye);
                 let settings = self.target.settings().clone();
                 self.key = key;
                 self.target = Target::new(self.key.clone(), self.device_type, settings);
+                self.epoch += 1;
                 self.pending.clear();
-                actions.push(Action::Advertise(self.target.discovery_record()));
-                actions.push(Action::SessionsChanged(Vec::new()));
-                actions
+                vec![
+                    Action::Advertise(self.target.discovery_record()),
+                    Action::SessionsChanged(Vec::new()),
+                ]
             }
             Input::State(state) => self.target.set_state(*state, now),
             Input::Finished(token, result) => {
                 self.finish(token, result);
                 Vec::new()
             }
-            Input::CatalogDone(conn, request, page) => {
-                self.target.finish_catalog(conn, request, page)
+            Input::CatalogDone(epoch, conn, request, page) => {
+                self.catalog_jobs.remove(&(epoch, conn));
+                if epoch == self.epoch {
+                    self.target.finish_catalog(conn, request, page)
+                } else {
+                    Vec::new()
+                }
             }
             Input::Sessions(reply) => {
                 let _ = reply.send(self.target.sessions());
@@ -388,8 +435,13 @@ impl Task {
         for action in actions {
             match action {
                 Action::Send { conn, bytes } => {
-                    if let Some(writer) = self.writers.get(&conn) {
-                        let _ = writer.send(bytes);
+                    let sent = self.writers.get(&conn).map(|w| w.send(bytes));
+                    if sent == Some(Err(Backlogged)) {
+                        tracing::info!("[remote] a controller reads too slowly; closing it");
+                        self.writers.remove(&conn);
+                        self.peers.remove(&conn);
+                        let actions = self.target.disconnected(conn, clock::now());
+                        self.carry_out(actions);
                     }
                 }
                 Action::Close { conn } => {
@@ -398,8 +450,13 @@ impl Task {
                     self.peers.remove(&conn);
                     self.pending.retain(|_, p| p.conn != conn);
                 }
-                Action::ShowConsent(prompt) => self.host.show_consent(&prompt),
-                Action::HideConsent(request) => self.host.hide_consent(request),
+                Action::ShowConsent(prompt) => self.host.show_consent(&ConsentPrompt {
+                    request: app_request(self.epoch, prompt.request),
+                    ..prompt
+                }),
+                Action::HideConsent(request) => {
+                    self.host.hide_consent(app_request(self.epoch, request))
+                }
                 Action::SessionsChanged(sessions) => self.host.sessions_changed(&sessions),
                 Action::Apply {
                     conn,
@@ -413,7 +470,7 @@ impl Task {
                         Pending {
                             conn,
                             request,
-                            deadline: clock::now() + self.command_timeout,
+                            deadline: clock::now() + self.limits.command_timeout,
                         },
                     );
                     self.host.apply(token, &command);
@@ -423,11 +480,23 @@ impl Task {
                     request,
                     query,
                 } => {
+                    let job = (self.epoch, conn);
+                    if self.catalog_jobs.contains(&job)
+                        || self.catalog_jobs.len() >= MAX_CATALOG_JOBS
+                    {
+                        let actions =
+                            self.target
+                                .finish_catalog(conn, request, Err(ErrorCode::RateLimited));
+                        self.carry_out(actions);
+                        continue;
+                    }
+                    self.catalog_jobs.insert(job);
                     let host = self.host.clone();
                     let inbox = self.inbox.clone();
+                    let epoch = self.epoch;
                     tokio::task::spawn_blocking(move || {
                         let page = host.catalog(query);
-                        let _ = inbox.send(Input::CatalogDone(conn, request, page));
+                        let _ = inbox.send(Input::CatalogDone(epoch, conn, request, page));
                     });
                 }
                 Action::Advertise(record) => self.advertise(record),
@@ -438,6 +507,33 @@ impl Task {
     fn advertise(&self, record: Option<DiscoveryRecord>) {
         self.host
             .advertise(record.map(|r| registration(r, &self.key, self.port)));
+    }
+}
+
+/// The id the webview knows a consent request by: the core's, with the
+/// epoch on top, so an answer from before a new identity can't answer a
+/// request of the new one.
+fn app_request(epoch: Epoch, request: RequestId) -> RequestId {
+    (epoch << 32) | (request & u64::from(u32::MAX))
+}
+
+/// The core's id for a request the webview names, if it's from `epoch`.
+fn core_request(epoch: Epoch, request: RequestId) -> Option<RequestId> {
+    (request >> 32 == epoch).then_some(request & u64::from(u32::MAX))
+}
+
+/// What the per-address limit counts as one address: an IPv4 address, or
+/// the /64 an IPv6 address is in, since one host can take any address in it.
+fn address_group(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
     }
 }
 

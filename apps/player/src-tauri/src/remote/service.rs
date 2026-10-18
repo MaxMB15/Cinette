@@ -8,6 +8,7 @@ use super::target::{self, CatalogPage, TargetHandle, TargetHost};
 use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
 use crate::discovery::{self, Advertisement, Registration};
+use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
@@ -15,10 +16,10 @@ use mvp_core::remote::message::{Command, DeviceType, ErrorCode};
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use serde::Serialize;
-use mvp_core::models::channel::Channel;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
@@ -33,6 +34,7 @@ pub struct RemoteService {
     pub(crate) handle: TargetHandle,
     key_dir: PathBuf,
     state: Mutex<Saved>,
+    resetting: Mutex<()>,
 }
 
 struct Saved {
@@ -74,6 +76,8 @@ impl RemoteService {
 
     /// Makes and saves a new key, so a new device id. Every session ends.
     pub fn reset_identity(&self) -> Result<DeviceId, String> {
+        // One reset at a time, so the saved key and the running one match.
+        let _one = lock(&self.resetting);
         let key = DeviceKey::generate();
         identity::save(&self.key_dir, &key).map_err(|e| e.to_string())?;
         let id = key.device_id();
@@ -133,6 +137,11 @@ pub struct CommandEvent<'a> {
 
 /// How many series' episodes the target keeps for loads, newest last.
 const REMEMBERED_SERIES: usize = 4;
+/// How long a series' episodes are answered from what was loaded before
+/// the provider is asked again.
+const FRESH_FOR: Duration = Duration::from_secs(60);
+/// The shortest time between two consent requests that raise the window.
+const RAISE_EVERY: Duration = Duration::from_secs(30);
 
 /// Puts a record on the network, or doesn't.
 type Advertiser = Box<dyn Fn(&Registration) -> Option<Advertisement> + Send + Sync>;
@@ -141,15 +150,42 @@ struct TauriHost<R: Runtime> {
     app: AppHandle<R>,
     advertiser: Advertiser,
     advertisement: Mutex<Option<Advertisement>>,
-    /// The episodes of the series controllers opened last, by series id.
-    episodes: Mutex<VecDeque<(String, Vec<Channel>)>>,
+    /// The episodes of the series controllers opened last, by series id,
+    /// with when they were loaded.
+    episodes: Mutex<VecDeque<Remembered>>,
+    /// When a consent request last brought the window up.
+    raised: Mutex<Option<Instant>>,
+}
+
+struct Remembered {
+    series_id: String,
+    loaded: Instant,
+    episodes: Vec<Channel>,
 }
 
 impl<R: Runtime> TauriHost<R> {
+    /// The episodes of `series_id` if they were loaded in the last
+    /// [`FRESH_FOR`].
+    fn fresh(&self, series_id: &str) -> Option<Vec<Channel>> {
+        lock(&self.episodes)
+            .iter()
+            .find(|r| r.series_id == series_id && r.loaded.elapsed() < FRESH_FOR)
+            .map(|r| r.episodes.clone())
+    }
+
     fn remember(&self, series_id: String, episodes: Vec<Channel>) {
         let mut remembered = lock(&self.episodes);
-        remembered.retain(|(id, _)| *id != series_id);
-        remembered.push_back((series_id, episodes));
+        // A series kept from earlier keeps its time, so it goes stale.
+        let loaded = remembered
+            .iter()
+            .find(|r| r.series_id == series_id && r.loaded.elapsed() < FRESH_FOR)
+            .map_or_else(Instant::now, |r| r.loaded);
+        remembered.retain(|r| r.series_id != series_id);
+        remembered.push_back(Remembered {
+            series_id,
+            loaded,
+            episodes,
+        });
         if remembered.len() > REMEMBERED_SERIES {
             remembered.pop_front();
         }
@@ -170,8 +206,13 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
                 .as_millis() as u64,
         };
         let _ = self.app.emit("remote://consent", event);
-        // A dialog behind other windows would time out unseen.
-        crate::show_main_window(&self.app);
+        // A dialog behind other windows would time out unseen. Requests
+        // can come again and again, so the window comes up only now and then.
+        let mut raised = lock(&self.raised);
+        if raised.is_none_or(|at| at.elapsed() >= RAISE_EVERY) {
+            *raised = Some(Instant::now());
+            crate::show_main_window(&self.app);
+        }
     }
 
     fn hide_consent(&self, request: RequestId) {
@@ -192,7 +233,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             Command::Load { item_id, .. } => remembered
                 .iter()
                 .rev()
-                .flat_map(|(_, episodes)| episodes)
+                .flat_map(|r| &r.episodes)
                 .find(|episode| episode.id == *item_id),
             _ => None,
         };
@@ -206,13 +247,23 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
 
     fn catalog(&self, query: CatalogQuery) -> CatalogPage {
         let state = self.app.state::<AppState>();
-        if let CatalogQuery::Episodes { series_id } = query {
-            // This runs on a blocking thread, which can wait for the provider.
-            let episodes = tokio::runtime::Handle::current()
-                .block_on(super::catalog::episodes(&state.cache, &series_id))?;
+        if let CatalogQuery::Episodes {
+            series_id,
+            cursor,
+            limit,
+        } = query
+        {
+            // A later page, or the same series asked again soon, comes from
+            // what was loaded, so paging doesn't ask the provider each time.
+            let episodes = match self.fresh(&series_id) {
+                Some(episodes) => episodes,
+                // This runs on a blocking thread, which can wait for the provider.
+                None => tokio::runtime::Handle::current()
+                    .block_on(super::catalog::episodes(&state.cache, &series_id))?,
+            };
             let page = {
                 let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
-                super::catalog::episode_page(&cache, &episodes)?
+                super::catalog::episode_page(&cache, &episodes, cursor, limit)?
             };
             self.remember(series_id, episodes);
             return Ok(page);
@@ -276,6 +327,7 @@ fn start_on<R: Runtime>(
         advertiser,
         advertisement: Mutex::new(None),
         episodes: Mutex::new(VecDeque::new()),
+        raised: Mutex::new(None),
     });
     let device_id = key.device_id();
     let handle = target::start(listener, key, DEVICE_TYPE, settings.clone(), host)
@@ -291,6 +343,7 @@ fn start_on<R: Runtime>(
             settings,
             device_id,
         }),
+        resetting: Mutex::new(()),
     });
     Ok(())
 }

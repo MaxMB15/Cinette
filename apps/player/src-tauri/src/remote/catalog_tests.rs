@@ -211,6 +211,8 @@ fn answer_reads_the_cache_and_hides_provider_hosts() {
         &cache,
         CatalogQuery::Episodes {
             series_id: "p1-series-9".into(),
+            cursor: None,
+            limit: 100,
         },
     );
     assert_eq!(episodes, Ok((Vec::new(), None)), "nothing cached yet");
@@ -227,6 +229,8 @@ fn episodes_come_from_the_cache() {
         &cache,
         CatalogQuery::Episodes {
             series_id: "p1-series-9".into(),
+            cursor: None,
+            limit: 100,
         },
     )
     .unwrap();
@@ -241,7 +245,9 @@ fn episodes_are_not_answered_from_the_channel_list() {
             &channels(),
             &[],
             CatalogQuery::Episodes {
-                series_id: "x".into()
+                series_id: "x".into(),
+                cursor: None,
+                limit: 100,
             }
         ),
         Err(ErrorCode::Unsupported)
@@ -349,8 +355,22 @@ mod loading_episodes {
         }
         let loaded = episodes(&cache, "p1-series-8").await.unwrap();
         assert_eq!(names(&loaded), ["Cached"]);
-        let unknown = episodes(&cache, "p1-series-404").await.unwrap();
-        assert!(unknown.is_empty());
+        assert_eq!(
+            episodes(&cache, "p1-series-404").await,
+            Err(ErrorCode::NotFound)
+        );
+        {
+            let store = cache.lock().unwrap();
+            store
+                .save_series_episodes("p1-series-gone", &[cached_episode()])
+                .unwrap();
+        }
+        let kept = episodes(&cache, "p1-series-gone").await.unwrap();
+        assert_eq!(
+            names(&kept),
+            ["Cached"],
+            "a downloaded series whose channel went"
+        );
     }
 
     #[test]
@@ -364,9 +384,65 @@ mod loading_episodes {
                 ep
             })
             .collect();
-        let (items, next) = episode_page(&cache, &many).unwrap();
+        let (items, next) = episode_page(&cache, &many, None, 500).unwrap();
         assert_eq!(items.len(), MAX_PAGE);
+        assert_eq!(next.as_deref(), Some("ep100"));
+        let (rest, next) = episode_page(&cache, &many, next, 10).unwrap();
+        let ids: Vec<&str> = rest.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["ep100", "ep101", "ep102"]);
         assert_eq!(next, None);
+        let (two, next) = episode_page(&cache, &many, Some("ep1".into()), 2).unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(next.as_deref(), Some("ep3"));
+        let (one, _) = episode_page(&cache, &many, None, 0).unwrap();
+        assert_eq!(one.len(), 1, "at least one");
+        assert_eq!(
+            episode_page(&cache, &many, Some("gone".into()), 10),
+            Err(ErrorCode::NotFound)
+        );
         assert!(items.iter().all(|i| i.logo.is_none()));
     }
+}
+
+#[test]
+fn no_logo_goes_out_from_the_site_a_stream_comes_from() {
+    use mvp_core::models::playlist::{Provider, ProviderType};
+    let cache = CacheStore::open_in_memory().unwrap();
+    // A playlist kept elsewhere, whose streams and logos are on the panel.
+    cache
+        .upsert_provider(&Provider {
+            id: "p1".into(),
+            name: "Mine".into(),
+            provider_type: ProviderType::M3u,
+            url: "https://lists.example/mine.m3u".into(),
+            username: None,
+            password: None,
+            last_updated: None,
+            channel_count: 0,
+            epg_url: None,
+        })
+        .unwrap();
+    let mut on_panel = channel("p1-live-1", "One", "live", "UK");
+    on_panel.url = "http://live.panel.example:8080/u/p/1.ts".into();
+    on_panel.logo_url = Some("http://img.panel.example/one.png".into());
+    let mut backup = channel("p1-live-2", "Two", "live", "UK");
+    backup.url = "http://plain.example/2.ts".into();
+    backup.sources = vec!["http://backup.mirror.example/2.ts".into()];
+    backup.logo_url = Some("http://mirror.example/two.png".into());
+    let mut elsewhere = channel("p1-live-3", "Three", "live", "UK");
+    elsewhere.logo_url = Some("https://logos.example/three.png".into());
+    cache
+        .save_channels("p1", &[on_panel, backup, elsewhere])
+        .unwrap();
+    let (items, _) = answer(&cache, items_query(None, 10)).unwrap();
+    let logo = |id: &str| {
+        let item = items.iter().find(|i| i.id == id).unwrap();
+        item.logo.clone()
+    };
+    assert_eq!(logo("p1-live-1"), None, "next to its own stream");
+    assert_eq!(logo("p1-live-2"), None, "next to a backup stream");
+    assert_eq!(
+        logo("p1-live-3").as_deref(),
+        Some("https://logos.example/three.png")
+    );
 }
