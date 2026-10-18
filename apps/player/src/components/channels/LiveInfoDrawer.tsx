@@ -4,8 +4,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, TvMinimal, LoaderCircle, Circle, Square, CalendarClock } from "lucide-react";
 import type { Channel, DownloadRecord, EpgProgram } from "@/lib/types";
-import { getEpgProgrammes } from "@/lib/tauri";
+import { useQuery } from "@tanstack/react-query";
 import { formatHHMM } from "@/lib/epg-window";
+import { scheduleQuery, SCHEDULE_STEP } from "@/lib/queries";
 import { isMobilePlatform } from "@/lib/platform";
 import { isRecordingOf, recordingOfProgram } from "@/lib/recordings";
 import { useProviderIds } from "@/hooks/useChannels";
@@ -36,15 +37,23 @@ const formatDuration = (startTime: number, endTime: number): string => {
 export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	const [visible, setVisible] = useState(false);
 	const epgId = channel.tvgId ?? channel.id;
-	// The schedule is kept with the guide id it's for, so a new channel shows
-	// the spinner until its own schedule arrives.
-	const [schedule, setSchedule] = useState<{ epgId: string; programmes: EpgProgram[] } | null>(
-		null
-	);
-	const loading = schedule?.epgId !== epgId;
-	const programmes = schedule && !loading ? schedule.programmes : NO_PROGRAMMES;
+	// 12 hours before the drawer opened through 12 hours after, from the start
+	// of its ten minutes, so opening the same channel again soon reads the cache.
+	const [opened] = useState(() => Math.floor(Date.now() / 1000 / SCHEDULE_STEP) * SCHEDULE_STEP);
+	const schedule = useQuery(scheduleQuery(epgId, opened));
+	// Each channel's schedule has its own query, so a new channel shows the
+	// spinner until its own schedule arrives. One that can't load shows none.
+	const loading = schedule.isPending;
+	const programmes = schedule.data ?? NO_PROGRAMMES;
 	const now = useNow();
-	const [selectedProg, setSelectedProg] = useState<EpgProgram | null>(null);
+	// The program picked in this channel's schedule. Until one is, it's the
+	// one on now.
+	const [picked, setPicked] = useState<{ epgId: string; prog: EpgProgram } | null>(null);
+	const selectedProg =
+		picked?.epgId === epgId
+			? picked.prog
+			: (programmes.find((p) => p.startTime <= now && p.endTime > now) ?? null);
+	const setSelectedProg = (prog: EpgProgram) => setPicked({ epgId, prog });
 	const currentRowRef = useRef<HTMLLIElement | null>(null);
 	const { downloads } = useDownloads();
 	const providerIds = useProviderIds();
@@ -60,29 +69,6 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 		const id = requestAnimationFrame(() => setVisible(true));
 		return () => cancelAnimationFrame(id);
 	}, []);
-
-	// Fetch schedule: 12 hours before now through 12 hours ahead
-	useEffect(() => {
-		let cancelled = false;
-		const nowSec = Math.floor(Date.now() / 1000);
-		const rangeStart = nowSec - 12 * 3600;
-		const rangeEnd = nowSec + 12 * 3600;
-
-		getEpgProgrammes(epgId, rangeStart, rangeEnd)
-			.then((data) => {
-				if (cancelled) return;
-				setSchedule({ epgId, programmes: data });
-				const current = data.find((p) => p.startTime <= nowSec && p.endTime > nowSec);
-				setSelectedProg(current ?? null);
-			})
-			.catch(() => {
-				if (!cancelled) setSchedule({ epgId, programmes: [] });
-			});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [epgId]);
 
 	// Auto-scroll to current programme after programmes load
 	useEffect(() => {

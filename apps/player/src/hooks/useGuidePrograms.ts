@@ -1,31 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
+import { useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { TimeRange } from "@/lib/epg-window";
-import { getEpgForLiveChannels } from "@/lib/tauri";
+import { channelGuideQuery, guideQuery } from "@/lib/queries";
 import type { EpgProgram } from "@/lib/types";
 
 /** Every channel's programs, or only those of the channels with these guide ids. */
 export type GuideChannels = "all" | readonly string[];
-
-/** What has been asked for over one range since the reset key last changed. */
-interface Loads {
-	/** Whether every channel's programs are on their way or in. */
-	all: "no" | "asked" | "loaded";
-	/** The guide ids whose programs are on their way or in. */
-	ids: Set<string>;
-}
-
-/** The loads that have finished over one range since the reset key last changed. */
-interface Landed {
-	range: TimeRange;
-	resetKey: unknown;
-	/** Every channel's load finished. */
-	all: boolean;
-	/** The guide ids whose own load finished. */
-	ids: ReadonlySet<string>;
-}
 
 /** The guide's programs and which channels are still waiting for theirs. */
 export interface GuidePrograms {
@@ -37,8 +20,6 @@ export interface GuidePrograms {
 	 */
 	isPending: (id: string) => boolean;
 }
-
-const nothingAsked = (): Loads => ({ all: "no", ids: new Set() });
 
 /** The programs grouped by guide id, each channel's in the order they came. */
 const byChannel = (programs: EpgProgram[]): Map<string, EpgProgram[]> => {
@@ -52,107 +33,103 @@ const byChannel = (programs: EpgProgram[]): Map<string, EpgProgram[]> => {
 };
 
 /**
- * What `channels` asks for as one string, with each id once and in order. The
- * effect then runs again only when the request changes, not each time the
- * caller builds a new list with the same ids.
+ * What `channels` asks for as one string, with each id once and in order, so
+ * a new list with the same ids is the same request.
  */
 const requestKey = (channels: GuideChannels | null): string | null =>
 	channels === null || channels === "all"
 		? channels
 		: JSON.stringify([...new Set(channels)].sort());
 
+const NO_IDS: string[] = [];
+const EMPTY: ReadonlyMap<string, EpgProgram[]> = new Map();
+// A range that is never loaded, for the queries while there is no range.
+const NO_RANGE: TimeRange = { from: 0, to: 0 };
+
+/**
+ * The programs already loaded for single channels over this range, which
+ * stand in while every channel's programs load.
+ */
+const channelsLoaded = (
+	client: QueryClient,
+	range: TimeRange,
+	version: string
+): EpgProgram[] | undefined => {
+	const prefix = channelGuideQuery(range, version, "").queryKey.slice(0, -1);
+	const found = client
+		.getQueriesData<EpgProgram[]>({ queryKey: prefix })
+		.flatMap(([, data]) => data ?? []);
+	return found.length > 0 ? found : undefined;
+};
+
 /**
  * The guide's programs over `range` by guide id, for `channels`. With null it
  * loads nothing.
  *
- * A list of ids loads only the ones that aren't loaded or on their way for the
- * range, and their answer replaces just those ids, so a new favorite loads only
- * its own programs. "all" loads once for the range, and its answer replaces all
- * the programs. After that a list loads nothing, though while it's on its way a
- * list still loads its own ids rather than wait for it.
+ * "all" loads every channel once for the range. A list of ids loads each id
+ * that isn't cached for the range, in one call for the ids asked for together,
+ * so a new favorite loads only its own programs. A list loads nothing when
+ * every channel's programs are cached for the range, and while that load is
+ * on its way a list still loads its own ids rather than wait for it.
  *
- * A new range or `resetKey`, or a null request, starts over and drops the
- * answers still on their way. The programs stay until the next answer replaces
- * them, so the rows keep showing what they had while the guide loads again.
+ * Answers are cached by range and `resetKey`, so coming back to a tab shows
+ * them again without a call. A new range or `resetKey` loads again, and the
+ * programs stay until its answer replaces them, so the rows keep showing what
+ * they had while the guide loads again.
  */
 export const useGuidePrograms = (
 	range: TimeRange | null,
 	channels: GuideChannels | null,
-	resetKey: unknown
+	resetKey: string | number
 ): GuidePrograms => {
-	const [programs, setPrograms] = useState<ReadonlyMap<string, EpgProgram[]>>(() => new Map());
-	const [landed, setLanded] = useState<Landed | null>(null);
-	const loads = useRef<Loads | null>(null);
 	const key = useMemo(() => requestKey(channels), [channels]);
-	const asked = useMemo(
-		() => (key === null || key === "all" ? key : new Set<string>(JSON.parse(key) as string[])),
+	const ids = useMemo(
+		() => (key === null || key === "all" ? NO_IDS : (JSON.parse(key) as string[])),
 		[key]
 	);
+	const queryClient = useQueryClient();
+	const version = String(resetKey);
+	const at = range ?? NO_RANGE;
 
-	// One record for each range and reset key. An answer counts only while its
-	// record is the current one. This runs before the load below, which then
-	// sees the new record.
-	useEffect(() => {
-		loads.current = nothingAsked();
-		return () => {
-			loads.current = null;
+	// Read on the Favorites tab too, without loading, since every channel's
+	// programs cover the favorites'.
+	const all = useQuery({
+		...guideQuery(at, version),
+		enabled: range !== null && key === "all",
+		select: byChannel,
+		// While it loads, the last range's programs, or else the single
+		// channels' already loaded for this one, keep the rows filled.
+		placeholderData: (previous) => previous ?? channelsLoaded(queryClient, at, version),
+	});
+	const allLoaded = all.isSuccess && !all.isPlaceholderData;
+
+	const perChannel = useQueries({
+		queries: ids.map((id) => ({
+			...channelGuideQuery(at, version, id),
+			enabled: range !== null && !allLoaded,
+			placeholderData: (previous: EpgProgram[] | undefined) => previous,
+		})),
+		combine: (results) => {
+			const programs = new Map<string, EpgProgram[]>();
+			const waiting = new Set<string>();
+			results.forEach((r, i) => {
+				if (r.data && r.data.length > 0) programs.set(ids[i], r.data);
+				if (r.isPending || r.isPlaceholderData) waiting.add(ids[i]);
+			});
+			return { programs, waiting };
+		},
+	});
+
+	if (key === null) return { programs: all.data ?? EMPTY, isPending: () => false };
+	if (key === "all" || allLoaded) {
+		const waiting = key === "all" && !allLoaded && !all.isError;
+		return {
+			programs: all.data ?? EMPTY,
+			isPending: () => waiting,
 		};
-	}, [range, resetKey]);
-
-	useEffect(() => {
-		if (key === null) {
-			// Leaving the guide's tabs forgets what's loaded, and coming back
-			// loads it again.
-			loads.current = nothingAsked();
-			return;
-		}
-		const record = loads.current;
-		if (!range || !record || record.all === "loaded") return;
-		const ids =
-			key === "all"
-				? undefined
-				: (JSON.parse(key) as string[]).filter((id) => !record.ids.has(id));
-		if (ids ? ids.length === 0 : record.all === "asked") return;
-		if (ids) for (const id of ids) record.ids.add(id);
-		else record.all = "asked";
-		const land = () =>
-			setLanded((old) =>
-				!ids
-					? { range, resetKey, all: true, ids: new Set() }
-					: old && old.resetKey === resetKey && old.range === range
-						? { ...old, ids: new Set([...old.ids, ...ids]) }
-						: { range, resetKey, all: false, ids: new Set(ids) }
-			);
-
-		getEpgForLiveChannels(range.from, range.to, ids).then(
-			(progs) => {
-				if (loads.current !== record) return;
-				const found = byChannel(progs);
-				if (ids) {
-					setPrograms((old) => {
-						const next = new Map(old);
-						for (const id of ids) next.delete(id);
-						for (const [id, list] of found) next.set(id, list);
-						return next;
-					});
-				} else {
-					record.all = "loaded";
-					setPrograms(found);
-				}
-				land();
-			},
-			() => {
-				// The next request asks for these again.
-				if (loads.current !== record) return;
-				if (ids) for (const id of ids) record.ids.delete(id);
-				else record.all = "no";
-				land();
-			}
-		);
-	}, [range, key, resetKey]);
-
-	const done = landed && landed.range === range && landed.resetKey === resetKey ? landed : null;
-	const isPending = (id: string): boolean =>
-		asked !== null && !done?.all && !done?.ids.has(id) && (asked === "all" || asked.has(id));
-	return { programs, isPending };
+	}
+	return {
+		programs: perChannel.programs,
+		isPending: (id) => perChannel.waiting.has(id),
+	};
 };

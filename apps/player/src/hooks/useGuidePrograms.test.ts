@@ -7,6 +7,7 @@ import type { TimeRange } from "@/lib/epg-window";
 import type { EpgProgram } from "@/lib/types";
 import { deferred } from "@/test/deferred";
 import { answerFrom } from "@/test/guide-answers";
+import { wrapperFor } from "@/test/query";
 
 vi.mock("@/lib/tauri", () => ({ getEpgForLiveChannels: vi.fn() }));
 
@@ -36,12 +37,13 @@ const guide = [
 interface Props {
 	range: TimeRange | null;
 	channels: GuideChannels | null;
-	resetKey: unknown;
+	resetKey: number;
 }
 
 const renderGuide = (initial: Props) =>
 	renderHook((props: Props) => useGuidePrograms(props.range, props.channels, props.resetKey), {
 		initialProps: initial,
+		wrapper: wrapperFor(),
 	});
 
 /** Lets pending loads reach the hook. */
@@ -68,7 +70,7 @@ describe("useGuidePrograms", () => {
 	it("loads every channel's programs and groups them by guide id", async () => {
 		const { result } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
-		expect(mockLoad).toHaveBeenCalledExactlyOnceWith(1000, 8000, undefined);
+		expect(mockLoad).toHaveBeenCalledExactlyOnceWith(1000, 8000);
 		expect(titles(result.current.programs)).toEqual({
 			"arts.tv": ["Gallery Hour"],
 			"news.tv": ["Noon News", "Weather"],
@@ -95,10 +97,10 @@ describe("useGuidePrograms", () => {
 		expect(result.current.isPending("arts.tv")).toBe(false);
 		await act(async () => news.resolve([]));
 		expect(result.current.isPending("news.tv")).toBe(false);
-		// Every channel's load waits for the rest, but not for news.tv, whose
+		// Every channel's load waits for every channel, even one whose own
 		// answer is in.
 		rerender({ range: evening, channels: "all", resetKey: 1 });
-		expect(result.current.isPending("news.tv")).toBe(false);
+		expect(result.current.isPending("news.tv")).toBe(true);
 		expect(result.current.isPending("arts.tv")).toBe(true);
 		await flush();
 		expect(result.current.isPending("arts.tv")).toBe(false);
@@ -114,15 +116,29 @@ describe("useGuidePrograms", () => {
 		expect(result.current.programs.size).toBe(0);
 
 		rerender({ range: morning, channels: ["news.tv"], resetKey: 1 });
+		await flush();
 		rerender({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 
 		expect(mockLoad.mock.calls).toStrictEqual([
-			[1000, 8000, undefined],
+			[1000, 8000],
 			[1000, 8000, ["news.tv"]],
-			[1000, 8000, undefined],
+			[1000, 8000],
 		]);
 		expect(result.current.programs.size).toBe(3);
+	});
+
+	it("asks for the ids asked for together in one call", async () => {
+		const { result, rerender } = renderGuide({
+			range: morning,
+			channels: ["news.tv"],
+			resetKey: 1,
+		});
+		rerender({ range: morning, channels: ["news.tv", "sport.tv"], resetKey: 1 });
+		await flush();
+
+		expect(mockLoad).toHaveBeenCalledExactlyOnceWith(1000, 8000, ["news.tv", "sport.tv"]);
+		expect(Object.keys(titles(result.current.programs))).toEqual(["news.tv", "sport.tv"]);
 	});
 
 	it("asks for each id once, in order, and not again for a new list of the same ids", async () => {
@@ -168,6 +184,7 @@ describe("useGuidePrograms", () => {
 			channels: ["news.tv"],
 			resetKey: 1,
 		});
+		await flush();
 		rerender({ range: morning, channels: ["news.tv", "sport.tv"], resetKey: 1 });
 		await flush();
 		await act(async () => first.resolve([program("news.tv", "Noon News")]));
@@ -219,7 +236,7 @@ describe("useGuidePrograms", () => {
 		rerender({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 
-		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, undefined);
+		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000);
 		expect(result.current.programs.size).toBe(3);
 	});
 
@@ -234,13 +251,13 @@ describe("useGuidePrograms", () => {
 		await act(async () => all.resolve(guide));
 
 		expect(mockLoad.mock.calls).toStrictEqual([
-			[1000, 8000, undefined],
+			[1000, 8000],
 			[1000, 8000, ["news.tv"]],
 		]);
 		expect(result.current.programs.size).toBe(3);
 	});
 
-	it("keeps the other channels' programs when some load for a new range", async () => {
+	it("shows only the asked-for ids' programs when they load for a new range", async () => {
 		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 		mockLoad.mockImplementation(answerFrom([program("news.tv", "Late News", 5000)]));
@@ -248,11 +265,8 @@ describe("useGuidePrograms", () => {
 		await flush();
 
 		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000, ["arts.tv", "news.tv"]);
-		// The answer replaces the asked-for ids, even one it found nothing for.
-		expect(titles(result.current.programs)).toEqual({
-			"news.tv": ["Late News"],
-			"sport.tv": ["Match Day"],
-		});
+		// Only the asked-for ids, and none for one the answer found nothing for.
+		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Late News"] });
 	});
 
 	it("replaces every program with what every channel's load finds", async () => {
@@ -277,7 +291,7 @@ describe("useGuidePrograms", () => {
 		await flush();
 		await act(async () => first.resolve([program("news.tv", "Old News")]));
 
-		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000, undefined);
+		expect(mockLoad).toHaveBeenLastCalledWith(5000, 12000);
 		expect(titles(result.current.programs)).toEqual({
 			"arts.tv": ["Gallery Hour"],
 			"news.tv": ["Noon News", "Weather"],
@@ -301,19 +315,16 @@ describe("useGuidePrograms", () => {
 		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Late News"] });
 	});
 
-	it("starts over after a request for nothing, and keeps its programs until then", async () => {
-		const later = deferred<EpgProgram[]>();
+	it("shows what it loaded again after a request for nothing, without a call", async () => {
 		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 		rerender({ range: morning, channels: null, resetKey: 1 });
-		mockLoad.mockReturnValueOnce(later.promise);
 		rerender({ range: morning, channels: "all", resetKey: 1 });
 		await flush();
 
-		expect(mockLoad).toHaveBeenCalledTimes(2);
+		expect(mockLoad).toHaveBeenCalledOnce();
+		expect(result.current.isPending("news.tv")).toBe(false);
 		expect(result.current.programs.size).toBe(3);
-		await act(async () => later.resolve([program("news.tv", "Late News")]));
-		expect(titles(result.current.programs)).toEqual({ "news.tv": ["Late News"] });
 	});
 
 	it("drops an answer still on its way after a request for nothing", async () => {
@@ -330,22 +341,22 @@ describe("useGuidePrograms", () => {
 		expect(result.current.programs.size).toBe(0);
 	});
 
-	it("ignores a failure from a load it already dropped", async () => {
+	it("keeps a load on its way through a request for nothing", async () => {
 		const first = deferred<EpgProgram[]>();
-		const second = deferred<EpgProgram[]>();
-		mockLoad.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		mockLoad.mockReturnValueOnce(first.promise);
 		const { result, rerender } = renderGuide({ range: morning, channels: "all", resetKey: 1 });
 		rerender({ range: morning, channels: null, resetKey: 1 });
 		rerender({ range: morning, channels: "all", resetKey: 1 });
-		await act(async () => first.reject(new Error("offline")));
+		await flush();
 		expect(result.current.isPending("news.tv")).toBe(true);
 
-		await act(async () => second.resolve(guide));
+		await act(async () => first.resolve(guide));
+		expect(mockLoad).toHaveBeenCalledOnce();
 		expect(result.current.isPending("news.tv")).toBe(false);
 		expect(result.current.programs.size).toBe(3);
 	});
 
-	it("keeps its programs when a load fails, and asks for those ids again next time", async () => {
+	it("keeps its programs when a load fails, and asks for those ids again with the next guide", async () => {
 		const { result, rerender } = renderGuide({
 			range: morning,
 			channels: ["news.tv"],
@@ -356,11 +367,17 @@ describe("useGuidePrograms", () => {
 		rerender({ range: morning, channels: ["news.tv", "sport.tv"], resetKey: 1 });
 		await flush();
 		expect([...result.current.programs.keys()]).toEqual(["news.tv"]);
+		expect(result.current.isPending("sport.tv")).toBe(false);
 
+		// A new favorite loads only its own programs.
 		rerender({ range: morning, channels: ["news.tv", "sport.tv", "arts.tv"], resetKey: 1 });
 		await flush();
+		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["arts.tv"]);
 
-		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["arts.tv", "sport.tv"]);
+		// The next guide asks for every id again.
+		rerender({ range: morning, channels: ["news.tv", "sport.tv", "arts.tv"], resetKey: 2 });
+		await flush();
+		expect(mockLoad).toHaveBeenLastCalledWith(1000, 8000, ["arts.tv", "news.tv", "sport.tv"]);
 		expect(result.current.programs.size).toBe(3);
 	});
 });

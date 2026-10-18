@@ -572,11 +572,7 @@ describe("ChannelList live rows", () => {
 		await renderList();
 
 		// With no list of guide ids, it loads every channel's programs.
-		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(
-			NOW - 2 * 3600,
-			NOW + 5 * 3600,
-			undefined
-		);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(NOW - 2 * 3600, NOW + 5 * 3600);
 		const newsRow = screen.getByText("News 24").closest(".group") as HTMLElement;
 		expect(within(newsRow).getByTitle("Morning Briefing")).toBeInTheDocument();
 		expect(within(newsRow).getByTitle("Market Watch")).toBeInTheDocument();
@@ -698,8 +694,7 @@ describe("ChannelList live rows", () => {
 		// guide loads one more hour ahead than that.
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
 			NOW - 3 * 3600,
-			NOW + 6 * 3600,
-			undefined
+			NOW + 6 * 3600
 		);
 	});
 
@@ -731,11 +726,7 @@ describe("ChannelList live rows", () => {
 
 		act(() => vi.advanceTimersByTime(30_000));
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
-		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
-			NOW + 3600,
-			NOW + 9 * 3600,
-			undefined
-		);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600);
 	});
 
 	it("doesn't load the guide again when it gets narrower", async () => {
@@ -795,8 +786,7 @@ describe("ChannelList live rows", () => {
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
 		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
 			NOW - 2 * 3600,
-			NOW + 5 * 3600,
-			undefined
+			NOW + 5 * 3600
 		);
 		expect(screen.getByTitle("Morning Briefing")).toBeInTheDocument();
 	});
@@ -920,7 +910,10 @@ describe("ChannelList search", () => {
 		]);
 		await renderList();
 		typeSearch("market");
-		fireEvent.click(await screen.findByRole("button", { name: /Lost Show/ }));
+		// The search waits 300 ms for the typing to stop, then asks the guide.
+		fireEvent.click(
+			await screen.findByRole("button", { name: /Lost Show/ }, { timeout: 3000 })
+		);
 		expect(state.navigate).not.toHaveBeenCalled();
 
 		fireEvent.click(screen.getByRole("button", { name: /Market Watch/ }));
@@ -1604,8 +1597,7 @@ describe("ChannelList favorites tab", () => {
 		const { rerender } = await renderList();
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
 			NOW - 2 * 3600,
-			NOW + 5 * 3600,
-			undefined
+			NOW + 5 * 3600
 		);
 
 		// The Live tab loaded every channel's guide, so a new favorite already
@@ -1639,7 +1631,7 @@ describe("ChannelList favorites tab", () => {
 		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
 
 		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
-			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600],
 			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
 		]);
 	});
@@ -1709,9 +1701,9 @@ describe("ChannelList favorites tab", () => {
 		expect(row("News 24").getByText("no epg")).toBeInTheDocument();
 
 		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
-			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600],
 			[NOW + 3600, NOW + 9 * 3600, ["news.tv"]],
-			[NOW + 3600, NOW + 9 * 3600, undefined],
+			[NOW + 3600, NOW + 9 * 3600],
 		]);
 	});
 
@@ -1724,7 +1716,9 @@ describe("ChannelList favorites tab", () => {
 		// The guide loaded up to 5 hours after NOW, and a narrow window gets there
 		// 3 hours after NOW.
 		vi.setSystemTime((NOW + 3 * 3600) * 1000);
-		act(() => vi.advanceTimersByTime(30_000));
+		// The guide's call goes out a moment after the tick, so it can take
+		// the other ids asked for with it.
+		await act(async () => vi.advanceTimersByTime(30_000));
 
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
 		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600, [
@@ -1768,7 +1762,7 @@ describe("ChannelList favorites tab", () => {
 
 		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
 			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
-			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600],
 		]);
 	});
 

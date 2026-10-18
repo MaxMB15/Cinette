@@ -46,11 +46,12 @@ import { useDownloads } from "@/hooks/useDownloads";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useNow } from "@/hooks/useNow";
 import { useGuidePrograms, type GuideChannels } from "@/hooks/useGuidePrograms";
-import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes, searchEpgProgrammes } from "@/lib/tauri";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes } from "@/lib/tauri";
+import { guideSearchQuery } from "@/lib/queries";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
-import { nowSeconds } from "@/lib/date";
 import { recordingChannel } from "@/lib/recordings";
 import { formatCount } from "@/lib/format";
 import type {
@@ -94,6 +95,7 @@ const RIGHT_BUTTONS_PX = 80;
  * the same between renders, so the memoized rows don't re-render for it.
  */
 const NO_PROGRAMS: EpgProgram[] = [];
+const NO_RESULTS: EpgSearchResult[] = [];
 
 const formatEpgTime = (startTime: number, now: number): string => {
 	const diff = startTime - now;
@@ -164,7 +166,8 @@ export const ChannelList = () => {
 	const [selectedMovie, setSelectedMovie] = useState<Channel | null>(null);
 
 	// EPG search: one result per channel (earliest matching program)
-	const [epgSearchResults, setEpgSearchResults] = useState<EpgSearchResult[]>([]);
+	// The guide search, 300ms after the last key, since it's a backend round trip.
+	const [epgTerm, setEpgTerm] = useState("");
 
 	// The root div's width, which sets the guide's window and the grid
 	// columns. It's null until the div has been measured.
@@ -295,7 +298,6 @@ export const ChannelList = () => {
 		setSelectedCategory(null);
 		setShowFavoritesOnly(false);
 		setShowDownloadsOnly(false);
-		setEpgSearchResults([]);
 		setNavState({ level: "home" });
 	};
 
@@ -368,27 +370,21 @@ export const ChannelList = () => {
 		`${channels.length}:${guideVersion}`
 	);
 
-	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.
 	const epgQuery = activeTab === "live" ? search.trim() : "";
-	// Clearing the search drops the results while rendering, so they don't
-	// show for a frame after the box empties.
-	if (!epgQuery && epgSearchResults.length > 0) setEpgSearchResults([]);
 	useEffect(() => {
 		if (!epgQuery) return;
-		let current = true;
-		const timer = setTimeout(() => {
-			searchEpgProgrammes(epgQuery, nowSeconds())
-				.then((results) => {
-					if (current) setEpgSearchResults(results);
-				})
-				.catch(() => {});
-		}, 300);
-		return () => {
-			current = false;
-			clearTimeout(timer);
-		};
+		const timer = setTimeout(() => setEpgTerm(epgQuery), 300);
+		return () => clearTimeout(timer);
 	}, [epgQuery]);
+	const epgSearch = useQuery({
+		...guideSearchQuery(epgTerm),
+		enabled: epgTerm !== "",
+		// The last search's results stay while the next one's load.
+		placeholderData: keepPreviousData,
+	});
+	// An empty search box shows no results, even before the search catches up.
+	const epgSearchResults = (epgQuery && epgSearch.data) || NO_RESULTS;
 
 	const getChannelPrograms = (ch: Channel): EpgProgram[] =>
 		(ch.tvgId && epgMap.get(ch.tvgId)) || NO_PROGRAMS;

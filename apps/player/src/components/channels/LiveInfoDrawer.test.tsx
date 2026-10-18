@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+	act,
+	cleanup,
+	fireEvent,
+	render as renderUi,
+	screen,
+	waitFor,
+	within,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { wrapperFor } from "@/test/query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DownloadRecord, EpgProgram } from "@/lib/types";
 import { formatHHMM } from "@/lib/epg-window";
@@ -30,7 +40,10 @@ vi.mock("@/hooks/useChannels", () => ({ useProviderIds: () => ["xt-1"] }));
 
 import { LiveInfoDrawer } from "./LiveInfoDrawer";
 
-/** Noon UTC. The tests run at ten past. */
+/** Each drawer gets a new cache, as each app does. */
+const render = (ui: ReactElement) => renderUi(ui, { wrapper: wrapperFor() });
+
+/** Noon UTC. The tests run at ten past, the start of a ten-minute step. */
 const T = Date.UTC(2026, 9, 12, 12, 0) / 1000;
 const NOW = T + 600;
 const HOUR = 3600;
@@ -79,7 +92,38 @@ describe("LiveInfoDrawer", () => {
 		expect(tauri.getEpgProgrammes).toHaveBeenCalledExactlyOnceWith(
 			"news24.uk",
 			NOW - 12 * HOUR,
-			NOW + 12 * HOUR
+			NOW + 12 * HOUR + 600
+		);
+	});
+
+	it("shows a channel's schedule again from the cache when it opens again soon", async () => {
+		const wrapper = wrapperFor();
+		const first = renderUi(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />, { wrapper });
+		await flush();
+		first.unmount();
+		// Nine minutes on, still in the same ten minutes.
+		vi.setSystemTime((NOW + 540) * 1000);
+		renderUi(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />, { wrapper });
+		await flush();
+
+		expect(tauri.getEpgProgrammes).toHaveBeenCalledOnce();
+		expect(row("Midday Report")).toBeInTheDocument();
+	});
+
+	it("loads the schedule again once the next ten minutes start", async () => {
+		const wrapper = wrapperFor();
+		const first = renderUi(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />, { wrapper });
+		await flush();
+		first.unmount();
+		vi.setSystemTime((NOW + 600) * 1000);
+		renderUi(<LiveInfoDrawer channel={channel} onClose={vi.fn()} />, { wrapper });
+		await flush();
+
+		expect(tauri.getEpgProgrammes).toHaveBeenCalledTimes(2);
+		expect(tauri.getEpgProgrammes).toHaveBeenLastCalledWith(
+			"news24.uk",
+			NOW + 600 - 12 * HOUR,
+			NOW + 600 + 12 * HOUR + 600
 		);
 	});
 
@@ -89,7 +133,7 @@ describe("LiveInfoDrawer", () => {
 		expect(tauri.getEpgProgrammes).toHaveBeenCalledWith(
 			"ch1",
 			NOW - 12 * HOUR,
-			NOW + 12 * HOUR
+			NOW + 12 * HOUR + 600
 		);
 	});
 
@@ -251,7 +295,7 @@ describe("LiveInfoDrawer", () => {
 		expect(tauri.getEpgProgrammes).toHaveBeenLastCalledWith(
 			"sports1.uk",
 			NOW - 12 * HOUR,
-			NOW + 12 * HOUR
+			NOW + 12 * HOUR + 600
 		);
 
 		second.resolve([makeProgramme("Match Of The Day", T, T + HOUR)]);
