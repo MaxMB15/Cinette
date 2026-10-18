@@ -208,6 +208,18 @@ describe("backend commands", () => {
 			{ channel: episode, source: 1, startAt: 30 },
 		],
 		[
+			"airplayLoadConverted",
+			() => tauri.airplayLoadConverted(episode, 0, 12),
+			"airplay_load_converted",
+			{ channel: episode, source: 0, startAt: 12 },
+		],
+		["airplayEndConversion", () => tauri.airplayEndConversion(), "airplay_end_conversion"],
+		[
+			"airplayConverterSupport",
+			() => tauri.airplayConverterSupport(),
+			"airplay_converter_support",
+		],
+		[
 			"airplaySetDetection",
 			() => tauri.airplaySetDetection(true),
 			"plugin:mpv|airplay_set_detection",

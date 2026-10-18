@@ -22,7 +22,13 @@ import {
 import { chooseRoute, type PlayRoute, type RouteDecision, type SenderProfile } from "@/lib/route";
 
 type Blocked = Extract<RouteDecision, { ok: false }>;
-import { airplayTvProfile, type StreamFormats } from "@/lib/route-profiles";
+import {
+	airplayTvProfile,
+	iosSender,
+	REFUSED,
+	type ConverterSupport,
+	type StreamFormats,
+} from "@/lib/route-profiles";
 import type { Channel } from "@/lib/types";
 
 /** The receiver the audio route goes to, from the backend. */
@@ -73,13 +79,14 @@ export const IDLE_NATIVE_STATE: AirPlayNativeState = {
  */
 export const AIRPLAY_RECEIVER = airplayTvProfile;
 
-/** This iPhone or iPad. It doesn't convert yet, so only direct routes work.
- *  Once it does, this becomes `iosSender` with the converter's support. */
-export const AIRPLAY_SENDER: SenderProfile = {
-	convert: false,
-	hardwareEncoder: false,
-	convertNeedsScreen: false,
-};
+/** This device, for AirPlay. A conversion keeps going with the screen
+ *  locked, through the audio background mode. */
+export const airplaySender = (support: ConverterSupport): SenderProfile =>
+	iosSender(support, { needsScreen: false });
+
+/** What the confirm step says before a conversion starts. */
+export const CONVERT_WARNING =
+	"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock.";
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
@@ -91,6 +98,16 @@ export const airplayErrorMessage = (error: NonNullable<AirPlayNativeState["error
 	if (error.unsupported) return "The TV can't play this stream as it is.";
 	if (error.code === "openFailed") return "Couldn't start the stream on the TV.";
 	return "The stream stopped on the TV.";
+};
+
+/**
+ * What the player says when sending to AirPlay failed: the provider's
+ * refusal, the backend's own message, or a plain one.
+ */
+export const airplayFailureMessage = (error: unknown): string => {
+	if (error === REFUSED) return airplayErrorMessage({ code: "refused" });
+	if (typeof error === "string" && error !== "") return error;
+	return "Couldn't start AirPlay.";
 };
 
 const NAMES: Record<string, string> = {
@@ -146,18 +163,21 @@ export const airplayPlaybackState = (
 		: null,
 });
 
-/** What AirPlay can do for the item it plays. */
+/** What AirPlay can do for the item it plays. A converted live stream
+ *  can't pause: the converter can't hold back a live source. */
 export const airplayCapabilities = (
 	native: AirPlayNativeState,
-	live: boolean
+	live: boolean,
+	converted: boolean
 ): PlaybackCapabilities => ({
 	seek: !live && native.duration > 0,
-	pause: true,
+	pause: !(live && converted),
 	volume: "none",
 	subtitles: native.subtitles.length > 0 ? "select" : "none",
 	// AVPlayer can't add a subtitle file to a stream it fetches by URL.
 	externalSubtitles: false,
-	audioTracks: native.audio.length > 1,
+	// The converter keeps one audio track.
+	audioTracks: !converted && native.audio.length > 1,
 	resumeAt: !live,
 	catalog: false,
 });
@@ -168,6 +188,9 @@ export interface AirPlayBridge {
 	 *  channel plays here, so the provider isn't asked again. */
 	formats: (channel: Channel) => Promise<StreamFormats>;
 	load: (channel: Channel, source: number, startAt?: number) => Promise<void>;
+	/** Converts on this device and plays that on the receiver. */
+	loadConverted: (channel: Channel, source: number, startAt?: number) => Promise<void>;
+	endConversion: () => Promise<void>;
 	play: () => Promise<void>;
 	pause: () => Promise<void>;
 	seek: (position: number) => Promise<void>;
@@ -185,14 +208,18 @@ export interface AirPlayDestination extends PlaybackDestination {
 	dispose(): void;
 }
 
-/** The AirPlay destination for `receiver`. */
+/** The AirPlay destination for `receiver`, from a device that converts as
+ *  `sender` says. */
 export const createAirPlayDestination = (
 	receiver: AirPlayRoute,
-	bridge: AirPlayBridge
+	bridge: AirPlayBridge,
+	sender: SenderProfile
 ): AirPlayDestination => {
 	let native = IDLE_NATIVE_STATE;
 	let item: PlaybackState["item"] = null;
 	let live = false;
+	/** The converted item and its source, so a seek can start it again. */
+	let converted: { channel: Channel; source: number } | null = null;
 	let state = airplayPlaybackState(native, item, bridge.now());
 	const listeners = new Set<(state: PlaybackState) => void>();
 	/** Each channel's URL places, from its last `route`. */
@@ -227,20 +254,20 @@ export const createAirPlayDestination = (
 		name: receiver.name,
 		catalog: { kind: "local" },
 		get capabilities() {
-			return airplayCapabilities(native, live);
+			return airplayCapabilities(native, live, converted !== null);
 		},
 		route: async (target: PlaybackItem): Promise<RouteDecision> => {
 			if (target.kind !== "local") return { ok: false, reason: "notFound" };
 			const found = await bridge.formats(target.channel);
 			sources.set(target.channel.id, found.sources);
-			return chooseRoute(found.formats, AIRPLAY_RECEIVER, AIRPLAY_SENDER);
+			return chooseRoute(found.formats, AIRPLAY_RECEIVER, sender);
 		},
 		load: async (target: PlaybackItem, opts?: { startAt?: number; route?: PlayRoute }) => {
 			if (target.kind !== "local")
 				throw new UnsupportedError("Playing another device's item");
 			const { route, startAt } = opts ?? {};
-			if (route?.via !== "direct")
-				throw new UnsupportedError("Converting a stream on this device");
+			if (route?.via !== "direct" && route?.via !== "converted")
+				throw new UnsupportedError("Playing this route on AirPlay");
 			const source = sources.get(target.channel.id)?.[route.format];
 			if (source === undefined) throw new Error("Check the route before loading");
 			const { channel } = target;
@@ -248,16 +275,30 @@ export const createAirPlayDestination = (
 			item = { title: channel.name, contentType: channel.contentType, ref: channel.id };
 			native = { ...IDLE_NATIVE_STATE, status: "opening" };
 			publish();
-			await bridge.load(channel, source, live ? undefined : startAt);
+			const from = live ? undefined : startAt;
+			if (route.via === "direct") {
+				converted = null;
+				await bridge.load(channel, source, from);
+			} else {
+				converted = { channel, source };
+				await bridge.loadConverted(channel, source, from);
+			}
 		},
 		play: () => bridge.play(),
 		pause: () => bridge.pause(),
-		seek: (seconds) => bridge.seek(seconds),
+		// A converted movie only has the segments around where it plays, so
+		// a seek converts again from there.
+		seek: (seconds) =>
+			converted && !live
+				? bridge.loadConverted(converted.channel, converted.source, seconds)
+				: bridge.seek(seconds),
 		setVolume: () => Promise.reject(new UnsupportedError("Setting the TV's volume")),
 		selectSubtitle: async (trackId) =>
 			bridge.selectSubtitle(trackId === null ? null : index(trackId)),
 		selectAudio: async (trackId) => bridge.selectAudio(index(trackId)),
 		stop: async () => {
+			if (converted) await bridge.endConversion();
+			converted = null;
 			await bridge.stop();
 			native = IDLE_NATIVE_STATE;
 			item = null;

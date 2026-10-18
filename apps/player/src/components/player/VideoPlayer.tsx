@@ -18,7 +18,7 @@ import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useAirPlay } from "@/hooks/useAirPlay";
-import { airplayBlockedMessage } from "@/lib/airplay";
+import { CONVERT_WARNING, airplayBlockedMessage, airplayFailureMessage } from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { useLatestRef } from "@/hooks/useLatestRef";
@@ -1263,11 +1263,16 @@ export const PlayerView = () => {
 	) : undefined;
 
 	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
-	const sendToAirPlay = async (channel: Channel, anchor: DOMRect): Promise<string | null> => {
+	const sendToAirPlay = async (
+		channel: Channel,
+		anchor: DOMRect,
+		confirm: () => Promise<boolean>
+	): Promise<string | null> => {
 		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
 		const result = await airplay.send(channel, {
 			anchor,
 			startAt,
+			confirm,
 			stopLocal: async () => {
 				flushProgress();
 				await mpv.stop();
@@ -1276,12 +1281,15 @@ export const PlayerView = () => {
 		if (result.sent || result.why === "cancelled") return null;
 		if (result.why === "blocked") return airplayBlockedMessage(result.decision);
 		console.warn("[VideoPlayer] AirPlay failed:", result.error);
-		return "Couldn't start AirPlay.";
+		return airplayFailureMessage(result.error);
 	};
 	const tv = airplay.destination;
 	const castSlot =
 		airplay.available && activeChannel && !airplay.destination ? (
-			<AirPlayButton onSend={(anchor) => sendToAirPlay(activeChannel, anchor)} />
+			<AirPlayButton
+				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+				warning={CONVERT_WARNING}
+			/>
 		) : undefined;
 
 	// Stryker disable next-line LogicalOperator: The state is null exactly when there's no destination, so either one alone gives the same answer.

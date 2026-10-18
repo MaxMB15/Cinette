@@ -126,6 +126,25 @@ export const getStreamFormats = (channel: Channel, playing?: PlayingInfo): Promi
 export const airplayLoad = (channel: Channel, source: number, startAt?: number): Promise<void> =>
 	invoke("airplay_load", { channel, source, startAt });
 
+/**
+ * Converts `channel` from the URL at `source` on this device and plays the
+ * result on the chosen AirPlay receiver. Resolves once the receiver can
+ * start. Rejects with `REFUSED` when the provider turns the login down, or
+ * with a message to show.
+ */
+export const airplayLoadConverted = (
+	channel: Channel,
+	source: number,
+	startAt?: number
+): Promise<void> => invoke("airplay_load_converted", { channel, source, startAt });
+
+/** Stops this device's AirPlay conversion, if one runs. */
+export const airplayEndConversion = (): Promise<void> => invoke("airplay_end_conversion");
+
+/** What this device can convert for AirPlay. */
+export const airplayConverterSupport = (): Promise<ConverterSupport> =>
+	invoke("airplay_converter_support");
+
 /** Looks for AirPlay receivers while the player is open. It costs power. */
 export const airplaySetDetection = (enabled: boolean): Promise<void> =>
 	invoke("plugin:mpv|airplay_set_detection", { enabled });

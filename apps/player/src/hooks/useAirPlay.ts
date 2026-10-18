@@ -8,6 +8,7 @@ import {
 	AIRPLAY_PICKER_CLOSED_EVENT,
 	AIRPLAY_ROUTE_EVENT,
 	AIRPLAY_STATE_EVENT,
+	airplaySender,
 	createAirPlayDestination,
 	type AirPlayBridge,
 	type AirPlayDestination,
@@ -16,10 +17,14 @@ import {
 } from "@/lib/airplay";
 import type { PlaybackState } from "@/lib/destination";
 import type { RouteDecision } from "@/lib/route";
+import type { ConverterSupport } from "@/lib/route-profiles";
 import {
 	airplayChoose,
+	airplayConverterSupport,
+	airplayEndConversion,
 	airplayGetRoute,
 	airplayLoad,
+	airplayLoadConverted,
 	airplayPause,
 	airplayPlay,
 	airplaySeek,
@@ -35,11 +40,16 @@ import type { Channel } from "@/lib/types";
 /** How long after the picker closes a route change may still arrive. */
 const ROUTE_GRACE_MS = 1000;
 
+/** What a device that can't convert offers, until the backend says. */
+const NO_CONVERTER: ConverterSupport = { convert: false, hardwareEncoder: false };
+
 const bridge: AirPlayBridge = {
 	// This device plays the channel while the picker is open, so mpv says
 	// what it is, and the provider isn't asked for a second connection.
 	formats: async (channel) => getStreamFormats(channel, await mpvGetMediaInfo()),
 	load: airplayLoad,
+	loadConverted: airplayLoadConverted,
+	endConversion: airplayEndConversion,
 	play: airplayPlay,
 	pause: airplayPause,
 	seek: airplaySeek,
@@ -102,13 +112,19 @@ export interface AirPlay {
 	state: PlaybackState | null;
 	/**
 	 * Has the user pick a receiver, then sends `channel` there from
-	 * `startAt`. `stopLocal` stops this device's player once the route is
-	 * known, before the receiver connects, since many accounts allow one
-	 * connection at a time.
+	 * `startAt`. When this device has to convert the stream, `confirm` asks
+	 * the user first. `stopLocal` stops this device's player once the route
+	 * is settled, before the receiver connects, since many accounts allow
+	 * one connection at a time.
 	 */
 	send: (
 		channel: Channel,
-		opts: { anchor: DOMRect; startAt?: number; stopLocal: () => Promise<void> }
+		opts: {
+			anchor: DOMRect;
+			startAt?: number;
+			stopLocal: () => Promise<void>;
+			confirm: () => Promise<boolean>;
+		}
 	) => Promise<SendResult>;
 	/** Stops AirPlay video. */
 	stop: () => Promise<void>;
@@ -122,6 +138,7 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const [available, setAvailable] = useState(false);
 	const [route, setRoute] = useState<AirPlayRoute | null>(null);
 	const [destination, setDestination] = useState<AirPlayDestination | null>(null);
+	const [support, setSupport] = useState(NO_CONVERTER);
 
 	useEffect(() => {
 		if (!enabled) return;
@@ -134,6 +151,11 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 		void airplayGetRoute()
 			.then((r) => {
 				if (current) setRoute(r);
+			})
+			.catch(() => {});
+		void airplayConverterSupport()
+			.then((s) => {
+				if (current) setSupport(s);
 			})
 			.catch(() => {});
 		return () => {
@@ -157,26 +179,40 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const state = useSyncExternalStore(subscribe, getState);
 
 	const send = useCallback<AirPlay["send"]>(
-		async (channel, { anchor, startAt, stopLocal }) => {
+		async (channel, { anchor, startAt, stopLocal, confirm }) => {
 			try {
 				const picked = route ?? (await choose(anchor));
 				if (!picked) return { sent: false, why: "cancelled" };
-				const target = createAirPlayDestination(picked, bridge);
+				const target = createAirPlayDestination(picked, bridge, airplaySender(support));
 				const item = { kind: "local" as const, channel };
 				const decision = await target.route(item);
 				if (!decision.ok) {
 					target.dispose();
 					return { sent: false, why: "blocked", decision };
 				}
+				if (decision.route.via === "converted" && !(await confirm())) {
+					target.dispose();
+					return { sent: false, why: "cancelled" };
+				}
 				await stopLocal();
 				setDestination(target);
-				await target.load(item, { route: decision.route, startAt });
+				try {
+					await target.load(item, { route: decision.route, startAt });
+				} catch (error) {
+					// Nothing plays on the TV, so the panel goes, and the player
+					// says why. React may never have shown this destination, so
+					// its cleanup can't be left to the effect.
+					setDestination(null);
+					await target.stop().catch(() => {});
+					target.dispose();
+					throw error;
+				}
 				return { sent: true };
 			} catch (error) {
 				return { sent: false, why: "failed", error };
 			}
 		},
-		[route]
+		[route, support]
 	);
 
 	return {
