@@ -151,28 +151,43 @@ impl CastMessage {
 
 /// Splits the bytes read from the connection into messages. A read can end
 /// anywhere, so it keeps what's left of a frame for the next one.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct FrameReader {
     buf: Vec<u8>,
+    /// Where the next frame starts in `buf`. What's before it was read, and
+    /// goes on the next push, so a read full of frames is moved once.
+    start: usize,
+}
+
+/// The buffered length only. A `MEDIA_STATUS` echoes the stream's URL.
+impl fmt::Debug for FrameReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FrameReader")
+            .field("buffered", &(self.buf.len() - self.start))
+            .finish()
+    }
 }
 
 impl FrameReader {
     pub fn push(&mut self, bytes: &[u8]) {
+        self.buf.drain(..self.start);
+        self.start = 0;
         self.buf.extend_from_slice(bytes);
     }
 
     /// The next whole message, `None` while it's still incomplete.
     pub fn next_message(&mut self) -> Option<Result<CastMessage, FrameError>> {
-        let len: [u8; 4] = self.buf.get(..4)?.try_into().ok()?;
+        let rest = &self.buf[self.start..];
+        let len: [u8; 4] = rest.get(..4)?.try_into().ok()?;
         let len = u32::from_be_bytes(len) as usize;
         if len > MAX_MESSAGE {
             // Nothing after this can be trusted, so drop it all.
             self.buf.clear();
+            self.start = 0;
             return Some(Err(FrameError::TooLong));
         }
-        let body = self.buf.get(4..4 + len)?;
-        let message = CastMessage::decode(body);
-        self.buf.drain(..4 + len);
+        let message = CastMessage::decode(rest.get(4..4 + len)?);
+        self.start += 4 + len;
         Some(message)
     }
 }

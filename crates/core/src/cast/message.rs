@@ -148,7 +148,9 @@ pub struct ReceiverVolume {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiverStatus {
-    #[serde(default)]
+    /// The apps that read as one. An entry missing a field, as some apps'
+    /// are, is skipped, so it can't hide the rest of the status.
+    #[serde(default, deserialize_with = "readable_apps")]
     pub applications: Vec<Application>,
     pub volume: Option<ReceiverVolume>,
 }
@@ -180,9 +182,9 @@ pub struct MediaStatusEntry {
     pub media_session_id: i64,
     pub player_state: String,
     pub idle_reason: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub current_time: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub supported_media_commands: u64,
     pub active_track_ids: Option<Vec<i64>>,
     pub media: Option<MediaInfo>,
@@ -215,8 +217,10 @@ pub enum Incoming {
         request_id: u64,
         reason: Option<String>,
     },
-    /// `ERROR`, which a receiver sends when playback fails.
+    /// `ERROR`, which a receiver sends when playback fails, or with a
+    /// request id when it can't carry out that request.
     Error {
+        request_id: u64,
         detailed_error_code: Option<i64>,
     },
     /// Anything else, ignored.
@@ -228,15 +232,37 @@ pub enum Incoming {
 struct Envelope {
     #[serde(rename = "type")]
     kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     request_id: u64,
     reason: Option<String>,
     detailed_error_code: Option<i64>,
     status: Option<Value>,
 }
 
+/// A field that some receivers send as `null`, read as its default instead
+/// of failing the whole message.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn readable_apps<'de, D>(deserializer: D) -> Result<Vec<Application>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries = Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default();
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
+}
+
 /// Reads a text payload from `namespace`. `None` means it isn't valid JSON
-/// with a `type`, which closes the connection.
+/// with a `type`, or its content doesn't read as that type, and the session
+/// ignores it.
 pub fn parse(namespace: &str, text: &str) -> Option<Incoming> {
     let envelope: Envelope = serde_json::from_str(text).ok()?;
     let kind = envelope.kind.as_str();
@@ -265,6 +291,7 @@ pub fn parse(namespace: &str, text: &str) -> Option<Incoming> {
             reason: envelope.reason,
         },
         (NS_MEDIA, "ERROR") => Incoming::Error {
+            request_id: envelope.request_id,
             detailed_error_code: envelope.detailed_error_code,
         },
         _ => Incoming::Other,
