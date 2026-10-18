@@ -63,6 +63,9 @@ exclude_re = [
     # Starts caffeinate or systemd-inhibit, which would change the machine's
     # own sleep settings. The tests check the command it runs.
     'src-tauri/src/downloads/keep_awake\.rs:.*\bhold_while_running\b',
+    # Browses for Cast receivers on the real network. The tests pass a fake
+    # browse to everything around it.
+    'src-tauri/src/cast/mod\.rs:.*\bbrowse_network\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This

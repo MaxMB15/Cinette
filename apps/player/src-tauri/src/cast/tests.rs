@@ -5,7 +5,8 @@
 //! app that never browses.
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
 use serde_json::json;
 use tauri::Listener;
@@ -217,4 +218,69 @@ fn a_mock_app_never_browses() {
     let handle = app.handle();
     let state = handle.state::<CastReceivers>();
     assert!(!*state.browsing.lock().unwrap());
+}
+
+/// A fake browse that counts its starts. The first `fail` starts fail, and
+/// each later one hands its sender to the test.
+fn fake_browse(
+    fail: usize,
+) -> (
+    Browse,
+    Arc<AtomicUsize>,
+    mpsc::Receiver<tokio::sync::mpsc::UnboundedSender<Event>>,
+) {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let (senders_tx, senders) = mpsc::channel();
+    let counted = starts.clone();
+    let senders_tx = Mutex::new(senders_tx);
+    let browse: Browse = Box::new(move || {
+        if counted.fetch_add(1, Ordering::SeqCst) < fail {
+            return Err("no network".into());
+        }
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        senders_tx.lock().unwrap().send(tx).unwrap();
+        Ok(rx)
+    });
+    (browse, starts, senders)
+}
+
+async fn eventually(check: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("it never happened");
+}
+
+#[tokio::test]
+async fn browses_once_and_again_after_the_browse_stops_or_fails() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    let (browse, starts, senders) = fake_browse(1);
+    handle.state::<CastReceivers>().set_browse(browse);
+    let list = || app.invoke("get_cast_receivers", json!({})).unwrap();
+
+    // The first start fails, so the next call tries again.
+    assert_eq!(list(), json!([]));
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    list();
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+    let events = senders.try_recv().unwrap();
+    // It runs now, so it isn't started again.
+    list();
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+
+    events.send(found("tv", "tv", "TV")).unwrap();
+    eventually(|| list()[0]["id"] == "cast:tv").await;
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+
+    // A browse that stops is started again by the next call.
+    drop(events);
+    let state = handle.state::<CastReceivers>();
+    eventually(|| !*state.browsing.lock().unwrap()).await;
+    list();
+    assert_eq!(starts.load(Ordering::SeqCst), 3);
+    assert!(senders.try_recv().is_ok());
 }

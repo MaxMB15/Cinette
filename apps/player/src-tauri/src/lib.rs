@@ -334,7 +334,7 @@ pub fn run() {
             let downloads_root = app_dir.join("downloads");
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             app.manage(crate::downloads::recordings::Recorder::default());
-            app.manage(crate::cast::CastReceivers::new(true));
+            app.manage(crate::cast::CastReceivers::on_network());
             crate::downloads::manager::restore_settings(app.handle());
 
             #[cfg(desktop)]
