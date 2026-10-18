@@ -576,6 +576,10 @@ export interface RemoteDevice {
 
 export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devices");
 
+/** Whether macOS refuses Cinette the local network, so no device can be found. */
+export const remoteLocalNetworkDenied = (): Promise<boolean> =>
+	invoke("remote_local_network_denied");
+
 /** Asks a device for control. Progress comes as `remote://controller`. */
 export const remoteConnect = (deviceId: string): Promise<void> =>
 	invoke("remote_connect", { deviceId });

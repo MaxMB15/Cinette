@@ -8,7 +8,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useRemoteSessions } from "@/hooks/useRemoteTarget";
-import { remoteDisconnect } from "@/lib/tauri";
+import { remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
 import type { CinetteDestination } from "@/lib/cinette-destination";
 import { endedText, formatCode } from "@/lib/remote-devices";
@@ -26,6 +26,13 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 	const { devices, link, connect, leave } = useRemoteControl();
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [denied, setDenied] = useState(false);
+	// Asked each time the picker opens, since the user can allow it meanwhile.
+	const checkNetwork = () => {
+		remoteLocalNetworkDenied()
+			.then((refused) => setDenied(refused === true))
+			.catch(() => setDenied(false));
+	};
 	const activeId = link ? cinetteId(link.deviceId) : LOCAL_ENTRY.id;
 	const select = (id: string) => {
 		setOpen(false);
@@ -62,11 +69,17 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 				entries={cinetteEntries(devices)}
 				activeId={activeId}
 				onSelect={select}
+				onOpen={checkNetwork}
+				notice={denied ? LOCAL_NETWORK_DENIED : null}
 			/>
 			{error && <Notice message={error} onDismiss={() => setError(null)} />}
 		</>
 	);
 };
+
+/** What the picker says while macOS keeps Cinette off the local network. */
+export const LOCAL_NETWORK_DENIED =
+	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
 
 const Notice = ({ message, onDismiss }: { message: string; onDismiss: () => void }) =>
 	createPortal(

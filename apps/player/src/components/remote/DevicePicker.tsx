@@ -29,6 +29,8 @@ interface DevicePickerProps {
 	onOpenEntry?: (id: string) => void;
 	/** The picker opened, so the routes for the current item can be checked. */
 	onOpen?: () => void;
+	/** A line above the rows, such as why no device can be found. */
+	notice?: string | null;
 }
 
 const BUTTON = cn(
@@ -67,6 +69,7 @@ export const DevicePicker = ({
 	onSelect,
 	onOpenEntry,
 	onOpen,
+	notice,
 }: DevicePickerProps) => {
 	const titleId = useId();
 	const [confirming, setConfirming] = useState<PickerEntry | null>(null);
@@ -125,6 +128,11 @@ export const DevicePicker = ({
 				</div>
 			) : (
 				<div className="space-y-3">
+					{notice && (
+						<p role="status" className="text-xs text-muted-foreground">
+							{notice}
+						</p>
+					)}
 					{groupEntries(entries).map((group) => (
 						<section key={group.kind} aria-label={group.heading ?? "This device"}>
 							{group.heading && (
