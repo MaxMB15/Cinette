@@ -31,8 +31,8 @@ const TEST_FILE = /\.test\.tsx?$|\/src\/test\//;
  * disabled React lint rule. With `all_errors`, that fails the build and every
  * test that loads the file instead, and the message names the line.
  */
-export const reactCompiler = () => ({
-	...babel({
+export const reactCompiler = () => {
+	const plugin = babel({
 		presets: [
 			reactCompilerPreset({
 				panicThreshold: "all_errors",
@@ -41,15 +41,15 @@ export const reactCompiler = () => ({
 					!notCompiled.some((file) => filename.endsWith(file)),
 			}),
 		],
-	}),
-	name: COMPILER_PLUGIN,
-});
+	});
+	compilerPlugins.add(plugin);
+	return plugin;
+};
 
-const COMPILER_PLUGIN = "cinette:react-compiler";
+// babel() gives a promise of the plugin, which Vite waits for, so the plugin
+// is told apart by the object itself rather than by its name.
+const compilerPlugins = new WeakSet<object>();
 
-/** Whether a Vite plugin is the one reactCompiler makes. */
+/** Whether a Vite plugin is one reactCompiler made. */
 export const isCompiler = (plugin: unknown): boolean =>
-	typeof plugin === "object" &&
-	plugin !== null &&
-	"name" in plugin &&
-	plugin.name === COMPILER_PLUGIN;
+	typeof plugin === "object" && plugin !== null && compilerPlugins.has(plugin);
