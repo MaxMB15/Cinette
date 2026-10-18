@@ -24,7 +24,9 @@ declare global {
  * `handleBack`. The player takes its own arrows first.
  */
 export const useTvRemote = (): void => {
-	const navigate = useNavigate();
+	// useNavigate gives a new function on each route change, so the listeners
+	// read it through a ref and stay put for the layout's life.
+	const navigateRef = useLatestRef(useNavigate());
 	const { pathname } = useLocation();
 	const atHomeRef = useLatestRef(pathname === "/");
 
@@ -38,13 +40,13 @@ export const useTvRemote = (): void => {
 			};
 			window.addEventListener("keydown", onKey);
 			window.__cinetteBack = () =>
-				handleBack(document, atHomeRef.current, () => navigate("/")) !== "exit";
+				handleBack(document, atHomeRef.current, () => navigateRef.current("/")) !== "exit";
 			return () => {
 				window.removeEventListener("keydown", onKey);
 				delete window.__cinetteBack;
 			};
 		},
-		// Stryker disable next-line ArrayDeclaration: navigate and the ref keep their identity for the router's life, so the effect runs once either way.
-		[navigate, atHomeRef]
+		// Stryker disable next-line ArrayDeclaration: both refs keep their identity, so the effect runs once either way.
+		[navigateRef, atHomeRef]
 	);
 };

@@ -99,6 +99,16 @@ describe("useTvRemote", () => {
 		expect(document.activeElement).toBe(screen.getByText("second"));
 	});
 
+	it("keeps one Back handler as the page changes", () => {
+		renderAt("/settings");
+		const back = window.__cinetteBack;
+		act(() => {
+			back?.();
+		});
+		expect(screen.getByTestId("where")).toHaveTextContent(/^\/$/);
+		expect(window.__cinetteBack).toBe(back);
+	});
+
 	it("takes Back home from another page, and lets the app close at home", () => {
 		renderAt("/settings");
 		let handled: boolean | undefined;
