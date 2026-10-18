@@ -123,14 +123,13 @@ describe("localPlaybackState", () => {
 });
 
 describe("localCapabilities", () => {
-	it("seeks only when the length is known", () => {
-		expect(localCapabilities(0).seek).toBe(false);
-		expect(localCapabilities(0.5).seek).toBe(true);
-		expect(localCapabilities(-1).seek).toBe(false);
+	it("seeks only when it's told it can", () => {
+		expect(localCapabilities(false).seek).toBe(false);
+		expect(localCapabilities(true).seek).toBe(true);
 	});
 
 	it("describes today's player", () => {
-		expect(localCapabilities(10)).toEqual({
+		expect(localCapabilities(true)).toEqual({
 			seek: true,
 			pause: true,
 			volume: "absolute",

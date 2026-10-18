@@ -203,9 +203,6 @@ export const PlayerView = () => {
 	const [showInfoDrawer, setShowInfoDrawer] = useState(false);
 	const [activeChannelName, setActiveChannelName] = useState<string | null>(null);
 	const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
-	// The player's controls go through the active destination, which is
-	// always this device for now.
-	const playback = useLocalPlayback(mpv, activeChannel);
 	// Episode list for series navigation — set when navigating from SeriesDetailModal
 	const [seriesEpisodes, setSeriesEpisodes] = useState<Channel[]>([]);
 	const { isFullscreen, setFullscreen } = useFullscreen();
@@ -470,6 +467,9 @@ export const PlayerView = () => {
 		},
 		[mpv, rememberLoadedUrl, recordEnd]
 	);
+	// The player's controls go through the active destination, which is
+	// always this device for now. It starts an item the way the player does.
+	const playback = useLocalPlayback(mpv, activeChannel, commitPlayback);
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with

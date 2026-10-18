@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useLocalPlayback, type LocalPlayer } from "./useLocalPlayback";
 import { UnsupportedError, type PlaybackState } from "@/lib/destination";
@@ -31,7 +31,6 @@ const player = (over: Partial<LocalPlayer> = {}): LocalPlayer => ({
 	reconnecting: false,
 	loadFailed: false,
 	openFailed: false,
-	load: vi.fn(async () => {}),
 	play: vi.fn(async () => {}),
 	pause: vi.fn(async () => {}),
 	seek: vi.fn(async () => {}),
@@ -50,9 +49,15 @@ const channel: Channel = {
 	sources: [],
 };
 
+const loadChannel = vi.fn();
+
+beforeEach(() => {
+	loadChannel.mockReset();
+});
+
 describe("useLocalPlayback", () => {
 	it("is this device, with its own catalog", () => {
-		const { result } = renderHook(() => useLocalPlayback(player(), null));
+		const { result } = renderHook(() => useLocalPlayback(player(), null, vi.fn()));
 		expect(result.current.id).toBe("local");
 		expect(result.current.kind).toBe("local");
 		expect(result.current.name).toBe("This device");
@@ -61,7 +66,7 @@ describe("useLocalPlayback", () => {
 
 	it("passes the controls straight to the player", async () => {
 		const p = player();
-		const { result } = renderHook(() => useLocalPlayback(p, channel));
+		const { result } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
 		await result.current.play();
 		await result.current.pause();
 		await result.current.seek(42);
@@ -74,18 +79,17 @@ describe("useLocalPlayback", () => {
 		expect(p.stop).toHaveBeenCalledOnce();
 	});
 
-	it("loads a channel's URL at the start position", async () => {
-		const p = player();
-		const { result } = renderHook(() => useLocalPlayback(p, null));
+	it("loads a channel through the player's own flow, at the start position", async () => {
+		const { result } = renderHook(() => useLocalPlayback(player(), null, loadChannel));
 		await result.current.load({ kind: "local", channel }, { startAt: 90 });
-		expect(p.load).toHaveBeenCalledWith("http://example.invalid/live/3.ts", 90);
+		expect(loadChannel).toHaveBeenCalledWith(channel, 90);
 		await result.current.load({ kind: "local", channel });
-		expect(p.load).toHaveBeenLastCalledWith("http://example.invalid/live/3.ts", undefined);
+		expect(loadChannel).toHaveBeenLastCalledWith(channel, undefined);
 	});
 
 	it("can't play another device's items", async () => {
 		const p = player();
-		const { result } = renderHook(() => useLocalPlayback(p, null));
+		const { result } = renderHook(() => useLocalPlayback(p, null, loadChannel));
 		const remote = { kind: "remote", itemId: "movie-1", title: "Film" } as const;
 		await expect(result.current.route(remote)).resolves.toEqual({
 			ok: false,
@@ -99,11 +103,11 @@ describe("useLocalPlayback", () => {
 		await expect(result.current.load(remote)).rejects.toThrow(
 			"Playing another device's item isn't supported here"
 		);
-		expect(p.load).not.toHaveBeenCalled();
+		expect(loadChannel).not.toHaveBeenCalled();
 	});
 
 	it("refuses track choices it can't make yet", async () => {
-		const { result } = renderHook(() => useLocalPlayback(player(), null));
+		const { result } = renderHook(() => useLocalPlayback(player(), null, vi.fn()));
 		await expect(result.current.selectSubtitle("en")).rejects.toMatchObject({
 			code: "unsupported",
 			message: "Choosing a subtitle track isn't supported here",
@@ -116,16 +120,25 @@ describe("useLocalPlayback", () => {
 
 	it("can seek once the length is known", () => {
 		let p = player();
-		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel));
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
 		expect(result.current.capabilities.seek).toBe(false);
-		p = player({ state: mpvState({ duration: 120 }) });
+		p = player({ state: mpvState({ duration: 0.5 }) });
 		rerender();
 		expect(result.current.capabilities.seek).toBe(true);
 	});
 
+	it("stays the same object while the length changes but stays known", () => {
+		let p = player({ state: mpvState({ duration: 120 }) });
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
+		const first = result.current;
+		p = { ...p, state: mpvState({ duration: 121 }) };
+		rerender();
+		expect(result.current).toBe(first);
+	});
+
 	it("tells subscribers about each new state, and stops when they leave", () => {
 		let p = player();
-		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel));
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
 		const seen: PlaybackState[] = [];
 		const unsubscribe = result.current.subscribe((s) => seen.push(s));
 		p = player({ state: mpvState({ isPlaying: true, position: 5 }) });
@@ -142,7 +155,7 @@ describe("useLocalPlayback", () => {
 
 	it("keeps the same state object while nothing changes", () => {
 		const p = player();
-		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel));
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
 		const first = result.current.getState();
 		const destination = result.current;
 		rerender();
@@ -152,7 +165,7 @@ describe("useLocalPlayback", () => {
 
 	it("reports what went wrong", () => {
 		let p = player({ openFailed: true });
-		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel));
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
 		expect(result.current.getState().error).toEqual({ code: "openFailed" });
 		p = player({ opening: true });
 		rerender();
