@@ -145,6 +145,32 @@ describe("useUpdateChecker", () => {
 		expect(result.current.update).toBeNull();
 	});
 
+	it("asks how the app was installed only once", async () => {
+		const { result } = renderHook(() => useUpdateChecker());
+		await waitFor(() => expect(result.current.checking).toBe(false));
+		await act(async () => {
+			await result.current.checkForUpdates();
+		});
+		expect(mockCheck).toHaveBeenCalledTimes(2);
+		expect(mockGetInstallInfo).toHaveBeenCalledOnce();
+	});
+
+	it("clears an install's error when it checks again", async () => {
+		const downloadAndInstall = vi.fn().mockRejectedValue(new Error("disk full"));
+		mockCheck.mockResolvedValue(fakeUpdate({ downloadAndInstall }) as never);
+		const { result } = renderHook(() => useUpdateChecker());
+		await waitFor(() => expect(result.current.update).toBeTruthy());
+		await act(async () => {
+			await result.current.install();
+		});
+		expect(result.current.error).toBe("Update failed: disk full");
+
+		await act(async () => {
+			await result.current.checkForUpdates();
+		});
+		expect(result.current.error).toBeNull();
+	});
+
 	// ── dismiss ────────────────────────────────────────────────────────
 
 	it("dismiss() clears the update", async () => {
