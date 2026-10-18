@@ -88,7 +88,11 @@ export const DownloadsProvider = ({ children }: { children: ReactNode }) => {
 
 	const refresh = useCallback(
 		async () => {
-			await queryClient.refetchQueries({ queryKey: downloadsQuery().queryKey });
+			// It rejects when the list can't load, as listDownloads did.
+			await queryClient.refetchQueries(
+				{ queryKey: downloadsQuery().queryKey },
+				{ throwOnError: true }
+			);
 		},
 		// Stryker disable next-line ArrayDeclaration: the query client stays the same object while the provider is mounted, so an empty list gives the same callback.
 		[queryClient]

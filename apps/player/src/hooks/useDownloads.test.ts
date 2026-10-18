@@ -239,6 +239,17 @@ describe("DownloadsProvider", () => {
 		expect(result.current.downloads).toEqual([movie]);
 	});
 
+	it("rejects a reload that fails, and keeps the list it had", async () => {
+		const { result } = await mount();
+		vi.mocked(listDownloads).mockRejectedValueOnce(new Error("store locked"));
+
+		let caught: unknown = null;
+		await act(() => result.current.refresh().catch((e: unknown) => (caught = e)));
+
+		expect(caught).toEqual(new Error("store locked"));
+		expect(result.current.downloads).toEqual([movie]);
+	});
+
 	it("saves the retention setting and reports how many downloads it deleted", async () => {
 		const { result } = await mount();
 		vi.mocked(setDownloadRetention).mockResolvedValueOnce(3);
