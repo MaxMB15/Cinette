@@ -274,15 +274,13 @@ export const createAirPlayDestination = (
 			live = channel.contentType === "live";
 			item = { title: channel.name, contentType: channel.contentType, ref: channel.id };
 			native = { ...IDLE_NATIVE_STATE, status: "opening" };
+			converted = route.via === "converted" ? { channel, source } : null;
+			// The capabilities change with the route, so the new state goes out
+			// after it's set, and subscribers read both together.
 			publish();
 			const from = live ? undefined : startAt;
-			if (route.via === "direct") {
-				converted = null;
-				await bridge.load(channel, source, from);
-			} else {
-				converted = { channel, source };
-				await bridge.loadConverted(channel, source, from);
-			}
+			if (converted) await bridge.loadConverted(channel, source, from);
+			else await bridge.load(channel, source, from);
 		},
 		play: () => bridge.play(),
 		pause: () => bridge.pause(),
@@ -297,8 +295,9 @@ export const createAirPlayDestination = (
 			bridge.selectSubtitle(trackId === null ? null : index(trackId)),
 		selectAudio: async (trackId) => bridge.selectAudio(index(trackId)),
 		stop: async () => {
-			if (converted) await bridge.endConversion();
+			const wasConverted = converted !== null;
 			converted = null;
+			if (wasConverted) await bridge.endConversion();
 			await bridge.stop();
 			native = IDLE_NATIVE_STATE;
 			item = null;

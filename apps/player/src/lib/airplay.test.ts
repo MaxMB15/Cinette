@@ -363,6 +363,20 @@ describe("createAirPlayDestination", () => {
 		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
 	});
 
+	it("tells subscribers about a route's capabilities with the state that brings them", async () => {
+		const { bridge } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
+		const d = createAirPlayDestination(receiver, bridge, converter);
+		const live = channel({ id: "live-1", contentType: "live" });
+		await d.route({ kind: "local", channel: live });
+		const seen: boolean[] = [];
+		d.subscribe(() => seen.push(d.capabilities.pause));
+		await d.load({ kind: "local", channel: live }, { route: converting });
+		// Converted live can't pause, and the first state says so.
+		expect(seen).toEqual([false]);
+		await d.stop();
+		expect(seen).toEqual([false, true]);
+	});
+
 	it("can't pause a converted live channel, and seeks it nowhere", async () => {
 		const { bridge, emit } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
 		const d = createAirPlayDestination(receiver, bridge, converter);
