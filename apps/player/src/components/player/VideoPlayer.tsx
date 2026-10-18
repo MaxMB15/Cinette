@@ -479,16 +479,14 @@ export const PlayerView = () => {
 	 * position, so no resume prompt shows. As a press in the player does, it
 	 * saves the last item's progress first, and a start that's still looking
 	 * up its resume point, or a resume prompt on screen, gives way to it.
+	 * The destination keeps the newest one in a ref, so it needs no memo.
 	 */
-	const loadFromDestination = useCallback(
-		(ch: Channel, startAt?: number): Promise<void> => {
-			++startRequestRef.current;
-			setPendingResume(null);
-			flushProgress();
-			return commitPlayback(ch, startAt);
-		},
-		[flushProgress, commitPlayback]
-	);
+	const loadFromDestination = (ch: Channel, startAt?: number): Promise<void> => {
+		++startRequestRef.current;
+		setPendingResume(null);
+		flushProgress();
+		return commitPlayback(ch, startAt);
+	};
 	// The player's controls go through the active destination, which is
 	// always this device for now.
 	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
