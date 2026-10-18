@@ -35,10 +35,10 @@ import { formatCount } from "@/lib/format";
 import { groupHierarchyQuery } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-// Enough channel names for Gemini to tell what a group holds.
 /** The hierarchy while it loads, kept the same between renders. */
 const NO_ENTRIES: GroupHierarchyEntry[] = [];
 
+// Enough channel names for Gemini to tell what a group holds.
 const SAMPLES_PER_GROUP = 5;
 // Adding to one category sends every other group, so fewer names each keeps the request small.
 const SAMPLES_PER_CANDIDATE = 3;

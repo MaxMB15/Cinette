@@ -9,7 +9,7 @@ import { formatHHMM } from "@/lib/epg-window";
 import { scheduleQuery, SCHEDULE_STEP } from "@/lib/queries";
 import { isMobilePlatform } from "@/lib/platform";
 import { isRecordingOf, recordingOfProgram } from "@/lib/recordings";
-import { useProviderIds } from "@/hooks/useChannels";
+import { useChannels, useProviderIds } from "@/hooks/useChannels";
 import { useDownloads } from "@/hooks/useDownloads";
 import { useNow } from "@/hooks/useNow";
 import { useSheetDrag } from "@/hooks/useSheetDrag";
@@ -40,7 +40,8 @@ export const LiveInfoDrawer = ({ channel, onClose }: LiveInfoDrawerProps) => {
 	// 12 hours before the drawer opened through 12 hours after, from the start
 	// of its ten minutes, so opening the same channel again soon reads the cache.
 	const [opened] = useState(() => Math.floor(Date.now() / 1000 / SCHEDULE_STEP) * SCHEDULE_STEP);
-	const schedule = useQuery(scheduleQuery(epgId, opened));
+	const { guideVersion } = useChannels();
+	const schedule = useQuery(scheduleQuery(epgId, opened, guideVersion));
 	// Each channel's schedule has its own query, so a new channel shows the
 	// spinner until its own schedule arrives. One that can't load shows none.
 	const loading = schedule.isPending;

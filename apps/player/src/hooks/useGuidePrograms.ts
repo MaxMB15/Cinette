@@ -89,16 +89,16 @@ export const useGuidePrograms = (
 	);
 	const queryClient = useQueryClient();
 	const version = String(resetKey);
-	const at = range ?? NO_RANGE;
+	const guideRange = range ?? NO_RANGE;
 
 	// Read on the Favorites tab too, without loading, since every channel's
 	// programs cover the favorites'.
 	const all = useQuery({
-		...guideQuery(at, version),
+		...guideQuery(guideRange, version),
 		enabled: range !== null && key === "all",
 		// While it loads, the last range's programs, or else the single
 		// channels' already loaded for this one, keep the rows filled.
-		placeholderData: (previous) => previous ?? channelsLoaded(queryClient, at, version),
+		placeholderData: (previous) => previous ?? channelsLoaded(queryClient, guideRange, version),
 	});
 	const allLoaded = all.isSuccess && !all.isPlaceholderData;
 	// Grouped here rather than in the query's select, which runs again on each
@@ -107,7 +107,7 @@ export const useGuidePrograms = (
 
 	const perChannel = useQueries({
 		queries: ids.map((id) => ({
-			...channelGuideQuery(at, version, id),
+			...channelGuideQuery(guideRange, version, id),
 			enabled: range !== null && !allLoaded,
 			placeholderData: (previous: EpgProgram[] | undefined) => previous,
 		})),

@@ -124,11 +124,12 @@ export const SCHEDULE_STEP = 600;
 /**
  * One channel's schedule from 12 hours before `at` through 12 hours after.
  * `at` is the start of a step, so the schedule runs one step longer, which
- * covers the 12 hours ahead of any moment in it.
+ * covers the 12 hours ahead of any moment in it. `version` goes up when a
+ * provider's guide refreshes, which makes it a new query.
  */
-export const scheduleQuery = (epgId: string, at: number, source: Source = LOCAL) =>
+export const scheduleQuery = (epgId: string, at: number, version: number, source: Source = LOCAL) =>
 	queryOptions({
-		queryKey: [source, "schedule", epgId, at] as const,
+		queryKey: [source, "schedule", epgId, at, version] as const,
 		queryFn: () => getEpgProgrammes(epgId, at - 12 * 3600, at + 12 * 3600 + SCHEDULE_STEP),
 	});
 
