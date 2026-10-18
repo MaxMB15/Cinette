@@ -381,3 +381,63 @@ fn says_why_for_the_player() {
         "Couldn't convert the stream on this device."
     );
 }
+
+fn control(started: Duration) -> Control {
+    Control {
+        pacer: Mutex::new(Pacer::new(0.0)),
+        wake: Condvar::new(),
+        stopped: AtomicBool::new(false),
+        clock: Instant::now() - started,
+    }
+}
+
+#[test]
+fn the_clock_counts_from_the_start() {
+    let c = control(Duration::from_secs(5));
+    let now = c.now();
+    assert!((5.0..6.0).contains(&now), "{now}");
+}
+
+#[test]
+fn the_master_declares_a_fifth_more_than_the_first_segment_took() {
+    // 1 MB in 2 s is 4 Mb/s, so 4.8 Mb/s.
+    assert_eq!(bandwidth(1_000_000, 2.0), 4_800_000);
+    assert_eq!(bandwidth(1_000_000, 4.0), 2_400_000);
+    // A tiny segment still declares the minimum.
+    assert_eq!(bandwidth(1000, 2.0), MIN_BANDWIDTH);
+    // A segment with no length counts as a tenth of a second.
+    assert_eq!(bandwidth(100_000, 0.0), 9_600_000);
+}
+
+#[test]
+fn paces_by_the_playback_clock_while_playing() {
+    // Playing since the clock started, a second ago: 1 s played. Making
+    // LEAD + 1.5 s puts it half a second past the lead, so it waits.
+    let c = Arc::new(control(Duration::from_secs(1)));
+    let started = Instant::now();
+    assert!(c.pace(LEAD_SECONDS + 1.5));
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_millis(400), "{waited:?}");
+    assert!(waited < Duration::from_secs(3), "{waited:?}");
+    // Behind, it goes straight on.
+    let behind = control(Duration::from_secs(30));
+    let started = Instant::now();
+    assert!(behind.pace(2.0));
+    assert!(started.elapsed() < Duration::from_millis(200));
+}
+
+#[test]
+fn a_stop_ends_the_wait() {
+    let c = Arc::new(control(Duration::ZERO));
+    c.pacer().pause(0.0);
+    let waiting = {
+        let c = c.clone();
+        std::thread::spawn(move || c.pace(LEAD_SECONDS + 5.0))
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    c.stopped.store(true, Ordering::Release);
+    c.wake.notify_all();
+    assert!(!waiting.join().unwrap());
+    // Stopped already, it doesn't wait at all.
+    assert!(!c.pace(1.0));
+}

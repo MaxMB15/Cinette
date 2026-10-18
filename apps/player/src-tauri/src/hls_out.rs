@@ -364,12 +364,10 @@ impl Sink for HlsSink {
         let bytes = std::mem::take(&mut self.buffer);
         if !self.master {
             self.master = true;
-            let bits = bytes.len() as f64 * 8.0 / duration.max(0.1);
-            let bandwidth = ((bits * 1.2) as u64).max(MIN_BANDWIDTH);
             self.files.put(
                 hls::MASTER,
                 hls::PLAYLIST_TYPE,
-                hls::master(bandwidth, &self.codecs).into_bytes(),
+                hls::master(bandwidth(bytes.len(), duration), &self.codecs).into_bytes(),
             );
         }
         let (sequence, dropped) = self.playlist.push(duration);
@@ -386,15 +384,24 @@ impl Sink for HlsSink {
         if self.playlist.ready() {
             self.tell_started();
         }
-        self.pace(duration)
+        self.control.pace(duration)
     }
 }
 
-impl HlsSink {
-    /// Waits while the converter is far enough ahead of playback. Returns
-    /// false once the conversion is stopped.
+/// The bandwidth the master playlist declares, from the first segment's
+/// size and length: a fifth more than it took, and at least
+/// [`MIN_BANDWIDTH`].
+fn bandwidth(bytes: usize, duration: f64) -> u64 {
+    let bits = bytes as f64 * 8.0 / duration.max(0.1);
+    ((bits * 1.2) as u64).max(MIN_BANDWIDTH)
+}
+
+impl Control {
+    /// Counts a segment `duration` seconds long, then waits while the
+    /// converter is far enough ahead of playback. Returns false once the
+    /// conversion is stopped.
     fn pace(&self, duration: f64) -> bool {
-        let control = &self.control;
+        let control = self;
         let mut pacer = control.pacer();
         pacer.made(duration);
         loop {
