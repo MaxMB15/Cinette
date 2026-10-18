@@ -1411,6 +1411,7 @@ export const PlayerView = () => {
 					// or after it fails, and the spinner or the error has the middle
 					// to itself.
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
+					// Stryker disable next-line OptionalChaining: the bar only calls this while it's on the page, inside the container, so the ref is never null.
 					onHideWithFocus={remote ? () => containerRef.current?.focus() : undefined}
 					onVolumeChange={mpv.setVolume}
 					onToggleMute={mpv.toggleMute}
