@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 mod commands;
+/// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod discovery;
 mod downloads;
 #[cfg(desktop)]
 mod identifier;
