@@ -3,6 +3,7 @@
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { wrapperFor } from "@/test/query";
+import { deferred } from "@/test/deferred";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/lib/tauri", () => ({
@@ -130,6 +131,46 @@ describe("useGroupHierarchy", () => {
 		const movies = renderHook(() => useGroupHierarchy("p1", "movie"), { wrapper });
 		await waitFor(() => expect(movies.result.current.loaded).toBe(true));
 		expect(mockGetHierarchy).toHaveBeenLastCalledWith("p1", "movie");
+	});
+
+	it("starts empty and counts as loaded only once both lists are in", async () => {
+		const pinnedLoad = deferred<PinnedGroup[]>();
+		mockGetPinned.mockReturnValue(pinnedLoad.promise);
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+			wrapper: wrapperFor(),
+		});
+		expect(result.current.entries).toEqual([]);
+		expect(result.current.pinnedGroups).toEqual([]);
+		await waitFor(() => expect(result.current.hasHierarchy).toBe(true));
+
+		expect(result.current.loaded).toBe(false);
+		await act(async () => pinnedLoad.resolve([]));
+		expect(result.current.loaded).toBe(true);
+		// Nothing failed, so nothing is logged.
+		expect(logged).not.toHaveBeenCalled();
+		logged.mockRestore();
+	});
+
+	it("pins and unpins in the content type it shows now", async () => {
+		const { result, rerender } = renderHook(
+			({ type }: { type: string }) => useGroupHierarchy("p1", type),
+			{ initialProps: { type: "live" }, wrapper: wrapperFor() }
+		);
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		rerender({ type: "movie" });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		mockGetPinned.mockClear();
+
+		await act(() => result.current.pinGroup("Drama"));
+		await act(() => result.current.unpinGroup("Drama"));
+
+		expect(pinGroup).toHaveBeenCalledWith("p1", "movie", "Drama", 0);
+		expect(unpinGroup).toHaveBeenCalledWith("p1", "movie", "Drama");
+		expect(mockGetPinned.mock.calls).toEqual([
+			["p1", "movie"],
+			["p1", "movie"],
+		]);
 	});
 
 	it("does nothing until a provider is chosen", async () => {

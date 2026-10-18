@@ -3,6 +3,7 @@
 
 import { defineConfig, mergeConfig, type Plugin } from "vitest/config";
 import base from "./vitest.config.ts";
+import { isCompiler } from "./react-compiler.config.ts";
 
 /**
  * Stryker runs each mutant against only the tests that reached it, which it
@@ -39,7 +40,19 @@ const matchVitestTestNames = (): Plugin => ({
 // mutant crashes a test runner process, Stryker prints the end of that
 // process's output, and GitHub shows those lines as errors on a run that
 // passed. Stryker reads the results itself, so the default reporter is enough.
+/**
+ * Stryker's mutants turn expressions into conditionals, which the React
+ * Compiler can't compile inside a try, and its build check would then stop
+ * the file from loading. The mutants test what the code does, which doesn't
+ * depend on memoizing, so these runs leave the compiler out. The normal test
+ * run checks the compiled code.
+ */
+const withoutCompiler = {
+	...base,
+	plugins: (base.plugins ?? []).flat().filter((plugin) => !isCompiler(plugin)),
+};
+
 export default mergeConfig(
-	base,
+	withoutCompiler,
 	defineConfig({ plugins: [matchVitestTestNames()], test: { reporters: ["default"] } })
 );
