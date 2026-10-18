@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { EventCallback } from "@tauri-apps/api/event";
 
 const handlers = vi.hoisted(() => new Map<string, EventCallback<unknown>>());
@@ -198,6 +199,19 @@ describe("useRemoteSessions", () => {
 		expect(result.current).toEqual([]);
 	});
 
+	it("keeps the newest list when a first load answers late", async () => {
+		// StrictMode mounts twice, so the first load's answer comes for a
+		// mount that has gone.
+		let late: (list: ReturnType<typeof session>[]) => void = () => {};
+		vi.mocked(remoteSessions)
+			.mockImplementationOnce(() => new Promise((r) => (late = r)))
+			.mockResolvedValueOnce([session(true)]);
+		const { result } = renderHook(() => useRemoteSessions(), { wrapper: StrictMode });
+		await waitFor(() => expect(result.current).toEqual([session(true)]));
+		await act(async () => late([session(false)]));
+		expect(result.current).toEqual([session(true)]);
+	});
+
 	it("ignores a list that arrives after unmounting", async () => {
 		let resolve: (list: ReturnType<typeof session>[]) => void = () => {};
 		vi.mocked(remoteSessions).mockImplementationOnce(() => new Promise((r) => (resolve = r)));
@@ -215,6 +229,17 @@ describe("usePublishRemoteState", () => {
 		expect(getMountedPlayer()).toBe(destination);
 		view.unmount();
 		expect(getMountedPlayer()).toBeNull();
+	});
+
+	it("registers the player the page uses now", () => {
+		const first = fakeDestination().destination;
+		const second = fakeDestination().destination;
+		const view = renderHook(({ player }) => usePublishRemoteState(player, channel), {
+			initialProps: { player: first },
+		});
+		view.rerender({ player: second });
+		expect(getMountedPlayer()).toBe(second);
+		view.unmount();
 	});
 
 	it("leaves a newer player registered when an older one unmounts", () => {

@@ -51,6 +51,7 @@ pub fn save(dir: &Path, key: &DeviceKey) -> io::Result<()> {
     let tmp = dir.join(format!("{KEY_FILE}.tmp"));
     // A leftover from a crash may have other permissions; start afresh.
     match fs::remove_file(&tmp) {
+        // mutants: skip MatchArmGuard: Another error leaves the leftover in place, and create_new then fails on it, so saving fails either way.
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
@@ -131,6 +132,23 @@ mod tests {
         let inner = dir.path().join("a").join("b");
         load_or_create(&inner).unwrap();
         assert!(inner.join(KEY_FILE).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_file_it_may_not_read_is_kept_and_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(KEY_FILE);
+        fs::write(&path, [7u8; KEY_LEN]).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&path).is_ok() {
+            // Running as root, which reads anything.
+            return;
+        }
+        assert!(load_or_create(dir.path()).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), vec![7u8; KEY_LEN], "not replaced");
     }
 
     #[cfg(unix)]

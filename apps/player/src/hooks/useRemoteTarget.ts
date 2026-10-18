@@ -30,20 +30,24 @@ import type { Channel } from "@/lib/types";
  */
 const useTauriEvent = <T>(event: string, handler: (payload: T) => void): void => {
 	const handlerRef = useLatestRef(handler);
-	useEffect(() => {
-		let current = true;
-		let unlisten: (() => void) | undefined;
-		listen<T>(event, ({ payload }) => handlerRef.current(payload))
-			.then((stop) => {
-				if (current) unlisten = stop;
-				else stop();
-			})
-			.catch(() => {});
-		return () => {
-			current = false;
-			unlisten?.();
-		};
-	}, [event, handlerRef]);
+	useEffect(
+		() => {
+			let current = true;
+			let unlisten: (() => void) | undefined;
+			listen<T>(event, ({ payload }) => handlerRef.current(payload))
+				.then((stop) => {
+					if (current) unlisten = stop;
+					else stop();
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+				unlisten?.();
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: every caller passes a fixed event name, and the ref never changes, so the effect runs once either way.
+		[event, handlerRef]
+	);
 };
 
 /**
@@ -78,18 +82,22 @@ export const useRemoteTarget = (): void => {
 export const useRemoteSessions = (): RemoteSession[] => {
 	const [sessions, setSessions] = useState<RemoteSession[]>([]);
 	useTauriEvent<RemoteSession[]>("remote://sessions", setSessions);
-	useEffect(() => {
-		let current = true;
-		remoteSessions()
-			.then((list) => {
-				// Anything but a list, as from a backend without remote control, is none.
-				if (current) setSessions(Array.isArray(list) ? list : []);
-			})
-			.catch(() => {});
-		return () => {
-			current = false;
-		};
-	}, []);
+	useEffect(
+		() => {
+			let current = true;
+			remoteSessions()
+				.then((list) => {
+					// Anything but a list, as from a backend without remote control, is none.
+					if (current) setSessions(Array.isArray(list) ? list : []);
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
+	);
 	return sessions;
 };
 
@@ -137,11 +145,9 @@ export interface ConsentRequest {
 	code: string;
 	/** `performance.now()` when the request runs out. */
 	expiresAt: number;
-	/** How long it had when it arrived, in milliseconds. */
-	expiresInMs: number;
 }
 
-type ConsentEvent = Omit<ConsentRequest, "expiresAt">;
+type ConsentEvent = Omit<ConsentRequest, "expiresAt"> & { expiresInMs: number };
 
 /**
  * The request on screen, if any, and the way to answer it. The Rust side
@@ -149,19 +155,16 @@ type ConsentEvent = Omit<ConsentRequest, "expiresAt">;
  */
 export const useConsentRequest = (): {
 	request: ConsentRequest | null;
-	answer: (allow: boolean) => void;
+	answer: (request: ConsentRequest, allow: boolean) => void;
 } => {
 	const [request, setRequest] = useState<ConsentRequest | null>(null);
-	useTauriEvent<ConsentEvent>("remote://consent", (event) =>
-		setRequest({ ...event, expiresAt: performance.now() + event.expiresInMs })
+	useTauriEvent<ConsentEvent>("remote://consent", ({ expiresInMs, ...event }) =>
+		setRequest({ ...event, expiresAt: performance.now() + expiresInMs })
 	);
 	useTauriEvent<{ request: number }>("remote://consent-hidden", ({ request: hidden }) =>
 		setRequest((shown) => (shown?.request === hidden ? null : shown))
 	);
-	const requestRef = useLatestRef(request);
-	const answer = (allow: boolean) => {
-		const shown = requestRef.current;
-		if (!shown) return;
+	const answer = (shown: ConsentRequest, allow: boolean) => {
 		// Off screen at once; the Rust side shows the next one, if any.
 		setRequest(null);
 		remoteAnswerConsent(shown.request, allow).catch(() => {});

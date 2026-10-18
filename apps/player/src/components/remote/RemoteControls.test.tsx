@@ -80,6 +80,7 @@ beforeEach(() => {
 describe("DevicesButton", () => {
 	it("opens the picker with this device and the Cinette devices", () => {
 		render(<DevicesButton />);
+		expect(screen.queryByRole("dialog"), "closed until asked").toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
 		const picker = screen.getByRole("dialog", { name: "Play on" });
 		expect(within(picker).getByRole("button", { name: /This device/ })).toHaveAttribute(
@@ -89,12 +90,31 @@ describe("DevicesButton", () => {
 		expect(within(picker).getByRole("button", { name: /Den/ })).toBeDisabled();
 	});
 
-	it("asks a device for control", () => {
+	it("asks the device chosen for control", () => {
+		const kitchen = { ...tv, deviceId: "k1", name: "Kitchen" };
+		control.state = { ...control.state, devices: [tv, kitchen] };
 		render(<DevicesButton />);
-		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
-		fireEvent.click(screen.getByRole("button", { name: /Living Room/ }));
-		expect(control.connect).toHaveBeenCalledWith(tv);
+		const button = screen.getByRole("button", { name: "Play on another device" });
+		expect(button).toHaveAttribute("title", "Play on another device");
+		fireEvent.click(button);
+		fireEvent.click(screen.getByRole("button", { name: /Kitchen/ }));
+		expect(control.connect).toHaveBeenCalledWith(kitchen);
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("clears an earlier error when asking again", async () => {
+		control.connect.mockRejectedValueOnce("Couldn't reach it.");
+		render(<DevicesButton />);
+		const open = () =>
+			fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		open();
+		fireEvent.click(screen.getByRole("button", { name: /Living Room/ }));
+		await screen.findByRole("status");
+		open();
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", { name: /Living Room/ })
+		);
+		await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
 	});
 
 	it("says why a request couldn't start, until dismissed", async () => {
@@ -113,6 +133,7 @@ describe("DevicesButton", () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		render(<DevicesButton />);
 		const button = screen.getByRole("button", { name: "Playing on Living Room" });
+		expect(button).toHaveAttribute("title", "Playing on Living Room");
 		expect(button).toHaveClass("text-primary");
 		fireEvent.click(button);
 		const picker = screen.getByRole("dialog", { name: "Play on" });
@@ -166,7 +187,8 @@ describe("ConnectStatusDialog", () => {
 			link: link({ phase: "pending", expiresInMs: 30_000 }, "042917"),
 		};
 		render(<ConnectStatusDialog />);
-		screen.getByRole("dialog", { name: "Waiting for Living Room to allow it" });
+		const dialog = screen.getByRole("dialog", { name: "Waiting for Living Room to allow it" });
+		expect(dialog).toHaveTextContent("Check that this code matches the one on that device.");
 		expect(screen.getByLabelText("Code 0 4 2 9 1 7")).toHaveTextContent("042 917");
 	});
 
