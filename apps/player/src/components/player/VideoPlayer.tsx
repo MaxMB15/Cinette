@@ -487,7 +487,7 @@ export const PlayerView = () => {
 			if (saved && shouldOfferResume(saved.positionSeconds, saved.durationSeconds)) {
 				const s = mpvStateRef.current;
 				const wasPlaying = s.isPlaying && !s.isPaused;
-				if (wasPlaying) playback.pause();
+				if (wasPlaying) mpv.pause();
 				setPendingResume({
 					channel: ch,
 					position: saved.positionSeconds,
@@ -500,7 +500,7 @@ export const PlayerView = () => {
 			}
 			commitPlayback(ch, undefined, apply);
 		},
-		[playback, mpvStateRef, flushProgress, commitPlayback]
+		[mpv, mpvStateRef, flushProgress, commitPlayback]
 	);
 
 	const resolveResume = useCallback(
@@ -510,7 +510,7 @@ export const PlayerView = () => {
 			setPendingResume(null);
 			containerRef.current?.focus();
 			if (choice === "cancel") {
-				if (pending.wasPlaying) playback.play();
+				if (pending.wasPlaying) mpv.play();
 				if (pending.origin === "nav") navigate(-1);
 				return;
 			}
@@ -526,7 +526,7 @@ export const PlayerView = () => {
 				pending.apply
 			);
 		},
-		[pendingResume, playback, navigate, commitPlayback]
+		[pendingResume, mpv, navigate, commitPlayback]
 	);
 
 	// When the player is re-entered with a new item while the previous one kept

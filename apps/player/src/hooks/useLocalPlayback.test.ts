@@ -95,6 +95,9 @@ describe("useLocalPlayback", () => {
 			ok: true,
 		});
 		await expect(result.current.load(remote)).rejects.toBeInstanceOf(UnsupportedError);
+		await expect(result.current.load(remote)).rejects.toThrow(
+			"Playing another device's item isn't supported here"
+		);
 		expect(p.load).not.toHaveBeenCalled();
 	});
 
