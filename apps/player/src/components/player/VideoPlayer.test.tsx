@@ -98,6 +98,9 @@ const tauri = vi.hoisted(() => ({
 	stopDownload: vi.fn<typeof Bridge.stopDownload>(async () => {}),
 	removeDownload: vi.fn<typeof Bridge.removeDownload>(async () => {}),
 	getSkipSegments: vi.fn<typeof Bridge.getSkipSegments>(async () => []),
+	// No device controls this one in these tests.
+	remoteSessions: vi.fn<typeof Bridge.remoteSessions>(async () => []),
+	remoteSetState: vi.fn<typeof Bridge.remoteSetState>(async () => {}),
 }));
 
 /**

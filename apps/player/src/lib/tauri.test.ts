@@ -10,6 +10,7 @@ import { deferred } from "@/test/deferred";
 import { mpvLoad, mpvStop } from "./tauri";
 import * as tauri from "./tauri";
 import type { Channel } from "./types";
+import type { RemotePlayerState } from "./remote-target";
 import commandArguments from "../../src-tauri/src/commands/tests/arguments.json";
 
 const ARGUMENTS_FILE = "src-tauri/src/commands/tests/arguments.json";
@@ -122,6 +123,27 @@ describe("backend commands", () => {
 	const samples: [string, string[]][] = [["News", ["CNN", "BBC"]]];
 
 	type Case = [name: string, call: () => Promise<unknown>, command: string, args?: object];
+
+	const remoteState: RemotePlayerState = {
+		status: "idle",
+		item: null,
+		position: 0,
+		duration: 0,
+		volume: null,
+		subtitles: [],
+		subtitleId: null,
+		audio: [],
+		audioId: null,
+		capabilities: {
+			pause: false,
+			seek: false,
+			volume: false,
+			subtitles: false,
+			audioTracks: false,
+			resumeAt: false,
+		},
+		error: null,
+	};
 
 	const cases: Case[] = [
 		// mpv
@@ -595,6 +617,45 @@ describe("backend commands", () => {
 			},
 		],
 		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
+		// remote control
+		["remoteGetSettings", () => tauri.remoteGetSettings(), "remote_get_settings"],
+		[
+			"remoteSetSettings",
+			() =>
+				tauri.remoteSetSettings({
+					discoverable: false,
+					remoteControl: "never",
+					deviceName: "Den",
+				}),
+			"remote_set_settings",
+			{ settings: { discoverable: false, remoteControl: "never", deviceName: "Den" } },
+		],
+		["remoteResetIdentity", () => tauri.remoteResetIdentity(), "remote_reset_identity"],
+		[
+			"remoteAnswerConsent",
+			() => tauri.remoteAnswerConsent(3, true),
+			"remote_answer_consent",
+			{ request: 3, allow: true },
+		],
+		["remoteSessions", () => tauri.remoteSessions(), "remote_sessions"],
+		[
+			"remoteDisconnect",
+			() => tauri.remoteDisconnect("s1"),
+			"remote_disconnect",
+			{ sessionId: "s1" },
+		],
+		[
+			"remoteSetState",
+			() => tauri.remoteSetState(remoteState),
+			"remote_set_state",
+			{ state: remoteState },
+		],
+		[
+			"remoteFinishCommand",
+			() => tauri.remoteFinishCommand(9, "staleItem"),
+			"remote_finish_command",
+			{ token: 9, outcome: "staleItem" },
+		],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));

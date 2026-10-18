@@ -103,5 +103,13 @@
 		"required": ["channelId", "startAt", "endAt"],
 		"optional": ["program"]
 	},
-	"stop_recording": { "required": ["id"] }
+	"stop_recording": { "required": ["id"] },
+	"remote_get_settings": {},
+	"remote_set_settings": { "required": ["settings"] },
+	"remote_reset_identity": {},
+	"remote_answer_consent": { "required": ["request", "allow"] },
+	"remote_sessions": {},
+	"remote_disconnect": { "required": ["sessionId"] },
+	"remote_set_state": { "required": ["state"] },
+	"remote_finish_command": { "required": ["token", "outcome"] }
 }
