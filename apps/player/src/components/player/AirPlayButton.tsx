@@ -19,6 +19,31 @@ interface AirPlayButtonProps {
 	warning: string;
 }
 
+/** Asks before this device converts a stream for the TV. */
+const ConfirmConvert = ({
+	warning,
+	onAnswer,
+}: {
+	warning: string;
+	onAnswer: (ok: boolean) => void;
+}) => (
+	<div
+		role="dialog"
+		aria-label="Convert on this device?"
+		className="absolute right-0 bottom-full mb-2 w-64 rounded bg-black/90 px-3 py-2 text-left text-xs text-white"
+	>
+		<p>{warning}</p>
+		<div className="mt-2 flex justify-end gap-2">
+			<Button variant="ghost" size="sm" onClick={() => onAnswer(false)}>
+				Cancel
+			</Button>
+			<Button variant="secondary" size="sm" onClick={() => onAnswer(true)}>
+				Send to TV
+			</Button>
+		</div>
+	</div>
+);
+
 /**
  * The player's AirPlay button. It asks before this device converts a
  * stream, and says why under it when an item can't go.
@@ -29,10 +54,6 @@ export const AirPlayButton = ({ onSend, warning }: AirPlayButtonProps) => {
 	const [asking, setAsking] = useState<((ok: boolean) => void) | null>(null);
 
 	const confirm = () => new Promise<boolean>((resolve) => setAsking(() => resolve));
-	const answer = (ok: boolean) => {
-		asking?.(ok);
-		setAsking(null);
-	};
 
 	// A reason that's gone already has nothing to clear, which is harmless.
 	useEffect(() => {
@@ -66,21 +87,13 @@ export const AirPlayButton = ({ onSend, warning }: AirPlayButtonProps) => {
 				<Airplay className="h-5 w-5" />
 			</Button>
 			{asking && (
-				<div
-					role="dialog"
-					aria-label="Convert on this device?"
-					className="absolute right-0 bottom-full mb-2 w-64 rounded bg-black/90 px-3 py-2 text-left text-xs text-white"
-				>
-					<p>{warning}</p>
-					<div className="mt-2 flex justify-end gap-2">
-						<Button variant="ghost" size="sm" onClick={() => answer(false)}>
-							Cancel
-						</Button>
-						<Button variant="secondary" size="sm" onClick={() => answer(true)}>
-							Send to TV
-						</Button>
-					</div>
-				</div>
+				<ConfirmConvert
+					warning={warning}
+					onAnswer={(ok) => {
+						asking(ok);
+						setAsking(null);
+					}}
+				/>
 			)}
 			{notice && (
 				<p

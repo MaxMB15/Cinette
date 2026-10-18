@@ -443,5 +443,7 @@ describe("useAirPlay converting", () => {
 		expect(result.current.destination).toBeNull();
 		expect(tauri.airplayEndConversion).toHaveBeenCalled();
 		expect(tauri.airplayStop).toHaveBeenCalled();
+		// The failed destination stopped listening for the TV's state.
+		expect(events.count("airplay://state")).toBe(0);
 	});
 });

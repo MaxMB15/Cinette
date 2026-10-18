@@ -41,6 +41,7 @@ import type { Channel } from "@/lib/types";
 const ROUTE_GRACE_MS = 1000;
 
 /** What a device that can't convert offers, until the backend says. */
+// Stryker disable next-line ObjectLiteral, BooleanLiteral: A sender that can't convert never reads hardwareEncoder, and a missing convert is false too.
 const NO_CONVERTER: ConverterSupport = { convert: false, hardwareEncoder: false };
 
 const bridge: AirPlayBridge = {
