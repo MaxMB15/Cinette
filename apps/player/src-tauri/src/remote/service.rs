@@ -108,6 +108,7 @@ impl RemoteService {
                 .links
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             timeouts: link::Timeouts::STANDARD,
+            clock: Arc::new(super::clock::now),
         };
         lock(&self.devices).keep(Some(device));
         // The slot stays locked until the new link is in it, so the link's

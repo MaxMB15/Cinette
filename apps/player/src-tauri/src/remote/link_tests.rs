@@ -9,6 +9,7 @@ use crate::discovery::Registration;
 use crate::remote::target::{self, CatalogPage, TargetHandle, TargetHost};
 use crate::remote::test_client::WAIT;
 use mvp_core::remote::consent::{Answer, RequestId};
+use mvp_core::remote::controller::GIVE_UP_AFTER;
 use mvp_core::remote::message::{DeviceType, Feature, PlaybackSnapshot, PROTOCOL_VERSION};
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
@@ -23,13 +24,16 @@ use tokio::time::timeout;
 struct Player {
     target: Mutex<Option<TargetHandle>>,
     prompts: mpsc::UnboundedSender<(RequestId, String)>,
+    hidden: mpsc::UnboundedSender<RequestId>,
 }
 
 impl TargetHost for Player {
     fn show_consent(&self, prompt: &ConsentPrompt) {
         let _ = self.prompts.send((prompt.request, prompt.code.clone()));
     }
-    fn hide_consent(&self, _: RequestId) {}
+    fn hide_consent(&self, request: RequestId) {
+        let _ = self.hidden.send(request);
+    }
     fn sessions_changed(&self, _: &[SessionInfo]) {}
     fn apply(&self, token: u64, _: &Command) {
         if let Some(target) = self.target.lock().unwrap().as_ref() {
@@ -54,6 +58,7 @@ struct Target {
     key: DeviceKey,
     port: u16,
     prompts: mpsc::UnboundedReceiver<(RequestId, String)>,
+    hidden: mpsc::UnboundedReceiver<RequestId>,
 }
 
 async fn target(mode: ControlMode) -> Target {
@@ -61,9 +66,11 @@ async fn target(mode: ControlMode) -> Target {
     let port = listener.local_addr().unwrap().port();
     let key = DeviceKey::generate();
     let (tx, prompts) = mpsc::unbounded_channel();
+    let (hide, hidden) = mpsc::unbounded_channel();
     let player = Arc::new(Player {
         target: Mutex::new(None),
         prompts: tx,
+        hidden: hide,
     });
     let settings = RemoteSettings {
         remote_control: mode,
@@ -83,6 +90,7 @@ async fn target(mode: ControlMode) -> Target {
         key,
         port,
         prompts,
+        hidden,
     }
 }
 
@@ -235,11 +243,22 @@ fn link_with(target: &Target, addresses: Addresses, grace: Duration) -> Link {
     link_timed(target, addresses, grace, Timeouts::STANDARD)
 }
 
-fn link_timed(
+fn link_timed(target: &Target, addresses: Addresses, grace: Duration, timeouts: Timeouts) -> Link {
+    link_clocked(
+        target,
+        addresses,
+        grace,
+        timeouts,
+        Arc::new(crate::remote::clock::now),
+    )
+}
+
+fn link_clocked(
     target: &Target,
     addresses: Addresses,
     grace: Duration,
     timeouts: Timeouts,
+    clock: Clock,
 ) -> Link {
     let (tx, changes) = mpsc::unbounded_channel();
     let recorder = Arc::new(Recorder {
@@ -263,6 +282,7 @@ fn link_timed(
             grace,
             generation: 7,
             timeouts,
+            clock,
         },
         recorder.clone(),
     );
@@ -578,7 +598,11 @@ async fn it_waits_longer_before_each_attempt() {
     let first = Instant::now();
     link.until_phase(Phase::Reconnecting { attempt: 2 }).await;
     // The second wait is two seconds.
-    assert!(first.elapsed() >= Duration::from_millis(1500), "{:?}", first.elapsed());
+    assert!(
+        first.elapsed() >= Duration::from_millis(1500),
+        "{:?}",
+        first.elapsed()
+    );
     link.handle.leave().await;
 }
 
@@ -586,7 +610,10 @@ async fn it_waits_longer_before_each_attempt() {
 async fn a_device_missing_from_discovery_for_a_while_is_tried_again() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
-    let found = Arc::new(Mutex::new(vec![SocketAddr::from(([127, 0, 0, 1], proxy.port))]));
+    let found = Arc::new(Mutex::new(vec![SocketAddr::from((
+        [127, 0, 0, 1],
+        proxy.port,
+    ))]));
     let list = found.clone();
     let mut link = link_with(&t, Arc::new(move || list.lock().unwrap().clone()), GRACE);
     link.until_phase(Phase::Connected).await;
@@ -602,7 +629,10 @@ async fn a_device_missing_from_discovery_for_a_while_is_tried_again() {
             == 2
     })
     .await;
-    assert!(!link.phases().iter().any(|p| matches!(p, Phase::Closed { .. })));
+    assert!(!link
+        .phases()
+        .iter()
+        .any(|p| matches!(p, Phase::Closed { .. })));
 }
 
 #[tokio::test]
@@ -649,7 +679,10 @@ async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
     tokio::time::sleep(Duration::from_millis(2500)).await;
     t.handle.answer(request, Answer::Allow);
     link.until_phase(Phase::Connected).await;
-    assert!(!link.phases().iter().any(|p| matches!(p, Phase::Closed { .. })));
+    assert!(!link
+        .phases()
+        .iter()
+        .any(|p| matches!(p, Phase::Closed { .. })));
 }
 
 #[tokio::test]
@@ -671,7 +704,43 @@ async fn it_pings_only_after_a_quiet_spell() {
     let before = proxy.sent.load(Ordering::SeqCst);
     // More than a nap, less than the ping interval.
     tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert_eq!(proxy.sent.load(Ordering::SeqCst), before, "nothing to say yet");
+    assert_eq!(
+        proxy.sent.load(Ordering::SeqCst),
+        before,
+        "nothing to say yet"
+    );
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(proxy.sent.load(Ordering::SeqCst) > before, "a ping after four seconds");
+    assert!(
+        proxy.sent.load(Ordering::SeqCst) > before,
+        "a ping after four seconds"
+    );
+}
+
+#[tokio::test]
+async fn gives_up_on_a_device_that_never_answers_and_withdraws_the_request() {
+    let mut t = target(ControlMode::Ask).await;
+    // A clock the test can move on.
+    let skew = Arc::new(Mutex::new(Duration::ZERO));
+    let ahead = skew.clone();
+    let clock: Clock = Arc::new(move || crate::remote::clock::now() + *ahead.lock().unwrap());
+    let port = t.port;
+    let mut link = link_clocked(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        Timeouts::STANDARD,
+        clock,
+    );
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    link.until(|l| {
+        l.phases()
+            .iter()
+            .any(|p| matches!(p, Phase::Pending { .. }))
+    })
+    .await;
+    *skew.lock().unwrap() = GIVE_UP_AFTER;
+    assert_eq!(link.closed().await, Ended::Target(CloseReason::Timeout));
+    // The target hears the request withdrawn, so its dialog goes.
+    let hidden = timeout(WAIT, t.hidden.recv()).await.unwrap().unwrap();
+    assert_eq!(hidden, request);
 }
