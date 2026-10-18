@@ -104,6 +104,7 @@ export const AirPlayPanel = ({
 						<select
 							className="rounded bg-white/10 px-2 py-1 text-sm"
 							aria-label="Subtitles"
+							// Stryker disable next-line StringLiteral: A select whose value matches no option shows its first, which is "No subtitles", the option "" picks.
 							value={state.subtitleId ?? ""}
 							onChange={(e) =>
 								onSubtitle(e.target.value === "" ? null : e.target.value)

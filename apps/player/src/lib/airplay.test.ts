@@ -295,7 +295,7 @@ describe("createAirPlayDestination", () => {
 				{ kind: "remote", itemId: "x", title: "X" },
 				{ route: { via: "direct", format: 0 } }
 			)
-		).rejects.toBeInstanceOf(UnsupportedError);
+		).rejects.toThrow("Playing another device's item isn't supported here");
 		expect(bridge.load).not.toHaveBeenCalled();
 	});
 
