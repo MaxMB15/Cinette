@@ -225,6 +225,14 @@ pub struct Advertisement {
 
 /// Starts advertising a service.
 pub fn advertise(registration: &Registration) -> Result<Advertisement, DiscoveryError> {
+    check_registration(registration)?;
+    Ok(Advertisement {
+        _handle: platform::advertise(registration)?,
+    })
+}
+
+/// Refuses a record either platform would refuse, so both refuse the same.
+fn check_registration(registration: &Registration) -> Result<(), DiscoveryError> {
     check_service_type(&registration.service_type)?;
     if registration.instance.is_empty() || registration.instance.len() > 63 {
         return Err(DiscoveryError(
@@ -243,11 +251,7 @@ pub fn advertise(registration: &Registration) -> Result<Advertisement, Discovery
             registration.host_label
         )));
     }
-    // Checked here so both platforms refuse the same records.
-    registration.txt.encode()?;
-    Ok(Advertisement {
-        _handle: platform::advertise(registration)?,
-    })
+    registration.txt.encode().map(drop)
 }
 
 /// A service type is `_name._tcp` or `_name._udp`.
