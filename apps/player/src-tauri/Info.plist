@@ -7,5 +7,12 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Cinette finds the other Cinette devices and the TVs on your network, so you can play on them or control them.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_cinette._tcp</string>
+		<string>_googlecast._tcp</string>
+	</array>
 </dict>
 </plist>
