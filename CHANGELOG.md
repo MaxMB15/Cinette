@@ -4,6 +4,13 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ## [Unreleased]
 
+### Changed
+
+- The channel list scrolls and searches with far less work. While you scroll, only the rows redraw, not the tabs and category filters around them, and typing a search no longer redraws every category. The app is now built with the React Compiler, which skips redrawing what hasn't changed (#307).
+- Going back to a tab, opening a movie's or a show's details again and opening a channel's schedule again show what the app already loaded, instead of asking for it again. A guide refresh, a new playlist or an edit still loads what it changed (#308, #310, #311, #313, #314, #315).
+
+## [0.8.0] - 2026-10-17
+
 ### Added
 
 - The project has a website at https://maxmb15.github.io/Cinette/. It shows what the app does and links each download of the latest release with its size (#288).
@@ -14,8 +21,6 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 - The project moved to https://github.com/MaxMB15/Cinette. Links to github.com/MaxMB15/MaxVideoPlayer still work, and so do updates from older versions (#294).
 - Cinette has a new icon, and the website uses it too (#295).
 - The app's identifier is now `app.cinette`, so its folders have new names, such as `~/Library/Application Support/app.cinette` on macOS and `~/.local/share/app.cinette` on Linux. The first launch moves your playlists, favorites, settings, downloads and player preferences there from the old `com.maxvideoplayer.app` folders, so an older version opened afterwards starts empty. macOS may ask again to let the app find devices on your local network (#296).
-- The channel list scrolls and searches with far less work. While you scroll, only the rows redraw, not the tabs and category filters around them, and typing a search no longer redraws every category. The app is now built with the React Compiler, which skips redrawing what hasn't changed (#307).
-- Going back to a tab, opening a movie's or a show's details again and opening a channel's schedule again show what the app already loaded, instead of asking for it again. A guide refresh, a new playlist or an edit still loads what it changed (#308, #310, #311, #313, #314, #315).
 - The demo playlist in `docs/demo` has a made-up guide for its live test streams. Its pictures now load from this repo, and Amazon's IVS test stream replaces Akamai's, which no longer plays (#289).
 
 ### Fixed
@@ -433,7 +438,8 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MaxMB15/Cinette/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/MaxMB15/Cinette/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MaxMB15/Cinette/compare/v0.5.3...v0.6.0
