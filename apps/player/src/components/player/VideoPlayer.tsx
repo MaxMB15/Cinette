@@ -1262,11 +1262,10 @@ export const PlayerView = () => {
 		/>
 	) : undefined;
 
-	/** Sends what plays to AirPlay. Resolves to why it couldn't, if it couldn't. */
-	const sendToAirPlay = async (anchor: DOMRect): Promise<string | null> => {
-		if (!activeChannel) return null;
+	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
+	const sendToAirPlay = async (channel: Channel, anchor: DOMRect): Promise<string | null> => {
 		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
-		const result = await airplay.send(activeChannel, {
+		const result = await airplay.send(channel, {
 			anchor,
 			startAt,
 			stopLocal: async () => {
@@ -1279,10 +1278,38 @@ export const PlayerView = () => {
 		console.warn("[VideoPlayer] AirPlay failed:", result.error);
 		return "Couldn't start AirPlay.";
 	};
+	const tv = airplay.destination;
 	const castSlot =
 		airplay.available && activeChannel && !airplay.destination ? (
-			<AirPlayButton onSend={sendToAirPlay} />
+			<AirPlayButton onSend={(anchor) => sendToAirPlay(activeChannel, anchor)} />
 		) : undefined;
+
+	// Stryker disable next-line LogicalOperator: The state is null exactly when there's no destination, so either one alone gives the same answer.
+	const airplayPanel = tv && airplay.state && (
+		<AirPlayPanel
+			name={tv.name}
+			state={airplay.state}
+			capabilities={tv.capabilities}
+			onPlay={() => void tv.play()}
+			onPause={() => void tv.pause()}
+			onSeek={(position) => void tv.seek(position)}
+			onSubtitle={(id) => void tv.selectSubtitle(id)}
+			onAudio={(id) => void tv.selectAudio(id)}
+			onPlayHere={(position) => {
+				void airplay.stop();
+				// Stryker disable next-line ConditionalExpression: The panel only shows after a send, which needs a channel, and nothing clears the channel while it shows.
+				if (activeChannel)
+					void playback.load(
+						{ kind: "local", channel: activeChannel },
+						{ startAt: position > 0 ? position : undefined }
+					);
+			}}
+			onStop={() => {
+				void airplay.stop();
+				handleStop();
+			}}
+		/>
+	);
 
 	// Resumes where the stream broke, not from the start of the movie or episode.
 	const retryStream = () => {
@@ -1403,30 +1430,7 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{airplay.destination && airplay.state && (
-				<AirPlayPanel
-					name={airplay.destination.name}
-					state={airplay.state}
-					capabilities={airplay.destination.capabilities}
-					onPlay={() => void airplay.destination?.play()}
-					onPause={() => void airplay.destination?.pause()}
-					onSeek={(position) => void airplay.destination?.seek(position)}
-					onSubtitle={(id) => void airplay.destination?.selectSubtitle(id)}
-					onAudio={(id) => void airplay.destination?.selectAudio(id)}
-					onPlayHere={(position) => {
-						void airplay.stop();
-						if (activeChannel)
-							void playback.load(
-								{ kind: "local", channel: activeChannel },
-								{ startAt: position > 0 ? position : undefined }
-							);
-					}}
-					onStop={() => {
-						void airplay.stop();
-						handleStop();
-					}}
-				/>
-			)}
+			{airplayPanel}
 
 			{!mpv.fallbackActive && !airplay.destination && (
 				<Controls

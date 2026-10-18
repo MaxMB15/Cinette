@@ -3446,11 +3446,13 @@ describe("AirPlay", () => {
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
 
-		vi.spyOn(console, "warn").mockImplementation(() => {});
-		send.mockResolvedValueOnce({ sent: false, why: "failed", error: new Error("x") });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const error = new Error("x");
+		send.mockResolvedValueOnce({ sent: false, why: "failed", error });
 		fireEvent.click(airplayButton()!);
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't start AirPlay.");
+		expect(warn).toHaveBeenCalledWith("[VideoPlayer] AirPlay failed:", error);
 	});
 
 	it("covers the player with its own controls while the TV plays", async () => {
