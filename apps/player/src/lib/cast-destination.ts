@@ -209,12 +209,14 @@ export const castRouteOf = (route: PlayRoute, formats: StreamFormats): CastRoute
 	if (route.via === "direct")
 		return {
 			via: "direct",
+			generation: formats.generation,
 			source: formats.sources[route.format],
 			container: formats.formats[route.format].container,
 		};
 	if (route.via === "converted")
 		return {
 			via: "converted",
+			generation: formats.generation,
 			source: formats.sources[route.format],
 			video: route.video,
 			audio: route.audio,
@@ -240,6 +242,10 @@ export const throughThisDevice = (route: PlayRoute, formats: StreamFormats): Pla
 /** What `castLoad` rejects with when a direct playlist failed its check at
  *  cast time, so the item routes again without that format. */
 const FORMAT_FAILED = ["notPlaylist", "cors"];
+
+/** What `castLoad` rejects with when the formats were listed before the
+ *  backend's newest list of the item's URLs. */
+export const STALE = "stale";
 
 /** The Cast destination for `receiver`, which the backend reaches through
  *  `backend`. */
@@ -341,6 +347,8 @@ export const createCastDestination = (
 				await send(channel, castRoute, formats, opts?.startAt);
 			} catch (e) {
 				if (FORMAT_FAILED.includes(String(e))) forget(channel, formats, castRoute.source);
+				// The backend has a newer list of the item's URLs, so ask again.
+				if (String(e) === STALE) known.delete(channel.id);
 				publish({
 					...snapshot,
 					loading: false,
