@@ -283,9 +283,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(invoke_handler())
         .setup(|app| {
-            // Before anything makes an HTTPS request.
+            // Before anything makes an HTTPS request. If it fails, every HTTPS
+            // request would hang, so the app stops here instead.
             #[cfg(target_os = "android")]
-            android_tls::init();
+            android_tls::init().expect("HTTPS certificate checks could not start");
 
             let app_dir = app
                 .path()

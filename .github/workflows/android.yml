@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
+
 name: Android
 
 # Builds a debug APK for 64-bit and 32-bit ARM, with libmpv and FFmpeg from
@@ -143,7 +146,20 @@ jobs:
               unzip -l "$APK" | grep "lib/$abi/lib$lib.so"
             done
           done
-          "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt2" dump badging "$APK" | grep -E "^(package|minSdkVersion|targetSdkVersion|leanback-launchable-activity)"
+          AAPT2="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt2"
+          BADGING="$RUNNER_TEMP/badging.txt"
+          "$AAPT2" dump badging "$APK" > "$BADGING"
+          cat "$BADGING"
+          # minSdk is set in app/build.gradle.kts. aapt2 from build-tools 34
+          # and older calls the line sdkVersion.
+          if ! grep -Eq "^(minSdkVersion|sdkVersion):'28'$" "$BADGING"; then
+            echo "::error::The APK's minimum SDK isn't 28"
+            exit 1
+          fi
+          if ! grep -q "^leanback-launchable-activity:" "$BADGING"; then
+            echo "::error::The APK has no TV launcher activity"
+            exit 1
+          fi
 
       # The build above shows warnings without failing. This lints the
       # workspace for both Android targets, including the code that only
