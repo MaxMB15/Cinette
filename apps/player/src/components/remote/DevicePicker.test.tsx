@@ -95,8 +95,8 @@ describe("DevicePicker", () => {
 
 	it("puts each row's status on a line of its own", () => {
 		picker();
-		expect(screen.getByText("Fire TV")).toBeInTheDocument();
-		expect(screen.getByText("Plays directly")).toBeInTheDocument();
+		expect(screen.getByText("Fire TV")).toHaveClass("text-xs");
+		expect(screen.getByText("Plays directly")).toHaveClass("text-xs");
 	});
 
 	it("groups the rows under their headings, TVs first among Cinette devices", () => {

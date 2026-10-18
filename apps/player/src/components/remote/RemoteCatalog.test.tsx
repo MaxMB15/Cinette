@@ -355,6 +355,47 @@ describe("RemoteCatalog", () => {
 	});
 });
 
+describe("RemoteCatalog while a page loads", () => {
+	it("says it's loading a group and offers no more of the last one", async () => {
+		let resolve: (page: { items: CatalogItem[]; next: string | null }) => void = () => {};
+		vi.mocked(remoteCatalog)
+			.mockResolvedValueOnce({ items: [item("UK", "UK")], next: "x" })
+			.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
+		render(<RemoteCatalog link={link()} />);
+		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
+		expect(screen.getByText("Loading…")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+		await act(async () => resolve({ items: [item("a", "One")], next: null }));
+		expect(screen.getByRole("button", { name: /One/ })).toBeInTheDocument();
+	});
+
+	it("says it's loading a search", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		vi.mocked(remoteCatalog)
+			.mockResolvedValueOnce({ items: [item("UK", "UK")], next: null })
+			.mockImplementationOnce(() => new Promise(() => {}));
+		render(<RemoteCatalog link={link()} />);
+		await act(async () => {});
+		fireEvent.change(screen.getByRole("textbox"), { target: { value: "bbc" } });
+		await act(async () => vi.advanceTimersByTime(SEARCH_DELAY_MS));
+		expect(screen.getByText("Loading…")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "UK" })).toBeNull();
+	});
+
+	it("keeps offering more while there is more", async () => {
+		answer({
+			[groups("live")]: { items: [item("UK", "UK")], next: null },
+			[groupItems("UK")]: { items: [item("a", "One")], next: "b" },
+			[groupItems("UK", "b")]: { items: [item("b", "Two")], next: "c" },
+		});
+		render(<RemoteCatalog link={link()} />);
+		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+		await screen.findByRole("button", { name: /Two/ });
+		expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
+	});
+});
+
 describe("episodeLabel", () => {
 	it("needs both the season and the episode", () => {
 		expect(episodeLabel(item("a", "A", { season: 2, episode: 5 }))).toBe("S2 E5");

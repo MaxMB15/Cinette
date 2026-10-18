@@ -80,6 +80,7 @@ beforeEach(() => {
 describe("DevicesButton", () => {
 	it("opens the picker with this device and the Cinette devices", () => {
 		render(<DevicesButton />);
+		expect(screen.queryByRole("dialog"), "closed until asked").toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
 		const picker = screen.getByRole("dialog", { name: "Play on" });
 		expect(within(picker).getByRole("button", { name: /This device/ })).toHaveAttribute(

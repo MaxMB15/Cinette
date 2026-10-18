@@ -30,20 +30,24 @@ import type { Channel } from "@/lib/types";
  */
 const useTauriEvent = <T>(event: string, handler: (payload: T) => void): void => {
 	const handlerRef = useLatestRef(handler);
-	useEffect(() => {
-		let current = true;
-		let unlisten: (() => void) | undefined;
-		listen<T>(event, ({ payload }) => handlerRef.current(payload))
-			.then((stop) => {
-				if (current) unlisten = stop;
-				else stop();
-			})
-			.catch(() => {});
-		return () => {
-			current = false;
-			unlisten?.();
-		};
-	}, [event, handlerRef]);
+	useEffect(
+		() => {
+			let current = true;
+			let unlisten: (() => void) | undefined;
+			listen<T>(event, ({ payload }) => handlerRef.current(payload))
+				.then((stop) => {
+					if (current) unlisten = stop;
+					else stop();
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+				unlisten?.();
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: every caller passes a fixed event name, and the ref never changes, so the effect runs once either way.
+		[event, handlerRef]
+	);
 };
 
 /**
