@@ -506,7 +506,9 @@ async fn leaving_ends_the_session_and_the_target_plays_on() {
     assert_eq!(
         link.handle
             .catalog(CatalogQuery::Groups {
-                content_type: "live".into()
+                content_type: "live".into(),
+                cursor: None,
+                limit: 10,
             })
             .await,
         Err(LinkError::NotConnected)

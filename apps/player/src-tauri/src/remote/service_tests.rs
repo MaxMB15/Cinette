@@ -699,7 +699,7 @@ async fn one_instance_controls_another() {
     let page = mac
         .invoke(
             "remote_catalog",
-            json!({ "catalogQuery": { "kind": "groups", "contentType": "live" } }),
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 100 } }),
         )
         .unwrap();
     assert_eq!(page, json!({ "items": [], "next": null }));
@@ -739,7 +739,7 @@ async fn the_target_disconnecting_ends_the_link() {
     assert_eq!(
         mac.invoke(
             "remote_catalog",
-            json!({ "catalogQuery": { "kind": "groups", "contentType": "live" } })
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 100 } })
         ),
         Err(json!("notConnected"))
     );

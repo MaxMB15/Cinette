@@ -591,7 +591,7 @@ export const remoteCommand = (command: RemoteCommand): Promise<number> =>
 
 /** A query for the controlled device's catalog. */
 export type CatalogQuery =
-	| { kind: "groups"; contentType: string }
+	| { kind: "groups"; contentType: string; cursor?: string; limit: number }
 	| { kind: "items"; contentType: string; group: string; cursor?: string; limit: number }
 	| { kind: "search"; query: string; contentType?: string; limit: number }
 	| { kind: "episodes"; seriesId: string };
