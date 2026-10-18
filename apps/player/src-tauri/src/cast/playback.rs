@@ -21,6 +21,7 @@ use mvp_core::convert::{pick_audio, AudioPlan, Plan, VideoPlan, CAST_AUDIO};
 use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::{provider_host, shareable_logo};
 use mvp_core::streams::format::Container;
+use mvp_core::streams::hls::{self, HlsError};
 use mvp_core::streams::probe::ProbeError;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -237,6 +238,21 @@ fn logo<R: Runtime>(app: &AppHandle<R>, channel: &Channel) -> Option<String> {
     shareable_logo(logo, &hosts).then(|| logo.to_string())
 }
 
+/// Checks, just before the receiver gets it, that `url` is still a playlist
+/// the receiver may fetch. A panel's `.m3u8` can be missing or not a
+/// playlist one time and fine the next, and the formats may come from what
+/// played here, which fetched nothing. The receiver still gets `url` itself,
+/// not where it redirects, since a redirect can carry a token tied to the
+/// address that asked.
+async fn check_playlist(url: &str) -> Result<(), String> {
+    match hls::inspect(mvp_core::http::download_client(), url).await {
+        Ok(info) if info.cors => Ok(()),
+        Ok(_) => Err("cors".into()),
+        Err(HlsError::Refused(_)) => Err(REFUSED.into()),
+        Err(_) => Err("notPlaylist".into()),
+    }
+}
+
 /// The plan for converting `url`, from what a probe finds in it.
 async fn conversion_plan<R: Runtime>(
     app: &AppHandle<R>,
@@ -293,7 +309,9 @@ async fn start_conversion<R: Runtime>(
 /// Plays `channel` on `receiver_id` the way `route` says, from `start_at`
 /// seconds for an item with a length. Connects first when needed. Rejects
 /// with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
-/// `noEncoder`, `noRoute`, `converterFailed` or `noSource`.
+/// `noEncoder`, `noRoute`, `converterFailed` or `noSource`, or, for a direct
+/// HLS route, `notPlaylist` or `cors`, after which the frontend routes the
+/// item again without that format.
 pub async fn load<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
@@ -329,6 +347,9 @@ pub async fn load<R: Runtime>(
     let mut conversion = None;
     match route {
         CastRoute::Direct { container, .. } => {
+            if matches!(container, Container::HlsTs | Container::HlsFmp4) {
+                check_playlist(url).await?;
+            }
             let (content_type, ts) = content_type(container);
             request.url = url.clone();
             request.content_type = content_type.into();
