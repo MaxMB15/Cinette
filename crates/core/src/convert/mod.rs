@@ -40,16 +40,21 @@ pub enum AudioPlan {
     },
 }
 
-/// The codecs a Cast receiver plays as they are, by ffmpeg's names. A track
-/// in one of these is copied rather than converted.
-const PLAYABLE_AUDIO: [&str; 4] = ["aac", "mp3", "opus", "vorbis"];
+/// The audio codecs a Cast receiver plays as they are, by ffmpeg's names,
+/// for [`pick_audio`]. Each destination passes its own list.
+pub const CAST_AUDIO: [&str; 4] = ["aac", "mp3", "opus", "vorbis"];
 /// The codecs whose decoders mix down to stereo themselves.
 const DECODER_DOWNMIX: [&str; 3] = ["ac3", "eac3", "dts"];
 
 /// Which audio track to keep, and how. A track in `language` comes first
-/// when there is one, and among those, one the receiver plays as it is, so
-/// there's no second lossy pass. Otherwise the default track is converted.
-pub fn pick_audio(tracks: &[AudioTrack], language: Option<&str>) -> (usize, AudioPlan) {
+/// when there is one, and among those, one whose codec is in `playable`,
+/// the ffmpeg names of what the receiver plays as it is, so there's no
+/// second lossy pass. Otherwise the default track is converted.
+pub fn pick_audio(
+    tracks: &[AudioTrack],
+    language: Option<&str>,
+    playable: &[&str],
+) -> (usize, AudioPlan) {
     let in_language: Vec<usize> = (0..tracks.len())
         .filter(|&i| language.is_some_and(|l| tracks[i].language.as_deref() == Some(l)))
         .collect();
@@ -65,7 +70,7 @@ pub fn pick_audio(tracks: &[AudioTrack], language: Option<&str>) -> (usize, Audi
     };
     if let Some(&copy) = ordered
         .iter()
-        .find(|&&i| PLAYABLE_AUDIO.contains(&tracks[i].codec.as_str()))
+        .find(|&&i| playable.contains(&tracks[i].codec.as_str()))
     {
         return (copy, AudioPlan::Copy);
     }

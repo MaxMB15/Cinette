@@ -5,6 +5,7 @@ use super::mkv::{MkvError, MkvSplitter, Piece};
 use super::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
 use super::{
     args, pick_audio, AacEncoder, AudioPlan, Encoders, HardwareEncoder, NoEncoder, Plan, VideoPlan,
+    CAST_AUDIO,
 };
 use crate::streams::probe::AudioTrack;
 
@@ -142,16 +143,52 @@ fn copies_a_playable_track_in_the_chosen_language() {
         track("mp2", Some("deu"), false),
         track("mp3", Some("deu"), false),
     ];
-    assert_eq!(pick_audio(&tracks, Some("eng")), (1, AudioPlan::Copy));
-    assert_eq!(pick_audio(&tracks, Some("deu")), (3, AudioPlan::Copy));
+    assert_eq!(
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO),
+        (1, AudioPlan::Copy)
+    );
+    assert_eq!(
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO),
+        (3, AudioPlan::Copy)
+    );
     // No language asked, or none matches: any playable track, the default
     // first.
-    assert_eq!(pick_audio(&tracks, None), (1, AudioPlan::Copy));
-    assert_eq!(pick_audio(&tracks, Some("fre")), (1, AudioPlan::Copy));
+    assert_eq!(pick_audio(&tracks, None, &CAST_AUDIO), (1, AudioPlan::Copy));
+    assert_eq!(
+        pick_audio(&tracks, Some("fre"), &CAST_AUDIO),
+        (1, AudioPlan::Copy)
+    );
     for codec in ["opus", "vorbis"] {
         let tracks = [track("dts", None, true), track(codec, None, false)];
-        assert_eq!(pick_audio(&tracks, None), (1, AudioPlan::Copy), "{codec}");
+        assert_eq!(
+            pick_audio(&tracks, None, &CAST_AUDIO),
+            (1, AudioPlan::Copy),
+            "{codec}"
+        );
     }
+}
+
+#[test]
+fn copies_only_what_the_receivers_own_list_plays() {
+    // AirPlay plays AAC and MP3 in TS segments, but not Opus or Vorbis.
+    let airplay = ["aac", "mp3"];
+    let tracks = [
+        track("opus", Some("eng"), true),
+        track("mp3", Some("eng"), false),
+    ];
+    assert_eq!(
+        pick_audio(&tracks, Some("eng"), &airplay),
+        (1, AudioPlan::Copy)
+    );
+    assert_eq!(
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO),
+        (0, AudioPlan::Copy)
+    );
+    let opus = [track("opus", None, false)];
+    assert_eq!(
+        pick_audio(&opus, None, &airplay),
+        (0, AudioPlan::Aac { downmix: false })
+    );
 }
 
 #[test]
@@ -162,27 +199,30 @@ fn converts_the_default_track_when_none_plays() {
         track("aac_latm", Some("eng"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("deu")),
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO),
         (1, AudioPlan::Aac { downmix: true })
     );
     // In the chosen language, though it isn't the default.
     assert_eq!(
-        pick_audio(&tracks, Some("eng")),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO),
         (2, AudioPlan::Aac { downmix: false })
     );
     let plain = [track("mp2", None, false), track("eac3", None, false)];
     assert_eq!(
-        pick_audio(&plain, None),
+        pick_audio(&plain, None, &CAST_AUDIO),
         (0, AudioPlan::Aac { downmix: false })
     );
     for codec in ["ac3", "eac3", "dts"] {
         assert_eq!(
-            pick_audio(&[track(codec, None, false)], None),
+            pick_audio(&[track(codec, None, false)], None, &CAST_AUDIO),
             (0, AudioPlan::Aac { downmix: true }),
             "{codec}"
         );
     }
-    assert_eq!(pick_audio(&[], Some("eng")), (0, AudioPlan::None));
+    assert_eq!(
+        pick_audio(&[], Some("eng"), &CAST_AUDIO),
+        (0, AudioPlan::None)
+    );
 }
 
 /// An element with a one-byte size.
