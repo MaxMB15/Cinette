@@ -171,6 +171,32 @@ describe("useCachedMediaDetails", () => {
 		expect(mockWhatson).toHaveBeenCalledOnce();
 	});
 
+	it("asks OMDb again for a movie it had nothing for, as after a key is saved", async () => {
+		mockOmdb.mockResolvedValueOnce(null).mockResolvedValueOnce(sintelOmdb);
+		const wrapper = wrapperFor();
+		const first = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(first.result.current.loading).toBe(false));
+		expect(first.result.current.omdbData).toBeNull();
+		first.unmount();
+
+		const again = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(again.result.current.omdbData).toBe(sintelOmdb));
+		expect(mockOmdb).toHaveBeenCalledTimes(2);
+	});
+
+	it("asks Whatson again for ratings it had nothing for", async () => {
+		mockOmdb.mockResolvedValue(sintelOmdb);
+		mockWhatson.mockResolvedValueOnce(null).mockResolvedValueOnce(certified);
+		const wrapper = wrapperFor();
+		const first = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(mockWhatson).toHaveBeenCalledOnce());
+		first.unmount();
+
+		const again = renderHook(() => useCachedMediaDetails(sintel), { wrapper });
+		await waitFor(() => expect(again.result.current.whatsonData).toBe(certified));
+		expect(mockOmdb).toHaveBeenCalledOnce();
+	});
+
 	it("keeps no Whatson ratings for a movie OMDb has no IMDb id for", async () => {
 		mockOmdb.mockResolvedValue(tearsOmdb);
 		const { result } = renderHook(() => useCachedMediaDetails(tears), {
