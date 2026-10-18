@@ -10,20 +10,20 @@ const NO_ENTRIES: WatchHistoryEntry[] = [];
 
 /**
  * The newest `limit` watch history entries, of one content type or of all,
- * from the cache. `failure` starts the line logged when they can't load.
+ * from the cache. `logPrefix` starts the line logged when they can't load.
  */
 export const useWatchHistory = (
 	limit: number,
 	contentType: string | undefined,
-	failure: string
+	logPrefix: string
 ) => {
 	const queryClient = useQueryClient();
 	const query = watchHistoryQuery(limit, contentType);
 	const result = useQuery(query);
 
 	useEffect(() => {
-		if (result.error) console.error(failure, result.error);
-	}, [result.error, failure]);
+		if (result.error) console.error(logPrefix, result.error);
+	}, [result.error, logPrefix]);
 
 	/**
 	 * Shows a change the backend has already made: in this list now, without

@@ -1911,7 +1911,7 @@ describe("ChannelList history tab", () => {
 		tauri.getWatchHistory.mockResolvedValue([entry]);
 		saveBrowseTab("history");
 		await renderList();
-		expect(tauri.getWatchHistory).toHaveBeenCalledWith(200);
+		expect(tauri.getWatchHistory).toHaveBeenCalledWith(200, undefined);
 		fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${entry.channelName}`) }));
 		await flush();
 	};

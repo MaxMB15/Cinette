@@ -32,7 +32,23 @@ describe("useWatchHistory", () => {
 
 		expect(live.result.current.entries).toEqual([news]);
 		expect(all.result.current.entries).toEqual([news, film]);
-		expect(mockHistory.mock.calls).toEqual([[50, "live"], [200]]);
+		expect(mockHistory.mock.calls).toEqual([
+			[50, "live"],
+			[200, undefined],
+		]);
+	});
+
+	it("logs nothing when the history loads", async () => {
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const { result } = renderHook(() => useWatchHistory(50, "live", "failed:"), {
+				wrapper: wrapperFor(),
+			});
+			await waitFor(() => expect(result.current.loading).toBe(false));
+			expect(logged).not.toHaveBeenCalled();
+		} finally {
+			logged.mockRestore();
+		}
 	});
 
 	it("reads the cache when it opens again, without a call", async () => {
@@ -75,7 +91,7 @@ describe("useWatchHistory", () => {
 
 		renderHook(() => useWatchHistory(200, undefined, "failed:"), { wrapper });
 		await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(3));
-		expect(mockHistory).toHaveBeenLastCalledWith(200);
+		expect(mockHistory).toHaveBeenLastCalledWith(200, undefined);
 	});
 });
 
