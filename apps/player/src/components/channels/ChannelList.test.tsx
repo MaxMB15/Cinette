@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { wrapperFor } from "@/test/query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -129,21 +130,33 @@ vi.mock("./MovieInfoDrawer", () => ({
 	),
 }));
 
-vi.mock("./CategoryManager", () => ({
-	CategoryManager: (props: {
-		providerId: string;
-		contentType: string;
-		channels: Channel[];
-		onClose: () => void;
-		onHierarchyChanged: () => void;
-	}) => (
-		<div role="dialog" aria-label="Category manager">
-			<p>{`${props.providerId} ${props.contentType} ${props.channels.length} channels`}</p>
-			<button onClick={props.onHierarchyChanged}>Save categories</button>
-			<button onClick={props.onClose}>Close manager</button>
-		</div>
-	),
-}));
+// The manager stores a change and loads the shared hierarchy again, which the
+// list reads too.
+vi.mock("./CategoryManager", async () => {
+	const { useQueryClient } = await import("@tanstack/react-query");
+	const { groupHierarchyQuery } = await import("@/lib/queries");
+	return {
+		CategoryManager: (props: {
+			providerId: string;
+			contentType: string;
+			channels: Channel[];
+			onClose: () => void;
+		}) => {
+			const client = useQueryClient();
+			const save = () =>
+				client.invalidateQueries({
+					queryKey: groupHierarchyQuery(props.providerId, props.contentType).queryKey,
+				});
+			return (
+				<div role="dialog" aria-label="Category manager">
+					<p>{`${props.providerId} ${props.contentType} ${props.channels.length} channels`}</p>
+					<button onClick={save}>Save categories</button>
+					<button onClick={props.onClose}>Close manager</button>
+				</div>
+			);
+		},
+	};
+});
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -309,7 +322,8 @@ const waitForDebounce = () =>
 	});
 
 const renderList = async (List = ChannelList) => {
-	const view = render(<List />);
+	// Each list gets a new cache, as each app does.
+	const view = render(<List />, { wrapper: wrapperFor() });
 	await flush();
 	return view;
 };

@@ -7,7 +7,7 @@
 // its catalog.
 
 import { queryOptions } from "@tanstack/react-query";
-import { getAllChannels, getProviders } from "./tauri";
+import { getAllChannels, getGroupHierarchy, getPinnedGroups, getProviders } from "./tauri";
 
 /** Where a query's data comes from. Only this device for now. */
 export type Source = "local";
@@ -26,4 +26,29 @@ export const channelsQuery = (source: Source = LOCAL) =>
 	queryOptions({
 		queryKey: [source, "channels"] as const,
 		queryFn: () => getAllChannels(),
+	});
+
+/**
+ * How a provider's groups of one content type sort into categories. Empty
+ * until the user or Gemini sorts them.
+ */
+export const groupHierarchyQuery = (
+	providerId: string,
+	contentType: string,
+	source: Source = LOCAL
+) =>
+	queryOptions({
+		queryKey: [source, "groupHierarchy", providerId, contentType] as const,
+		queryFn: () => getGroupHierarchy(providerId, contentType),
+	});
+
+/** The groups pinned above the others, in order. */
+export const pinnedGroupsQuery = (
+	providerId: string,
+	contentType: string,
+	source: Source = LOCAL
+) =>
+	queryOptions({
+		queryKey: [source, "pinnedGroups", providerId, contentType] as const,
+		queryFn: () => getPinnedGroups(providerId, contentType),
 	});

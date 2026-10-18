@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { wrapperFor } from "@/test/query";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/lib/tauri", () => ({
@@ -53,7 +54,9 @@ describe("useGroupHierarchy", () => {
 	});
 
 	it("loads hierarchy and derives super-categories", async () => {
-		const { result } = renderHook(() => useGroupHierarchy("p1", "live"));
+		const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+			wrapper: wrapperFor(),
+		});
 		await waitFor(() => expect(result.current.loaded).toBe(true));
 
 		expect(result.current.superCategories).toEqual(["United States"]);
@@ -72,7 +75,9 @@ describe("useGroupHierarchy", () => {
 	});
 
 	it("puts the first pinned group at the top of the order", async () => {
-		const { result } = renderHook(() => useGroupHierarchy("p1", "live"));
+		const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+			wrapper: wrapperFor(),
+		});
 		await waitFor(() => expect(result.current.loaded).toBe(true));
 		mockGetPinned.mockResolvedValueOnce([pinned("Misc", 0)]);
 
@@ -85,18 +90,24 @@ describe("useGroupHierarchy", () => {
 
 	it("pins a group after the last pinned one", async () => {
 		mockGetPinned.mockResolvedValue([pinned("Misc", 0), pinned("US: News", 250)]);
-		const { result } = renderHook(() => useGroupHierarchy("p1", "live"));
+		const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+			wrapper: wrapperFor(),
+		});
 		await waitFor(() => expect(result.current.pinnedGroups).toHaveLength(2));
 
 		await act(() => result.current.pinGroup("US: Sports"));
 
 		expect(pinGroup).toHaveBeenCalledWith("p1", "live", "US: Sports", 350);
-		expect(mockGetHierarchy).toHaveBeenCalledTimes(2);
+		// Only the pinned list loads again. Pinning doesn't change the categories.
+		expect(mockGetPinned).toHaveBeenCalledTimes(2);
+		expect(mockGetHierarchy).toHaveBeenCalledTimes(1);
 	});
 
 	it("unpins a group and reloads the pinned list", async () => {
 		mockGetPinned.mockResolvedValueOnce([pinned("Misc", 0)]);
-		const { result } = renderHook(() => useGroupHierarchy("p1", "live"));
+		const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+			wrapper: wrapperFor(),
+		});
 		await waitFor(() => expect(result.current.isPinned("Misc")).toBe(true));
 
 		await act(() => result.current.unpinGroup("Misc"));
@@ -106,14 +117,31 @@ describe("useGroupHierarchy", () => {
 		expect(result.current.pinnedGroups).toEqual([]);
 	});
 
+	it("shares the loaded lists with every reader of the same provider and type", async () => {
+		const wrapper = wrapperFor();
+		const first = renderHook(() => useGroupHierarchy("p1", "live"), { wrapper });
+		await waitFor(() => expect(first.result.current.loaded).toBe(true));
+		const second = renderHook(() => useGroupHierarchy("p1", "live"), { wrapper });
+
+		expect(second.result.current.loaded).toBe(true);
+		expect(mockGetHierarchy).toHaveBeenCalledTimes(1);
+		expect(mockGetPinned).toHaveBeenCalledTimes(1);
+
+		const movies = renderHook(() => useGroupHierarchy("p1", "movie"), { wrapper });
+		await waitFor(() => expect(movies.result.current.loaded).toBe(true));
+		expect(mockGetHierarchy).toHaveBeenLastCalledWith("p1", "movie");
+	});
+
 	it("does nothing until a provider is chosen", async () => {
-		const { result } = renderHook(() => useGroupHierarchy(null, "live"));
+		const { result } = renderHook(() => useGroupHierarchy(null, "live"), {
+			wrapper: wrapperFor(),
+		});
 
 		await act(() => result.current.pinGroup("Misc"));
 		await act(() => result.current.unpinGroup("Misc"));
-		await act(() => result.current.reload());
 
 		expect(mockGetHierarchy).not.toHaveBeenCalled();
+		expect(mockGetPinned).not.toHaveBeenCalled();
 		expect(pinGroup).not.toHaveBeenCalled();
 		expect(unpinGroup).not.toHaveBeenCalled();
 		expect(result.current.loaded).toBe(false);
@@ -125,7 +153,9 @@ describe("useGroupHierarchy", () => {
 		const failure = new Error("database locked");
 		mockGetHierarchy.mockRejectedValueOnce(failure);
 		try {
-			const { result } = renderHook(() => useGroupHierarchy("p1", "live"));
+			const { result } = renderHook(() => useGroupHierarchy("p1", "live"), {
+				wrapper: wrapperFor(),
+			});
 			await waitFor(() => expect(result.current.loaded).toBe(true));
 
 			expect(consoleError).toHaveBeenCalledWith("Failed to load group hierarchy:", failure);
