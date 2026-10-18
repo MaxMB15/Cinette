@@ -196,7 +196,7 @@ async fn ensure_connected<R: Runtime>(app: &AppHandle<R>, receiver_id: &str) -> 
             Ok(())
         }
         Err(e) => {
-            super::update(app, |registry| registry.unreachable(receiver_id));
+            super::mark_unreachable(app, receiver_id);
             Err(match e {
                 tls::TlsError::NotPinned => "notPinned",
                 _ => "unreachable",
@@ -267,7 +267,9 @@ async fn conversion_plan<R: Runtime>(
     })?;
     let (audio_track, audio) = match audio {
         AudioChoice::None => (0, AudioPlan::None),
-        AudioChoice::Copy | AudioChoice::Aac => pick_audio(&probed.audio_tracks, None, &CAST_AUDIO),
+        AudioChoice::Copy | AudioChoice::Aac => {
+            pick_audio(&probed.audio_tracks, None, &CAST_AUDIO, true)
+        }
     };
     let video = match (video, probed.video) {
         (VideoChoice::None, _) | (_, None) => VideoPlan::None,
