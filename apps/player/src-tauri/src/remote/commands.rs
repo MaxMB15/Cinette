@@ -231,6 +231,8 @@ mod imp {
     pub fn link_error(e: crate::remote::link::LinkError) -> String {
         match e {
             crate::remote::link::LinkError::NotConnected => not_connected(),
+            crate::remote::link::LinkError::TimedOut => "timedOut".to_owned(),
+            crate::remote::link::LinkError::Busy => "busy".to_owned(),
             crate::remote::link::LinkError::Refused(code) => serde_json::to_value(code)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
@@ -415,20 +417,38 @@ pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json:
 }
 
 /// Asks a device for control. Progress comes as `remote://controller`.
+/// `link` is a number the webview picks to tell this link from others: its
+/// events carry it, and its commands name it.
 #[command]
 pub async fn remote_connect<R: Runtime>(
     app: AppHandle<R>,
     device_id: String,
+    link: u64,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let id = mvp_core::remote::identity::DeviceId::parse(&device_id)
             .ok_or_else(|| "That isn't a device id.".to_owned())?;
-        imp::service(&app)?.connect(id)
+        imp::service(&app)?.connect(id, link)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, device_id);
+        let _ = (app, device_id, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The link this device holds now, if any, as the number `remote_connect`
+/// was given. A webview that reloaded uses it to drop a link it forgot.
+#[command]
+pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        Ok(imp::service(&app)?.current_link())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
         Err(UNAVAILABLE.into())
     }
 }
@@ -449,7 +469,7 @@ pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     }
 }
 
-/// Sends a playback command to the controlled device. Resolves with that
+/// Sends a playback command to the controlled device through link `link`. Resolves with that
 /// device's state version once it carried the command out; fails with an
 /// error code as the protocol spells it, such as `stale_item`, or
 /// `notConnected` when there is no session.
@@ -457,34 +477,40 @@ pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 pub async fn remote_command<R: Runtime>(
     app: AppHandle<R>,
     command: mvp_core::remote::message::Command,
+    link: u64,
 ) -> Result<u64, String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let link = imp::service(&app)?.link().ok_or_else(imp::not_connected)?;
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
         link.command(command).await.map_err(imp::link_error)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, command);
+        let _ = (app, command, link);
         Err(UNAVAILABLE.into())
     }
 }
 
-/// A page of the controlled device's catalog.
+/// A page of the controlled device's catalog, through link `link`.
 #[command]
 pub async fn remote_catalog<R: Runtime>(
     app: AppHandle<R>,
     catalog_query: mvp_core::remote::catalog::CatalogQuery,
+    link: u64,
 ) -> Result<serde_json::Value, String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let link = imp::service(&app)?.link().ok_or_else(imp::not_connected)?;
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
         let (items, next) = link.catalog(catalog_query).await.map_err(imp::link_error)?;
         Ok(serde_json::json!({ "items": items, "next": next }))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, catalog_query);
+        let _ = (app, catalog_query, link);
         Err(UNAVAILABLE.into())
     }
 }

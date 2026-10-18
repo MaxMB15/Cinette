@@ -20,11 +20,13 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-/// A target host that carries out every command at once.
+/// A target host that carries out every command at once, unless told not
+/// to answer.
 struct Player {
     target: Mutex<Option<TargetHandle>>,
     prompts: mpsc::UnboundedSender<(RequestId, String)>,
     hidden: mpsc::UnboundedSender<RequestId>,
+    silent: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl TargetHost for Player {
@@ -36,6 +38,9 @@ impl TargetHost for Player {
     }
     fn sessions_changed(&self, _: &[SessionInfo]) {}
     fn apply(&self, token: u64, _: &Command) {
+        if self.silent.load(Ordering::SeqCst) {
+            return;
+        }
         if let Some(target) = self.target.lock().unwrap().as_ref() {
             target.finish_command(token, Ok(()));
         }
@@ -59,6 +64,8 @@ struct Target {
     port: u16,
     prompts: mpsc::UnboundedReceiver<(RequestId, String)>,
     hidden: mpsc::UnboundedReceiver<RequestId>,
+    /// While set, the player never finishes a command.
+    silent: Arc<std::sync::atomic::AtomicBool>,
 }
 
 async fn target(mode: ControlMode) -> Target {
@@ -67,10 +74,12 @@ async fn target(mode: ControlMode) -> Target {
     let key = DeviceKey::generate();
     let (tx, prompts) = mpsc::unbounded_channel();
     let (hide, hidden) = mpsc::unbounded_channel();
+    let silent = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let player = Arc::new(Player {
         target: Mutex::new(None),
         prompts: tx,
         hidden: hide,
+        silent: silent.clone(),
     });
     let settings = RemoteSettings {
         remote_control: mode,
@@ -91,6 +100,7 @@ async fn target(mode: ControlMode) -> Target {
         port,
         prompts,
         hidden,
+        silent,
     }
 }
 
@@ -240,15 +250,15 @@ fn link_to(target: &Target, port: u16, grace: Duration) -> Link {
 }
 
 fn link_with(target: &Target, addresses: Addresses, grace: Duration) -> Link {
-    link_timed(target, addresses, grace, Timeouts::STANDARD)
+    link_timed(target, addresses, grace, Limits::STANDARD)
 }
 
-fn link_timed(target: &Target, addresses: Addresses, grace: Duration, timeouts: Timeouts) -> Link {
+fn link_timed(target: &Target, addresses: Addresses, grace: Duration, limits: Limits) -> Link {
     link_clocked(
         target,
         addresses,
         grace,
-        timeouts,
+        limits,
         Arc::new(crate::remote::clock::now),
     )
 }
@@ -257,7 +267,7 @@ fn link_clocked(
     target: &Target,
     addresses: Addresses,
     grace: Duration,
-    timeouts: Timeouts,
+    limits: Limits,
     clock: Clock,
 ) -> Link {
     let (tx, changes) = mpsc::unbounded_channel();
@@ -281,7 +291,7 @@ fn link_clocked(
             addresses,
             grace,
             generation: 7,
-            timeouts,
+            limits,
             clock,
         },
         recorder.clone(),
@@ -306,7 +316,11 @@ async fn connects_and_attaches_to_what_plays() {
     link.until_phase(Phase::Connected).await;
     let phases = link.phases();
     assert_eq!(phases[0], Phase::Connecting);
-    assert!(matches!(phases[1], Phase::Verifying { ref code } if code.len() == 6));
+    let own_name = RemoteSettings::default().name(DeviceType::FireTv);
+    assert!(
+        matches!(phases[1], Phase::Verifying { ref code, ref name } if code.len() == 6 && *name == own_name),
+        "{phases:?}"
+    );
     assert_eq!(phases[2], Phase::Connected);
     link.until(|l| !l.states().is_empty()).await;
     assert_eq!(link.states()[0].state.position, 12.0);
@@ -328,7 +342,7 @@ async fn waits_for_consent_with_the_same_code_and_hears_a_denial() {
         .phases()
         .iter()
         .find_map(|p| match p {
-            Phase::Verifying { code } => Some(code.clone()),
+            Phase::Verifying { code, .. } => Some(code.clone()),
             _ => None,
         })
         .unwrap();
@@ -428,6 +442,12 @@ async fn a_dropped_connection_resumes_without_asking_again() {
     })
     .await;
     assert!(t.prompts.try_recv().is_err(), "no second dialog");
+    let codes = link
+        .phases()
+        .iter()
+        .filter(|p| matches!(p, Phase::Verifying { .. }))
+        .count();
+    assert_eq!(codes, 1, "the code shows once, not again on the resume");
     assert!(link.handle.command(Command::Stop).await.is_ok());
     assert_eq!(t.handle.sessions().await.len(), 1);
 }
@@ -462,7 +482,15 @@ async fn gives_up_when_the_grace_runs_out() {
     let mut link = link_to(&t, proxy.port, Duration::from_millis(1500));
     link.until_phase(Phase::Connected).await;
     proxy.cut(true);
+    let cut = Instant::now();
     assert_eq!(link.closed().await, Ended::Lost);
+    // The second wait is cut to the half second of grace left, rather than
+    // the two seconds that would run past it.
+    assert!(
+        cut.elapsed() < Duration::from_millis(2600),
+        "{:?}",
+        cut.elapsed()
+    );
     let reconnects = link
         .phases()
         .iter()
@@ -648,15 +676,15 @@ async fn a_device_that_takes_the_connection_but_never_answers_is_unreachable() {
             open.push(stream);
         }
     });
-    let timeouts = Timeouts {
+    let limits = Limits {
         handshake: Duration::from_millis(300),
-        ..Timeouts::STANDARD
+        ..Limits::STANDARD
     };
     let mut link = link_timed(
         &t,
         Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
         GRACE,
-        timeouts,
+        limits,
     );
     assert_eq!(link.closed().await, Ended::Unreachable);
     held.abort();
@@ -665,16 +693,16 @@ async fn a_device_that_takes_the_connection_but_never_answers_is_unreachable() {
 #[tokio::test]
 async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
     let mut t = target(ControlMode::Ask).await;
-    let timeouts = Timeouts {
+    let limits = Limits {
         handshake: Duration::from_millis(300),
-        ..Timeouts::STANDARD
+        ..Limits::STANDARD
     };
     let port = t.port;
     let mut link = link_timed(
         &t,
         Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
         GRACE,
-        timeouts,
+        limits,
     );
     let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
     // Longer than the handshake may take, and longer than a nap.
@@ -691,16 +719,16 @@ async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
 async fn it_pings_only_after_a_quiet_spell() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
-    let timeouts = Timeouts {
+    let limits = Limits {
         ping: Duration::from_secs(4),
-        ..Timeouts::STANDARD
+        ..Limits::STANDARD
     };
     let port = proxy.port;
     let mut link = link_timed(
         &t,
         Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
         GRACE,
-        timeouts,
+        limits,
     );
     link.until_phase(Phase::Connected).await;
     let before = proxy.sent.load(Ordering::SeqCst);
@@ -730,7 +758,7 @@ async fn gives_up_on_a_device_that_never_answers_and_withdraws_the_request() {
         &t,
         Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
         GRACE,
-        Timeouts::STANDARD,
+        Limits::STANDARD,
         clock,
     );
     let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
@@ -745,4 +773,136 @@ async fn gives_up_on_a_device_that_never_answers_and_withdraws_the_request() {
     // The target hears the request withdrawn, so its dialog goes.
     let hidden = timeout(WAIT, t.hidden.recv()).await.unwrap().unwrap();
     assert_eq!(hidden, request);
+}
+
+#[tokio::test]
+async fn a_resume_that_reaches_another_device_tries_again() {
+    let t = target(ControlMode::Always).await;
+    let impostor = target(ControlMode::Always).await;
+    let proxy = Proxy::new(t.port).await;
+    // The first try after the drop finds another device at the address.
+    let tries = Arc::new(AtomicUsize::new(0));
+    let (real, other) = (proxy.port, impostor.port);
+    let count = tries.clone();
+    let mut link = link_with(
+        &t,
+        Arc::new(move || {
+            let port = if count.fetch_add(1, Ordering::SeqCst) == 1 {
+                other
+            } else {
+                real
+            };
+            vec![SocketAddr::from(([127, 0, 0, 1], port))]
+        }),
+        GRACE,
+    );
+    link.until_phase(Phase::Connected).await;
+    proxy.cut(false);
+    link.until(|l| {
+        l.phases()
+            .iter()
+            .filter(|p| **p == Phase::Connected)
+            .count()
+            == 2
+    })
+    .await;
+    assert!(tries.load(Ordering::SeqCst) >= 3);
+    assert!(!link
+        .phases()
+        .iter()
+        .any(|p| matches!(p, Phase::Closed { .. })));
+}
+
+#[tokio::test]
+async fn leaving_while_a_connection_is_being_opened_stops_at_once() {
+    let t = target(ControlMode::Always).await;
+    // A listener whose queue is full, so a new connection waits.
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    let full = socket.listen(1).unwrap();
+    let port = full.local_addr().unwrap().port();
+    let mut queued = Vec::new();
+    for _ in 0..8 {
+        let attempt = TcpStream::connect(("127.0.0.1", port));
+        if let Ok(Ok(stream)) = timeout(Duration::from_millis(200), attempt).await {
+            queued.push(stream);
+        }
+    }
+    assert!(queued.len() < 8, "the queue never filled");
+    let mut link = link_to(&t, port, GRACE);
+    link.until_phase(Phase::Connecting).await;
+    let asked = Instant::now();
+    link.handle.leave().await;
+    assert!(
+        asked.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(link.closed().await, Ended::Left);
+    drop(queued);
+}
+
+#[tokio::test]
+async fn a_command_with_no_answer_times_out() {
+    let t = target(ControlMode::Always).await;
+    t.silent.store(true, Ordering::SeqCst);
+    let limits = Limits {
+        request: Duration::from_millis(300),
+        ..Limits::STANDARD
+    };
+    let port = t.port;
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        limits,
+    );
+    link.until_phase(Phase::Connected).await;
+    assert_eq!(
+        link.handle.command(Command::Stop).await,
+        Err(LinkError::TimedOut)
+    );
+    // The link itself goes on.
+    t.silent.store(false, Ordering::SeqCst);
+    assert!(link.handle.command(Command::Stop).await.is_ok());
+}
+
+#[tokio::test]
+async fn only_so_many_wait_for_answers() {
+    let t = target(ControlMode::Always).await;
+    t.silent.store(true, Ordering::SeqCst);
+    let limits = Limits {
+        waiting: 1,
+        ..Limits::STANDARD
+    };
+    let port = t.port;
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        limits,
+    );
+    link.until_phase(Phase::Connected).await;
+    let first = {
+        let handle = link.handle.clone();
+        tokio::spawn(async move { handle.command(Command::Stop).await })
+    };
+    // Until the first is on its way, the second could be it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        link.handle
+            .catalog(CatalogQuery::Groups {
+                content_type: "live".into(),
+                cursor: None,
+                limit: 10,
+            })
+            .await,
+        Err(LinkError::Busy)
+    );
+    assert_eq!(
+        link.handle.command(Command::Stop).await,
+        Err(LinkError::Busy)
+    );
+    link.handle.leave().await;
+    assert_eq!(first.await.unwrap(), Err(LinkError::NotConnected));
 }

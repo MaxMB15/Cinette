@@ -59,7 +59,7 @@ export interface RemoteSnapshot {
 /** Where the connection to the other device stands. */
 export type LinkPhase =
 	| { phase: "connecting" }
-	| { phase: "verifying"; code: string }
+	| { phase: "verifying"; code: string; name: string }
 	| { phase: "pending"; expiresInMs: number }
 	| { phase: "connected" }
 	| { phase: "reconnecting"; attempt: number }
@@ -158,13 +158,44 @@ const nothingPlaying: RemoteSnapshot = {
 	error: null,
 };
 
-/** Sends one command, resolving once the other device carried it out. */
+/** Sends one command, resolving once the other device carried it out, with
+ *  its state version then. */
 export type SendCommand = (command: RemoteCommand) => Promise<unknown>;
+
+/** The other device's state, with the version that orders it. */
+export interface VersionedSnapshot {
+	epoch: string;
+	version: number;
+	state: RemoteSnapshot;
+}
+
+/** A command the other device, or the link to it, turned down. `code` is
+ *  the protocol's, like `stale_item`, or `notConnected`, `timedOut` or `busy`. */
+export class RemoteCommandError extends Error {
+	readonly code: string;
+	constructor(code: string) {
+		super(`The other device didn't carry it out: ${code}`);
+		this.name = "RemoteCommandError";
+		this.code = code;
+	}
+}
+
+/** What a rejected command becomes: the destination's own error for what
+ *  isn't supported there, and a {@link RemoteCommandError} for the rest. */
+export const commandError = (e: unknown): Error => {
+	const code = typeof e === "string" ? e : "failed";
+	return code === "unsupported"
+		? new UnsupportedError("That on the other device")
+		: new RemoteCommandError(code);
+};
+
+/** How long a load waits for the other device's state to show the new item. */
+export const LOAD_SHOWS_WITHIN_MS = 3_000;
 
 /** A destination for another Cinette device, and the way to feed it. */
 export interface CinetteDestination extends PlaybackDestination {
 	/** A newer state from the other device. */
-	receive(snapshot: RemoteSnapshot, at: number): void;
+	receive(snapshot: VersionedSnapshot, at: number): void;
 	/** The connection moved on. */
 	setPhase(phase: LinkPhase): void;
 }
@@ -180,6 +211,8 @@ export const createCinetteDestination = (
 	send: SendCommand
 ): CinetteDestination => {
 	let snapshot = nothingPlaying;
+	let capabilities = remoteCapabilities(snapshot);
+	let seen = { epoch: "", version: -1 };
 	// Not connected yet.
 	let connection: PlaybackState["connection"] = "reconnecting";
 	let arrived = 0;
@@ -189,13 +222,46 @@ export const createCinetteDestination = (
 		state = remotePlaybackState(snapshot, connection, arrived);
 		for (const listener of listeners) listener(state);
 	};
+	// Loads waiting for a state at least as new as their answer.
+	const waiting = new Set<{ epoch: string; version: number; done: () => void }>();
+	const settle = (all: boolean) => {
+		for (const w of waiting) {
+			if (all || seen.epoch !== w.epoch || seen.version >= w.version) {
+				waiting.delete(w);
+				w.done();
+			}
+		}
+	};
+	const shown = (version: unknown): Promise<void> => {
+		if (typeof version !== "number" || seen.version >= version || connection === "lost")
+			return Promise.resolve();
+		return new Promise((resolve) => {
+			const w = { epoch: seen.epoch, version, done: () => {} };
+			const timer = setTimeout(() => {
+				waiting.delete(w);
+				resolve();
+			}, LOAD_SHOWS_WITHIN_MS);
+			w.done = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			waiting.add(w);
+		});
+	};
+	const sent = async (command: RemoteCommand): Promise<unknown> => {
+		try {
+			return await send(command);
+		} catch (e) {
+			throw commandError(e);
+		}
+	};
 	const current = (): string => {
 		const id = snapshot.item?.id;
 		if (id === undefined) throw new UnsupportedError("Controlling nothing");
 		return id;
 	};
 	const run = async (command: () => RemoteCommand): Promise<void> => {
-		await send(command());
+		await sent(command());
 	};
 	return {
 		id: `cinette:${deviceId}`,
@@ -203,7 +269,7 @@ export const createCinetteDestination = (
 		name,
 		catalog: { kind: "remote", deviceId },
 		get capabilities() {
-			return remoteCapabilities(snapshot);
+			return capabilities;
 		},
 		route: async (item) =>
 			item.kind === "remote"
@@ -213,11 +279,14 @@ export const createCinetteDestination = (
 			if (item.kind !== "remote")
 				throw new UnsupportedError("Playing this device's channel on another device");
 			const startAt = opts?.startAt;
-			await send(
+			const version = await sent(
 				startAt === undefined
 					? { action: "load", itemId: item.itemId }
 					: { action: "load", itemId: item.itemId, startAt }
 			);
+			// Resolves once the state names the new item, so a command right
+			// after names it too.
+			await shown(version);
 		},
 		play: () => run(() => ({ action: "play", itemId: current() })),
 		pause: () => run(() => ({ action: "pause", itemId: current() })),
@@ -235,12 +304,20 @@ export const createCinetteDestination = (
 			};
 		},
 		receive: (next, at) => {
-			snapshot = next;
+			snapshot = next.state;
+			seen = { epoch: next.epoch, version: next.version };
+			const now = remoteCapabilities(snapshot);
+			// The same object until something in it changes.
+			if (JSON.stringify(now) !== JSON.stringify(capabilities)) capabilities = now;
 			arrived = at;
 			publish();
+			settle(false);
 		},
 		setPhase: (next) => {
-			connection = connectionOf(next);
+			if (next.phase === "closed") settle(true);
+			const changed = connectionOf(next);
+			if (changed === connection) return;
+			connection = changed;
 			publish();
 		},
 	};

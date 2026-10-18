@@ -45,8 +45,7 @@ pub struct RemoteService {
     devices: Arc<Mutex<Devices>>,
     link: Arc<Mutex<Option<LinkHandle>>>,
     link_host: Arc<dyn LinkHost>,
-    /// The next link's generation.
-    links: std::sync::atomic::AtomicU64,
+    events: Arc<dyn ServiceEvents>,
 }
 
 struct Saved {
@@ -74,13 +73,22 @@ impl RemoteService {
         lock(&self.devices).list()
     }
 
-    /// The link to the device this one controls, if any.
-    pub fn link(&self) -> Option<LinkHandle> {
-        lock(&self.link).clone()
+    /// The link numbered `link`, if it's the one this device holds now.
+    pub fn link(&self, link: u64) -> Option<LinkHandle> {
+        lock(&self.link)
+            .as_ref()
+            .filter(|l| l.generation() == link)
+            .cloned()
+    }
+
+    /// The number of the link this device holds now, if any.
+    pub fn current_link(&self) -> Option<u64> {
+        lock(&self.link).as_ref().map(LinkHandle::generation)
     }
 
     /// Starts asking `device` for control, leaving any device controlled now.
-    pub fn connect(&self, device: DeviceId) -> Result<(), String> {
+    /// `link` numbers the new link.
+    pub fn connect(&self, device: DeviceId, link: u64) -> Result<(), String> {
         let allowed = lock(&self.devices).get(&device).map(|d| d.control_allowed);
         match allowed {
             None => return Err("That device isn't on the network now.".into()),
@@ -106,10 +114,8 @@ impl RemoteService {
             target: device.clone(),
             addresses: Arc::new(move || lock(&devices).addresses(&target)),
             grace: RESUME_GRACE,
-            generation: self
-                .links
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            timeouts: link::Timeouts::STANDARD,
+            generation: link,
+            limits: link::Limits::STANDARD,
             clock: Arc::new(super::clock::now),
         };
         lock(&self.devices).keep(Some(device));
@@ -125,12 +131,27 @@ impl RemoteService {
     }
 
     /// Ends the session, or stops asking. The other device keeps playing.
+    /// The webview asked, so no `remote://controller` event says so.
     pub async fn leave(&self) {
         let old = lock(&self.link).take();
         if let Some(old) = old {
             old.leave().await;
         }
-        lock(&self.devices).keep(None);
+        self.forget_kept();
+    }
+
+    /// Stops keeping the device left in the list, unless a link to another
+    /// started meanwhile, and says what the list is now.
+    fn forget_kept(&self) {
+        if lock(&self.link).is_some() {
+            return;
+        }
+        let list = {
+            let mut devices = lock(&self.devices);
+            devices.keep(None);
+            devices.list()
+        };
+        self.events.devices_changed(&list);
     }
 
     /// Saves the settings and hands them to the target.
@@ -160,9 +181,13 @@ impl RemoteService {
         lock(&self.state).key = key.clone();
         lock(&self.devices).set_own(id.clone());
         self.handle.reset_identity(key);
-        // A session this device holds on another one ends too.
-        if let Some(old) = lock(&self.link).take() {
+        // A session this device holds on another one ends too, and the
+        // webview didn't ask, so it's told.
+        let old = lock(&self.link).take();
+        if let Some(old) = old {
+            self.events.left(old.generation(), old.device());
             tauri::async_runtime::spawn(async move { old.leave().await });
+            self.forget_kept();
         }
         tracing::info!("[remote] device identity reset; new id {id}");
         Ok(id)
@@ -384,6 +409,7 @@ fn advertise_on_network(registration: &Registration) -> Option<Advertisement> {
 #[serde(rename_all = "camelCase")]
 pub struct ControllerEvent<'a> {
     pub device_id: String,
+    pub link: u64,
     #[serde(flatten)]
     pub phase: &'a Phase,
 }
@@ -391,15 +417,37 @@ pub struct ControllerEvent<'a> {
 /// What `remote://state` carries.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StateEvent<'a> {
+pub struct StateEvent {
     pub device_id: String,
-    pub state: &'a VersionedState,
+    pub link: u64,
+    pub state: VersionedState,
 }
+
+/// What the service tells the webview besides what links report.
+trait ServiceEvents: Send + Sync {
+    /// The device list changed.
+    fn devices_changed(&self, devices: &[RemoteDevice]);
+    /// Link `link` to `device` ended without the webview asking.
+    fn left(&self, link: u64, device: &DeviceId);
+}
+
+/// States from a controlled device, kept to at most one every
+/// [`STATE_EVERY`] so a device that floods can't flood the webview.
+#[derive(Default)]
+struct Throttle {
+    last: Option<Instant>,
+    /// The newest state held back, sent when its turn comes.
+    held: Option<StateEvent>,
+}
+
+/// The shortest time between two `remote://state` events.
+const STATE_EVERY: Duration = Duration::from_millis(100);
 
 struct TauriLinkHost<R: Runtime> {
     app: AppHandle<R>,
     devices: Arc<Mutex<Devices>>,
     link: Arc<Mutex<Option<LinkHandle>>>,
+    throttle: Arc<Mutex<Throttle>>,
 }
 
 impl<R: Runtime> TauriLinkHost<R> {
@@ -435,6 +483,7 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
             "remote://controller",
             ControllerEvent {
                 device_id: device.to_string(),
+                link,
                 phase,
             },
         );
@@ -444,11 +493,56 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
         if !self.current(link) {
             return;
         }
+        let event = StateEvent {
+            device_id: device.to_string(),
+            link,
+            state: state.clone(),
+        };
+        let mut throttle = lock(&self.throttle);
+        let now = Instant::now();
+        let wait = throttle.last.map_or(Duration::ZERO, |at| {
+            STATE_EVERY.saturating_sub(now.duration_since(at))
+        });
+        if wait.is_zero() {
+            throttle.last = Some(now);
+            let _ = self.app.emit("remote://state", event);
+            return;
+        }
+        // One held state at a time; a newer one takes its place.
+        let already_waiting = throttle.held.replace(event).is_some();
+        if already_waiting {
+            return;
+        }
+        let (app, slot, throttle) = (self.app.clone(), self.link.clone(), self.throttle.clone());
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let mut throttle = lock(&throttle);
+            let Some(event) = throttle.held.take() else {
+                return;
+            };
+            throttle.last = Some(Instant::now());
+            let current = lock(&slot).as_ref().map(LinkHandle::generation);
+            if current == Some(event.link) {
+                let _ = app.emit("remote://state", event);
+            }
+        });
+    }
+}
+
+impl<R: Runtime> ServiceEvents for TauriLinkHost<R> {
+    fn devices_changed(&self, devices: &[RemoteDevice]) {
+        let _ = self.app.emit("remote://devices", devices);
+    }
+
+    fn left(&self, link: u64, device: &DeviceId) {
         let _ = self.app.emit(
-            "remote://state",
-            StateEvent {
+            "remote://controller",
+            ControllerEvent {
                 device_id: device.to_string(),
-                state,
+                link,
+                phase: &Phase::Closed {
+                    reason: super::link::Ended::Left,
+                },
             },
         );
     }
@@ -551,19 +645,21 @@ fn start_on<R: Runtime>(
         "[remote] listening on port {} as {device_id}",
         handle.port()
     );
+    let link_host = Arc::new(TauriLinkHost {
+        app: app.clone(),
+        devices: devices.clone(),
+        link: link.clone(),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+    });
     app.manage(RemoteService {
         handle,
         key_dir,
         state: Mutex::new(Saved { settings, key }),
-        link_host: Arc::new(TauriLinkHost {
-            app: app.clone(),
-            devices: devices.clone(),
-            link: link.clone(),
-        }),
+        link_host: link_host.clone(),
+        events: link_host,
         resetting: Mutex::new(()),
         devices,
         link,
-        links: std::sync::atomic::AtomicU64::new(0),
     });
     Ok(())
 }

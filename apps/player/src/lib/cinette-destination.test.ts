@@ -3,12 +3,17 @@
 
 import { describe, it, expect, vi } from "vitest";
 import {
+	commandError,
 	connectionOf,
 	createCinetteDestination,
+	LOAD_SHOWS_WITHIN_MS,
+	RemoteCommandError,
 	remoteCapabilities,
 	remotePlaybackState,
 	type RemoteSnapshot,
+	type VersionedSnapshot,
 } from "./cinette-destination";
+import { UnsupportedError } from "./destination";
 import type { RemoteCommand } from "./remote-target";
 import type { Channel } from "./types";
 
@@ -91,7 +96,7 @@ describe("remotePlaybackState", () => {
 		expect(connection({ phase: "reconnecting", attempt: 2 })).toBe("reconnecting");
 		expect(connection({ phase: "connecting" })).toBe("reconnecting");
 		expect(connection({ phase: "pending", expiresInMs: 30_000 })).toBe("reconnecting");
-		expect(connection({ phase: "verifying", code: "123456" })).toBe("reconnecting");
+		expect(connection({ phase: "verifying", code: "123456", name: "TV" })).toBe("reconnecting");
 		expect(connection({ phase: "closed", reason: "lost" })).toBe("lost");
 	});
 });
@@ -129,11 +134,19 @@ describe("remoteCapabilities", () => {
 	});
 });
 
+/** `state` as the other device sends it. */
+const versioned = (state: RemoteSnapshot, version = 1, epoch = "e1"): VersionedSnapshot => ({
+	epoch,
+	version,
+	state,
+});
+
 const destination = () => {
 	const sent: RemoteCommand[] = [];
-	const send = vi.fn(async (command: RemoteCommand) => {
+	// No version in the answer, so a load doesn't wait for a state.
+	const send = vi.fn(async (command: RemoteCommand): Promise<unknown> => {
 		sent.push(command);
-		return 1;
+		return undefined;
 	});
 	return { d: createCinetteDestination("dev1", "Living Room", send), sent, send };
 };
@@ -199,7 +212,7 @@ describe("createCinetteDestination", () => {
 
 	it("names the playing item in every command about it", async () => {
 		const { d, sent } = destination();
-		d.receive(snapshot(), 0);
+		d.receive(versioned(snapshot()), 0);
 		await d.play();
 		await d.pause();
 		await d.seek(42);
@@ -228,11 +241,114 @@ describe("createCinetteDestination", () => {
 		expect(send).toHaveBeenCalledTimes(2);
 	});
 
-	it("passes a refused command's error on", async () => {
+	it("passes a refused command's error on as an error with its code", async () => {
 		const send = vi.fn(() => Promise.reject("stale_item"));
 		const d = createCinetteDestination("dev1", "TV", send);
-		d.receive(snapshot(), 0);
-		await expect(d.pause()).rejects.toBe("stale_item");
+		d.receive(versioned(snapshot()), 0);
+		const refused = d.pause();
+		await expect(refused).rejects.toBeInstanceOf(RemoteCommandError);
+		await expect(refused).rejects.toMatchObject({ code: "stale_item" });
+		send.mockImplementationOnce(() => Promise.reject("unsupported"));
+		await expect(d.play()).rejects.toBeInstanceOf(UnsupportedError);
+	});
+
+	it("turns what a command rejects with into an error", () => {
+		expect(commandError("timedOut")).toMatchObject({ code: "timedOut" });
+		expect(commandError("timedOut").message).toBe(
+			"The other device didn't carry it out: timedOut"
+		);
+		expect(commandError(new Error("odd"))).toMatchObject({ code: "failed" });
+		expect(commandError("unsupported")).toMatchObject({ code: "unsupported" });
+		expect(commandError("unsupported").message).toBe(
+			"That on the other device isn't supported here"
+		);
+		expect(new RemoteCommandError("busy").name).toBe("RemoteCommandError");
+	});
+
+	it("finishes a load once the other device's state is as new as its answer", async () => {
+		let answer = 0;
+		const send = vi.fn(async (): Promise<unknown> => answer);
+		const d = createCinetteDestination("dev1", "TV", send);
+		d.receive(versioned(snapshot(), 4), 0);
+		answer = 6;
+		let done = false;
+		const load = d.load({ kind: "remote", itemId: "movie-2", title: "Film" }).then(() => {
+			done = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		d.receive(versioned(snapshot(), 5), 10);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(done, "version 5 is older than the answer").toBe(false);
+		d.receive(versioned(snapshot({ item: null }), 6), 20);
+		await load;
+		expect(done).toBe(true);
+		// An answer the state already reached doesn't wait.
+		answer = 3;
+		await d.load({ kind: "remote", itemId: "movie-2", title: "Film" });
+	});
+
+	it("finishes a load when the other device starts again, or the link ends", async () => {
+		const send = vi.fn(async (): Promise<unknown> => 9);
+		const d = createCinetteDestination("dev1", "TV", send);
+		d.receive(versioned(snapshot(), 1, "old"), 0);
+		const restarted = d.load({ kind: "remote", itemId: "a", title: "A" });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		d.receive(versioned(snapshot(), 1, "new"), 5);
+		await restarted;
+		const closed = d.load({ kind: "remote", itemId: "b", title: "B" });
+		// Until the answer is in, nothing waits.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		d.receive(versioned(snapshot(), 2, "new"), 6);
+		d.setPhase({ phase: "closed", reason: "lost" });
+		await closed;
+		// Over the closed link, a load doesn't wait at all.
+		await d.load({ kind: "remote", itemId: "c", title: "C" });
+	});
+
+	it("finishes a load whose state never comes, after a while", async () => {
+		vi.useFakeTimers();
+		try {
+			const send = vi.fn(async (): Promise<unknown> => 9);
+			const d = createCinetteDestination("dev1", "TV", send);
+			let done = false;
+			const load = d.load({ kind: "remote", itemId: "a", title: "A" }).then(() => {
+				done = true;
+			});
+			await vi.advanceTimersByTimeAsync(LOAD_SHOWS_WITHIN_MS - 1);
+			expect(done).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			await load;
+			expect(done).toBe(true);
+			// A state that comes later finds nothing waiting.
+			d.receive(versioned(snapshot(), 9), 0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps its capabilities the same object until they change", () => {
+		const { d } = destination();
+		d.receive(versioned(snapshot()), 0);
+		const first = d.capabilities;
+		d.receive(versioned(snapshot({ position: 90 }), 2), 5);
+		expect(d.capabilities).toBe(first);
+		d.receive(
+			versioned(snapshot({ capabilities: { ...snapshot().capabilities, seek: true } }), 3),
+			6
+		);
+		expect(d.capabilities).not.toBe(first);
+		expect(d.capabilities.seek).toBe(true);
+	});
+
+	it("tells nobody about a phase that leaves the connection as it was", () => {
+		const { d } = destination();
+		const seen: string[] = [];
+		d.subscribe((s) => seen.push(s.connection));
+		d.setPhase({ phase: "verifying", code: "123456", name: "TV" });
+		d.setPhase({ phase: "pending", expiresInMs: 1 });
+		d.setPhase({ phase: "connected" });
+		d.setPhase({ phase: "connected" });
+		expect(seen).toStrictEqual(["connected"]);
 	});
 
 	it("tells subscribers about every new state and phase, until they leave", () => {
@@ -242,12 +358,12 @@ describe("createCinetteDestination", () => {
 		const before = d.getState();
 		expect(d.getState(), "the same object until it changes").toBe(before);
 		d.setPhase({ phase: "connected" });
-		d.receive(snapshot({ status: "paused" }), 500);
+		d.receive(versioned(snapshot({ status: "paused" })), 500);
 		expect(d.getState()).not.toBe(before);
 		expect(d.getState().status).toBe("paused");
 		expect(d.capabilities.pause).toBe(true);
 		stop();
-		d.receive(snapshot(), 900);
+		d.receive(versioned(snapshot()), 900);
 		expect(seen).toStrictEqual(["idle/connected/0", "paused/connected/500"]);
 		expect(d.getState().positionAt).toBe(900);
 	});

@@ -36,7 +36,13 @@ struct Entry {
     device: RemoteDevice,
     addrs: Vec<IpAddr>,
     port: u16,
+    /// When it was last found, as a count of records taken in.
+    seen: u64,
 }
+
+/// The most instances listed. Anyone on the network can advertise as many
+/// as they like.
+pub const MAX_INSTANCES: usize = 64;
 
 /// What a record says, if it's a Cinette device this one can talk to.
 fn read_record(txt: &Txt) -> Option<(DeviceId, String, DeviceType, bool)> {
@@ -67,6 +73,8 @@ pub struct Devices {
     entries: BTreeMap<String, Entry>,
     /// The device being controlled stays listed when discovery loses it.
     keep: Option<DeviceId>,
+    /// Records taken in so far.
+    found: u64,
 }
 
 impl Devices {
@@ -108,6 +116,11 @@ impl Devices {
                 if Some(&id) == self.own.as_ref() {
                     return false;
                 }
+                let known = self.entries.get(&instance);
+                if known.is_none() && self.entries.len() >= MAX_INSTANCES {
+                    return false;
+                }
+                self.found += 1;
                 let entry = Entry {
                     device: RemoteDevice {
                         device_id: id.to_string(),
@@ -119,15 +132,19 @@ impl Devices {
                     id,
                     addrs,
                     port,
+                    seen: self.found,
                 };
-                // The same device under a new instance name replaces the old one.
-                let before = self.entries.len();
-                self.entries
-                    .retain(|i, e| *i == instance || e.id != entry.id);
-                let replaced = self.entries.len() != before;
-                let changed = self.entries.get(&instance) != Some(&entry);
+                // Another instance with the same id stays: it may be the
+                // device under an old name, or someone else claiming its id,
+                // and a connection tries every address listed for it.
+                let changed = known.is_none_or(|k| {
+                    Entry {
+                        seen: k.seen,
+                        ..entry.clone()
+                    } != *k
+                });
                 self.entries.insert(instance, entry);
-                changed || replaced
+                changed
             }
             Event::Removed { instance } => {
                 let keep = self.keep.clone();
@@ -144,9 +161,21 @@ impl Devices {
         }
     }
 
-    /// The list for the picker, by name.
+    /// The entry the picker shows for each device: the one found last.
+    fn shown(&self) -> impl Iterator<Item = &Entry> {
+        let mut newest: BTreeMap<&DeviceId, &Entry> = BTreeMap::new();
+        for entry in self.entries.values() {
+            let slot = newest.entry(&entry.id).or_insert(entry);
+            if entry.seen > slot.seen {
+                *slot = entry;
+            }
+        }
+        newest.into_values()
+    }
+
+    /// The list for the picker, by name, with each device once.
     pub fn list(&self) -> Vec<RemoteDevice> {
-        let mut list: Vec<RemoteDevice> = self.entries.values().map(|e| e.device.clone()).collect();
+        let mut list: Vec<RemoteDevice> = self.shown().map(|e| e.device.clone()).collect();
         list.sort_by(|a, b| a.name.cmp(&b.name).then(a.device_id.cmp(&b.device_id)));
         list
     }
@@ -163,10 +192,7 @@ impl Devices {
 
     /// The device with this id, if it's listed.
     pub fn get(&self, id: &DeviceId) -> Option<&RemoteDevice> {
-        self.entries
-            .values()
-            .find(|e| &e.id == id)
-            .map(|e| &e.device)
+        self.shown().find(|e| &e.id == id).map(|e| &e.device)
     }
 }
 

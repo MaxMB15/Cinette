@@ -30,6 +30,25 @@ fn found(instance: &str, id: &DeviceId, extra: &[(&str, &str)]) -> Event {
     }
 }
 
+/// [`found`] at one address and port.
+fn found_at(instance: &str, id: &DeviceId, ip: [u8; 4], port: u16) -> Event {
+    match found(instance, id, &[]) {
+        Event::Found {
+            instance,
+            host,
+            txt,
+            ..
+        } => Event::Found {
+            instance,
+            host,
+            addrs: vec![IpAddr::from(ip)],
+            port,
+            txt,
+        },
+        removed => removed,
+    }
+}
+
 fn id() -> DeviceId {
     DeviceKey::generate().device_id()
 }
@@ -200,16 +219,66 @@ fn keeping_a_device_leaves_available_ones_listed() {
 }
 
 #[test]
-fn a_device_under_a_new_instance_name_replaces_the_old_listing() {
+fn a_device_under_two_instance_names_is_listed_once_by_the_newest() {
     let tv = id();
     let mut devices = Devices::new(id());
     devices.apply(found("Living Room", &tv, &[]));
-    assert!(devices.apply(found("Living Room (2)", &tv, &[])));
-    assert_eq!(devices.list().len(), 1);
+    assert!(devices.apply(found("Den", &tv, &[("n", "Den")])));
+    let list = devices.list();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "Den");
     assert!(devices.apply(Event::Removed {
-        instance: "Living Room (2)".into()
+        instance: "Den".into()
+    }));
+    assert_eq!(
+        devices.list()[0].name,
+        "Living Room",
+        "the older one is still there"
+    );
+    assert!(devices.apply(Event::Removed {
+        instance: "Living Room".into()
     }));
     assert!(devices.list().is_empty());
+}
+
+#[test]
+fn a_record_claiming_a_device_id_doesnt_hide_its_addresses() {
+    let tv = id();
+    let mut devices = Devices::new(id());
+    devices.apply(found_at("Living Room", &tv, [192, 168, 1, 20], 47130));
+    devices.apply(found_at("Living Room", &tv, [192, 168, 1, 20], 47130));
+    devices.apply(found_at("Impostor", &tv, [192, 168, 1, 66], 9));
+    let addrs = devices.addresses(&tv);
+    assert!(
+        addrs.contains(&SocketAddr::from(([192, 168, 1, 20], 47130))),
+        "{addrs:?}"
+    );
+    assert!(addrs.contains(&SocketAddr::from(([192, 168, 1, 66], 9))));
+}
+
+#[test]
+fn the_list_stops_at_its_limit_until_one_goes() {
+    let mut devices = Devices::new(id());
+    for n in 0..MAX_INSTANCES {
+        assert!(devices.apply(found(&format!("TV {n}"), &id(), &[])));
+    }
+    assert!(!devices.apply(found("One too many", &id(), &[])));
+    assert_eq!(devices.list().len(), MAX_INSTANCES);
+    // One already listed still updates.
+    let again = id();
+    assert!(devices.apply(found("TV 0", &again, &[])));
+    assert!(devices.apply(Event::Removed {
+        instance: "TV 1".into()
+    }));
+    assert!(devices.apply(found("Now it fits", &id(), &[])));
+}
+
+#[test]
+fn the_same_record_again_changes_nothing() {
+    let tv = id();
+    let mut devices = Devices::new(id());
+    assert!(devices.apply(found("Living Room", &tv, &[])));
+    assert!(!devices.apply(found("Living Room", &tv, &[])));
 }
 
 #[test]

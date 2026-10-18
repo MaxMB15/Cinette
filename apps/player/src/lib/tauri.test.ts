@@ -657,19 +657,25 @@ describe("backend commands", () => {
 			{ token: 9, outcome: "staleItem" },
 		],
 		["remoteDevices", () => tauri.remoteDevices(), "remote_devices"],
-		["remoteConnect", () => tauri.remoteConnect("abc"), "remote_connect", { deviceId: "abc" }],
+		[
+			"remoteConnect",
+			() => tauri.remoteConnect("abc", 5),
+			"remote_connect",
+			{ deviceId: "abc", link: 5 },
+		],
+		["remoteLink", () => tauri.remoteLink(), "remote_link"],
 		["remoteLeave", () => tauri.remoteLeave(), "remote_leave"],
 		[
 			"remoteCommand",
-			() => tauri.remoteCommand({ action: "seek", itemId: "live-1", to: 30 }),
+			() => tauri.remoteCommand(5, { action: "seek", itemId: "live-1", to: 30 }),
 			"remote_command",
-			{ command: { action: "seek", itemId: "live-1", to: 30 } },
+			{ command: { action: "seek", itemId: "live-1", to: 30 }, link: 5 },
 		],
 		[
 			"remoteCatalog",
-			() => tauri.remoteCatalog({ kind: "search", query: "news", limit: 20 }),
+			() => tauri.remoteCatalog(5, { kind: "search", query: "news", limit: 20 }),
 			"remote_catalog",
-			{ catalogQuery: { kind: "search", query: "news", limit: 20 } },
+			{ catalogQuery: { kind: "search", query: "news", limit: 20 }, link: 5 },
 		],
 	];
 

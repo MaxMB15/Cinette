@@ -42,21 +42,32 @@ fn backoff(attempt: u32) -> Duration {
     BACKOFF.get(attempt as usize).copied().unwrap_or(last)
 }
 
-/// How long a connection waits for things.
+/// How long a connection waits for things, and how much it takes on.
 #[derive(Debug, Clone, Copy)]
-pub struct Timeouts {
+pub struct Limits {
     /// How long the handshake may take once connected.
     pub handshake: Duration,
     /// How long the link stays quiet before it pings.
     pub ping: Duration,
+    /// How long a command or catalog query waits for its answer. The
+    /// target gives its player 10 s for a command.
+    pub request: Duration,
+    /// The most commands and queries waiting for answers at once.
+    pub waiting: usize,
 }
 
-impl Timeouts {
+impl Limits {
     pub const STANDARD: Self = Self {
         handshake: Duration::from_secs(10),
         ping: PING_INTERVAL,
+        request: Duration::from_secs(15),
+        waiting: 32,
     };
 }
+
+/// The most addresses tried in one attempt. A record can list any number.
+const MAX_ADDRESSES: usize = 8;
+
 /// The longest the task sleeps without looking at the clock, so a sleep of
 /// the whole computer is noticed soon after it wakes.
 const MAX_NAP: Duration = Duration::from_secs(2);
@@ -73,6 +84,9 @@ pub enum Phase {
     /// The handshake is done. Both screens show this code.
     Verifying {
         code: String,
+        /// The name the other device gave in the handshake, which its
+        /// key vouches for, unlike the one discovery found.
+        name: String,
     },
     /// The target is asking its user.
     Pending {
@@ -128,6 +142,10 @@ pub enum LinkError {
     Refused(ErrorCode),
     /// There's no session right now.
     NotConnected,
+    /// No answer came in time.
+    TimedOut,
+    /// Too many are waiting for answers already.
+    Busy,
 }
 
 enum Input {
@@ -141,12 +159,18 @@ enum Input {
 pub struct LinkHandle {
     inbox: mpsc::UnboundedSender<Input>,
     generation: u64,
+    device: DeviceId,
 }
 
 impl LinkHandle {
     /// The number it was started with.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The device it's a link to.
+    pub fn device(&self) -> &DeviceId {
+        &self.device
     }
 
     /// Sends a command. Resolves with the target's state version once it
@@ -179,9 +203,13 @@ impl LinkHandle {
 #[cfg(test)]
 impl LinkHandle {
     /// A handle with no link behind it, for tests of what holds one.
-    pub(crate) fn detached(generation: u64) -> Self {
+    pub(crate) fn detached(generation: u64, device: DeviceId) -> Self {
         let (inbox, _) = mpsc::unbounded_channel();
-        Self { inbox, generation }
+        Self {
+            inbox,
+            generation,
+            device,
+        }
     }
 }
 
@@ -194,9 +222,10 @@ pub struct LinkConfig {
     /// How long after a drop the session can still resume: the target's
     /// [`mvp_core::remote::sessions::RESUME_GRACE`].
     pub grace: Duration,
-    /// A number that tells this link from earlier ones to the same device.
+    /// A number that tells this link from earlier ones. The webview picks
+    /// it; its events carry it.
     pub generation: u64,
-    pub timeouts: Timeouts,
+    pub limits: Limits,
     pub clock: Clock,
 }
 
@@ -204,8 +233,13 @@ pub struct LinkConfig {
 pub fn start(config: LinkConfig, host: Arc<dyn LinkHost>) -> LinkHandle {
     let (inbox, rx) = mpsc::unbounded_channel();
     let generation = config.generation;
+    let device = config.target.clone();
     tokio::spawn(run(config, host, rx));
-    LinkHandle { inbox, generation }
+    LinkHandle {
+        inbox,
+        generation,
+        device,
+    }
 }
 
 /// How one connection ended.
@@ -236,8 +270,9 @@ async fn run(
                 Phase::Reconnecting { attempt }
             },
         );
-        let outcome = match connect_any(&(config.addresses)()).await {
-            Some(stream) => {
+        let outcome = match connect_any(&(config.addresses)(), &mut inbox).await {
+            Reached::Left => Outcome::Ended(Ended::Left),
+            Reached::Stream(stream) => {
                 let mut session_back = false;
                 let result = connection(
                     &config,
@@ -255,18 +290,20 @@ async fn run(
                 }
                 result
             }
-            None if session.is_some() => Outcome::Dropped,
-            None => Outcome::Ended(Ended::Unreachable),
+            Reached::Nowhere if session.is_some() => Outcome::Dropped,
+            Reached::Nowhere => Outcome::Ended(Ended::Unreachable),
         };
         let ended = match outcome {
             Outcome::Ended(ended) => Some(ended),
             Outcome::Dropped if session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
                 let since = *dropped_at.get_or_insert_with(|| (config.clock)());
-                let wait = backoff(attempt);
-                if (config.clock)() + wait >= since + config.grace {
+                let left = (since + config.grace).saturating_duration_since((config.clock)());
+                if left.is_zero() {
                     Some(Ended::Lost)
                 } else {
+                    // The last try comes as the grace runs out.
+                    let wait = backoff(attempt).min(left);
                     attempt += 1;
                     match wait_or_leave(wait, &mut inbox).await {
                         true => Some(Ended::Left),
@@ -302,21 +339,59 @@ async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input
     }
 }
 
-/// The first of `addrs` that takes a connection.
-async fn connect_any(addrs: &[SocketAddr]) -> Option<TcpStream> {
-    for addr in addrs {
-        if let Ok(Ok(stream)) =
-            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await
-        {
-            return Some(stream);
+/// How a connection attempt ended.
+enum Reached {
+    Stream(TcpStream),
+    Nowhere,
+    /// This device left meanwhile.
+    Left,
+}
+
+/// The first of `addrs` that takes a connection, trying at most
+/// [`MAX_ADDRESSES`]. Leaving stops it at once.
+async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<Input>) -> Reached {
+    for addr in addrs.iter().take(MAX_ADDRESSES) {
+        let attempt = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr));
+        tokio::pin!(attempt);
+        loop {
+            tokio::select! {
+                result = &mut attempt => {
+                    if let Ok(Ok(stream)) = result {
+                        return Reached::Stream(stream);
+                    }
+                    break;
+                }
+                input = inbox.recv() => match input {
+                    None => return Reached::Left,
+                    Some(Input::Leave(done)) => {
+                        let _ = done.send(());
+                        return Reached::Left;
+                    }
+                    // Dropping a request answers it with NotConnected.
+                    Some(_) => {}
+                },
+            }
         }
     }
-    None
+    Reached::Nowhere
 }
 
 enum Waiting {
     Command(oneshot::Sender<Result<u64, LinkError>>),
     Catalog(oneshot::Sender<Page>),
+}
+
+impl Waiting {
+    fn fail(self, error: LinkError) {
+        match self {
+            Waiting::Command(reply) => {
+                let _ = reply.send(Err(error));
+            }
+            Waiting::Catalog(reply) => {
+                let _ = reply.send(Err(error));
+            }
+        }
+    }
 }
 
 /// One connection, from the handshake until it ends.
@@ -347,18 +422,15 @@ async fn connection(
     let mut last_heard = opened;
     let mut last_sent = opened;
     let mut verified = false;
-    let mut waiting: HashMap<u64, Waiting> = HashMap::new();
+    // What's waiting for an answer, and until when.
+    let mut waiting: HashMap<u64, (Waiting, Instant)> = HashMap::new();
+    // A resume that goes wrong before the session is back can try again,
+    // within the grace, rather than end the session.
+    let resuming = session.is_some();
 
-    let finish = |waiting: HashMap<u64, Waiting>| {
-        for (_, w) in waiting {
-            match w {
-                Waiting::Command(reply) => {
-                    let _ = reply.send(Err(LinkError::NotConnected));
-                }
-                Waiting::Catalog(reply) => {
-                    let _ = reply.send(Err(LinkError::NotConnected));
-                }
-            }
+    let finish = |waiting: HashMap<u64, (Waiting, Instant)>| {
+        for (_, (w, _)) in waiting {
+            w.fail(LinkError::NotConnected);
         }
     };
 
@@ -380,9 +452,13 @@ async fn connection(
                 }
                 for event in output.events {
                     match event {
-                        Event::Verified { code, .. } => {
+                        Event::Verified { code, peer } => {
                             verified = true;
-                            host.phase(link, device, &Phase::Verifying { code: code.to_string() });
+                            // A resume skips the code: it was compared already.
+                            if !resuming {
+                                let code = code.to_string();
+                                host.phase(link, device, &Phase::Verifying { code, name: peer.name });
+                            }
                         }
                         Event::Pending { expires_in } => host.phase(
                             link,
@@ -397,17 +473,24 @@ async fn connection(
                         }
                         Event::State(state) => host.state(link, device, &state),
                         Event::Reply { request, result } => {
-                            if let Some(Waiting::Command(reply)) = waiting.remove(&request) {
+                            if let Some((Waiting::Command(reply), _)) = waiting.remove(&request) {
                                 let _ = reply.send(result.map_err(LinkError::Refused));
                             }
                         }
                         Event::Page { request, items, next } => {
-                            if let Some(Waiting::Catalog(reply)) = waiting.remove(&request) {
+                            if let Some((Waiting::Catalog(reply), _)) = waiting.remove(&request) {
                                 let _ = reply.send(Ok((items, next)));
                             }
                         }
                         Event::Error(code) => {
-                            tracing::warn!("[remote] {device} reported {code:?}");
+                            // The other device can send these as often as it likes.
+                            tracing::debug!("[remote] {device} reported {code:?}");
+                        }
+                        Event::Closed(CloseReason::IdentityMismatch) if resuming && !*session_back => {
+                            // Another device has its old address; discovery
+                            // may find the right one.
+                            finish(waiting);
+                            return Outcome::Dropped;
                         }
                         Event::Closed(reason) => {
                             finish(waiting);
@@ -436,11 +519,18 @@ async fn connection(
                     let _ = done.send(());
                     return Outcome::Ended(Ended::Left);
                 }
+                Some(Input::Command(_, reply)) if waiting.len() >= config.limits.waiting => {
+                    let _ = reply.send(Err(LinkError::Busy));
+                }
+                Some(Input::Catalog(_, reply)) if waiting.len() >= config.limits.waiting => {
+                    let _ = reply.send(Err(LinkError::Busy));
+                }
                 Some(Input::Command(command, reply)) => match controller.command(command) {
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
                         last_sent = (config.clock)();
-                        waiting.insert(id, Waiting::Command(reply));
+                        let until = last_sent + config.limits.request;
+                        waiting.insert(id, (Waiting::Command(reply), until));
                     }
                     Err(_) => {
                         let _ = reply.send(Err(LinkError::NotConnected));
@@ -450,14 +540,15 @@ async fn connection(
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
                         last_sent = (config.clock)();
-                        waiting.insert(id, Waiting::Catalog(reply));
+                        let until = last_sent + config.limits.request;
+                        waiting.insert(id, (Waiting::Catalog(reply), until));
                     }
                     Err(_) => {
                         let _ = reply.send(Err(LinkError::NotConnected));
                     }
                 },
             },
-            () = tokio::time::sleep(MAX_NAP.min(config.timeouts.ping)) => {}
+            () = tokio::time::sleep(MAX_NAP.min(config.limits.ping)) => {}
         }
         let now = (config.clock)();
         // The core gives up on a handshake or an answer that takes too long.
@@ -467,21 +558,37 @@ async fn connection(
         }
         if !given_up.events.is_empty() {
             finish(waiting);
+            if resuming {
+                return Outcome::Dropped;
+            }
             return Outcome::Ended(if verified {
                 Ended::Target(CloseReason::Timeout)
             } else {
                 Ended::Unreachable
             });
         }
-        if !verified && now.duration_since(opened) >= config.timeouts.handshake {
+        if !verified && now.duration_since(opened) >= config.limits.handshake {
             finish(waiting);
+            if resuming {
+                return Outcome::Dropped;
+            }
             return Outcome::Ended(Ended::Unreachable);
+        }
+        let late: Vec<u64> = waiting
+            .iter()
+            .filter(|(_, (_, until))| *until <= now)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in late {
+            if let Some((w, _)) = waiting.remove(&id) {
+                w.fail(LinkError::TimedOut);
+            }
         }
         if verified && now.duration_since(last_heard) >= IDLE_TIMEOUT {
             finish(waiting);
             return Outcome::Dropped;
         }
-        if now.duration_since(last_sent) >= config.timeouts.ping
+        if now.duration_since(last_sent) >= config.limits.ping
             && let Some(bytes) = controller.ping()
         {
             let _ = writer.send(bytes);
