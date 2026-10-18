@@ -8,6 +8,7 @@ mod downloads;
 mod identifier;
 #[cfg(desktop)]
 mod keep_awake;
+mod lan_server;
 mod logging;
 mod progress;
 mod streams;

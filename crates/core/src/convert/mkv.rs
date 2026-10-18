@@ -78,7 +78,8 @@ impl MkvSplitter {
                 let Some(len) = whole_length(size, head_len)? else {
                     return Err(MkvError::Size);
                 };
-                if self.buf.len() < start + len {
+                // Wait for the rest of the element.
+                if self.buf.get(start..start + len).is_none() {
                     break;
                 }
                 self.header_end = start + len;
@@ -87,7 +88,7 @@ impl MkvSplitter {
             let Some(len) = whole_length(size, head_len)? else {
                 return Err(MkvError::Size);
             };
-            if self.buf.len() < len {
+            if self.buf.get(..len).is_none() {
                 break;
             }
             let bytes: Vec<u8> = self.buf.drain(..len).collect();

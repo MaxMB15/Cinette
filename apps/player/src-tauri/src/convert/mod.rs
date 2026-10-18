@@ -2,12 +2,9 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! Converts a stream with the bundled ffmpeg and serves it to one receiver
-//! on the local network, for as long as the cast lasts.
+//! on the local network, through [`crate::lan_server`], for as long as the
+//! cast lasts.
 //!
-//! - The server listens on this computer's address on the route to the
-//!   receiver, since a receiver can't reach 127.0.0.1.
-//! - It answers only the receiver's address, and only an unguessable path.
-//!   Anything else gets the connection closed with no answer.
 //! - The provider's URL and login stay with ffmpeg. The receiver only ever
 //!   sees this computer's address.
 //! - The computer stays awake while ffmpeg runs, as it does for recordings.
@@ -16,21 +13,20 @@
 // The Cast destination starts conversions from the next step on.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mvp_core::convert::mkv::{MkvSplitter, Piece};
-use mvp_core::convert::serve::{head_end, ok_head, read_request, token, MAX_HEAD};
 use mvp_core::convert::{args, HardwareEncoder, NoEncoder, Plan};
 use mvp_core::streams::probe::{open_error, ProbeError};
 use tauri::{AppHandle, Runtime};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::AsyncReadExt;
 use tokio::process::Child;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
+
+use crate::lan_server::{LanServer, LivePipe};
 
 #[cfg(desktop)]
 use crate::keep_awake;
@@ -42,8 +38,6 @@ mod tests;
 
 /// How long ffmpeg gets to open the source and write the stream's header.
 const START_LIMIT: Duration = Duration::from_secs(30);
-/// How long a connection gets to send its request.
-const REQUEST_LIMIT: Duration = Duration::from_secs(5);
 /// Clusters a slow receiver may fall behind by before it's dropped.
 const BACKLOG: usize = 64;
 /// The most of ffmpeg's error text that's kept, to read why it failed.
@@ -81,21 +75,13 @@ pub enum Ended {
     Failed(ConvertError),
 }
 
-/// A file served beside the stream, such as subtitles.
-#[derive(Debug, Clone)]
-pub struct ServedFile {
-    /// The last part of its path, such as `subs.vtt`.
-    pub name: String,
-    pub content_type: &'static str,
-    pub body: Arc<Vec<u8>>,
-}
-
 /// A running conversion. Dropping it stops ffmpeg and the server.
 pub struct Conversion {
     /// The stream's address for the receiver.
     pub url: String,
-    /// The base the served files' names go after.
-    pub base: String,
+    /// The server, which can serve files beside the stream, such as
+    /// subtitles.
+    pub server: LanServer,
     /// Changes from `None` when ffmpeg exits.
     pub ended: watch::Receiver<Option<Ended>>,
     tasks: Vec<JoinHandle<()>>,
@@ -111,12 +97,6 @@ impl Drop for Conversion {
     }
 }
 
-/// What the server hands each request for the stream.
-struct Stream {
-    header: Vec<u8>,
-    pieces: broadcast::Sender<Arc<Piece>>,
-}
-
 /// Starts converting `source` by `plan` for the receiver at `receiver`.
 /// Returns once ffmpeg has written the stream's header, so a source that
 /// refuses the login fails here, before the receiver is told anything.
@@ -126,17 +106,11 @@ pub async fn start<R: Runtime>(
     plan: &Plan,
     encoder: Option<HardwareEncoder>,
     receiver: IpAddr,
-    files: Vec<ServedFile>,
 ) -> Result<Conversion, ConvertError> {
     let args = args(source, plan, encoder)?;
-    let local = route_to(receiver)?;
-    let listener = TcpListener::bind(SocketAddr::new(local, 0))
+    let server = LanServer::start(receiver)
         .await
         .map_err(|_| ConvertError::NoRoute)?;
-    let port = listener
-        .local_addr()
-        .map_err(|_| ConvertError::NoRoute)?
-        .port();
     let mut child = spawn(app, args)?;
     #[cfg(desktop)]
     if let Some(pid) = child.id() {
@@ -194,29 +168,19 @@ pub async fn start<R: Runtime>(
         }
     };
 
-    let token = token();
-    let host = match local {
-        IpAddr::V4(ip) => ip.to_string(),
-        IpAddr::V6(ip) => format!("[{ip}]"),
-    };
-    let base = format!("http://{host}:{port}/cast/{token}/");
-    let stream = Arc::new(Stream { header, pieces });
-    let files: HashMap<String, ServedFile> = files
-        .into_iter()
-        .map(|f| (format!("/cast/{token}/{}", f.name), f))
-        .collect();
-    let server = tokio::spawn(serve(
-        listener,
-        receiver,
-        format!("/cast/{token}/stream.mkv"),
-        stream,
-        Arc::new(files),
-    ));
+    let url = server.set_live(
+        "stream.mkv",
+        LivePipe {
+            content_type: "video/x-matroska",
+            header,
+            pieces: pieces.subscribe(),
+        },
+    );
     Ok(Conversion {
-        url: format!("{base}stream.mkv"),
-        base,
+        url,
+        server,
         ended,
-        tasks: vec![reader, errors_task, server],
+        tasks: vec![reader, errors_task],
     })
 }
 
@@ -230,24 +194,6 @@ pub async fn get_converter_support<R: Runtime>(
 
 fn failed(what: &str) -> ConvertError {
     ConvertError::Failed(what.to_string())
-}
-
-/// This computer's address on the route to `receiver`. Connecting a UDP
-/// socket sends nothing; it only picks the route.
-fn route_to(receiver: IpAddr) -> Result<IpAddr, ConvertError> {
-    let unspecified: SocketAddr = match receiver {
-        IpAddr::V4(_) => "0.0.0.0:0".parse().expect("a valid address"),
-        IpAddr::V6(_) => "[::]:0".parse().expect("a valid address"),
-    };
-    let socket = UdpSocket::bind(unspecified).map_err(|_| ConvertError::NoRoute)?;
-    socket
-        .connect(SocketAddr::new(receiver, 8009))
-        .map_err(|_| ConvertError::NoRoute)?;
-    let local = socket.local_addr().map_err(|_| ConvertError::NoRoute)?.ip();
-    if local.is_unspecified() {
-        return Err(ConvertError::NoRoute);
-    }
-    Ok(local)
 }
 
 /// Starts the bundled ffmpeg with its output piped. Its arguments carry
@@ -338,96 +284,4 @@ async fn read_output(
         }
     };
     let _ = ended.send(Some(end));
-}
-
-/// Accepts connections from the receiver until the conversion stops.
-async fn serve(
-    listener: TcpListener,
-    receiver: IpAddr,
-    stream_path: String,
-    stream: Arc<Stream>,
-    files: Arc<HashMap<String, ServedFile>>,
-) {
-    while let Ok((socket, peer)) = listener.accept().await {
-        // Anyone else on the network gets nothing at all.
-        if peer.ip() != receiver {
-            continue;
-        }
-        let (stream, files, stream_path) = (stream.clone(), files.clone(), stream_path.clone());
-        tokio::spawn(async move {
-            let _ = answer(socket, &stream_path, &stream, &files).await;
-        });
-    }
-}
-
-async fn answer(
-    mut socket: TcpStream,
-    stream_path: &str,
-    stream: &Stream,
-    files: &HashMap<String, ServedFile>,
-) -> std::io::Result<()> {
-    let Some(request) = tokio::time::timeout(REQUEST_LIMIT, read_head(&mut socket))
-        .await
-        .ok()
-        .flatten()
-    else {
-        return Ok(());
-    };
-    if request.path == stream_path {
-        // Subscribe before writing the header, so no cluster slips by.
-        let mut pieces = stream.pieces.subscribe();
-        socket
-            .write_all(ok_head("video/x-matroska", None).as_bytes())
-            .await?;
-        if request.head_only {
-            return Ok(());
-        }
-        socket.write_all(&stream.header).await?;
-        let mut started = false;
-        loop {
-            match pieces.recv().await {
-                Ok(piece) => {
-                    let Piece::Element { bytes, cluster } = piece.as_ref() else {
-                        continue;
-                    };
-                    // A late request starts at a cluster, which starts at
-                    // a keyframe.
-                    started |= *cluster;
-                    if started {
-                        socket.write_all(bytes).await?;
-                    }
-                }
-                // Fallen too far behind, or the conversion ended.
-                Err(_) => return Ok(()),
-            }
-        }
-    }
-    if let Some(file) = files.get(&request.path) {
-        socket
-            .write_all(ok_head(file.content_type, Some(file.body.len())).as_bytes())
-            .await?;
-        if !request.head_only {
-            socket.write_all(&file.body).await?;
-        }
-    }
-    Ok(())
-}
-
-/// Reads a request's head, up to [`MAX_HEAD`] bytes.
-async fn read_head(socket: &mut TcpStream) -> Option<mvp_core::convert::serve::Request> {
-    let mut head = Vec::new();
-    let mut buf = [0u8; 1024];
-    loop {
-        let n = socket.read(&mut buf).await.ok()?;
-        if n == 0 {
-            return None;
-        }
-        head.extend_from_slice(&buf[..n]);
-        if let Some(end) = head_end(&head) {
-            return read_request(&head[..end]);
-        }
-        if head.len() > MAX_HEAD {
-            return None;
-        }
-    }
 }

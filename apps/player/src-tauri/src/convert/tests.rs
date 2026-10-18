@@ -23,28 +23,19 @@ fn copy_audio() -> Plan {
     }
 }
 
-fn subtitles() -> ServedFile {
-    ServedFile {
-        name: "subs.vtt".into(),
-        content_type: "text/vtt",
-        body: Arc::new(b"WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n".to_vec()),
-    }
-}
+const SUBTITLES: &[u8] = b"WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n";
 
 async fn start_copy(
     app: &TestApp,
     source: &str,
     receiver: IpAddr,
 ) -> Result<Conversion, ConvertError> {
-    start(
-        &app.handle(),
-        source,
-        &copy_audio(),
-        None,
-        receiver,
-        vec![subtitles()],
-    )
-    .await
+    let conversion = start(&app.handle(), source, &copy_audio(), None, receiver).await?;
+    conversion
+        .server
+        .files
+        .put("subs.vtt", "text/vtt", SUBTITLES.to_vec());
+    Ok(conversion)
 }
 
 #[tokio::test]
@@ -61,7 +52,7 @@ async fn serves_live_matroska_from_this_computers_address() {
         .strip_suffix("/stream.mkv")
         .unwrap();
     assert_eq!(token.len(), 64);
-    assert!(conversion.url.starts_with(&conversion.base));
+    assert!(conversion.url.starts_with(&conversion.server.base));
 
     let client = test_server::client();
     let mut response = client.get(&conversion.url).send().await.unwrap();
@@ -100,87 +91,36 @@ async fn serves_subtitles_and_heads_and_nothing_else() {
     let client = test_server::client();
 
     let subs = client
-        .get(format!("{}subs.vtt", conversion.base))
+        .get(format!("{}subs.vtt", conversion.server.base))
         .send()
         .await
         .unwrap();
     assert_eq!(subs.headers()["content-type"], "text/vtt");
     assert_eq!(subs.headers()["access-control-allow-origin"], "*");
-    assert_eq!(
-        subs.bytes().await.unwrap().as_ref(),
-        subtitles().body.as_slice()
-    );
+    assert_eq!(subs.bytes().await.unwrap().as_ref(), SUBTITLES);
 
     let head = client.head(&conversion.url).send().await.unwrap();
     assert_eq!(head.status(), 200);
     assert_eq!(head.bytes().await.unwrap().len(), 0);
     let head = client
-        .head(format!("{}subs.vtt", conversion.base))
+        .head(format!("{}subs.vtt", conversion.server.base))
         .send()
         .await
         .unwrap();
     assert_eq!(
         head.headers()["content-length"],
-        subtitles().body.len().to_string()
+        SUBTITLES.len().to_string()
     );
 
     // Another path, a guessed token or another method gets no answer at all.
     let wrong = conversion.url.replace("/cast/", "/cast/0");
     assert!(client.get(&wrong).send().await.is_err());
     assert!(client
-        .get(format!("{}other.vtt", conversion.base))
+        .get(format!("{}other.vtt", conversion.server.base))
         .send()
         .await
         .is_err());
     assert!(client.post(&conversion.url).send().await.is_err());
-}
-
-#[tokio::test]
-async fn a_request_that_never_ends_its_head_gets_nothing() {
-    let app = TestApp::new();
-    let conversion = start_copy(&app, &video_url("slow"), LOOPBACK)
-        .await
-        .unwrap();
-    let address = conversion
-        .url
-        .strip_prefix("http://")
-        .unwrap()
-        .split('/')
-        .next()
-        .unwrap()
-        .to_string();
-    let mut socket = TcpStream::connect(&address).await.unwrap();
-    socket
-        .write_all(&vec![b'a'; MAX_HEAD + 1024])
-        .await
-        .unwrap();
-    let mut reply = Vec::new();
-    let _ = socket.read_to_end(&mut reply).await;
-    assert!(reply.is_empty());
-    // A head that ends with nothing in it gets nothing either.
-    let mut socket = TcpStream::connect(&address).await.unwrap();
-    socket.write_all(b"GET\r\n\r\n").await.unwrap();
-    let mut reply = Vec::new();
-    let _ = socket.read_to_end(&mut reply).await;
-    assert!(reply.is_empty());
-}
-
-/// Every loopback address reaches this computer on Linux, so 127.0.0.2 can
-/// stand in for a receiver that isn't the client.
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn answers_only_the_receiver() {
-    let app = TestApp::new();
-    let receiver = IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2));
-    let conversion = start_copy(&app, &video_url("peer"), receiver)
-        .await
-        .unwrap();
-    // This client connects from 127.0.0.1.
-    assert!(test_server::client()
-        .get(&conversion.url)
-        .send()
-        .await
-        .is_err());
 }
 
 #[tokio::test]
@@ -209,7 +149,7 @@ async fn says_when_the_source_ends_and_stops_when_dropped() {
         .to_string();
     drop(conversion);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(TcpStream::connect(&address).await.is_err());
+    assert!(tokio::net::TcpStream::connect(&address).await.is_err());
 }
 
 #[tokio::test]
@@ -258,30 +198,14 @@ async fn a_transcode_without_an_encoder_never_starts() {
         video: VideoPlan::Transcode { deinterlace: true },
         ..copy_audio()
     };
-    let err = start(
-        &app.handle(),
-        &video_url("x"),
-        &plan,
-        None,
-        LOOPBACK,
-        vec![],
-    )
-    .await
-    .err()
-    .unwrap();
+    let err = start(&app.handle(), &video_url("x"), &plan, None, LOOPBACK)
+        .await
+        .err()
+        .unwrap();
     assert_eq!(err, ConvertError::NoEncoder);
     assert_eq!(
         err.to_string(),
         "this computer has no hardware video encoder"
-    );
-}
-
-#[test]
-fn finds_the_route_to_a_receiver() {
-    assert_eq!(route_to(LOOPBACK), Ok(LOOPBACK));
-    assert_eq!(
-        route_to(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
-        Ok(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST))
     );
 }
 
