@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { useState } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render, cleanup, fireEvent, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
+import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
+import { useSubtitleNudge } from "./useSubtitleNudge";
 import { useTvRemote } from "./useTvRemote";
 
 /** Gives `el` a box, since jsdom lays nothing out. */
@@ -26,11 +29,26 @@ const Remote = () => {
 	);
 };
 
-const renderAt = (path: string) => {
+/** The player's subtitle nudge, which mounts under the TV layout. */
+const Nudge = () => {
+	const [position, setPosition] = useState(DEFAULT_SUBTITLE_POSITION);
+	useSubtitleNudge(true, setPosition);
+	return <p data-testid="position">{`${position.x},${position.y}`}</p>;
+};
+
+const renderAt = (path: string, nudge = false) => {
 	render(
 		<MemoryRouter initialEntries={[path]}>
 			<Routes>
-				<Route path="*" element={<Remote />} />
+				<Route
+					path="*"
+					element={
+						<>
+							<Remote />
+							{nudge && <Nudge />}
+						</>
+					}
+				/>
 			</Routes>
 		</MemoryRouter>
 	);
@@ -97,6 +115,15 @@ describe("useTvRemote", () => {
 
 		fireEvent.keyDown(screen.getByText("second"), { key: "Enter" });
 		expect(document.activeElement).toBe(screen.getByText("second"));
+	});
+
+	it("leaves the arrows to the subtitle nudge while it's on", () => {
+		renderAt("/", true);
+		const first = screen.getByText("first");
+		first.focus();
+		fireEvent.keyDown(first, { key: "ArrowDown" });
+		expect(document.activeElement).toBe(first);
+		expect(screen.getByTestId("position")).toHaveTextContent("50,90");
 	});
 
 	it("keeps one Back handler as the page changes", () => {

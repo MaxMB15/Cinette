@@ -5,6 +5,8 @@ import { useRef, useState, type ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { useSubtitleNudge } from "@/hooks/useSubtitleNudge";
+import { DEFAULT_SUBTITLE_POSITION } from "@/lib/subtitle-position";
 import { deferred } from "@/test/deferred";
 import type { SubtitleEntry, SubtitleSearchResult } from "@/lib/types";
 import { SubtitlePicker, type SubtitlePick } from "./SubtitlePicker";
@@ -76,6 +78,27 @@ const Confirm = () => {
 		<div ref={ref} role="dialog">
 			<button>OK</button>
 		</div>
+	);
+};
+
+/** The picker with the player's subtitle nudge, which runs while the settings are open. */
+const WithNudge = () => {
+	const [delay, setDelay] = useState(0);
+	const [editing, setEditing] = useState(false);
+	const [position, setPosition] = useState(DEFAULT_SUBTITLE_POSITION);
+	useSubtitleNudge(editing, setPosition);
+	return (
+		<>
+			<SubtitlePicker
+				imdbId="tt0000001"
+				onClose={() => {}}
+				startPick={makePlayer().startPick}
+				subtitleDelay={delay}
+				onDelayChange={setDelay}
+				onSettingsModeChange={setEditing}
+			/>
+			<p data-testid="position">{`${position.x},${position.y}`}</p>
+		</>
 	);
 };
 
@@ -831,22 +854,37 @@ describe("SubtitlePicker settings", () => {
 		openSettings();
 		const delaySection = screen.getByText("Delay").parentElement as HTMLElement;
 
-		fireEvent.keyDown(document, { key: "ArrowRight" });
+		fireEvent.keyDown(document.body, { key: "ArrowRight" });
 		expect(screen.getByText("0.0s")).toBeInTheDocument();
 
 		fireEvent.mouseEnter(delaySection);
 		// The key is used up here, so the player doesn't seek or move the subtitle as well.
-		expect(fireEvent.keyDown(document, { key: "ArrowRight" })).toBe(false);
+		expect(fireEvent.keyDown(document.body, { key: "ArrowRight" })).toBe(false);
 		expect(screen.getByText("+0.1s")).toBeInTheDocument();
-		fireEvent.keyDown(document, { key: "ArrowLeft" });
-		fireEvent.keyDown(document, { key: "ArrowLeft" });
+		fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+		fireEvent.keyDown(document.body, { key: "ArrowLeft" });
 		expect(screen.getByText("-0.1s")).toBeInTheDocument();
-		expect(fireEvent.keyDown(document, { key: "ArrowUp" })).toBe(true);
+		expect(fireEvent.keyDown(document.body, { key: "ArrowUp" })).toBe(true);
 		expect(screen.getByText("-0.1s")).toBeInTheDocument();
 
 		fireEvent.mouseLeave(delaySection);
-		fireEvent.keyDown(document, { key: "ArrowRight" });
+		fireEvent.keyDown(document.body, { key: "ArrowRight" });
 		expect(screen.getByText("-0.1s")).toBeInTheDocument();
+	});
+
+	it("keeps the arrows from moving the subtitles too while the pointer is over the delay", () => {
+		render(<WithNudge />);
+		openSettings();
+		const delaySection = screen.getByText("Delay").parentElement as HTMLElement;
+
+		fireEvent.keyDown(document.body, { key: "ArrowRight" });
+		expect(screen.getByTestId("position")).toHaveTextContent("52,88");
+		expect(screen.getByText("0.0s")).toBeInTheDocument();
+
+		fireEvent.mouseEnter(delaySection);
+		fireEvent.keyDown(document.body, { key: "ArrowRight" });
+		expect(screen.getByText("+0.1s")).toBeInTheDocument();
+		expect(screen.getByTestId("position")).toHaveTextContent("52,88");
 	});
 
 	it("leaves the arrow keys to a confirm open over it", () => {

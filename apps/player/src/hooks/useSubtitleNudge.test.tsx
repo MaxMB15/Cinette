@@ -33,8 +33,8 @@ const Player = ({ active, confirm = false }: { active: boolean; confirm?: boolea
 
 const position = () => screen.getByRole("status").textContent;
 
-/** Presses `key` on the window, and says whether the hook took it. */
-const press = (key: string): boolean => !fireEvent.keyDown(window, { key });
+/** Presses `key` with nothing focused, and says whether the hook took it. */
+const press = (key: string): boolean => !fireEvent.keyDown(document.body, { key });
 
 describe("useSubtitleNudge", () => {
 	it("moves the subtitles with the arrow keys while positioning", () => {
@@ -46,6 +46,23 @@ describe("useSubtitleNudge", () => {
 		press("ArrowRight");
 		press("ArrowRight");
 		expect(position()).toBe("52,88");
+	});
+
+	it("takes the key before the window hears it, where the TV remote listens", () => {
+		// The TV layout mounts before the player, so its listener comes first.
+		let used: boolean | undefined;
+		const remote = (e: KeyboardEvent) => {
+			used = e.defaultPrevented;
+		};
+		window.addEventListener("keydown", remote);
+		try {
+			render(<Player active />);
+			press("ArrowLeft");
+		} finally {
+			window.removeEventListener("keydown", remote);
+		}
+		expect(used).toBe(true);
+		expect(position()).toBe("48,88");
 	});
 
 	it("leaves other keys to the player", () => {

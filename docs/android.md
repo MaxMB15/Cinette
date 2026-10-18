@@ -184,6 +184,8 @@ On a TV, `getPlatform()` in `lib/platform.ts` returns `tv` and the app uses
   controls, since the TV has its own volume, and once a control has focus the arrows
   move between controls. Any key shows the controls and keeps them up. When they hide
   with a control focused, the player takes focus back, so Left and Right seek again.
+  While the subtitle settings are open, the arrows move the subtitles instead. That
+  listener is on the document, so it takes the key before `useTvRemote` on the window.
 - **Back:** `MainActivity.kt` hands it to `window.__cinetteBack`, which sends Escape to
   the focused element (`lib/tv-back.ts`). Escape already closes the top layer: a
   dialog, a player panel, full screen, then the player itself. When nothing takes
