@@ -120,8 +120,14 @@ pub enum CatalogQuery {
         content_type: Option<String>,
         limit: u32,
     },
-    /// The episodes of a series.
-    Episodes { series_id: String },
+    /// The episodes of a series, a page at a time. The cursor is the id
+    /// of the first episode on the page.
+    Episodes {
+        series_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        limit: u32,
+    },
 }
 
 impl CatalogQuery {
@@ -165,7 +171,14 @@ impl CatalogQuery {
                     && content_type.as_deref().is_none_or(content_type_ok))
                 .then_some(())
             }
-            CatalogQuery::Episodes { series_id } => id_ok(series_id).then_some(()),
+            CatalogQuery::Episodes {
+                series_id,
+                cursor,
+                limit,
+            } => {
+                *limit = (*limit).clamp(1, MAX_PAGE as u32);
+                (id_ok(series_id) && cursor.as_deref().is_none_or(id_ok)).then_some(())
+            }
         }?;
         Some(self)
     }

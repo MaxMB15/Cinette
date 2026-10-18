@@ -10,8 +10,8 @@ use crate::remote::test_client::{self, Client, WAIT};
 use crate::test_support::TestApp;
 use mvp_core::http::test_server::{self, route, serve_routes};
 use mvp_core::models::channel::Channel;
-use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::models::playlist::{Provider, ProviderType};
+use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::controller::Event;
 use mvp_core::remote::message::CloseReason;
 use serde_json::{json, Value};
@@ -413,6 +413,8 @@ async fn ask_for_episodes(phone: &mut Client, series_id: &str) -> Vec<CatalogIte
         .controller
         .catalog(CatalogQuery::Episodes {
             series_id: series_id.into(),
+            cursor: None,
+            limit: 100,
         })
         .unwrap();
     phone.write(&bytes).await;
@@ -452,7 +454,7 @@ async fn channel_with_load(running: &mut Running, phone: &mut Client, item_id: &
 
 #[tokio::test(flavor = "multi_thread")]
 async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() {
-    let (url, _requests) = serve_routes(vec![route(
+    let (url, requests) = serve_routes(vec![route(
         "action=get_series_info",
         "200 OK",
         r#"{"info":{"name":"The Show"},"episodes":{"1":[
@@ -490,6 +492,14 @@ async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, "p1-xt-ep-7-s1-0");
     assert_eq!(items[0].episode, Some(1));
+    // Asked again soon, they come from what was loaded.
+    let again = ask_for_episodes(&mut phone, "p1-series-7").await;
+    assert_eq!(again, items);
+    let asked = requests
+        .try_iter()
+        .filter(|r| r.contains("action=get_series_info"))
+        .count();
+    assert_eq!(asked, 1, "the provider is asked once");
 
     let channel = channel_with_load(&mut running, &mut phone, "p1-xt-ep-7-s1-0").await;
     assert_eq!(channel["id"], "p1-xt-ep-7-s1-0");
@@ -867,4 +877,13 @@ async fn only_the_current_link_reaches_the_webview() {
     assert_eq!(controller["phase"], json!("connected"));
     let shown = running.event("remote://state").await;
     assert_eq!(shown["state"]["version"], json!(2));
+}
+
+#[test]
+fn consent_brings_the_window_up_at_most_every_thirty_seconds() {
+    let now = Instant::now() + Duration::from_secs(120);
+    assert!(may_raise(None, now));
+    assert!(!may_raise(Some(now - Duration::from_secs(29)), now));
+    assert!(may_raise(Some(now - RAISE_EVERY), now));
+    assert!(may_raise(Some(now - Duration::from_secs(31)), now));
 }

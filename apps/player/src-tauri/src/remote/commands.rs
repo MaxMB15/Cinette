@@ -95,6 +95,10 @@ pub struct PlayerItem {
     pub series_title: Option<String>,
     pub season: Option<u32>,
     pub episode: Option<u32>,
+    /// The hosts it streams from. Never sent on; a logo on the same site is
+    /// dropped.
+    #[serde(default)]
+    pub stream_hosts: Vec<String>,
 }
 
 /// A number the webview sent, or 0 if it isn't one.
@@ -111,6 +115,8 @@ impl PlayerState {
     /// can go.
     pub fn into_snapshot(self, provider_hosts: &[String]) -> PlaybackSnapshot {
         let item = self.item.map(|i| {
+            let mut hosts = provider_hosts.to_vec();
+            hosts.extend(i.stream_hosts.iter().map(|h| h.to_ascii_lowercase()));
             let channel = Channel {
                 id: i.id,
                 name: i.name,
@@ -122,7 +128,15 @@ impl PlayerState {
                 episode: i.episode,
                 ..Channel::default()
             };
-            mvp_core::remote::catalog::CatalogItem::from_channel(&channel, provider_hosts)
+            let mut item = mvp_core::remote::catalog::CatalogItem::from_channel(&channel, &hosts);
+            if item
+                .logo
+                .as_deref()
+                .is_some_and(|logo| super::logos::on_a_provider_site(logo, &hosts))
+            {
+                item.logo = None;
+            }
+            item
         });
         PlaybackSnapshot {
             status: self.status,

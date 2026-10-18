@@ -10,6 +10,7 @@ use super::target::{self, CatalogPage, TargetHandle, TargetHost};
 use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
 use crate::discovery::{self, Advertisement, Registration};
+use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
@@ -20,10 +21,10 @@ use mvp_core::remote::sessions::RESUME_GRACE;
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use serde::Serialize;
-use mvp_core::models::channel::Channel;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::mpsc;
@@ -40,6 +41,7 @@ pub struct RemoteService {
     pub(crate) handle: TargetHandle,
     key_dir: PathBuf,
     state: Mutex<Saved>,
+    resetting: Mutex<()>,
     devices: Arc<Mutex<Devices>>,
     link: Arc<Mutex<Option<LinkHandle>>>,
     link_host: Arc<dyn LinkHost>,
@@ -150,6 +152,8 @@ impl RemoteService {
 
     /// Makes and saves a new key, so a new device id. Every session ends.
     pub fn reset_identity(&self) -> Result<DeviceId, String> {
+        // One reset at a time, so the saved key and the running one match.
+        let _one = lock(&self.resetting);
         let key = DeviceKey::generate();
         identity::save(&self.key_dir, &key).map_err(|e| e.to_string())?;
         let id = key.device_id();
@@ -214,6 +218,11 @@ pub struct CommandEvent<'a> {
 
 /// How many series' episodes the target keeps for loads, newest last.
 const REMEMBERED_SERIES: usize = 4;
+/// How long a series' episodes are answered from what was loaded before
+/// the provider is asked again.
+const FRESH_FOR: Duration = Duration::from_secs(60);
+/// The shortest time between two consent requests that raise the window.
+const RAISE_EVERY: Duration = Duration::from_secs(30);
 
 /// Puts a record on the network, or doesn't.
 type Advertiser = Box<dyn Fn(&Registration) -> Option<Advertisement> + Send + Sync>;
@@ -222,15 +231,43 @@ struct TauriHost<R: Runtime> {
     app: AppHandle<R>,
     advertiser: Advertiser,
     advertisement: Mutex<Option<Advertisement>>,
-    /// The episodes of the series controllers opened last, by series id.
-    episodes: Mutex<VecDeque<(String, Vec<Channel>)>>,
+    /// The episodes of the series controllers opened last, by series id,
+    /// with when they were loaded.
+    episodes: Mutex<VecDeque<Remembered>>,
+    /// When a consent request last brought the window up.
+    raised: Mutex<Option<Instant>>,
+}
+
+struct Remembered {
+    series_id: String,
+    loaded: Instant,
+    episodes: Vec<Channel>,
 }
 
 impl<R: Runtime> TauriHost<R> {
+    /// The episodes of `series_id` if they were loaded in the last
+    /// [`FRESH_FOR`]. They count as the newest again.
+    fn fresh(&self, series_id: &str) -> Option<Vec<Channel>> {
+        let mut remembered = lock(&self.episodes);
+        let at = remembered
+            .iter()
+            // mutants: skip BinaryOperator: < and <= differ only at one instant of a clock that never stops.
+            .position(|r| r.series_id == series_id && r.loaded.elapsed() < FRESH_FOR)?;
+        let found = remembered.remove(at)?;
+        let episodes = found.episodes.clone();
+        remembered.push_back(found);
+        Some(episodes)
+    }
+
+    /// Keeps episodes just loaded.
     fn remember(&self, series_id: String, episodes: Vec<Channel>) {
         let mut remembered = lock(&self.episodes);
-        remembered.retain(|(id, _)| *id != series_id);
-        remembered.push_back((series_id, episodes));
+        remembered.retain(|r| r.series_id != series_id);
+        remembered.push_back(Remembered {
+            series_id,
+            loaded: Instant::now(),
+            episodes,
+        });
         if remembered.len() > REMEMBERED_SERIES {
             remembered.pop_front();
         }
@@ -251,8 +288,14 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
                 .as_millis() as u64,
         };
         let _ = self.app.emit("remote://consent", event);
-        // A dialog behind other windows would time out unseen.
-        crate::show_main_window(&self.app);
+        // A dialog behind other windows would time out unseen. Requests
+        // can come again and again, so the window comes up only now and then.
+        let mut raised = lock(&self.raised);
+        let now = Instant::now();
+        if may_raise(*raised, now) {
+            *raised = Some(now);
+            crate::show_main_window(&self.app);
+        }
     }
 
     fn hide_consent(&self, request: RequestId) {
@@ -273,7 +316,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             Command::Load { item_id, .. } => remembered
                 .iter()
                 .rev()
-                .flat_map(|(_, episodes)| episodes)
+                .flat_map(|r| &r.episodes)
                 .find(|episode| episode.id == *item_id),
             _ => None,
         };
@@ -287,16 +330,26 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
 
     fn catalog(&self, query: CatalogQuery) -> CatalogPage {
         let state = self.app.state::<AppState>();
-        if let CatalogQuery::Episodes { series_id } = query {
-            // This runs on a blocking thread, which can wait for the provider.
-            let episodes = tokio::runtime::Handle::current()
-                .block_on(super::catalog::episodes(&state.cache, &series_id))?;
-            let page = {
-                let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
-                super::catalog::episode_page(&cache, &episodes)?
+        if let CatalogQuery::Episodes {
+            series_id,
+            cursor,
+            limit,
+        } = query
+        {
+            // A later page, or the same series asked again soon, comes from
+            // what was loaded, so paging doesn't ask the provider each time.
+            let episodes = match self.fresh(&series_id) {
+                Some(episodes) => episodes,
+                None => {
+                    // This runs on a blocking thread, which can wait for the provider.
+                    let loaded = tokio::runtime::Handle::current()
+                        .block_on(super::catalog::episodes(&state.cache, &series_id))?;
+                    self.remember(series_id, loaded.clone());
+                    loaded
+                }
             };
-            self.remember(series_id, episodes);
-            return Ok(page);
+            let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
+            return super::catalog::episode_page(&cache, &episodes, cursor, limit);
         }
         let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
         super::catalog::answer(&cache, query)
@@ -310,6 +363,12 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             *current = (self.advertiser)(&registration);
         }
     }
+}
+
+/// Whether a consent request may bring the window up `now`, when one last
+/// did at `last`.
+fn may_raise(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|at| now.duration_since(at) >= RAISE_EVERY)
 }
 
 /// Advertises on the network this device is on.
@@ -480,6 +539,7 @@ fn start_on<R: Runtime>(
         advertiser,
         advertisement: Mutex::new(None),
         episodes: Mutex::new(VecDeque::new()),
+        raised: Mutex::new(None),
     });
     let device_id = key.device_id();
     let handle = target::start(listener, key.clone(), DEVICE_TYPE, settings.clone(), host)
@@ -500,6 +560,7 @@ fn start_on<R: Runtime>(
             devices: devices.clone(),
             link: link.clone(),
         }),
+        resetting: Mutex::new(()),
         devices,
         link,
         links: std::sync::atomic::AtomicU64::new(0),
