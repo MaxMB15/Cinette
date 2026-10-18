@@ -308,6 +308,7 @@ describe("useAirPlay", () => {
 				sent: false,
 				why: "failed",
 				error: new Error("no picker"),
+				stopped: false,
 			});
 		});
 		expect(events.count("airplay://route")).toBe(1);
@@ -336,6 +337,222 @@ describe("useAirPlay", () => {
 		await flush();
 		expect(tauri.airplayStop).toHaveBeenCalledTimes(2);
 		expect(events.count("airplay://state")).toBe(0);
+	});
+});
+
+describe("useAirPlay's switching", () => {
+	const mkv = { formats: [{ ...mp4, container: "mkv" as const }], sources: [0], duration: null };
+
+	it("checks the item before the picker, so a blocked one never moves the sound", async () => {
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toMatchObject({ sent: false, why: "blocked" });
+		});
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+		// The check's own listener is gone.
+		expect(events.count("airplay://state")).toBe(0);
+	});
+
+	it("starts nothing when the page goes during the check", async () => {
+		let formats: (f: {
+			formats: StreamFormat[];
+			sources: number[];
+			duration: null;
+		}) => void = () => {};
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.getStreamFormats.mockReturnValueOnce(new Promise((r) => (formats = r)));
+		const { result, unmount } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
+		unmount();
+		formats({ formats: [mp4], sources: [0], duration: null });
+		expect(await sent).toEqual({ sent: false, why: "cancelled" });
+		expect(stopLocal).not.toHaveBeenCalled();
+		expect(tauri.airplayLoad).not.toHaveBeenCalled();
+		await flush();
+		expect(events.count("airplay://state")).toBe(0);
+	});
+
+	it("starts nothing when the page goes while the receiver's route is checked", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		let second: (f: {
+			formats: StreamFormat[];
+			sources: number[];
+			duration: null;
+		}) => void = () => {};
+		tauri.getStreamFormats
+			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null })
+			.mockReturnValueOnce(new Promise((r) => (second = r)));
+		const { result, unmount } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
+		await flush();
+		unmount();
+		second({ formats: [mp4], sources: [0], duration: null });
+		expect(await sent).toEqual({ sent: false, why: "cancelled" });
+		expect(stopLocal).not.toHaveBeenCalled();
+		expect(tauri.airplayLoad).not.toHaveBeenCalled();
+	});
+
+	it("starts nothing when the page goes while this device stops", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result, unmount } = renderHook(() => useAirPlay(true));
+		await flush();
+		let stopped: () => void = () => {};
+		const stopLocal = vi.fn(() => new Promise<void>((r) => (stopped = r)));
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
+		await flush();
+		unmount();
+		stopped();
+		expect(await sent).toEqual({ sent: false, why: "cancelled" });
+		expect(tauri.airplayLoad).not.toHaveBeenCalled();
+		await flush();
+		expect(events.count("airplay://state")).toBe(0);
+	});
+
+	it("doesn't open the picker once the page has gone", async () => {
+		let formats: (f: {
+			formats: StreamFormat[];
+			sources: number[];
+			duration: null;
+		}) => void = () => {};
+		tauri.getStreamFormats.mockReturnValueOnce(new Promise((r) => (formats = r)));
+		const { result, unmount } = renderHook(() => useAirPlay(true));
+		await flush();
+		const sent = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		unmount();
+		formats({ formats: [mp4], sources: [0], duration: null });
+		expect(await sent).toEqual({ sent: false, why: "cancelled" });
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+	});
+
+	it("says which picks the page went during", async () => {
+		const { result, unmount } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
+		await flush();
+		unmount();
+		act(() => events.emit("airplay://route", tv));
+		expect(await sent).toEqual({ sent: false, why: "cancelled" });
+		expect(stopLocal).not.toHaveBeenCalled();
+	});
+
+	it("blocks an item the receiver's own check turns down", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.getStreamFormats
+			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null })
+			.mockResolvedValueOnce(mkv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		await act(async () => {
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
+				sent: false,
+				why: "blocked",
+				decision: { ok: false, reason: "container", detail: "mkv" },
+			});
+		});
+		expect(stopLocal).not.toHaveBeenCalled();
+	});
+
+	it("takes the panel away when the TV never starts", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayLoad.mockRejectedValue("That stream format is no longer offered");
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toEqual({
+				sent: false,
+				why: "failed",
+				error: "That stream format is no longer offered",
+				stopped: true,
+			});
+		});
+		expect(result.current.destination).toBeNull();
+		expect(result.current.state).toBeNull();
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+		expect(events.count("airplay://state")).toBe(0);
+	});
+
+	it("stops AirPlay before it resolves", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		let done: () => void = () => {};
+		tauri.airplayStop.mockReturnValueOnce(new Promise((r) => (done = r)));
+		let resolved = false;
+		let stopping: Promise<void> = Promise.resolve();
+		act(() => {
+			stopping = result.current.stop().then(() => {
+				resolved = true;
+			});
+		});
+		await flush();
+		expect(resolved).toBe(false);
+		expect(result.current.destination).toBeNull();
+		await act(async () => {
+			done();
+			await stopping;
+		});
+		expect(resolved).toBe(true);
+		// Stopping again with nothing playing does nothing.
+		await act(() => result.current.stop());
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("brings the sound back to this device before it stops AirPlay", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		let back: Promise<void> = Promise.resolve();
+		act(() => {
+			back = result.current.returnHere(anchor);
+		});
+		await flush();
+		expect(tauri.airplayChoose).toHaveBeenCalledWith({ x: 10, y: 20, width: 30, height: 40 });
+		expect(tauri.airplayStop).not.toHaveBeenCalled();
+		// Another receiver doesn't count; this device does.
+		act(() => events.emit("airplay://route", { id: "airplay:other", name: "Other" }));
+		await flush();
+		expect(tauri.airplayStop).not.toHaveBeenCalled();
+		act(() => events.emit("airplay://route", null));
+		await act(() => back);
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+		expect(result.current.destination).toBeNull();
+	});
+
+	it("stops AirPlay even when the picker won't open", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		tauri.airplayChoose.mockRejectedValue(new Error("no picker"));
+		await act(() => result.current.returnHere(anchor));
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("doesn't open the picker to come back when the sound is already here", async () => {
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(() => result.current.returnHere(anchor));
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
 	});
 });
 
@@ -427,7 +644,7 @@ describe("useAirPlay converting", () => {
 		});
 	});
 
-	it("takes the panel away when the TV never starts", async () => {
+	it("takes the panel away when a conversion never starts", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
 		tauri.getStreamFormats.mockResolvedValue(mkv);
@@ -437,7 +654,7 @@ describe("useAirPlay converting", () => {
 		await act(async () => {
 			expect(
 				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
-			).toEqual({ sent: false, why: "failed", error: "refused" });
+			).toEqual({ sent: false, why: "failed", error: "refused", stopped: true });
 		});
 		await flush();
 		expect(result.current.destination).toBeNull();

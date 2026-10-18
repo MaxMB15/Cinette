@@ -248,7 +248,6 @@ describe("backend commands", () => {
 			{ index: 2 },
 		],
 		["airplayStop", () => tauri.airplayStop(), "plugin:mpv|airplay_stop"],
-		["airplayGetState", () => tauri.airplayGetState(), "plugin:mpv|airplay_get_state"],
 		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
 		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],
 		[

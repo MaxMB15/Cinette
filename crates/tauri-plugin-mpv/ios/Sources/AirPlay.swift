@@ -164,7 +164,9 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
     MpvHost.shared.setAudioActive(true)
     player.replaceCurrentItem(with: item)
     timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-      self?.sendReport()
+      // Every second, even when nothing changed: Rust tells a stalled
+      // receiver from a playing one by how long the same report goes on.
+      self?.sendReport(always: true)
     }
     sendReport()
   }
@@ -328,9 +330,27 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
     return true
   }
 
+  /// The stream address couldn't be read, so nothing loads. Rust hears
+  /// it as a load that failed before it started.
+  func failLoad() {
+    let report: [String: Any] = [
+      "status": "failed",
+      "position": 0,
+      "duration": NSNull(),
+      "external": false,
+      "error": ["domain": "Cinette", "code": -1],
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: report),
+      let json = String(data: data, encoding: .utf8)
+    else { return }
+    json.withCString { reportCallback?($0) }
+  }
+
   // MARK: Reports
 
-  private func sendReport() {
+  /// Sends AVPlayer's state to Rust. A report from an event that changed
+  /// nothing is dropped, but the timer's goes out every second regardless.
+  private func sendReport(always: Bool = false) {
     guard isActive, let player, let item = player.currentItem else { return }
     let status: String
     if failed || item.status == .failed {
@@ -380,7 +400,7 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
       title: title, duration: live ? 0 : (duration ?? 0), position: position,
       playing: status == "playing")
     guard let data = try? JSONSerialization.data(withJSONObject: report),
-      let json = String(data: data, encoding: .utf8), json != lastReport
+      let json = String(data: data, encoding: .utf8), always || json != lastReport
     else { return }
     lastReport = json
     json.withCString { reportCallback?($0) }
@@ -440,6 +460,7 @@ func mvpIosAirPlayLoad(
   // Copy the strings now. Rust frees them when this function returns.
   guard let url = url.flatMap({ URL(string: String(cString: $0)) }) else {
     NSLog("[AirPlay] load without a valid stream address")
+    DispatchQueue.main.async { AirPlayHost.shared.failLoad() }
     return
   }
   let name = title.map { String(cString: $0) }

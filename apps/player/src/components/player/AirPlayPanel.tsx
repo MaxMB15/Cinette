@@ -16,8 +16,10 @@ interface AirPlayPanelProps {
 	onSeek: (position: number) => void;
 	onSubtitle: (trackId: string | null) => void;
 	onAudio: (trackId: string) => void;
-	/** Ends AirPlay and plays here, from `position` for a movie or episode. */
-	onPlayHere: (position: number) => void;
+	/** Ends AirPlay and plays here, from `position` for a movie or episode.
+	 *  `anchor` is the button, for the system picker that brings the sound
+	 *  back to this device. */
+	onPlayHere: (position: number, anchor: DOMRect) => void;
 	/** Ends AirPlay and leaves the player. */
 	onStop: () => void;
 }
@@ -137,13 +139,19 @@ export const AirPlayPanel = ({
 			)}
 
 			<div className="flex gap-3">
-				<Button variant="secondary" onClick={() => onPlayHere(resumeAt)}>
+				<Button
+					variant="secondary"
+					onClick={(e) => onPlayHere(resumeAt, e.currentTarget.getBoundingClientRect())}
+				>
 					{resumeAt > 0 ? `Play here from ${formatTime(resumeAt)}` : "Play here"}
 				</Button>
 				<Button variant="ghost" className="text-white hover:bg-white/20" onClick={onStop}>
 					Stop
 				</Button>
 			</div>
+			<p className="text-xs text-white/50">
+				Play here opens the AirPlay list. Choose this iPhone so the sound comes back too.
+			</p>
 		</div>
 	);
 };

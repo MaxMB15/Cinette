@@ -212,12 +212,14 @@ fn parses_a_live_ts_probe() {
                 AudioTrack {
                     codec: "mp2".into(),
                     language: Some("deu".into()),
-                    default: false
+                    default: false,
+                    layout: Some("stereo".into())
                 },
                 AudioTrack {
                     codec: "ac3".into(),
                     language: Some("eng".into()),
-                    default: false
+                    default: false,
+                    layout: Some("5.1(side)".into())
                 },
             ],
             duration: None,
@@ -249,12 +251,14 @@ At least one output file must be specified
             AudioTrack {
                 codec: "dts".into(),
                 language: Some("eng".into()),
-                default: false
+                default: false,
+                layout: Some("5.1(side)".into())
             },
             AudioTrack {
                 codec: "eac3".into(),
                 language: Some("eng".into()),
-                default: true
+                default: true,
+                layout: Some("5.1(side)".into())
             },
         ]
     );
@@ -459,10 +463,10 @@ async fn reads_why_the_check_failed() {
         ("403 Forbidden", HlsError::Refused(403)),
         ("404 Not Found", HlsError::Unreachable),
     ] {
-        let url = format!("{}/live/u/{}/1.m3u8", serve_once(status, ""), password());
+        let url = format!("{}/live/u/SECRET/1.m3u8", serve_once(status, ""));
         let err = inspect(&client, &url).await.unwrap_err();
         assert_eq!(err, expected, "{status}");
-        test_server::assert_hides(&err, &password());
+        test_server::assert_hides(&err, "SECRET");
     }
     let url = format!("{}/x.m3u8", test_server::refused_url());
     assert_eq!(inspect(&client, &url).await, Err(HlsError::Unreachable));
@@ -624,4 +628,27 @@ fn reads_each_audio_tracks_language() {
     assert_eq!(languages, vec![None, None, Some("fre"), None]);
     assert_eq!(probed.audio, Some(AudioCodec::Ac3));
     assert_eq!(probed.audio_tracks[1].codec, "vorbis");
+    let layouts: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.layout.as_deref())
+        .collect();
+    assert_eq!(
+        layouts,
+        vec![Some("stereo"), Some("stereo"), Some("5.1"), Some("stereo")]
+    );
+    // A layout ffmpeg doesn't name, or a stream with no rate.
+    let odd = "Input #0, wav, from 'x':
+  Stream #0:0: Audio: pcm_s16le, 48000 Hz, 3 channels, s16, 2304 kb/s
+  Stream #0:1: Audio: opus
+  Stream #0:2: Audio: aac, 48000 Hz
+  Stream #0:3: Audio: aac, 48000 Hz, , fltp
+";
+    let probed = probe::parse(odd).unwrap();
+    let layouts: Vec<Option<&str>> = probed
+        .audio_tracks
+        .iter()
+        .map(|t| t.layout.as_deref())
+        .collect();
+    assert_eq!(layouts, vec![Some("3 channels"), None, None, None]);
 }

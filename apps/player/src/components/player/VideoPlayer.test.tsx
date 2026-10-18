@@ -23,7 +23,7 @@ import {
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { AirPlay } from "@/hooks/useAirPlay";
-import type { PlaybackState } from "@/lib/destination";
+import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -221,6 +221,7 @@ const fakeAirPlay = vi.hoisted(() => {
 		state: null,
 		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
 		stop: vi.fn<AirPlay["stop"]>(async () => {}),
+		returnHere: vi.fn<AirPlay["returnHere"]>(async () => {}),
 	});
 	let current = initial();
 	const listeners = new Set<() => void>();
@@ -256,6 +257,26 @@ vi.mock("@/hooks/useAirPlay", async () => {
 vi.mock("@/hooks/useMpv", async () => {
 	const { useSyncExternalStore } = await import("react");
 	return { useMpv: () => useSyncExternalStore(fakeMpv.subscribe, fakeMpv.get) };
+});
+
+/** The destination the player last handed its controls. */
+const local = vi.hoisted(() => ({ destination: null as PlaybackDestination | null }));
+
+// The real hook, keeping the destination so a test can drive it the way
+// another device's controls will.
+vi.mock("@/hooks/useLocalPlayback", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/hooks/useLocalPlayback")>();
+	const { useEffect } = await import("react");
+	return {
+		...actual,
+		useLocalPlayback: (...args: Parameters<typeof actual.useLocalPlayback>) => {
+			const destination = actual.useLocalPlayback(...args);
+			useEffect(() => {
+				local.destination = destination;
+			}, [destination]);
+			return destination;
+		},
+	};
 });
 
 // The picker and the drawers have tests of their own. These stand-ins show
@@ -668,6 +689,7 @@ beforeEach(() => {
 	env.os = "macos";
 	nav.current = null;
 	pageOpens.run = null;
+	local.destination = null;
 });
 
 afterEach(() => {
@@ -1110,6 +1132,97 @@ describe("resuming", () => {
 		await flush();
 		expect(loadedUrls()).toEqual([ep2.url, ep1.url]);
 		expect(screen.getByText("Show S01E01 Pilot")).toBeInTheDocument();
+	});
+});
+
+/** The player's destination, once the player has rendered. */
+const destination = () => {
+	if (!local.destination) throw new Error("The player hasn't rendered");
+	return local.destination;
+};
+
+/** Plays `channel` through the player's destination and lets it settle. */
+const loadThrough = async (channel: Channel, startAt?: number) => {
+	await act(() => destination().load({ kind: "local", channel }, { startAt }));
+	await flush();
+};
+
+describe("loading through the destination", () => {
+	it("starts where it's asked to, without offering to resume", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(harborLights());
+		await loadThrough(lanternKeeper(), 120);
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([harborLights().url, MOVIE_URL]);
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MOVIE_URL, 120);
+		expect(tauri.recordPlayStart).toHaveBeenLastCalledWith(
+			"mv1",
+			"The Lantern Keeper",
+			null,
+			"movie"
+		);
+	});
+
+	it("takes over from a resume prompt on screen", async () => {
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		expect(resumePrompt()).toBeInTheDocument();
+		await loadThrough(harborLights(), 30);
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([harborLights().url]);
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(harborLights().url, 30);
+	});
+
+	it("saves where the last item got to first", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 700, 3600) });
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		await loadThrough(harborLights());
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 700, 3600);
+	});
+
+	it("wins over a start still looking up its resume point, and later starts still work", async () => {
+		const slow = deferred<PlaybackPosition | null>();
+		tauri.getPlaybackPosition.mockImplementation(async (key) =>
+			key === MOVIE_KEY ? slow.promise : null
+		);
+		await openItem(harborLights());
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		await loadThrough(makeNewsChannel());
+		await goTo({ url: harborLights().url, channel: harborLights() });
+		await act(async () => slow.resolve(saved(MOVIE_KEY, 1800, 3600)));
+		await flush();
+		expect(resumePrompt()).not.toBeInTheDocument();
+		expect(loadedUrls()).toEqual([harborLights().url, NEWS_URL, harborLights().url]);
+	});
+
+	it("waits for mpv to open the item, and passes on a failure", async () => {
+		await openItem(harborLights());
+		const opening = deferred();
+		fakeMpv.actions.load.mockReturnValueOnce(opening.promise);
+		let done = false;
+		let loading: Promise<void> = Promise.resolve();
+		act(() => {
+			loading = destination()
+				.load({ kind: "local", channel: lanternKeeper() })
+				.then(() => {
+					done = true;
+				});
+		});
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenLastCalledWith(MOVIE_URL, undefined);
+		expect(done).toBe(false);
+		await act(async () => {
+			opening.resolve();
+			await loading;
+		});
+		expect(done).toBe(true);
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("can't open it"));
+		await act(() =>
+			expect(destination().load({ kind: "local", channel: harborLights() })).rejects.toThrow(
+				"can't open it"
+			)
+		);
 	});
 });
 
@@ -3377,7 +3490,7 @@ describe("AirPlay", () => {
 		selectSubtitle: vi.fn(async () => {}),
 		selectAudio: vi.fn(async () => {}),
 		stop: vi.fn(),
-		getState: vi.fn(),
+		getState: vi.fn(() => tvState()),
 		subscribe: vi.fn(),
 		dispose: vi.fn(),
 	});
@@ -3466,13 +3579,18 @@ describe("AirPlay", () => {
 
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const error = new Error("x");
-		send.mockResolvedValueOnce({ sent: false, why: "failed", error });
+		send.mockResolvedValueOnce({ sent: false, why: "failed", error, stopped: false });
 		fireEvent.click(airplayButton()!);
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't start AirPlay.");
 		expect(warn).toHaveBeenCalledWith("[VideoPlayer] AirPlay failed:", error);
 
-		send.mockResolvedValueOnce({ sent: false, why: "failed", error: "refused" });
+		send.mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: "refused",
+			stopped: false,
+		});
 		fireEvent.click(airplayButton()!);
 		await flush();
 		expect(screen.getByRole("alert").textContent).toMatch(/^The provider refused the stream/);
@@ -3481,6 +3599,7 @@ describe("AirPlay", () => {
 			sent: false,
 			why: "failed",
 			error: "Connect to Wi-Fi to send this to the TV.",
+			stopped: false,
 		});
 		fireEvent.click(airplayButton()!);
 		await flush();
@@ -3521,10 +3640,35 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper());
 		fakeMpv.actions.load.mockClear();
 		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		// The last reading came too soon after the one before to be saved.
+		act(() => fakeAirPlay.set({ state: tvState({ position: 605 }) }));
+		await flush();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeAirPlay.set({ state: tvState({ position: 606 }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		const returnHere = vi.mocked(fakeAirPlay.get().returnHere);
+		let letGo: () => void = () => {};
+		returnHere.mockReturnValueOnce(new Promise((r) => (letGo = r)));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:06" }));
+		await flush();
+		// It waits for AirPlay to let go of the stream and the sound.
+		expect(returnHere).toHaveBeenCalledWith(expect.any(Object));
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		// The position the TV had is saved as soon as Play here is pressed.
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 606, 5400);
+		await act(async () => letGo());
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 606);
+	});
+
+	it("says so when it can't play here again", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
 		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
 		await flush();
-		expect(fakeAirPlay.get().stop).toHaveBeenCalled();
-		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 600);
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 	});
 
 	it("plays live here again from now", async () => {
@@ -3541,9 +3685,129 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper());
 		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
 		const panel = screen.getByRole("region", { name: "AirPlay" });
+		act(() => fakeAirPlay.set({ state: tvState({ position: 700 }) }));
+		await flush();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeAirPlay.set({ state: tvState({ position: 701 }) }));
+		await flush();
+		const stop = vi.mocked(fakeAirPlay.get().stop);
+		let stopped: () => void = () => {};
+		stop.mockReturnValueOnce(new Promise((r) => (stopped = r)));
 		fireEvent.click(within(panel).getByRole("button", { name: "Stop" }));
 		await flush();
-		expect(fakeAirPlay.get().stop).toHaveBeenCalled();
+		// It saves where the TV was, and leaves once AirPlay has stopped.
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
+		expect(screen.queryByText("Channel list")).toBeNull();
+		await act(async () => stopped());
+		await flush();
 		expect(screen.getByText("Channel list")).toBeTruthy();
+	});
+
+	it("drives the TV with the keyboard, and starts nothing here", async () => {
+		await openItem(lanternKeeper(), { episodes: [] });
+		fakeMpv.actions.load.mockClear();
+		const destination = tv();
+		act(() => fakeAirPlay.set({ destination, state: tvState() }));
+		await press(" ");
+		expect(destination.pause).toHaveBeenCalledTimes(1);
+		expect(destination.play).not.toHaveBeenCalled();
+		expect(destination.seek).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+		await press("ArrowRight");
+		expect(destination.seek).toHaveBeenCalledWith(610);
+		expect(destination.play).not.toHaveBeenCalled();
+		expect(destination.pause).toHaveBeenCalledTimes(1);
+		await press("5");
+		expect(destination.seek).toHaveBeenLastCalledWith(2700);
+		// Volume, info and the rest do nothing.
+		await press("ArrowUp");
+		await press("i");
+		expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+	});
+
+	it("plays a paused TV from the keyboard", async () => {
+		await openItem(lanternKeeper());
+		const destination = { ...tv(), getState: vi.fn(() => tvState({ status: "paused" })) };
+		act(() => fakeAirPlay.set({ destination, state: tvState({ status: "paused" }) }));
+		await press(" ");
+		expect(destination.play).toHaveBeenCalled();
+		expect(destination.pause).not.toHaveBeenCalled();
+		expect(destination.seek).not.toHaveBeenCalled();
+	});
+
+	it("still goes full screen from the keyboard", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		await press("f");
+		expect(fullscreenSpy).toHaveBeenCalledWith(true);
+	});
+
+	it("saves the position on the TV as the resume point", async () => {
+		await openItem(lanternKeeper());
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState({ position: 900 }) }));
+		await flush();
+		// The first reading saves at once, then every few seconds.
+		act(() => fakeAirPlay.set({ state: tvState({ position: 901 }) }));
+		await flush();
+		act(() => fakeAirPlay.set({ state: tvState({ position: 1200, status: "paused" }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).toHaveBeenLastCalledWith(MOVIE_KEY, 1200, 5400);
+		// No length yet, or the very start, saves nothing.
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() =>
+			fakeAirPlay.set({ state: tvState({ position: 1300, duration: 0, status: "paused" }) })
+		);
+		act(() => fakeAirPlay.set({ state: tvState({ position: 0.5, status: "paused" }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("says so in the player when AirPlay fails after this device stopped", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		vi.useFakeTimers();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: new Error("nope"),
+			stopped: true,
+		});
+		fireEvent.click(airplayButton()!);
+		await act(async () => {
+			for (let i = 0; i < 30; i++) await Promise.resolve();
+		});
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe("Couldn't start AirPlay. Nothing is playing.");
+		act(() => vi.advanceTimersByTime(5999));
+		expect(screen.queryByRole("alert")).not.toBeNull();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		// A second note gets its own six seconds, whatever the first one's
+		// timer had left.
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: "nope",
+			stopped: true,
+		});
+		fireEvent.click(airplayButton()!);
+		await act(async () => {
+			for (let i = 0; i < 30; i++) await Promise.resolve();
+		});
+		act(() => vi.advanceTimersByTime(3000));
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
+		await act(async () => {
+			for (let i = 0; i < 30; i++) await Promise.resolve();
+		});
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
+		act(() => vi.advanceTimersByTime(3500));
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 	});
 });

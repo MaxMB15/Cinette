@@ -299,6 +299,9 @@ fn plan(
             codec: t.codec.clone(),
             language: t.language.clone(),
             default: t.default,
+            // The converter doesn't read layouts, and the choice of track
+            // doesn't use them.
+            layout: None,
         })
         .collect();
     let playable: Vec<&str> = playable.iter().map(String::as_str).collect();

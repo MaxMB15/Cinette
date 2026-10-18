@@ -128,10 +128,12 @@ fn a_transcode_needs_a_hardware_encoder() {
 }
 
 fn track(codec: &str, language: Option<&str>, default: bool) -> AudioTrack {
+    let layout = Some("stereo".to_string());
     AudioTrack {
         codec: codec.into(),
         language: language.map(String::from),
         default,
+        layout,
     }
 }
 

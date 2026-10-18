@@ -29,6 +29,7 @@ import {
 	type ConverterSupport,
 	type StreamFormats,
 } from "@/lib/route-profiles";
+import type { PlayerAction } from "@/lib/hotkeys";
 import type { Channel } from "@/lib/types";
 
 /** The receiver the audio route goes to, from the backend. */
@@ -181,6 +182,73 @@ export const airplayCapabilities = (
 	resumeAt: !live,
 	catalog: false,
 });
+
+/** The resume point the player keeps, as far as AirPlay touches it. */
+export interface AirPlayProgress {
+	position: number;
+	duration: number;
+	dirty: boolean;
+	lastSaved: number;
+}
+
+/**
+ * The resume point after the receiver reports `state`, and whether to save
+ * it now: when it's paused, or `interval` ms after the last save. A
+ * reading with no length yet, or from the very start, changes nothing.
+ */
+export const airplayProgress = (
+	progress: AirPlayProgress,
+	state: PlaybackState,
+	now: number,
+	interval: number
+): { progress: AirPlayProgress; save: boolean } | null => {
+	if (state.duration <= 0 || state.position <= 1) return null;
+	const moved = state.position !== progress.position || state.duration !== progress.duration;
+	const next = moved
+		? { ...progress, position: state.position, duration: state.duration, dirty: true }
+		: progress;
+	const save = state.status === "paused" || now - progress.lastSaved >= interval;
+	return { progress: next, save };
+};
+
+/** What a player hotkey does while AirPlay plays. */
+export type AirPlayKey =
+	| { kind: "play" }
+	| { kind: "pause" }
+	| { kind: "seek"; to: number }
+	/** The player handles it as usual: full screen, the shortcut list, Escape. */
+	| { kind: "pass" }
+	/** Nothing: the volume is the phone's, and episodes, subtitles and the
+	 *  info sheet would start or change playback here. */
+	| { kind: "ignore" };
+
+/** What `action` does while AirPlay plays `state`. Nothing starts here, so
+ *  the provider never sees a second connection. */
+export const airplayKey = (
+	action: PlayerAction,
+	state: PlaybackState,
+	capabilities: PlaybackCapabilities
+): AirPlayKey => {
+	const seekTo = (to: number): AirPlayKey =>
+		capabilities.seek
+			? { kind: "seek", to: Math.min(Math.max(0, to), state.duration) }
+			: { kind: "ignore" };
+	switch (action.type) {
+		case "togglePlay":
+			if (state.status !== "playing" && state.status !== "buffering") return { kind: "play" };
+			return capabilities.pause ? { kind: "pause" } : { kind: "ignore" };
+		case "seekBy":
+			return seekTo(state.position + action.seconds);
+		case "seekToPercent":
+			return seekTo((state.duration * action.percent) / 100);
+		case "toggleFullscreen":
+		case "toggleShortcuts":
+		case "escape":
+			return { kind: "pass" };
+		default:
+			return { kind: "ignore" };
+	}
+};
 
 /** What the destination needs from the backend, so tests can fake it. */
 export interface AirPlayBridge {

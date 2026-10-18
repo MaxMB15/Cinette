@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { AirPlayNativeState, AirPlayRoute } from "@/lib/airplay";
+import type { AirPlayRoute } from "@/lib/airplay";
 import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
@@ -174,9 +174,6 @@ export const airplaySelectAudio = (index: number): Promise<void> =>
 	invoke("plugin:mpv|airplay_select_audio", { index });
 
 export const airplayStop = (): Promise<void> => invoke("plugin:mpv|airplay_stop");
-
-export const airplayGetState = (): Promise<AirPlayNativeState> =>
-	invoke("plugin:mpv|airplay_get_state");
 
 export const removeProvider = (id: string): Promise<void> => invoke("remove_provider", { id });
 

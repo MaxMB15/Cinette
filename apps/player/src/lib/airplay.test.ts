@@ -11,6 +11,8 @@ import {
 	airplayErrorMessage,
 	airplayFailureMessage,
 	airplaySender,
+	airplayKey,
+	airplayProgress,
 	airplayPlaybackState,
 	createAirPlayDestination,
 	type AirPlayBridge,
@@ -525,5 +527,106 @@ describe("airplayBlockedMessage", () => {
 		] as const;
 		for (const [reason, detail, message] of cases)
 			expect(airplayBlockedMessage({ ok: false, reason, detail })).toBe(message);
+	});
+});
+
+describe("airplayKey", () => {
+	const caps = airplayCapabilities(playing, false, false);
+	const state = airplayPlaybackState(playing, null, 0);
+	const at = (patch: Partial<PlaybackState>) => ({ ...state, ...patch });
+
+	it("plays and pauses the TV", () => {
+		expect(airplayKey({ type: "togglePlay" }, state, caps)).toEqual({ kind: "pause" });
+		expect(airplayKey({ type: "togglePlay" }, at({ status: "buffering" }), caps)).toEqual({
+			kind: "pause",
+		});
+		for (const status of ["paused", "opening", "ended", "error", "idle"] as const)
+			expect(airplayKey({ type: "togglePlay" }, at({ status }), caps)).toEqual({
+				kind: "play",
+			});
+		expect(airplayKey({ type: "togglePlay" }, state, { ...caps, pause: false })).toEqual({
+			kind: "ignore",
+		});
+	});
+
+	it("seeks within the item, when the TV can", () => {
+		expect(airplayKey({ type: "seekBy", seconds: 10 }, state, caps)).toEqual({
+			kind: "seek",
+			to: 51,
+		});
+		expect(airplayKey({ type: "seekBy", seconds: -100 }, state, caps)).toEqual({
+			kind: "seek",
+			to: 0,
+		});
+		expect(airplayKey({ type: "seekBy", seconds: 9999 }, state, caps)).toEqual({
+			kind: "seek",
+			to: 5400,
+		});
+		expect(airplayKey({ type: "seekToPercent", percent: 50 }, state, caps)).toEqual({
+			kind: "seek",
+			to: 2700,
+		});
+		expect(
+			airplayKey({ type: "seekBy", seconds: 10 }, state, { ...caps, seek: false })
+		).toEqual({ kind: "ignore" });
+	});
+
+	it("leaves full screen, the shortcut list and Escape to the player", () => {
+		for (const type of ["toggleFullscreen", "toggleShortcuts", "escape"] as const)
+			expect(airplayKey({ type }, state, caps)).toEqual({ kind: "pass" });
+	});
+
+	it("ignores what would start or change playback here", () => {
+		const ignored = [
+			{ type: "toggleMute" },
+			{ type: "volumeBy", delta: 5 },
+			{ type: "nextEpisode" },
+			{ type: "prevEpisode" },
+			{ type: "toggleSubtitles" },
+			{ type: "toggleInfo" },
+			{ type: "skipSegment" },
+		] as const;
+		for (const action of ignored)
+			expect(airplayKey(action, state, caps)).toEqual({ kind: "ignore" });
+	});
+});
+
+describe("airplayProgress", () => {
+	const saved = { position: 600, duration: 5400, dirty: false, lastSaved: 1000 };
+	const state = (patch: Partial<PlaybackState>) =>
+		airplayPlaybackState(
+			{ ...playing, position: 610, ...patch } as AirPlayNativeState,
+			null,
+			0
+		);
+
+	it("takes the receiver's position, and saves it every interval", () => {
+		expect(airplayProgress(saved, state({}), 3000, 5000)).toEqual({
+			progress: { position: 610, duration: 5400, dirty: true, lastSaved: 1000 },
+			save: false,
+		});
+		expect(airplayProgress(saved, state({}), 6000, 5000)?.save).toBe(true);
+		expect(airplayProgress(saved, state({}), 5999, 5000)?.save).toBe(false);
+	});
+
+	it("saves at once when the receiver pauses", () => {
+		expect(airplayProgress(saved, state({ status: "paused" }), 1001, 5000)?.save).toBe(true);
+	});
+
+	it("leaves an unmoved resume point as it is", () => {
+		const same = airplayProgress(saved, state({ position: 600 }), 1001, 5000);
+		expect(same?.progress).toBe(saved);
+		const longer = airplayProgress(saved, state({ position: 600, duration: 5500 }), 1001, 5000);
+		expect(longer?.progress).toEqual({ ...saved, duration: 5500, dirty: true });
+	});
+
+	it("changes nothing without a length or at the very start", () => {
+		expect(airplayProgress(saved, state({ duration: 0 }), 9000, 5000)).toBeNull();
+		expect(airplayProgress(saved, state({ duration: -1 }), 9000, 5000)).toBeNull();
+		expect(airplayProgress(saved, state({ position: 1 }), 9000, 5000)).toBeNull();
+		expect(airplayProgress(saved, state({ position: 1.5 }), 9000, 5000)).not.toBeNull();
+		expect(
+			airplayProgress(saved, state({ duration: 0.5, position: 2 }), 9000, 5000)
+		).not.toBeNull();
 	});
 });
