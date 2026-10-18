@@ -113,7 +113,7 @@ jobs:
         run: ./scripts/fetch-ffmpeg.sh linux
 
       - name: Upload the sidecar
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ffmpeg-sidecar
           path: apps/player/src-tauri/binaries/
@@ -284,7 +284,7 @@ jobs:
       # The HTML report shows each mutant in its source file.
       - name: Upload the report
         if: ${{ !cancelled() && steps.stryker.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: stryker-report
           path: apps/player/reports/mutation/
@@ -407,7 +407,7 @@ jobs:
       # the size. diff/ still shows what each mutant changed.
       - name: Upload the results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-${{ matrix.package }}-shard-${{ matrix.shard }}
           path: |
