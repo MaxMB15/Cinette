@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+use super::bonjour::{self, Access, Failure, DENIED_FOR, RETRY_AFTER};
 use super::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::time::{Duration, Instant};
 
 fn v4(a: u8, b: u8, c: u8, d: u8) -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(a, b, c, d))
@@ -377,10 +379,196 @@ fn a_type_can_only_be_browsed_once_at_a_time() {
     assert!(BrowseGuard::take("_onlyonce._tcp").is_ok());
 }
 
-/// Advertises a service and finds it by browsing, through the real mDNS
-/// stack. The service type is made up, so nothing else on the network
-/// answers it.
+#[test]
+fn trackers_take_new_instances_while_they_have_room() {
+    let (mut t, _rx) = tracker();
+    assert!(t.has_room(0));
+    assert!(t.has_room(MAX_INSTANCES - 1));
+    assert!(!t.full, "nothing turned away yet");
+    assert!(!t.has_room(MAX_INSTANCES));
+    assert!(t.full);
+    assert!(!t.has_room(MAX_INSTANCES + 1));
+}
+
+#[test]
+fn tracker_ignores_new_instances_past_the_cap() {
+    let (mut t, mut rx) = tracker();
+    let found = |t: &mut Tracker, name: &str, last: u8| {
+        t.resolved(name, "tv.local.", [v4(10, 0, 0, last)], 1, Txt::default())
+    };
+    for i in 0..MAX_INSTANCES {
+        assert!(found(&mut t, &format!("TV {i}"), 2));
+    }
+    assert_eq!(drain(&mut rx).len(), MAX_INSTANCES);
+    assert!(!t.full);
+
+    assert!(found(&mut t, "One more", 2), "the browse goes on");
+    assert!(drain(&mut rx).is_empty(), "the one past the cap isn't reported");
+    assert!(t.full);
+    assert!(found(&mut t, "TV 0", 3));
+    assert_eq!(drain(&mut rx).len(), 1, "one it has still changes");
+
+    t.removed("TV 0");
+    assert!(found(&mut t, "One more", 2));
+    let events = drain(&mut rx);
+    assert_eq!(events.len(), 2, "a removal makes room");
+    assert!(matches!(&events[1], Event::Found { instance, .. } if instance == "One more"));
+}
+
+#[test]
+fn local_network_access_counts_as_allowed_until_refused() {
+    assert!(!local_network_denied());
+}
+
+#[test]
+fn bonjour_errors_say_what_failed() {
+    assert_eq!(Failure::of(-65563), Failure::Connection, "ServiceNotRunning");
+    assert_eq!(Failure::of(-65569), Failure::Connection, "DefunctConnection");
+    assert_eq!(Failure::of(-65570), Failure::Denied, "PolicyDenied");
+    assert_eq!(Failure::of(-65540), Failure::Other, "BadParam");
+    assert_eq!(Failure::of(-65537), Failure::Other, "Unknown");
+    assert!(Failure::Connection.passes());
+    assert!(Failure::Denied.passes());
+    assert!(!Failure::Other.passes());
+}
+
+#[test]
+fn a_retry_is_due_from_its_time_on() {
+    let at = Instant::now();
+    let later = at + Duration::from_millis(1);
+    assert!(!bonjour::due(None, at));
+    assert!(bonjour::due(Some(at), at));
+    assert!(bonjour::due(Some(at), later));
+    assert!(!bonjour::due(Some(later), at));
+}
+
+#[test]
+fn bonjour_waits_until_the_earliest_retry() {
+    let now = Instant::now();
+    let wait = |deadlines: &[Instant]| bonjour::poll_timeout(now, deadlines.iter().copied());
+    assert_eq!(wait(&[]), -1, "for ever");
+    assert_eq!(bonjour::poll_timeout(now + RETRY_AFTER, [now]), 0, "a past one");
+    assert_eq!(wait(&[now]), 0);
+    assert_eq!(wait(&[now + Duration::from_nanos(1)]), 1, "rounded up");
+    assert_eq!(wait(&[now + Duration::from_micros(5001)]), 6);
+    assert_eq!(wait(&[now + RETRY_AFTER]), 5000);
+    assert_eq!(
+        wait(&[now + Duration::from_millis(9), now + Duration::from_millis(4), now + RETRY_AFTER]),
+        4,
+        "the earliest"
+    );
+    assert_eq!(wait(&[now + Duration::from_secs(3_000_000)]), i32::MAX);
+}
+
+#[test]
+fn access_is_denied_from_a_refusal_until_an_answer() {
+    let now = Instant::now();
+    let mut access = Access::new();
+    assert!(!access.denied(now));
+    assert!(access.refused(now), "the first refusal is news");
+    assert!(access.denied(now));
+    assert!(!access.refused(now + RETRY_AFTER), "a retry refused again isn't");
+    assert!(access.denied(now + RETRY_AFTER));
+    access.answered();
+    assert!(!access.denied(now + RETRY_AFTER));
+    assert!(access.refused(now + RETRY_AFTER), "news again after an answer");
+}
+
+#[test]
+fn access_counts_as_allowed_once_nothing_was_refused_for_a_while() {
+    let now = Instant::now();
+    let mut access = Access::new();
+    access.refused(now);
+    assert!(access.denied(now + DENIED_FOR - Duration::from_nanos(1)));
+    assert!(!access.denied(now + DENIED_FOR));
+    assert!(access.refused(now + DENIED_FOR), "news again once it ran out");
+}
+
+#[test]
+fn srv_records_give_their_port() {
+    assert_eq!(bonjour::srv_port(b"\0\x01\0\x02\x1f\x90\x02tv\0"), Some(8080));
+    assert_eq!(bonjour::srv_port(&[0, 0, 0, 0, 0x1f, 0x90]), Some(8080));
+    assert_eq!(bonjour::srv_port(&[0, 0, 0, 0, 0x1f]), None);
+    assert_eq!(bonjour::srv_port(&[]), None);
+}
+
+#[test]
+fn an_srv_record_moves_the_instance_when_it_changes() {
+    let srv = |port: u16, host: &[u8]| [&[0, 0, 0, 0][..], &port.to_be_bytes(), host].concat();
+    let tv = srv(8009, b"\x02tv\x05local\0");
+    let tv2 = srv(8009, b"\x03tv2\x05local\0");
+    assert!(!bonjour::srv_moved(None, &tv, 8009), "the first matches the resolve");
+    assert!(bonjour::srv_moved(None, &tv, 8010), "another port than the resolve");
+    assert!(!bonjour::srv_moved(Some(&tv), &tv, 8009));
+    assert!(bonjour::srv_moved(Some(&tv), &tv2, 8009), "another host");
+    assert!(!bonjour::srv_moved(None, &[0, 0], 8009), "too short to say");
+}
+
 #[cfg(target_os = "linux")]
+#[test]
+fn the_mdns_watcher_counts_the_errors() {
+    use mdns_sd::{DaemonEvent, Error};
+    let events = [
+        DaemonEvent::Error(Error::Msg("can't send".into())),
+        DaemonEvent::IpAdd(v4(127, 0, 0, 1)),
+        DaemonEvent::Error(Error::Msg("can't send".into())),
+        DaemonEvent::Respond("lo".into()),
+    ];
+    assert_eq!(super::linux::watch(events), 2);
+    assert_eq!(super::linux::watch(Vec::new()), 0);
+}
+
+/// A UDP port that was free when first asked for. Every daemon the tests
+/// start uses it, so they hear each other.
+#[cfg(target_os = "linux")]
+fn test_port() -> u16 {
+    static PORT: OnceLock<u16> = OnceLock::new();
+    *PORT.get_or_init(|| {
+        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .and_then(|socket| socket.local_addr())
+            .map(|addr| addr.port())
+            .expect("a free UDP port")
+    })
+}
+
+/// An mDNS daemon that only uses the loopback interface and a port of its
+/// own, so nothing the tests advertise or look for reaches the network. The
+/// module's daemon is one of these in the tests. It handles commands in
+/// order, so the interfaces are set before any browse or advertisement.
+#[cfg(target_os = "linux")]
+pub(super) fn loopback_daemon() -> mdns_sd::Result<mdns_sd::ServiceDaemon> {
+    let daemon = mdns_sd::ServiceDaemon::new_with_port(test_port())?;
+    daemon.disable_interface(mdns_sd::IfKind::All)?;
+    daemon.enable_interface(mdns_sd::IfKind::LoopbackV4)?;
+    Ok(daemon)
+}
+
+/// Whether a daemon of mdns-sd's own, outside the module, finds the
+/// service, which says whether multicast works on the loopback interface
+/// here at all.
+#[cfg(target_os = "linux")]
+async fn loopback_multicast_works(service_type: &str) -> bool {
+    let raw = loopback_daemon().unwrap();
+    let events = raw.browse(&format!("{service_type}.local.")).unwrap();
+    let found = tokio::task::spawn_blocking(move || {
+        let deadline = Instant::now() + RETRY_AFTER;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            if let Ok(mdns_sd::ServiceEvent::ServiceResolved(_)) = events.recv_timeout(left) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap();
+    let _ = raw.shutdown();
+    found
+}
+
+/// Advertises a service and finds it by browsing, through the real mDNS
+/// stack, without reaching the network: on macOS the tests use Bonjour's
+/// local-only interface, and on Linux daemons on the loopback interface. The
+/// service type is made up.
 #[tokio::test]
 async fn advertising_and_browsing_find_each_other() {
     let service_type = "_cinettetest._tcp";
@@ -397,28 +585,13 @@ async fn advertising_and_browsing_find_each_other() {
     })
     .unwrap();
 
-    // A daemon of mdns-sd's own, outside the module, says whether multicast
-    // works here at all. Where it does, the module must find the record too.
-    let raw = mdns_sd::ServiceDaemon::new().unwrap();
-    let raw_events = raw.browse(&format!("{service_type}.local.")).unwrap();
-    let multicast_works = tokio::task::spawn_blocking(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
-            if let Ok(mdns_sd::ServiceEvent::ServiceResolved(_)) = raw_events.recv_timeout(left) {
-                return true;
-            }
-        }
-        false
-    })
-    .await
-    .unwrap();
-    let _ = raw.shutdown();
-    if !multicast_works {
-        // No interface here takes multicast, as in some containers.
-        eprintln!("skipped: mDNS itself found nothing over multicast");
+    #[cfg(target_os = "linux")]
+    if !loopback_multicast_works(service_type).await {
+        // As in some containers.
+        eprintln!("skipped: mDNS found nothing over multicast on the loopback interface");
         return;
     }
-    let found = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    let found = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             match browser.next().await {
                 Some(Event::Found {
@@ -436,15 +609,19 @@ async fn advertising_and_browsing_find_each_other() {
         }
     })
     .await;
-    let (host, addrs, port, txt) = found.expect("mDNS works here, but the browse found nothing");
+    let (host, addrs, port, txt) = found.expect("the browse found nothing");
+    // macOS names its own host on the local-only interface.
+    #[cfg(target_os = "linux")]
     assert_eq!(host, "abcdefghijklmnopqrstuvwxyz.local.");
+    assert!(!host.is_empty(), "a host");
     assert!(!addrs.is_empty());
+    assert!(addrs.iter().all(IpAddr::is_loopback), "only loopback addresses");
     assert_eq!(port, 47130);
     assert_eq!(txt.get_str("ID"), Some("ABC"));
     assert_eq!(txt.get("raw"), Some(&[0xff][..]));
 
     drop(ad);
-    let removed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let removed = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match browser.next().await {
                 Some(Event::Removed { instance: i }) if i == instance => break,
