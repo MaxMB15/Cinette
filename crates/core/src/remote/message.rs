@@ -192,6 +192,24 @@ pub enum PlaybackStatus {
     Error,
 }
 
+/// Why the target's player stopped with an error. Only a code goes out, never
+/// the player's own message, which can hold a stream's address or login.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaybackError {
+    /// The stream stopped before it ever played.
+    OpenFailed,
+    /// Reconnecting ran out of tries.
+    LoadFailed,
+    /// The provider refused the stream, so its login may have expired.
+    Refused,
+    /// Anything else.
+    Failed,
+    /// A code from a newer version of Cinette.
+    #[serde(other)]
+    Unknown,
+}
+
 /// A subtitle or audio track.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -231,7 +249,8 @@ pub struct PlaybackSnapshot {
     pub audio: Vec<Track>,
     pub audio_id: Option<String>,
     pub capabilities: Capabilities,
-    pub error: Option<String>,
+    /// Set when `status` is [`PlaybackStatus::Error`].
+    pub error: Option<PlaybackError>,
 }
 
 /// The target's state with its version. A controller keeps the newest one.

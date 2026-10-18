@@ -72,6 +72,9 @@ pub(crate) fn frame(noise: &[u8]) -> Vec<u8> {
 #[derive(Debug, Default)]
 pub struct FrameReader {
     buffer: Vec<u8>,
+    /// Where the next frame starts in `buffer`. The bytes before it were
+    /// read already.
+    start: usize,
 }
 
 /// A frame with no contents. No Noise message is empty, so the other side is
@@ -87,23 +90,29 @@ impl FrameReader {
 
     /// Adds bytes as they arrive.
     pub fn push(&mut self, bytes: &[u8]) {
+        // The frames already read go here, once for each push rather than
+        // once for each frame. Moving the rest down for every frame would
+        // cost the square of the bytes in a push full of tiny frames.
+        self.buffer.drain(..self.start);
+        self.start = 0;
         self.buffer.extend_from_slice(bytes);
     }
 
     /// The next whole frame's contents, if one has arrived.
     pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, EmptyFrame> {
-        if self.buffer.len() < 2 {
+        let rest = &self.buffer[self.start..];
+        if rest.len() < 2 {
             return Ok(None);
         }
-        let len = usize::from(u16::from_be_bytes([self.buffer[0], self.buffer[1]]));
+        let len = usize::from(u16::from_be_bytes([rest[0], rest[1]]));
         if len == 0 {
             return Err(EmptyFrame);
         }
-        if self.buffer.len() < 2 + len {
+        if rest.len() < 2 + len {
             return Ok(None);
         }
-        let frame = self.buffer[2..2 + len].to_vec();
-        self.buffer.drain(..2 + len);
+        let frame = rest[2..2 + len].to_vec();
+        self.start += 2 + len;
         Ok(Some(frame))
     }
 }

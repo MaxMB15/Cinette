@@ -10,7 +10,12 @@
  * carry it out.
  */
 
-import type { PlaybackCapabilities, PlaybackDestination, PlaybackState } from "@/lib/destination";
+import type {
+	PlaybackCapabilities,
+	PlaybackDestination,
+	PlaybackError,
+	PlaybackState,
+} from "@/lib/destination";
 import type { Channel } from "@/lib/types";
 
 /** A command from a controller, as `remote://command` carries it. */
@@ -55,7 +60,7 @@ export interface RemotePlayerState {
 		audioTracks: boolean;
 		resumeAt: boolean;
 	};
-	error: string | null;
+	error: PlaybackError["code"] | null;
 }
 
 /**
@@ -102,7 +107,8 @@ export const remotePlayerState = (
 			audioTracks: capabilities.audioTracks,
 			resumeAt: capabilities.resumeAt,
 		},
-		error: state.error ? (state.error.message ?? state.error.code) : null,
+		// Only the code: the player's message can hold a stream's address.
+		error: state.error?.code ?? null,
 	};
 };
 

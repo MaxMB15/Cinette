@@ -26,6 +26,7 @@ use mvp_core::remote::target::{
 };
 use mvp_core::remote::ConnId;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
@@ -34,6 +35,9 @@ use tokio::sync::{mpsc, oneshot};
 /// How long the player has to carry out a command before the controller
 /// hears `failed`.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// The most connections one address may have open, so one device can't
+/// take every slot the core has.
+const MAX_PER_ADDRESS: usize = 4;
 /// The longest the task sleeps without looking at the clock. Timers don't
 /// count time asleep, so after a wake this is how soon the deadlines that
 /// passed during the sleep are seen.
@@ -62,7 +66,7 @@ pub trait TargetHost: Send + Sync + 'static {
 }
 
 enum Input {
-    Accepted(TcpStream),
+    Accepted(TcpStream, IpAddr),
     Answer(RequestId, Answer),
     Disconnect(String),
     Settings(RemoteSettings),
@@ -182,8 +186,11 @@ fn start_with(
     let accept = tokio::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((stream, _)) => {
-                    if accept_inbox.send(Input::Accepted(stream)).is_err() {
+                Ok((stream, from)) => {
+                    if accept_inbox
+                        .send(Input::Accepted(stream, from.ip()))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -204,6 +211,7 @@ fn start_with(
         port,
         inbox: inbox.clone(),
         writers: HashMap::new(),
+        peers: HashMap::new(),
         reads,
         pending: HashMap::new(),
         next_token: 0,
@@ -227,6 +235,8 @@ struct Task {
     port: u16,
     inbox: mpsc::UnboundedSender<Input>,
     writers: HashMap<ConnId, Writer>,
+    /// Where each open connection comes from.
+    peers: HashMap<ConnId, IpAddr>,
     reads: mpsc::UnboundedSender<(ConnId, Read)>,
     /// Commands the player hasn't finished, by token.
     pending: HashMap<u64, Pending>,
@@ -271,6 +281,7 @@ impl Task {
                         Read::Frame(frame) => self.target.receive(conn, &frame, now),
                         Read::Gone => {
                             self.writers.remove(&conn);
+                            self.peers.remove(&conn);
                             self.target.disconnected(conn, now)
                         }
                     };
@@ -305,6 +316,30 @@ impl Task {
         }
     }
 
+    /// Hands a new connection to the core, unless this device is hidden
+    /// with no session to resume, or `from` has enough open already.
+    /// Dropping the stream closes it before the core says who this is.
+    fn accept(&mut self, stream: TcpStream, from: IpAddr, now: Instant) {
+        if !self.target.settings().discoverable && self.target.sessions().is_empty() {
+            tracing::info!("[remote] not discoverable; turned a connection away");
+            return;
+        }
+        let open = self.peers.values().filter(|&&ip| ip == from).count();
+        if open >= MAX_PER_ADDRESS {
+            tracing::info!(
+                "[remote] {MAX_PER_ADDRESS} connections from one address; turned one away"
+            );
+            return;
+        }
+        // The core makes room for this one by closing the oldest that
+        // hasn't asked yet; that close comes from its next tick.
+        if let Some(conn) = self.target.accept(now) {
+            let writer = conn::spawn(stream, conn, self.reads.clone());
+            self.writers.insert(conn, writer);
+            self.peers.insert(conn, from);
+        }
+    }
+
     fn finish(&mut self, token: u64, result: Result<(), ErrorCode>) {
         if let Some(p) = self.pending.remove(&token) {
             let actions = self.target.finish_command(p.conn, p.request, result);
@@ -315,14 +350,8 @@ impl Task {
     fn handle(&mut self, input: Input) {
         let now = clock::now();
         let actions = match input {
-            Input::Accepted(stream) => {
-                match self.target.accept(now) {
-                    Some(conn) => {
-                        let writer = conn::spawn(stream, conn, self.reads.clone());
-                        self.writers.insert(conn, writer);
-                    }
-                    None => tracing::info!("[remote] too many connections; turned one away"),
-                }
+            Input::Accepted(stream, from) => {
+                self.accept(stream, from, now);
                 Vec::new()
             }
             Input::Answer(request, answer) => self.target.answer(request, answer, now),
@@ -366,6 +395,7 @@ impl Task {
                 Action::Close { conn } => {
                     // The writer flushes what's queued, then closes.
                     self.writers.remove(&conn);
+                    self.peers.remove(&conn);
                     self.pending.retain(|_, p| p.conn != conn);
                 }
                 Action::ShowConsent(prompt) => self.host.show_consent(&prompt),

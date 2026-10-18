@@ -14,15 +14,45 @@ fn state(epoch: &str, version: u64) -> VersionedState {
 }
 
 fn controller() -> Controller {
+    controller_at(Instant::now())
+}
+
+fn controller_at(now: Instant) -> Controller {
     let key = DeviceKey::generate();
     let (c, _) = Controller::connect(
         &key,
         hello(&key, "P", DeviceType::Iphone),
         DeviceKey::generate().device_id(),
         None,
+        now,
     )
     .unwrap();
     c
+}
+
+#[test]
+fn a_controller_waits_no_longer_than_the_target_would() {
+    assert_eq!(GIVE_UP_AFTER, Duration::from_secs(40));
+    assert_eq!(GIVE_UP_AFTER, HANDSHAKE_TIMEOUT + CONSENT_TIMEOUT);
+}
+
+#[test]
+fn a_controller_gives_up_on_a_handshake_that_stalls() {
+    let now = Instant::now();
+    let mut c = controller_at(now);
+    let deadline = now + HANDSHAKE_TIMEOUT;
+    assert_eq!(c.next_deadline(), Some(deadline));
+    assert_eq!(
+        c.tick(deadline - Duration::from_millis(1)),
+        Output::default()
+    );
+    assert!(!c.is_closed());
+    let out = c.tick(deadline);
+    assert!(out.send.is_empty());
+    assert_eq!(out.events, [Event::Closed(CloseReason::Timeout)]);
+    assert!(c.is_closed());
+    assert_eq!(c.next_deadline(), None);
+    assert_eq!(c.tick(deadline + GIVE_UP_AFTER), Output::default());
 }
 
 #[test]

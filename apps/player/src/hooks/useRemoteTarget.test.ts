@@ -142,6 +142,35 @@ describe("useRemoteTarget", () => {
 		expect(mocks.play).toHaveBeenCalledTimes(1);
 	});
 
+	it("plays an episode that comes with the command", async () => {
+		const episode = { ...channel, id: "ep-1", name: "Pilot", url: "http://x.test/ep1.mkv" };
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
+		emit("remote://command", {
+			token: 8,
+			command: { action: "load", itemId: "ep-1" },
+			channel: episode,
+		});
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(8, "ok"));
+		expect(navigate).toHaveBeenCalledWith("/player", {
+			state: { url: episode.url, channelName: "Pilot", channel: episode },
+		});
+	});
+
+	it("looks in the channel list when the episode is another one", async () => {
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
+		emit("remote://command", {
+			token: 9,
+			command: { action: "load", itemId: "live-1" },
+			channel: { ...channel, id: "ep-1", name: "Pilot" },
+		});
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(9, "ok"));
+		expect(navigate).toHaveBeenCalledWith("/player", {
+			state: { url: channel.url, channelName: "News", channel },
+		});
+	});
+
 	it("reports what wasn't found", async () => {
 		renderHook(() => useRemoteTarget());
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));

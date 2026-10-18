@@ -12,6 +12,9 @@
 //! [`Advertisement`] withdraws it. Several browses of different service types
 //! can run at once.
 
+// The macOS backend's decisions, which the tests on Linux check too.
+#[cfg(any(target_os = "macos", test))]
+mod bonjour;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -138,6 +141,10 @@ impl fmt::Display for DiscoveryError {
 }
 
 impl std::error::Error for DiscoveryError {}
+
+// Whether macOS refused the app local network access. Each platform's
+// function has the details.
+pub use platform::local_network_denied;
 
 /// A running browse. Dropping it stops the browse.
 pub struct Browser {
@@ -282,11 +289,18 @@ struct Seen {
     txt: Txt,
 }
 
+/// The most instances one browse keeps track of. Anything on the network can
+/// advertise, so this stops a flood of made-up instances from using up
+/// memory or, on macOS, Bonjour operations.
+pub(crate) const MAX_INSTANCES: usize = 256;
+
 /// Turns what a platform hears into [`Event`]s: a `Found` only when
 /// something changed, and a `Removed` only for an instance that was found.
 pub(crate) struct Tracker {
     tx: mpsc::UnboundedSender<Event>,
     seen: HashMap<String, Seen>,
+    /// A new instance was turned away for want of room.
+    full: bool,
 }
 
 impl Tracker {
@@ -294,11 +308,27 @@ impl Tracker {
         Self {
             tx,
             seen: HashMap::new(),
+            full: false,
         }
     }
 
+    /// Whether a browse that keeps track of `count` instances may take on
+    /// another, which it may below [`MAX_INSTANCES`]. The first time it may
+    /// not is logged.
+    pub(crate) fn has_room(&mut self, count: usize) -> bool {
+        let room = count < MAX_INSTANCES;
+        if !room && !self.full {
+            self.full = true;
+            tracing::warn!(
+                "[discovery] a browse found more than {MAX_INSTANCES} instances and ignores the rest"
+            );
+        }
+        room
+    }
+
     /// An instance resolved. One with no address yet isn't reported, since
-    /// nothing could connect to it. Returns false once the browser is gone.
+    /// nothing could connect to it, and nor is a new one past
+    /// [`MAX_INSTANCES`]. Returns false once the browser is gone.
     pub(crate) fn resolved(
         &mut self,
         instance: &str,
@@ -324,7 +354,11 @@ impl Tracker {
             port,
             txt,
         };
-        if self.seen.get(instance) == Some(&seen) {
+        let known = match self.seen.get(instance) {
+            Some(last) if *last == seen => return !self.tx.is_closed(),
+            last => last.is_some(),
+        };
+        if !known && !self.has_room(self.seen.len()) {
             return !self.tx.is_closed();
         }
         self.seen.insert(instance.to_owned(), seen.clone());
