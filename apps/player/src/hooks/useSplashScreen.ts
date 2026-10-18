@@ -243,7 +243,9 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		return () => {
 			cancelled = true;
 		};
-		// The steps run once, with the providers loaded at startup.
+		// The steps run once, with the providers loaded at startup: the other
+		// dependencies are a state that never changes, the context's tracker
+		// and two refs, which all stay the same object while the app runs.
 	}, [alreadyShown, initialized, startup, autoRefresh, onCompleteRef]);
 
 	const progress =
