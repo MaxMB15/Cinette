@@ -7,6 +7,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 ### Added
 
 - The project has a website at https://maxmb15.github.io/Cinette/. It shows what the app does and links each download of the latest release with its size (#288).
+- On iPhone and iPad, the player has an AirPlay button when an AirPlay TV is in reach. It sends the channel, movie or episode that's playing to the TV, which plays it straight from your provider, and a movie or episode carries on from where it was. Streams the TV can't play as they are, such as MKV files and most raw MPEG-TS channels, stay on the iPhone and Cinette says why. iOS may ask again to let Cinette use your local network (#323).
 
 ### Changed
 
