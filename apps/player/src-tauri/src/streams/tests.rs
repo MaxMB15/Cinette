@@ -222,6 +222,7 @@ async fn get_hls(app: &TestApp, url: &str) -> Result<StreamFormats, String> {
         video: Some(VideoCodec::H264),
         interlaced: false,
         audio: Some(AudioCodec::Aac),
+        audio_tracks: vec![],
         duration: None,
     };
     check_hls(&streams, &[url.to_string()], format_of(&probed), 0, false).await
