@@ -371,6 +371,9 @@ export const ChannelList = () => {
 
 	// Only the live tab searches the guide.
 	const epgQuery = activeTab === "live" ? search.trim() : "";
+	// An empty box forgets the last term, so typing it again is a new search
+	// that asks the guide again once the cached answer is a minute old.
+	if (!epgQuery && epgTerm !== "") setEpgTerm("");
 	useEffect(() => {
 		if (!epgQuery) return;
 		const timer = setTimeout(() => setEpgTerm(epgQuery), 300);
