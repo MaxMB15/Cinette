@@ -391,13 +391,18 @@ import { ChannelsContext, useChannels } from "./useChannels";
 import { makeProvider } from "@/test/app-fixtures";
 import type { Provider } from "@/lib/types";
 import { deferred } from "@/test/deferred";
+import { makeHistoryEntry } from "@/test/channel-fixtures";
+import { watchHistoryQuery } from "@/lib/queries";
+import type { QueryClient } from "@tanstack/react-query";
+
+type Hook = ReturnType<typeof useChannelsProvider>;
 
 const channel = (id: string, isFavorite = false) =>
 	({ id, name: id.toUpperCase(), groupTitle: "News", isFavorite }) as never;
 
 /** Mounts the provider and waits for its first load. */
-const mountProvider = async () => {
-	const hook = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor() });
+const mountProvider = async (client?: QueryClient) => {
+	const hook = renderHook(() => useChannelsProvider(), { wrapper: wrapperFor(client) });
 	await waitFor(() => expect(hook.result.current.initialized).toBe(true));
 	return hook;
 };
@@ -636,6 +641,24 @@ describe("useChannelsProvider provider changes", () => {
 		expect(result.current.error).toBe("Error: locked");
 		expect(result.current.providers).toHaveLength(1);
 	});
+
+	it.each([
+		{ action: "reloading the channels", run: (r: Hook) => r.refreshChannels() },
+		{ action: "a playlist refresh", run: (r: Hook) => r.refreshProvider("p1") },
+	])(
+		"loads the watch history again after $action, which moves it to new ids",
+		async ({ run }) => {
+			const client = createTestQueryClient();
+			const history = watchHistoryQuery(200).queryKey;
+			client.setQueryData(history, [makeHistoryEntry()]);
+			const { result } = await mountProvider(client);
+			expect(client.getQueryState(history)?.isInvalidated).toBe(false);
+
+			await act(() => run(result.current));
+
+			expect(client.getQueryState(history)?.isInvalidated).toBe(true);
+		}
+	);
 
 	it("keeps the channels it has when reloading them fails", async () => {
 		mockGetAllChannels.mockResolvedValueOnce([channel("c1")]);

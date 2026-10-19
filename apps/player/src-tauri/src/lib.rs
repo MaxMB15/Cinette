@@ -3,6 +3,8 @@
 
 mod airplay;
 #[cfg(target_os = "android")]
+mod android_device;
+#[cfg(target_os = "android")]
 mod android_tls;
 mod commands;
 mod downloads;
@@ -277,6 +279,9 @@ pub fn run() {
 
     // Metadata and subtitle lookups name the app's version in their user agent.
     mvp_core::http::set_app_version(env!("CARGO_PKG_VERSION"));
+
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_device::plugin());
 
     builder
         .plugin(tauri_plugin_os::init())

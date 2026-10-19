@@ -36,18 +36,16 @@ describe("layoutModeFor", () => {
 		expect(layoutModeFor("ios", view(375, 1032, 1032))).toBe("mobile");
 	});
 
-	it("uses the tv layout for large Android screens", () => {
-		expect(layoutModeFor("android", view(1920, 1080, 1080))).toBe("tv");
+	it("always gives a TV the tv layout", () => {
+		expect(layoutModeFor("tv", view(960, 540, 540))).toBe("tv");
+		expect(layoutModeFor("tv", view(1920, 1080, 1080))).toBe("tv");
+	});
+
+	it("gives Android phones and tablets the same layouts as iOS ones", () => {
 		expect(layoutModeFor("android", view(412, 915, 412))).toBe("mobile");
-	});
-
-	it("gives a Fire Stick at 960 by 540 the tv layout", () => {
-		expect(layoutModeFor("android", view(960, 540, 540))).toBe("tv");
-	});
-
-	it("needs both a wide and a tall enough Android screen for the tv layout", () => {
-		expect(layoutModeFor("android", view(959, 540, 540))).toBe("mobile");
-		expect(layoutModeFor("android", view(1920, 539, 539))).toBe("mobile");
+		expect(layoutModeFor("android", view(915, 412, 412))).toBe("mobile");
+		expect(layoutModeFor("android", view(800, 1280, 800))).toBe("tablet");
+		expect(layoutModeFor("android", view(1280, 800, 800))).toBe("desktop");
 	});
 
 	it("always uses the desktop layout on desktop platforms", () => {
@@ -59,10 +57,24 @@ describe("layoutModeFor", () => {
 describe("getPlatform", () => {
 	afterEach(() => {
 		vi.mocked(osPlatform).mockReset();
+		delete window.__CINETTE_TV__;
 	});
 
 	it("returns the os plugin's platform", () => {
 		vi.mocked(osPlatform).mockReturnValue("ios");
+		expect(getPlatform()).toBe("ios");
+	});
+
+	it("is tv on an Android device the app's init script marked as a TV", () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		expect(getPlatform()).toBe("android");
+		window.__CINETTE_TV__ = true;
+		expect(getPlatform()).toBe("tv");
+	});
+
+	it("only takes the TV mark on Android", () => {
+		vi.mocked(osPlatform).mockReturnValue("ios");
+		window.__CINETTE_TV__ = true;
 		expect(getPlatform()).toBe("ios");
 	});
 
@@ -83,9 +95,10 @@ describe("getPlatform", () => {
 });
 
 describe("isMobilePlatform", () => {
-	it("is true for iOS and Android only", () => {
+	it("is true for iOS, Android and TVs only", () => {
 		expect(isMobilePlatform("ios")).toBe(true);
 		expect(isMobilePlatform("android")).toBe(true);
+		expect(isMobilePlatform("tv")).toBe(true);
 		expect(isMobilePlatform("macos")).toBe(false);
 		expect(isMobilePlatform("linux")).toBe(false);
 	});

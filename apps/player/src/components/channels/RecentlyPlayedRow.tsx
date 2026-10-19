@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { X } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-	clearWatchHistoryOfType,
-	deleteHistoryEntry,
-	deleteHistorySeries,
-	getWatchHistory,
-} from "@/lib/tauri";
+import { clearWatchHistoryOfType, deleteHistoryEntry, deleteHistorySeries } from "@/lib/tauri";
+import { useWatchHistory } from "@/hooks/useWatchHistory";
 import type { WatchHistoryEntry } from "@/lib/types";
 
 /** How many of the newest entries of its type the row shows. */
@@ -32,21 +28,11 @@ interface DisplayEntry {
 const showOf = (entry: WatchHistoryEntry): string => entry.seriesTitle ?? entry.channelName;
 
 export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProps) => {
-	const [entries, setEntries] = useState<WatchHistoryEntry[]>([]);
-
-	useEffect(() => {
-		let current = true;
-		getWatchHistory(ROW_LIMIT, contentType)
-			.then((history) => {
-				if (current) setEntries(history);
-			})
-			.catch((err) => {
-				console.error("[RecentlyPlayedRow] failed to load watch history:", err);
-			});
-		return () => {
-			current = false;
-		};
-	}, [contentType]);
+	const { entries, change } = useWatchHistory(
+		ROW_LIMIT,
+		contentType,
+		"[RecentlyPlayedRow] failed to load watch history:"
+	);
 
 	// Series show one card per show, for its most recent episode.
 	const displayEntries = useMemo((): DisplayEntry[] => {
@@ -69,10 +55,13 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 		try {
 			if (seriesTitle === undefined) {
 				await deleteHistoryEntry(entry.channelId);
-				setEntries((prev) => prev.filter((e) => e.channelId !== entry.channelId));
+				change((prev) => prev.filter((e) => e.channelId !== entry.channelId));
 			} else {
 				await deleteHistorySeries(seriesTitle);
-				setEntries((prev) => prev.filter((e) => showOf(e) !== seriesTitle));
+				// The backend only deletes series entries.
+				change((prev) =>
+					prev.filter((e) => e.contentType !== "series" || showOf(e) !== seriesTitle)
+				);
 			}
 		} catch (err) {
 			console.error("[RecentlyPlayedRow] failed to delete history:", err);
@@ -82,7 +71,7 @@ export const RecentlyPlayedRow = ({ contentType, onPlay }: RecentlyPlayedRowProp
 	const handleClearAll = async () => {
 		try {
 			await clearWatchHistoryOfType(contentType);
-			setEntries([]);
+			change((prev) => prev.filter((e) => e.contentType !== contentType));
 		} catch (err) {
 			console.error("[RecentlyPlayedRow] failed to clear history:", err);
 		}

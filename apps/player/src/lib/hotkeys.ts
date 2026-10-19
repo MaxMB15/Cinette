@@ -6,6 +6,8 @@ import type { SkipIntervals } from "./player-prefs";
 /** Player keyboard actions. Resolved from key events by `resolvePlayerHotkey`. */
 export type PlayerAction =
 	| { type: "togglePlay" }
+	| { type: "play" }
+	| { type: "pause" }
 	| { type: "toggleFullscreen" }
 	| { type: "toggleMute" }
 	| { type: "seekBy"; seconds: number }
@@ -39,13 +41,16 @@ interface KeyLike {
  * Map a keydown event to a player action, or null if the key isn't bound.
  * Combinations with Cmd/Ctrl/Alt are never handled so OS and app shortcuts
  * (Cmd+F, Cmd+M, Cmd+Q, …) keep working. `skip` sets how far the plain arrow
- * and J/L keys jump.
+ * and J/L keys jump. With `remote` set, for a TV, Up and Down are left to
+ * move focus, since a TV remote has its own volume buttons.
  */
 export const resolvePlayerHotkey = (
 	e: KeyLike,
-	skip: SkipIntervals = DEFAULT_SKIP
+	skip: SkipIntervals = DEFAULT_SKIP,
+	remote = false
 ): PlayerAction | null => {
 	if (e.ctrlKey || e.metaKey || e.altKey) return null;
+	if (remote && (e.key === "ArrowUp" || e.key === "ArrowDown")) return null;
 
 	// Digit keys: 0–9 jump to 0%–90% of the runtime (YouTube convention).
 	if (/^[0-9]$/.test(e.key)) return { type: "seekToPercent", percent: Number(e.key) * 10 };
@@ -93,6 +98,21 @@ export const resolvePlayerHotkey = (
 			return { type: "skipSegment" };
 		case "Escape":
 			return { type: "escape" };
+		// The media keys on a TV remote or a keyboard.
+		case "MediaPlayPause":
+			return { type: "togglePlay" };
+		case "MediaPlay":
+			return { type: "play" };
+		case "MediaPause":
+			return { type: "pause" };
+		case "MediaFastForward":
+			return { type: "seekBy", seconds: skip.forward };
+		case "MediaRewind":
+			return { type: "seekBy", seconds: -skip.back };
+		case "MediaTrackNext":
+			return { type: "nextEpisode" };
+		case "MediaTrackPrevious":
+			return { type: "prevEpisode" };
 		default:
 			return null;
 	}
@@ -115,6 +135,7 @@ export const playerShortcuts = (
 	skip: SkipIntervals = DEFAULT_SKIP
 ): { keys: string[]; label: string }[] => [
 	{ keys: ["Space", "K"], label: "Play / pause" },
+	{ keys: ["Play", "Pause"], label: "Play, pause (media keys)" },
 	{ keys: ["F"], label: "Toggle fullscreen (or double-click)" },
 	{ keys: ["M"], label: "Mute / unmute" },
 	{ keys: ["←", "→"], label: skipLabel(skip) },

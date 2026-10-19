@@ -45,6 +45,16 @@ fn messages_read_back() {
             id: 5,
             query: CatalogQuery::Groups {
                 content_type: "live".into(),
+                cursor: None,
+                limit: 10,
+            },
+        },
+        Message::Catalog {
+            id: 6,
+            query: CatalogQuery::Episodes {
+                series_id: "series-7".into(),
+                cursor: Some("ep-3".into()),
+                limit: 20,
             },
         },
         Message::State(VersionedState {
@@ -168,6 +178,8 @@ fn known_types_match_the_message_enum() {
             id: 0,
             query: CatalogQuery::Groups {
                 content_type: "live".into(),
+                cursor: None,
+                limit: 10,
             },
         },
         Message::CatalogPage {
