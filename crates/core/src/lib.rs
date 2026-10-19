@@ -21,5 +21,7 @@ mod json;
 pub mod models;
 /// Remote control between Cinette devices on the same network.
 pub mod remote;
+/// The ways of fetching an item and what each holds, for Cast and AirPlay.
+pub mod streams;
 #[cfg(test)]
 mod test_log;

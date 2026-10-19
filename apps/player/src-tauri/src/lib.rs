@@ -15,6 +15,7 @@ mod downloads;
 mod identifier;
 mod logging;
 mod progress;
+mod streams;
 #[cfg(test)]
 mod android_project_tests;
 #[cfg(test)]
@@ -185,6 +186,7 @@ register_commands![
     commands::get_playback_position,
     commands::delete_playback_position,
     progress::hand_off_progress,
+    streams::get_stream_formats,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,
     commands::delete_group_hierarchy,
@@ -349,6 +351,7 @@ pub fn run() {
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             app.manage(crate::downloads::recordings::Recorder::default());
             app.manage(crate::cast::CastReceivers::on_network());
+            app.manage(crate::streams::StreamsState::default());
             crate::downloads::manager::restore_settings(app.handle());
 
             #[cfg(desktop)]

@@ -14,6 +14,20 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Once;
 
+/// What the item playing is made of, for deciding whether a Cast or AirPlay
+/// receiver can play it, without asking the provider again.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaInfo {
+    /// mpv's `file-format`, the demuxer's name, such as `mpegts` or
+    /// `mov,mp4,m4a,3gp,3g2,mj2`.
+    pub file_format: Option<String>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    /// The latest frame was interlaced.
+    pub interlaced: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
@@ -463,6 +477,26 @@ impl MpvEngine {
             .ok_or_else(|| "no mpv instance".to_string())?
             .set_property("sub-delay", delay)
             .map_err(|e| e.to_string())
+    }
+
+    /// What the current item holds. Empty with no item or no instance.
+    pub fn media_info(&self) -> MediaInfo {
+        let Some(ref mpv) = self.mpv else {
+            return MediaInfo::default();
+        };
+        let text = |k: &str| {
+            mpv.get_property::<String>(k)
+                .ok()
+                .filter(|v| !v.is_empty())
+        };
+        MediaInfo {
+            file_format: text("file-format"),
+            video_codec: text("current-tracks/video/codec"),
+            audio_codec: text("current-tracks/audio/codec"),
+            interlaced: mpv
+                .get_property::<bool>("video-frame-info/interlaced")
+                .unwrap_or(false),
+        }
     }
 
     pub fn get_state(&mut self) -> PlayerState {
