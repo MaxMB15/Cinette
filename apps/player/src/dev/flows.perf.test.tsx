@@ -152,8 +152,11 @@ describe("measured flows", () => {
 			fireEvent.keyDown(document, { key: "Escape" });
 		});
 		await settle(renders.commits);
-		fireEvent.click(screen.getByRole("button", { name: /^Live/ }));
-		await settle(renders.commits);
+
+		await measure("Go back to the Live tab", async () => {
+			fireEvent.click(screen.getByRole("button", { name: /^Live/ }));
+			await screen.findByText("News 0");
+		});
 
 		// The player asks mpv for its state every second. The flow ends as the
 		// sixth poll goes out, after the fifth answer has rendered.

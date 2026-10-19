@@ -85,9 +85,15 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		setDismissed(true);
 	}, []);
 
+	// The effect below reads these through a ref, so a refresh that updates
+	// the provider list doesn't start the steps again.
+	const startup = useLatestRef({ providers, updateState });
+
 	// Run once ChannelsContext has finished its initial provider fetch
 	useEffect(() => {
 		if (alreadyShown || !initialized) return;
+		// The providers and the update check as they were when loading finished.
+		const { providers: loaded, updateState: updates } = startup.current;
 
 		let cancelled = false;
 
@@ -98,14 +104,14 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		};
 
 		const run = async () => {
-			const hasAnyProviders = providers.length > 0;
+			const hasAnyProviders = loaded.length > 0;
 			setHasProviders(hasAnyProviders);
 
 			// Step 1 complete — providers came from ChannelsContext, no extra fetch needed
 			setStepStatus("providers", "done", "Providers & channels loaded");
 
 			const { playlistIds: providerRefreshIds, epgIds: epgRefreshIds } = findDueRefreshes(
-				providers,
+				loaded,
 				{ settingsFor: loadProviderSettings, epgLastRefreshFor: getEpgLastRefresh }
 			);
 
@@ -183,7 +189,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			});
 			if (!epgFinished) return;
 
-			if (!updateState.supported) {
+			if (!updates.supported) {
 				setAllDone(true);
 				onCompleteRef.current?.(didRefreshProviders);
 				return;
@@ -197,7 +203,7 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 			let foundUpdate: Update | null;
 			try {
 				foundUpdate = await Promise.race([
-					updateState.checkForUpdates(),
+					updates.checkForUpdates(),
 					new Promise<null>((_, reject) =>
 						setTimeout(() => reject(new Error("Update check timed out")), 7_000)
 					),
@@ -237,11 +243,10 @@ export const useSplashScreen = (options: UseSplashScreenOptions): SplashScreenSt
 		return () => {
 			cancelled = true;
 		};
-		// The steps run once, with the providers loaded at startup. Listing
-		// providers or updateState here would restart them whenever a refresh
-		// above updates the provider list.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [initialized]);
+		// The steps run once, with the providers loaded at startup: the other
+		// dependencies are a state that never changes, the context's tracker
+		// and two refs, which all stay the same object while the app runs.
+	}, [alreadyShown, initialized, startup, autoRefresh, onCompleteRef]);
 
 	const progress =
 		steps.length === 0
