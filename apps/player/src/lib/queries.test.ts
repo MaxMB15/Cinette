@@ -11,9 +11,13 @@ vi.mock("./tauri", () => ({
 	getEpgForLiveChannels: vi.fn(),
 	getEpgProgrammes: vi.fn(async () => [{ title: "News" }]),
 	searchEpgProgrammes: vi.fn(async () => [{ title: "Found" }]),
+	fetchOmdbData: vi.fn(async () => ({ title: "Sintel" })),
+	fetchWhatsonData: vi.fn(async () => ({ certification: "12A" })),
 }));
 
 import {
+	fetchOmdbData,
+	fetchWhatsonData,
 	getAllChannels,
 	getEpgForLiveChannels,
 	getEpgProgrammes,
@@ -30,10 +34,12 @@ import {
 	guideSearchQuery,
 	loadChannelGuide,
 	LOCAL,
+	omdbQuery,
 	pinnedGroupsQuery,
 	providersQuery,
 	SCHEDULE_STEP,
 	scheduleQuery,
+	whatsonQuery,
 } from "./queries";
 import type { EpgProgram } from "./types";
 import { answerFrom } from "@/test/guide-answers";
@@ -232,5 +238,30 @@ describe("guideSearchQuery", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("details queries", () => {
+	it("ask OMDb by the channel, title and kind", async () => {
+		const client = createTestQueryClient();
+		const query = omdbQuery("mv1", "Sintel", "movie");
+		expect(query.queryKey).toEqual(["local", "omdb", "mv1", "Sintel", "movie"]);
+		expect(omdbQuery("mv1", "Sintel", "movie", LOCAL).queryKey).toEqual(query.queryKey);
+		await expect(client.fetchQuery(query)).resolves.toEqual({ title: "Sintel" });
+		expect(fetchOmdbData).toHaveBeenCalledExactlyOnceWith("mv1", "Sintel", "movie");
+	});
+
+	it("ask Whatson for a movie, and for a series as a show", async () => {
+		const client = createTestQueryClient();
+		expect(whatsonQuery("tt1", "movie").queryKey).toEqual(["local", "whatson", "tt1", "movie"]);
+		expect(whatsonQuery("tt1", "series", LOCAL).queryKey).toEqual(
+			whatsonQuery("tt1", "series").queryKey
+		);
+		await client.fetchQuery(whatsonQuery("tt1", "movie"));
+		await client.fetchQuery(whatsonQuery("tt2", "series"));
+		expect(vi.mocked(fetchWhatsonData).mock.calls).toEqual([
+			["tt1", "movie"],
+			["tt2", "show"],
+		]);
 	});
 });

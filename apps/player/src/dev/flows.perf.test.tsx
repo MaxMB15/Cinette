@@ -148,10 +148,19 @@ describe("measured flows", () => {
 			await screen.findByText("A made-up plot.", undefined, { timeout: 10_000 });
 		});
 
-		await act(async () => {
-			fireEvent.keyDown(document, { key: "Escape" });
+		const closeDetails = async () => {
+			fireEvent.click(screen.getByRole("button", { name: "Close" }));
+			// The drawer slides away before it closes.
+			await waitFor(() => expect(screen.queryByText("A made-up plot.")).toBeNull());
+			await settle(renders.commits);
+		};
+		await closeDetails();
+
+		await measure("Open the same movie's details again", async () => {
+			fireEvent.click(screen.getByText("Movie 0 (1980)"));
+			await screen.findByText("A made-up plot.", undefined, { timeout: 10_000 });
 		});
-		await settle(renders.commits);
+		await closeDetails();
 
 		await measure("Go back to the Live tab", async () => {
 			fireEvent.click(screen.getByRole("button", { name: /^Live/ }));

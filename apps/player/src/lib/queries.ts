@@ -11,6 +11,8 @@ import {
 	getAllChannels,
 	getEpgForLiveChannels,
 	getEpgProgrammes,
+	fetchOmdbData,
+	fetchWhatsonData,
 	getGroupHierarchy,
 	getPinnedGroups,
 	getProviders,
@@ -147,4 +149,36 @@ export const guideSearchQuery = (term: string, source: Source = LOCAL) =>
 		queryKey: [source, "guideSearch", term] as const,
 		queryFn: () => searchEpgProgrammes(term, nowSeconds()),
 		staleTime: 60_000,
+	});
+
+/**
+ * Keeps details that were found until the app loads them again. No details,
+ * as when no API key is saved yet, are asked for again the next time, since a
+ * key saved in Settings since then may find them.
+ */
+const keepFound = (query: { state: { data: unknown } }) =>
+	query.state.data == null ? 0 : Infinity;
+
+/**
+ * OMDb's details for a movie or show, by the channel the backend saves them
+ * for and the title it searches.
+ */
+export const omdbQuery = (
+	id: string,
+	title: string,
+	kind: "movie" | "series",
+	source: Source = LOCAL
+) =>
+	queryOptions({
+		queryKey: [source, "omdb", id, title, kind] as const,
+		queryFn: () => fetchOmdbData(id, title, kind),
+		staleTime: keepFound,
+	});
+
+/** Whatson's ratings for an IMDb id. A series is a "show" there. */
+export const whatsonQuery = (imdbId: string, kind: "movie" | "series", source: Source = LOCAL) =>
+	queryOptions({
+		queryKey: [source, "whatson", imdbId, kind] as const,
+		queryFn: () => fetchWhatsonData(imdbId, kind === "series" ? "show" : "movie"),
+		staleTime: keepFound,
 	});
