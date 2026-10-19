@@ -3,7 +3,9 @@
 
 //! Which logos may go to another device, past what the core checks.
 
-use mvp_core::remote::catalog::{provider_host, CatalogItem};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use mvp_core::remote::catalog::CatalogItem;
+use mvp_core::remote::catalog::provider_host;
 
 /// Whether `logo` is on the same site as one of `hosts`, or has no host.
 pub fn on_a_provider_site(logo: &str, hosts: &[String]) -> bool {
@@ -30,6 +32,7 @@ fn site(host: &str) -> &str {
 }
 
 /// `item` with its logo dropped unless [`fetchable`].
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn checked(mut item: CatalogItem) -> CatalogItem {
     if item.logo.as_deref().is_some_and(|logo| !fetchable(logo)) {
         item.logo = None;
@@ -41,6 +44,7 @@ pub fn checked(mut item: CatalogItem) -> CatalogItem {
 /// sent: plain http or https, with no login, query or fragment, on a public
 /// host. Anything else could make the webview probe this network, or this
 /// machine, for whoever sent it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn fetchable(logo: &str) -> bool {
     let Ok(url) = url::Url::parse(logo) else {
         return false;
