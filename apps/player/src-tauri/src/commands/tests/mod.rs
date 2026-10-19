@@ -193,7 +193,10 @@ fn sample(argument: &str) -> Value {
         "groupsWithSamples" | "uncategorizedGroups" | "existingCategories" => json!([]),
         "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
-        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt" => json!(1),
+        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt"
+        | "source" | "generation" => {
+            json!(1)
+        }
         "keep" | "allow" => json!(true),
         "request" | "token" => json!(1),
         "outcome" => json!("ok"),

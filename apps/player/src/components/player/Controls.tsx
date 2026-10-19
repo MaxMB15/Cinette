@@ -58,6 +58,8 @@ interface ControlsProps {
 	showVolumeSlider?: boolean;
 	/** Optional download control rendered in the right cluster. */
 	downloadSlot?: React.ReactNode;
+	/** Optional control for sending the item to a TV, before the download one. */
+	castSlot?: React.ReactNode;
 	/** How far the skip buttons jump. Leave out when the stream can't seek. */
 	skip?: SkipIntervals;
 	onSkip?: (seconds: number) => void;
@@ -105,6 +107,7 @@ export const Controls = ({
 	onShortcuts,
 	showVolumeSlider = true,
 	downloadSlot,
+	castSlot,
 	skip,
 	onSkip,
 	touchLayout = false,
@@ -502,6 +505,7 @@ export const Controls = ({
 						</Button>
 					)}
 
+					{castSlot}
 					{downloadSlot && (
 						<div className="flex items-center justify-center h-9 w-9 text-white">
 							{downloadSlot}
