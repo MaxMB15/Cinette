@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { wrapperFor } from "@/test/query";
 import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,7 +44,8 @@ const renderDrawer = (props: Partial<Props> = {}) => {
 	const result = render(
 		<MemoryRouter>
 			<MovieInfoDrawer {...all} />
-		</MemoryRouter>
+		</MemoryRouter>,
+		{ wrapper: wrapperFor() }
 	);
 	return { ...result, ...all };
 };

@@ -8,6 +8,8 @@
 pub mod ai;
 /// The SQLite store for providers, channels, guides, metadata and watch history.
 pub mod cache;
+/// Playing on a Google Cast receiver.
+pub mod cast;
 /// Movie and episode downloads, their file paths and the ffmpeg arguments they
 /// run with.
 pub mod downloads;
@@ -17,6 +19,8 @@ pub mod iptv;
 mod json;
 /// Data types shared by the app and the services.
 pub mod models;
+/// Remote control between Cinette devices on the same network.
+pub mod remote;
 /// The ways of fetching an item and what each holds, for Cast and AirPlay.
 pub mod streams;
 #[cfg(test)]

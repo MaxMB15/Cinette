@@ -4,6 +4,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { notifyManager } from "@tanstack/react-query";
 
 // Vitest runs without globals, so Testing Library can't register its own
 // cleanup. Unmount what each test rendered, including its timers and polls.
@@ -18,3 +19,8 @@ if (!("ResizeObserver" in globalThis)) {
 		disconnect() {}
 	};
 }
+
+// TanStack Query tells components about new data on a timer, which fires
+// after act() has returned. A microtask lands inside act(), so a test can read
+// the new data straight after it, as it can for a state update.
+notifyManager.setScheduler(queueMicrotask);
