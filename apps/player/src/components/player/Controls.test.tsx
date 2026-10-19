@@ -240,6 +240,45 @@ describe("Controls", () => {
 	});
 });
 
+describe("Controls focus as they hide", () => {
+	afterEach(cleanup);
+
+	it("hands focus back when the bar hides with a control focused", () => {
+		const onHideWithFocus = vi.fn();
+		const view = renderControls({ onHideWithFocus });
+		screen.getByRole("button", { name: "Stop" }).focus();
+		view.rerender({ visible: false });
+		expect(onHideWithFocus).toHaveBeenCalledTimes(1);
+		// Not as the bar shows again.
+		view.rerender({ visible: true });
+		expect(onHideWithFocus).toHaveBeenCalledTimes(1);
+	});
+
+	it("hands focus back when the focused control goes away with the bar", () => {
+		const onHideWithFocus = vi.fn();
+		const sources = ["http://main.example.com/a.m3u8", "http://backup.example.com/a.ts"];
+		const view = renderControls({ sources, onSelectSource: vi.fn(), onHideWithFocus });
+		fireEvent.click(screen.getByRole("button", { name: "Source" }));
+		screen.getByRole("menuitemradio", { name: /^Source 2/ }).focus();
+		view.rerender({ visible: false });
+		expect(screen.queryByRole("menu")).toBeNull();
+		expect(onHideWithFocus).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves focus alone when it's somewhere else", () => {
+		const onHideWithFocus = vi.fn();
+		const view = renderControls({ onHideWithFocus });
+		const outside = document.createElement("button");
+		document.body.append(outside);
+		onTestFinished(() => outside.remove());
+		screen.getByRole("button", { name: "Stop" }).focus();
+		outside.focus();
+		view.rerender({ visible: false });
+		expect(document.activeElement).toBe(outside);
+		expect(onHideWithFocus).not.toHaveBeenCalled();
+	});
+});
+
 describe("Controls autoplay toggle", () => {
 	const autoplayToggle = () => screen.queryByRole("button", { name: /^Autoplay/ });
 

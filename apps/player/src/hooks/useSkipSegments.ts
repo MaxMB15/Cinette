@@ -114,9 +114,9 @@ export const useSkipSegments = ({
 				clearTimeout(retryTimerRef.current);
 				retryTimerRef.current = setTimeout(() => setRetry((n) => n + 1), RETRY_MS);
 			});
-		// The video covers every other input that changes the answer.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [ready, video, duration, retry]);
+		// The video names the IMDb id, season and episode too, so listing them
+		// never runs the lookup again on its own.
+	}, [ready, video, duration, retry, imdbId, lookupSeason, lookupEpisode]);
 
 	return {
 		video,

@@ -97,13 +97,14 @@ const useAction = () => {
 	const run = async (action: () => Promise<void>) => {
 		setBusy(true);
 		setMessage(null);
+		// The catch never throws, so this runs in place of a finally, which
+		// the React Compiler can't compile yet.
 		try {
 			await action();
 		} catch (e) {
 			setMessage(String(e));
-		} finally {
-			setBusy(false);
 		}
+		setBusy(false);
 	};
 
 	return { busy, message, setMessage, run };

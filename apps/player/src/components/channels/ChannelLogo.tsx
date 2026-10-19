@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, type ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -9,20 +9,28 @@ import { cn } from "@/lib/utils";
  * lists remount cards while scrolling, and each remount would retry a dead URL.
  */
 const brokenImageUrls = new Set<string>();
+const brokenListeners = new Set<() => void>();
+
+/** Calls the listener each time a logo fails, and returns a function that stops it. */
+export const subscribeToBroken = (listener: () => void) => {
+	brokenListeners.add(listener);
+	return () => {
+		brokenListeners.delete(listener);
+	};
+};
 
 /**
  * Whether the image at url has failed before, and a callback for its onError.
  * The answer follows url, so a card that is given a new logo tries it rather
- * than keeping the old one's failure.
+ * than keeping the old one's failure. Every card showing a logo that fails
+ * switches to its fallback.
  */
 export const useImageFailed = (url?: string): [boolean, () => void] => {
-	// Only re-renders after a failure. The set is the record of what failed.
-	const [, setFailedUrl] = useState<string>();
-	const failed = !!url && brokenImageUrls.has(url);
+	const failed = useSyncExternalStore(subscribeToBroken, () => !!url && brokenImageUrls.has(url));
 	const markFailed = () => {
 		if (!url) return;
 		brokenImageUrls.add(url);
-		setFailedUrl(url);
+		for (const listener of brokenListeners) listener();
 	};
 	return [failed, markFailed];
 };
