@@ -225,14 +225,19 @@ describe("chooseRoute", () => {
 	});
 
 	it("checks the copied video against what this device serves", () => {
-		// HLS out of the converter uses fMP4 segments, where AirPlay plays HEVC.
+		// HLS out of the converter uses TS segments, where AirPlay doesn't
+		// play HEVC, so it needs a transcode.
 		const f = format({ video: "hevc", container: "mkv" });
-		expect(chooseRoute([f], airplay, desktop)).toEqual(converted({ output: "hls" }));
-		const tsOnly = { ...airplay, video: { hevc: ["hls-ts"] as const } };
-		expect(chooseRoute([f], tsOnly, desktop)).toMatchObject({
+		expect(chooseRoute([f], airplay, desktop)).toMatchObject({
 			ok: false,
 			reason: "videoCodec",
+			detail: "hevc",
 		});
+		expect(chooseRoute([f], airplay, { ...desktop, hardwareEncoder: true })).toEqual(
+			converted({ output: "hls", video: "transcode" })
+		);
+		const tsHevc = { ...airplay, video: { hevc: ["hls-ts"] as const } };
+		expect(chooseRoute([f], tsHevc, desktop)).toEqual(converted({ output: "hls" }));
 	});
 
 	it("serves progressive fMP4 as MP4", () => {

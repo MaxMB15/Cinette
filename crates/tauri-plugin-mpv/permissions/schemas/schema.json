@@ -295,6 +295,126 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the airplay_choose command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-choose",
+          "markdownDescription": "Enables the airplay_choose command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_choose command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-choose",
+          "markdownDescription": "Denies the airplay_choose command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_get_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-get-route",
+          "markdownDescription": "Enables the airplay_get_route command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_get_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-get-route",
+          "markdownDescription": "Denies the airplay_get_route command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_get_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-get-state",
+          "markdownDescription": "Enables the airplay_get_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_get_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-get-state",
+          "markdownDescription": "Denies the airplay_get_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_pause command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-pause",
+          "markdownDescription": "Enables the airplay_pause command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_pause command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-pause",
+          "markdownDescription": "Denies the airplay_pause command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_play command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-play",
+          "markdownDescription": "Enables the airplay_play command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_play command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-play",
+          "markdownDescription": "Denies the airplay_play command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_seek command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-seek",
+          "markdownDescription": "Enables the airplay_seek command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_seek command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-seek",
+          "markdownDescription": "Denies the airplay_seek command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_select_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-select-audio",
+          "markdownDescription": "Enables the airplay_select_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_select_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-select-audio",
+          "markdownDescription": "Denies the airplay_select_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_select_subtitle command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-select-subtitle",
+          "markdownDescription": "Enables the airplay_select_subtitle command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_select_subtitle command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-select-subtitle",
+          "markdownDescription": "Denies the airplay_select_subtitle command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_set_detection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-set-detection",
+          "markdownDescription": "Enables the airplay_set_detection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_set_detection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-set-detection",
+          "markdownDescription": "Denies the airplay_set_detection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the airplay_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-airplay-stop",
+          "markdownDescription": "Enables the airplay_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the airplay_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-airplay-stop",
+          "markdownDescription": "Denies the airplay_stop command without any pre-configured scope."
+        },
+        {
           "description": "Enables the mpv_get_media_info command without any pre-configured scope.",
           "type": "string",
           "const": "allow-mpv-get-media-info",
@@ -475,10 +595,10 @@
           "markdownDescription": "Denies the mpv_sub_remove command without any pre-configured scope."
         },
         {
-          "description": "Allows all MPV player commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`",
+          "description": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Allows all MPV player commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`"
+          "markdownDescription": "Allows all MPV player and AirPlay commands\n#### This default permission set includes:\n\n- `allow-mpv-load`\n- `allow-mpv-play`\n- `allow-mpv-pause`\n- `allow-mpv-stop`\n- `allow-mpv-seek`\n- `allow-mpv-set-volume`\n- `allow-mpv-set-bounds`\n- `allow-mpv-set-visible`\n- `allow-mpv-get-state`\n- `allow-mpv-get-media-info`\n- `allow-mpv-sub-add`\n- `allow-mpv-sub-remove`\n- `allow-mpv-set-sub-delay`\n- `allow-mpv-set-media-info`\n- `allow-mpv-set-skip-intervals`\n- `allow-airplay-set-detection`\n- `allow-airplay-choose`\n- `allow-airplay-get-route`\n- `allow-airplay-play`\n- `allow-airplay-pause`\n- `allow-airplay-seek`\n- `allow-airplay-select-subtitle`\n- `allow-airplay-select-audio`\n- `allow-airplay-stop`\n- `allow-airplay-get-state`"
         }
       ]
     }

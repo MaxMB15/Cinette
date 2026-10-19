@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { invoke } from "./invoke";
+import type { AirPlayRoute } from "@/lib/airplay";
 import type { CatalogItem } from "@/lib/cinette-destination";
 import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
 import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
@@ -116,6 +117,48 @@ export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
  */
 export const getStreamFormats = (channel: Channel): Promise<StreamFormats> =>
 	invoke("get_stream_formats", { channel });
+
+/**
+ * Plays `channel` on the chosen AirPlay receiver, from the URL at `source`
+ * in the `getStreamFormats` list named `generation`. The URL stays in the
+ * backend. Stop local playback first.
+ */
+export const airplayLoad = (
+	channel: Channel,
+	generation: number,
+	source: number,
+	startAt?: number
+): Promise<void> => invoke("airplay_load", { channel, generation, source, startAt });
+
+/** Looks for AirPlay receivers while the player is open. It costs power. */
+export const airplaySetDetection = (enabled: boolean): Promise<void> =>
+	invoke("plugin:mpv|airplay_set_detection", { enabled });
+
+/** Opens the system's AirPlay picker over a rect in CSS pixels. */
+export const airplayChoose = (rect: {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}): Promise<void> => invoke("plugin:mpv|airplay_choose", rect);
+
+export const airplayGetRoute = (): Promise<AirPlayRoute | null> =>
+	invoke("plugin:mpv|airplay_get_route");
+
+export const airplayPlay = (): Promise<void> => invoke("plugin:mpv|airplay_play");
+
+export const airplayPause = (): Promise<void> => invoke("plugin:mpv|airplay_pause");
+
+export const airplaySeek = (position: number): Promise<void> =>
+	invoke("plugin:mpv|airplay_seek", { position });
+
+export const airplaySelectSubtitle = (index: number | null): Promise<void> =>
+	invoke("plugin:mpv|airplay_select_subtitle", { index });
+
+export const airplaySelectAudio = (index: number): Promise<void> =>
+	invoke("plugin:mpv|airplay_select_audio", { index });
+
+export const airplayStop = (): Promise<void> => invoke("plugin:mpv|airplay_stop");
 
 export const removeProvider = (id: string): Promise<void> => invoke("remove_provider", { id });
 

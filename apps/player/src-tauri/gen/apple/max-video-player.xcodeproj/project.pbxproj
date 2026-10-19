@@ -24,6 +24,7 @@
 		80E1FA9B0720A6DC75E939C4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 846D45698CB9A1DE1A83173F /* Assets.xcassets */; };
 		85516C8B3A3A8EBD642BC880 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 932726AE920CD320D9DD4C14 /* assets */; };
 		9BBB68912A9560F75A754C8E /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1E8934988259A9F11A312126 /* AVFoundation.framework */; };
+		345C37D1D96D4CC40ADB8ACF /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10D5EC62F17B41037A789B45 /* AVKit.framework */; };
 		AE6DCE8974B229698AEBB9C5 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6360DB9922FE8C5DEB91CCF6 /* Security.framework */; };
 		BD5E02885DBB9E192DD584F7 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 31E5083221F1CE8B84C69112 /* LaunchScreen.storyboard */; };
 		C0B6525149364D52F86DE9B2 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 82EB03A40F038D978BB817EB /* CoreGraphics.framework */; };
@@ -39,6 +40,7 @@
 		1132019601E2245AB9CBF149 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		173E91697AB29E73D0AD7090 /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
 		1E8934988259A9F11A312126 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		10D5EC62F17B41037A789B45 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		1EF2353A08B03215FA6733F1 /* scheduler.rs */ = {isa = PBXFileReference; path = scheduler.rs; sourceTree = "<group>"; };
 		1FDF3C0ABA4CCC79EDC40A3C /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		25C0912BCC839992C5E44640 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
@@ -81,6 +83,7 @@
 				6BFB617DF17A34016BEA347B /* libapp.a in Frameworks */,
 				E7BEA2306E1ACDFC35A87AE8 /* MPVKit in Frameworks */,
 				9BBB68912A9560F75A754C8E /* AVFoundation.framework in Frameworks */,
+				345C37D1D96D4CC40ADB8ACF /* AVKit.framework in Frameworks */,
 				80D548CE036D7D3A334BCC6A /* AudioToolbox.framework in Frameworks */,
 				E3664FED9C739F035B0AF408 /* CoreFoundation.framework in Frameworks */,
 				C0B6525149364D52F86DE9B2 /* CoreGraphics.framework in Frameworks */,
@@ -189,6 +192,7 @@
 			children = (
 				3D7CFEB34E8297D6E716774F /* AudioToolbox.framework */,
 				1E8934988259A9F11A312126 /* AVFoundation.framework */,
+				10D5EC62F17B41037A789B45 /* AVKit.framework */,
 				25C0912BCC839992C5E44640 /* CoreFoundation.framework */,
 				82EB03A40F038D978BB817EB /* CoreGraphics.framework */,
 				B8BEE860C1777A246AF415C5 /* CoreMedia.framework */,
