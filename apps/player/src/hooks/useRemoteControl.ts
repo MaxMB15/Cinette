@@ -57,7 +57,8 @@ export const useRemoteControl = (): RemoteControlState & {
 	useEffect(
 		() => {
 			users += 1;
-			stopping ??= control.start().catch(() => () => {});
+			// The React Compiler can't compile ??=.
+			if (!stopping) stopping = control.start().catch(() => () => {});
 			return () => {
 				users -= 1;
 				stopWhenIdle(control);
