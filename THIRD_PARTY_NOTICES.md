@@ -5,7 +5,7 @@ Cinette is built on other people's open source software. Each component below ke
 ## Getting the source code
 
 - **Cinette.** Every release has a tag in this repository. Settings > About in the app links to the source for the version you're running.
-- **mpv.** The macOS and Linux apps' libmpv is built from the [mpv v0.40.0 tag](https://github.com/mpv-player/mpv/tree/v0.40.0) by [scripts/build-libmpv.sh](scripts/build-libmpv.sh). The iOS app's libmpv comes from MPVKit, described [below](#libraries-bundled-in-the-ios-app).
+- **mpv.** The macOS and Linux apps' libmpv is built from the [mpv v0.40.0 tag](https://github.com/mpv-player/mpv/tree/v0.40.0) by [scripts/build-libmpv.sh](scripts/build-libmpv.sh). The iOS app's libmpv comes from MPVKit, described [below](#libraries-bundled-in-the-ios-app). The Android app's libmpv is built from the mpv v0.41.0 tag, as described [below](#libraries-bundled-in-the-android-app).
 - **FFmpeg.** The `ffmpeg` program in the macOS and Linux apps is built from the FFmpeg 8.1.3 release source by [scripts/build-ffmpeg.sh](scripts/build-ffmpeg.sh). The [ffmpeg-sidecar-8.1](https://github.com/MaxMB15/Cinette/releases/tag/ffmpeg-sidecar-8.1) pre-release has that source, the OpenSSL source the macOS build links in, and the FFmpeg source of the Windows build. Other FFmpeg source releases are at [ffmpeg.org/download.html](https://ffmpeg.org/download.html).
 - **Other libraries.** Each project in the tables below links to its home page, where its source is published. In the Apple Silicon Mac app they come from [Homebrew](https://github.com/Homebrew/homebrew-core), whose formulas record the exact source archive and build options. In the Intel Mac app they come from [MacPorts](https://github.com/macports/macports-ports), whose Portfiles record the same. On iOS they come from MPVKit, whose build scripts record the same.
 
@@ -13,7 +13,7 @@ If you received a copy of Cinette and can't find the source for one of its compo
 
 ## mpv
 
-Cinette plays video with libmpv from [mpv](https://mpv.io), licensed under the GNU General Public License version 2 or later. Some of its files are under the GNU Lesser General Public License version 2.1 or later. The macOS app and the Linux AppImage include libmpv. The Linux `.deb` and `.rpm` packages use the libmpv package from your distribution instead. The iOS app includes a build of libmpv without mpv's GPL parts, which is licensed under the GNU Lesser General Public License version 2.1 or later.
+Cinette plays video with libmpv from [mpv](https://mpv.io), licensed under the GNU General Public License version 2 or later. Some of its files are under the GNU Lesser General Public License version 2.1 or later. The macOS app and the Linux AppImage include libmpv. The Linux `.deb` and `.rpm` packages use the libmpv package from your distribution instead. The iOS app includes a build of libmpv without mpv's GPL parts, which is licensed under the GNU Lesser General Public License version 2.1 or later. The Android app includes libmpv 0.41.0 with its GPL parts, licensed under the GNU General Public License version 2 or later.
 
 ## FFmpeg
 
@@ -21,6 +21,7 @@ Cinette includes [FFmpeg](https://ffmpeg.org) in two forms. FFmpeg is a trademar
 
 - **FFmpeg 7.1 libraries** (`libavcodec`, `libavfilter`, `libavformat`, `libavutil`, `libpostproc`, `libswresample`, `libswscale`), used by libmpv. The Apple Silicon Mac app includes them as built by Homebrew's `ffmpeg@7` formula, with `--enable-gpl` and `--enable-version3`. That build is licensed under the GNU General Public License version 3 or later. The Intel Mac app includes FFmpeg 7.1.5 as built by MacPorts' `ffmpeg7` port with its default `gpl2` variant, which uses `--enable-gpl` without `--enable-version3`. That build is licensed under the GNU General Public License version 2 or later.
 - **FFmpeg 9.0.2 libraries** (`libavcodec`, `libavdevice`, `libavfilter`, `libavformat`, `libavutil`, `libswresample`, `libswscale`), used by libmpv in the iOS app. They're built with `--enable-version3` and without `--enable-gpl`, so they're licensed under the GNU Lesser General Public License version 3 or later.
+- **FFmpeg 8.1.3 libraries** (`libavcodec`, `libavfilter`, `libavformat`, `libavutil`, `libswresample`, `libswscale`), used by libmpv in the Android app. They're built from FFmpeg's release source with `--enable-gpl` and `--enable-version3`, so they're licensed under the GNU General Public License version 3 or later.
 - **The `ffmpeg` program**, which the desktop app runs to download movies and episodes. The iOS app doesn't include it. On macOS and Linux it is FFmpeg 8.1.3, built by [scripts/build-ffmpeg.sh](scripts/build-ffmpeg.sh) from FFmpeg's release source with only the parts downloads use. That build is licensed under the GNU Lesser General Public License version 3 or later. The macOS builds include [OpenSSL](https://openssl-library.org) 3.5.9, licensed under Apache-2.0, for HTTPS. On Linux, the `.deb` and `.rpm` packages use your system's OpenSSL 3 and zlib libraries for it, and the AppImage uses your system's zlib and the OpenSSL 3 from Ubuntu that the AppImage includes. Each build's archive has a `BUILDINFO.txt` with the options it was built with. On Windows, [scripts/fetch-ffmpeg.sh](scripts/fetch-ffmpeg.sh) pins a static build of FFmpeg 8.1.3 by [BtbN](https://github.com/BtbN/FFmpeg-Builds), from the `release/8.1` branch at commit `29e619e767`. It is licensed under the GNU General Public License version 3 or later, and includes other libraries linked into the program, such as x264 and x265. It uses Windows' own Schannel for HTTPS. BtbN's [FFmpeg-Builds at commit `6c9aec5fc9`](https://github.com/BtbN/FFmpeg-Builds/tree/6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b) lists each library and where its source came from. The builds, and the FFmpeg and OpenSSL source code they come from, are on the [ffmpeg-sidecar-8.1](https://github.com/MaxMB15/Cinette/releases/tag/ffmpeg-sidecar-8.1) pre-release.
 
 ## Libraries bundled in the macOS app
@@ -149,6 +150,22 @@ The iOS app gets libmpv, the FFmpeg libraries and the libraries below from relea
 | [uchardet](https://www.freedesktop.org/wiki/Software/uchardet/) | `Libuchardet` | MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later |
 
 `Libshaderc_combined` also contains [glslang](https://github.com/KhronosGroup/glslang) and [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools), each under its own license.
+
+## Libraries bundled in the Android app
+
+[scripts/build-libmpv.sh android](scripts/lib/libmpv-android.sh) builds libmpv, the FFmpeg libraries and the libraries below from their release sources, pinned by version and SHA-256, and libplacebo from its git tag. FFmpeg and libmpv are shared libraries in the APK, and the others are linked into libmpv. The script lists every option they're built with.
+
+| Project | Version | License |
+| --- | --- | --- |
+| [freetype](https://www.freetype.org/) | 2.14.1 | FTL |
+| [fribidi](https://github.com/fribidi/fribidi) | 1.0.17 | LGPL-2.1-or-later |
+| [harfbuzz](https://github.com/harfbuzz/harfbuzz) | 14.6.0 | MIT |
+| [libass](https://github.com/libass/libass) | 0.17.5 | ISC |
+| [libplacebo](https://code.videolan.org/videolan/libplacebo) | 7.360.1 | LGPL-2.1-or-later |
+| [mbedtls](https://www.trustedfirmware.org/projects/mbed-tls/) | 3.6.7 | Apache-2.0 |
+| [LLVM libc++](https://libcxx.llvm.org/), from the Android NDK | r30 | Apache-2.0 WITH LLVM-exception |
+
+The Android app also includes Android libraries from Google, such as AndroidX and Material Components, which are licensed under Apache-2.0, and the Kotlin half of [rustls-platform-verifier](https://github.com/rustls/rustls-platform-verifier), licensed under Apache-2.0 or MIT.
 
 ## Skip times
 
