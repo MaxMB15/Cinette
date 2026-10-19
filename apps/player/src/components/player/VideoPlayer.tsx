@@ -16,6 +16,7 @@ import { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
+import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -434,9 +435,14 @@ export const PlayerView = () => {
 		recordPlayEnd(ch.id, Math.floor((Date.now() - startedAt) / 1000)).catch(() => {});
 	}, [activeChannelRef]);
 
-	/** Actually start playing `ch` (optionally from `startPos`), replacing whatever is playing. */
+	/**
+	 * Actually start playing `ch` (optionally from `startPos`), replacing
+	 * whatever is playing. Resolves once mpv has opened the stream, or at once
+	 * if another item replaced this one first, and rejects if mpv couldn't
+	 * open it. The player shows that error itself, so callers can ignore it.
+	 */
 	const commitPlayback = useCallback(
-		(ch: Channel, startPos?: number, apply?: () => void) => {
+		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
 			recordEnd();
 			playStartTimeRef.current = Date.now();
 			recordPlayStart(ch.id, ch.name, ch.logoUrl ?? null, ch.contentType).catch(() => {});
@@ -449,7 +455,7 @@ export const PlayerView = () => {
 			// Prefer a completed download so playback works offline; fall back to
 			// the stream URL if there is none or the lookup fails.
 			const loadId = ++loadRequestRef.current;
-			resolveLocalDownload(ch.id)
+			const loaded = resolveLocalDownload(ch.id)
 				.catch(() => null)
 				.then((local) => {
 					if (loadId !== loadRequestRef.current) return;
@@ -460,14 +466,32 @@ export const PlayerView = () => {
 					// saved its subtitles with no stream. They're for this one.
 					if (!openRef.current) updateSubtitleSession(ch.id, null, { url: target });
 					return mpv.load(target, startPos);
-				})
-				.catch(() => {});
+				});
+			loaded.catch(() => {});
 			setActiveChannelName(ch.name);
 			setActiveChannel(ch);
 			apply?.();
+			return loaded;
 		},
 		[mpv, rememberLoadedUrl, recordEnd]
 	);
+
+	/**
+	 * Starts `ch` for the destination's `load`. The caller picked the start
+	 * position, so no resume prompt shows. As a press in the player does, it
+	 * saves the last item's progress first, and a start that's still looking
+	 * up its resume point, or a resume prompt on screen, gives way to it.
+	 * The destination keeps the newest one in a ref, so it needs no memo.
+	 */
+	const loadFromDestination = (ch: Channel, startAt?: number): Promise<void> => {
+		++startRequestRef.current;
+		setPendingResume(null);
+		flushProgress();
+		return commitPlayback(ch, startAt);
+	};
+	// The player's controls go through the active destination, which is
+	// always this device for now.
+	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with
@@ -984,10 +1008,11 @@ export const PlayerView = () => {
 			const s = mpvStateRef.current;
 			const run = nextSkip(lastSkipRef.current, s.position, s.duration, seconds, Date.now());
 			lastSkipRef.current = run;
-			mpv.seek(run.target);
+			playback.seek(run.target);
 			return run.total;
 		},
-		[mpv, mpvStateRef]
+		// Stryker disable next-line ArrayDeclaration: The seek it calls is the one useMpv keeps with useCallback, and mpvStateRef is a ref.
+		[playback, mpvStateRef]
 	);
 	// The tap layer keeps its clicks from the player, so a double-tap skip
 	// restarts the hide timer here, as a press on a skip button does. Hidden
@@ -1002,9 +1027,10 @@ export const PlayerView = () => {
 	const seekTo = useCallback(
 		(position: number) => {
 			lastSkipRef.current = null;
-			mpv.seek(position);
+			playback.seek(position);
 		},
-		[mpv]
+		// Stryker disable next-line ArrayDeclaration: The seek it calls is the one useMpv keeps with useCallback, so the first render's works as well as the last.
+		[playback]
 	);
 
 	// --- Intros, recaps, credits and previews ---
@@ -1111,8 +1137,8 @@ export const PlayerView = () => {
 				// A remote's center button plays and pauses when there's nothing to skip.
 				else if (!e.repeat && remote) {
 					e.preventDefault();
-					if (mpv.state.isPaused || !mpv.state.isPlaying) mpv.play();
-					else mpv.pause();
+					if (mpv.state.isPaused || !mpv.state.isPlaying) playback.play();
+					else playback.pause();
 				}
 				return;
 			}
@@ -1123,16 +1149,16 @@ export const PlayerView = () => {
 			switch (action.type) {
 				case "togglePlay":
 					if (s.isPaused || !s.isPlaying) {
-						mpv.play();
+						playback.play();
 					} else {
-						mpv.pause();
+						playback.pause();
 					}
 					break;
 				case "play":
-					mpv.play();
+					playback.play();
 					break;
 				case "pause":
-					mpv.pause();
+					playback.pause();
 					break;
 				case "toggleFullscreen":
 					toggleFullscreen();
@@ -1156,7 +1182,7 @@ export const PlayerView = () => {
 						MAX_VOLUME,
 						Math.max(0, Math.round(s.volume + action.delta))
 					);
-					mpv.setVolume(v);
+					playback.setVolume(v);
 					flashOsd(`Volume ${v}%`);
 					break;
 				}
@@ -1199,6 +1225,7 @@ export const PlayerView = () => {
 		},
 		[
 			mpv,
+			playback,
 			pendingResume,
 			showShortcuts,
 			isFullscreen,
@@ -1400,8 +1427,8 @@ export const PlayerView = () => {
 					}}
 					visible={showControls}
 					isFullscreen={isFullscreen}
-					onPlay={mpv.play}
-					onPause={mpv.pause}
+					onPlay={playback.play}
+					onPause={playback.pause}
 					onStop={handleStop}
 					onSeek={seekTo}
 					skip={seekable ? skip : undefined}
@@ -1413,7 +1440,7 @@ export const PlayerView = () => {
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
 					// Stryker disable next-line OptionalChaining: the bar only calls this while it's on the page, inside the container, so the ref is never null.
 					onHideWithFocus={remote ? () => containerRef.current?.focus() : undefined}
-					onVolumeChange={mpv.setVolume}
+					onVolumeChange={playback.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
 					onInfo={hasInfo ? () => setShowInfoDrawer(true) : undefined}
