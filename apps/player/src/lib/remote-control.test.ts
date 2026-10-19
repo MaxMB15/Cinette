@@ -44,7 +44,7 @@ const backend = () => {
 		devices: vi.fn(() => Promise.resolve([tv])),
 		connect: vi.fn<(deviceId: string, link: number) => Promise<void>>(() => Promise.resolve()),
 		current: vi.fn<() => Promise<number | null>>(() => Promise.resolve(null)),
-		leave: vi.fn(() => Promise.resolve()),
+		leave: vi.fn<(link: number) => Promise<void>>(() => Promise.resolve()),
 		// No version, so a load doesn't wait for a state.
 		command: vi.fn<(link: number, command: unknown) => Promise<unknown>>(() =>
 			Promise.resolve(undefined)
@@ -239,13 +239,18 @@ describe("createRemoteControl", () => {
 		const { b } = backend();
 		const rc = createRemoteControl(b);
 		await rc.connect(tv);
-		const left = rc.getState().link!.destination;
+		const { destination: left, id } = rc.getState().link!;
 		const changes = vi.fn();
 		rc.subscribe(changes);
 		await rc.leave();
 		expect(left.getState().connection).toBe("lost");
 		expect(rc.getState().link).toBeNull();
 		expect(rc.getState().ended).toBeNull();
+		expect(b.leave).toHaveBeenCalledTimes(1);
+		expect(b.leave).toHaveBeenCalledWith(id);
+		expect(changes).toHaveBeenCalledTimes(1);
+		// With nothing to leave, the backend hears nothing.
+		await rc.leave();
 		expect(b.leave).toHaveBeenCalledTimes(1);
 		expect(changes).toHaveBeenCalledTimes(1);
 	});
@@ -268,6 +273,7 @@ describe("createRemoteControl", () => {
 		await rc.start();
 		await flush();
 		expect(b.leave).toHaveBeenCalledTimes(1);
+		expect(b.leave).toHaveBeenCalledWith(12);
 	});
 
 	it("keeps the backend's link when it's this page's own", async () => {

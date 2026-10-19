@@ -118,7 +118,7 @@
 	"remote_devices": {},
 	"remote_connect": { "required": ["deviceId", "link"] },
 	"remote_link": {},
-	"remote_leave": {},
+	"remote_leave": { "required": ["link"] },
 	"remote_command": { "required": ["command", "link"] },
 	"remote_catalog": { "required": ["catalogQuery", "link"] }
 }

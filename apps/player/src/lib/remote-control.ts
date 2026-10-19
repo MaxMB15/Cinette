@@ -42,7 +42,8 @@ export interface RemoteControlBackend {
 	connect(deviceId: string, link: number): Promise<void>;
 	/** The link the backend holds, which a reloaded page may not know. */
 	current(): Promise<number | null>;
-	leave(): Promise<void>;
+	/** Ends link `link`, and no other that took its place. */
+	leave(link: number): Promise<void>;
 	command(link: number, command: RemoteCommand): Promise<unknown>;
 	listen<T>(event: string, handler: (payload: T) => void): Promise<() => void>;
 	/** `performance.now()`. */
@@ -127,7 +128,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 			backend
 				.current()
 				.then((held) => {
-					if (held !== null && held !== state.link?.id) void backend.leave();
+					if (held !== null && held !== state.link?.id) void backend.leave(held);
 				})
 				.catch(() => {});
 			return () => {
@@ -159,9 +160,11 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 			}
 		},
 		leave: async () => {
-			drop(state.link);
+			const link = state.link;
+			if (!link) return;
+			drop(link);
 			set({ link: null });
-			await backend.leave();
+			await backend.leave(link.id);
 		},
 	};
 };

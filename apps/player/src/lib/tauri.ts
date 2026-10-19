@@ -641,7 +641,7 @@ export const remoteConnect = (deviceId: string, link: number): Promise<void> =>
 export const remoteLink = (): Promise<number | null> => invoke("remote_link");
 
 /** Ends the session with the controlled device. It keeps playing. */
-export const remoteLeave = (): Promise<void> => invoke("remote_leave");
+export const remoteLeave = (link: number): Promise<void> => invoke("remote_leave", { link });
 
 /** Resolves with the other device's state version once it carried the
  *  command out. Rejects with the protocol's error code, like `stale_item`,

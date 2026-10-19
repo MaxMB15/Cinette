@@ -748,7 +748,7 @@ async fn one_instance_controls_another() {
 
     // Leaving ends the session on both sides. The webview asked, so no
     // event tells it.
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
     let deadline = std::time::Instant::now() + WAIT;
     while tv.invoke("remote_sessions", json!({})).unwrap() != json!([]) {
         assert!(std::time::Instant::now() < deadline);
@@ -837,7 +837,7 @@ async fn only_devices_on_the_network_that_allow_control_can_be_asked() {
         Err(json!("notConnected"))
     );
     // Leaving with nothing to leave is fine.
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -853,6 +853,23 @@ async fn a_device_that_goes_away_leaves_the_list() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_late_leave_for_an_old_link_leaves_the_new_one() {
+    let (mut mac, tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
+        .unwrap();
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 2 }))
+        .unwrap();
+    // The leave for link 1 arrives after link 2 took its place.
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(2)));
+    phase(&mut mac, "connected").await;
+    mac.invoke("remote_leave", json!({ "link": 2 })).unwrap();
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn connecting_again_is_not_undone_by_the_old_link_ending() {
     let (mut mac, mut tv) = pair("always").await;
     let tv_id = tv.device_id().to_string();
@@ -860,7 +877,7 @@ async fn connecting_again_is_not_undone_by_the_old_link_ending() {
     mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     phase(&mut mac, "connected").await;
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
     mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 2 }))
         .unwrap();
     phase(&mut mac, "connected").await;
@@ -1056,7 +1073,7 @@ async fn links_are_named_by_the_webview_and_only_the_current_one_takes_commands(
 
     // Leaving says what the list is now, since the left device is no
     // longer kept in it.
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 41 })).unwrap();
     mac.event("remote://devices").await;
     assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
 }

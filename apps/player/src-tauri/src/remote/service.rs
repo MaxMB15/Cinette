@@ -130,10 +130,19 @@ impl RemoteService {
         Ok(())
     }
 
-    /// Ends the session, or stops asking. The other device keeps playing.
-    /// The webview asked, so no `remote://controller` event says so.
-    pub async fn leave(&self) {
-        let old = lock(&self.link).take();
+    /// Ends link `link`, or stops it asking. The other device keeps
+    /// playing. A link that another replaced meanwhile is gone already, so
+    /// a late leave for it leaves the new one alone. The webview asked, so
+    /// no `remote://controller` event says so.
+    pub async fn leave(&self, link: u64) {
+        let old = {
+            let mut slot = lock(&self.link);
+            if slot.as_ref().is_some_and(|l| l.generation() == link) {
+                slot.take()
+            } else {
+                None
+            }
+        };
         if let Some(old) = old {
             old.leave().await;
         }
@@ -794,7 +803,9 @@ fn start_on<R: Runtime>(
 pub fn stop_for_exit<R: Runtime>(app: &AppHandle<R>) {
     if let Some(service) = app.try_state::<RemoteService>() {
         tauri::async_runtime::block_on(async {
-            service.leave().await;
+            if let Some(link) = service.current_link() {
+                service.leave(link).await;
+            }
             service.handle.shutdown().await;
         });
     }

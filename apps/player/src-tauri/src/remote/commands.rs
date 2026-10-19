@@ -453,18 +453,18 @@ pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, S
     }
 }
 
-/// Ends the session with the controlled device, or stops asking. That
-/// device keeps playing.
+/// Ends link `link` to the controlled device, or stops it asking. That
+/// device keeps playing. Another link that took its place stays.
 #[command]
-pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+pub async fn remote_leave<R: Runtime>(app: AppHandle<R>, link: u64) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        imp::service(&app)?.leave().await;
+        imp::service(&app)?.leave(link).await;
         Ok(())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = app;
+        let _ = (app, link);
         Err(UNAVAILABLE.into())
     }
 }

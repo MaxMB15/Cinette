@@ -678,7 +678,7 @@ describe("backend commands", () => {
 			{ deviceId: "abc", link: 5 },
 		],
 		["remoteLink", () => tauri.remoteLink(), "remote_link"],
-		["remoteLeave", () => tauri.remoteLeave(), "remote_leave"],
+		["remoteLeave", () => tauri.remoteLeave(4), "remote_leave", { link: 4 }],
 		[
 			"remoteCommand",
 			() => tauri.remoteCommand(5, { action: "seek", itemId: "live-1", to: 30 }),
