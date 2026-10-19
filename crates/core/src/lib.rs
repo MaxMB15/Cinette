@@ -8,6 +8,8 @@
 pub mod ai;
 /// The SQLite store for providers, channels, guides, metadata and watch history.
 pub mod cache;
+/// Playing on a Google Cast receiver.
+pub mod cast;
 /// Movie and episode downloads, their file paths and the ffmpeg arguments they
 /// run with.
 pub mod downloads;

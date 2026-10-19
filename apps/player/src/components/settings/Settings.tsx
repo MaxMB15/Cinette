@@ -293,11 +293,10 @@ export const Settings = ({ updateState }: SettingsProps) => {
 	};
 
 	const handleBrowseFolder = async () => {
+		// Outside the try, which the React Compiler can't compile with a || in it.
+		const defaultPath = downloadFolder || undefined;
 		try {
-			const selected = await open({
-				directory: true,
-				defaultPath: downloadFolder || undefined,
-			});
+			const selected = await open({ directory: true, defaultPath });
 			if (typeof selected === "string") {
 				await applyFolder(selected);
 			}

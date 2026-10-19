@@ -8,6 +8,10 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 - On macOS and Linux, one Cinette can control another on the same network. Choose Devices in the sidebar and pick the other device; it plays there, and this one shows what's playing, with play, pause, stop and that device's channels, movies and series to choose from. Unless it's set to Always allow, the other device asks first, and both screens show the same code so you can tell your own request from someone else's. Settings > Remote control sets whether others can find this device, who may control it (Always allow, Only when allowed, Never allow), its name, lists the devices controlling it, each with Disconnect, and can give this device a new identity, which ends every session. macOS asks once whether Cinette may use the local network; if that was refused, the device list says where to allow it. Nothing leaves your network, and no stream address, login or playlist setting is sent to the other device (#317, #318, #319, #321, #322).
 
+### Changed
+
+- The channel list scrolls and searches with far less work. While you scroll, only the rows redraw, not the tabs and category filters around them, and typing a search no longer redraws every category. The app is now built with the React Compiler, which skips redrawing what hasn't changed (#307).
+
 ## [0.8.0] - 2026-10-17
 
 ### Added
