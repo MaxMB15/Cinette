@@ -4,11 +4,12 @@
 
 set -euo pipefail
 
-# Builds libmpv from source for the desktop app. iOS gets libmpv from MPVKit
-# through Swift Package Manager instead, so it has no case here.
+# Builds libmpv from source for the desktop app and Android. iOS gets libmpv
+# from MPVKit through Swift Package Manager instead, so it has no case here.
 # Output: libs/<platform>/ at the repository root.
 #
 # Usage: ./scripts/build-libmpv.sh macos|linux
+#        ./scripts/build-libmpv.sh android [arm64-v8a|armeabi-v7a...]
 
 PLATFORM="${1:-}"
 LIBS_DIR="$(cd "$(dirname "$0")/.." && pwd)/libs"
@@ -246,8 +247,15 @@ case "$PLATFORM" in
     echo "    Done."
     ;;
 
+  android)
+    # Cross-builds FFmpeg, libmpv and their dependencies with the NDK. See
+    # docs/android.md.
+    shift
+    exec "$(dirname "$0")/lib/libmpv-android.sh" "$LIBS_DIR" "$@"
+    ;;
+
   *)
-    echo "Usage: $0 {macos|linux}"
+    echo "Usage: $0 {macos|linux|android}"
     echo ""
     echo "Builds libmpv for the target platform."
     echo "Output goes to libs/<platform>/"

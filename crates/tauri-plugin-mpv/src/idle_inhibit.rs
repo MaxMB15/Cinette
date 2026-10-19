@@ -202,12 +202,35 @@ impl IdleInhibitor {
         crate::ios::set_idle_timer_disabled(false);
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
+    /// `FLAG_KEEP_SCREEN_ON` on the activity's window, set by the plugin's
+    /// Kotlin side. It also keeps a TV's screensaver away.
+    #[cfg(target_os = "android")]
+    fn platform_inhibit(&self, _state: &mut InhibitState) -> bool {
+        crate::android::set_keep_screen_on(true);
+        true
+    }
+
+    #[cfg(target_os = "android")]
+    fn platform_uninhibit(&self, _state: &mut InhibitState) {
+        crate::android::set_keep_screen_on(false);
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "ios",
+        target_os = "android"
+    )))]
     fn platform_inhibit(&self, _state: &mut InhibitState) -> bool {
         false
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "ios",
+        target_os = "android"
+    )))]
     fn platform_uninhibit(&self, _state: &mut InhibitState) {}
 }
 
