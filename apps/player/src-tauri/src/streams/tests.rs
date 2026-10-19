@@ -53,6 +53,7 @@ async fn formats(
             video_codec: p.video_codec,
             audio_codec: p.audio_codec,
             interlaced: p.interlaced,
+            hdr: false,
         };
         (channel.url.clone(), info)
     });
@@ -72,6 +73,7 @@ fn playing_ts() -> PlayingInfo {
         video_codec: Some("h264".into()),
         audio_codec: Some("mp2".into()),
         interlaced: true,
+        hdr: false,
     }
 }
 
@@ -101,6 +103,7 @@ async fn xtream_live_playing_here_offers_hls_then_ts_without_asking_the_stream()
         container: Container::HlsTs,
         video: Some(VideoCodec::H264),
         interlaced: true,
+        hdr: false,
         audio: Some(AudioCodec::Mp2),
         cors: false,
     };
@@ -230,6 +233,7 @@ async fn get_hls(app: &TestApp, url: &str) -> Result<StreamFormats, String> {
         container: Container::HlsTs,
         video: Some(VideoCodec::H264),
         interlaced: false,
+        hdr: false,
         audio: Some(AudioCodec::Aac),
         audio_tracks: vec![],
         duration: None,
@@ -334,6 +338,7 @@ fn mpv_info(file_format: Option<&str>) -> MediaInfo {
         video_codec: Some("h264".into()),
         audio_codec: Some("aac".into()),
         interlaced: false,
+        hdr: false,
     }
 }
 
@@ -367,11 +372,13 @@ fn trusts_mpv_only_about_this_item_once_it_has_opened() {
                 video_codec: Some("h264".into()),
                 audio_codec: Some("aac".into()),
                 interlaced: false,
+                hdr: false,
             }
         );
     }
     let interlaced = MediaInfo {
         interlaced: true,
+        hdr: false,
         ..mpv_info(Some("mpegts"))
     };
     assert!(

@@ -8,11 +8,28 @@ use mvp_core::http::test_server;
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
-fn element(cluster: bool, byte: u8) -> Arc<Piece> {
-    Arc::new(Piece::Element {
-        bytes: vec![byte; 4],
-        cluster,
-    })
+/// A feed of at most `cap` bytes, with the header `HEAD`.
+fn feed(cap: usize, live: bool) -> LiveFeed {
+    LiveFeed::new("video/x-matroska", b"HEAD".to_vec(), cap, live)
+}
+
+/// Four bytes of `byte`.
+fn piece(byte: u8) -> Vec<u8> {
+    vec![byte; 4]
+}
+
+/// Reads `response` until it has `n` bytes.
+async fn read_bytes(response: &mut reqwest::Response, n: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    while body.len() < n {
+        let chunk = tokio::time::timeout(Duration::from_secs(10), response.chunk())
+            .await
+            .expect("more of the stream within 10 s")
+            .unwrap()
+            .expect("the stream goes on");
+        body.extend_from_slice(&chunk);
+    }
+    body
 }
 
 /// The server's `host:port`.
@@ -37,17 +54,10 @@ async fn raw(server: &LanServer, request: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn serves_a_live_pipe_from_the_next_start_point() {
+async fn the_first_request_gets_the_stream_from_its_first_piece() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
-    let (pieces, _) = broadcast::channel(16);
-    let url = server.set_live(
-        "stream.mkv",
-        LivePipe {
-            content_type: "video/x-matroska",
-            header: b"HEAD".to_vec(),
-            pieces: pieces.subscribe(),
-        },
-    );
+    let feed = feed(1 << 20, false);
+    let url = server.set_live("stream.mkv", feed.clone());
     assert_eq!(url, format!("{}stream.mkv", server.base));
     assert!(server.base.starts_with("http://127.0.0.1:"));
     let token = server
@@ -58,56 +68,148 @@ async fn serves_a_live_pipe_from_the_next_start_point() {
         .trim_end_matches('/');
     assert_eq!(token.len(), 64);
 
+    // Pieces written before anyone asks are kept for the first request,
+    // from the first start point.
+    feed.push(piece(1), false).await;
+    feed.push(piece(2), true).await;
+    feed.push(piece(3), false).await;
     let mut response = test_server::client().get(&url).send().await.unwrap();
     assert_eq!(response.headers()["content-type"], "video/x-matroska");
     assert!(response.headers().get("content-length").is_none());
-    // The request is in once the head is back. A piece that isn't a start
-    // point is skipped, and everything from the next one on comes through.
-    pieces.send(element(false, 1)).unwrap();
-    pieces.send(Arc::new(Piece::Header(b"x".to_vec()))).unwrap();
-    pieces.send(element(true, 2)).unwrap();
-    pieces.send(element(false, 3)).unwrap();
-    let mut body = Vec::new();
-    while body.len() < 12 {
-        body.extend_from_slice(&response.chunk().await.unwrap().unwrap());
-    }
-    assert_eq!(body, b"HEAD\x02\x02\x02\x02\x03\x03\x03\x03");
+    feed.push(piece(4), true).await;
+    assert_eq!(
+        read_bytes(&mut response, 16).await,
+        [b"HEAD".to_vec(), piece(2), piece(3), piece(4)].concat()
+    );
 
     // A HEAD request gets the head and no body.
     let head = test_server::client().head(&url).send().await.unwrap();
     assert_eq!(head.status(), 200);
     assert!(head.bytes().await.unwrap().is_empty());
 
-    // The pipe ending ends the response.
-    drop(pieces);
+    // The feed ending ends the response once it has everything.
+    feed.push(piece(4), false).await;
+    feed.end();
+    assert_eq!(read_bytes(&mut response, 4).await, piece(4));
     assert!(response.chunk().await.unwrap().is_none());
 }
 
 #[tokio::test]
-async fn a_receiver_that_falls_behind_is_dropped() {
+async fn a_request_that_comes_later_starts_at_the_last_start_point_sent() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
-    let (pieces, _) = broadcast::channel(1);
-    let url = server.set_live(
-        "stream.mkv",
-        LivePipe {
-            content_type: "video/x-matroska",
-            header: vec![],
-            pieces: pieces.subscribe(),
-        },
+    let feed = feed(1 << 20, true);
+    let url = server.set_live("stream.mkv", feed.clone());
+    let mut first = test_server::client().get(&url).send().await.unwrap();
+    for (byte, start) in [(1, true), (2, false), (3, true), (4, false)] {
+        feed.push(piece(byte), start).await;
+    }
+    read_bytes(&mut first, 20).await;
+    drop(first);
+    // It starts from the third piece, the last start point sent.
+    let mut again = test_server::client().get(&url).send().await.unwrap();
+    assert_eq!(
+        read_bytes(&mut again, 12).await,
+        [b"HEAD".to_vec(), piece(3), piece(4)].concat()
     );
+    feed.push(piece(5), false).await;
+    assert_eq!(read_bytes(&mut again, 4).await, piece(5));
+}
+
+#[tokio::test]
+async fn a_request_with_no_start_point_kept_waits_for_the_next() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = feed(1 << 20, true);
+    let url = server.set_live("stream.mkv", feed.clone());
+    feed.push(piece(1), false).await;
     let mut response = test_server::client().get(&url).send().await.unwrap();
-    for byte in 0..8 {
-        pieces.send(element(true, byte)).unwrap();
+    feed.push(piece(2), false).await;
+    feed.push(piece(3), true).await;
+    feed.push(piece(4), false).await;
+    assert_eq!(
+        read_bytes(&mut response, 12).await,
+        [b"HEAD".to_vec(), piece(3), piece(4)].concat()
+    );
+}
+
+#[tokio::test]
+async fn a_live_feed_no_one_reads_drops_its_oldest_pieces_to_a_start_point() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = feed(12, true);
+    let url = server.set_live("stream.mkv", feed.clone());
+    for (byte, start) in [(1, true), (2, false), (3, false), (4, true), (5, false)] {
+        // Never waits, though the feed holds only three.
+        tokio::time::timeout(Duration::from_secs(5), feed.push(piece(byte), start))
+            .await
+            .unwrap();
     }
-    // It may get a piece or two before the lag shows, then the end.
-    let mut ended = false;
-    for _ in 0..8 {
-        if response.chunk().await.ok().flatten().is_none() {
-            ended = true;
-            break;
-        }
+    let mut response = test_server::client().get(&url).send().await.unwrap();
+    assert_eq!(
+        read_bytes(&mut response, 12).await,
+        [b"HEAD".to_vec(), piece(4), piece(5)].concat()
+    );
+}
+
+#[tokio::test]
+async fn a_file_waits_for_its_reader_who_gets_every_byte_in_order() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = feed(64, false);
+    let url = server.set_live("stream.mkv", feed.clone());
+    let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let writer = {
+        let (feed, written) = (feed.clone(), written.clone());
+        tokio::spawn(async move {
+            for i in 0..200u8 {
+                feed.push(vec![i; 16], i % 10 == 0).await;
+                written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            feed.end();
+        })
+    };
+    // With no one reading, the writer stops once the feed is full.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), 4);
+    let mut response = test_server::client().get(&url).send().await.unwrap();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.unwrap() {
+        body.extend_from_slice(&chunk);
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    assert!(ended);
+    writer.await.unwrap();
+    let expected: Vec<u8> = (0..200u8).flat_map(|i| [i; 16]).collect();
+    assert_eq!(&body[..4], b"HEAD");
+    assert!(body[4..] == expected[..], "every piece, in order");
+}
+
+#[tokio::test]
+async fn a_receiver_that_stops_reading_is_dropped_and_counted() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = LiveFeed::with_write_limit(
+        "video/x-matroska",
+        vec![],
+        64 << 20,
+        false,
+        Duration::from_millis(200),
+    );
+    let mut stalls = feed.stalls();
+    let url = server.set_live("stream.mkv", feed.clone());
+    let path = url
+        .strip_prefix(&format!("http://{}", address(&server)))
+        .unwrap();
+    // A request that never reads its answer.
+    let mut socket = TcpStream::connect(address(&server)).await.unwrap();
+    socket
+        .write_all(format!("GET {path} HTTP/1.1\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    for _ in 0..256 {
+        feed.push(vec![0; 64 << 10], true).await;
+    }
+    tokio::time::timeout(Duration::from_secs(10), stalls.changed())
+        .await
+        .expect("the stall is counted")
+        .unwrap();
+    assert_eq!(*stalls.borrow(), 1);
+    drop(socket);
 }
 
 #[tokio::test]
@@ -197,23 +299,35 @@ async fn answers_a_head_that_arrives_in_parts_up_to_its_limit() {
 #[tokio::test]
 async fn stops_when_dropped_and_ends_its_requests() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
-    let (pieces, _) = broadcast::channel(4);
-    let url = server.set_live(
-        "stream.mkv",
-        LivePipe {
-            content_type: "video/x-matroska",
-            header: b"HEAD".to_vec(),
-            pieces: pieces.subscribe(),
-        },
-    );
+    let feed = feed(1 << 20, true);
+    let url = server.set_live("stream.mkv", feed.clone());
     let mut response = test_server::client().get(&url).send().await.unwrap();
-    assert_eq!(response.chunk().await.unwrap().unwrap().as_ref(), b"HEAD");
+    assert_eq!(read_bytes(&mut response, 4).await, b"HEAD");
     let address = address(&server);
     drop(server);
-    // The open request ends, though its pipe hasn't.
+    // The open request ends, though its feed hasn't.
     assert!(response.chunk().await.ok().flatten().is_none());
-    drop(pieces);
+    drop(feed);
     assert!(TcpStream::connect(&address).await.is_err());
+}
+
+#[tokio::test]
+async fn answers_at_most_16_requests_at_once() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    server.files.put("a.vtt", "text/vtt", b"WEBVTT\n".to_vec());
+    let mut idle = Vec::new();
+    for _ in 0..MAX_REQUESTS {
+        idle.push(TcpStream::connect(address(&server)).await.unwrap());
+    }
+    // Let the server take them all.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let client = test_server::client();
+    assert!(client.get(server.url("a.vtt")).send().await.is_err());
+    drop(idle);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let body = client.get(server.url("a.vtt")).send().await.unwrap();
+    assert_eq!(body.bytes().await.unwrap().as_ref(), b"WEBVTT\n");
+    assert_eq!(MAX_REQUESTS, 16);
 }
 
 /// Every loopback address reaches this computer on Linux, so 127.0.0.2 can

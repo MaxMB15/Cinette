@@ -123,6 +123,7 @@ pub fn playing_info(
         video_codec: info.video_codec,
         audio_codec: info.audio_codec,
         interlaced: info.interlaced,
+        hdr: info.hdr,
     }))
 }
 
@@ -286,6 +287,7 @@ fn format_of(probed: &Probed) -> StreamFormat {
         container: probed.container,
         video: probed.video,
         interlaced: probed.interlaced,
+        hdr: probed.hdr,
         audio: probed.audio,
         cors: false,
     }

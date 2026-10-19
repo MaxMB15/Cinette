@@ -4,8 +4,8 @@
 use super::mkv::{MkvError, MkvSplitter, Piece};
 use super::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
 use super::{
-    args, pick_audio, AacEncoder, AudioPlan, Encoders, HardwareEncoder, NoEncoder, Plan, VideoPlan,
-    CAST_AUDIO,
+    args, pick_audio, unsupported, AacEncoder, AudioPlan, Encoders, HardwareEncoder, NoEncoder,
+    Plan, VideoPlan, CAST_AUDIO,
 };
 use crate::streams::probe::AudioTrack;
 
@@ -20,10 +20,21 @@ const MAC: Encoders = Encoders {
     aac: AacEncoder::AudioToolbox,
 };
 
+/// What every test's ffmpeg decodes, by the probe's codec names.
+const DECODES: &[&str] = &[
+    "aac", "aac_latm", "ac3", "dts", "eac3", "mp2", "mp3", "opus", "vorbis",
+];
+
+/// The arguments before `-i` for a file from a server: only network
+/// protocols, and the file's own pace after a burst.
+const FILE_INPUT: &str = "-protocol_whitelist http,https,tcp,tls,crypto -readrate 1 \
+                          -readrate_initial_burst 10";
+
 fn plan(video: VideoPlan, audio: AudioPlan) -> Plan {
     Plan {
         video,
         audio,
+        live: false,
         start_at: None,
         audio_track: 0,
     }
@@ -38,10 +49,45 @@ fn a_remux_copies_both_tracks_into_live_matroska() {
     let args = args(URL, &plan(VideoPlan::Copy, AudioPlan::Copy), LINUX).unwrap();
     assert_eq!(
         joined(&args),
-        "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 \
-         -rw_timeout 15000000 -i http://srv/live/u/p/1.ts -map 0:v:0 -map 0:a:0? -sn -dn \
-         -c:v copy -c:a copy -f matroska -live 1 -flush_packets 1 pipe:1"
+        format!(
+            "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 \
+             -rw_timeout 15000000 {FILE_INPUT} -i http://srv/live/u/p/1.ts -map 0:v:0 \
+             -map 0:a:0 -sn -dn -c:v copy -c:a copy -f matroska -live 1 -flush_packets 1 pipe:1"
+        )
     );
+}
+
+#[test]
+fn a_live_channel_comes_at_its_own_pace() {
+    let mut live = plan(VideoPlan::Copy, AudioPlan::Copy);
+    live.live = true;
+    let args = joined(&args(URL, &live, LINUX).unwrap());
+    assert!(
+        args.contains(
+            "-rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -i http://srv"
+        ),
+        "{args}"
+    );
+    assert!(!args.contains("-readrate"), "{args}");
+}
+
+#[test]
+fn a_file_on_this_device_may_use_any_protocol() {
+    let p = plan(VideoPlan::Copy, AudioPlan::Copy);
+    for url in [
+        "/Users/me/Movies/film.mkv",
+        "file:///tmp/film.mkv",
+        "httpx://x",
+    ] {
+        let args = joined(&args(url, &p, LINUX).unwrap());
+        assert!(!args.contains("-protocol_whitelist"), "{args}");
+        assert!(
+            args.contains("-readrate 1 -readrate_initial_burst 10 -i "),
+            "{args}"
+        );
+    }
+    let secure = joined(&args("https://srv/movie/1.mkv", &p, LINUX).unwrap());
+    assert!(secure.contains("-protocol_whitelist"), "{secure}");
 }
 
 #[test]
@@ -50,7 +96,7 @@ fn audio_the_receiver_cant_play_becomes_stereo_aac_at_256k() {
     p.audio_track = 2;
     let linux = joined(&args(URL, &p, LINUX).unwrap());
     assert!(
-        linux.contains("-map 0:a:2? -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska"),
+        linux.contains("-map 0:a:2 -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska"),
         "{linux}"
     );
     assert!(!linux.contains("-downmix"), "{linux}");
@@ -67,7 +113,9 @@ fn dolby_and_dts_mix_down_in_their_decoder() {
     p.start_at = Some(30.0);
     let args = joined(&args(URL, &p, LINUX).unwrap());
     assert!(
-        args.contains("-rw_timeout 15000000 -downmix stereo -ss 30.000 -i "),
+        args.contains(&format!(
+            "-rw_timeout 15000000 -downmix stereo {FILE_INPUT} -ss 30.000 -i "
+        )),
         "{args}"
     );
     assert!(args.contains("-c:a aac -b:a 256k -ac 2"), "{args}");
@@ -96,7 +144,7 @@ fn starts_a_file_where_asked() {
     p.start_at = Some(1312.4);
     let args = joined(&args(URL, &p, LINUX).unwrap());
     assert!(
-        args.contains("-rw_timeout 15000000 -ss 1312.400 -i "),
+        args.contains(&format!("{FILE_INPUT} -ss 1312.400 -i ")),
         "{args}"
     );
     p.start_at = Some(0.0);
@@ -110,15 +158,17 @@ fn a_transcode_needs_a_hardware_encoder() {
     let progressive = joined(&args(URL, &transcode, MAC).unwrap());
     assert!(
         progressive.contains(
-            "-vf format=yuv420p -c:v h264_videotoolbox -b:v 10M -maxrate 12M -bufsize 20M \
-             -force_key_frames expr:gte(t,n_forced*2) -c:a copy"
+            "-vf scale=-2:'min(ih,1080)',format=yuv420p -c:v h264_videotoolbox -b:v 10M \
+             -maxrate 12M -bufsize 20M -force_key_frames expr:gte(t,n_forced*2) -c:a copy"
         ),
         "{progressive}"
     );
     let interlaced = plan(VideoPlan::Transcode { deinterlace: true }, AudioPlan::Copy);
     let interlaced = joined(&args(URL, &interlaced, MAC).unwrap());
     assert!(
-        interlaced.contains("-vf bwdif=mode=send_field,format=yuv420p -c:v h264_videotoolbox"),
+        interlaced.contains(
+            "-vf bwdif=mode=send_field,scale=-2:'min(ih,1080)',format=yuv420p -c:v h264_videotoolbox"
+        ),
         "{interlaced}"
     );
     assert_eq!(
@@ -155,27 +205,27 @@ fn copies_a_playable_track_in_the_chosen_language() {
         track("mp3", Some("deu"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, true),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, DECODES, true),
         (1, AudioPlan::Copy)
     );
     assert_eq!(
-        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, true),
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, DECODES, true),
         (3, AudioPlan::Copy)
     );
     // No language asked, or none matches: any playable track, the default
     // first.
     assert_eq!(
-        pick_audio(&tracks, None, &CAST_AUDIO, true),
+        pick_audio(&tracks, None, &CAST_AUDIO, DECODES, true),
         (1, AudioPlan::Copy)
     );
     assert_eq!(
-        pick_audio(&tracks, Some("fre"), &CAST_AUDIO, true),
+        pick_audio(&tracks, Some("fre"), &CAST_AUDIO, DECODES, true),
         (1, AudioPlan::Copy)
     );
     for codec in ["opus", "vorbis"] {
         let tracks = [track("dts", None, true), track(codec, None, false)];
         assert_eq!(
-            pick_audio(&tracks, None, &CAST_AUDIO, true),
+            pick_audio(&tracks, None, &CAST_AUDIO, DECODES, true),
             (1, AudioPlan::Copy),
             "{codec}"
         );
@@ -191,16 +241,16 @@ fn copies_only_what_the_receivers_own_list_plays() {
         track("mp3", Some("eng"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &airplay, true),
+        pick_audio(&tracks, Some("eng"), &airplay, DECODES, true),
         (1, AudioPlan::Copy)
     );
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, true),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, DECODES, true),
         (0, AudioPlan::Copy)
     );
     let opus = [track("opus", None, false)];
     assert_eq!(
-        pick_audio(&opus, None, &airplay, true),
+        pick_audio(&opus, None, &airplay, DECODES, true),
         (0, AudioPlan::Aac { downmix: false })
     );
 }
@@ -211,7 +261,7 @@ fn keeps_5_1_as_5_1_aac_where_the_receiver_takes_it() {
         for codec in ["ac3", "eac3", "dts", "mp2"] {
             let tracks = [laid_out(codec, Some(layout))];
             assert_eq!(
-                pick_audio(&tracks, None, &CAST_AUDIO, true),
+                pick_audio(&tracks, None, &CAST_AUDIO, DECODES, true),
                 (0, AudioPlan::Surround),
                 "{codec} {layout}"
             );
@@ -220,19 +270,26 @@ fn keeps_5_1_as_5_1_aac_where_the_receiver_takes_it() {
     // The stereo fallback.
     let dolby = [laid_out("ac3", Some("5.1(side)"))];
     assert_eq!(
-        pick_audio(&dolby, None, &CAST_AUDIO, false),
+        pick_audio(&dolby, None, &CAST_AUDIO, DECODES, false),
         (0, AudioPlan::Aac { downmix: true })
     );
     // 5.1 AAC plays as it is.
     let aac = [laid_out("aac", Some("5.1"))];
     assert_eq!(
-        pick_audio(&aac, None, &CAST_AUDIO, true),
+        pick_audio(&aac, None, &CAST_AUDIO, DECODES, true),
         (0, AudioPlan::Copy)
     );
-    // Anything but 5.1 becomes stereo.
-    for layout in [Some("7.1"), Some("stereo"), Some("6.0"), None] {
+    // Anything but 5.1 becomes stereo, 5.1 with height channels too.
+    for layout in [
+        Some("7.1"),
+        Some("stereo"),
+        Some("6.0"),
+        Some("5.1.2"),
+        Some("5.1.4"),
+        None,
+    ] {
         assert_eq!(
-            pick_audio(&[laid_out("ac3", layout)], None, &CAST_AUDIO, true),
+            pick_audio(&[laid_out("ac3", layout)], None, &CAST_AUDIO, DECODES, true),
             (0, AudioPlan::Aac { downmix: true }),
             "{layout:?}"
         );
@@ -264,30 +321,84 @@ fn converts_the_default_track_when_none_plays() {
         track("aac_latm", Some("eng"), false),
     ];
     assert_eq!(
-        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, true),
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, DECODES, true),
         (1, AudioPlan::Aac { downmix: true })
     );
     // In the chosen language, though it isn't the default.
     assert_eq!(
-        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, true),
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, DECODES, true),
         (2, AudioPlan::Aac { downmix: false })
     );
     let plain = [track("mp2", None, false), track("eac3", None, false)];
     assert_eq!(
-        pick_audio(&plain, None, &CAST_AUDIO, true),
+        pick_audio(&plain, None, &CAST_AUDIO, DECODES, true),
         (0, AudioPlan::Aac { downmix: false })
     );
     for codec in ["ac3", "eac3", "dts"] {
         assert_eq!(
-            pick_audio(&[track(codec, None, false)], None, &CAST_AUDIO, true),
+            pick_audio(
+                &[track(codec, None, false)],
+                None,
+                &CAST_AUDIO,
+                DECODES,
+                true
+            ),
             (0, AudioPlan::Aac { downmix: true }),
             "{codec}"
         );
     }
     assert_eq!(
-        pick_audio(&[], Some("eng"), &CAST_AUDIO, true),
+        pick_audio(&[], Some("eng"), &CAST_AUDIO, DECODES, true),
         (0, AudioPlan::None)
     );
+}
+
+#[test]
+fn converts_a_track_this_device_decodes_when_it_cant_decode_the_default() {
+    let tracks = [
+        track("truehd", Some("eng"), true),
+        track("ac3", Some("eng"), false),
+        track("flac", Some("deu"), false),
+    ];
+    assert_eq!(
+        pick_audio(&tracks, Some("eng"), &CAST_AUDIO, DECODES, true),
+        (1, AudioPlan::Aac { downmix: true })
+    );
+    // Within the chosen language when it can.
+    assert_eq!(
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, DECODES, true),
+        (2, AudioPlan::Aac { downmix: false })
+    );
+    // The default when nothing decodes, so ffmpeg says why it can't.
+    assert_eq!(
+        pick_audio(&tracks, Some("deu"), &CAST_AUDIO, &[], true),
+        (2, AudioPlan::Aac { downmix: false })
+    );
+    assert_eq!(
+        pick_audio(&tracks, None, &CAST_AUDIO, &["flac", "truehd"], true),
+        (0, AudioPlan::Aac { downmix: false })
+    );
+}
+
+#[test]
+fn tells_a_missing_decoder_or_encoder_from_a_stream_it_couldnt_read() {
+    for text in [
+        "[aist#0:0/pcm_u8 @ 0x1] Decoding requested, but no decoder found for: pcm_u8",
+        "Decoder (codec truehd) not found for input stream #0:1",
+        "[aost#0:0 @ 0x1] Unknown encoder 'aac'\nError opening output files: Encoder not found",
+        "Error while opening encoder - maybe incorrect parameters",
+        "[vost#0:0] Could not open encoder before EOF",
+    ] {
+        assert!(unsupported(text), "{text}");
+    }
+    for text in [
+        "Server returned 404 Not Found",
+        "Connection refused",
+        "Invalid data found when processing input",
+        "",
+    ] {
+        assert!(!unsupported(text), "{text}");
+    }
 }
 
 /// An element with a one-byte size.
@@ -338,18 +449,107 @@ fn splits_the_header_from_each_cluster() {
             Piece::Header(header()),
             Piece::Element {
                 bytes: first,
-                cluster: true
+                start: true
             },
             Piece::Element {
                 bytes: tags,
-                cluster: false
+                start: false
             },
             Piece::Element {
                 bytes: second,
-                cluster: true
+                start: true
             },
         ]
     );
+}
+
+/// A stream whose Tracks has audio as track 2 and video as track 1.
+fn header_with_video() -> Vec<u8> {
+    let audio = [element(&[0xD7], &[2]), element(&[0x83], &[2])].concat();
+    let video = [element(&[0x83], &[1]), element(&[0xD7], &[1])].concat();
+    let tracks = [element(&[0xAE], &audio), element(&[0xAE], &video)].concat();
+    let mut out = element(EBML, &[0x42, 0x86, 0x81, 0x01]);
+    out.extend_from_slice(SEGMENT);
+    out.extend_from_slice(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+    out.extend(element(INFO, b"info"));
+    out.extend(element(TRACKS, &tracks));
+    out
+}
+
+/// A SimpleBlock of `track`, a keyframe when `key`.
+fn simple_block(track: u8, key: bool) -> Vec<u8> {
+    element(
+        &[0xA3],
+        &[0x80 | track, 0, 0, if key { 0x80 } else { 0 }, 9, 9],
+    )
+}
+
+/// A BlockGroup of `track`, with a ReferenceBlock when it isn't a keyframe.
+fn block_group(track: u8, key: bool) -> Vec<u8> {
+    let mut group = element(&[0xA1], &[0x80 | track, 0, 0, 0, 9, 9]);
+    if !key {
+        group.extend(element(&[0xFB], &[0xFF]));
+    }
+    element(&[0xA0], &group)
+}
+
+#[test]
+fn only_a_cluster_whose_first_video_frame_is_a_keyframe_is_a_start() {
+    let timestamp = element(&[0xE7], &[0x10]);
+    let crc = element(&[0xBF], &[0, 0, 0, 0]);
+    let void = element(&[0xEC], &[0]);
+    let clusters: Vec<(Vec<u8>, bool)> = vec![
+        ([timestamp.clone(), simple_block(1, true)].concat(), true),
+        (
+            [
+                crc.clone(),
+                void,
+                timestamp.clone(),
+                simple_block(2, true),
+                simple_block(1, false),
+                simple_block(1, true),
+            ]
+            .concat(),
+            false,
+        ),
+        (
+            [crc, timestamp.clone(), block_group(1, true)].concat(),
+            true,
+        ),
+        ([timestamp.clone(), block_group(1, false)].concat(), false),
+        ([block_group(2, true), simple_block(1, true)].concat(), true),
+        // No video at all, or a block cut short.
+        ([timestamp.clone(), simple_block(2, true)].concat(), false),
+        ([timestamp, element(&[0xA3], &[0x81, 0])].concat(), false),
+        (vec![], false),
+    ];
+    let mut stream = header_with_video();
+    for (data, _) in &clusters {
+        stream.extend(element(CLUSTER, data));
+    }
+    let pieces = MkvSplitter::default().push(&stream).unwrap();
+    let starts: Vec<bool> = pieces[1..]
+        .iter()
+        .map(|p| matches!(p, Piece::Element { start: true, .. }))
+        .collect();
+    let expected: Vec<bool> = clusters.iter().map(|(_, start)| *start).collect();
+    assert_eq!(starts, expected);
+    // A video track with a two-byte number.
+    let video = [element(&[0x83], &[1]), element(&[0xD7], &[0x01, 0x02])].concat();
+    let mut stream = element(EBML, &[]);
+    stream.extend_from_slice(SEGMENT);
+    stream.push(0xFF);
+    stream.extend(element(TRACKS, &element(&[0xAE], &video)));
+    let block = element(&[0xA3], &[0x41, 0x02, 0, 0, 0x80]);
+    stream.extend(element(CLUSTER, &block));
+    let pieces = MkvSplitter::default().push(&stream).unwrap();
+    assert!(matches!(pieces[1], Piece::Element { start: true, .. }));
+    // Something other than a cluster is never a start.
+    let mut stream = header_with_video();
+    stream.extend(element(CLUSTER, &simple_block(1, true)));
+    stream.extend(element(TAGS, &simple_block(1, true)));
+    let pieces = MkvSplitter::default().push(&stream).unwrap();
+    assert!(matches!(pieces[2], Piece::Element { start: false, .. }));
 }
 
 #[test]
@@ -499,19 +699,50 @@ fn tokens_are_long_and_new_each_time() {
 #[test]
 fn the_sidecar_test_runs_the_converters_arguments() {
     // scripts/test-ffmpeg-sidecar.py tests each ffmpeg build with a copy of
-    // the arguments a conversion uses.
+    // the arguments a conversion uses, from a server, as the app's are.
     let script = include_str!("../../../../scripts/test-ffmpeg-sidecar.py");
-    for (name, audio) in [
-        ("CONVERT_ARGS", AudioPlan::Aac { downmix: false }),
-        ("CONVERT_DOWNMIX_ARGS", AudioPlan::Aac { downmix: true }),
-        ("CONVERT_SURROUND_ARGS", AudioPlan::Surround),
-    ] {
-        let plan = plan(VideoPlan::Copy, audio);
-        let convert = args("URL", &plan, LINUX).unwrap().join(" ");
-        let line = format!("{name} = \"{convert}\"");
-        assert!(
-            script.lines().any(|l| l == line),
-            "scripts/test-ffmpeg-sidecar.py should have the line {line}"
-        );
-    }
+    let aac = plan(VideoPlan::Copy, AudioPlan::Aac { downmix: false });
+    let live = Plan { live: true, ..aac };
+    let seek = Plan {
+        start_at: Some(2.0),
+        ..plan(VideoPlan::Copy, AudioPlan::Copy)
+    };
+    let transcode = Plan {
+        video: VideoPlan::Transcode { deinterlace: true },
+        ..aac
+    };
+    let missing = [
+        ("CONVERT_ARGS", aac, LINUX),
+        (
+            "CONVERT_DOWNMIX_ARGS",
+            plan(VideoPlan::Copy, AudioPlan::Aac { downmix: true }),
+            LINUX,
+        ),
+        (
+            "CONVERT_SURROUND_ARGS",
+            plan(VideoPlan::Copy, AudioPlan::Surround),
+            LINUX,
+        ),
+        ("CONVERT_LIVE_ARGS", live, LINUX),
+        ("CONVERT_SEEK_ARGS", seek, LINUX),
+        ("CONVERT_MAC_ARGS", aac, MAC),
+        (
+            "CONVERT_MAC_SURROUND_ARGS",
+            plan(VideoPlan::Copy, AudioPlan::Surround),
+            MAC,
+        ),
+        ("CONVERT_MAC_TRANSCODE_ARGS", transcode, MAC),
+    ]
+    .map(|(name, plan, encoders)| {
+        let convert = args("http://URL", &plan, encoders).unwrap().join(" ");
+        format!("{name} = \"{convert}\"")
+    })
+    .into_iter()
+    .filter(|line| !script.lines().any(|l| l == line))
+    .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "scripts/test-ffmpeg-sidecar.py should have these lines:\n{}",
+        missing.join("\n")
+    );
 }

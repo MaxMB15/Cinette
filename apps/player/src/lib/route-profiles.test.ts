@@ -9,6 +9,7 @@ const format = (f: Partial<StreamFormat>): StreamFormat => ({
 	container: "hls-ts",
 	video: "h264",
 	interlaced: false,
+	hdr: false,
 	audio: "aac",
 	cors: true,
 	...f,

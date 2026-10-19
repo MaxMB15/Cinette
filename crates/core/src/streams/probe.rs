@@ -38,6 +38,8 @@ pub struct Probed {
     pub container: Container,
     pub video: Option<VideoCodec>,
     pub interlaced: bool,
+    /// The video is HDR10 or HLG, by its transfer function.
+    pub hdr: bool,
     /// The default audio track's codec, which a receiver plays when it
     /// fetches the stream itself.
     pub audio: Option<AudioCodec>,
@@ -78,6 +80,7 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
     let mut duration = None;
     let mut video = None;
     let mut interlaced = false;
+    let mut hdr = false;
     let mut audio_tracks: Vec<AudioTrack> = Vec::new();
     for line in stderr.lines() {
         let line = line.trim();
@@ -103,6 +106,10 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
                     ]
                     .iter()
                     .any(|order| rest.contains(order));
+                    // Such as `yuv420p10le(tv, bt2020nc/bt2020/smpte2084)`.
+                    hdr = ["smpte2084", "arib-std-b67"]
+                        .iter()
+                        .any(|transfer| rest.contains(transfer));
                 }
             } else if let Some(rest) = after(line, "Audio: ") {
                 audio_tracks.push(AudioTrack {
@@ -128,6 +135,7 @@ pub fn parse(stderr: &str) -> Result<Probed, ProbeError> {
         container,
         video,
         interlaced,
+        hdr,
         audio: played.map(|t| audio_codec(&t.codec)),
         audio_tracks,
         duration,

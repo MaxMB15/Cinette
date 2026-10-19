@@ -19,16 +19,15 @@
 // HLS output adds the subnet server.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use mvp_core::convert::mkv::Piece;
 use mvp_core::convert::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{watch, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 
 #[cfg(test)]
@@ -36,6 +35,17 @@ mod tests;
 
 /// How long a connection gets to send its request.
 const REQUEST_LIMIT: Duration = Duration::from_secs(5);
+/// How long one write may wait on a receiver that stopped reading before
+/// its request is dropped. Wi-Fi can stall for a few seconds.
+const WRITE_LIMIT: Duration = Duration::from_secs(15);
+/// The most requests answered at once. A receiver makes one or two, so
+/// more come from something else on the network.
+const MAX_REQUESTS: usize = 16;
+/// How long the server waits after a failed accept, such as when the app
+/// is out of file descriptors for a moment.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
+/// How much of a live stream is kept: tens of seconds of a 1080p stream.
+pub const LIVE_BYTES: usize = 32 << 20;
 
 /// No address on this device reaches the receiver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -73,18 +83,247 @@ impl Peers {
 }
 
 /// A live stream: a header every request starts with, then pieces as they
-/// come. A request that joins late starts at the next piece that's a start
-/// point, such as a Matroska cluster.
-pub struct LivePipe {
-    pub content_type: &'static str,
-    pub header: Vec<u8>,
-    /// Each request gets its own copy. Holding a receiver rather than the
-    /// sender lets the stream end when its sender is dropped.
-    pub pieces: broadcast::Receiver<Arc<Piece>>,
+/// come, some of which are start points, such as a Matroska cluster that
+/// starts with a keyframe. The writer and each request share one buffer.
+///
+/// - The first request starts at the first piece, so a stream that starts
+///   partway through a file starts where it was asked to.
+/// - A later request, as when the receiver opens the stream again, starts
+///   at the last start point at or before what was already sent.
+/// - The buffer holds at most `cap` bytes. When it's full, the writer
+///   waits for the requests to catch up. A live channel with no request
+///   open drops its oldest pieces instead, since it can't wait.
+/// - A request whose receiver stops reading for [`WRITE_LIMIT`] is dropped
+///   and counted in [`LiveFeed::stalls`].
+#[derive(Clone)]
+pub struct LiveFeed(Arc<Feed>);
+
+struct Feed {
+    content_type: &'static str,
+    header: Vec<u8>,
+    cap: usize,
+    live: bool,
+    /// [`WRITE_LIMIT`], or less in tests.
+    write_limit: Duration,
+    state: Mutex<FeedState>,
+    /// Changes with every piece written or taken, which wakes whoever
+    /// waits.
+    changed: watch::Sender<u64>,
+    stalls: watch::Sender<u32>,
 }
 
-/// The live pipe and the name it's served as.
-type NamedPipe = (String, Arc<LivePipe>);
+#[derive(Default)]
+struct FeedState {
+    /// Each piece and whether it's a start point.
+    pieces: VecDeque<(Arc<[u8]>, bool)>,
+    /// The number of the first piece in `pieces`.
+    first: u64,
+    bytes: usize,
+    /// The first piece no request has taken yet.
+    frontier: u64,
+    /// Each open request's next piece, by request. A request waiting for a
+    /// start point skips what comes before it.
+    readers: HashMap<u64, (u64, bool)>,
+    next_reader: u64,
+    ended: bool,
+}
+
+impl FeedState {
+    fn end(&self) -> u64 {
+        self.first + self.pieces.len() as u64
+    }
+
+    fn is_start(&self, n: u64) -> bool {
+        n >= self.first
+            && self
+                .pieces
+                .get((n - self.first) as usize)
+                .is_some_and(|(_, start)| *start)
+    }
+
+    /// Where a new request starts: the last start point among the pieces
+    /// already sent, or else the next one kept. `None` when no start point
+    /// is kept, and the request waits for the next.
+    fn start(&self) -> Option<u64> {
+        let sent = self.frontier.clamp(self.first, self.end());
+        (self.first..sent)
+            .rev()
+            .chain(sent..self.end())
+            .find(|&n| self.is_start(n))
+    }
+
+    /// The first piece an open request still needs.
+    fn needed(&self) -> Option<u64> {
+        self.readers.values().map(|&(next, _)| next).min()
+    }
+
+    /// Drops the pieces before `keep`.
+    fn drop_before(&mut self, keep: u64) {
+        while self.first < keep {
+            let Some((bytes, _)) = self.pieces.pop_front() else {
+                break;
+            };
+            self.bytes -= bytes.len();
+            self.first += 1;
+        }
+        self.frontier = self.frontier.max(self.first);
+    }
+
+    /// Drops the pieces no request needs and no new one starts from.
+    fn trim(&mut self) {
+        let start = self.start().unwrap_or(self.frontier);
+        let keep = self.needed().map_or(start, |needed| needed.min(start));
+        self.drop_before(keep);
+    }
+
+    /// Drops the oldest pieces up to the next start point, for a live
+    /// channel no request reads.
+    fn skip(&mut self) {
+        let next = (self.first + 1..self.end())
+            .find(|&n| self.is_start(n))
+            .unwrap_or(self.end());
+        self.drop_before(next);
+    }
+}
+
+impl LiveFeed {
+    /// A feed that keeps at most `cap` bytes. A `live` one drops pieces
+    /// rather than wait when no request reads.
+    pub fn new(content_type: &'static str, header: Vec<u8>, cap: usize, live: bool) -> Self {
+        Self::with_write_limit(content_type, header, cap, live, WRITE_LIMIT)
+    }
+
+    fn with_write_limit(
+        content_type: &'static str,
+        header: Vec<u8>,
+        cap: usize,
+        live: bool,
+        write_limit: Duration,
+    ) -> Self {
+        Self(Arc::new(Feed {
+            content_type,
+            header,
+            cap,
+            live,
+            write_limit,
+            state: Mutex::new(FeedState::default()),
+            changed: watch::Sender::new(0),
+            stalls: watch::Sender::new(0),
+        }))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, FeedState> {
+        self.0.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn wake(&self) {
+        self.0.changed.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Adds a piece, once there's room for it.
+    pub async fn push(&self, bytes: Vec<u8>, start: bool) {
+        let mut changed = self.0.changed.subscribe();
+        loop {
+            changed.borrow_and_update();
+            {
+                let mut state = self.state();
+                state.trim();
+                if state.pieces.is_empty() || state.bytes + bytes.len() <= self.0.cap {
+                    state.bytes += bytes.len();
+                    state.pieces.push_back((bytes.into(), start));
+                    drop(state);
+                    self.wake();
+                    return;
+                }
+                // What's kept for a new request's start point gives way
+                // first. Then a live channel no one reads skips ahead, and
+                // anything else waits for its readers.
+                if let Some(needed) = state.needed().filter(|&n| n > state.first) {
+                    state.drop_before(needed);
+                    continue;
+                }
+                if self.0.live && state.readers.is_empty() {
+                    state.skip();
+                    continue;
+                }
+            }
+            // The feed holds the sender, so this never fails.
+            let _ = changed.changed().await;
+        }
+    }
+
+    /// No more pieces come. Requests end once they've sent what's left.
+    pub fn end(&self) {
+        self.state().ended = true;
+        self.wake();
+    }
+
+    /// How many requests were dropped because their receiver stopped
+    /// reading. It changes with each.
+    pub fn stalls(&self) -> watch::Receiver<u32> {
+        self.0.stalls.subscribe()
+    }
+
+    fn reader(&self) -> Reader {
+        let mut state = self.state();
+        let id = state.next_reader;
+        state.next_reader += 1;
+        let start = state.start();
+        let next = start.unwrap_or(state.end());
+        state.readers.insert(id, (next, start.is_none()));
+        Reader {
+            feed: self.clone(),
+            id,
+        }
+    }
+}
+
+/// One request's place in a [`LiveFeed`].
+struct Reader {
+    feed: LiveFeed,
+    id: u64,
+}
+
+impl Reader {
+    /// The next piece, or `None` once the feed has ended and every piece
+    /// was taken.
+    async fn next(&mut self) -> Option<Arc<[u8]>> {
+        let mut changed = self.feed.0.changed.subscribe();
+        loop {
+            changed.borrow_and_update();
+            {
+                let mut state = self.feed.state();
+                let (next, waiting) = state.readers.get(&self.id).copied()?;
+                let next = next.max(state.first);
+                if let Some((bytes, start)) = state.pieces.get((next - state.first) as usize) {
+                    let (bytes, start) = (bytes.clone(), *start);
+                    state.readers.insert(self.id, (next + 1, waiting && !start));
+                    if waiting && !start {
+                        continue;
+                    }
+                    state.frontier = state.frontier.max(next + 1);
+                    drop(state);
+                    self.feed.wake();
+                    return Some(bytes);
+                }
+                if state.ended && next >= state.end() {
+                    return None;
+                }
+            }
+            let _ = changed.changed().await;
+        }
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.feed.state().readers.remove(&self.id);
+        self.feed.wake();
+    }
+}
+
+/// The live feed and the name it's served as.
+type NamedPipe = (String, LiveFeed);
 
 /// A file kept in memory.
 #[derive(Debug, Clone)]
@@ -182,10 +421,9 @@ impl LanServer {
         })
     }
 
-    /// Serves `pipe` as `name`, and returns its address.
-    pub fn set_live(&self, name: &str, pipe: LivePipe) -> String {
-        *self.live.write().unwrap_or_else(|p| p.into_inner()) =
-            Some((name.to_string(), Arc::new(pipe)));
+    /// Serves `feed` as `name`, and returns its address.
+    pub fn set_live(&self, name: &str, feed: LiveFeed) -> String {
+        *self.live.write().unwrap_or_else(|p| p.into_inner()) = Some((name.to_string(), feed));
         self.url(name)
     }
 
@@ -223,18 +461,42 @@ async fn serve(
 ) {
     // Dropped with this task, which ends every request still open.
     let mut requests = JoinSet::new();
-    while let Ok((socket, peer)) = listener.accept().await {
-        // Anyone else on the network gets nothing at all.
+    let slots = Arc::new(Semaphore::new(MAX_REQUESTS));
+    loop {
+        let (socket, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            // Such as running out of file descriptors, or a connection
+            // reset before it was accepted. Neither lasts.
+            Err(e) => {
+                tracing::debug!(kind = ?e.kind(), "the converter's server couldn't accept a connection");
+                tokio::time::sleep(ACCEPT_PAUSE).await;
+                continue;
+            }
+        };
+        // Anyone else on the network gets nothing at all, and so does a
+        // connection past the limit.
         if !peers.allows(peer.ip()) {
             continue;
         }
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            continue;
+        };
         // Forget the requests that are done.
         while requests.try_join_next().is_some() {}
         let (prefix, files, live) = (prefix.clone(), files.clone(), live.clone());
         requests.spawn(async move {
             let _ = answer(socket, &prefix, &files, &live).await;
+            drop(slot);
         });
     }
+}
+
+/// Writes `bytes`, or fails once the receiver has stopped reading for
+/// `limit`.
+async fn write(socket: &mut TcpStream, bytes: &[u8], limit: Duration) -> std::io::Result<()> {
+    tokio::time::timeout(limit, socket.write_all(bytes))
+        .await
+        .map_err(|_| std::io::ErrorKind::TimedOut)?
 }
 
 async fn answer(
@@ -253,21 +515,24 @@ async fn answer(
     let Some(name) = request.path.strip_prefix(prefix) else {
         return Ok(());
     };
-    let pipe = live
+    let feed = live
         .read()
         .unwrap_or_else(|p| p.into_inner())
         .as_ref()
         .filter(|(live_name, _)| live_name == name)
-        .map(|(_, pipe)| pipe.clone());
-    if let Some(pipe) = pipe {
-        return send_live(socket, &request, &pipe).await;
+        .map(|(_, feed)| feed.clone());
+    if let Some(feed) = feed {
+        return send_live(socket, &request, &feed).await;
     }
     if let Some(file) = files.get(name) {
-        socket
-            .write_all(ok_head(file.content_type, Some(file.body.len())).as_bytes())
-            .await?;
+        write(
+            &mut socket,
+            ok_head(file.content_type, Some(file.body.len())).as_bytes(),
+            WRITE_LIMIT,
+        )
+        .await?;
         if !request.head_only {
-            socket.write_all(&file.body).await?;
+            write(&mut socket, &file.body, WRITE_LIMIT).await?;
         }
     }
     Ok(())
@@ -276,35 +541,34 @@ async fn answer(
 async fn send_live(
     mut socket: TcpStream,
     request: &Request,
-    pipe: &LivePipe,
+    feed: &LiveFeed,
 ) -> std::io::Result<()> {
-    // Subscribe before writing the header, so no piece slips by.
-    let mut pieces = pipe.pieces.resubscribe();
-    socket
-        .write_all(ok_head(pipe.content_type, None).as_bytes())
-        .await?;
+    let limit = feed.0.write_limit;
+    write(
+        &mut socket,
+        ok_head(feed.0.content_type, None).as_bytes(),
+        limit,
+    )
+    .await?;
     if request.head_only {
         return Ok(());
     }
-    socket.write_all(&pipe.header).await?;
-    let mut started = false;
-    loop {
-        match pieces.recv().await {
-            Ok(piece) => {
-                let Piece::Element { bytes, cluster } = piece.as_ref() else {
-                    continue;
-                };
-                // A late request starts at a cluster, which starts at a
-                // keyframe.
-                started |= *cluster;
-                if started {
-                    socket.write_all(bytes).await?;
-                }
-            }
-            // Fallen too far behind, or the stream ended.
-            Err(_) => return Ok(()),
+    let mut reader = feed.reader();
+    let sent: std::io::Result<()> = async {
+        write(&mut socket, &feed.0.header, limit).await?;
+        while let Some(piece) = reader.next().await {
+            write(&mut socket, &piece, limit).await?;
         }
+        Ok(())
     }
+    .await;
+    if sent
+        .as_ref()
+        .is_err_and(|e| e.kind() == std::io::ErrorKind::TimedOut)
+    {
+        feed.0.stalls.send_modify(|n| *n += 1);
+    }
+    sent
 }
 
 /// Reads a request's head, up to [`MAX_HEAD`] bytes.

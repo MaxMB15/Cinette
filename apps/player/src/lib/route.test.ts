@@ -8,6 +8,7 @@ const format = (over: Partial<StreamFormat> = {}): StreamFormat => ({
 	container: "mp4",
 	video: "h264",
 	interlaced: false,
+	hdr: false,
 	audio: "aac",
 	cors: false,
 	...over,
@@ -171,6 +172,24 @@ describe("chooseRoute", () => {
 				desktop
 			)
 		).toEqual({ ok: false, reason: "videoCodec", detail: "mpeg2" });
+	});
+
+	it("copies HDR video but doesn't transcode it", () => {
+		const hw = { ...desktop, hardwareEncoder: true };
+		const hdr = format({ container: "ts", video: "hevc", hdr: true });
+		expect(chooseRoute([hdr], cast, hw)).toEqual(converted());
+		expect(chooseRoute([{ ...hdr, container: "mp4" }], cast, hw)).toEqual({
+			ok: true,
+			route: { via: "direct", format: 0 },
+		});
+		const h264Only = { ...cast, video: { h264: cast.video.h264 } };
+		expect(chooseRoute([hdr], h264Only, hw)).toEqual({ ok: false, reason: "hdr" });
+		// Without an encoder, that's the reason.
+		expect(chooseRoute([hdr], h264Only, desktop)).toEqual({
+			ok: false,
+			reason: "videoCodec",
+			detail: "hevc",
+		});
 	});
 
 	it("copies interlaced video to a receiver that plays it", () => {
