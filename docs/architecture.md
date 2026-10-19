@@ -32,7 +32,8 @@ Cinette/
 - `useMpv` polls the player state from Rust every second, and again as soon as the
   video stops or starts moving. It also listens for `mpv://` events such as
   buffering and reconnecting.
-- `lib/tauri.ts` is the only file that calls `invoke()`. Player commands use the
+- `lib/tauri.ts` is the only file that calls `invoke()`, through `lib/invoke.ts`,
+  where a dev build counts the calls. Player commands use the
   `plugin:mpv|<command>` namespace; everything else uses the bare command name.
 - Components are in the shadcn style (`components/ui/`), styled with Tailwind CSS 4.
   There is no Tailwind config file. The theme and the custom utilities are in
@@ -205,6 +206,17 @@ View, Stage Manager and rotation switch between them:
 `layoutModeFor` in `lib/platform.ts` picks the layout, and `usePlatform` checks again
 on every resize. A device counts as an iPhone when the short side of its screen is
 under 744 points.
+
+### Android
+
+The Android build runs the same frontend and commands, and leaves out what iOS
+leaves out. `AndroidSurfaceRenderer` in `android.rs` passes mpv the `Surface` of a
+`SurfaceView` as its `wid`, and mpv draws into it with `vo=gpu` and
+`gpu-context=android`. The view belongs to the Kotlin side of the plugin
+(`android/src/main/java/MpvPlugin.kt`), which keeps it under the transparent webview
+and reports each new or destroyed surface to Rust. HTTPS goes through rustls with
+Android's certificate checks. [android.md](android.md) covers building, the video
+surface and the Gradle project.
 
 ## Data flow
 
