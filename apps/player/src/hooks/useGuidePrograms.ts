@@ -96,7 +96,9 @@ const newestLoaded = (
 const lastLoaded = (client: QueryClient, id: string): EpgProgram[] | undefined =>
 	newestLoaded(client, (key) => key[key.length - 2] === "channel" && key[key.length - 1] === id);
 
-// How long every channel's key is, which tells it from a single channel's.
+// How long every channel's key is. A single channel's key adds its guide id,
+// so the length tells them apart, even for a guide id of "all".
+// Stryker disable next-line StringLiteral: only the key's length is read, and no version changes it.
 const ALL_KEY_LENGTH = guideQuery(NO_RANGE, "").queryKey.length;
 
 /**
@@ -109,7 +111,7 @@ const lastShown = (
 	range: TimeRange,
 	version: string
 ): EpgProgram[] | undefined =>
-	newestLoaded(client, (key) => key.length === ALL_KEY_LENGTH && key[key.length - 1] === "all") ??
+	newestLoaded(client, (key) => key.length === ALL_KEY_LENGTH) ??
 	channelsLoaded(client, range, version);
 
 /**
