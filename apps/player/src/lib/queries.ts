@@ -11,6 +11,7 @@ import {
 	getAllChannels,
 	getEpgForLiveChannels,
 	getEpgProgrammes,
+	getWatchHistory,
 	fetchOmdbData,
 	fetchWhatsonData,
 	getGroupHierarchy,
@@ -181,4 +182,14 @@ export const whatsonQuery = (imdbId: string, kind: "movie" | "series", source: S
 		queryKey: [source, "whatson", imdbId, kind] as const,
 		queryFn: () => fetchWhatsonData(imdbId, kind === "series" ? "show" : "movie"),
 		staleTime: keepFound,
+	});
+
+/** The start of every watch history query's key, to mark them all stale at once. */
+export const historyKey = (source: Source = LOCAL) => [source, "history"] as const;
+
+/** The newest watch history entries, of one content type or of all. */
+export const watchHistoryQuery = (limit: number, contentType?: string, source: Source = LOCAL) =>
+	queryOptions({
+		queryKey: [...historyKey(source), contentType ?? "all", limit] as const,
+		queryFn: () => getWatchHistory(limit, contentType),
 	});

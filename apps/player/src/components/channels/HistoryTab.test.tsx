@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderUi, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { wrapperFor } from "@/test/query";
+
+/** Each test gets a new cache, as each app does. */
+const render = (ui: ReactElement) => renderUi(ui, { wrapper: wrapperFor() });
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
@@ -101,7 +106,7 @@ describe("HistoryTab list", () => {
 		vi.mocked(getWatchHistory).mockReturnValue(new Promise((r) => (resolve = r)));
 		const { container } = render(<HistoryTab onPlay={vi.fn()} />);
 
-		expect(getWatchHistory).toHaveBeenCalledWith(200);
+		expect(getWatchHistory).toHaveBeenCalledWith(200, undefined);
 		expect(container.querySelector(".animate-spin")).not.toBeNull();
 
 		resolve([entry]);
@@ -120,7 +125,10 @@ describe("HistoryTab list", () => {
 		vi.mocked(getWatchHistory).mockRejectedValue(new Error("db locked"));
 		render(<HistoryTab onPlay={vi.fn()} />);
 		expect(await screen.findByText(/No watch history yet/)).toBeInTheDocument();
-		expect(console.error).toHaveBeenCalled();
+		expect(console.error).toHaveBeenCalledWith(
+			"[HistoryTab] failed to fetch history:",
+			expect.any(Error)
+		);
 	});
 
 	it("labels each entry with its type, plays and total time", async () => {
