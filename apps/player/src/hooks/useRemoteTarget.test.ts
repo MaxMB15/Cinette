@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@/lib/tauri", () => ({
+	mpvStop: vi.fn(() => Promise.resolve()),
 	remoteFinishCommand: vi.fn(() => Promise.resolve()),
 	remoteSessions: vi.fn(() => Promise.resolve([])),
 	remoteSetState: vi.fn(() => Promise.resolve()),
@@ -30,9 +31,9 @@ const channels = vi.hoisted(() => ({ list: [] as Channel[] }));
 vi.mock("@/hooks/useChannels", () => ({ useChannels: () => ({ channels: channels.list }) }));
 
 import { listen } from "@tauri-apps/api/event";
-import { remoteFinishCommand, remoteSessions, remoteSetState } from "@/lib/tauri";
+import { mpvStop, remoteFinishCommand, remoteSessions, remoteSetState } from "@/lib/tauri";
 import { usePublishRemoteState, useRemoteSessions, useRemoteTarget } from "./useRemoteTarget";
-import { getMountedPlayer, setMountedPlayer } from "@/lib/remote-target";
+import { getMountedPlayer, IDLE_REMOTE_STATE, setMountedPlayer } from "@/lib/remote-target";
 import { localCapabilities, type PlaybackDestination, type PlaybackState } from "@/lib/destination";
 import type { Channel } from "@/lib/types";
 
@@ -183,6 +184,14 @@ describe("useRemoteTarget", () => {
 		expect(page.load).toHaveBeenCalledWith({ kind: "local", channel }, { startAt: undefined });
 	});
 
+	it("stops mpv for a stop when no player page is open", async () => {
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
+		emit("remote://command", { token: 8, command: { action: "stop" } });
+		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(8, "ok"));
+		expect(mpvStop).toHaveBeenCalledTimes(1);
+	});
+
 	it("reports what wasn't found", async () => {
 		renderHook(() => useRemoteTarget());
 		await waitFor(() => expect(handlers.has("remote://command")).toBe(true));
@@ -280,6 +289,26 @@ describe("usePublishRemoteState", () => {
 		});
 		view.rerender({ player: second });
 		expect(getMountedPlayer()).toBe(second);
+		view.unmount();
+	});
+
+	it("tells controllers the player is idle when the page closes", async () => {
+		const { destination } = fakeDestination();
+		const view = renderHook(() => usePublishRemoteState(destination, channel));
+		view.unmount();
+		await waitFor(() => expect(remoteSetState).toHaveBeenCalledWith(IDLE_REMOTE_STATE));
+		expect(IDLE_REMOTE_STATE).toMatchObject({ status: "idle", item: null });
+	});
+
+	it("sends no idle state when the page swaps in a new destination", async () => {
+		const first = fakeDestination().destination;
+		const second = fakeDestination().destination;
+		const view = renderHook(({ player }) => usePublishRemoteState(player, channel), {
+			initialProps: { player: first },
+		});
+		view.rerender({ player: second });
+		await Promise.resolve();
+		expect(remoteSetState).not.toHaveBeenCalledWith(IDLE_REMOTE_STATE);
 		view.unmount();
 	});
 

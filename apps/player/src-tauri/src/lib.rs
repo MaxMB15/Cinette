@@ -2,7 +2,10 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 #[cfg(target_os = "android")]
+mod android_device;
+#[cfg(target_os = "android")]
 mod android_tls;
+mod cast;
 mod commands;
 /// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -13,6 +16,7 @@ mod identifier;
 mod logging;
 mod progress;
 mod remote;
+mod streams;
 #[cfg(test)]
 mod android_project_tests;
 #[cfg(test)]
@@ -198,6 +202,7 @@ register_commands![
     commands::get_playback_position,
     commands::delete_playback_position,
     progress::hand_off_progress,
+    streams::get_stream_formats,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,
     commands::delete_group_hierarchy,
@@ -236,6 +241,8 @@ register_commands![
     commands::count_downloads_due,
     commands::schedule_recording,
     commands::stop_recording,
+    cast::get_cast_receivers,
+    cast::hold_cast_receivers,
 ];
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -292,6 +299,9 @@ pub fn run() {
 
     // Metadata and subtitle lookups name the app's version in their user agent.
     mvp_core::http::set_app_version(env!("CARGO_PKG_VERSION"));
+
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_device::plugin());
 
     builder
         .plugin(tauri_plugin_os::init())
@@ -356,6 +366,8 @@ pub fn run() {
             let downloads_root = app_dir.join("downloads");
             app.manage(crate::downloads::manager::DownloadManager::new(downloads_root));
             app.manage(crate::downloads::recordings::Recorder::default());
+            app.manage(crate::cast::CastReceivers::on_network());
+            app.manage(crate::streams::StreamsState::default());
             crate::downloads::manager::restore_settings(app.handle());
 
             // Listens for other Cinette devices and advertises this one.

@@ -17,6 +17,9 @@ import {
 	updateGroupHierarchyEntry,
 } from "@/lib/tauri";
 import { makeChannel } from "@/test/channel-fixtures";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
+import { groupHierarchyQuery } from "@/lib/queries";
+import type { QueryClient } from "@tanstack/react-query";
 import { CategoryManager } from "./CategoryManager";
 
 vi.mock("@/lib/tauri", () => ({
@@ -71,7 +74,13 @@ const hierarchy = [
 ];
 
 const onClose = vi.fn();
-const onHierarchyChanged = vi.fn();
+
+// The cache the channel list would share with the manager.
+let client: QueryClient;
+/** What the channel list's copy of the movie hierarchy holds now. */
+const shared = () => client.getQueryData(groupHierarchyQuery("p1", "movie").queryKey);
+/** How many times the hierarchy was read from the backend. */
+const loads = () => vi.mocked(getGroupHierarchy).mock.calls.length;
 
 /** Lets the hierarchy load, and any handler waiting on the mocks, finish. */
 const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
@@ -84,8 +93,8 @@ const renderManager = async (saved: GroupHierarchyEntry[] = hierarchy, contentTy
 			contentType={contentType}
 			channels={channels}
 			onClose={onClose}
-			onHierarchyChanged={onHierarchyChanged}
-		/>
+		/>,
+		{ wrapper: wrapperFor(client) }
 	);
 	await flush();
 };
@@ -101,6 +110,7 @@ const click = async (name: string) => {
 const card = (name: string) => screen.getByRole("group", { name });
 
 beforeEach(() => {
+	client = createTestQueryClient();
 	// Resetting drops the return values a test set, including queued ones it
 	// didn't use. Clearing keeps them.
 	vi.resetAllMocks();
@@ -141,8 +151,36 @@ describe("CategoryManager counts", () => {
 		expect(screen.getByText("movie · 4 groups · 0 categories")).toBeInTheDocument();
 		expect(within(card("Uncategorized")).getByText("4 groups")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "News" })).toBeNull();
+		// Named alone, without the badge of a group placed by hand.
+		for (const group of ["Action", "Drama", "Kids", "Documentary"]) {
+			expect(button(group)).toBeInTheDocument();
+		}
 		// With no categories there's nothing to assign to.
 		expect(screen.queryByRole("button", { name: /Assign All/ })).toBeNull();
+	});
+
+	it("lists a provider group that turns up while it's open", async () => {
+		vi.mocked(getGroupHierarchy).mockResolvedValue([]);
+		const { rerender } = render(
+			<CategoryManager
+				providerId="p1"
+				contentType="movie"
+				channels={channels}
+				onClose={onClose}
+			/>,
+			{ wrapper: wrapperFor(client) }
+		);
+		await flush();
+		rerender(
+			<CategoryManager
+				providerId="p1"
+				contentType="movie"
+				channels={[...channels, movie("m6", "Up", "Animation")]}
+				onClose={onClose}
+			/>
+		);
+		expect(button("Animation")).toBeInTheDocument();
+		expect(screen.getByText("movie · 5 groups · 0 categories")).toBeInTheDocument();
 	});
 
 	it("shows an empty list when the hierarchy can't be read", async () => {
@@ -153,11 +191,22 @@ describe("CategoryManager counts", () => {
 				contentType="movie"
 				channels={channels}
 				onClose={onClose}
-				onHierarchyChanged={onHierarchyChanged}
-			/>
+			/>,
+			{ wrapper: wrapperFor(client) }
 		);
 		await flush();
 		expect(screen.getByText("movie · 0 groups · 0 categories")).toBeInTheDocument();
+	});
+	it("keeps the groups it has when loading them again after a change fails", async () => {
+		await renderManager();
+		vi.mocked(getGroupHierarchy).mockRejectedValue(new Error("db locked"));
+		fireEvent.click(within(card("Family")).getByRole("button", { name: "Rename" }));
+		fireEvent.change(screen.getByDisplayValue("Family"), { target: { value: "Kids" } });
+		await click("Save name");
+
+		expect(loads()).toBe(2);
+		expect(screen.getByText("movie · 4 groups · 2 categories")).toBeInTheDocument();
+		expect(within(card("Films")).getByText("2 groups")).toBeInTheDocument();
 	});
 });
 
@@ -182,6 +231,55 @@ describe("CategoryManager categories", () => {
 		expect(screen.getByText("movie · 4 groups · 4 categories")).toBeInTheDocument();
 	});
 
+	it("drops an empty category once groups are saved in it, and doesn't bring it back", async () => {
+		await renderManager();
+		fireEvent.change(screen.getByPlaceholderText("New category name…"), {
+			target: { value: "Thrillers" },
+		});
+		await click("Create");
+		expect(card("Thrillers")).toBeInTheDocument();
+
+		// Gemini puts a group in it, so the stored hierarchy has it now.
+		vi.mocked(categorizeProvider).mockResolvedValue([
+			entry("Action", "Thrillers", 0),
+			...hierarchy.slice(1),
+		]);
+		await click("Re-categorize All");
+		expect(within(card("Thrillers")).getByText("1 group")).toBeInTheDocument();
+
+		// Moving that group out leaves no Thrillers in the stored hierarchy.
+		vi.mocked(getGroupHierarchy).mockResolvedValue(hierarchy);
+		await click("Action");
+		await click("Films");
+		expect(screen.queryByRole("group", { name: "Thrillers" })).toBeNull();
+	});
+
+	it("keeps a new empty category through a change to the others", async () => {
+		await renderManager();
+		fireEvent.change(screen.getByPlaceholderText("New category name…"), {
+			target: { value: "Classics" },
+		});
+		await click("Create");
+		fireEvent.click(within(card("Family")).getByRole("button", { name: "Rename" }));
+		fireEvent.change(screen.getByDisplayValue("Family"), { target: { value: "Kids" } });
+		await click("Save name");
+
+		expect(loads()).toBe(2);
+		expect(card("Classics")).toBeInTheDocument();
+	});
+
+	it("loads only the hierarchy again after a change", async () => {
+		const pinnedKey = ["local", "pinnedGroups", "p1", "movie"];
+		client.setQueryData(pinnedKey, []);
+		await renderManager();
+		fireEvent.click(within(card("Family")).getByRole("button", { name: "Rename" }));
+		fireEvent.change(screen.getByDisplayValue("Family"), { target: { value: "Kids" } });
+		await click("Save name");
+
+		expect(loads()).toBe(2);
+		expect(client.getQueryState(pinnedKey)?.isInvalidated).toBe(false);
+	});
+
 	it("renames a category with the trimmed name", async () => {
 		await renderManager();
 		fireEvent.click(within(card("Family")).getByRole("button", { name: "Rename" }));
@@ -196,8 +294,8 @@ describe("CategoryManager categories", () => {
 			"Family",
 			"Kids & Family"
 		);
-		expect(getGroupHierarchy).toHaveBeenCalledTimes(2);
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		// Loaded again once, for the manager and the channel list alike.
+		expect(loads()).toBe(2);
 		expect(screen.queryByRole("button", { name: "Save name" })).toBeNull();
 	});
 
@@ -231,7 +329,7 @@ describe("CategoryManager categories", () => {
 
 		expect(screen.getByText("name taken")).toBeInTheDocument();
 		expect(button("Save name")).toBeInTheDocument();
-		expect(onHierarchyChanged).not.toHaveBeenCalled();
+		expect(loads()).toBe(1);
 		await click("dismiss");
 		expect(screen.queryByText("name taken")).toBeNull();
 	});
@@ -255,7 +353,7 @@ describe("CategoryManager categories", () => {
 		remove();
 		await flush();
 		expect(deleteSuperCategory).toHaveBeenCalledExactlyOnceWith("p1", "movie", "Family");
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		expect(loads()).toBe(2);
 	});
 
 	it("moves a category down by renumbering every group", async () => {
@@ -275,7 +373,7 @@ describe("CategoryManager categories", () => {
 			["p1", "movie", "Drama", 1001],
 			["p1", "movie", "Documentary", 2000],
 		]);
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		expect(loads()).toBe(2);
 	});
 
 	it("moves a category up", async () => {
@@ -294,7 +392,7 @@ describe("CategoryManager categories", () => {
 		await renderManager();
 		await click("Reset");
 		expect(deleteGroupHierarchy).toHaveBeenCalledExactlyOnceWith("p1", "movie");
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		expect(loads()).toBe(2);
 
 		vi.mocked(ask).mockResolvedValueOnce(false);
 		await click("Reset");
@@ -325,7 +423,7 @@ describe("CategoryManager moving a group", () => {
 			"Family",
 			1001
 		);
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		expect(loads()).toBe(2);
 		expect(screen.queryByText(/to:$/)).toBeNull();
 	});
 
@@ -425,7 +523,9 @@ describe("CategoryManager with Gemini", () => {
 		]);
 		expect(card("Thrillers")).toBeInTheDocument();
 		expect(screen.queryByText("Films")).toBeNull();
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		// The channel list gets Gemini's answer without loading it again.
+		expect(shared()).toEqual(sorted);
+		expect(loads()).toBe(1);
 		expect(button("Re-categorize All")).toBeEnabled();
 	});
 
@@ -441,7 +541,8 @@ describe("CategoryManager with Gemini", () => {
 		await renderManager();
 		await click("Re-categorize All");
 		expect(screen.getByText("quota exceeded")).toBeInTheDocument();
-		expect(onHierarchyChanged).not.toHaveBeenCalled();
+		expect(shared()).toEqual(hierarchy);
+		expect(loads()).toBe(1);
 	});
 
 	it("assigns the uncategorized groups to the existing categories", async () => {
@@ -460,7 +561,7 @@ describe("CategoryManager with Gemini", () => {
 			["Films", "Family"]
 		);
 		expect(screen.queryByText("Uncategorized")).toBeNull();
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		expect(shared()).toEqual([...hierarchy.slice(0, 3), entry("Documentary", "Films", 2)]);
 	});
 
 	it("shows why assigning failed", async () => {
@@ -471,7 +572,8 @@ describe("CategoryManager with Gemini", () => {
 	});
 
 	it("fills one category from all the groups outside it", async () => {
-		vi.mocked(fixUncategorizedGroups).mockResolvedValue(hierarchy);
+		const filled = [...hierarchy.slice(0, 3), entry("Documentary", "Family", 1001)];
+		vi.mocked(fixUncategorizedGroups).mockResolvedValue(filled);
 		await renderManager();
 		fireEvent.click(within(card("Family")).getByRole("button", { name: /^AI:/ }));
 		expect(screen.getByText(/^AI: Add groups to/)).toHaveTextContent(
@@ -490,7 +592,8 @@ describe("CategoryManager with Gemini", () => {
 			],
 			["Family"]
 		);
-		expect(onHierarchyChanged).toHaveBeenCalledOnce();
+		expect(shared()).toEqual(filled);
+		expect(loads()).toBe(1);
 		expect(screen.queryByText(/^AI: Add groups to/)).toBeNull();
 	});
 

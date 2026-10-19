@@ -3,7 +3,8 @@
 
 import { useEffect, type RefObject } from "react";
 
-const FOCUSABLE = [
+/** The elements that can take keyboard focus. */
+export const FOCUSABLE = [
 	"button:not([disabled])",
 	"a[href]",
 	"input:not([disabled])",
@@ -33,6 +34,9 @@ export const onFocusLostOnClose = (listener: () => void): (() => void) => {
 
 /** Whether a modal with a focus trap is open. */
 export const hasOpenFocusTrap = (): boolean => traps.length > 0;
+
+/** The newest mounted focus trap, the modal on top, or null when none is open. */
+export const topFocusTrap = (): HTMLElement | null => traps[traps.length - 1] ?? null;
 
 /** Whether `node` is the newest mounted focus trap, the modal on top. */
 export const isTopFocusTrap = (node: HTMLElement | null): boolean =>

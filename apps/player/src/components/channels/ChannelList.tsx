@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	LoaderCircle,
 	TvMinimal,
@@ -20,12 +19,14 @@ import { CategoryFilter } from "./CategoryFilter";
 import { ChannelCard, COMPACT_ROW_HEIGHT, ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
 import { ChannelLogo } from "./ChannelLogo";
 import { useGroupHierarchy } from "@/hooks/useGroupHierarchy";
+import { useHistoryStaleOnLeave } from "@/hooks/useWatchHistory";
 import { RecentlyPlayedRow } from "./RecentlyPlayedRow";
 import { PinnedGroupsRow } from "./PinnedGroupsRow";
 import { CategoryBrowser } from "./CategoryBrowser";
 import { GroupList } from "./GroupList";
 import { Breadcrumb } from "./Breadcrumb";
 import { CategoryManager } from "./CategoryManager";
+import { VirtualList } from "./VirtualList";
 import { SeriesDetailModal } from "./SeriesDetailModal";
 import { MovieInfoDrawer } from "./MovieInfoDrawer";
 import { HistoryTab } from "./HistoryTab";
@@ -46,11 +47,12 @@ import { useDownloads } from "@/hooks/useDownloads";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useNow } from "@/hooks/useNow";
 import { useGuidePrograms, type GuideChannels } from "@/hooks/useGuidePrograms";
-import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes, searchEpgProgrammes } from "@/lib/tauri";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { getXtreamSeriesEpisodes, getCachedSeriesEpisodes } from "@/lib/tauri";
+import { guideSearchQuery } from "@/lib/queries";
 import { consumeBrowseState, saveBrowseSearch, saveBrowseTab } from "@/lib/browse-state";
 import { findEpisode, sortEpisodes } from "@/lib/episodes";
 import { categoriesByCount, channelCountFor, dedupeByTitle, seriesTitleOf } from "@/lib/channels";
-import { nowSeconds } from "@/lib/date";
 import { recordingChannel } from "@/lib/recordings";
 import { formatCount } from "@/lib/format";
 import type {
@@ -94,6 +96,7 @@ const RIGHT_BUTTONS_PX = 80;
  * the same between renders, so the memoized rows don't re-render for it.
  */
 const NO_PROGRAMS: EpgProgram[] = [];
+const NO_RESULTS: EpgSearchResult[] = [];
 
 const formatEpgTime = (startTime: number, now: number): string => {
 	const diff = startTime - now;
@@ -151,6 +154,7 @@ export const ChannelList = () => {
 	const contentType =
 		activeTab === "movie" ? "movie" : activeTab === "series" ? "series" : "live";
 	const hierarchy = useGroupHierarchy(activeProviderId, contentType);
+	useHistoryStaleOnLeave();
 	const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 	const [showDownloadsOnly, setShowDownloadsOnly] = useState(false);
 	const [seriesModalData, setSeriesModalData] = useState<{
@@ -164,15 +168,14 @@ export const ChannelList = () => {
 	const [selectedMovie, setSelectedMovie] = useState<Channel | null>(null);
 
 	// EPG search: one result per channel (earliest matching program)
-	const [epgSearchResults, setEpgSearchResults] = useState<EpgSearchResult[]>([]);
+	// The guide search, 300ms after the last key, since it's a backend round trip.
+	const [epgTerm, setEpgTerm] = useState("");
 
 	// The root div's width, which sets the guide's window and the grid
 	// columns. It's null until the div has been measured.
 	const [containerWidth, setContainerWidth] = useState<number | null>(null);
 	// The guide's window and its red line for now follow this clock.
 	const now = useNow();
-	/** Virtualizer scroll ref — kept for TanStack Virtual scroll element. */
-	const parentRef = useRef<HTMLDivElement>(null);
 
 	/**
 	 * Ref callback for the root div. While the channels load, or before any
@@ -296,7 +299,6 @@ export const ChannelList = () => {
 		setSelectedCategory(null);
 		setShowFavoritesOnly(false);
 		setShowDownloadsOnly(false);
-		setEpgSearchResults([]);
 		setNavState({ level: "home" });
 	};
 
@@ -369,27 +371,24 @@ export const ChannelList = () => {
 		`${channels.length}:${guideVersion}`
 	);
 
-	// Debounced EPG programme search, 300ms since it's a backend round trip.
 	// Only the live tab searches the guide.
 	const epgQuery = activeTab === "live" ? search.trim() : "";
-	// Clearing the search drops the results while rendering, so they don't
-	// show for a frame after the box empties.
-	if (!epgQuery && epgSearchResults.length > 0) setEpgSearchResults([]);
+	// An empty box forgets the last term, so typing it again is a new search
+	// that asks the guide again once the cached answer is a minute old.
+	if (!epgQuery && epgTerm !== "") setEpgTerm("");
 	useEffect(() => {
 		if (!epgQuery) return;
-		let current = true;
-		const timer = setTimeout(() => {
-			searchEpgProgrammes(epgQuery, nowSeconds())
-				.then((results) => {
-					if (current) setEpgSearchResults(results);
-				})
-				.catch(() => {});
-		}, 300);
-		return () => {
-			current = false;
-			clearTimeout(timer);
-		};
+		const timer = setTimeout(() => setEpgTerm(epgQuery), 300);
+		return () => clearTimeout(timer);
 	}, [epgQuery]);
+	const epgSearch = useQuery({
+		...guideSearchQuery(epgTerm),
+		enabled: epgTerm !== "",
+		// The last search's results stay while the next one's load.
+		placeholderData: keepPreviousData,
+	});
+	// An empty search box shows no results, even before the search catches up.
+	const epgSearchResults = (epgQuery && epgSearch.data) || NO_RESULTS;
 
 	const getChannelPrograms = (ch: Channel): EpgProgram[] =>
 		(ch.tvgId && epgMap.get(ch.tvgId)) || NO_PROGRAMS;
@@ -401,18 +400,17 @@ export const ChannelList = () => {
 	 * offline, the cached list stands in when the live one can't be had.
 	 */
 	const openSeries = useCallback(
-		async (channel: Channel, cacheFallback: boolean) => {
+		(channel: Channel, cacheFallback: boolean): Promise<void> => {
 			const showName = seriesTitleOf(channel);
 			setSeriesLoading(true);
-			try {
-				let eps: Channel[] = [];
+			const open = async () => {
+				let eps: Channel[];
 				if (channel.url.startsWith("xtream://series/")) {
-					try {
-						eps = await fetchXtreamShowEpisodes(showName, channel);
-					} catch (e) {
+					eps = await fetchXtreamShowEpisodes(showName, channel).catch((e) => {
 						if (!cacheFallback) throw e;
 						console.warn("[ChannelList] live episode fetch failed, using cache:", e);
-					}
+						return [];
+					});
 				} else {
 					eps = byType.series.filter((ep) => seriesTitleOf(ep) === showName);
 				}
@@ -424,11 +422,12 @@ export const ChannelList = () => {
 					episodes: eps,
 					seriesChannelId: channel.id,
 				});
-			} catch (e) {
-				console.error("[ChannelList] failed to load series episodes:", e);
-			} finally {
-				setSeriesLoading(false);
-			}
+			};
+			// Promise callbacks in place of try and finally, which the React
+			// Compiler can't compile yet.
+			return open()
+				.catch((e) => console.error("[ChannelList] failed to load series episodes:", e))
+				.finally(() => setSeriesLoading(false));
 		},
 		[byType.series, fetchXtreamShowEpisodes]
 	);
@@ -568,24 +567,6 @@ export const ChannelList = () => {
 			? 0
 			: Math.ceil(filtered.length / columnsPerRow);
 
-	// The compiler can't memoize what TanStack Virtual returns, so it skips this
-	// whole component. That's the right call, and the app doesn't run the
-	// compiler yet, but it also means the compiler rules don't check anything
-	// else in ChannelList. To check it, rename useVirtualizer for one lint run.
-	// eslint-disable-next-line react-hooks/incompatible-library -- see above
-	const virtualizer = useVirtualizer({
-		count: rowCount,
-		getScrollElement: () => parentRef.current,
-		estimateSize: () => gridRowHeight,
-		overscan: 4,
-	});
-
-	// The virtualizer keeps row sizes until told otherwise, and the height
-	// changes with the window width and layout.
-	useEffect(() => {
-		virtualizer.measure();
-	}, [gridRowHeight, virtualizer]);
-
 	// Use debouncedSearch for isLiveSearch to avoid expensive view-switch on every keystroke
 	const hasSearch = searchQuery.length > 0;
 	const isLiveSearch = activeTab === "live" && hasSearch;
@@ -638,7 +619,8 @@ export const ChannelList = () => {
 	const countLabel = `${countNoun}s`;
 
 	// Pixel offset of the timeline column left edge within the virtualizer div.
-	// The virtualizer div already lives inside the px-3 padding of parentRef, so no extra 12px.
+	// The rows already sit inside the px-3 padding that ChannelList gives
+	// VirtualList's scroll element, so no extra 12px.
 	const timelineLeft = ROW_CARD_LEFT_WIDTH;
 
 	return (
@@ -1182,122 +1164,99 @@ export const ChannelList = () => {
 				</div>
 			) : !showChannelList ? null : (
 				/* Virtualised list — live/movie/series tabs */
-				<div
+				<VirtualList
 					key={columnsPerRow}
-					ref={parentRef}
-					className="flex-1 overflow-auto scrollbar-hide px-3 pb-3"
-				>
-					{filtered.length === 0 && hasSearch ? (
-						<NoSearchResults
-							query={debouncedSearch}
-							scope={countLabel}
-							filtered={showFavoritesOnly || effectiveCategory != null}
-							onClear={() => setSearch("")}
-						/>
-					) : filtered.length === 0 && showFavoritesOnly ? (
-						<div className="flex flex-col items-center justify-center h-full gap-2 text-center py-12">
-							<Heart className="h-10 w-10 text-muted-foreground/30" />
-							<p className="text-sm text-muted-foreground">
-								No favorites yet — tap ♡ on any channel
-							</p>
-						</div>
-					) : (
-						<div
-							style={{
-								height: `${virtualizer.getTotalSize()}px`,
-								width: "100%",
-								position: "relative",
-							}}
-						>
-							{/* Background gridlines spanning full virtual height — only on Live tab */}
-							{activeTab === "live" && !compactRows && (
-								<div
-									className="absolute top-0 bottom-0 pointer-events-none z-0"
-									style={{
-										left: `${timelineLeft}px`,
-										right: `${RIGHT_BUTTONS_PX}px`,
-									}}
-								>
-									{headerGridMarks.map((t) => (
-										<div
-											key={t}
-											className={`absolute top-0 bottom-0 w-px ${
-												t % 3600 === 0 ? "bg-border/30" : "bg-border/12"
-											}`}
-											style={{
-												left: `${toPct(t, windowStart, windowTotal).toFixed(3)}%`,
-											}}
-										/>
-									))}
-									{/* Full-height "now" line */}
+					className="flex-1 scrollbar-hide px-3 pb-3"
+					count={rowCount}
+					rowHeight={gridRowHeight}
+					placeholder={
+						filtered.length === 0 && hasSearch ? (
+							<NoSearchResults
+								query={debouncedSearch}
+								scope={countLabel}
+								filtered={showFavoritesOnly || effectiveCategory != null}
+								onClear={() => setSearch("")}
+							/>
+						) : filtered.length === 0 && showFavoritesOnly ? (
+							<div className="flex flex-col items-center justify-center h-full gap-2 text-center py-12">
+								<Heart className="h-10 w-10 text-muted-foreground/30" />
+								<p className="text-sm text-muted-foreground">
+									No favorites yet — tap ♡ on any channel
+								</p>
+							</div>
+						) : undefined
+					}
+					background={
+						/* Background gridlines spanning full virtual height — only on Live tab */
+						activeTab === "live" &&
+						!compactRows && (
+							<div
+								className="absolute top-0 bottom-0 pointer-events-none z-0"
+								style={{
+									left: `${timelineLeft}px`,
+									right: `${RIGHT_BUTTONS_PX}px`,
+								}}
+							>
+								{headerGridMarks.map((t) => (
 									<div
-										className="absolute top-0 bottom-0 w-px bg-red-400/20"
+										key={t}
+										className={`absolute top-0 bottom-0 w-px ${
+											t % 3600 === 0 ? "bg-border/30" : "bg-border/12"
+										}`}
 										style={{
-											left: `${toPct(now, windowStart, windowTotal).toFixed(3)}%`,
+											left: `${toPct(t, windowStart, windowTotal).toFixed(3)}%`,
 										}}
 									/>
-								</div>
-							)}
-
-							{/* Virtual rows */}
-							{virtualizer.getVirtualItems().map((virtualRow) => {
-								const startIdx = virtualRow.index * columnsPerRow;
-								const rowChannels = filtered.slice(
-									startIdx,
-									startIdx + columnsPerRow
-								);
-								return (
-									<div
-										key={virtualRow.key}
-										style={{
-											position: "absolute",
-											top: 0,
-											left: 0,
-											width: "100%",
-											height: `${virtualRow.size}px`,
-											transform: `translateY(${virtualRow.start}px)`,
-										}}
-									>
-										{isGrid ? (
-											<div
-												className="grid gap-3 pt-1"
-												style={{
-													gridTemplateColumns: `repeat(${columnsPerRow}, minmax(0, 1fr))`,
-												}}
-											>
-												{rowChannels.map((ch) => (
-													<ChannelCard
-														key={ch.id}
-														channel={ch}
-														onPlay={handlePlay}
-														variant="poster"
-														onToggleFavorite={handleToggleFavorite}
-													/>
-												))}
-											</div>
-										) : (
-											<div className="flex flex-col">
-												{rowChannels.map((ch) => (
-													<ChannelCard
-														key={ch.id}
-														channel={ch}
-														onPlay={handlePlay}
-														variant={rowVariant}
-														onToggleFavorite={handleToggleFavorite}
-														epgPrograms={getChannelPrograms(ch)}
-														guidePending={isGuidePending(ch)}
-														windowStart={windowStart}
-														windowEnd={windowEnd}
-													/>
-												))}
-											</div>
-										)}
-									</div>
-								);
-							})}
-						</div>
-					)}
-				</div>
+								))}
+								{/* Full-height "now" line */}
+								<div
+									className="absolute top-0 bottom-0 w-px bg-red-400/20"
+									style={{
+										left: `${toPct(now, windowStart, windowTotal).toFixed(3)}%`,
+									}}
+								/>
+							</div>
+						)
+					}
+					renderRow={(index) => {
+						const startIdx = index * columnsPerRow;
+						const rowChannels = filtered.slice(startIdx, startIdx + columnsPerRow);
+						return isGrid ? (
+							<div
+								className="grid gap-3 pt-1"
+								style={{
+									gridTemplateColumns: `repeat(${columnsPerRow}, minmax(0, 1fr))`,
+								}}
+							>
+								{rowChannels.map((ch) => (
+									<ChannelCard
+										key={ch.id}
+										channel={ch}
+										onPlay={handlePlay}
+										variant="poster"
+										onToggleFavorite={handleToggleFavorite}
+									/>
+								))}
+							</div>
+						) : (
+							<div className="flex flex-col">
+								{rowChannels.map((ch) => (
+									<ChannelCard
+										key={ch.id}
+										channel={ch}
+										onPlay={handlePlay}
+										variant={rowVariant}
+										onToggleFavorite={handleToggleFavorite}
+										epgPrograms={getChannelPrograms(ch)}
+										guidePending={isGuidePending(ch)}
+										windowStart={windowStart}
+										windowEnd={windowEnd}
+									/>
+								))}
+							</div>
+						);
+					}}
+				/>
 			)}
 
 			{showCategoryManager && activeProviderId && (
@@ -1307,7 +1266,6 @@ export const ChannelList = () => {
 						contentType={contentType}
 						channels={channels}
 						onClose={() => setShowCategoryManager(false)}
-						onHierarchyChanged={() => hierarchy.reload()}
 					/>
 				</div>
 			)}

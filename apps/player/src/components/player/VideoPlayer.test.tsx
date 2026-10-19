@@ -1691,6 +1691,103 @@ describe("keyboard shortcuts", () => {
 		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
 	});
 
+	it("plays and pauses with the media keys", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+		expect(await press("MediaPlay")).toBe(false);
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		expect(await press("MediaPause")).toBe(false);
+		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeks with the arrows on a desktop even while a control has keyboard focus", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+		expect(await press("ArrowRight")).toBe(false);
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+	});
+
+	describe("on a TV", () => {
+		beforeEach(() => {
+			env.os = "android";
+			window.__CINETTE_TV__ = true;
+		});
+
+		afterEach(() => {
+			delete window.__CINETTE_TV__;
+		});
+
+		it("plays and pauses with the center button when there's nothing to skip", async () => {
+			await openItem(lanternKeeper());
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+			await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+			// Held down, it doesn't flip back and forth.
+			expect(await press("Enter", { repeat: true })).toBe(true);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+		});
+
+		it("leaves Up and Down to move focus, since the TV has its own volume", async () => {
+			await openItem(lanternKeeper());
+			expect(await press("ArrowUp")).toBe(true);
+			expect(await press("ArrowDown")).toBe(true);
+			expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
+		});
+
+		it("still seeks with Left and Right", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			expect(await press("ArrowRight")).toBe(false);
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+		});
+
+		it("leaves the arrows to move between the controls once one has focus", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+			expect(await press("ArrowRight")).toBe(true);
+			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+		});
+
+		describe("as the controls show and hide", () => {
+			beforeEach(() => {
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			});
+
+			it("shows them on any key, and keeps them up while focus moves between them", async () => {
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+				act(() => vi.advanceTimersByTime(4000));
+				expect(controlBar()).toHaveClass("opacity-0");
+				// Down moves focus into the controls, so they show.
+				await press("ArrowDown");
+				expect(controlBar()).toHaveClass("opacity-100");
+
+				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+				act(() => vi.advanceTimersByTime(3000));
+				await press("ArrowLeft");
+				act(() => vi.advanceTimersByTime(3000));
+				expect(controlBar()).toHaveClass("opacity-100");
+				act(() => vi.advanceTimersByTime(1000));
+				expect(controlBar()).toHaveClass("opacity-0");
+			});
+
+			it("gives the player focus back as they hide, so Left and Right seek again", async () => {
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+				act(() => vi.advanceTimersByTime(4000));
+				expect(controlBar()).toHaveClass("opacity-0");
+				expect(document.activeElement).toBe(playerArea());
+				expect(await press("ArrowRight")).toBe(false);
+				expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+			});
+		});
+	});
+
 	it("goes full screen with F or a double click", async () => {
 		renderPlayer(null);
 		await flush();
@@ -1932,6 +2029,22 @@ describe("showing and hiding the controls", () => {
 		act(() => vi.advanceTimersByTime(4000));
 		await press("ArrowUp");
 		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+	});
+
+	it("stays hidden on a desktop for a key that isn't a shortcut", async () => {
+		await openItem(lanternKeeper());
+		act(() => vi.advanceTimersByTime(4000));
+		await press("x");
+		expect(controlBar()).toHaveClass("opacity-0");
+	});
+
+	it("leaves keyboard focus on a control as they hide on a desktop", async () => {
+		await openItem(lanternKeeper());
+		const stop = screen.getByRole("button", { name: "Stop" });
+		stop.focus();
+		act(() => vi.advanceTimersByTime(4000));
+		expect(controlBar()).toHaveClass("opacity-0");
+		expect(document.activeElement).toBe(stop);
 	});
 
 	describe("on a touch screen", () => {

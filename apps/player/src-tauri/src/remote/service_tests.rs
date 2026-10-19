@@ -13,7 +13,8 @@ use mvp_core::models::channel::Channel;
 use mvp_core::models::playlist::{Provider, ProviderType};
 use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::controller::Event;
-use mvp_core::remote::message::CloseReason;
+use mvp_core::remote::message::{CloseReason, ErrorCode};
+use mvp_core::remote::settings::ControlMode;
 use serde_json::{json, Value};
 use tauri::test::MockRuntime;
 use tauri::Listener;
@@ -69,6 +70,11 @@ impl Running {
                 None
             }),
             found_rx,
+            // Tests load one item after another at once.
+            target::Limits {
+                load_gap: Duration::ZERO,
+                ..target::Limits::STANDARD
+            },
         )
         .unwrap();
         Self {
@@ -210,6 +216,32 @@ async fn saving_settings_writes_them_and_tells_the_target() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(running.last_advertised().unwrap().instance, "Den");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn never_allow_ends_sessions_even_when_it_cant_be_saved() {
+    let running = Running::start(|_| {}).await;
+    let mut phone = connected(&running).await;
+    let saved = saved_settings(&running.app);
+    // A folder where the file goes makes every write of it fail.
+    let file = running.app.app_dir().join(SETTINGS_STORE_FILE);
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    let error = running
+        .invoke(
+            "remote_set_settings",
+            json!({ "settings": { "discoverable": true, "remoteControl": "never", "deviceName": null } }),
+        )
+        .unwrap_err();
+    assert!(
+        error.as_str().unwrap().contains("couldn't be saved"),
+        "{error}"
+    );
+    assert_eq!(phone.closed().await, Some(CloseReason::Revoked));
+    assert_eq!(running.service_settings().remote_control, ControlMode::Never);
+    // The store keeps what it had, so the next write doesn't save it.
+    let store = running.app.handle().store(SETTINGS_STORE_FILE).unwrap();
+    assert_eq!(store.get(SETTINGS_KEY), Some(saved));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -894,12 +926,49 @@ async fn only_the_current_link_reaches_the_webview() {
 }
 
 #[test]
-fn consent_brings_the_window_up_at_most_every_thirty_seconds() {
-    let now = Instant::now() + Duration::from_secs(120);
+fn consent_asks_for_attention_at_most_every_two_minutes() {
+    let now = Instant::now() + Duration::from_secs(300);
     assert!(may_raise(None, now));
-    assert!(!may_raise(Some(now - Duration::from_secs(29)), now));
+    assert!(!may_raise(Some(now - Duration::from_secs(119)), now));
     assert!(may_raise(Some(now - RAISE_EVERY), now));
-    assert!(may_raise(Some(now - Duration::from_secs(31)), now));
+    assert!(may_raise(Some(now - Duration::from_secs(121)), now));
+}
+
+#[test]
+fn provider_loads_come_four_at_once_then_one_a_second() {
+    let start = Instant::now();
+    let mut bucket = Bucket::full();
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(start));
+    }
+    assert!(!bucket.take(start));
+    assert!(!bucket.take(start + Duration::from_millis(999)));
+    assert!(bucket.take(start + FETCH_EVERY));
+    assert!(!bucket.take(start + FETCH_EVERY));
+    // Half a second's wait carries over to the next token.
+    assert!(!bucket.take(start + Duration::from_millis(1500)));
+    assert!(bucket.take(start + FETCH_EVERY * 2));
+    // A long wait fills it, but no further than the burst.
+    let later = start + Duration::from_secs(60);
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(later));
+    }
+    assert!(!bucket.take(later));
+}
+
+#[test]
+fn a_gate_lasts_while_anyone_holds_it() {
+    let gates = Gates::default();
+    let first = gates.enter("series-1");
+    let second = gates.enter("series-1");
+    assert!(Arc::ptr_eq(&first, &second), "one lock for one series");
+    let other = gates.enter("series-2");
+    assert!(!Arc::ptr_eq(&first, &other));
+    gates.leave(first);
+    assert_eq!(gates.len(), 2, "series-1 is still being loaded");
+    gates.leave(second);
+    gates.leave(other);
+    assert_eq!(gates.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

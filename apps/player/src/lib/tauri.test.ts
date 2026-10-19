@@ -153,6 +153,7 @@ describe("backend commands", () => {
 		["mpvSeek", () => tauri.mpvSeek(42.5), "plugin:mpv|mpv_seek", { position: 42.5 }],
 		["mpvSetVolume", () => tauri.mpvSetVolume(80), "plugin:mpv|mpv_set_volume", { volume: 80 }],
 		["mpvGetState", () => tauri.mpvGetState(), "plugin:mpv|mpv_get_state"],
+		["mpvGetMediaInfo", () => tauri.mpvGetMediaInfo(), "plugin:mpv|mpv_get_media_info"],
 		[
 			"mpvSetVisible",
 			() => tauri.mpvSetVisible(false),
@@ -215,6 +216,12 @@ describe("backend commands", () => {
 			{ name: "Xt", url: "http://xt.example", username: "user", password: "secret" },
 		],
 		["getProviders", () => tauri.getProviders(), "get_providers"],
+		[
+			"getStreamFormats",
+			() => tauri.getStreamFormats(episode),
+			"get_stream_formats",
+			{ channel: episode },
+		],
 		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
 		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],
 		[
@@ -617,6 +624,13 @@ describe("backend commands", () => {
 			},
 		],
 		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
+		["getCastReceivers", () => tauri.getCastReceivers(), "get_cast_receivers"],
+		[
+			"holdCastReceivers",
+			() => tauri.holdCastReceivers(["cast:tv"]),
+			"hold_cast_receivers",
+			{ ids: ["cast:tv"] },
+		],
 		// remote control
 		["remoteGetSettings", () => tauri.remoteGetSettings(), "remote_get_settings"],
 		[
@@ -698,6 +712,10 @@ describe("backend commands", () => {
 	it("passes a backend error on to the caller", async () => {
 		invoke.mockRejectedValueOnce("provider not found");
 		await expect(tauri.removeProvider("missing")).rejects.toBe("provider not found");
+	});
+
+	it("listens for receivers on the event cast/mod.rs emits", () => {
+		expect(tauri.CAST_RECEIVERS_EVENT).toBe("cast://receivers");
 	});
 
 	/**

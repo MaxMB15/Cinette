@@ -4,7 +4,7 @@
 //! Thread-safe MPV plugin state.
 //! Owns MpvEngine + the platform renderer, coordinates load/fallback.
 
-pub use crate::engine::PlayerState;
+pub use crate::engine::{MediaInfo, PlayerState};
 use crate::engine::MpvEngine;
 use crate::idle_inhibit::IdleInhibitor;
 use crate::lock::lock_or_recover;
@@ -701,6 +701,18 @@ impl MpvState {
             kept.delay = delay;
         }
         result
+    }
+
+    pub fn media_info(&self) -> MediaInfo {
+        lock_or_recover(&self.inner).media_info()
+    }
+
+    /// The URL loaded now and what mpv says about it, read together so they
+    /// belong to the same item. `None` when nothing is loaded.
+    pub fn playing(&self) -> Option<(String, MediaInfo)> {
+        let engine = lock_or_recover(&self.inner);
+        let url = engine.current_url()?.to_string();
+        Some((url, engine.media_info()))
     }
 
     pub fn get_state(&self) -> PlayerState {

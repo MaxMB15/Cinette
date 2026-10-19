@@ -85,12 +85,16 @@ async fn target(mode: ControlMode) -> Target {
         remote_control: mode,
         ..RemoteSettings::default()
     };
-    let handle = target::start(
+    let handle = target::start_with(
         listener,
         key.clone(),
         DeviceType::FireTv,
         settings,
         player.clone(),
+        target::Limits {
+            load_gap: Duration::ZERO,
+            ..target::Limits::STANDARD
+        },
     )
     .unwrap();
     *player.target.lock().unwrap() = Some(handle.clone());
