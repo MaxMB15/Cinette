@@ -205,7 +205,9 @@ const target = (player: ReturnType<typeof fakePlayer> | null) => ({
 	player: player as unknown as PlaybackDestination | null,
 	findChannel: (id: string) => [channel, episode].find((c) => c.id === id),
 	openPlayer: vi.fn<CommandTarget["openPlayer"]>(),
-	waitForPlayer: vi.fn<CommandTarget["waitForPlayer"]>(async () => null),
+	waitForPlayer: vi.fn<CommandTarget["waitForPlayer"]>(async () => ({
+		load: () => Promise.reject(new Error("not open")),
+	})),
 });
 
 describe("applyRemoteCommand", () => {
@@ -376,7 +378,7 @@ describe("the mounted player", () => {
 		setMountedPlayer(null);
 	});
 
-	it("is null when no page registers one in time", async () => {
+	it("loads nothing when no page registers one in time", async () => {
 		vi.useFakeTimers();
 		try {
 			const waited = waitForMountedPlayer();
@@ -384,10 +386,33 @@ describe("the mounted player", () => {
 			const player = fakePlayer() as unknown as PlaybackDestination;
 			const early = waitForMountedPlayer();
 			vi.advanceTimersByTime(1);
-			await expect(waited).resolves.toBeNull();
+			const none = await waited;
+			await expect(none.load({ kind: "local", channel })).rejects.toThrow();
 			// A page that opens later goes only to those still waiting.
 			setMountedPlayer(player);
 			await expect(early).resolves.toBe(player);
+			setMountedPlayer(null);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("waits for the next page, not one that came and went before", async () => {
+		vi.useFakeTimers();
+		try {
+			const first = fakePlayer() as unknown as PlaybackDestination;
+			const waited = waitForMountedPlayer();
+			setMountedPlayer(first);
+			await expect(waited).resolves.toBe(first);
+			setMountedPlayer(null);
+			const again = waitForMountedPlayer();
+			let got: Pick<PlaybackDestination, "load"> | undefined;
+			void again.then((p) => (got = p));
+			await vi.advanceTimersByTimeAsync(1);
+			expect(got, "the old page is gone").toBeUndefined();
+			const second = fakePlayer() as unknown as PlaybackDestination;
+			setMountedPlayer(second);
+			await expect(again).resolves.toBe(second);
 			setMountedPlayer(null);
 		} finally {
 			vi.useRealTimers();
