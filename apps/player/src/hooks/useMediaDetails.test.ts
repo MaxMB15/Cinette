@@ -19,7 +19,8 @@ import {
 	useSheetDetails,
 	type MediaDetailsRequest,
 } from "./useMediaDetails";
-import { wrapperFor } from "@/test/query";
+import { omdbQuery } from "@/lib/queries";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
 
 const mockOmdb = vi.mocked(fetchOmdbData);
 const mockWhatson = vi.mocked(fetchWhatsonData);
@@ -198,6 +199,29 @@ describe("useCachedMediaDetails", () => {
 		await act(async () => later.resolve(sintelOmdb));
 		expect(again.result.current.loading).toBe(false);
 		expect(again.result.current.omdbData).toBe(sintelOmdb);
+	});
+
+	it("keeps showing a movie's details while it loads them again", async () => {
+		const later = deferred<OmdbData | null>();
+		mockOmdb.mockResolvedValueOnce(sintelOmdb).mockReturnValueOnce(later.promise);
+		const client = createTestQueryClient();
+		const { result } = renderHook(() => useCachedMediaDetails(sintel), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(result.current.whatsonData).toBe(certified));
+
+		await act(async () => {
+			void client.invalidateQueries({
+				queryKey: omdbQuery("mv1", "Sintel", "movie").queryKey,
+			});
+		});
+		await waitFor(() => expect(mockOmdb).toHaveBeenCalledTimes(2));
+		expect(result.current).toEqual({
+			omdbData: sintelOmdb,
+			whatsonData: certified,
+			loading: false,
+		});
+		await act(async () => later.resolve(sintelOmdb));
 	});
 
 	it("asks Whatson again for ratings it had nothing for", async () => {
