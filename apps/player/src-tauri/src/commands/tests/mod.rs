@@ -202,7 +202,7 @@ fn sample(argument: &str) -> Value {
             "status": "idle", "item": null, "position": 0, "duration": 0, "volume": null,
             "subtitleId": null, "audioId": null, "error": null
         }),
-        "episode" => serde_json::to_value(Channel::default()).unwrap(),
+        "episode" | "channel" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),
     }
 }

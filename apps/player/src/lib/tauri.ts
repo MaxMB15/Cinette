@@ -3,6 +3,7 @@
 
 import { invoke } from "./invoke";
 import type { CommandOutcome, RemotePlayerState } from "@/lib/remote-target";
+import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
 	Channel,
@@ -69,6 +70,9 @@ export const mpvSetVolume = (volume: number): Promise<void> =>
 
 export const mpvGetState = (): Promise<MpvPlayerState> => invoke("plugin:mpv|mpv_get_state");
 
+/** The playing item's container and codecs, for deciding how to cast it. */
+export const mpvGetMediaInfo = (): Promise<PlayingInfo> => invoke("plugin:mpv|mpv_get_media_info");
+
 export const mpvSetVisible = (visible: boolean): Promise<void> =>
 	invoke("plugin:mpv|mpv_set_visible", { visible });
 
@@ -102,6 +106,15 @@ export const loadXtreamProvider = (
 ): Promise<Channel[]> => invoke("load_xtream_provider", { name, url, username, password });
 
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
+
+/**
+ * The formats `channel` comes in, for Cast and AirPlay. While mpv plays it,
+ * the backend asks mpv, so the provider isn't asked for a second
+ * connection. Rejects with `REFUSED` when the provider turns the login
+ * down, and with `NOT_READY` while mpv is still opening it.
+ */
+export const getStreamFormats = (channel: Channel): Promise<StreamFormats> =>
+	invoke("get_stream_formats", { channel });
 
 export const removeProvider = (id: string): Promise<void> => invoke("remove_provider", { id });
 
@@ -511,6 +524,48 @@ export const scheduleRecording = (
 
 /** Stop a recording and keep what it recorded, or cancel one that hasn't started. */
 export const stopRecording = (id: string): Promise<void> => invoke("stop_recording", { id });
+
+/** A Cast receiver on the local network, as `_googlecast._tcp` browsing found it. */
+export interface CastReceiver {
+	/** `cast:` and the receiver's own id, which stays the same across renames. */
+	id: string;
+	name: string;
+	/** Such as "Chromecast Ultra", for `castProfile`. */
+	model: string;
+	/** What it shows now, such as "YouTube", when it says. */
+	status: string | null;
+	/** False once it went away while held, or couldn't be reached. */
+	available: boolean;
+}
+
+/** The receivers, as `getCastReceivers` and `CAST_RECEIVERS_EVENT` give them. */
+export interface CastReceiverList {
+	/** Higher for a newer list. */
+	revision: number;
+	receivers: CastReceiver[];
+	/** macOS refuses this app local network access, so nothing can be found
+	 *  until it's allowed in System Settings. Show that instead of an empty
+	 *  list. */
+	localNetworkDenied: boolean;
+}
+
+/**
+ * The event that carries the whole list, as a `CastReceiverList`, after a
+ * change, at most one every 200 ms. The reply to `getCastReceivers` and
+ * these events can arrive in any order, so listen before calling it, and
+ * keep whichever list has the highest `revision`.
+ */
+export const CAST_RECEIVERS_EVENT = "cast://receivers";
+
+/** The Cast receivers found so far. The first call starts looking for them. */
+export const getCastReceivers = (): Promise<CastReceiverList> => invoke("get_cast_receivers");
+
+/**
+ * Keep these receivers listed, as unavailable, if they go away: the active
+ * destination and the rows an open picker shows. Each call replaces the last.
+ */
+export const holdCastReceivers = (ids: string[]): Promise<void> =>
+	invoke("hold_cast_receivers", { ids });
 
 /** Who may control this device from another Cinette device. */
 export type RemoteControlMode = "always" | "ask" | "never";

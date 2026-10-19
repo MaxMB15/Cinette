@@ -10,6 +10,7 @@ permissions = [
     "allow-mpv-set-bounds",
     "allow-mpv-set-visible",
     "allow-mpv-get-state",
+    "allow-mpv-get-media-info",
     "allow-mpv-sub-add",
     "allow-mpv-sub-remove",
     "allow-mpv-set-sub-delay",
