@@ -297,7 +297,8 @@ describe("usePublishRemoteState", () => {
 		const view = renderHook(() => usePublishRemoteState(destination, channel));
 		view.unmount();
 		await waitFor(() => expect(remoteSetState).toHaveBeenCalled());
-		expect(vi.mocked(remoteSetState).mock.calls.at(-1)?.[0]).toEqual({
+		const calls = vi.mocked(remoteSetState).mock.calls;
+		expect(calls[calls.length - 1][0]).toEqual({
 			status: "idle",
 			item: null,
 			position: 0,
