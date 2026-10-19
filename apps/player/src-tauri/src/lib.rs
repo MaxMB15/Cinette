@@ -13,6 +13,8 @@ mod identifier;
 mod logging;
 mod progress;
 #[cfg(test)]
+mod android_project_tests;
+#[cfg(test)]
 mod capabilities_tests;
 #[cfg(test)]
 mod test_support;

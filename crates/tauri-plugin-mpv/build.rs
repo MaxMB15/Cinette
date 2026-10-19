@@ -21,11 +21,42 @@ const COMMANDS: &[&str] = &[
 fn main() {
     // iOS gets libmpv from MPVKit, which the Xcode project links. The
     // `#[cfg]` blocks in `link_libmpv` check the host, not the target, so
-    // they'd point an iOS build at the macOS dylib.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("ios") {
-        link_libmpv();
+    // they'd point an iOS or Android build at the host's libmpv.
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("ios") => {}
+        Ok("android") => link_android_libmpv(),
+        _ => link_libmpv(),
     }
-    tauri_plugin::Builder::new(COMMANDS).ios_path("ios").build();
+    tauri_plugin::Builder::new(COMMANDS)
+        .ios_path("ios")
+        .android_path("android")
+        .build();
+}
+
+/// Links the libmpv and FFmpeg that `scripts/build-libmpv.sh android` puts
+/// in `libs/android/<ABI>/`. The app's Gradle project packs the same folder
+/// into the APK.
+fn link_android_libmpv() {
+    let abi = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64-v8a",
+        Ok("arm") => "armeabi-v7a",
+        Ok("x86_64") => "x86_64",
+        Ok("x86") => "x86",
+        other => panic!("no Android ABI for target arch {other:?}"),
+    };
+    let dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../libs/android")
+        .join(abi);
+    println!("cargo:rerun-if-changed={}", dir.display());
+    if !dir.join("libmpv.so").exists() {
+        println!(
+            "cargo:warning=No libmpv in {}. Run ./scripts/build-libmpv.sh android {abi}.",
+            dir.display()
+        );
+    }
+    println!("cargo:rustc-link-search=native={}", dir.display());
+    // For `av_jni_set_java_vm`. See android.rs.
+    println!("cargo:rustc-link-lib=dylib=avcodec");
 }
 
 /// Configure linking to libmpv from libs/<platform>/ or pkg-config.
