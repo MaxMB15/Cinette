@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,11 @@ import {
 	type RemoteSettings,
 } from "@/lib/tauri";
 
+/** What shows when the settings couldn't be saved. */
+export const SAVE_FAILED = "Couldn't save the remote control settings. Try again.";
+/** What shows when a new identity couldn't be made. */
+export const RESET_FAILED = "Couldn't reset the device identity. Try again.";
+
 const MODES: { value: RemoteControlMode; label: string }[] = [
 	{ value: "always", label: "Always allow" },
 	{ value: "ask", label: "Only when allowed" },
@@ -25,10 +30,26 @@ const MODES: { value: RemoteControlMode; label: string }[] = [
 ];
 
 const MODE_TEXT: Record<RemoteControlMode, string> = {
-	always: "Any device on this network can control playback here, with no dialog and no code to compare. Only choose this on a network you trust.",
+	always: "Any device on this network can control playback here and browse what this device can play, with no dialog and no code to compare. Only choose this on a network you trust.",
 	ask: "This device asks each time another one wants to control it, and shows a code to compare.",
 	never: "No device can control this one. Choosing this ends every session now.",
 };
+
+/** The longest name, in UTF-8 bytes, that goes out whole. */
+export const MAX_NAME_BYTES = 63;
+
+/** `typed`, cut to the characters that fit in {@link MAX_NAME_BYTES}. */
+export const fitName = (typed: string): string => {
+	const encoder = new TextEncoder();
+	let fitted = "";
+	for (const char of typed) {
+		if (encoder.encode(fitted + char).length > MAX_NAME_BYTES) break;
+		fitted += char;
+	}
+	return fitted;
+};
+
+type Saveable = Pick<RemoteSettings, "discoverable" | "remoteControl" | "deviceName">;
 
 /**
  * Remote control between Cinette devices: whether others can find this
@@ -41,9 +62,17 @@ export const RemoteControlSettings = () => {
 	const [error, setError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
 	const sessions = useRemoteSessions();
+	// The settings as last sent, so a change made before the last save is
+	// back builds on it rather than undoing it.
+	const sentRef = useRef<Saveable | null>(null);
+	// Saves go one after another; only the newest one's answer shows.
+	const queueRef = useRef<Promise<unknown>>(Promise.resolve());
+	const latestRef = useRef(0);
 
-	const show = (settings: RemoteSettings) =>
+	const show = (settings: RemoteSettings) => {
+		sentRef.current = settings;
 		setForm({ settings, name: settings.deviceName ?? "" });
+	};
 
 	useEffect(
 		() => {
@@ -63,25 +92,33 @@ export const RemoteControlSettings = () => {
 
 	if (!form) return null;
 	const { settings, name } = form;
-	const setName = (typed: string) => setForm({ settings, name: typed });
+	const setName = (typed: string) => setForm({ settings, name: fitName(typed) });
 
-	const save = (
-		change: Partial<Pick<RemoteSettings, "discoverable" | "remoteControl" | "deviceName">>
-	) => {
+	const save = (change: Partial<Saveable>) => {
 		setError(null);
-		remoteSetSettings({
-			discoverable: settings.discoverable,
-			remoteControl: settings.remoteControl,
-			deviceName: settings.deviceName,
+		const base = sentRef.current ?? settings;
+		const next: Saveable = {
+			discoverable: base.discoverable,
+			remoteControl: base.remoteControl,
+			deviceName: base.deviceName,
 			...change,
-		})
-			.then(show)
-			.catch((e: unknown) => setError(`Couldn't save: ${String(e)}`));
+		};
+		sentRef.current = next;
+		latestRef.current += 1;
+		const mine = latestRef.current;
+		queueRef.current = queueRef.current
+			.then(() => remoteSetSettings(next))
+			.then((saved) => {
+				if (mine === latestRef.current) show(saved);
+			})
+			.catch(() => {
+				if (mine === latestRef.current) setError(SAVE_FAILED);
+			});
 	};
 
 	const saveName = () => {
 		const typed = name.trim();
-		if (typed === (settings.deviceName ?? "")) return;
+		if (typed === ((sentRef.current ?? settings).deviceName ?? "")) return;
 		save({ deviceName: typed === "" ? null : typed });
 	};
 
@@ -114,6 +151,7 @@ export const RemoteControlSettings = () => {
 				<div>
 					<p className="text-sm font-medium mb-2">Remote control</p>
 					<SegmentedControl
+						aria-label="Remote control"
 						value={settings.remoteControl}
 						onChange={(mode) => save({ remoteControl: mode })}
 						options={MODES}
@@ -134,7 +172,6 @@ export const RemoteControlSettings = () => {
 						id="remote-device-name"
 						value={name}
 						placeholder={settings.defaultName}
-						maxLength={63}
 						onChange={(e) => setName(e.target.value)}
 						onBlur={saveName}
 						onKeyDown={(e) => {
@@ -208,7 +245,7 @@ export const RemoteControlSettings = () => {
 					setConfirmReset(false);
 					remoteResetIdentity()
 						.then(show)
-						.catch((e: unknown) => setError(`Couldn't reset: ${String(e)}`));
+						.catch(() => setError(RESET_FAILED));
 				}}
 			/>
 		</Card>

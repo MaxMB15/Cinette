@@ -22,7 +22,7 @@ import {
 	remoteResetIdentity,
 	remoteSetSettings,
 } from "@/lib/tauri";
-import { RemoteControlSettings } from "./RemoteControlSettings";
+import { MAX_NAME_BYTES, RemoteControlSettings, fitName } from "./RemoteControlSettings";
 
 const defaults: RemoteSettings = {
 	discoverable: true,
@@ -106,6 +106,7 @@ describe("RemoteControlSettings", () => {
 	it("turns discovery off and on", async () => {
 		await shown();
 		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		await act(async () => {});
 		expect(remoteSetSettings).toHaveBeenCalledWith({
 			discoverable: false,
 			remoteControl: "ask",
@@ -125,6 +126,7 @@ describe("RemoteControlSettings", () => {
 	it("changes who may control it and says what each choice means", async () => {
 		await shown();
 		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		await act(async () => {});
 		expect(remoteSetSettings).toHaveBeenCalledWith({
 			discoverable: true,
 			remoteControl: "never",
@@ -134,7 +136,7 @@ describe("RemoteControlSettings", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
 		expect(
 			await screen.findByText(
-				/Any device on this network can control playback here, with no dialog and no code to compare. Only choose this on a network you trust/
+				/Any device on this network can control playback here and browse what this device can play, with no dialog and no code to compare. Only choose this on a network you trust/
 			)
 		).toBeInTheDocument();
 	});
@@ -147,6 +149,7 @@ describe("RemoteControlSettings", () => {
 		expect(remoteSetSettings).not.toHaveBeenCalled();
 		fireEvent.change(field, { target: { value: "  Living Room " } });
 		fireEvent.keyDown(field, { key: "Enter" });
+		await act(async () => {});
 		expect(remoteSetSettings).toHaveBeenCalledWith({
 			discoverable: true,
 			remoteControl: "ask",
@@ -155,6 +158,7 @@ describe("RemoteControlSettings", () => {
 		await waitFor(() => expect(field).toHaveValue("Living Room"));
 		fireEvent.change(field, { target: { value: "Living Room 2" } });
 		fireEvent.keyDown(field, { key: "a" });
+		await act(async () => {});
 		expect(remoteSetSettings, "only Enter saves").toHaveBeenCalledTimes(1);
 	});
 
@@ -163,6 +167,7 @@ describe("RemoteControlSettings", () => {
 		const field = screen.getByLabelText("Device name");
 		fireEvent.change(field, { target: { value: "   " } });
 		fireEvent.blur(field);
+		await act(async () => {});
 		expect(remoteSetSettings).toHaveBeenCalledWith({
 			discoverable: true,
 			remoteControl: "ask",
@@ -175,7 +180,9 @@ describe("RemoteControlSettings", () => {
 		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
 		await shown();
 		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save: disk full");
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Couldn't save the remote control settings. Try again."
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
 		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 	});
@@ -246,6 +253,93 @@ describe("RemoteControlSettings", () => {
 		await shown();
 		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
 		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reset" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't reset: no key");
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"Couldn't reset the device identity. Try again."
+		);
+	});
+
+	it("saves one change after another, each on top of the last", async () => {
+		let finish: () => void = () => {};
+		vi.mocked(remoteSetSettings).mockImplementationOnce(
+			(sent) =>
+				new Promise((resolve) => {
+					finish = () => resolve({ ...defaults, ...sent });
+				})
+		);
+		await shown();
+		const field = screen.getByLabelText("Device name");
+		fireEvent.change(field, { target: { value: "Den" } });
+		fireEvent.blur(field);
+		// Chosen before the name's save is back.
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		await act(async () => {});
+		expect(remoteSetSettings, "the second waits for the first").toHaveBeenCalledTimes(1);
+		await act(async () => finish());
+		expect(remoteSetSettings).toHaveBeenLastCalledWith({
+			discoverable: true,
+			remoteControl: "never",
+			deviceName: "Den",
+		});
+		expect(field).toHaveValue("Den");
+		// The same name again, now saved, saves nothing.
+		fireEvent.blur(field);
+		await act(async () => {});
+		expect(remoteSetSettings).toHaveBeenCalledTimes(2);
+	});
+
+	it("shows only the newest save's answer", async () => {
+		const answers: ((s: RemoteSettings) => void)[] = [];
+		vi.mocked(remoteSetSettings).mockImplementation(
+			() => new Promise((resolve) => answers.push(resolve))
+		);
+		await shown();
+		const mode = (name: string) => screen.getByRole("button", { name });
+		fireEvent.click(mode("Never allow"));
+		fireEvent.click(mode("Always allow"));
+		await act(async () => {});
+		await act(async () => answers[0]({ ...defaults, remoteControl: "never" }));
+		expect(mode("Never allow"), "a newer save is on its way").toHaveAttribute(
+			"aria-pressed",
+			"false"
+		);
+		await act(async () => answers[1]({ ...defaults, remoteControl: "always" }));
+		expect(mode("Always allow")).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("says nothing about an older save that failed", async () => {
+		let failFirst: (e: unknown) => void = () => {};
+		vi.mocked(remoteSetSettings)
+			.mockImplementationOnce(() => new Promise((_, reject) => (failFirst = reject)))
+			.mockImplementationOnce(async (sent) => ({ ...defaults, ...sent }));
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+		await act(async () => {});
+		await act(async () => failFirst("late"));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Always allow" })).toHaveAttribute(
+				"aria-pressed",
+				"true"
+			)
+		);
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("keeps a name to what fits in 63 bytes", async () => {
+		expect(MAX_NAME_BYTES).toBe(63);
+		expect(fitName("Den")).toBe("Den");
+		expect(fitName("x".repeat(70))).toBe("x".repeat(63));
+		// Each of these takes 4 bytes, so 15 fit.
+		expect(fitName("😀".repeat(20))).toBe("😀".repeat(15));
+		expect(new TextEncoder().encode(fitName("é".repeat(40))).length).toBe(62);
+		await shown();
+		const field = screen.getByLabelText("Device name");
+		fireEvent.change(field, { target: { value: "Ж".repeat(40) } });
+		expect(field).toHaveValue("Ж".repeat(31));
+	});
+
+	it("names its choice of who may control it", async () => {
+		await shown();
+		expect(screen.getByRole("group", { name: "Remote control" })).toBeInTheDocument();
 	});
 });
