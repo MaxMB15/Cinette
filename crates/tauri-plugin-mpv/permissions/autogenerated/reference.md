@@ -13,6 +13,7 @@ Allows all MPV player commands
 - `allow-mpv-set-bounds`
 - `allow-mpv-set-visible`
 - `allow-mpv-get-state`
+- `allow-mpv-get-media-info`
 - `allow-mpv-sub-add`
 - `allow-mpv-sub-remove`
 - `allow-mpv-set-sub-delay`
@@ -27,6 +28,32 @@ Allows all MPV player commands
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`mpv:allow-mpv-get-media-info`
+
+</td>
+<td>
+
+Enables the mpv_get_media_info command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-get-media-info`
+
+</td>
+<td>
+
+Denies the mpv_get_media_info command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>
