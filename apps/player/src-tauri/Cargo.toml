@@ -41,6 +41,12 @@ libc = "0.2"
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser
 # decides whether that plugin can start on Linux.
 zbus = "5"
+# DNS-SD for Cinette devices and Cast receivers, without needing Avahi.
+mdns-sd = { version = "0.21", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# poll and the socket types for Bonjour's dns_sd.h.
+libc = "0.2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 oslog = { version = "0.2", default-features = false }

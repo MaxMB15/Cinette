@@ -725,6 +725,30 @@ until someone deletes it. CI doesn't run Stryker on the site, so run
 - On macOS, AppKit and OpenGL calls must run on the main thread. See
   [architecture.md](architecture.md#macos).
 
+### React Compiler
+
+The [React Compiler](https://react.dev/learn/react-compiler) memoizes components and
+hooks in the app's build and in its tests. `apps/player/react-compiler.config.ts`
+sets it up for both. It runs with `panicThreshold: "all_errors"`, so a component or
+hook it can't compile fails `vite build` and every test that loads the file, with the
+line it stopped at. Without that, it would skip the whole component, which would then
+render as often as it did before the compiler.
+
+- Compiler 1.0 can't compile these inside a `try` block: `finally`, `throw`, and value
+  expressions like `??`, `?.`, `&&` and ternaries. A `try`/`catch` that rethrows from
+  `catch` is fine. Put the steps in an inner async function, and chain `.catch()` and
+  `.finally()` on its promise, as `addProvider` in `useChannels.ts` does.
+- It can't compile `++` on a variable inside a function, such as a `for` loop counter in
+  a callback. Loop over `array.entries()` instead.
+- A disabled React lint rule, like `react-hooks/exhaustive-deps`, makes it skip the
+  component. Read a value through `useLatestRef` instead of leaving it out of an
+  effect's dependencies.
+- TanStack Virtual's `useVirtualizer` returns functions the compiler can't memoize.
+  `VirtualList` holds it and opts out with `"use no memo"`. Scrolling only re-renders
+  `VirtualList`, and the page around the list stays as it is.
+- `NOT_COMPILED` in the config lists the files the compiler leaves alone, each with
+  why. Take a file off once it compiles.
+
 ## Branches and pull requests
 
 - Branch from `dev` and open pull requests against `dev`. `main` only receives `dev`

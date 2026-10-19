@@ -85,12 +85,22 @@ describe("usePlatform", () => {
 		expect(result.current.layoutMode).toBe("mobile");
 	});
 
-	it("gives a large Android screen the tv layout", () => {
+	it("gives an Android TV the tv platform and layout", () => {
 		vi.mocked(osPlatform).mockReturnValue("android");
-		setDisplay(1920, 1080, 1920, 1080);
+		window.__CINETTE_TV__ = true;
+		setDisplay(960, 540, 960, 540);
 
 		const { result } = renderHook(() => usePlatform());
-		expect(result.current).toEqual({ platform: "android", layoutMode: "tv" });
+		expect(result.current).toEqual({ platform: "tv", layoutMode: "tv" });
+		delete window.__CINETTE_TV__;
+	});
+
+	it("gives a large Android tablet the desktop layout, not the tv one", () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		setDisplay(1280, 800, 1280, 800);
+
+		const { result } = renderHook(() => usePlatform());
+		expect(result.current).toEqual({ platform: "android", layoutMode: "desktop" });
 	});
 
 	it("stops following resizes once unmounted", () => {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { createTestQueryClient, wrapperFor } from "@/test/query";
+import { historyKey } from "@/lib/queries";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -18,6 +20,7 @@ import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixt
 import { deferred } from "@/test/deferred";
 import { answerFrom } from "@/test/guide-answers";
 import { ChannelList } from "./ChannelList";
+import { ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
 
 const state = vi.hoisted(() => ({
 	channels: [] as Channel[],
@@ -129,21 +132,33 @@ vi.mock("./MovieInfoDrawer", () => ({
 	),
 }));
 
-vi.mock("./CategoryManager", () => ({
-	CategoryManager: (props: {
-		providerId: string;
-		contentType: string;
-		channels: Channel[];
-		onClose: () => void;
-		onHierarchyChanged: () => void;
-	}) => (
-		<div role="dialog" aria-label="Category manager">
-			<p>{`${props.providerId} ${props.contentType} ${props.channels.length} channels`}</p>
-			<button onClick={props.onHierarchyChanged}>Save categories</button>
-			<button onClick={props.onClose}>Close manager</button>
-		</div>
-	),
-}));
+// The manager stores a change and loads the shared hierarchy again, which the
+// list reads too.
+vi.mock("./CategoryManager", async () => {
+	const { useQueryClient } = await import("@tanstack/react-query");
+	const { groupHierarchyQuery } = await import("@/lib/queries");
+	return {
+		CategoryManager: (props: {
+			providerId: string;
+			contentType: string;
+			channels: Channel[];
+			onClose: () => void;
+		}) => {
+			const client = useQueryClient();
+			const save = () =>
+				client.invalidateQueries({
+					queryKey: groupHierarchyQuery(props.providerId, props.contentType).queryKey,
+				});
+			return (
+				<div role="dialog" aria-label="Category manager">
+					<p>{`${props.providerId} ${props.contentType} ${props.channels.length} channels`}</p>
+					<button onClick={save}>Save categories</button>
+					<button onClick={props.onClose}>Close manager</button>
+				</div>
+			);
+		},
+	};
+});
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -309,10 +324,15 @@ const waitForDebounce = () =>
 	});
 
 const renderList = async (List = ChannelList) => {
-	const view = render(<List />);
+	// Each list gets a new cache, as each app does.
+	const view = render(<List />, { wrapper: wrapperFor() });
 	await flush();
 	return view;
 };
+
+/** The gridlines drawn behind the virtual rows, or null when there are none. */
+const rowGrid = (container: HTMLElement) =>
+	container.querySelector<HTMLElement>(".absolute.top-0.bottom-0.pointer-events-none.z-0");
 
 const tab = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
 
@@ -558,11 +578,7 @@ describe("ChannelList live rows", () => {
 		await renderList();
 
 		// With no list of guide ids, it loads every channel's programs.
-		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(
-			NOW - 2 * 3600,
-			NOW + 5 * 3600,
-			undefined
-		);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledWith(NOW - 2 * 3600, NOW + 5 * 3600);
 		const newsRow = screen.getByText("News 24").closest(".group") as HTMLElement;
 		expect(within(newsRow).getByTitle("Morning Briefing")).toBeInTheDocument();
 		expect(within(newsRow).getByTitle("Market Watch")).toBeInTheDocument();
@@ -684,8 +700,7 @@ describe("ChannelList live rows", () => {
 		// guide loads one more hour ahead than that.
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
 			NOW - 3 * 3600,
-			NOW + 6 * 3600,
-			undefined
+			NOW + 6 * 3600
 		);
 	});
 
@@ -717,11 +732,7 @@ describe("ChannelList live rows", () => {
 
 		act(() => vi.advanceTimersByTime(30_000));
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
-		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
-			NOW + 3600,
-			NOW + 9 * 3600,
-			undefined
-		);
+		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600);
 	});
 
 	it("doesn't load the guide again when it gets narrower", async () => {
@@ -781,8 +792,7 @@ describe("ChannelList live rows", () => {
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
 		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(
 			NOW - 2 * 3600,
-			NOW + 5 * 3600,
-			undefined
+			NOW + 5 * 3600
 		);
 		expect(screen.getByTitle("Morning Briefing")).toBeInTheDocument();
 	});
@@ -887,6 +897,22 @@ describe("ChannelList search", () => {
 		expect(startOf("Weekend Review")).toBe(`${weekend} ${formatHHMM(NOW + 3 * 24 * 3600)}`);
 	});
 
+	it("searches the guide once for a search typed quickly", async () => {
+		tauri.searchEpgProgrammes.mockResolvedValue([]);
+		await renderList();
+		typeSearch("ma");
+		typeSearch("mar");
+		typeSearch("market");
+		await waitFor(() => expect(tauri.searchEpgProgrammes).toHaveBeenCalled(), {
+			timeout: 3000,
+		});
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 400));
+		});
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledWith("market", expect.any(Number));
+	});
+
 	it("plays the channel a program result is on", async () => {
 		tauri.searchEpgProgrammes.mockResolvedValue([
 			{
@@ -906,7 +932,10 @@ describe("ChannelList search", () => {
 		]);
 		await renderList();
 		typeSearch("market");
-		fireEvent.click(await screen.findByRole("button", { name: /Lost Show/ }));
+		// The search waits 300 ms for the typing to stop, then asks the guide.
+		fireEvent.click(
+			await screen.findByRole("button", { name: /Lost Show/ }, { timeout: 3000 })
+		);
 		expect(state.navigate).not.toHaveBeenCalled();
 
 		fireEvent.click(screen.getByRole("button", { name: /Market Watch/ }));
@@ -1000,6 +1029,30 @@ describe("ChannelList search", () => {
 		);
 		expect(screen.queryByText("Market Watch")).toBeNull();
 		expect(await screen.findByText("3 channels")).toBeInTheDocument();
+	});
+
+	it("searches the guide again for a term typed again once its answer is old", async () => {
+		freezeClock();
+		tauri.searchEpgProgrammes.mockResolvedValue([]);
+		await renderList();
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+
+		// Typed again soon after, it shows the cached answer.
+		typeSearch("");
+		await flush();
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledOnce();
+
+		typeSearch("");
+		await flush();
+		vi.setSystemTime((NOW + 61) * 1000);
+		typeSearch("market");
+		await waitForDebounce();
+		expect(tauri.searchEpgProgrammes).toHaveBeenCalledTimes(2);
+		expect(tauri.searchEpgProgrammes).toHaveBeenLastCalledWith("market", NOW + 61);
 	});
 
 	it("searches no programs outside the live tab", async () => {
@@ -1252,6 +1305,18 @@ describe("ChannelList recently played", () => {
 		});
 	});
 
+	it("marks the history stale when it closes", async () => {
+		const client = createTestQueryClient();
+		const view = render(<ChannelList />, { wrapper: wrapperFor(client) });
+		await flush();
+		const history = () => client.getQueryCache().findAll({ queryKey: historyKey() });
+		expect(history().length).toBeGreaterThan(0);
+		expect(history().some((q) => q.state.isInvalidated)).toBe(false);
+
+		view.unmount();
+		expect(history().every((q) => q.state.isInvalidated)).toBe(true);
+	});
+
 	it("does nothing for a channel that is no longer listed", async () => {
 		tauri.getWatchHistory.mockResolvedValue([
 			makeHistoryEntry({ channelId: "closed", channelName: "Closed Channel" }),
@@ -1377,7 +1442,12 @@ describe("ChannelList series", () => {
 		await renderList();
 
 		fireEvent.click(screen.getByText("Harbor Lights"));
-		await waitFor(() => expect(error).toHaveBeenCalled());
+		await waitFor(() =>
+			expect(error).toHaveBeenCalledWith(
+				"[ChannelList] failed to load series episodes:",
+				new Error("server down")
+			)
+		);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(tauri.getCachedSeriesEpisodes).not.toHaveBeenCalled();
 	});
@@ -1590,8 +1660,7 @@ describe("ChannelList favorites tab", () => {
 		const { rerender } = await renderList();
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledExactlyOnceWith(
 			NOW - 2 * 3600,
-			NOW + 5 * 3600,
-			undefined
+			NOW + 5 * 3600
 		);
 
 		// The Live tab loaded every channel's guide, so a new favorite already
@@ -1625,7 +1694,7 @@ describe("ChannelList favorites tab", () => {
 		expect(row("Sport One").getByTitle("Match Day")).toBeInTheDocument();
 
 		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
-			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600],
 			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
 		]);
 	});
@@ -1695,9 +1764,9 @@ describe("ChannelList favorites tab", () => {
 		expect(row("News 24").getByText("no epg")).toBeInTheDocument();
 
 		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
-			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600],
 			[NOW + 3600, NOW + 9 * 3600, ["news.tv"]],
-			[NOW + 3600, NOW + 9 * 3600, undefined],
+			[NOW + 3600, NOW + 9 * 3600],
 		]);
 	});
 
@@ -1710,7 +1779,9 @@ describe("ChannelList favorites tab", () => {
 		// The guide loaded up to 5 hours after NOW, and a narrow window gets there
 		// 3 hours after NOW.
 		vi.setSystemTime((NOW + 3 * 3600) * 1000);
-		act(() => vi.advanceTimersByTime(30_000));
+		// The guide's call goes out a moment after the tick, so it can take
+		// the other ids asked for with it.
+		await act(async () => vi.advanceTimersByTime(30_000));
 
 		expect(tauri.getEpgForLiveChannels).toHaveBeenCalledTimes(2);
 		expect(tauri.getEpgForLiveChannels).toHaveBeenLastCalledWith(NOW + 3600, NOW + 9 * 3600, [
@@ -1754,7 +1825,7 @@ describe("ChannelList favorites tab", () => {
 
 		expect(tauri.getEpgForLiveChannels.mock.calls).toStrictEqual([
 			[NOW - 2 * 3600, NOW + 5 * 3600, ["news.tv"]],
-			[NOW - 2 * 3600, NOW + 5 * 3600, undefined],
+			[NOW - 2 * 3600, NOW + 5 * 3600],
 		]);
 	});
 
@@ -1893,7 +1964,7 @@ describe("ChannelList history tab", () => {
 		tauri.getWatchHistory.mockResolvedValue([entry]);
 		saveBrowseTab("history");
 		await renderList();
-		expect(tauri.getWatchHistory).toHaveBeenCalledWith(200);
+		expect(tauri.getWatchHistory).toHaveBeenCalledWith(200, undefined);
 		fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${entry.channelName}`) }));
 		await flush();
 	};
@@ -1972,6 +2043,31 @@ describe("ChannelList history tab", () => {
 });
 
 describe("ChannelList virtual list", () => {
+	it("draws the guide's gridlines and the now line behind the live rows", async () => {
+		freezeClock();
+		state.channels = liveChannels(5);
+		const { container } = await renderList();
+
+		const grid = rowGrid(container)!;
+		expect(grid.style.left).toBe(`${ROW_CARD_LEFT_WIDTH}px`);
+		expect(grid.style.right).toBe("80px");
+		const lines = [...grid.children] as HTMLElement[];
+		expect(lines.length).toBeGreaterThan(1);
+		for (const line of lines) expect(line.style.left).toMatch(/^[\d.]+%$/);
+		expect(lines[lines.length - 1]).toHaveClass("bg-red-400/20");
+	});
+
+	it("draws no gridlines behind posters", async () => {
+		state.channels = [
+			...liveChannels(3),
+			makeChannel({ id: "m1", name: "Heat", contentType: "movie" }),
+		];
+		const { container } = await renderList();
+		await openTab("Movies");
+		expect(screen.getByText("Heat")).toBeInTheDocument();
+		expect(rowGrid(container)).toBeNull();
+	});
+
 	it("renders only the rows in view and the next ones as the list scrolls", async () => {
 		state.channels = liveChannels(300);
 		await renderList();
@@ -2037,6 +2133,14 @@ describe("ChannelList on a phone", () => {
 		vi.resetModules();
 		return (await import("./ChannelList")).ChannelList;
 	};
+
+	it("draws no guide gridlines, since its rows have no timeline", async () => {
+		const PhoneList = await loadPhoneList();
+		state.channels = liveChannels(3);
+		const { container } = await renderList(PhoneList);
+		expect(screen.getByText("Channel 1")).toBeInTheDocument();
+		expect(rowGrid(container)).toBeNull();
+	});
 
 	it("has no downloads tab or download filter", async () => {
 		const PhoneList = await loadPhoneList();

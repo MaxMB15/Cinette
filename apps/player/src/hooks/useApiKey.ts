@@ -135,14 +135,18 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		// When it moved to another service, only Saving needs to go.
 		const forService = () => shown.current === service;
 		const forText = () => forService() && generation.current === started;
+		// Not a finally, which the React Compiler can't compile yet.
+		let failed = false;
 		try {
 			await service.save(key);
 			savedFor.current = service;
 		} catch {
+			failed = true;
+		}
+		saving.current = false;
+		if (failed) {
 			setSaveStatus(forText() ? "error" : "idle");
 			return;
-		} finally {
-			saving.current = false;
 		}
 		if (forService()) {
 			setSaved(key);
@@ -160,10 +164,12 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		}
 		// The key is saved either way, so a listener that throws doesn't make
 		// the save look failed.
-		try {
-			service.onSaved?.(key);
-		} catch (e) {
-			console.error("Couldn't report the saved key", e);
+		if (service.onSaved) {
+			try {
+				service.onSaved(key);
+			} catch (e) {
+				console.error("Couldn't report the saved key", e);
+			}
 		}
 	}, [service, value]);
 
@@ -172,12 +178,15 @@ export const useApiKey = (service: ApiKeyService): ApiKeyState => {
 		if (!key || testStatus === "testing") return;
 		const started = generation.current;
 		setTestStatus("testing");
-		let result: KeyTestStatus;
-		try {
-			result = (await service.test(key)) ? "valid" : "invalid";
-		} catch {
-			result = "unreachable";
-		}
+		// Promise callbacks in place of a try, which the React Compiler can't
+		// compile with the ternary. Starting from a promise catches a check
+		// that throws before it returns one, as the try did.
+		const result = await Promise.resolve()
+			.then(() => service.test(key))
+			.then(
+				(valid): KeyTestStatus => (valid ? "valid" : "invalid"),
+				(): KeyTestStatus => "unreachable"
+			);
 		// An edit already cleared Testing, and the new text may have a check of
 		// its own on the way.
 		if (generation.current !== started) return;

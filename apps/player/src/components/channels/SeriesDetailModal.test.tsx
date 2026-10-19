@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { wrapperFor } from "@/test/query";
 import type { ComponentProps } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,7 +85,7 @@ const renderModal = (props: Partial<Props> = {}) => {
 			<SeriesDetailModal {...p} />
 		</MemoryRouter>
 	);
-	const result = render(ui(all));
+	const result = render(ui(all), { wrapper: wrapperFor() });
 	return {
 		...result,
 		...all,

@@ -3,9 +3,14 @@
 
 mod airplay;
 #[cfg(target_os = "android")]
+mod android_device;
+#[cfg(target_os = "android")]
 mod android_tls;
 mod commands;
 mod convert;
+/// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod discovery;
 mod downloads;
 #[cfg(any(target_os = "ios", all(test, target_os = "linux")))]
 mod hls_out;
@@ -289,6 +294,9 @@ pub fn run() {
 
     // Metadata and subtitle lookups name the app's version in their user agent.
     mvp_core::http::set_app_version(env!("CARGO_PKG_VERSION"));
+
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(android_device::plugin());
 
     builder
         .plugin(tauri_plugin_os::init())

@@ -65,13 +65,10 @@ export const AirPlayButton = ({ onSend, warning }: AirPlayButtonProps) => {
 	const send = async (anchor: DOMRect) => {
 		setBusy(true);
 		setNotice(null);
-		try {
-			setNotice(await onSend(anchor, confirm));
-		} catch {
-			setNotice("Couldn't start AirPlay.");
-		} finally {
-			setBusy(false);
-		}
+		// On the promise, since the React Compiler can't compile `finally`.
+		const notice = await onSend(anchor, confirm).catch(() => "Couldn't start AirPlay.");
+		setNotice(notice);
+		setBusy(false);
 	};
 
 	return (
