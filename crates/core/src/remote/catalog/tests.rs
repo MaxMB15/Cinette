@@ -100,6 +100,31 @@ fn queries_read_from_camel_case_json() {
 }
 
 #[test]
+fn a_groups_query_reads_and_writes_its_page() {
+    let query: CatalogQuery = serde_json::from_value(serde_json::json!({
+        "kind": "groups", "contentType": "movie", "cursor": "Drama", "limit": 20
+    }))
+    .unwrap();
+    assert_eq!(
+        query,
+        CatalogQuery::Groups {
+            content_type: "movie".into(),
+            cursor: Some("Drama".into()),
+            limit: 20
+        }
+    );
+    let first = CatalogQuery::Groups {
+        content_type: "live".into(),
+        cursor: None,
+        limit: 100,
+    };
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::json!({ "kind": "groups", "contentType": "live", "limit": 100 })
+    );
+}
+
+#[test]
 fn validate_keeps_good_queries_and_caps_the_page() {
     let query = CatalogQuery::Search {
         query: "news".into(),
@@ -124,16 +149,30 @@ fn validate_keeps_good_queries_and_caps_the_page() {
         zero.validate(),
         Some(CatalogQuery::Items { limit: 1, .. })
     ));
-    assert!(CatalogQuery::Groups {
-        content_type: "series".into()
-    }
-    .validate()
-    .is_some());
-    assert!(CatalogQuery::Episodes {
-        series_id: "series-1".into()
-    }
-    .validate()
-    .is_some());
+    let groups = |cursor: Option<&str>, limit| CatalogQuery::Groups {
+        content_type: "series".into(),
+        cursor: cursor.map(str::to_owned),
+        limit,
+    };
+    assert_eq!(groups(None, 0).validate(), Some(groups(None, 1)));
+    assert_eq!(
+        groups(Some("Drama"), 500).validate(),
+        Some(groups(Some("Drama"), MAX_PAGE as u32))
+    );
+    // A group can have an empty name, and so can the cursor naming it.
+    assert_eq!(groups(Some(""), 5).validate(), Some(groups(Some(""), 5)));
+    let longest = "g".repeat(MAX_ID_BYTES);
+    assert!(groups(Some(&longest), 5).validate().is_some());
+    let episodes = |cursor: Option<&str>, limit| CatalogQuery::Episodes {
+        series_id: "series-1".into(),
+        cursor: cursor.map(str::to_owned),
+        limit,
+    };
+    assert_eq!(episodes(None, 0).validate(), Some(episodes(None, 1)));
+    assert_eq!(
+        episodes(Some("ep-101"), 900).validate(),
+        Some(episodes(Some("ep-101"), MAX_PAGE as u32))
+    );
 }
 
 #[test]
@@ -141,6 +180,13 @@ fn validate_refuses_bad_queries() {
     let bad = [
         CatalogQuery::Groups {
             content_type: "radio".into(),
+            cursor: None,
+            limit: 10,
+        },
+        CatalogQuery::Groups {
+            content_type: "live".into(),
+            cursor: Some("g".repeat(MAX_ID_BYTES + 1)),
+            limit: 10,
         },
         CatalogQuery::Search {
             query: "  ".into(),
@@ -171,9 +217,18 @@ fn validate_refuses_bad_queries() {
         },
         CatalogQuery::Episodes {
             series_id: String::new(),
+            cursor: None,
+            limit: 10,
         },
         CatalogQuery::Episodes {
             series_id: "s".repeat(MAX_ID_BYTES + 1),
+            cursor: None,
+            limit: 10,
+        },
+        CatalogQuery::Episodes {
+            series_id: "s".into(),
+            cursor: Some(String::new()),
+            limit: 10,
         },
     ];
     for query in bad {

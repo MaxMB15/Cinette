@@ -14,13 +14,15 @@ import {
 	type CinetteDestination,
 	type LinkEnded,
 	type LinkPhase,
-	type RemoteSnapshot,
+	type VersionedSnapshot,
 } from "@/lib/cinette-destination";
 import type { RemoteCommand } from "@/lib/remote-target";
 import type { RemoteDevice } from "@/lib/tauri";
 
 /** The device this one controls, and how the connection stands. */
 export interface Link {
+	/** The number its events carry, and its commands name. */
+	id: number;
 	deviceId: string;
 	name: string;
 	phase: LinkPhase;
@@ -39,9 +41,11 @@ export interface RemoteControlState {
 /** What the store needs from the backend. */
 export interface RemoteControlBackend {
 	devices(): Promise<RemoteDevice[]>;
-	connect(deviceId: string): Promise<void>;
+	connect(deviceId: string, link: number): Promise<void>;
+	/** The link the backend holds, which a reloaded page may not know. */
+	current(): Promise<number | null>;
 	leave(): Promise<void>;
-	command(command: RemoteCommand): Promise<unknown>;
+	command(link: number, command: RemoteCommand): Promise<unknown>;
 	listen<T>(event: string, handler: (payload: T) => void): Promise<() => void>;
 	/** `performance.now()`. */
 	now(): number;
@@ -58,11 +62,15 @@ export interface RemoteControl {
 	leave(): Promise<void>;
 }
 
-type ControllerEvent = { deviceId: string } & LinkPhase;
+type ControllerEvent = { deviceId: string; link: number } & LinkPhase;
 type StateEvent = {
 	deviceId: string;
-	state: { epoch: string; version: number; state: RemoteSnapshot };
+	link: number;
+	state: VersionedSnapshot;
 };
+
+/** Link numbers, starting from the time so a reloaded page picks new ones. */
+let lastLink = Date.now();
 
 export const createRemoteControl = (backend: RemoteControlBackend): RemoteControl => {
 	let state: RemoteControlState = { devices: [], link: null, ended: null };
@@ -72,22 +80,31 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 		for (const listener of listeners) listener();
 	};
 
-	const onPhase = ({ deviceId, ...phase }: ControllerEvent) => {
+	const onPhase = ({ deviceId, link: id, ...phase }: ControllerEvent) => {
 		const link = state.link;
-		if (link?.deviceId !== deviceId) return;
+		if (link?.id !== id || link.deviceId !== deviceId) return;
 		link.destination.setPhase(phase);
 		if (phase.phase === "closed") {
 			set({ link: null, ended: { name: link.name, reason: phase.reason } });
+		} else if (phase.phase === "verifying") {
+			// The name the device gave once its key was checked, and the code,
+			// which stays shown while that device asks.
+			set({ link: { ...link, name: phase.name, phase, code: phase.code } });
 		} else {
-			const code = phase.phase === "verifying" ? phase.code : link.code;
-			set({ link: { ...link, phase, code } });
+			set({ link: { ...link, phase } });
 		}
 	};
 
-	const onState = ({ deviceId, state: versioned }: StateEvent) => {
+	const onState = ({ deviceId, link: id, state: versioned }: StateEvent) => {
 		const link = state.link;
-		if (link?.deviceId !== deviceId) return;
-		link.destination.receive(versioned.state, backend.now());
+		if (link?.id !== id || link.deviceId !== deviceId) return;
+		link.destination.receive(versioned, backend.now());
+	};
+
+	/** Ends `link` here: its destination hears it closed. */
+	const drop = (link: Link | null) => {
+		// Stryker disable next-line StringLiteral: a destination reads only that the phase is closed, not why.
+		link?.destination.setPhase({ phase: "closed", reason: "left" });
 	};
 
 	return {
@@ -110,16 +127,27 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 				// Anything but a list, as from a backend without remote control, is none.
 				.then((devices) => set({ devices: Array.isArray(devices) ? devices : [] }))
 				.catch(() => {});
+			// A link from before the page reloaded has no one to show it.
+			backend
+				.current()
+				.then((held) => {
+					if (held !== null && held !== state.link?.id) void backend.leave();
+				})
+				.catch(() => {});
 			return () => {
 				for (const stop of stops) stop();
 			};
 		},
 		connect: async (device) => {
+			lastLink += 1;
+			const id = lastLink;
 			const destination = createCinetteDestination(device.deviceId, device.name, (c) =>
-				backend.command(c)
+				backend.command(id, c)
 			);
+			drop(state.link);
 			set({
 				link: {
+					id,
 					deviceId: device.deviceId,
 					name: device.name,
 					phase: { phase: "connecting" },
@@ -129,13 +157,14 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 				ended: null,
 			});
 			try {
-				await backend.connect(device.deviceId);
+				await backend.connect(device.deviceId, id);
 			} catch (e) {
 				if (state.link?.destination === destination) set({ link: null });
 				throw e;
 			}
 		},
 		leave: async () => {
+			drop(state.link);
 			set({ link: null });
 			await backend.leave();
 		},

@@ -25,6 +25,8 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
+# Reads the logo addresses other Cinette devices send. The same version as mvp-core's.
+url = "2"
 
 [dev-dependencies]
 # The mock runtime, so tests can build an app and call commands without a window.

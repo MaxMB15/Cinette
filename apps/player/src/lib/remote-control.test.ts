@@ -42,9 +42,13 @@ const backend = () => {
 	const stops: ReturnType<typeof vi.fn>[] = [];
 	const b = {
 		devices: vi.fn(() => Promise.resolve([tv])),
-		connect: vi.fn<(deviceId: string) => Promise<void>>(() => Promise.resolve()),
+		connect: vi.fn<(deviceId: string, link: number) => Promise<void>>(() => Promise.resolve()),
+		current: vi.fn<() => Promise<number | null>>(() => Promise.resolve(null)),
 		leave: vi.fn(() => Promise.resolve()),
-		command: vi.fn(() => Promise.resolve(1)),
+		// No version, so a load doesn't wait for a state.
+		command: vi.fn<(link: number, command: unknown) => Promise<unknown>>(() =>
+			Promise.resolve(undefined)
+		),
 		listen: vi.fn(<T>(event: string, handler: (payload: T) => void) => {
 			handlers.set(event, handler as (payload: unknown) => void);
 			const stop = vi.fn();
@@ -101,23 +105,44 @@ describe("createRemoteControl", () => {
 		const rc = createRemoteControl(b);
 		await rc.start();
 		await rc.connect(tv);
-		expect(b.connect).toHaveBeenCalledWith("tv1");
 		const link = rc.getState().link!;
+		expect(b.connect).toHaveBeenCalledWith("tv1", link.id);
+		expect(link.id).toBeGreaterThan(Date.now() - 60_000);
 		expect(link.deviceId).toBe("tv1");
 		expect(link.name).toBe("Living Room");
 		expect(link.phase).toStrictEqual({ phase: "connecting" });
 		expect(link.destination.id).toBe("cinette:tv1");
 
 		expect(link.code).toBeNull();
-		emit("remote://controller", { deviceId: "tv1", phase: "verifying", code: "123456" });
-		expect(rc.getState().link!.phase).toStrictEqual({ phase: "verifying", code: "123456" });
-		emit("remote://controller", { deviceId: "tv1", phase: "pending", expiresInMs: 30_000 });
+		const id = link.id;
+		emit("remote://controller", {
+			deviceId: "tv1",
+			link: id,
+			phase: "verifying",
+			code: "123456",
+			name: "Lounge TV",
+		});
+		expect(rc.getState().link!.phase).toStrictEqual({
+			phase: "verifying",
+			code: "123456",
+			name: "Lounge TV",
+		});
+		expect(rc.getState().link!.name, "the name its key vouches for").toBe("Lounge TV");
+		emit("remote://controller", {
+			deviceId: "tv1",
+			link: id,
+			phase: "pending",
+			expiresInMs: 30_000,
+		});
 		expect(rc.getState().link!.code, "the code outlives the phase").toBe("123456");
-		emit("remote://controller", { deviceId: "tv1", phase: "connected" });
+		emit("remote://controller", { deviceId: "tv1", link: id, phase: "connected" });
 		expect(link.destination.getState().connection).toBe("connected");
+		expect(rc.getState().link!.phase).toStrictEqual({ phase: "connected" });
+		expect(rc.getState().link!.name).toBe("Lounge TV");
 
 		emit("remote://state", {
 			deviceId: "tv1",
+			link: id,
 			state: { epoch: "e", version: 3, state: snapshot },
 		});
 		expect(link.destination.getState()).toMatchObject({
@@ -127,23 +152,43 @@ describe("createRemoteControl", () => {
 		});
 
 		await link.destination.pause();
-		expect(b.command).toHaveBeenCalledWith({ action: "pause", itemId: "live-7" });
+		expect(b.command).toHaveBeenCalledWith(id, { action: "pause", itemId: "live-7" });
 	});
 
-	it("ignores events about other devices", async () => {
+	it("ignores events about other devices and other links", async () => {
 		const { b, emit } = backend();
 		const rc = createRemoteControl(b);
 		await rc.start();
-		emit("remote://controller", { deviceId: "tv1", phase: "connected" });
+		emit("remote://controller", { deviceId: "tv1", link: 1, phase: "connected" });
 		emit("remote://state", {
 			deviceId: "tv1",
+			link: 1,
 			state: { epoch: "e", version: 1, state: snapshot },
 		});
 		expect(rc.getState().link).toBeNull();
 		await rc.connect(tv);
-		emit("remote://controller", { deviceId: "den1", phase: "closed", reason: "lost" });
+		const id = rc.getState().link!.id;
+		emit("remote://controller", {
+			deviceId: "den1",
+			link: id,
+			phase: "closed",
+			reason: "lost",
+		});
 		emit("remote://state", {
 			deviceId: "den1",
+			link: id,
+			state: { epoch: "e", version: 1, state: snapshot },
+		});
+		// An earlier link to the same device, ending late.
+		emit("remote://controller", {
+			deviceId: "tv1",
+			link: id - 1,
+			phase: "closed",
+			reason: "left",
+		});
+		emit("remote://state", {
+			deviceId: "tv1",
+			link: id - 1,
 			state: { epoch: "e", version: 1, state: snapshot },
 		});
 		const link = rc.getState().link!;
@@ -156,9 +201,10 @@ describe("createRemoteControl", () => {
 		const rc = createRemoteControl(b);
 		await rc.start();
 		await rc.connect(tv);
-		const destination = rc.getState().link!.destination;
+		const { destination, id } = rc.getState().link!;
 		emit("remote://controller", {
 			deviceId: "tv1",
+			link: id,
 			phase: "closed",
 			reason: { target: "revoked" },
 		});
@@ -186,7 +232,9 @@ describe("createRemoteControl", () => {
 		b.connect.mockImplementationOnce(() => new Promise((_, reject) => (fail = reject)));
 		const rc = createRemoteControl(b);
 		const first = rc.connect(tv);
+		const replaced = rc.getState().link!.destination;
 		await rc.connect(den);
+		expect(replaced.getState().connection, "the old one hears it ended").toBe("lost");
 		fail("gone");
 		await expect(first).rejects.toBe("gone");
 		expect(rc.getState().link?.deviceId).toBe("den1");
@@ -208,9 +256,11 @@ describe("createRemoteControl", () => {
 		const { b } = backend();
 		const rc = createRemoteControl(b);
 		await rc.connect(tv);
+		const left = rc.getState().link!.destination;
 		const changes = vi.fn();
 		rc.subscribe(changes);
 		await rc.leave();
+		expect(left.getState().connection).toBe("lost");
 		expect(rc.getState().link).toBeNull();
 		expect(rc.getState().ended).toBeNull();
 		expect(b.leave).toHaveBeenCalledTimes(1);
@@ -226,5 +276,37 @@ describe("createRemoteControl", () => {
 		stop();
 		emit("remote://devices", []);
 		expect(changes).not.toHaveBeenCalled();
+	});
+
+	it("leaves a link the backend holds that this page doesn't know", async () => {
+		const { b } = backend();
+		b.current.mockResolvedValueOnce(12);
+		const rc = createRemoteControl(b);
+		await rc.start();
+		await flush();
+		expect(b.leave).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the backend's link when it's this page's own", async () => {
+		const { b } = backend();
+		const rc = createRemoteControl(b);
+		await rc.connect(tv);
+		b.current.mockResolvedValueOnce(rc.getState().link!.id);
+		await rc.start();
+		await flush();
+		expect(b.leave).not.toHaveBeenCalled();
+		b.current.mockRejectedValueOnce("unavailable");
+		await rc.start();
+		await flush();
+		expect(b.leave).not.toHaveBeenCalled();
+	});
+
+	it("gives each link its own number", async () => {
+		const { b } = backend();
+		const rc = createRemoteControl(b);
+		await rc.connect(tv);
+		const first = rc.getState().link!.id;
+		await rc.connect(den);
+		expect(rc.getState().link!.id).toBe(first + 1);
 	});
 });

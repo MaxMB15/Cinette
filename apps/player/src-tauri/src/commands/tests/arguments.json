@@ -114,8 +114,9 @@
 	"remote_finish_command": { "required": ["token", "outcome"] },
 	"remote_devices": {},
 	"remote_local_network_denied": {},
-	"remote_connect": { "required": ["deviceId"] },
+	"remote_connect": { "required": ["deviceId", "link"] },
+	"remote_link": {},
 	"remote_leave": {},
-	"remote_command": { "required": ["command"] },
-	"remote_catalog": { "required": ["catalogQuery"] }
+	"remote_command": { "required": ["command", "link"] },
+	"remote_catalog": { "required": ["catalogQuery", "link"] }
 }

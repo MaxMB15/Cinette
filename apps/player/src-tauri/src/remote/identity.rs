@@ -27,7 +27,10 @@ pub fn load_or_create(dir: &Path) -> io::Result<DeviceKey> {
     let path = key_path(dir);
     match fs::read(&path) {
         Ok(bytes) => match <[u8; KEY_LEN]>::try_from(bytes.as_slice()) {
-            Ok(private) => return Ok(DeviceKey::from_private(private)),
+            Ok(private) => {
+                keep_private(&path)?;
+                return Ok(DeviceKey::from_private(private));
+            }
             Err(_) => tracing::warn!(
                 "[remote] {} is {} bytes, not {KEY_LEN}; making a new device key",
                 path.display(),
@@ -66,7 +69,28 @@ pub fn save(dir: &Path, key: &DeviceKey) -> io::Result<()> {
     file.write_all(key.private_bytes())?;
     file.sync_all()?;
     drop(file);
-    fs::rename(&tmp, key_path(dir))
+    fs::rename(&tmp, key_path(dir))?;
+    // The rename itself is only kept once the folder is written out.
+    #[cfg(unix)]
+    fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// Takes away other users' access to a key file that has it, as one copied
+/// back from a backup may.
+fn keep_private(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            tracing::warn!("[remote] the device key file was readable by others; fixing that");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -157,5 +181,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join(KEY_FILE)).unwrap();
         assert!(load_or_create(dir.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_file_others_can_read_is_made_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let key = load_or_create(dir.path()).unwrap();
+        let path = dir.path().join(KEY_FILE);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let again = load_or_create(dir.path()).unwrap();
+        assert_eq!(again.device_id(), key.device_id());
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // One the user alone can read is left as it is.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        load_or_create(dir.path()).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o400);
     }
 }

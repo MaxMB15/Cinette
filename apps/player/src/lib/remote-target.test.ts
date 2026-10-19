@@ -6,7 +6,9 @@ import {
 	applyRemoteCommand,
 	getMountedPlayer,
 	remotePlayerState,
+	PLAYER_OPENS_WITHIN_MS,
 	setMountedPlayer,
+	waitForMountedPlayer,
 	type CommandTarget,
 	type RemoteCommand,
 } from "./remote-target";
@@ -89,7 +91,19 @@ describe("remotePlayerState", () => {
 			seriesTitle: null,
 			season: null,
 			episode: null,
+			streamHosts: ["iptv.example"],
 		});
+		expect(JSON.stringify(remote)).not.toContain("pass");
+	});
+
+	it("names every host the item streams from, and skips what isn't a URL", () => {
+		const backed = {
+			...channel,
+			url: "http://user:pass@Panel.Example:8080/live/1.ts",
+			sources: ["http://backup.example/1.ts", "not a url", "file:///local/1.ts"],
+		};
+		const remote = remotePlayerState(state(), backed, localCapabilities(false), 0);
+		expect(remote.item?.streamHosts).toStrictEqual(["panel.example", "backup.example"]);
 		expect(JSON.stringify(remote)).not.toContain("pass");
 	});
 
@@ -191,6 +205,9 @@ const target = (player: ReturnType<typeof fakePlayer> | null) => ({
 	player: player as unknown as PlaybackDestination | null,
 	findChannel: (id: string) => [channel, episode].find((c) => c.id === id),
 	openPlayer: vi.fn<CommandTarget["openPlayer"]>(),
+	waitForPlayer: vi.fn<CommandTarget["waitForPlayer"]>(async () => ({
+		load: () => Promise.reject(new Error("not open")),
+	})),
 });
 
 describe("applyRemoteCommand", () => {
@@ -208,12 +225,22 @@ describe("applyRemoteCommand", () => {
 		expect(t.openPlayer).not.toHaveBeenCalled();
 	});
 
-	it("opens the player for a load when none is open", async () => {
+	it("opens the player for a load when none is open, and loads it there", async () => {
+		const opened = fakePlayer();
+		const t = target(null);
+		t.waitForPlayer.mockResolvedValue(opened as unknown as PlaybackDestination);
+		const load: RemoteCommand = { action: "load", itemId: channel.id, startAt: 5 };
+		await expect(applyRemoteCommand(load, t)).resolves.toBe("ok");
+		expect(t.openPlayer).toHaveBeenCalledTimes(1);
+		expect(opened.load).toHaveBeenCalledWith({ kind: "local", channel }, { startAt: 5 });
+	});
+
+	it("fails a load when the player page doesn't open", async () => {
 		const t = target(null);
 		await expect(applyRemoteCommand({ action: "load", itemId: channel.id }, t)).resolves.toBe(
-			"ok"
+			"failed"
 		);
-		expect(t.openPlayer).toHaveBeenCalledWith(channel);
+		expect(t.openPlayer).toHaveBeenCalledTimes(1);
 	});
 
 	it("says a load of something this device doesn't have isn't found", async () => {
@@ -224,6 +251,7 @@ describe("applyRemoteCommand", () => {
 		);
 		expect(player.load).not.toHaveBeenCalled();
 		expect(t.openPlayer).not.toHaveBeenCalled();
+		expect(t.waitForPlayer).not.toHaveBeenCalled();
 	});
 
 	it("stops the open player, and stopping nothing is fine", async () => {
@@ -336,5 +364,58 @@ describe("the mounted player", () => {
 		expect(getMountedPlayer()).toBe(player);
 		setMountedPlayer(null);
 		expect(getMountedPlayer()).toBeNull();
+	});
+
+	it("is waited for until a page registers one", async () => {
+		const player = fakePlayer() as unknown as PlaybackDestination;
+		const first = waitForMountedPlayer();
+		const second = waitForMountedPlayer();
+		setMountedPlayer(null);
+		setMountedPlayer(player);
+		await expect(first).resolves.toBe(player);
+		await expect(second).resolves.toBe(player);
+		await expect(waitForMountedPlayer(), "one open already").resolves.toBe(player);
+		setMountedPlayer(null);
+	});
+
+	it("loads nothing when no page registers one in time", async () => {
+		vi.useFakeTimers();
+		try {
+			const waited = waitForMountedPlayer();
+			vi.advanceTimersByTime(PLAYER_OPENS_WITHIN_MS - 1);
+			const player = fakePlayer() as unknown as PlaybackDestination;
+			const early = waitForMountedPlayer();
+			vi.advanceTimersByTime(1);
+			const none = await waited;
+			await expect(none.load({ kind: "local", channel })).rejects.toThrow();
+			// A page that opens later goes only to those still waiting.
+			setMountedPlayer(player);
+			await expect(early).resolves.toBe(player);
+			setMountedPlayer(null);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("waits for the next page, not one that came and went before", async () => {
+		vi.useFakeTimers();
+		try {
+			const first = fakePlayer() as unknown as PlaybackDestination;
+			const waited = waitForMountedPlayer();
+			setMountedPlayer(first);
+			await expect(waited).resolves.toBe(first);
+			setMountedPlayer(null);
+			const again = waitForMountedPlayer();
+			let got: Pick<PlaybackDestination, "load"> | undefined;
+			void again.then((p) => (got = p));
+			await vi.advanceTimersByTimeAsync(1);
+			expect(got, "the old page is gone").toBeUndefined();
+			const second = fakePlayer() as unknown as PlaybackDestination;
+			setMountedPlayer(second);
+			await expect(again).resolves.toBe(second);
+			setMountedPlayer(null);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

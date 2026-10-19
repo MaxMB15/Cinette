@@ -8,23 +8,39 @@ import {
 	type RemoteControl,
 	type RemoteControlState,
 } from "@/lib/remote-control";
-import { remoteCommand, remoteConnect, remoteDevices, remoteLeave } from "@/lib/tauri";
+import { remoteCommand, remoteConnect, remoteDevices, remoteLeave, remoteLink } from "@/lib/tauri";
 
 /** The app's one remote control, made on first use. */
 let shared: RemoteControl | null = null;
-/** How many components use it, so it follows events only while they do. */
+/** How many components use it, so it follows events only while they do,
+ *  or while a link is open, whose events can't be missed. */
 let users = 0;
 let stopping: Promise<() => void> | null = null;
 
+/** Stops following events once no one uses the store and no link is open.
+ *  It's checked when a user goes and whenever the store changes, which is
+ *  how a link that ends with no one looking is seen. */
+const stopWhenIdle = (control: RemoteControl) => {
+	if (users > 0 || !stopping || control.getState().link) return;
+	const done = stopping;
+	stopping = null;
+	void done.then((stop) => stop());
+};
+
 export const remoteControl = (): RemoteControl => {
-	shared ??= createRemoteControl({
-		devices: remoteDevices,
-		connect: remoteConnect,
-		leave: remoteLeave,
-		command: remoteCommand,
-		listen: (event, handler) => listen(event, ({ payload }) => handler(payload as never)),
-		now: performance.now.bind(performance),
-	});
+	if (!shared) {
+		const control = createRemoteControl({
+			devices: remoteDevices,
+			connect: remoteConnect,
+			current: remoteLink,
+			leave: remoteLeave,
+			command: remoteCommand,
+			listen: (event, handler) => listen(event, ({ payload }) => handler(payload as never)),
+			now: performance.now.bind(performance),
+		});
+		control.subscribe(() => stopWhenIdle(control));
+		shared = control;
+	}
 	return shared;
 };
 
@@ -41,14 +57,10 @@ export const useRemoteControl = (): RemoteControlState & {
 	useEffect(
 		() => {
 			users += 1;
-			if (users === 1) stopping = control.start().catch(() => () => {});
+			stopping ??= control.start().catch(() => () => {});
 			return () => {
 				users -= 1;
-				if (users === 0 && stopping) {
-					const done = stopping;
-					stopping = null;
-					void done.then((stop) => stop());
-				}
+				stopWhenIdle(control);
 			};
 		},
 		// Stryker disable next-line ArrayDeclaration: control is the app's one store, so the effect runs once whatever the list holds.
