@@ -78,7 +78,8 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 			</Routes>
 
 			<UpdateBanner state={updateState} hidden={!splash.dismissed} />
-			<ConsentDialog />
+			{/* Remote control runs on the desktop only. */}
+			{!isMobilePlatform() && <ConsentDialog />}
 			<ConnectStatusDialog />
 			{donation.shouldShow && !updateState.update && (
 				<DonationPopup onDismiss={donation.dismiss} />

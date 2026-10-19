@@ -10,8 +10,8 @@ use crate::remote::test_client::{self, Client, WAIT};
 use crate::test_support::TestApp;
 use mvp_core::http::test_server::{self, route, serve_routes};
 use mvp_core::models::channel::Channel;
-use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::models::playlist::{Provider, ProviderType};
+use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::controller::Event;
 use mvp_core::remote::message::CloseReason;
 use serde_json::{json, Value};
@@ -391,6 +391,8 @@ async fn catalog_queries_read_the_cache() {
         .controller
         .catalog(CatalogQuery::Groups {
             content_type: "live".into(),
+            cursor: None,
+            limit: 100,
         })
         .unwrap();
     phone.write(&bytes).await;
@@ -411,6 +413,8 @@ async fn ask_for_episodes(phone: &mut Client, series_id: &str) -> Vec<CatalogIte
         .controller
         .catalog(CatalogQuery::Episodes {
             series_id: series_id.into(),
+            cursor: None,
+            limit: 100,
         })
         .unwrap();
     phone.write(&bytes).await;
@@ -450,7 +454,7 @@ async fn channel_with_load(running: &mut Running, phone: &mut Client, item_id: &
 
 #[tokio::test(flavor = "multi_thread")]
 async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() {
-    let (url, _requests) = serve_routes(vec![route(
+    let (url, requests) = serve_routes(vec![route(
         "action=get_series_info",
         "200 OK",
         r#"{"info":{"name":"The Show"},"episodes":{"1":[
@@ -488,6 +492,14 @@ async fn episodes_are_loaded_from_the_provider_and_a_load_carries_the_episode() 
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, "p1-xt-ep-7-s1-0");
     assert_eq!(items[0].episode, Some(1));
+    // Asked again soon, they come from what was loaded.
+    let again = ask_for_episodes(&mut phone, "p1-series-7").await;
+    assert_eq!(again, items);
+    let asked = requests
+        .try_iter()
+        .filter(|r| r.contains("action=get_series_info"))
+        .count();
+    assert_eq!(asked, 1, "the provider is asked once");
 
     let channel = channel_with_load(&mut running, &mut phone, "p1-xt-ep-7-s1-0").await;
     assert_eq!(channel["id"], "p1-xt-ep-7-s1-0");
@@ -638,7 +650,7 @@ async fn one_instance_controls_another() {
     );
     assert_eq!(mac.invoke("remote_devices", json!({})).unwrap(), devices);
 
-    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     let verifying = phase(&mut mac, "verifying").await;
     assert_eq!(verifying["deviceId"], json!(tv_id));
@@ -665,7 +677,7 @@ async fn one_instance_controls_another() {
             crate::test_support::invoke_on(
                 &handle,
                 "remote_command",
-                json!({ "command": { "action": "stop" } }),
+                json!({ "command": { "action": "stop" }, "link": 1 }),
             )
         })
     };
@@ -697,7 +709,7 @@ async fn one_instance_controls_another() {
     let page = mac
         .invoke(
             "remote_catalog",
-            json!({ "catalogQuery": { "kind": "groups", "contentType": "live" } }),
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 100 }, "link": 1 }),
         )
         .unwrap();
     assert_eq!(page, json!({ "items": [], "next": null }));
@@ -711,7 +723,10 @@ async fn one_instance_controls_another() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert_eq!(
-        mac.invoke("remote_command", json!({ "command": { "action": "stop" } })),
+        mac.invoke(
+            "remote_command",
+            json!({ "command": { "action": "stop" }, "link": 1 })
+        ),
         Err(json!("notConnected"))
     );
 }
@@ -721,7 +736,7 @@ async fn the_target_disconnecting_ends_the_link() {
     let (mut mac, mut tv) = pair("always").await;
     let tv_id = tv.device_id().to_string();
     mac.event("remote://devices").await;
-    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     phase(&mut mac, "connected").await;
     let sessions = tv.event("remote://sessions").await;
@@ -737,7 +752,7 @@ async fn the_target_disconnecting_ends_the_link() {
     assert_eq!(
         mac.invoke(
             "remote_catalog",
-            json!({ "catalogQuery": { "kind": "groups", "contentType": "live" } })
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 100 }, "link": 1 })
         ),
         Err(json!("notConnected"))
     );
@@ -748,13 +763,13 @@ async fn a_refused_command_names_its_code() {
     let (mut mac, tv) = pair("always").await;
     let tv_id = tv.device_id().to_string();
     mac.event("remote://devices").await;
-    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     phase(&mut mac, "connected").await;
     assert_eq!(
         mac.invoke(
             "remote_command",
-            json!({ "command": { "action": "pause", "itemId": "nothing" } })
+            json!({ "command": { "action": "pause", "itemId": "nothing" }, "link": 1 })
         ),
         Err(json!("stale_item"))
     );
@@ -767,23 +782,26 @@ async fn only_devices_on_the_network_that_allow_control_can_be_asked() {
     assert_eq!(
         mac.invoke(
             "remote_connect",
-            json!({ "deviceId": tv.device_id().to_string() })
+            json!({ "deviceId": tv.device_id().to_string(), "link": 1 })
         ),
         Err(json!("That device doesn't allow remote control."))
     );
     assert_eq!(
         mac.invoke(
             "remote_connect",
-            json!({ "deviceId": DeviceKey::generate().device_id().to_string() })
+            json!({ "deviceId": DeviceKey::generate().device_id().to_string(), "link": 1 })
         ),
         Err(json!("That device isn't on the network now."))
     );
     assert_eq!(
-        mac.invoke("remote_connect", json!({ "deviceId": "nope" })),
+        mac.invoke("remote_connect", json!({ "deviceId": "nope", "link": 1 })),
         Err(json!("That isn't a device id."))
     );
     assert_eq!(
-        mac.invoke("remote_command", json!({ "command": { "action": "stop" } })),
+        mac.invoke(
+            "remote_command",
+            json!({ "command": { "action": "stop" }, "link": 1 })
+        ),
         Err(json!("notConnected"))
     );
     // Leaving with nothing to leave is fine.
@@ -807,11 +825,11 @@ async fn connecting_again_is_not_undone_by_the_old_link_ending() {
     let (mut mac, mut tv) = pair("always").await;
     let tv_id = tv.device_id().to_string();
     mac.event("remote://devices").await;
-    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     phase(&mut mac, "connected").await;
     mac.invoke("remote_leave", json!({})).unwrap();
-    mac.invoke("remote_connect", json!({ "deviceId": tv_id }))
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 2 }))
         .unwrap();
     phase(&mut mac, "connected").await;
     // The new session works, and the old one's end said nothing.
@@ -821,7 +839,7 @@ async fn connecting_again_is_not_undone_by_the_old_link_ending() {
             crate::test_support::invoke_on(
                 &handle,
                 "remote_command",
-                json!({ "command": { "action": "stop" } }),
+                json!({ "command": { "action": "stop" }, "link": 2 }),
             )
         })
     };
@@ -844,12 +862,13 @@ async fn connecting_again_is_not_undone_by_the_old_link_ending() {
 async fn only_the_current_link_reaches_the_webview() {
     let mut running = Running::start(|_| {}).await;
     let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
     let host = TauriLinkHost {
         app: running.app.handle(),
         devices: Arc::new(Mutex::new(Devices::new(own))),
-        link: Arc::new(Mutex::new(Some(LinkHandle::detached(2)))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
     };
-    let device = DeviceKey::generate().device_id();
     let state = VersionedState {
         epoch: "e".into(),
         version: 1,
@@ -859,10 +878,220 @@ async fn only_the_current_link_reaches_the_webview() {
     host.phase(1, &device, &Phase::Reconnecting { attempt: 1 });
     host.state(1, &device, &state);
     host.phase(2, &device, &Phase::Connected);
-    host.state(2, &device, &VersionedState { version: 2, ..state });
+    host.state(
+        2,
+        &device,
+        &VersionedState {
+            version: 2,
+            ..state
+        },
+    );
     // Events come in order, so the first of each is link 2's.
     let controller = running.event("remote://controller").await;
     assert_eq!(controller["phase"], json!("connected"));
     let shown = running.event("remote://state").await;
     assert_eq!(shown["state"]["version"], json!(2));
+}
+
+#[test]
+fn consent_brings_the_window_up_at_most_every_thirty_seconds() {
+    let now = Instant::now() + Duration::from_secs(120);
+    assert!(may_raise(None, now));
+    assert!(!may_raise(Some(now - Duration::from_secs(29)), now));
+    assert!(may_raise(Some(now - RAISE_EVERY), now));
+    assert!(may_raise(Some(now - Duration::from_secs(31)), now));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flood_of_states_reaches_the_webview_as_a_few_with_the_newest_last() {
+    let mut running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let host = TauriLinkHost {
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+    };
+    let state = |version| VersionedState {
+        epoch: "e".into(),
+        version,
+        state: mvp_core::remote::message::PlaybackSnapshot::default(),
+    };
+    for version in 1..=50 {
+        host.state(1, &device, &state(version));
+    }
+    let first = running.event("remote://state").await;
+    assert_eq!(first["state"]["version"], json!(1));
+    assert_eq!(first["link"], json!(1));
+    let held = running.event("remote://state").await;
+    assert_eq!(held["state"]["version"], json!(50), "the newest, held back");
+    tokio::time::sleep(STATE_EVERY * 3).await;
+    while let Ok((name, payload)) = running.events.try_recv() {
+        assert_ne!(name, "remote://state", "only two: {payload}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_state_from_a_link_that_went_is_dropped() {
+    let mut running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let slot = Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone()))));
+    let host = TauriLinkHost {
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: slot.clone(),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+    };
+    let state = |version| VersionedState {
+        epoch: "e".into(),
+        version,
+        state: mvp_core::remote::message::PlaybackSnapshot::default(),
+    };
+    host.state(1, &device, &state(1));
+    host.state(1, &device, &state(2));
+    running.event("remote://state").await;
+    *lock(&slot) = Some(LinkHandle::detached(2, device.clone()));
+    tokio::time::sleep(STATE_EVERY * 3).await;
+    while let Ok((name, payload)) = running.events.try_recv() {
+        assert_ne!(name, "remote://state", "{payload}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn links_are_named_by_the_webview_and_only_the_current_one_takes_commands() {
+    let (mut mac, tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 41 }))
+        .unwrap();
+    let connected = phase(&mut mac, "connected").await;
+    assert_eq!(connected["link"], json!(41));
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(41)));
+    assert_eq!(
+        mac.invoke(
+            "remote_command",
+            json!({ "command": { "action": "stop" }, "link": 40 })
+        ),
+        Err(json!("notConnected"))
+    );
+    assert_eq!(
+        mac.invoke(
+            "remote_catalog",
+            json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 1 }, "link": 40 })
+        ),
+        Err(json!("notConnected"))
+    );
+
+    // Leaving says what the list is now, since the left device is no
+    // longer kept in it.
+    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.event("remote://devices").await;
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_identity_tells_the_webview_its_link_ended() {
+    let (mut mac, tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 7 }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    mac.invoke("remote_reset_identity", json!({})).unwrap();
+    let closed = phase(&mut mac, "closed").await;
+    assert_eq!(closed["link"], json!(7));
+    assert_eq!(closed["reason"], json!("left"));
+    assert_eq!(closed["deviceId"], json!(tv_id));
+    mac.event("remote://devices").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn logos_another_device_sends_reach_the_webview_only_from_public_hosts() {
+    let mut running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let host = TauriLinkHost {
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+    };
+    let with_logo = |logo: &str| VersionedState {
+        epoch: "e".into(),
+        version: 1,
+        state: mvp_core::remote::message::PlaybackSnapshot {
+            item: Some(CatalogItem {
+                id: "live-1".into(),
+                logo: Some(logo.into()),
+                ..CatalogItem::default()
+            }),
+            ..Default::default()
+        },
+    };
+    host.state(1, &device, &with_logo("http://192.168.1.1/admin.png"));
+    let shown = running.event("remote://state").await;
+    assert_eq!(shown["state"]["state"]["item"]["id"], json!("live-1"));
+    assert_eq!(shown["state"]["state"]["item"].get("logo"), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_page_keeps_only_logos_this_device_may_load() {
+    let (mut mac, tv) = pair("always").await;
+    {
+        let state = tv.app.state();
+        let cache = state.cache.lock().unwrap();
+        cache
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Mine".into(),
+                provider_type: ProviderType::M3u,
+                url: "http://iptv.example/list.m3u".into(),
+                username: None,
+                password: None,
+                last_updated: None,
+                channel_count: 2,
+                epg_url: None,
+            })
+            .unwrap();
+        let channel = |id: &str, logo: &str| Channel {
+            id: id.into(),
+            name: id.into(),
+            url: format!("http://iptv.example/{id}.ts"),
+            logo_url: Some(logo.into()),
+            group_title: "UK".into(),
+            content_type: "live".into(),
+            ..Channel::default()
+        };
+        cache
+            .save_channels(
+                "p1",
+                &[
+                    channel("a", "http://10.1.1.1/a.png"),
+                    channel("b", "https://logos.example/b.png"),
+                ],
+            )
+            .unwrap();
+    }
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 3 }))
+        .unwrap();
+    phase(&mut mac, "connected").await;
+    let query = json!({ "kind": "items", "contentType": "live", "group": "UK", "limit": 10 });
+    let page = mac
+        .invoke(
+            "remote_catalog",
+            json!({ "catalogQuery": query, "link": 3 }),
+        )
+        .unwrap();
+    let logos: Vec<Value> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i.get("logo").cloned().unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(logos, [Value::Null, json!("https://logos.example/b.png")]);
 }

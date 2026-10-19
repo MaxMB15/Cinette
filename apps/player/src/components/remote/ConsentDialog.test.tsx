@@ -72,8 +72,14 @@ describe("ConsentDialog", () => {
 			name: "Allow Max's iPhone to control this device?",
 		});
 		expect(dialog).toHaveTextContent("iPhone on your network");
-		expect(screen.getByLabelText("Code 0 4 2 9 1 7")).toHaveTextContent("042 917");
+		expect(screen.getByText("042 917")).toHaveAttribute("aria-hidden");
+		expect(screen.getByText("Code 0 4 2 9 1 7")).toHaveClass("sr-only");
 		expect(dialog).toHaveTextContent("Expires in 30 s");
+		expect(
+			screen.getByRole("heading", { name: "Allow Max's iPhone to control this device?" }),
+			"focus starts on the question, not on a button"
+		).toHaveFocus();
+		expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
 	});
 
 	it("allows", async () => {
@@ -140,10 +146,16 @@ describe("ConsentDialog", () => {
 		await act(async () => {});
 		ask(1, 2_000);
 		expect(screen.getByRole("dialog")).toHaveTextContent("Expires in 2 s");
+		const said = () =>
+			Array.from(document.querySelectorAll("[aria-live]")).map((n) => n.textContent);
+		expect(said(), "the count isn't read out").toStrictEqual([""]);
 		act(() => vi.advanceTimersByTime(1_000));
 		expect(screen.getByRole("dialog")).toHaveTextContent("Expires in 1 s");
+		expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
 		act(() => vi.advanceTimersByTime(1_000));
 		expect(screen.getByRole("dialog")).toHaveTextContent("Expired");
+		expect(said()).toStrictEqual(["The request expired."]);
+		expect(screen.getByRole("button", { name: "Allow" })).toBeDisabled();
 	});
 
 	it("keeps going when answering fails", async () => {

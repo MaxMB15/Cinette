@@ -12,6 +12,7 @@ import {
 	getMountedPlayer,
 	remotePlayerState,
 	setMountedPlayer,
+	waitForMountedPlayer,
 	type RemoteCommand,
 } from "@/lib/remote-target";
 import {
@@ -52,8 +53,8 @@ const useTauriEvent = <T>(event: string, handler: (payload: T) => void): void =>
 
 /**
  * Carries out the commands other Cinette devices send this one. Mounted
- * once, in `App`. A load with no player open opens it the way the channel
- * list does, so the play is this device's own and goes in its history.
+ * once, in `App`. A load with no player open opens the player page and
+ * plays through it, so the play is this device's own and goes in its history.
  */
 export const useRemoteTarget = (): void => {
 	const { channels } = useChannels();
@@ -68,10 +69,8 @@ export const useRemoteTarget = (): void => {
 				// An episode comes with the command, since the channel list has none.
 				findChannel: (id) =>
 					channel?.id === id ? channel : channelsRef.current.find((c) => c.id === id),
-				openPlayer: (channel) =>
-					navigateRef.current("/player", {
-						state: { url: channel.url, channelName: channel.name, channel },
-					}),
+				openPlayer: () => navigateRef.current("/player"),
+				waitForPlayer: waitForMountedPlayer,
 			})
 				.then((outcome) => remoteFinishCommand(token, outcome))
 				.catch(() => {});

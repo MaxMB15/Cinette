@@ -148,6 +148,7 @@ register_commands![
     remote_commands::remote_devices,
     remote_commands::remote_local_network_denied,
     remote_commands::remote_connect,
+    remote_commands::remote_link,
     remote_commands::remote_leave,
     remote_commands::remote_command,
     remote_commands::remote_catalog,

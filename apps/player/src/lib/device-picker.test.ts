@@ -138,6 +138,7 @@ describe("cinetteEntries", () => {
 				name: "Living Room",
 				deviceType: "fire-tv",
 				status: "unavailable",
+				why: "Doesn't allow remote control",
 			},
 		]);
 		expect(cinetteId("x")).toBe("cinette:x");

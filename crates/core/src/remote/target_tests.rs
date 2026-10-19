@@ -786,6 +786,8 @@ fn over_the_limit_a_session_hears_only_that_it_is_limited() {
         id: 6,
         query: CatalogQuery::Groups {
             content_type: "live".into(),
+            cursor: None,
+            limit: 10,
         },
     };
     let actions = say(&mut target, conn, &mut channel, &catalog, now);

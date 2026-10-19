@@ -16,16 +16,21 @@ vi.mock("@tauri-apps/api/event", () => ({
 	}),
 }));
 
-vi.mock("@/lib/tauri", () => ({
+const bridge = vi.hoisted(() => ({
 	remoteDevices: vi.fn(() => Promise.resolve([])),
 	remoteConnect: vi.fn(() => Promise.resolve()),
+	remoteLink: vi.fn(() => Promise.resolve(null)),
 	remoteLeave: vi.fn(() => Promise.resolve()),
 	remoteCommand: vi.fn(() => Promise.resolve(4)),
 }));
+vi.mock("@/lib/tauri", () => bridge);
 
 import { listen } from "@tauri-apps/api/event";
-import { remoteCommand, remoteConnect, remoteLeave } from "@/lib/tauri";
-import { remoteControl, useRemoteControl } from "./useRemoteControl";
+
+const { remoteCommand, remoteConnect, remoteLeave } = bridge;
+// The store is the module's own, so each test loads the module afresh.
+let remoteControl: typeof import("./useRemoteControl").remoteControl;
+let useRemoteControl: typeof import("./useRemoteControl").useRemoteControl;
 
 const tv = {
 	deviceId: "tv1",
@@ -35,10 +40,12 @@ const tv = {
 	available: true,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
 	handlers.clear();
 	stops.length = 0;
 	vi.clearAllMocks();
+	vi.resetModules();
+	({ remoteControl, useRemoteControl } = await import("./useRemoteControl"));
 });
 
 describe("useRemoteControl", () => {
@@ -61,7 +68,8 @@ describe("useRemoteControl", () => {
 	it("connects and leaves through the backend", async () => {
 		const { result, unmount } = renderHook(() => useRemoteControl());
 		await act(() => result.current.connect(tv));
-		expect(remoteConnect).toHaveBeenCalledWith("tv1");
+		const id = result.current.link!.id;
+		expect(remoteConnect).toHaveBeenCalledWith("tv1", id);
 		expect(result.current.link?.deviceId).toBe("tv1");
 		act(() =>
 			handlers.get("remote://state")!({
@@ -69,6 +77,7 @@ describe("useRemoteControl", () => {
 				id: 0,
 				payload: {
 					deviceId: "tv1",
+					link: id,
 					state: {
 						epoch: "e",
 						version: 1,
@@ -101,7 +110,7 @@ describe("useRemoteControl", () => {
 		expect(at).toBeGreaterThan(0);
 		expect(at).toBeLessThanOrEqual(performance.now());
 		await act(() => result.current.link!.destination.play());
-		expect(remoteCommand).toHaveBeenCalledWith({ action: "play", itemId: "live-1" });
+		expect(remoteCommand).toHaveBeenCalledWith(id, { action: "play", itemId: "live-1" });
 		await act(() => result.current.leave());
 		expect(remoteLeave).toHaveBeenCalledTimes(1);
 		expect(result.current.link).toBeNull();
@@ -114,5 +123,46 @@ describe("useRemoteControl", () => {
 		await act(async () => {});
 		unmount();
 		await act(async () => {});
+	});
+
+	it("keeps following events while a link is open, after its users went", async () => {
+		const { result, unmount } = renderHook(() => useRemoteControl());
+		await waitFor(() => expect(handlers.has("remote://controller")).toBe(true));
+		await act(() => result.current.connect(tv));
+		const id = result.current.link!.id;
+		unmount();
+		await act(async () => {});
+		expect(
+			stops.some((s) => s.mock.calls.length > 0),
+			"still listening"
+		).toBe(false);
+		// The link ends while no one looks; the store still hears it.
+		act(() =>
+			handlers.get("remote://controller")!({
+				event: "",
+				id: 0,
+				payload: { deviceId: "tv1", link: id, phase: "closed", reason: "lost" },
+			})
+		);
+		expect(remoteControl().getState().link).toBeNull();
+		await waitFor(() => expect(stops.every((s) => s.mock.calls.length === 1)).toBe(true));
+	});
+
+	it("stops waiting for a link to end once someone uses it again", async () => {
+		const first = renderHook(() => useRemoteControl());
+		await waitFor(() => expect(handlers.has("remote://controller")).toBe(true));
+		await act(() => first.result.current.connect(tv));
+		first.unmount();
+		const again = renderHook(() => useRemoteControl());
+		await act(async () => {});
+		expect(vi.mocked(listen), "the same listeners go on").toHaveBeenCalledTimes(3);
+		await act(() => again.result.current.leave());
+		await act(async () => {});
+		expect(
+			stops.some((s) => s.mock.calls.length > 0),
+			"someone still uses it"
+		).toBe(false);
+		again.unmount();
+		await waitFor(() => expect(stops.every((s) => s.mock.calls.length === 1)).toBe(true));
 	});
 });

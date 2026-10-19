@@ -130,3 +130,32 @@ fn an_error_goes_on_as_its_code() {
     let newer = player_state(json!({ "status": "error", "error": "notYetInvented" }));
     assert_eq!(newer.into_snapshot(&[]).error, Some(PlaybackError::Unknown));
 }
+
+#[test]
+fn a_logo_on_the_site_the_item_streams_from_stays_home() {
+    let next_to_stream = player_state(json!({ "item": {
+        "id": "p1-live-7", "name": "News", "contentType": "live",
+        "logoUrl": "http://img.panel.example/news.png",
+        "streamHosts": ["Live.Panel.Example"]
+    }}));
+    assert_eq!(next_to_stream.into_snapshot(&[]).item.unwrap().logo, None);
+    let elsewhere = player_state(json!({ "item": {
+        "id": "p1-live-7", "name": "News", "contentType": "live",
+        "logoUrl": "https://logos.example/news.png",
+        "streamHosts": ["live.panel.example"]
+    }}));
+    assert_eq!(
+        elsewhere.into_snapshot(&[]).item.unwrap().logo.as_deref(),
+        Some("https://logos.example/news.png")
+    );
+    // Next to a provider's own server, too.
+    let next_to_provider = player_state(json!({ "item": {
+        "id": "p1-live-7", "name": "News", "contentType": "live",
+        "logoUrl": "http://cdn.iptv.example/news.png"
+    }}));
+    let hosts = ["iptv.example".to_owned()];
+    assert_eq!(
+        next_to_provider.into_snapshot(&hosts).item.unwrap().logo,
+        None
+    );
+}

@@ -32,7 +32,9 @@ import {
 	ConnectStatusDialog,
 	ControllersBar,
 	DevicesButton,
+	LEAVE_FAILED,
 	LOCAL_NETWORK_DENIED,
+	NONE_FOUND,
 	RemoteBar,
 } from "./RemoteControls";
 
@@ -76,7 +78,7 @@ const send = vi.fn<(command: unknown) => Promise<number>>(() => Promise.resolve(
 
 const link = (phase: Link["phase"], code: string | null = null): Link => {
 	const destination = createCinetteDestination("tv1", "Living Room", send);
-	return { deviceId: "tv1", name: "Living Room", phase, code, destination };
+	return { id: 3, deviceId: "tv1", name: "Living Room", phase, code, destination };
 };
 
 beforeEach(() => {
@@ -90,20 +92,22 @@ describe("DevicesButton", () => {
 	it("opens the picker with this device and the Cinette devices", () => {
 		render(<DevicesButton />);
 		expect(screen.queryByRole("dialog"), "closed until asked").toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		const picker = screen.getByRole("dialog", { name: "Play on" });
 		expect(within(picker).getByRole("button", { name: /This device/ })).toHaveAttribute(
 			"aria-current",
 			"true"
 		);
-		expect(within(picker).getByRole("button", { name: /Den/ })).toBeDisabled();
+		expect(within(picker).getByRole("button", { name: /Den/ })).toHaveAttribute(
+			"aria-disabled",
+			"true"
+		);
 	});
 
 	it("says when macOS keeps it off the local network, checking at each opening", async () => {
 		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
 		render(<DevicesButton />);
-		const open = () =>
-			fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		const open = () => fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		open();
 		const picker = screen.getByRole("dialog", { name: "Play on" });
 		expect(await within(picker).findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
@@ -121,8 +125,7 @@ describe("DevicesButton", () => {
 			.mockResolvedValueOnce(true)
 			.mockRejectedValueOnce("unavailable");
 		render(<DevicesButton />);
-		const open = () =>
-			fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		const open = () => fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		const close = () =>
 			fireEvent.keyDown(screen.getByRole("dialog", { name: "Play on" }), { key: "Escape" });
 		open();
@@ -140,7 +143,7 @@ describe("DevicesButton", () => {
 		const kitchen = { ...tv, deviceId: "k1", name: "Kitchen" };
 		control.state = { ...control.state, devices: [tv, kitchen] };
 		render(<DevicesButton />);
-		const button = screen.getByRole("button", { name: "Play on another device" });
+		const button = screen.getByRole("button", { name: "Devices" });
 		expect(button).toHaveAttribute("title", "Play on another device");
 		fireEvent.click(button);
 		fireEvent.click(screen.getByRole("button", { name: /Kitchen/ }));
@@ -151,8 +154,7 @@ describe("DevicesButton", () => {
 	it("clears an earlier error when asking again", async () => {
 		control.connect.mockRejectedValueOnce("Couldn't reach it.");
 		render(<DevicesButton />);
-		const open = () =>
-			fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		const open = () => fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		open();
 		fireEvent.click(screen.getByRole("button", { name: /Living Room/ }));
 		await screen.findByRole("status");
@@ -166,7 +168,7 @@ describe("DevicesButton", () => {
 	it("says why a request couldn't start, until dismissed", async () => {
 		control.connect.mockRejectedValue("That device isn't on the network now.");
 		render(<DevicesButton />);
-		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		fireEvent.click(screen.getByRole("button", { name: /Living Room/ }));
 		expect(await screen.findByRole("status")).toHaveTextContent(
 			"That device isn't on the network now."
@@ -175,10 +177,10 @@ describe("DevicesButton", () => {
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 
-	it("shows which device plays, and choosing this device returns", () => {
+	it("shows which device plays, and choosing this device returns", async () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		render(<DevicesButton />);
-		const button = screen.getByRole("button", { name: "Playing on Living Room" });
+		const button = screen.getByRole("button", { name: "Devices, playing on Living Room" });
 		expect(button).toHaveAttribute("title", "Playing on Living Room");
 		expect(button).toHaveClass("text-primary");
 		fireEvent.click(button);
@@ -190,11 +192,46 @@ describe("DevicesButton", () => {
 		fireEvent.click(within(picker).getByRole("button", { name: /This device/ }));
 		expect(control.leave).toHaveBeenCalledTimes(1);
 		expect(control.connect).not.toHaveBeenCalled();
+		await act(async () => {});
+		expect(screen.queryByRole("status"), "it worked, so nothing to say").toBeNull();
+	});
+
+	it("says when ending the session from the picker didn't work", async () => {
+		control.leave.mockRejectedValueOnce("gone");
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices, playing on Living Room" }));
+		fireEvent.click(screen.getByRole("button", { name: /This device/ }));
+		expect(await screen.findByRole("status")).toHaveTextContent(
+			"Couldn't end the session. Try again."
+		);
+		expect(screen.getByRole("status")).toHaveClass("bottom-20");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("says when no other device was found", async () => {
+		control.state = { ...control.state, devices: [] };
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		expect(await screen.findByRole("status")).toHaveTextContent(NONE_FOUND);
+	});
+
+	it("says a device set to Never allow doesn't allow it", () => {
+		control.state = {
+			...control.state,
+			devices: [{ ...tv, deviceId: "n1", name: "Garage", controlAllowed: false }],
+		};
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		expect(screen.getByRole("button", { name: /Garage/ })).toHaveTextContent(
+			"Doesn't allow remote control"
+		);
 	});
 
 	it("does nothing for the device already chosen", () => {
 		render(<DevicesButton />);
-		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		fireEvent.click(screen.getByRole("button", { name: /This device/ }));
 		expect(control.leave).not.toHaveBeenCalled();
 		expect(screen.queryByRole("dialog")).toBeNull();
@@ -202,7 +239,7 @@ describe("DevicesButton", () => {
 
 	it("closes the picker with Escape", () => {
 		render(<DevicesButton />);
-		fireEvent.click(screen.getByRole("button", { name: "Play on another device" }));
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
@@ -235,17 +272,18 @@ describe("ConnectStatusDialog", () => {
 		render(<ConnectStatusDialog />);
 		const dialog = screen.getByRole("dialog", { name: "Waiting for Living Room to allow it" });
 		expect(dialog).toHaveTextContent("Check that this code matches the one on that device.");
-		expect(screen.getByLabelText("Code 0 4 2 9 1 7")).toHaveTextContent("042 917");
+		expect(screen.getByText("Code 0 4 2 9 1 7")).toHaveClass("sr-only");
+		expect(screen.getByText("042 917")).toHaveAttribute("aria-hidden");
 	});
 
 	it("shows the code as soon as the handshake gives it", () => {
 		control.state = {
 			...control.state,
-			link: link({ phase: "verifying", code: "123456" }, "123456"),
+			link: link({ phase: "verifying", code: "123456", name: "Living Room" }, "123456"),
 		};
 		render(<ConnectStatusDialog />);
 		screen.getByRole("dialog", { name: "Connecting to Living Room" });
-		expect(screen.getByLabelText("Code 1 2 3 4 5 6")).toBeInTheDocument();
+		expect(screen.getByText("Code 1 2 3 4 5 6")).toBeInTheDocument();
 	});
 
 	it("cancels with the button or Escape", () => {
@@ -266,7 +304,7 @@ describe("RemoteBar", () => {
 
 	it("names the device that receives commands and what plays there", () => {
 		const l = link({ phase: "connected" });
-		l.destination.receive(snapshot, 0);
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		const bar = screen.getByRole("region", { name: "Remote control" });
@@ -280,12 +318,17 @@ describe("RemoteBar", () => {
 		render(<RemoteBar />);
 		expect(screen.getByRole("region")).toHaveTextContent("Nothing playing");
 		expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-		act(() => l.destination.receive(snapshot, 0));
+		act(() => l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0));
 		fireEvent.click(screen.getByRole("button", { name: "Pause" }));
 		await waitFor(() =>
 			expect(send).toHaveBeenCalledWith({ action: "pause", itemId: "live-7" })
 		);
-		act(() => l.destination.receive({ ...snapshot, status: "paused" }, 0));
+		act(() =>
+			l.destination.receive(
+				{ epoch: "e", version: 2, state: { ...snapshot, status: "paused" } },
+				0
+			)
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Play" }));
 		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 		await waitFor(() => expect(send).toHaveBeenCalledWith({ action: "stop" }));
@@ -294,10 +337,8 @@ describe("RemoteBar", () => {
 
 	it("leaves out play and pause where the other device can't pause", () => {
 		const l = link({ phase: "connected" });
-		l.destination.receive(
-			{ ...snapshot, capabilities: { ...snapshot.capabilities, pause: false } },
-			0
-		);
+		const state = { ...snapshot, capabilities: { ...snapshot.capabilities, pause: false } };
+		l.destination.receive({ epoch: "e", version: 1, state }, 0);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
@@ -306,7 +347,10 @@ describe("RemoteBar", () => {
 
 	it("shows a buffering item as playing", () => {
 		const l = link({ phase: "connected" });
-		l.destination.receive({ ...snapshot, status: "buffering" }, 0);
+		l.destination.receive(
+			{ epoch: "e", version: 1, state: { ...snapshot, status: "buffering" } },
+			0
+		);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
@@ -315,7 +359,7 @@ describe("RemoteBar", () => {
 	it("keeps going when a control is refused", async () => {
 		send.mockRejectedValueOnce("stale_item");
 		const l = link({ phase: "connected" });
-		l.destination.receive(snapshot, 0);
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		fireEvent.click(screen.getByRole("button", { name: "Pause" }));
@@ -338,8 +382,24 @@ describe("RemoteBar", () => {
 	it("returns to independent playback", () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		render(<RemoteBar />);
+		expect(screen.queryByRole("status")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		expect(control.leave).toHaveBeenCalledTimes(1);
+	});
+
+	it("says when returning to independent playback didn't work", async () => {
+		control.leave.mockRejectedValueOnce("gone");
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		render(<RemoteBar />);
+		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
+		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
+		expect(screen.getByRole("status")).toHaveClass("bottom-4");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("status")).toBeNull();
+		// A second try that works says nothing.
+		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
+		await act(async () => {});
+		expect(screen.queryByRole("status")).toBeNull();
 	});
 
 	it("says once why a link ended", () => {

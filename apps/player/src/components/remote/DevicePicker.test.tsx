@@ -136,9 +136,9 @@ describe("DevicePicker", () => {
 
 	it("keeps rows that can't be chosen listed with the reason", () => {
 		const { onSelect } = picker();
-		expect(row(/Garage/)).toBeDisabled();
+		expect(row(/Garage/)).toHaveAttribute("aria-disabled", "true");
 		expect(row(/Garage/)).toHaveTextContent("Can't play this sound (dts)");
-		expect(row(/Attic/)).toBeDisabled();
+		expect(row(/Attic/)).toHaveAttribute("aria-disabled", "true");
 		expect(row(/Attic/)).toHaveTextContent("Checking…");
 		fireEvent.click(row(/Garage/));
 		expect(onSelect).not.toHaveBeenCalled();

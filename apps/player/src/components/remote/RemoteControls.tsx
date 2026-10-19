@@ -24,6 +24,7 @@ const BUTTON = cn(
  */
 export const DevicesButton = ({ className }: { className?: string }) => {
 	const { devices, link, connect, leave } = useRemoteControl();
+	const [leaveFailed, setLeaveFailed] = useState(false);
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [denied, setDenied] = useState(false);
@@ -39,7 +40,8 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 		if (id === activeId) return;
 		// Choosing this device is returning to independent playback.
 		if (id === LOCAL_ENTRY.id) {
-			void leave();
+			setLeaveFailed(false);
+			leave().catch(() => setLeaveFailed(true));
 			return;
 		}
 		// The picker's rows come from this list, so the device is in it.
@@ -52,7 +54,8 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 			<button
 				type="button"
 				title={link ? `Playing on ${link.name}` : "Play on another device"}
-				aria-label={link ? `Playing on ${link.name}` : "Play on another device"}
+				aria-label={link ? `Devices, playing on ${link.name}` : undefined}
+				aria-haspopup="dialog"
 				onClick={() => setOpen(true)}
 				className={cn(
 					"flex flex-col items-center justify-center w-full py-3 gap-1 transition-colors",
@@ -70,9 +73,12 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 				activeId={activeId}
 				onSelect={select}
 				onOpen={checkNetwork}
-				notice={denied ? LOCAL_NETWORK_DENIED : null}
+				notice={denied ? LOCAL_NETWORK_DENIED : devices.length === 0 ? NONE_FOUND : null}
 			/>
-			{error && <Notice message={error} onDismiss={() => setError(null)} />}
+			{error && <Notice message={error} onDismiss={() => setError(null)} raised />}
+			{leaveFailed && (
+				<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
+			)}
 		</>
 	);
 };
@@ -81,11 +87,31 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 export const LOCAL_NETWORK_DENIED =
 	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
 
-const Notice = ({ message, onDismiss }: { message: string; onDismiss: () => void }) =>
+/** What the picker says when it found no other device. */
+export const NONE_FOUND =
+	"No other Cinette device on this network yet. Cinette needs to be open on it, with discovery on.";
+
+/** What shows when ending a session didn't work. */
+export const LEAVE_FAILED = "Couldn't end the session. Try again.";
+
+/** A note at the bottom of the screen. A `raised` one sits above the
+ *  others, so two don't cover each other. */
+const Notice = ({
+	message,
+	onDismiss,
+	raised = false,
+}: {
+	message: string;
+	onDismiss: () => void;
+	raised?: boolean;
+}) =>
 	createPortal(
 		<div
 			role="status"
-			className="fixed bottom-4 left-1/2 -translate-x-1/2 z-10000 flex items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl"
+			className={cn(
+				"fixed left-1/2 -translate-x-1/2 z-10000 flex items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl max-w-[calc(100vw-2rem)] break-words",
+				raised ? "bottom-20" : "bottom-4"
+			)}
 		>
 			<span>{message}</span>
 			<button
@@ -119,7 +145,7 @@ export const ConnectStatusDialog = () => {
 			overlayClassName="z-10000"
 			className="bg-card border border-border rounded-lg p-5 w-[320px] max-w-[calc(100vw-2rem)] shadow-xl"
 		>
-			<h2 id={titleId} className="text-base font-semibold mb-1">
+			<h2 id={titleId} className="text-base font-semibold mb-1 break-words">
 				{phase.phase === "pending"
 					? `Waiting for ${link.name} to allow it`
 					: `Connecting to ${link.name}`}
@@ -130,11 +156,9 @@ export const ConnectStatusDialog = () => {
 					: "Looking for it on the network…"}
 			</p>
 			{code && (
-				<p
-					className="text-3xl font-mono font-semibold tracking-widest text-center mb-5"
-					aria-label={`Code ${code.split("").join(" ")}`}
-				>
-					{formatCode(code)}
+				<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-5">
+					<span aria-hidden>{formatCode(code)}</span>
+					<span className="sr-only">Code {code.split("").join(" ")}</span>
 				</p>
 			)}
 			<div className="flex justify-end">
@@ -209,8 +233,10 @@ export const ControllersBar = () => {
 			<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
 			<span className="font-medium">Controlled from</span>
 			{connected.map((s) => (
-				<span key={s.sessionId} className="flex items-center gap-1">
-					<span>{s.name}</span>
+				<span key={s.sessionId} className="flex items-center gap-1 min-w-0">
+					<span className="truncate max-w-64" title={s.name}>
+						{s.name}
+					</span>
 					<button
 						type="button"
 						className={`${BUTTON} hover:bg-accent`}
@@ -233,6 +259,7 @@ export const ControllersBar = () => {
 export const RemoteBar = () => {
 	const { link, ended, leave } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
+	const [leaveFailed, setLeaveFailed] = useState(false);
 	if (link && (link.phase.phase === "connected" || link.phase.phase === "reconnecting")) {
 		return (
 			<div
@@ -241,7 +268,7 @@ export const RemoteBar = () => {
 				className="flex items-center gap-3 px-4 py-2 border-b border-border bg-primary/10 text-sm"
 			>
 				<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
-				<span className="font-medium shrink-0">
+				<span className="font-medium min-w-0 truncate" title={link.name}>
 					{link.phase.phase === "reconnecting"
 						? `Reconnecting to ${link.name}…`
 						: `Playing on ${link.name}`}
@@ -250,10 +277,16 @@ export const RemoteBar = () => {
 				<button
 					type="button"
 					className={`${BUTTON} ml-auto shrink-0 hover:bg-accent`}
-					onClick={() => void leave()}
+					onClick={() => {
+						setLeaveFailed(false);
+						leave().catch(() => setLeaveFailed(true));
+					}}
 				>
 					Return to independent playback
 				</button>
+				{leaveFailed && (
+					<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} />
+				)}
 			</div>
 		);
 	}

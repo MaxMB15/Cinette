@@ -580,9 +580,14 @@ export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devic
 export const remoteLocalNetworkDenied = (): Promise<boolean> =>
 	invoke("remote_local_network_denied");
 
-/** Asks a device for control. Progress comes as `remote://controller`. */
-export const remoteConnect = (deviceId: string): Promise<void> =>
-	invoke("remote_connect", { deviceId });
+/** Asks a device for control. Progress comes as `remote://controller`.
+ *  `link` is a number this side picks; that link's events carry it, and its
+ *  commands name it. */
+export const remoteConnect = (deviceId: string, link: number): Promise<void> =>
+	invoke("remote_connect", { deviceId, link });
+
+/** The link the backend holds now, if any. */
+export const remoteLink = (): Promise<number | null> => invoke("remote_link");
 
 /** Ends the session with the controlled device. It keeps playing. */
 export const remoteLeave = (): Promise<void> => invoke("remote_leave");
@@ -590,17 +595,19 @@ export const remoteLeave = (): Promise<void> => invoke("remote_leave");
 /** Resolves with the other device's state version once it carried the
  *  command out. Rejects with the protocol's error code, like `stale_item`,
  *  or `notConnected`. */
-export const remoteCommand = (command: RemoteCommand): Promise<number> =>
-	invoke("remote_command", { command });
+export const remoteCommand = (link: number, command: RemoteCommand): Promise<number> =>
+	invoke("remote_command", { command, link });
 
 /** A query for the controlled device's catalog. */
 export type CatalogQuery =
-	| { kind: "groups"; contentType: string }
+	| { kind: "groups"; contentType: string; cursor?: string; limit: number }
 	| { kind: "items"; contentType: string; group: string; cursor?: string; limit: number }
 	| { kind: "search"; query: string; contentType?: string; limit: number }
-	| { kind: "episodes"; seriesId: string };
+	| { kind: "episodes"; seriesId: string; cursor?: string; limit: number };
 
+/** A page of the catalog of the device link `link` goes to. */
 export const remoteCatalog = (
+	link: number,
 	catalogQuery: CatalogQuery
 ): Promise<{ items: CatalogItem[]; next: string | null }> =>
-	invoke("remote_catalog", { catalogQuery });
+	invoke("remote_catalog", { catalogQuery, link });

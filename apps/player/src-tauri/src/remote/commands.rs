@@ -95,6 +95,10 @@ pub struct PlayerItem {
     pub series_title: Option<String>,
     pub season: Option<u32>,
     pub episode: Option<u32>,
+    /// The hosts it streams from. Never sent on; a logo on the same site is
+    /// dropped.
+    #[serde(default)]
+    pub stream_hosts: Vec<String>,
 }
 
 /// A number the webview sent, or 0 if it isn't one.
@@ -111,6 +115,8 @@ impl PlayerState {
     /// can go.
     pub fn into_snapshot(self, provider_hosts: &[String]) -> PlaybackSnapshot {
         let item = self.item.map(|i| {
+            let mut hosts = provider_hosts.to_vec();
+            hosts.extend(i.stream_hosts.iter().map(|h| h.to_ascii_lowercase()));
             let channel = Channel {
                 id: i.id,
                 name: i.name,
@@ -122,7 +128,15 @@ impl PlayerState {
                 episode: i.episode,
                 ..Channel::default()
             };
-            mvp_core::remote::catalog::CatalogItem::from_channel(&channel, provider_hosts)
+            let mut item = mvp_core::remote::catalog::CatalogItem::from_channel(&channel, &hosts);
+            if item
+                .logo
+                .as_deref()
+                .is_some_and(|logo| super::logos::on_a_provider_site(logo, &hosts))
+            {
+                item.logo = None;
+            }
+            item
         });
         PlaybackSnapshot {
             status: self.status,
@@ -217,6 +231,8 @@ mod imp {
     pub fn link_error(e: crate::remote::link::LinkError) -> String {
         match e {
             crate::remote::link::LinkError::NotConnected => not_connected(),
+            crate::remote::link::LinkError::TimedOut => "timedOut".to_owned(),
+            crate::remote::link::LinkError::Busy => "busy".to_owned(),
             crate::remote::link::LinkError::Refused(code) => serde_json::to_value(code)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
@@ -415,20 +431,38 @@ pub async fn remote_local_network_denied() -> bool {
 }
 
 /// Asks a device for control. Progress comes as `remote://controller`.
+/// `link` is a number the webview picks to tell this link from others: its
+/// events carry it, and its commands name it.
 #[command]
 pub async fn remote_connect<R: Runtime>(
     app: AppHandle<R>,
     device_id: String,
+    link: u64,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let id = mvp_core::remote::identity::DeviceId::parse(&device_id)
             .ok_or_else(|| "That isn't a device id.".to_owned())?;
-        imp::service(&app)?.connect(id)
+        imp::service(&app)?.connect(id, link)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, device_id);
+        let _ = (app, device_id, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The link this device holds now, if any, as the number `remote_connect`
+/// was given. A webview that reloaded uses it to drop a link it forgot.
+#[command]
+pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        Ok(imp::service(&app)?.current_link())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
         Err(UNAVAILABLE.into())
     }
 }
@@ -449,7 +483,7 @@ pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     }
 }
 
-/// Sends a playback command to the controlled device. Resolves with that
+/// Sends a playback command to the controlled device through link `link`. Resolves with that
 /// device's state version once it carried the command out; fails with an
 /// error code as the protocol spells it, such as `stale_item`, or
 /// `notConnected` when there is no session.
@@ -457,34 +491,41 @@ pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
 pub async fn remote_command<R: Runtime>(
     app: AppHandle<R>,
     command: mvp_core::remote::message::Command,
+    link: u64,
 ) -> Result<u64, String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let link = imp::service(&app)?.link().ok_or_else(imp::not_connected)?;
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
         link.command(command).await.map_err(imp::link_error)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, command);
+        let _ = (app, command, link);
         Err(UNAVAILABLE.into())
     }
 }
 
-/// A page of the controlled device's catalog.
+/// A page of the controlled device's catalog, through link `link`.
 #[command]
 pub async fn remote_catalog<R: Runtime>(
     app: AppHandle<R>,
     catalog_query: mvp_core::remote::catalog::CatalogQuery,
+    link: u64,
 ) -> Result<serde_json::Value, String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let link = imp::service(&app)?.link().ok_or_else(imp::not_connected)?;
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
         let (items, next) = link.catalog(catalog_query).await.map_err(imp::link_error)?;
+        let items: Vec<_> = items.into_iter().map(super::logos::checked).collect();
         Ok(serde_json::json!({ "items": items, "next": next }))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (app, catalog_query);
+        let _ = (app, catalog_query, link);
         Err(UNAVAILABLE.into())
     }
 }
