@@ -28,7 +28,15 @@ Cinette/
 - `main.tsx` mounts `App.tsx`, which sets up the routes: `/` (channels, movies,
   series and the other tabs), `/player`, `/playlists` and `/settings`.
 - `useChannels` provides all provider and channel state through a React context that
-  the whole app reads.
+  the whole app reads. It loads the providers and channels through TanStack Query.
+- TanStack Query caches what the backend answers. Every query, with its key and the
+  backend call behind it, is in `lib/queries.ts`. Each key starts with where the data
+  comes from, `"local"` for now, so another device can later answer the same queries
+  for the remote control. `lib/query-client.ts` sets the cache up: an answer stays
+  until the app changes that data and loads it again, a failed call isn't retried, and
+  calls go out while the computer is offline, since the backend is on this device.
+  Tests make a new client with `createTestQueryClient` or `wrapperFor` from
+  `test/query.tsx`.
 - `useMpv` polls the player state from Rust every second, and again as soon as the
   video stops or starts moving. It also listens for `mpv://` events such as
   buffering and reconnecting.
