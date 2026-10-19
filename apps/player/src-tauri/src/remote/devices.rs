@@ -161,28 +161,37 @@ impl Devices {
         }
     }
 
-    /// The entry the picker shows for each device: the one found last.
-    fn shown(&self) -> impl Iterator<Item = &Entry> {
-        let mut newest: BTreeMap<&DeviceId, &Entry> = BTreeMap::new();
+    /// What the picker shows for each device: the record found last, which
+    /// allows control if any of the device's records does. Someone else
+    /// can claim a device's id with a record that says it doesn't, and the
+    /// target refuses for itself when it really doesn't.
+    fn shown(&self) -> impl Iterator<Item = RemoteDevice> {
+        let mut newest: BTreeMap<&DeviceId, (&Entry, bool)> = BTreeMap::new();
         for entry in self.entries.values() {
-            let slot = newest.entry(&entry.id).or_insert(entry);
+            let allowed = entry.device.control_allowed;
+            let slot = newest.entry(&entry.id).or_insert((entry, allowed));
             // mutants: skip BinaryOperator: no two entries have the same count, so > and >= pick the same.
-            if entry.seen > slot.seen {
-                *slot = entry;
+            if entry.seen > slot.0.seen {
+                slot.0 = entry;
             }
+            slot.1 |= allowed;
         }
-        newest.into_values()
+        newest.into_values().map(|(entry, allowed)| RemoteDevice {
+            control_allowed: allowed,
+            ..entry.device.clone()
+        })
     }
 
     /// The list for the picker, by name, with each device once.
     pub fn list(&self) -> Vec<RemoteDevice> {
-        let mut list: Vec<RemoteDevice> = self.shown().map(|e| e.device.clone()).collect();
+        let mut list: Vec<RemoteDevice> = self.shown().collect();
         list.sort_by(|a, b| a.name.cmp(&b.name).then(a.device_id.cmp(&b.device_id)));
         list
     }
 
-    /// Where to reach a device, IPv4 first, or nothing when it isn't
-    /// available now.
+    /// Where to reach a device, or nothing when it isn't available now:
+    /// each record's addresses in turn, IPv4 first within a record. A
+    /// connection tries each until one has the device's key.
     pub fn addresses(&self, id: &DeviceId) -> Vec<SocketAddr> {
         self.entries
             .values()
@@ -192,8 +201,9 @@ impl Devices {
     }
 
     /// The device with this id, if it's listed.
-    pub fn get(&self, id: &DeviceId) -> Option<&RemoteDevice> {
-        self.shown().find(|e| &e.id == id).map(|e| &e.device)
+    pub fn get(&self, id: &DeviceId) -> Option<RemoteDevice> {
+        let id = id.to_string();
+        self.shown().find(|d| d.device_id == id)
     }
 }
 

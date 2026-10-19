@@ -69,9 +69,13 @@ struct Target {
 }
 
 async fn target(mode: ControlMode) -> Target {
+    target_keyed(mode, DeviceKey::generate()).await
+}
+
+/// A target with `key`, as one that restarted has its old key.
+async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let key = DeviceKey::generate();
     let (tx, prompts) = mpsc::unbounded_channel();
     let (hide, hidden) = mpsc::unbounded_channel();
     let silent = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -457,6 +461,61 @@ async fn a_dropped_connection_resumes_without_asking_again() {
 }
 
 #[tokio::test]
+async fn a_resume_a_restarted_target_asks_about_shows_its_code() {
+    let mut t = target(ControlMode::Ask).await;
+    let proxy = Proxy::new(t.port).await;
+    let at = Arc::new(std::sync::atomic::AtomicU16::new(proxy.port));
+    let to = at.clone();
+    let addresses: Addresses = Arc::new(move || {
+        vec![SocketAddr::from((
+            [127, 0, 0, 1],
+            to.load(Ordering::SeqCst),
+        ))]
+    });
+    let mut link = link_with(&t, addresses, GRACE);
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    t.handle.answer(request, Answer::Allow);
+    link.until_phase(Phase::Connected).await;
+
+    // The target restarts with its key but none of its sessions.
+    let mut restarted = target_keyed(ControlMode::Ask, t.key.clone()).await;
+    at.store(restarted.port, Ordering::SeqCst);
+    proxy.cut(true);
+    let (_, shown) = timeout(WAIT, restarted.prompts.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    link.until(|l| {
+        l.phases()
+            .iter()
+            .filter(|p| matches!(p, Phase::Pending { .. }))
+            .count()
+            == 2
+    })
+    .await;
+    let phases = link.phases();
+    let after = phases.iter().rposition(|p| *p == Phase::Connected).unwrap();
+    let codes: Vec<&str> = phases[after..]
+        .iter()
+        .filter_map(|p| match p {
+            Phase::Verifying { code, .. } => Some(code.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(codes, [shown.as_str()], "{phases:?}");
+    let verifying = phases
+        .iter()
+        .rposition(|p| matches!(p, Phase::Verifying { .. }));
+    let pending = phases
+        .iter()
+        .rposition(|p| matches!(p, Phase::Pending { .. }));
+    assert!(
+        verifying < pending,
+        "the code comes before the wait: {phases:?}"
+    );
+}
+
+#[tokio::test]
 async fn commands_while_reconnecting_are_not_sent() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
@@ -586,6 +645,24 @@ async fn the_wrong_key_at_the_address_is_refused() {
         link.closed().await,
         Ended::Target(CloseReason::IdentityMismatch)
     );
+}
+
+#[tokio::test]
+async fn an_address_with_the_wrong_key_is_passed_over_for_the_next() {
+    let t = target(ControlMode::Always).await;
+    let impostor = target(ControlMode::Always).await;
+    // Someone else claims the target's id, at an address listed first.
+    let (wrong, right) = (impostor.port, t.port);
+    let addresses: Addresses = Arc::new(move || {
+        vec![
+            SocketAddr::from(([127, 0, 0, 1], wrong)),
+            SocketAddr::from(([127, 0, 0, 1], right)),
+        ]
+    });
+    let mut link = link_with(&t, addresses, GRACE);
+    link.until_phase(Phase::Connected).await;
+    assert!(link.handle.command(Command::Stop).await.is_ok());
+    assert_eq!(t.handle.sessions().await.len(), 1);
 }
 
 #[tokio::test]
