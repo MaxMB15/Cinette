@@ -90,6 +90,18 @@ is still ahead. `downloads/keep_awake.rs` keeps the computer awake while ffmpeg
 records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
 `schedule_recording` and `stop_recording`, and both refuse on iOS and Android.
 
+`cast/` lists the Google Cast receivers on the local network. The first
+`get_cast_receivers` call starts one `_googlecast._tcp` browse through `discovery/`,
+which runs until the app quits. Changes go to the frontend as `cast://receivers`, at
+most one list every 200 ms, each with a revision so the frontend keeps the newest, and
+with whether macOS refuses local network access. A receiver's id is `cast:` and its TXT
+`id`, and its address stays in Rust. When several DNS-SD instances claim one id, as
+after a restart, the first live one is listed. One that goes away is dropped, unless
+`hold_cast_receivers` holds it, as for the active destination and an open picker's
+rows. Then it stays listed as unavailable. A receiver that couldn't be reached shows as
+unavailable for 30 seconds. At most 128 receivers are listed, and a browse that ends
+takes what it found with it. iOS doesn't browse yet, so it lists none.
+
 ### `crates/tauri-plugin-mpv`
 
 | File | Responsibility |

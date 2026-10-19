@@ -39,6 +39,9 @@ exclude_re = [
     # helper like that sets a field on a line of its own, not in a struct
     # update.
     '\btests::',
+    # Test helpers in a file module such as cast/tests.rs, which the pattern
+    # above doesn't match.
+    'src-tauri/src/cast/tests\.rs:',
     # The app's entry point builds the whole Tauri app and opens its window.
     'src-tauri/src/lib\.rs:.*\b(run|show_main_window)\b',
     # Logging sets the process's one tracing subscriber and panic hook. The
@@ -63,6 +66,12 @@ exclude_re = [
     # Starts caffeinate or systemd-inhibit, which would change the machine's
     # own sleep settings. The tests check the command it runs.
     'src-tauri/src/downloads/keep_awake\.rs:.*\bhold_while_running\b',
+    # Browses for Cast receivers on the real network. The tests pass a fake
+    # browse to everything around it.
+    'src-tauri/src/cast/mod\.rs:.*\bbrowse_network\b',
+    # Asks macOS whether it refuses local network access. On Linux, where
+    # the mutation runs build, it's always false.
+    'src-tauri/src/cast/mod\.rs:.*\blocal_network_denied\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
