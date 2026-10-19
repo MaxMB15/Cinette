@@ -645,7 +645,7 @@ export const remoteLeave = (link: number): Promise<void> => invoke("remote_leave
 
 /** Resolves with the other device's state version once it carried the
  *  command out. Rejects with the protocol's error code, like `stale_item`,
- *  or `notConnected`. */
+ *  or `link_not_connected`. */
 export const remoteCommand = (link: number, command: RemoteCommand): Promise<number> =>
 	invoke("remote_command", { command, link });
 

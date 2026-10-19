@@ -759,7 +759,7 @@ async fn one_instance_controls_another() {
             "remote_command",
             json!({ "command": { "action": "stop" }, "link": 1 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
 }
 
@@ -786,7 +786,7 @@ async fn the_target_disconnecting_ends_the_link() {
             "remote_catalog",
             json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 100 }, "link": 1 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
 }
 
@@ -834,7 +834,7 @@ async fn only_devices_on_the_network_that_allow_control_can_be_asked() {
             "remote_command",
             json!({ "command": { "action": "stop" }, "link": 1 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
     // Leaving with nothing to leave is fine.
     mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
@@ -1061,14 +1061,14 @@ async fn links_are_named_by_the_webview_and_only_the_current_one_takes_commands(
             "remote_command",
             json!({ "command": { "action": "stop" }, "link": 40 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
     assert_eq!(
         mac.invoke(
             "remote_catalog",
             json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 1 }, "link": 40 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
 
     // Leaving says what the list is now, since the left device is no

@@ -142,7 +142,7 @@ const versioned = (state: RemoteSnapshot, version = 1, epoch = "e1"): VersionedS
 
 const destination = () => {
 	const sent: RemoteCommand[] = [];
-	// No version in the answer, so a load doesn't wait for a state.
+	// No version in the answer, so a load always shows the item opening.
 	const send = vi.fn(async (command: RemoteCommand): Promise<unknown> => {
 		sent.push(command);
 		return undefined;
@@ -252,21 +252,26 @@ describe("createCinetteDestination", () => {
 	});
 
 	it("turns what a command rejects with into an error", () => {
-		expect(commandError("timedOut")).toMatchObject({ code: "timedOut" });
-		expect(commandError("timedOut").message).toBe(
-			"The other device didn't carry it out: timedOut"
+		expect(commandError("link_timed_out")).toMatchObject({ code: "link_timed_out" });
+		expect(commandError("link_timed_out").message).toBe(
+			"The other device didn't carry it out: link_timed_out"
 		);
 		expect(commandError(new Error("odd"))).toMatchObject({ code: "failed" });
 		expect(commandError("unsupported")).toMatchObject({ code: "unsupported" });
 		expect(commandError("unsupported").message).toBe(
 			"That on the other device isn't supported here"
 		);
-		expect(new RemoteCommandError("busy").name).toBe("RemoteCommandError");
+		expect(new RemoteCommandError("link_busy").name).toBe("RemoteCommandError");
 	});
 
 	it("names a loaded item until the other device's next state", async () => {
 		const { d } = destination();
-		d.receive(versioned(snapshot({ status: "paused", error: "failed" })), 0);
+		d.receive(
+			versioned(
+				snapshot({ status: "paused", error: "failed", subtitleId: "s1", audioId: "a1" })
+			),
+			0
+		);
 		const seen: string[] = [];
 		d.subscribe((s) => seen.push(`${s.status}/${s.item?.ref ?? "-"}`));
 		const before = performance.now();
@@ -278,6 +283,11 @@ describe("createCinetteDestination", () => {
 			duration: 0,
 			error: null,
 			volume: 55,
+			// The old item's tracks aren't the new one's.
+			subtitles: [],
+			subtitleId: null,
+			audio: [],
+			audioId: null,
 		});
 		expect(d.getState().positionAt).toBeGreaterThanOrEqual(before);
 		expect(seen).toStrictEqual(["opening/movie-2"]);
@@ -287,6 +297,38 @@ describe("createCinetteDestination", () => {
 		expect(d.getState().position, "from the start").toBe(0);
 		d.receive(versioned(snapshot(), 2), 10);
 		expect(d.getState().item?.ref).toBe("live-7");
+	});
+
+	it("keeps a state from the other device that came before the load's answer", async () => {
+		let answer: (version: number) => void = () => {};
+		const send = vi.fn(
+			() => new Promise<unknown>((resolve) => (answer = resolve as (v: number) => void))
+		);
+		const d = createCinetteDestination("dev1", "TV", send);
+		d.receive(versioned(snapshot(), 4), 0);
+		const movie = snapshot({
+			status: "playing",
+			item: { id: "movie-2", name: "Film", contentType: "movie", group: "Drama" },
+			duration: 5400,
+		});
+		const loading = d.load({ kind: "remote", itemId: "movie-2", title: "Film" });
+		// The state the load made arrives first, then the answer with its version.
+		d.receive(versioned(movie, 5), 10);
+		answer(5);
+		await loading;
+		expect(d.getState()).toMatchObject({
+			status: "playing",
+			item: { ref: "movie-2", contentType: "movie" },
+			duration: 5400,
+		});
+	});
+
+	it("shows the item opening when the answer is newer than the last state", async () => {
+		const send = vi.fn(() => Promise.resolve<unknown>(5));
+		const d = createCinetteDestination("dev1", "TV", send);
+		d.receive(versioned(snapshot(), 4), 0);
+		await d.load({ kind: "remote", itemId: "movie-2", title: "Film" });
+		expect(d.getState()).toMatchObject({ status: "opening", item: { ref: "movie-2" } });
 	});
 
 	it("leaves the state as it was when a load is refused", async () => {

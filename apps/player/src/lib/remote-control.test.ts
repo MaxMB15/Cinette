@@ -45,7 +45,7 @@ const backend = () => {
 		connect: vi.fn<(deviceId: string, link: number) => Promise<void>>(() => Promise.resolve()),
 		current: vi.fn<() => Promise<number | null>>(() => Promise.resolve(null)),
 		leave: vi.fn<(link: number) => Promise<void>>(() => Promise.resolve()),
-		// No version, so a load doesn't wait for a state.
+		// No version, so a load always shows the item opening.
 		command: vi.fn<(link: number, command: unknown) => Promise<unknown>>(() =>
 			Promise.resolve(undefined)
 		),

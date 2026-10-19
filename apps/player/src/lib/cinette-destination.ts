@@ -170,7 +170,8 @@ export interface VersionedSnapshot {
 }
 
 /** A command the other device, or the link to it, turned down. `code` is
- *  the protocol's, like `stale_item`, or `notConnected`, `timedOut` or `busy`. */
+ *  the protocol's, like `stale_item`, or the link's own, which start with
+ *  `link_`: `link_not_connected`, `link_timed_out` or `link_busy`. */
 export class RemoteCommandError extends Error {
 	readonly code: string;
 	constructor(code: string) {
@@ -212,6 +213,8 @@ export const createCinetteDestination = (
 	// Not connected yet.
 	let connection: PlaybackState["connection"] = "reconnecting";
 	let arrived = 0;
+	// The version of the newest state received.
+	let seen = -1;
 	let state = remotePlaybackState(snapshot, connection, arrived);
 	const listeners = new Set<(state: PlaybackState) => void>();
 	const publish = () => {
@@ -249,14 +252,17 @@ export const createCinetteDestination = (
 			if (item.kind !== "remote")
 				throw new UnsupportedError("Playing this device's channel on another device");
 			const startAt = opts?.startAt;
-			await sent(
+			const version = await sent(
 				startAt === undefined
 					? { action: "load", itemId: item.itemId }
 					: { action: "load", itemId: item.itemId, startAt }
 			);
+			// The other device's state can come before its answer does. Once
+			// one as new as the answer is here, it says more than this would.
+			if (typeof version === "number" && seen >= version) return;
 			// It's opening there now. Until that device's next state says
 			// more, this one names the new item, so a command right after
-			// names it too.
+			// names it too. The tracks were the old item's.
 			snapshot = {
 				...snapshot,
 				status: "opening",
@@ -264,6 +270,10 @@ export const createCinetteDestination = (
 				item: { id: item.itemId, name: item.title, contentType: "live", group: "" },
 				position: startAt ?? 0,
 				duration: 0,
+				subtitles: [],
+				subtitleId: null,
+				audio: [],
+				audioId: null,
 				error: null,
 			};
 			arrived = performance.now();
@@ -285,6 +295,7 @@ export const createCinetteDestination = (
 			};
 		},
 		receive: (next, at) => {
+			seen = next.version;
 			snapshot = next.state;
 			const now = remoteCapabilities(snapshot);
 			// The same object until something in it changes.
