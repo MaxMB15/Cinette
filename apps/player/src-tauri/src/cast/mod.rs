@@ -10,6 +10,7 @@
 //! - Casting to one of them ([`playback`]), over TLS ([`tls`]) through the
 //!   session loop ([`link`]). macOS and Linux only for now.
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -62,6 +63,7 @@ pub struct CastReceivers {
     /// When the last list went out, and whether a later one is due.
     announced: Mutex<(Option<Instant>, bool)>,
     /// A browse that can't start says so once.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     warned: AtomicBool,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     browse: Mutex<Option<Browse>>,
@@ -83,6 +85,7 @@ impl CastReceivers {
         Self {
             registry: Mutex::default(),
             announced: Mutex::new((None, false)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             warned: AtomicBool::new(false),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             browse: Mutex::new(None),
