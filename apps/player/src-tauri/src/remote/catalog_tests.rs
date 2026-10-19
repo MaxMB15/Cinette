@@ -77,11 +77,26 @@ fn groups_come_a_page_at_a_time() {
 }
 
 #[test]
-fn a_group_that_is_gone_is_not_found() {
-    assert_eq!(
-        answer_from(&channels(), &[], groups_query(Some("Sport"), 10)),
-        Err(ErrorCode::NotFound)
-    );
+fn a_cursor_for_a_group_thats_gone_starts_at_the_next_one() {
+    // "Sport" sorts between "news" and "UK".
+    let page = answer_from(&channels(), &[], groups_query(Some("Sport"), 10));
+    assert_eq!(ids(&page), ["UK"]);
+}
+
+#[test]
+fn a_group_name_too_long_to_come_back_doesnt_stop_the_paging() {
+    let long = "━".repeat(90);
+    let mut all = channels();
+    all.push(channel("live-6", "Match", "live", &long));
+    all.push(channel("live-7", "Weather", "live", "Weather"));
+    let first = answer_from(&all, &[], groups_query(None, 3));
+    assert_eq!(ids(&first), ["News", "news", "UK"]);
+    let next = first.unwrap().1;
+    assert_eq!(next.as_deref(), Some("Weather"));
+    let query = groups_query(next.as_deref(), 3).validate().unwrap();
+    let rest = answer_from(&all, &[], query);
+    assert_eq!(ids(&rest), ["Weather"]);
+    assert_eq!(rest.unwrap().1, None);
 }
 
 fn items_query(cursor: Option<&str>, limit: u32) -> CatalogQuery {
