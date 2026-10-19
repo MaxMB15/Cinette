@@ -67,7 +67,7 @@ export const RemoteControlSettings = () => {
 	const sentRef = useRef<Saveable | null>(null);
 	// Saves go one after another; only the newest one's answer shows.
 	const queueRef = useRef<Promise<unknown>>(Promise.resolve());
-	const latestRef = useRef(0);
+	const latestRef = useRef({});
 
 	const show = (settings: RemoteSettings) => {
 		sentRef.current = settings;
@@ -104,8 +104,8 @@ export const RemoteControlSettings = () => {
 			...change,
 		};
 		sentRef.current = next;
-		latestRef.current += 1;
-		const mine = latestRef.current;
+		const mine = {};
+		latestRef.current = mine;
 		queueRef.current = queueRef.current
 			.then(() => remoteSetSettings(next))
 			.then((saved) => {

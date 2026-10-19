@@ -79,6 +79,7 @@ describe("RemoteControlSettings", () => {
 	it("saves nothing when the default name is left empty", async () => {
 		await shown();
 		fireEvent.blur(screen.getByLabelText("Device name"));
+		await act(async () => {});
 		expect(remoteSetSettings).not.toHaveBeenCalled();
 	});
 
@@ -269,6 +270,8 @@ describe("RemoteControlSettings", () => {
 		await shown();
 		const field = screen.getByLabelText("Device name");
 		fireEvent.change(field, { target: { value: "Den" } });
+		fireEvent.blur(field);
+		// The same name again, on its way already, isn't sent twice.
 		fireEvent.blur(field);
 		// Chosen before the name's save is back.
 		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
