@@ -135,9 +135,9 @@ export interface CommandTarget {
 	findChannel: (id: string) => Channel | undefined;
 	/** Opens the player page when none is open. */
 	openPlayer: () => void;
-	/** The player's destination once the page has opened, or null if it
-	 *  didn't in time. */
-	waitForPlayer: () => Promise<PlaybackDestination | null>;
+	/** The player's destination once the page has opened, or one whose
+	 *  load fails if it didn't in time. */
+	waitForPlayer: () => Promise<Pick<PlaybackDestination, "load">>;
 }
 
 const outcomeOf = async (run: () => Promise<void>): Promise<CommandOutcome> => {
@@ -160,14 +160,13 @@ export const applyRemoteCommand = async (
 		if (!channel) return "notFound";
 		// The open page plays it, so it goes in this device's history and
 		// starts where the controller asked.
-		let destination = player;
+		let destination: Pick<PlaybackDestination, "load"> | null = player;
 		if (!destination) {
 			target.openPlayer();
 			destination = await target.waitForPlayer();
 		}
-		if (!destination) return "failed";
-		const startAt = command.startAt;
 		const opened = destination;
+		const startAt = command.startAt;
 		return outcomeOf(() => opened.load({ kind: "local", channel }, { startAt }));
 	}
 	if (command.action === "stop") {
@@ -204,32 +203,42 @@ export const applyRemoteCommand = async (
 
 let mountedPlayer: PlaybackDestination | null = null;
 
-const waiting = new Set<(player: PlaybackDestination) => void>();
+/** What the pages that open next resolve, for whoever waits for one. */
+let next: {
+	opened: Promise<PlaybackDestination>;
+	resolve: (p: PlaybackDestination) => void;
+} | null = null;
 
 /** The player page registers its destination while it's open. */
 export const setMountedPlayer = (player: PlaybackDestination | null): void => {
 	mountedPlayer = player;
-	if (!player) return;
-	for (const resolve of waiting) resolve(player);
-	waiting.clear();
+	if (player && next) {
+		next.resolve(player);
+		next = null;
+	}
 };
 
 /** How long a page that's opening has to register its player. */
 export const PLAYER_OPENS_WITHIN_MS = 5_000;
 
-/** The player's destination as soon as a page registers one, or null after
- *  {@link PLAYER_OPENS_WITHIN_MS}. */
-export const waitForMountedPlayer = (): Promise<PlaybackDestination | null> => {
+/** Stands in for a player page that didn't open: nothing loads. */
+const noPlayer: Pick<PlaybackDestination, "load"> = {
+	load: () => Promise.reject(new Error()),
+};
+
+/** The player's destination as soon as a page registers one, or after
+ *  {@link PLAYER_OPENS_WITHIN_MS} one that loads nothing. */
+export const waitForMountedPlayer = (): Promise<Pick<PlaybackDestination, "load">> => {
 	if (mountedPlayer) return Promise.resolve(mountedPlayer);
-	return new Promise((resolve) => {
-		const done = (player: PlaybackDestination | null) => {
-			clearTimeout(timer);
-			waiting.delete(done);
-			resolve(player);
-		};
-		const timer = setTimeout(() => done(null), PLAYER_OPENS_WITHIN_MS);
-		waiting.add(done);
-	});
+	if (!next) {
+		let resolve: (p: PlaybackDestination) => void = () => {};
+		const opened = new Promise<PlaybackDestination>((r) => (resolve = r));
+		next = { opened, resolve };
+	}
+	const late = new Promise<typeof noPlayer>((r) =>
+		setTimeout(() => r(noPlayer), PLAYER_OPENS_WITHIN_MS)
+	);
+	return Promise.race([next.opened, late]);
 };
 
 /** The open player's destination, or null. */
