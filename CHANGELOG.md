@@ -8,6 +8,10 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 - On iPhone and iPad, the player has an AirPlay button when an AirPlay TV is in reach. It sends the channel, movie or episode that's playing to the TV, which plays it straight from your provider, and a movie or episode carries on from where it was. Streams the TV can't play as they are, such as MKV files and most raw MPEG-TS channels, stay on the iPhone and Cinette says why (#323).
 
+### Changed
+
+- The channel list scrolls and searches with far less work. While you scroll, only the rows redraw, not the tabs and category filters around them, and typing a search no longer redraws every category. The app is now built with the React Compiler, which skips redrawing what hasn't changed (#307).
+
 ## [0.8.0] - 2026-10-17
 
 ### Added
