@@ -203,6 +203,17 @@ View, Stage Manager and rotation switch between them:
 on every resize. A device counts as an iPhone when the short side of its screen is
 under 744 points.
 
+### Android
+
+The Android build runs the same frontend and commands, and leaves out what iOS
+leaves out. `AndroidSurfaceRenderer` in `android.rs` passes mpv the `Surface` of a
+`SurfaceView` as its `wid`, and mpv draws into it with `vo=gpu` and
+`gpu-context=android`. The view belongs to the Kotlin side of the plugin
+(`android/src/main/java/MpvPlugin.kt`), which keeps it under the transparent webview
+and reports each new or destroyed surface to Rust. HTTPS goes through rustls with
+Android's certificate checks. [android.md](android.md) covers building, the video
+surface and the Gradle project.
+
 ## Data flow
 
 ```

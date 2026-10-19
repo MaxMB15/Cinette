@@ -50,6 +50,18 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # Fetches the channel logo for the lock screen. See `set_artwork` in ios.rs.
 reqwest = { workspace = true, features = ["native-tls-no-alpn"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# The surface callback from the Kotlin side, and the JVM for libavcodec.
+# The same versions as the app's.
+jni = { version = "0.22", default-features = false }
+ndk-context = "0.1"
+
+# libmpv2-sys's bundled bindings are for 64-bit targets, and their layout
+# checks fail on 32-bit ARM, so armv7 generates its own. docs/android.md says
+# what bindgen needs.
+[target.'cfg(all(target_os = "android", target_pointer_width = "32"))'.dependencies]
+libmpv2-sys = { version = "4", features = ["use-bindgen"] }
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
