@@ -87,13 +87,17 @@ export interface PlaybackDestination {
 	readonly kind: DestinationKind;
 	readonly name: string;
 	readonly catalog: CatalogSource;
+	/** What it can do with the current item, which can change with the item,
+	 *  as `seek` does once a stream's length is known. A change always comes
+	 *  with a new state, so a listener reads this again when it's called. */
 	readonly capabilities: PlaybackCapabilities;
 
 	/** How the item would reach this destination, or why it can't. Called
 	 *  before `load`, so the UI can warn about a converted route first. */
 	route(item: PlaybackItem): Promise<RouteDecision>;
 	/** `route` is what `route()` gave for this item, so the destination plays
-	 *  the format the UI warned about. */
+	 *  the format the UI warned about. Resolves once the item has started
+	 *  loading there, and rejects if it couldn't. */
 	load(item: PlaybackItem, opts?: { startAt?: number; route?: PlayRoute }): Promise<void>;
 	play(): Promise<void>;
 	pause(): Promise<void>;

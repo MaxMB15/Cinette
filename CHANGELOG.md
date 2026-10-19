@@ -4,6 +4,8 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-17
+
 ### Added
 
 - On macOS and Linux, one Cinette can control another on the same network. Choose Devices in the sidebar and pick the other device; it plays there, and this one shows what's playing, with play, pause, stop and that device's channels, movies and series to choose from. Unless it's set to Always allow, the other device asks first, and both screens show the same code so you can tell your own request from someone else's. Settings > Remote control sets whether others can find this device, who may control it (Always allow, Only when allowed, Never allow), its name, lists the devices controlling it, each with Disconnect, and can give this device a new identity, which ends every session. macOS asks once whether Cinette may use the local network; if that was refused, the device list says where to allow it. Nothing leaves your network, and no stream address, login or playlist setting is sent to the other device (#317, #318, #319, #321, #322).
@@ -432,7 +434,8 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MaxMB15/Cinette/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/MaxMB15/Cinette/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MaxMB15/Cinette/compare/v0.5.3...v0.6.0
