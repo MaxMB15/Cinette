@@ -7,7 +7,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { makeHistoryEntry } from "@/test/channel-fixtures";
-import { watchHistoryQuery } from "@/lib/queries";
+import { pinnedGroupsQuery, watchHistoryQuery } from "@/lib/queries";
 import { deferred } from "@/test/deferred";
 import type { WatchHistoryEntry } from "@/lib/types";
 
@@ -119,6 +119,20 @@ describe("useWatchHistory", () => {
 		await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(3));
 		await act(async () => answer.resolve([film]));
 		expect(again.result.current.entries).toEqual([film]);
+	});
+
+	it("leaves the lists outside the history alone", async () => {
+		const client = createTestQueryClient();
+		const pinned = pinnedGroupsQuery("p1", "live").queryKey;
+		client.setQueryData(pinned, ["News"]);
+		const live = renderHook(() => useWatchHistory(50, "live", "failed:"), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(live.result.current.loading).toBe(false));
+
+		await act(async () => live.result.current.change(() => []));
+		expect(live.result.current.entries).toEqual([]);
+		expect(client.getQueryData(pinned)).toEqual(["News"]);
 	});
 
 	it("loads the history again while the computer is offline", async () => {
