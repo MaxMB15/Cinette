@@ -65,7 +65,7 @@ exclude_re = [
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's
     # own sleep settings. The tests check the command it runs.
-    'src-tauri/src/downloads/keep_awake\.rs:.*\bhold_while_running\b',
+    'src-tauri/src/keep_awake\.rs:.*\bhold_while_running\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This

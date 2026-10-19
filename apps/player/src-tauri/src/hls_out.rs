@@ -305,10 +305,12 @@ fn plan(
         })
         .collect();
     let playable: Vec<&str> = playable.iter().map(String::as_str).collect();
-    let (track, audio) = match pick_audio(&tracks, language, &playable) {
+    // The converter makes stereo AAC only, so it never asks for 5.1.
+    let (track, audio) = match pick_audio(&tracks, language, &playable, false) {
         (_, AudioPlan::None) => (None, Audio::None),
         (i, AudioPlan::Copy) => (Some(tracks[i].codec.as_str()), Audio::Copy(i)),
         (i, AudioPlan::Aac { downmix }) => (Some("aac"), Audio::Aac { track: i, downmix }),
+        (_, AudioPlan::Surround) => unreachable!("5.1 wasn't asked for"),
     };
     codecs.extend(track.and_then(hls::audio_codec).map(str::to_string));
     if video == Video::None && audio == Audio::None {
