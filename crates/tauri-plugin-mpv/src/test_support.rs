@@ -454,7 +454,7 @@ impl FakeRenderer {
     }
 
     /// A renderer whose `attach` fails with `error`.
-    #[cfg_attr(target_os = "ios", allow(dead_code))]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
     pub(crate) fn failing(error: &str) -> (Box<dyn PlatformRenderer>, SharedLog) {
         Self::build(Some(error.to_string()))
     }

@@ -458,6 +458,7 @@ async fn the_command_probes_what_mpv_doesnt_play() {
 }
 
 /// Whether an ffmpeg with `url` among its arguments runs.
+#[cfg(desktop)]
 fn ffmpeg_runs_for(url: &str) -> bool {
     std::process::Command::new("pgrep")
         .args(["-f", url])
@@ -465,6 +466,7 @@ fn ffmpeg_runs_for(url: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+#[cfg(desktop)]
 #[tokio::test]
 async fn a_probe_that_runs_too_long_stops_its_ffmpeg() {
     // A server that sends a byte every half second, so ffmpeg keeps waiting.

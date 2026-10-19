@@ -18,7 +18,8 @@ together, see [architecture.md](architecture.md). For cutting a release, see
 - The platform dependencies below
 
 The desktop app builds on macOS (Apple Silicon and Intel) and Linux (x86_64). Windows
-isn't supported yet. For the iPhone and iPad app, see [ios.md](ios.md).
+isn't supported yet. For the iPhone and iPad app, see [ios.md](ios.md), and for
+Android TV, [android.md](android.md).
 
 ### macOS
 
@@ -351,6 +352,38 @@ locally.
 
 A Husky pre-commit hook runs Prettier and ESLint on the staged files through
 lint-staged, then runs the tests.
+
+### Counting renders and backend calls
+
+`pnpm perf`, run from `apps/player`, measures a few flows through the whole app
+against a made-up backend in `src/test/perf-backend.ts`: opening the app, scrolling
+the channel list, typing a search, opening the Movies tab and a movie's details, and
+starting a channel. For each flow it prints, as Markdown tables, the commits, the
+renders per component and the backend calls per command. Set `PERF_OUT` to a file
+path to save them as JSON too. The flows are in `src/dev/flows.perf.test.tsx`, and
+`pnpm test` leaves them out.
+
+They render without StrictMode, as the shipped app does, with real timers and a fixed
+clock. The counts are the same from run to run, except that the player flow can gain
+one render of the player, which depends on when its timers fire.
+
+A dev build counts the same things in the real app. Run this in the web inspector's
+console, then reload:
+
+```js
+localStorage.setItem("cinette-perf", "1");
+```
+
+Then `cinettePerf.print()` prints the counts since the page loaded or since the last
+`cinettePerf.reset()`, and `cinettePerf.report()` returns them. Remove the key to stop.
+StrictMode runs each effect twice in a dev build, so some backend calls count twice
+there. The backend calls are the commands in `src/lib/tauri.ts`, which all go through
+`src/lib/invoke.ts`. Calls that Tauri's own packages make, such as event listeners and
+dialogs, aren't counted. A production build leaves the counters out.
+
+The render counter reads React's fiber tree the way React DevTools does, through a
+`<Profiler>` around the app (`src/dev/render-counts.ts`). A React upgrade could change
+what it reads.
 
 ### Mutation testing
 
