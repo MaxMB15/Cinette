@@ -76,7 +76,7 @@ const send = vi.fn<(command: unknown) => Promise<number>>(() => Promise.resolve(
 
 const link = (phase: Link["phase"], code: string | null = null): Link => {
 	const destination = createCinetteDestination("tv1", "Living Room", send);
-	return { deviceId: "tv1", name: "Living Room", phase, code, destination };
+	return { id: 3, deviceId: "tv1", name: "Living Room", phase, code, destination };
 };
 
 beforeEach(() => {
@@ -241,7 +241,7 @@ describe("ConnectStatusDialog", () => {
 	it("shows the code as soon as the handshake gives it", () => {
 		control.state = {
 			...control.state,
-			link: link({ phase: "verifying", code: "123456" }, "123456"),
+			link: link({ phase: "verifying", code: "123456", name: "Living Room" }, "123456"),
 		};
 		render(<ConnectStatusDialog />);
 		screen.getByRole("dialog", { name: "Connecting to Living Room" });
@@ -266,7 +266,7 @@ describe("RemoteBar", () => {
 
 	it("names the device that receives commands and what plays there", () => {
 		const l = link({ phase: "connected" });
-		l.destination.receive(snapshot, 0);
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		const bar = screen.getByRole("region", { name: "Remote control" });
@@ -280,12 +280,17 @@ describe("RemoteBar", () => {
 		render(<RemoteBar />);
 		expect(screen.getByRole("region")).toHaveTextContent("Nothing playing");
 		expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-		act(() => l.destination.receive(snapshot, 0));
+		act(() => l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0));
 		fireEvent.click(screen.getByRole("button", { name: "Pause" }));
 		await waitFor(() =>
 			expect(send).toHaveBeenCalledWith({ action: "pause", itemId: "live-7" })
 		);
-		act(() => l.destination.receive({ ...snapshot, status: "paused" }, 0));
+		act(() =>
+			l.destination.receive(
+				{ epoch: "e", version: 2, state: { ...snapshot, status: "paused" } },
+				0
+			)
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Play" }));
 		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 		await waitFor(() => expect(send).toHaveBeenCalledWith({ action: "stop" }));
@@ -294,10 +299,8 @@ describe("RemoteBar", () => {
 
 	it("leaves out play and pause where the other device can't pause", () => {
 		const l = link({ phase: "connected" });
-		l.destination.receive(
-			{ ...snapshot, capabilities: { ...snapshot.capabilities, pause: false } },
-			0
-		);
+		const state = { ...snapshot, capabilities: { ...snapshot.capabilities, pause: false } };
+		l.destination.receive({ epoch: "e", version: 1, state }, 0);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
@@ -306,7 +309,10 @@ describe("RemoteBar", () => {
 
 	it("shows a buffering item as playing", () => {
 		const l = link({ phase: "connected" });
-		l.destination.receive({ ...snapshot, status: "buffering" }, 0);
+		l.destination.receive(
+			{ epoch: "e", version: 1, state: { ...snapshot, status: "buffering" } },
+			0
+		);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
@@ -315,7 +321,7 @@ describe("RemoteBar", () => {
 	it("keeps going when a control is refused", async () => {
 		send.mockRejectedValueOnce("stale_item");
 		const l = link({ phase: "connected" });
-		l.destination.receive(snapshot, 0);
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
 		control.state = { ...control.state, link: l };
 		render(<RemoteBar />);
 		fireEvent.click(screen.getByRole("button", { name: "Pause" }));

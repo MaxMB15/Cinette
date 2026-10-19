@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -29,11 +29,16 @@ type Place =
 	| { kind: "group"; group: string }
 	| { kind: "episodes"; series: CatalogItem; from: Place };
 
-/** What the list shows. */
+/** What the list shows. `more` is how the next page stands. */
 type View =
 	| { status: "loading" }
 	| { status: "failed" }
-	| { status: "ready"; items: CatalogItem[]; next: string | null };
+	| {
+			status: "ready";
+			items: CatalogItem[];
+			next: string | null;
+			more: "idle" | "loading" | "failed";
+	  };
 
 const LOADING: View = { status: "loading" };
 
@@ -47,11 +52,11 @@ const queryFor = (
 	if (search) return { kind: "search", query: search, contentType: type, limit: PAGE };
 	switch (place.kind) {
 		case "groups":
-			return { kind: "groups", contentType: type };
+			return { kind: "groups", contentType: type, cursor, limit: PAGE };
 		case "group":
 			return { kind: "items", contentType: type, group: place.group, cursor, limit: PAGE };
 		case "episodes":
-			return { kind: "episodes", seriesId: place.series.id };
+			return { kind: "episodes", seriesId: place.series.id, cursor, limit: PAGE };
 	}
 };
 
@@ -60,6 +65,9 @@ export const episodeLabel = (item: CatalogItem): string | null =>
 	item.season !== undefined && item.episode !== undefined
 		? `S${item.season} E${item.episode}`
 		: null;
+
+/** What a group is called on screen. M3U lists often leave it out. */
+export const groupName = (group: string): string => group || "No group";
 
 /**
  * The controlled device's channels, movies and series, read from that
@@ -72,7 +80,12 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	const [typed, setTyped] = useState("");
 	const [search, setSearch] = useState("");
 	const [view, setView] = useState<View>(LOADING);
+	// Bumped to load what's on screen again.
+	const [attempt, setAttempt] = useState(0);
 	const [message, setMessage] = useState<string | null>(null);
+	// Which view a page of "Load more" belongs to; a newer one drops it.
+	const shownRef = useRef(0);
+	const connected = link.phase.phase === "connected";
 
 	const searchRef = useLatestRef(search);
 	useEffect(() => {
@@ -86,10 +99,13 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	}, [typed, searchRef]);
 
 	useEffect(() => {
+		// While the link is down nothing can come; it loads again once back.
+		if (!connected) return;
 		let current = true;
-		remoteCatalog(queryFor(type, place, search))
+		shownRef.current += 1;
+		remoteCatalog(link.id, queryFor(type, place, search))
 			.then(({ items, next }) => {
-				if (current) setView({ status: "ready", items, next });
+				if (current) setView({ status: "ready", items, next, more: "idle" });
 			})
 			.catch(() => {
 				if (current) setView({ status: "failed" });
@@ -97,19 +113,31 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		return () => {
 			current = false;
 		};
-	}, [type, place, search]);
+	}, [link.id, connected, type, place, search, attempt]);
 
 	const go = (to: Place) => {
 		setView(LOADING);
 		setPlace(to);
 	};
 
+	const retry = () => {
+		setView(LOADING);
+		setAttempt((n) => n + 1);
+	};
+
 	const more = (shown: CatalogItem[], cursor: string) => {
-		remoteCatalog(queryFor(type, place, search, cursor))
-			.then(({ items, next }) =>
-				setView({ status: "ready", items: [...shown, ...items], next })
-			)
-			.catch(() => setView({ status: "failed" }));
+		const forView = shownRef.current;
+		const ready = (more: "idle" | "loading" | "failed", next: string | null = cursor) =>
+			setView({ status: "ready", items: shown, next, more });
+		ready("loading");
+		remoteCatalog(link.id, queryFor(type, place, search, cursor))
+			.then(({ items, next }) => {
+				if (shownRef.current !== forView) return;
+				setView({ status: "ready", items: [...shown, ...items], next, more: "idle" });
+			})
+			.catch(() => {
+				if (shownRef.current === forView) ready("failed");
+			});
 	};
 
 	const play = (item: CatalogItem) => {
@@ -121,22 +149,26 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 
 	const choose = (item: CatalogItem) => {
 		if (search === "" && place.kind === "groups") go({ kind: "group", group: item.id });
-		else if (item.contentType === "series" && episodeLabel(item) === null)
-			// From search results, going back leaves the search for the groups.
+		else if (item.contentType === "series" && episodeLabel(item) === null) {
+			// From search results, the episodes replace the search, and going
+			// back goes to the groups.
+			setTyped("");
+			setSearch("");
 			go({ kind: "episodes", series: item, from: search ? { kind: "groups" } : place });
-		else play(item);
+		} else play(item);
 	};
 
 	const title =
 		place.kind === "group"
-			? place.group
+			? groupName(place.group)
 			: place.kind === "episodes"
 				? place.series.name
 				: `On ${link.name}`;
 	const canGoBack = place.kind !== "groups" && search === "";
+	const listsGroups = place.kind === "groups" && search === "";
 	const nextPage =
 		view.status === "ready" && view.next !== null
-			? { shown: view.items, cursor: view.next }
+			? { shown: view.items, cursor: view.next, more: view.more }
 			: null;
 
 	return (
@@ -154,7 +186,9 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 						<ChevronLeft className="h-4 w-4" aria-hidden />
 					</button>
 				)}
-				<h1 className="text-base font-semibold truncate">{title}</h1>
+				<h1 className="text-base font-semibold truncate min-w-0" title={title}>
+					{title}
+				</h1>
 				<SegmentedControl
 					value={type}
 					onChange={(t) => {
@@ -184,9 +218,16 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 			)}
 			<div className="flex-1 min-h-0 overflow-y-auto">
 				{view.status === "failed" ? (
-					<p className="p-4 text-sm text-muted-foreground">
-						Couldn&apos;t load this from {link.name}.
-					</p>
+					<div className="p-4 text-sm text-muted-foreground">
+						<p>Couldn&apos;t load this from {link.name}.</p>
+						<button
+							type="button"
+							className="mt-2 px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80"
+							onClick={retry}
+						>
+							Try again
+						</button>
+					</div>
 				) : view.status === "loading" ? (
 					<p className="p-4 text-sm text-muted-foreground">Loading…</p>
 				) : view.items.length === 0 ? (
@@ -197,6 +238,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 					<ul aria-label={title}>
 						{view.items.map((item) => {
 							const line = episodeLabel(item) ?? item.nowPlaying;
+							const name = listsGroups ? groupName(item.name) : item.name;
 							return (
 								<li key={item.id}>
 									<button
@@ -208,6 +250,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 											<img
 												src={item.logo}
 												alt=""
+												referrerPolicy="no-referrer"
 												className="h-8 w-8 object-contain shrink-0"
 											/>
 										) : (
@@ -217,9 +260,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 											/>
 										)}
 										<span className="flex-1 min-w-0">
-											<span className="block text-sm truncate">
-												{item.name}
-											</span>
+											<span className="block text-sm truncate">{name}</span>
 											{line && (
 												<span className="block text-xs text-muted-foreground truncate">
 													{line}
@@ -233,13 +274,21 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 					</ul>
 				)}
 				{nextPage && (
-					<button
-						type="button"
-						className="m-4 px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80"
-						onClick={() => more(nextPage.shown, nextPage.cursor)}
-					>
-						Load more
-					</button>
+					<div className="m-4 flex items-center gap-3">
+						<button
+							type="button"
+							disabled={nextPage.more === "loading"}
+							className="px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80 disabled:opacity-50"
+							onClick={() => more(nextPage.shown, nextPage.cursor)}
+						>
+							{nextPage.more === "failed" ? "Try again" : "Load more"}
+						</button>
+						{nextPage.more === "failed" && (
+							<p role="alert" className="text-xs text-red-500">
+								Couldn&apos;t load more from {link.name}.
+							</p>
+						)}
+					</div>
 				)}
 			</div>
 		</div>
