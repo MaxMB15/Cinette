@@ -19,7 +19,7 @@ import {
 	type AirPlayNativeState,
 } from "@/lib/airplay";
 import { UnsupportedError, type PlaybackState } from "@/lib/destination";
-import { airplayTvProfile } from "@/lib/route-profiles";
+import { airplayTvProfile, NOT_READY, REFUSED } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import type { Channel } from "@/lib/types";
 
@@ -57,7 +57,12 @@ const fakeBridge = (formats: StreamFormat[] = [mp4], sources = [3]) => {
 	let handler: ((s: AirPlayNativeState) => void) | null = null;
 	const unlisten = vi.fn();
 	const bridge = {
-		formats: vi.fn(async () => ({ formats, sources, duration: null })),
+		formats: vi.fn<AirPlayBridge["formats"]>(async () => ({
+			formats,
+			sources,
+			duration: null,
+			generation: 9,
+		})),
 		load: vi.fn(async () => {}),
 		loadConverted: vi.fn(async () => {}),
 		endConversion: vi.fn(async () => {}),
@@ -72,6 +77,7 @@ const fakeBridge = (formats: StreamFormat[] = [mp4], sources = [3]) => {
 			return unlisten;
 		}),
 		now: vi.fn(() => 1000),
+		sleep: vi.fn(async () => {}),
 	} satisfies AirPlayBridge;
 	const emit = (s: AirPlayNativeState) => handler?.(s);
 	return { bridge, emit, unlisten };
@@ -263,6 +269,36 @@ describe("createAirPlayDestination", () => {
 		});
 	});
 
+	it("asks again while mpv is still opening the item", async () => {
+		const { bridge } = fakeBridge();
+		const listed = await bridge.formats(channel());
+		bridge.formats
+			.mockReset()
+			.mockRejectedValueOnce(NOT_READY)
+			.mockRejectedValueOnce(NOT_READY)
+			.mockResolvedValueOnce(listed);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		expect(await d.route({ kind: "local", channel: channel() })).toMatchObject({ ok: true });
+		expect(bridge.formats).toHaveBeenCalledTimes(3);
+		expect(bridge.sleep).toHaveBeenCalledTimes(2);
+		expect(bridge.sleep).toHaveBeenCalledWith(500);
+	});
+
+	it("gives up after ten tries, and doesn't retry other errors", async () => {
+		const { bridge } = fakeBridge();
+		bridge.formats.mockRejectedValue(NOT_READY);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		await expect(d.route({ kind: "local", channel: channel() })).rejects.toBe(NOT_READY);
+		expect(bridge.formats).toHaveBeenCalledTimes(10);
+		expect(bridge.sleep).toHaveBeenCalledTimes(9);
+
+		bridge.formats.mockReset().mockRejectedValue(REFUSED);
+		bridge.sleep.mockClear();
+		await expect(d.route({ kind: "local", channel: channel() })).rejects.toBe(REFUSED);
+		expect(bridge.formats).toHaveBeenCalledTimes(1);
+		expect(bridge.sleep).not.toHaveBeenCalled();
+	});
+
 	it("says why when only a conversion would work", async () => {
 		const { bridge } = fakeBridge([{ ...mp4, container: "mkv" }]);
 		const d = createAirPlayDestination(receiver, bridge, noConverter);
@@ -283,7 +319,7 @@ describe("createAirPlayDestination", () => {
 		expect(decision).toEqual({ ok: true, route: { via: "direct", format: 1 } });
 		if (!decision.ok) throw new Error("no route");
 		await d.load({ kind: "local", channel: film }, { route: decision.route, startAt: 41 });
-		expect(bridge.load).toHaveBeenCalledWith(film, 4, 41);
+		expect(bridge.load).toHaveBeenCalledWith(film, 9, 4, 41);
 		expect(states[states.length - 1]).toMatchObject({
 			status: "opening",
 			item: { title: "A Film", contentType: "movie", ref: "movie-7" },
@@ -299,7 +335,7 @@ describe("createAirPlayDestination", () => {
 		const decision = await d.route({ kind: "local", channel: live });
 		if (!decision.ok) throw new Error("no route");
 		await d.load({ kind: "local", channel: live }, { route: decision.route, startAt: 41 });
-		expect(bridge.load).toHaveBeenCalledWith(live, 0, undefined);
+		expect(bridge.load).toHaveBeenCalledWith(live, 9, 0, undefined);
 		emit(playing);
 		expect(d.capabilities.seek).toBe(false);
 		expect(d.capabilities.resumeAt).toBe(false);
@@ -344,14 +380,14 @@ describe("createAirPlayDestination", () => {
 		expect(decision).toEqual({ ok: true, route: converting });
 		if (!decision.ok) throw new Error("no route");
 		await d.load({ kind: "local", channel: film }, { route: decision.route, startAt: 41 });
-		expect(bridge.loadConverted).toHaveBeenCalledWith(film, 2, 41);
+		expect(bridge.loadConverted).toHaveBeenCalledWith(film, 9, 2, 41);
 		expect(bridge.load).not.toHaveBeenCalled();
 		emit({ ...playing, audio: [{ label: "A" }, { label: "B" }] });
 		expect(d.capabilities).toMatchObject({ seek: true, pause: true, audioTracks: false });
 
 		// A seek converts again from there.
 		await d.seek(900);
-		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 2, 900);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 900);
 		expect(bridge.seek).not.toHaveBeenCalled();
 
 		// Stopping ends the conversion too.
@@ -387,7 +423,7 @@ describe("createAirPlayDestination", () => {
 		const decision = await d.route({ kind: "local", channel: live });
 		if (!decision.ok) throw new Error("no route");
 		await d.load({ kind: "local", channel: live }, { route: decision.route, startAt: 41 });
-		expect(bridge.loadConverted).toHaveBeenCalledWith(live, 0, undefined);
+		expect(bridge.loadConverted).toHaveBeenCalledWith(live, 9, 0, undefined);
 		emit(playing);
 		expect(d.capabilities).toMatchObject({ pause: false, seek: false });
 		await d.seek(10);
@@ -402,7 +438,7 @@ describe("createAirPlayDestination", () => {
 		await d.route({ kind: "local", channel: film });
 		await d.load({ kind: "local", channel: film }, { route: { ...converting, format: 0 } });
 		await d.load({ kind: "local", channel: film }, { route: { via: "direct", format: 1 } });
-		expect(bridge.load).toHaveBeenCalledWith(film, 1, undefined);
+		expect(bridge.load).toHaveBeenCalledWith(film, 9, 1, undefined);
 		await d.seek(5);
 		expect(bridge.seek).toHaveBeenCalledWith(5);
 		await d.stop();

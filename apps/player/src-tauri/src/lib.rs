@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 mod airplay;
+#[cfg(target_os = "android")]
+mod android_tls;
 mod commands;
 mod convert;
 mod downloads;
@@ -17,6 +19,8 @@ mod progress;
 mod streams;
 #[cfg(any(target_os = "ios", test))]
 mod wifi;
+#[cfg(test)]
+mod android_project_tests;
 #[cfg(test)]
 mod capabilities_tests;
 #[cfg(test)]
@@ -295,6 +299,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(invoke_handler())
         .setup(|app| {
+            // Before anything makes an HTTPS request. If it fails, every HTTPS
+            // request would hang, so the app stops here instead.
+            #[cfg(target_os = "android")]
+            android_tls::init().expect("HTTPS certificate checks could not start");
+
             let app_dir = app
                 .path()
                 .app_data_dir()

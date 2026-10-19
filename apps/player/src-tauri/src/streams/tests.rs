@@ -46,12 +46,22 @@ async fn formats(
     playing: Option<PlayingInfo>,
 ) -> Result<StreamFormats, String> {
     let handle = app.handle();
-    get_stream_formats(
-        handle.clone(),
-        app.state(),
-        handle.state::<StreamsState>(),
+    // As mpv would report it while it plays the channel.
+    let now = playing.map(|p| {
+        let info = MediaInfo {
+            file_format: p.file_format,
+            video_codec: p.video_codec,
+            audio_codec: p.audio_codec,
+            interlaced: p.interlaced,
+        };
+        (channel.url.clone(), info)
+    });
+    stream_formats(
+        &handle,
+        &app.state(),
+        &handle.state::<StreamsState>(),
         channel,
-        playing,
+        now,
     )
     .await
 }
@@ -106,6 +116,7 @@ async fn xtream_live_playing_here_offers_hls_then_ts_without_asking_the_stream()
             ],
             sources: vec![0, 1],
             duration: None,
+            generation: result.generation,
         }
     );
     // Only the panel's login check, never the stream.
@@ -179,7 +190,8 @@ async fn a_refused_stream_says_so_and_an_unreachable_one_offers_nothing() {
         StreamFormats {
             formats: vec![],
             sources: vec![],
-            duration: None
+            duration: None,
+            generation: result.generation,
         }
     );
 }
@@ -228,7 +240,7 @@ async fn get_hls(app: &TestApp, url: &str) -> Result<StreamFormats, String> {
 #[tokio::test]
 async fn a_panel_that_cant_be_asked_keeps_the_channels_own_url() {
     let app = TestApp::new();
-    let (panel, _) = serve_routes(vec![route(
+    let (panel, requests) = serve_routes(vec![route(
         "player_api.php",
         "500 Internal Server Error",
         "",
@@ -240,23 +252,28 @@ async fn a_panel_that_cant_be_asked_keeps_the_channels_own_url() {
         &panel,
         std::slice::from_ref(&live),
     );
-    let result = formats(&app, live, Some(playing_ts())).await.unwrap();
+    let result = formats(&app, live.clone(), Some(playing_ts()))
+        .await
+        .unwrap();
     assert_eq!(result.sources, vec![0]);
     assert_eq!(result.formats[0].container, Container::Ts);
-    // It's asked again next time, since the answer wasn't kept.
-    let handle = app.handle();
-    assert!(lock(&handle.state::<StreamsState>().output_formats).is_empty());
+    // It isn't asked again in this run, so the list of URLs stays the same.
+    let again = formats(&app, live, Some(playing_ts())).await.unwrap();
+    assert_eq!(again.sources, vec![0]);
+    assert_eq!(requests.try_iter().count(), 1);
 }
 
 #[tokio::test]
 async fn m3u_channels_and_episodes_keep_their_own_url() {
     let app = TestApp::new();
-    let url = "http://srv.invalid/live/u/p/7.ts";
+    // Nothing is fetched while it plays, and nothing answers there anyway.
+    let base = mvp_core::http::test_server::refused_url();
+    let url = &format!("{base}/live/u/p/7.ts");
     let live = channel("p-ch-0", url, "live");
     add_provider(
         &app,
         ProviderType::M3u,
-        "http://srv.invalid/list.m3u",
+        &format!("{base}/list.m3u"),
         std::slice::from_ref(&live),
     );
     let result = formats(&app, live, Some(playing_ts())).await.unwrap();
@@ -264,7 +281,7 @@ async fn m3u_channels_and_episodes_keep_their_own_url() {
     // An episode isn't in the cache, so it has no provider.
     let episode = channel(
         "xt-ep-1-s1-0",
-        "http://srv.invalid/series/u/p/9.mkv",
+        &format!("{base}/series/u/p/9.mkv"),
         "series",
     );
     let result = formats(&app, episode, Some(playing_ts())).await.unwrap();
@@ -309,4 +326,175 @@ async fn probes_the_first_url_when_the_channels_own_isnt_offered() {
     assert_eq!(formats(&app, live, None).await.unwrap_err(), REFUSED);
     assert!(requests.recv().unwrap().contains("player_api.php"));
     assert!(requests.recv().unwrap().contains("/7.m3u8"));
+}
+
+fn mpv_info(file_format: Option<&str>) -> MediaInfo {
+    MediaInfo {
+        file_format: file_format.map(String::from),
+        video_codec: Some("h264".into()),
+        audio_codec: Some("aac".into()),
+        interlaced: false,
+    }
+}
+
+#[test]
+fn trusts_mpv_only_about_this_item_once_it_has_opened() {
+    let ts = "http://panel/live/u/SECRET/7.ts".to_string();
+    let hls = "http://panel/live/u/SECRET/7.m3u8".to_string();
+    let urls = vec![hls.clone(), ts.clone()];
+    // Nothing loaded, or another item.
+    assert_eq!(playing_info(None, &urls, &ts), Ok(None));
+    let other = (
+        "http://panel/live/u/SECRET/8.ts".to_string(),
+        mpv_info(Some("mpegts")),
+    );
+    assert_eq!(playing_info(Some(other), &urls, &ts), Ok(None));
+    // This item, still opening.
+    let opening = (ts.clone(), mpv_info(None));
+    assert_eq!(
+        playing_info(Some(opening), &urls, &ts),
+        Err(NOT_READY.to_string())
+    );
+    // This item, by its own URL or another of its URLs.
+    for url in [ts.clone(), hls] {
+        let playing = playing_info(Some((url, mpv_info(Some("mpegts")))), &urls, &ts)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            playing,
+            PlayingInfo {
+                file_format: Some("mpegts".into()),
+                video_codec: Some("h264".into()),
+                audio_codec: Some("aac".into()),
+                interlaced: false,
+            }
+        );
+    }
+    let interlaced = MediaInfo {
+        interlaced: true,
+        ..mpv_info(Some("mpegts"))
+    };
+    assert!(
+        playing_info(Some((ts.clone(), interlaced)), &urls, &ts)
+            .unwrap()
+            .unwrap()
+            .interlaced
+    );
+    // The channel's own URL counts even when it isn't among the URLs.
+    assert!(
+        playing_info(Some((ts.clone(), mpv_info(Some("mpegts")))), &[], &ts)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_load_names_its_url_by_the_generation_it_was_listed_in() {
+    let app = TestApp::new();
+    let (panel, _) = serve_routes(vec![route("player_api.php", "200 OK", PANEL_FORMATS)]);
+    let ts = format!("{panel}/live/{ACCOUNT}/7.ts");
+    let live = channel("p-live-7", &ts, "live");
+    add_provider(
+        &app,
+        ProviderType::Xtream,
+        &panel,
+        std::slice::from_ref(&live),
+    );
+    let first = formats(&app, live.clone(), Some(playing_ts()))
+        .await
+        .unwrap();
+    let handle = app.handle();
+    let streams = handle.state::<StreamsState>();
+    assert_eq!(
+        streams.url("p-live-7", first.generation, first.sources[1]),
+        Ok(ts.clone())
+    );
+    // A newer list makes the older one stale.
+    let second = formats(&app, live, Some(playing_ts())).await.unwrap();
+    assert!(second.generation > first.generation);
+    assert_eq!(
+        streams.url("p-live-7", first.generation, 1),
+        Err(STALE.to_string())
+    );
+    assert_eq!(streams.url("p-live-7", second.generation, 1), Ok(ts));
+    assert_eq!(
+        streams.url("p-live-7", second.generation, 2),
+        Err(STALE.to_string())
+    );
+    assert_eq!(
+        streams.url("p-live-8", second.generation, 0),
+        Err(STALE.to_string())
+    );
+}
+
+#[tokio::test]
+async fn an_item_mpv_is_still_opening_isnt_routed_yet() {
+    let app = TestApp::new();
+    let url = mvp_core::http::test_server::refused_url() + "/1.mkv";
+    let film = channel("m-1", &url, "movie");
+    let handle = app.handle();
+    let opening = Some((url, mpv_info(None)));
+    let result = stream_formats(
+        &handle,
+        &app.state(),
+        &handle.state::<StreamsState>(),
+        film,
+        opening,
+    )
+    .await;
+    assert_eq!(result, Err(NOT_READY.to_string()));
+}
+
+#[tokio::test]
+async fn the_command_probes_what_mpv_doesnt_play() {
+    let app = TestApp::new();
+    let film = channel("m-1", &video_url("formats-command"), "movie");
+    let result = app
+        .invoke("get_stream_formats", serde_json::json!({ "channel": film }))
+        .unwrap();
+    assert_eq!(result["formats"][0]["container"], "other");
+    assert!(result["duration"].as_f64().is_some());
+    assert!(result["generation"].as_u64().unwrap() > 0);
+}
+
+/// Whether an ffmpeg with `url` among its arguments runs.
+#[cfg(desktop)]
+fn ffmpeg_runs_for(url: &str) -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-f", url])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[cfg(desktop)]
+#[tokio::test]
+async fn a_probe_that_runs_too_long_stops_its_ffmpeg() {
+    // A server that sends a byte every half second, so ffmpeg keeps waiting.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                use std::io::Write;
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\n\r\n";
+                if stream.write_all(head.as_bytes()).is_err() {
+                    return;
+                }
+                while stream.write_all(&[0x47]).is_ok() {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
+        }
+    });
+    let url = format!("http://{address}/live/u/SECRET/slow.ts");
+    let app = TestApp::new();
+    let probed = probe_within(&app.handle(), &url, Duration::from_secs(2)).await;
+    assert_eq!(probed.err(), Some(ProbeError::Unreachable));
+    for _ in 0..50 {
+        if !ffmpeg_runs_for(&url) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the probe's ffmpeg still runs");
 }

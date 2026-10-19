@@ -13,8 +13,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
 tracing = "0.1"
 thiserror = "2"
-# reqwest 0.13 switched its default TLS to rustls with aws-lc. These are 0.12's
-# defaults, which use the system's TLS (Security.framework on Apple platforms,
-# OpenSSL on Linux). Without ALPN, HTTPS stays on HTTP/1.1 as it did in 0.12.
-# Crates add the features they need on top.
-reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "charset", "http2", "system-proxy"] }
+# No TLS backend here, because cargo features are additive and a workspace
+# dependency can't differ by target. mvp-core picks one per target, so every
+# crate that depends on it gets one. Crates add the other features they need
+# on top.
+reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "system-proxy"] }

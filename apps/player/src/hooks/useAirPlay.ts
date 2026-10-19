@@ -33,7 +33,6 @@ import {
 	airplaySetDetection,
 	airplayStop,
 	getStreamFormats,
-	mpvGetMediaInfo,
 } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
 
@@ -45,9 +44,9 @@ const ROUTE_GRACE_MS = 1000;
 const NO_CONVERTER: ConverterSupport = { convert: false, hardwareEncoder: false };
 
 const bridge: AirPlayBridge = {
-	// This device plays the channel while the picker is open, so mpv says
-	// what it is, and the provider isn't asked for a second connection.
-	formats: async (channel) => getStreamFormats(channel, await mpvGetMediaInfo()),
+	// This device plays the channel while the picker is open, so the
+	// backend asks mpv, and the provider isn't asked for a second connection.
+	formats: getStreamFormats,
 	load: airplayLoad,
 	loadConverted: airplayLoadConverted,
 	endConversion: airplayEndConversion,
@@ -60,6 +59,7 @@ const bridge: AirPlayBridge = {
 	listen: (handler) =>
 		listen<AirPlayNativeState>(AIRPLAY_STATE_EVENT, (event) => handler(event.payload)),
 	now: () => performance.now(),
+	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
 // Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.

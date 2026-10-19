@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// How a stream is packaged, as far as a receiver cares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Container {
@@ -20,6 +21,7 @@ pub enum Container {
     Other,
 }
 
+/// The video codecs receivers differ on. Anything else is `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VideoCodec {
@@ -29,9 +31,13 @@ pub enum VideoCodec {
     Other,
 }
 
+/// The audio codecs receivers differ on. Anything else is `Other`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioCodec {
+    /// AAC in ADTS or MP4. LATM, which some DVB channels use, is `Other`:
+    /// copied into Matroska it isn't `A_AAC`, and Chromium's TS parser
+    /// is believed to take only ADTS.
     Aac,
     Mp3,
     Ac3,
@@ -83,7 +89,7 @@ pub fn video_codec(name: &str) -> VideoCodec {
 /// An audio codec from ffmpeg's or mpv's name for it.
 pub fn audio_codec(name: &str) -> AudioCodec {
     match name.trim().to_ascii_lowercase().as_str() {
-        "aac" | "aac_latm" => AudioCodec::Aac,
+        "aac" => AudioCodec::Aac,
         "mp3" | "mp3float" => AudioCodec::Mp3,
         "ac3" => AudioCodec::Ac3,
         "eac3" => AudioCodec::Eac3,

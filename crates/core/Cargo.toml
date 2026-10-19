@@ -28,6 +28,19 @@ percent-encoding = "2"
 # The converter's unguessable paths.
 getrandom = "0.3"
 
+# reqwest 0.13 switched its default TLS to rustls with aws-lc. Desktop and iOS
+# keep 0.12's default, the system's TLS: Security.framework on Apple platforms
+# and OpenSSL on Linux. Without ALPN, HTTPS stays on HTTP/1.1 as it did in 0.12.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+reqwest = { workspace = true, features = ["native-tls-no-alpn"] }
+
+# Android has no system OpenSSL. rustls checks certificates with Android's own
+# verifier through rustls-platform-verifier, so the system's CAs and, where the
+# network security config allows them, the user's CAs are trusted. rustls
+# offers HTTP/2 over ALPN, so `http::build` keeps Android on HTTP/1.1 too.
+[target.'cfg(target_os = "android")'.dependencies]
+reqwest = { workspace = true, features = ["rustls"] }
+
 [dev-dependencies]
 # Folders for tests that write files, removed when the test ends.
 tempfile = "3"

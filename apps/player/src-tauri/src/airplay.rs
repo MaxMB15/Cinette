@@ -9,8 +9,7 @@ use mvp_core::models::channel::Channel;
 use serde::Serialize;
 use tauri::{command, AppHandle, Runtime, State};
 
-use crate::commands::AppState;
-use crate::streams::{fetch_urls, StreamsState};
+use crate::streams::StreamsState;
 
 #[cfg(target_os = "ios")]
 mod ios;
@@ -23,53 +22,41 @@ mod tests;
 #[cfg(any(target_os = "ios", test))]
 pub const AIRPLAY_AUDIO: [&str; 2] = ["aac", "mp3"];
 
-/// The URL at `source` in `channel`'s list, as `get_stream_formats`
-/// numbered them.
-async fn source_url(
-    state: &AppState,
-    streams: &StreamsState,
-    channel: &Channel,
-    source: usize,
-) -> Result<String, String> {
-    let urls = fetch_urls(state, streams, channel).await?;
-    urls.into_iter()
-        .nth(source)
-        .ok_or_else(|| "That stream format is no longer offered".to_string())
-}
-
-/// Plays `channel` over AirPlay from the URL at `source`, which the
-/// receiver fetches itself. Local playback must already have stopped.
-/// `start_at` only counts for movies and episodes.
+/// Plays `channel` over AirPlay from the URL at `source` in the list that
+/// `get_stream_formats` named `generation`. A replaced list fails with
+/// `STALE`. Local playback must already have stopped. `start_at` only
+/// counts for movies and episodes.
 #[command]
 pub async fn airplay_load<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, AppState>,
     streams: State<'_, StreamsState>,
     channel: Channel,
+    generation: u64,
     source: usize,
     start_at: Option<f64>,
 ) -> Result<(), String> {
-    let url = source_url(&state, &streams, &channel, source).await?;
+    let url = streams.url(&channel.id, generation, source)?;
     // mutants: skip BinaryOperator: Only iOS reads live, and the plugin fails first elsewhere.
     let live = channel.content_type == "live";
     tracing::info!("[AirPlay] load source={source} live={live}");
     tauri_plugin_mpv::airplay::load(&app, &url, &channel.name, start_at, live, None)
 }
 
-/// Converts `channel` from the URL at `source` on this device, serves it
+/// Converts `channel` from the URL at `source` in the list named
+/// `generation`, as `airplay_load` finds it, on this device, serves it
 /// on the Wi-Fi network, and plays that over AirPlay from `start_at`.
 /// Resolves once the receiver can start, or rejects with why not: the
 /// stream's `"refused"`, as `get_stream_formats` does, or a message.
 #[command]
 pub async fn airplay_load_converted<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, AppState>,
     streams: State<'_, StreamsState>,
     channel: Channel,
+    generation: u64,
     source: usize,
     start_at: Option<f64>,
 ) -> Result<(), String> {
-    let url = source_url(&state, &streams, &channel, source).await?;
+    let url = streams.url(&channel.id, generation, source)?;
     #[cfg(target_os = "ios")]
     {
         ios::load_converted(&app, &url, &channel, start_at).await

@@ -194,7 +194,7 @@ fn sample(argument: &str) -> Value {
         "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
         | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt"
-        | "source" => {
+        | "source" | "generation" => {
             json!(1)
         }
         "keep" => json!(true),

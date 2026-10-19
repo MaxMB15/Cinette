@@ -4,7 +4,9 @@
 use super::*;
 use crate::test_support::TestApp;
 use mvp_core::models::playlist::{Provider, ProviderType};
+use crate::streams::{stream_formats, STALE};
 use tauri::Manager;
+use tauri_plugin_mpv::MediaInfo;
 
 fn add_m3u_channel(app: &TestApp) -> Channel {
     let channel = Channel {
@@ -34,13 +36,41 @@ fn add_m3u_channel(app: &TestApp) -> Channel {
     channel
 }
 
-async fn load(app: &TestApp, channel: Channel, source: usize) -> Result<(), String> {
+/// Lists `channel`'s formats as mpv plays it, so nothing is fetched, and
+/// returns the list's generation.
+async fn list(app: &TestApp, channel: &Channel) -> u64 {
+    let handle = app.handle();
+    let info = MediaInfo {
+        file_format: Some("mpegts".into()),
+        video_codec: Some("h264".into()),
+        audio_codec: Some("aac".into()),
+        interlaced: false,
+    };
+    let now = Some((channel.url.clone(), info));
+    let listed = stream_formats(
+        &handle,
+        &app.state(),
+        &handle.state::<StreamsState>(),
+        channel.clone(),
+        now,
+    )
+    .await
+    .unwrap();
+    listed.generation
+}
+
+async fn load(
+    app: &TestApp,
+    channel: Channel,
+    generation: u64,
+    source: usize,
+) -> Result<(), String> {
     let handle = app.handle();
     airplay_load(
         handle.clone(),
-        app.state(),
         handle.state::<StreamsState>(),
         channel,
+        generation,
         source,
         Some(30.0),
     )
@@ -48,36 +78,48 @@ async fn load(app: &TestApp, channel: Channel, source: usize) -> Result<(), Stri
 }
 
 #[tokio::test]
-async fn hands_the_resolved_url_to_the_plugin() {
+async fn hands_the_listed_url_to_the_plugin() {
     let app = TestApp::new();
     let channel = add_m3u_channel(&app);
-    // The URL resolved, and the plugin says AirPlay isn't on this computer.
+    let generation = list(&app, &channel).await;
+    // The URL was found, and the plugin says AirPlay isn't on this computer.
     assert_eq!(
-        load(&app, channel, 0).await,
+        load(&app, channel, generation, 0).await,
         Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string())
     );
 }
 
 #[tokio::test]
-async fn refuses_a_format_the_item_no_longer_has() {
+async fn refuses_a_format_the_list_doesnt_have() {
     let app = TestApp::new();
     let channel = add_m3u_channel(&app);
+    let generation = list(&app, &channel).await;
     assert_eq!(
-        load(&app, channel, 1).await,
-        Err("That stream format is no longer offered".to_string())
+        load(&app, channel, generation, 1).await,
+        Err(STALE.to_string())
     );
+}
+
+#[tokio::test]
+async fn refuses_a_replaced_list() {
+    let app = TestApp::new();
+    let channel = add_m3u_channel(&app);
+    let first = list(&app, &channel).await;
+    list(&app, &channel).await;
+    assert_eq!(load(&app, channel, first, 0).await, Err(STALE.to_string()));
 }
 
 #[tokio::test]
 async fn converting_is_only_on_ios() {
     let app = TestApp::new();
     let channel = add_m3u_channel(&app);
+    let generation = list(&app, &channel).await;
     let handle = app.handle();
     let converted = airplay_load_converted(
         handle.clone(),
-        app.state(),
         handle.state::<StreamsState>(),
         channel.clone(),
+        generation,
         0,
         None,
     )
@@ -89,17 +131,14 @@ async fn converting_is_only_on_ios() {
     // The format is checked first, as for a direct load.
     let gone = airplay_load_converted(
         handle.clone(),
-        app.state(),
         handle.state::<StreamsState>(),
         channel,
+        generation,
         3,
         None,
     )
     .await;
-    assert_eq!(
-        gone,
-        Err("That stream format is no longer offered".to_string())
-    );
+    assert_eq!(gone, Err(STALE.to_string()));
     assert_eq!(airplay_end_conversion().await, Ok(()));
     assert_eq!(
         airplay_converter_support().await,

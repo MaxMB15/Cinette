@@ -7,7 +7,7 @@
  * picks one in the system picker and this only ever knows its name.
  *
  * The stream URL stays in the backend: a load names the format by its
- * place in `getStreamFormats`' list.
+ * place in `getStreamFormats`' list and that list's generation.
  */
 
 import {
@@ -25,6 +25,7 @@ type Blocked = Extract<RouteDecision, { ok: false }>;
 import {
 	airplayTvProfile,
 	iosSender,
+	NOT_READY,
 	REFUSED,
 	type ConverterSupport,
 	type StreamFormats,
@@ -252,12 +253,17 @@ export const airplayKey = (
 
 /** What the destination needs from the backend, so tests can fake it. */
 export interface AirPlayBridge {
-	/** The formats `channel` comes in. Passes mpv's media info when the
-	 *  channel plays here, so the provider isn't asked again. */
+	/** The formats `channel` comes in. Rejects with `NOT_READY` while mpv
+	 *  is still opening it here. */
 	formats: (channel: Channel) => Promise<StreamFormats>;
-	load: (channel: Channel, source: number, startAt?: number) => Promise<void>;
+	load: (channel: Channel, generation: number, source: number, startAt?: number) => Promise<void>;
 	/** Converts on this device and plays that on the receiver. */
-	loadConverted: (channel: Channel, source: number, startAt?: number) => Promise<void>;
+	loadConverted: (
+		channel: Channel,
+		generation: number,
+		source: number,
+		startAt?: number
+	) => Promise<void>;
 	endConversion: () => Promise<void>;
 	play: () => Promise<void>;
 	pause: () => Promise<void>;
@@ -268,7 +274,26 @@ export interface AirPlayBridge {
 	/** Calls `handler` with every state event. Resolves to an unsubscribe. */
 	listen: (handler: (state: AirPlayNativeState) => void) => Promise<() => void>;
 	now: () => number;
+	/** Resolves after `ms`. */
+	sleep: (ms: number) => Promise<void>;
 }
+
+/** How long `route` waits before asking again while mpv opens the item. */
+const NOT_READY_WAIT_MS = 500;
+/** How many times `route` asks, about 5 s in all. */
+const NOT_READY_TRIES = 10;
+
+/** `channel`'s formats, asked again while mpv is still opening it. */
+const formatsWhenReady = async (bridge: AirPlayBridge, channel: Channel) => {
+	for (let tried = 1; ; tried++) {
+		try {
+			return await bridge.formats(channel);
+		} catch (error) {
+			if (error !== NOT_READY || tried === NOT_READY_TRIES) throw error;
+			await bridge.sleep(NOT_READY_WAIT_MS);
+		}
+	}
+};
 
 export interface AirPlayDestination extends PlaybackDestination {
 	readonly kind: "airplay";
@@ -287,11 +312,12 @@ export const createAirPlayDestination = (
 	let item: PlaybackState["item"] = null;
 	let live = false;
 	/** The converted item and its source, so a seek can start it again. */
-	let converted: { channel: Channel; source: number } | null = null;
+	let converted: { channel: Channel; generation: number; source: number } | null = null;
 	let state = airplayPlaybackState(native, item, bridge.now());
 	const listeners = new Set<(state: PlaybackState) => void>();
-	/** Each channel's URL places, from its last `route`. */
-	const sources = new Map<string, number[]>();
+	/** Each channel's URL places and their list's generation, from its last
+	 *  `route`. */
+	const sources = new Map<string, Pick<StreamFormats, "sources" | "generation">>();
 
 	const publish = () => {
 		state = airplayPlaybackState(native, item, bridge.now());
@@ -326,8 +352,8 @@ export const createAirPlayDestination = (
 		},
 		route: async (target: PlaybackItem): Promise<RouteDecision> => {
 			if (target.kind !== "local") return { ok: false, reason: "notFound" };
-			const found = await bridge.formats(target.channel);
-			sources.set(target.channel.id, found.sources);
+			const found = await formatsWhenReady(bridge, target.channel);
+			sources.set(target.channel.id, found);
 			return chooseRoute(found.formats, AIRPLAY_RECEIVER, sender);
 		},
 		load: async (target: PlaybackItem, opts?: { startAt?: number; route?: PlayRoute }) => {
@@ -336,19 +362,21 @@ export const createAirPlayDestination = (
 			const { route, startAt } = opts ?? {};
 			if (route?.via !== "direct" && route?.via !== "converted")
 				throw new UnsupportedError("Playing this route on AirPlay");
-			const source = sources.get(target.channel.id)?.[route.format];
-			if (source === undefined) throw new Error("Check the route before loading");
+			const listed = sources.get(target.channel.id);
+			const source = listed?.sources[route.format];
+			if (!listed || source === undefined) throw new Error("Check the route before loading");
 			const { channel } = target;
 			live = channel.contentType === "live";
 			item = { title: channel.name, contentType: channel.contentType, ref: channel.id };
 			native = { ...IDLE_NATIVE_STATE, status: "opening" };
-			converted = route.via === "converted" ? { channel, source } : null;
+			const { generation } = listed;
+			converted = route.via === "converted" ? { channel, generation, source } : null;
 			// The capabilities change with the route, so the new state goes out
 			// after it's set, and subscribers read both together.
 			publish();
 			const from = live ? undefined : startAt;
-			if (converted) await bridge.loadConverted(channel, source, from);
-			else await bridge.load(channel, source, from);
+			if (converted) await bridge.loadConverted(channel, generation, source, from);
+			else await bridge.load(channel, generation, source, from);
 		},
 		play: () => bridge.play(),
 		pause: () => bridge.pause(),
@@ -356,7 +384,12 @@ export const createAirPlayDestination = (
 		// a seek converts again from there.
 		seek: (seconds) =>
 			converted && !live
-				? bridge.loadConverted(converted.channel, converted.source, seconds)
+				? bridge.loadConverted(
+						converted.channel,
+						converted.generation,
+						converted.source,
+						seconds
+					)
 				: bridge.seek(seconds),
 		setVolume: () => Promise.reject(new UnsupportedError("Setting the TV's volume")),
 		selectSubtitle: async (trackId) =>

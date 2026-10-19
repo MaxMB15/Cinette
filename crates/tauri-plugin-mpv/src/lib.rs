@@ -22,6 +22,10 @@ mod options;
 #[cfg(test)]
 mod test_support;
 
+#[cfg(target_os = "android")]
+mod android;
+#[cfg(any(target_os = "android", test))]
+mod android_surface;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "linux")]
@@ -34,6 +38,7 @@ use tauri::{
     Manager, Runtime,
 };
 
+pub use engine::MediaInfo;
 pub use mpv::MpvState;
 
 // The Swift half of the plugin, in `ios/Sources/MpvPlugin.swift`.
@@ -91,6 +96,19 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 ios::install(app);
             }
             airplay::install(app);
+            #[cfg(target_os = "android")]
+            {
+                let handle = _api.register_android_plugin("app.cinette.mpv", "MpvPlugin")?;
+                let font_dir = app.path().app_cache_dir().ok().map(|dir| dir.join("mpv-fonts"));
+                android::install(
+                    Box::new(move |command, payload| {
+                        if let Err(e) = handle.run_mobile_plugin::<serde_json::Value>(command, payload) {
+                            tracing::warn!("[MPV android] {command} failed: {e}");
+                        }
+                    }),
+                    font_dir,
+                );
+            }
             tracing::info!("MPV plugin initialized");
             Ok(())
         })

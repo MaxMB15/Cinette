@@ -4,9 +4,12 @@
 	"load_xtream_provider": { "required": ["name", "url", "username", "password"] },
 	"get_providers": {},
 	"get_converter_support": {},
-	"get_stream_formats": { "required": ["channel"], "optional": ["playing"] },
-	"airplay_load": { "required": ["channel", "source"], "optional": ["startAt"] },
-	"airplay_load_converted": { "required": ["channel", "source"], "optional": ["startAt"] },
+	"get_stream_formats": { "required": ["channel"] },
+	"airplay_load": { "required": ["channel", "generation", "source"], "optional": ["startAt"] },
+	"airplay_load_converted": {
+		"required": ["channel", "generation", "source"],
+		"optional": ["startAt"]
+	},
 	"airplay_end_conversion": {},
 	"airplay_converter_support": {},
 	"remove_provider": { "required": ["id"] },
