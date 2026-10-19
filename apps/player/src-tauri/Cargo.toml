@@ -61,7 +61,7 @@ tauri-plugin-single-instance = "2"
 
 [lib]
 name = "max_video_player_lib"
-# The desktop binary links the rlib and iOS links the staticlib. A cdylib
-# can't link on iOS because libmpv comes from MPVKit in the Xcode project,
-# not from a library cargo can find. Android will need "cdylib" back.
-crate-type = ["staticlib", "rlib"]
+# The desktop binary links the rlib, iOS links the staticlib and Android
+# loads the cdylib. On iOS the cdylib is left unused, and build.rs lets it
+# link without libmpv, which comes from MPVKit in the Xcode project.
+crate-type = ["staticlib", "cdylib", "rlib"]
