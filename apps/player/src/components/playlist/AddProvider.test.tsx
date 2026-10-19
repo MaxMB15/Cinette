@@ -91,4 +91,83 @@ describe("AddProvider", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Clear selected file" }));
 		await waitFor(() => expect(screen.queryByText("Sports.m3u8")).toBeNull());
 	});
+
+	describe("submitting", () => {
+		const handlers = () => ({
+			onAddM3u: vi.fn().mockResolvedValue(undefined),
+			onAddM3uFile: vi.fn().mockResolvedValue(undefined),
+			onAddXtream: vi.fn().mockResolvedValue(undefined),
+		});
+		const type = (label: string, value: string) =>
+			fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+		it("loads a playlist URL under a default name, then clears the form", async () => {
+			const h = handlers();
+			render(<AddProvider {...h} />);
+			type("Playlist URL", "http://list.example.test/a.m3u");
+			fireEvent.click(screen.getByRole("button", { name: "Load Playlist" }));
+
+			await waitFor(() =>
+				expect(h.onAddM3u).toHaveBeenCalledWith(
+					"M3U Playlist",
+					"http://list.example.test/a.m3u"
+				)
+			);
+			await waitFor(() => expect(screen.getByLabelText("Playlist URL")).toHaveValue(""));
+			expect(screen.queryByRole("alert")).toBeNull();
+		});
+
+		it("shows why adding failed, keeps the form and lets it try again", async () => {
+			const h = handlers();
+			h.onAddM3u.mockRejectedValue(new Error("no playlist there"));
+			render(<AddProvider {...h} />);
+			type("Provider name", "Home");
+			type("Playlist URL", "http://list.example.test/a.m3u");
+			const button = screen.getByRole("button", { name: "Load Playlist" });
+			fireEvent.click(button);
+			expect(button).toBeDisabled();
+
+			expect(await screen.findByRole("alert")).toHaveTextContent("no playlist there");
+			expect(h.onAddM3u).toHaveBeenCalledWith("Home", "http://list.example.test/a.m3u");
+			expect(screen.getByLabelText("Playlist URL")).toHaveValue(
+				"http://list.example.test/a.m3u"
+			);
+			expect(button).toBeEnabled();
+		});
+
+		it("imports the chosen file under its own name, then clears it", async () => {
+			const h = handlers();
+			render(<AddProvider {...h} />);
+			fireEvent.click(screen.getByRole("button", { name: "File" }));
+			fireEvent.click(screen.getByRole("button", { name: /\.m3u file/ }));
+			await screen.findByText("Sports.m3u8");
+			fireEvent.click(screen.getByRole("button", { name: "Import Playlist" }));
+
+			await waitFor(() =>
+				expect(h.onAddM3uFile).toHaveBeenCalledWith("Sports", "/Users/me/lists/Sports.m3u8")
+			);
+			await waitFor(() => expect(screen.queryByText("Sports.m3u8")).toBeNull());
+			expect(h.onAddM3u).not.toHaveBeenCalled();
+		});
+
+		it("connects an Xtream account under a default name", async () => {
+			const h = handlers();
+			render(<AddProvider {...h} />);
+			fireEvent.click(screen.getByRole("button", { name: "Xtream Codes" }));
+			type("Server URL", "http://xt.example.test");
+			type("Username", "made-up-user");
+			type("Password", "made-up-pass");
+			fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+			await waitFor(() =>
+				expect(h.onAddXtream).toHaveBeenCalledWith(
+					"Xtream Provider",
+					"http://xt.example.test",
+					"made-up-user",
+					"made-up-pass"
+				)
+			);
+			await waitFor(() => expect(screen.getByLabelText("Username")).toHaveValue(""));
+		});
+	});
 });

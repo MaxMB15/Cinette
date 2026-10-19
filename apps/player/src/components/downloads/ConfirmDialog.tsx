@@ -42,12 +42,15 @@ export const ConfirmDialog = ({
 	onConfirm,
 	onCancel,
 	cancelLabel = "Cancel",
-	destructive = onCancel !== undefined,
+	destructive,
 	confirmDisabled = false,
 	children,
 }: ConfirmDialogProps) => {
 	const titleId = useId();
 	if (!open) return null;
+	// A default that reads another prop is worked out here, since the React
+	// Compiler can't compile one in the parameter list.
+	const isDestructive = destructive ?? onCancel !== undefined;
 	return createPortal(
 		<Dialog
 			onClose={onCancel ?? onConfirm}
@@ -84,7 +87,7 @@ export const ConfirmDialog = ({
 					<button
 						type="button"
 						className={`${BUTTON} disabled:opacity-50 disabled:pointer-events-none ${
-							destructive
+							isDestructive
 								? "bg-red-600 text-white hover:bg-red-500"
 								: "bg-primary text-primary-foreground hover:bg-primary/90"
 						}`}

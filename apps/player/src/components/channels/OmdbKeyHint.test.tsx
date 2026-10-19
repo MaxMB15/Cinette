@@ -6,6 +6,7 @@ import { render, screen, fireEvent, cleanup, act } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import type { Channel, OmdbData } from "@/lib/types";
+import { wrapperFor } from "@/test/query";
 
 const tauri = vi.hoisted(() => ({
 	getOmdbApiKey: vi.fn<() => Promise<string | null>>(),
@@ -70,7 +71,8 @@ const inRouter = (sheet: ReactNode) =>
 				<Route path="/" element={sheet} />
 				<Route path="/settings" element={<SettingsPage />} />
 			</Routes>
-		</MemoryRouter>
+		</MemoryRouter>,
+		{ wrapper: wrapperFor() }
 	);
 
 const renderMovie = (onClose = vi.fn(), prefetchedOmdbData?: OmdbData | null) =>

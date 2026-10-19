@@ -46,33 +46,36 @@ export const useUpdateChecker = (): UpdateState => {
 		if (!supported) return Promise.resolve(null);
 		if (inflightRef.current) return inflightRef.current;
 
-		const promise = (async () => {
-			setChecking(true);
-			setError(null);
-			setCheckError(null);
-			try {
-				// Fetch install info once
-				if (!installInfoRef.current) {
-					installInfoRef.current = await getInstallInfo();
-				}
+		setChecking(true);
+		setError(null);
+		setCheckError(null);
+		const run = async () => {
+			// Fetch install info once
+			if (!installInfoRef.current) {
+				installInfoRef.current = await getInstallInfo();
+			}
 
-				const result = (await check({ timeout: 5_000 })) ?? null;
-				setUpdate(result);
+			const result = (await check({ timeout: 5_000 })) ?? null;
+			setUpdate(result);
 
-				const type = installInfoRef.current.installType;
-				setPackageInstall(type === "deb" || type === "rpm");
+			const type = installInfoRef.current.installType;
+			setPackageInstall(type === "deb" || type === "rpm");
 
-				return result;
-			} catch (err) {
+			return result;
+		};
+		// Promise callbacks in place of try and finally, which the React
+		// Compiler can't compile yet.
+		const promise = run()
+			.catch((err) => {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.warn("[updater] check error:", msg);
 				setCheckError(msg);
 				return null;
-			} finally {
+			})
+			.finally(() => {
 				setChecking(false);
 				inflightRef.current = null;
-			}
-		})();
+			});
 
 		inflightRef.current = promise;
 		return promise;
@@ -114,11 +117,7 @@ export const useUpdateChecker = (): UpdateState => {
 					"package-update://progress",
 					(event) => setProgress(event.payload.percent)
 				);
-				try {
-					await packageUpdate();
-				} finally {
-					unlisten();
-				}
+				await packageUpdate().finally(() => unlisten());
 			} else {
 				// AppImage/macOS/Windows: use Tauri's built-in updater
 				let downloaded = 0;

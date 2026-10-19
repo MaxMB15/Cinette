@@ -202,6 +202,37 @@ describe("PlaylistManager actions", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
+	it("keeps a failed refresh's error until that provider's own update time moves", async () => {
+		state.refreshProvider.mockRejectedValue("Server returned 503");
+		state.providers = [
+			makeProvider({ lastUpdated: "2026-10-01T08:00:00Z" }),
+			makeProvider({ id: "p2", name: "Panel", lastUpdated: "2026-10-02T08:00:00Z" }),
+		];
+		const { rerender } = render(<PlaylistManager />);
+		fireEvent.click(cardButton("Panel", "Refresh"));
+		await flush();
+		expect(within(card("Panel")).getByRole("alert")).toHaveTextContent("Server returned 503");
+
+		// The other provider updating doesn't hide it.
+		state.providers = [
+			makeProvider({ lastUpdated: "2026-10-12T08:00:00Z" }),
+			makeProvider({ id: "p2", name: "Panel", lastUpdated: "2026-10-02T08:00:00Z" }),
+		];
+		rerender(<PlaylistManager />);
+		expect(within(card("Panel")).getByRole("alert")).toBeInTheDocument();
+	});
+
+	it("passes on the failure of a provider that's no longer listed", async () => {
+		state.refreshProvider.mockRejectedValue("Server returned 503");
+		state.providers = [makeProvider()];
+		render(<PlaylistManager />);
+		fireEvent.click(cardButton("Home", "Settings"));
+
+		let failure: unknown;
+		await act(() => state.settings!.onRefreshNow("gone").catch((e: unknown) => (failure = e)));
+		expect(failure).toBe("Server returned 503");
+	});
+
 	it("passes a failed refresh on to the settings dialog as well", async () => {
 		state.refreshProvider.mockRejectedValue("Server returned 503");
 		state.providers = [makeProvider()];

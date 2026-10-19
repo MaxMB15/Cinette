@@ -188,6 +188,31 @@ describe("ConfirmDialog", () => {
 		expect(onConfirm).toHaveBeenCalledTimes(3);
 	});
 
+	it("makes the confirm button red when it asks, unless told otherwise, and never for a notice", () => {
+		const dialog = (props: { onCancel?: () => void; destructive?: boolean }) => (
+			<ConfirmDialog
+				open
+				title="Remove?"
+				message=""
+				confirmLabel="Go"
+				onConfirm={vi.fn()}
+				{...props}
+			/>
+		);
+		const go = () => screen.getByRole("button", { name: "Go" });
+		const { rerender } = render(dialog({ onCancel: vi.fn() }));
+		expect(go()).toHaveClass("bg-red-600");
+
+		rerender(dialog({ onCancel: vi.fn(), destructive: false }));
+		expect(go()).not.toHaveClass("bg-red-600");
+
+		rerender(dialog({}));
+		expect(go()).not.toHaveClass("bg-red-600");
+
+		rerender(dialog({ destructive: true }));
+		expect(go()).toHaveClass("bg-red-600");
+	});
+
 	it("renders nothing while closed", () => {
 		render(
 			<ConfirmDialog
