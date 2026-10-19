@@ -36,7 +36,7 @@ import { fakeUpdate, makeUpdateState } from "@/test/app-fixtures";
 import { deferred } from "@/test/deferred";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { makeHistoryEntry } from "@/test/channel-fixtures";
-import { historyKey, watchHistoryQuery } from "@/lib/queries";
+import { historyKey, omdbQuery, watchHistoryQuery } from "@/lib/queries";
 import { REPO_URL } from "./LegalNotices";
 import { Settings } from "./Settings";
 
@@ -976,6 +976,31 @@ describe("Settings watch history cache", () => {
 		await click(screen.getByRole("button", { name: "Clear All History…" }));
 
 		expect(client.getQueryCache().findAll({ queryKey: historyKey() })).toHaveLength(2);
+	});
+});
+
+describe("Settings details cache", () => {
+	it("loads cached details again once the caches are cleared", async () => {
+		vi.mocked(ask).mockResolvedValue(true);
+		const client = createTestQueryClient();
+		const details: readonly unknown[] = omdbQuery("mv1", "Sintel", "movie").queryKey;
+		client.setQueryData(details, { title: "Sintel" });
+		await renderSettings({ client });
+		await click(screen.getByRole("button", { name: "Clear All Caches…" }));
+
+		expect(client.getQueryState(details)?.isInvalidated).toBe(true);
+	});
+
+	it("keeps the cached details when the caches can't be cleared", async () => {
+		vi.mocked(ask).mockResolvedValue(true);
+		vi.mocked(clearAllCaches).mockRejectedValueOnce(new Error("db locked"));
+		const client = createTestQueryClient();
+		const details: readonly unknown[] = omdbQuery("mv1", "Sintel", "movie").queryKey;
+		client.setQueryData(details, { title: "Sintel" });
+		await renderSettings({ client });
+		await click(screen.getByRole("button", { name: "Clear All Caches…" }));
+
+		expect(client.getQueryState(details)?.isInvalidated).toBe(false);
 	});
 });
 

@@ -6,12 +6,14 @@
 // device can later answer the same queries when the remote control browses
 // its catalog.
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import {
 	getAllChannels,
 	getEpgForLiveChannels,
 	getEpgProgrammes,
 	getWatchHistory,
+	getDownloadRetention,
+	listDownloads,
 	fetchOmdbData,
 	fetchWhatsonData,
 	getGroupHierarchy,
@@ -184,6 +186,17 @@ export const whatsonQuery = (imdbId: string, kind: "movie" | "series", source: S
 		staleTime: keepFound,
 	});
 
+/**
+ * Loads again, the next time they're shown, the details, ratings and guide
+ * data that Settings' "Clear All Caches" deletes from the backend's cache.
+ */
+export const reloadClearedCaches = (client: QueryClient, source: Source = LOCAL) =>
+	Promise.all(
+		(["omdb", "whatson", "guide", "schedule", "guideSearch"] as const).map((name) =>
+			client.invalidateQueries({ queryKey: [source, name] })
+		)
+	);
+
 /** The start of every watch history query's key, to mark them all stale at once. */
 export const historyKey = (source: Source = LOCAL) => [source, "history"] as const;
 
@@ -192,4 +205,21 @@ export const watchHistoryQuery = (limit: number, contentType?: string, source: S
 	queryOptions({
 		queryKey: [...historyKey(source), contentType ?? "all", limit] as const,
 		queryFn: () => getWatchHistory(limit, contentType),
+	});
+
+/**
+ * Every download and recording. The backend's progress and removal events
+ * keep the cached list up to date between loads.
+ */
+export const downloadsQuery = (source: Source = LOCAL) =>
+	queryOptions({
+		queryKey: [source, "downloads"] as const,
+		queryFn: () => listDownloads(),
+	});
+
+/** Days finished downloads are kept, or null to keep them until removed. */
+export const downloadRetentionQuery = (source: Source = LOCAL) =>
+	queryOptions({
+		queryKey: [source, "downloadRetention"] as const,
+		queryFn: () => getDownloadRetention(),
 	});
