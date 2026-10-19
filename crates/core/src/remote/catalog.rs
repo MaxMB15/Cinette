@@ -91,6 +91,11 @@ pub fn provider_host(server: &str) -> Option<String> {
 }
 
 /// A catalog request from a controller.
+///
+/// A paged query sends `cursor` back as the `next` of the page before, or
+/// leaves it out for the first page. A page can hold fewer than `limit`
+/// items and still have a `next`, since it also has to fit in one frame,
+/// so only a missing `next` ends the list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -98,24 +103,99 @@ pub fn provider_host(server: &str) -> Option<String> {
     rename_all_fields = "camelCase"
 )]
 pub enum CatalogQuery {
-    /// The groups of one content type.
-    Groups { content_type: String },
-    /// The items in one group, a page at a time.
+    /// The groups of one content type, a page at a time, in name order
+    /// (see [`group_page`]). Each group goes out as an item whose id, name
+    /// and group are all the group's name, which `Items` takes back. A
+    /// group whose name fails [`group_ok`] is left out, since neither
+    /// query could name it.
+    Groups {
+        content_type: String,
+        /// The name of the first group on the page. A group that's gone
+        /// since starts the page at the next one in name order.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        /// The most items on the page. A missing one means [`MAX_PAGE`].
+        #[serde(default = "max_page")]
+        limit: u32,
+    },
+    /// The items in one group, a page at a time, in the target's order.
     Items {
         content_type: String,
         group: String,
+        /// The id of the first item on the page.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,
+        /// The most items on the page. A missing one means [`MAX_PAGE`].
+        #[serde(default = "max_page")]
         limit: u32,
     },
+    /// Items whose name has `query` in it, one page with no `next`.
     Search {
         query: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content_type: Option<String>,
+        /// The most items on the page. A missing one means [`MAX_PAGE`].
+        #[serde(default = "max_page")]
         limit: u32,
     },
-    /// The episodes of a series.
-    Episodes { series_id: String },
+    /// The episodes of a series, a page at a time, in the target's order.
+    Episodes {
+        series_id: String,
+        /// The id of the first episode on the page.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        /// The most items on the page. A missing one means [`MAX_PAGE`].
+        #[serde(default = "max_page")]
+        limit: u32,
+    },
+}
+
+const fn max_page() -> u32 {
+    MAX_PAGE as u32
+}
+
+/// Whether a group can go to a controller: one whose name is longer than
+/// [`MAX_ID_BYTES`] couldn't come back as a cursor or an `Items` group.
+pub fn group_ok(name: &str) -> bool {
+    name.len() <= MAX_ID_BYTES
+}
+
+/// The order groups go out in: by name ignoring case, then by name, so
+/// names that differ only in case keep one order.
+fn group_key(name: &str) -> (String, &str) {
+    (name.to_lowercase(), name)
+}
+
+/// One page of the groups `names`, for a `Groups` query: the distinct names
+/// that pass [`group_ok`], in name order, from the first one at or after
+/// `cursor`, with the name after the page as `next`. A cursor naming a
+/// group that's gone starts at the one after where it was, so paging goes
+/// on without repeating a group.
+pub fn group_page<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    content_type: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> (Vec<CatalogItem>, Option<String>) {
+    let mut groups: Vec<&str> = names.into_iter().filter(|g| group_ok(g)).collect();
+    groups.sort_by_cached_key(|g| group_key(g));
+    groups.dedup();
+    let start = cursor.map_or(0, |c| {
+        let key = group_key(c);
+        groups.partition_point(|g| group_key(g) < key)
+    });
+    let end = (start + limit).min(groups.len());
+    let page = groups[start..end]
+        .iter()
+        .map(|&g| CatalogItem {
+            id: g.to_owned(),
+            name: g.to_owned(),
+            content_type: content_type.to_owned(),
+            group: g.to_owned(),
+            ..CatalogItem::default()
+        })
+        .collect();
+    (page, groups.get(end).map(|g| (*g).to_owned()))
 }
 
 impl CatalogQuery {
@@ -125,7 +205,16 @@ impl CatalogQuery {
         let content_type_ok = |t: &str| matches!(t, "live" | "movie" | "series");
         let id_ok = |s: &str| !s.is_empty() && s.len() <= MAX_ID_BYTES;
         match &mut self {
-            CatalogQuery::Groups { content_type } => content_type_ok(content_type).then_some(()),
+            CatalogQuery::Groups {
+                content_type,
+                cursor,
+                limit,
+            } => {
+                *limit = (*limit).clamp(1, MAX_PAGE as u32);
+                // A group's name can be empty, so its cursor can be too.
+                (content_type_ok(content_type) && cursor.as_deref().is_none_or(group_ok))
+                    .then_some(())
+            }
             CatalogQuery::Items {
                 content_type,
                 group,
@@ -134,7 +223,7 @@ impl CatalogQuery {
             } => {
                 *limit = (*limit).clamp(1, MAX_PAGE as u32);
                 (content_type_ok(content_type)
-                    && group.len() <= MAX_ID_BYTES
+                    && group_ok(group)
                     && cursor.as_deref().is_none_or(id_ok))
                 .then_some(())
             }
@@ -149,7 +238,14 @@ impl CatalogQuery {
                     && content_type.as_deref().is_none_or(content_type_ok))
                 .then_some(())
             }
-            CatalogQuery::Episodes { series_id } => id_ok(series_id).then_some(()),
+            CatalogQuery::Episodes {
+                series_id,
+                cursor,
+                limit,
+            } => {
+                *limit = (*limit).clamp(1, MAX_PAGE as u32);
+                (id_ok(series_id) && cursor.as_deref().is_none_or(id_ok)).then_some(())
+            }
         }?;
         Some(self)
     }
