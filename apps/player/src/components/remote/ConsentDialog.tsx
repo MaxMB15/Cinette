@@ -57,7 +57,13 @@ const ConsentPrompt = ({
 			overlayClassName="z-10000"
 			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] shadow-xl"
 		>
-			<h2 id={titleId} className="text-base font-semibold mb-1">
+			{/* Focus starts here rather than on Deny, so a key pressed for the
+			    player behind, like Space, doesn't answer the request. */}
+			<h2
+				id={titleId}
+				tabIndex={0}
+				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden"
+			>
 				Allow {request.name} to control this device?
 			</h2>
 			<p className="text-xs text-muted-foreground mb-4">
@@ -65,14 +71,16 @@ const ConsentPrompt = ({
 				and choose what plays here, and see what this device can play. Only allow it if the
 				code matches the one on that device.
 			</p>
-			<p
-				className="text-3xl font-mono font-semibold tracking-widest text-center mb-1"
-				aria-label={`Code ${request.code.split("").join(" ")}`}
-			>
-				{formatCode(request.code)}
+			<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-1">
+				<span aria-hidden>{formatCode(request.code)}</span>
+				<span className="sr-only">Code {request.code.split("").join(" ")}</span>
 			</p>
-			<p className="text-xs text-muted-foreground text-center mb-5" aria-live="polite">
+			<p className="text-xs text-muted-foreground text-center mb-5">
 				{left > 0 ? `Expires in ${left} s` : "Expired"}
+			</p>
+			{/* Only the end is read out, not every second of the count. */}
+			<p className="sr-only" aria-live="polite">
+				{left > 0 ? "" : "The request expired."}
 			</p>
 			<div className="flex justify-end gap-2">
 				<button
@@ -84,7 +92,8 @@ const ConsentPrompt = ({
 				</button>
 				<button
 					type="button"
-					className={`${BUTTON} bg-primary text-primary-foreground hover:bg-primary/90`}
+					disabled={left === 0}
+					className={`${BUTTON} bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50`}
 					onClick={() => answer(true)}
 				>
 					Allow

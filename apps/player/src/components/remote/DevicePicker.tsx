@@ -80,6 +80,8 @@ export const DevicePicker = ({
 	if (!open) return null;
 
 	const choose = (entry: PickerEntry) => {
+		// A row that can't be chosen stays reachable, so its reason is read out.
+		if (isDisabled(entry)) return;
 		if (entry.opens) {
 			onOpenEntry?.(entry.id);
 			return;
@@ -149,7 +151,7 @@ export const DevicePicker = ({
 										<li key={entry.id}>
 											<button
 												type="button"
-												disabled={disabled}
+												aria-disabled={disabled ? "true" : undefined}
 												aria-current={active ? "true" : undefined}
 												onClick={() => choose(entry)}
 												className={cn(

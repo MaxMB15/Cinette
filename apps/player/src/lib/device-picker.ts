@@ -30,6 +30,8 @@ export interface PickerEntry extends DestinationSummary {
 	/** The row opens something else, like the system's AirPlay picker,
 	 *  instead of being chosen here. */
 	opens?: boolean;
+	/** Why an unavailable row is, when there's more to say than that. */
+	why?: string;
 }
 
 export interface PickerGroup {
@@ -89,7 +91,7 @@ export const statusText = (entry: PickerEntry): string | null => {
 			: null;
 	}
 	if (status === "checking") return "Checking…";
-	if (status === "unavailable") return "Not available";
+	if (status === "unavailable") return entry.why ?? "Not available";
 	if ("blocked" in status) return blockerText(status.blocked, status.detail);
 	if (status.via === "direct") return "Plays directly";
 	return status.keep === "on" ? "This computer has to stay on" : "Keep Cinette open";
@@ -138,5 +140,6 @@ export const cinetteEntries = (devices: readonly FoundDevice[]): PickerEntry[] =
 		name: d.name,
 		deviceType: d.deviceType,
 		...(d.available && d.controlAllowed ? {} : { status: "unavailable" as const }),
+		...(d.available && !d.controlAllowed ? { why: "Doesn't allow remote control" } : {}),
 	})),
 ];
