@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Conversions of WAV and Y4M files made here, served on loopback and
-//! fetched the way a receiver would.
+//! Conversions of WAV, Y4M and H.264 files made here, served on loopback
+//! and fetched the way a receiver would.
 
 use super::*;
+use hls_remux::test_media::{ts_bytes, Media};
 use mvp_core::http::test_server::{self, serve_once};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::Ipv4Addr;
 use tempfile::TempDir;
 
@@ -17,7 +18,8 @@ const LOOPBACK: Peers = Peers::Subnet {
 const AIRPLAY: &[&str] = &["aac", "mp3"];
 const LEAD_SECONDS: f64 = mvp_core::convert::hls::LEAD;
 
-/// `seconds` of 8 kHz mono silence with a little noise.
+/// `seconds` of a quiet 440 Hz tone, 8 kHz mono. A tone, not noise, which
+/// AAC takes far longer to encode.
 fn wav(seconds: u32) -> Vec<u8> {
     let samples = 8000 * seconds;
     let mut out = b"RIFF".to_vec();
@@ -32,7 +34,10 @@ fn wav(seconds: u32) -> Vec<u8> {
     out.extend_from_slice(&8u16.to_le_bytes());
     out.extend_from_slice(b"data");
     out.extend_from_slice(&samples.to_le_bytes());
-    out.extend((0..samples).map(|i| 128u8.wrapping_add((i % 7) as u8)));
+    out.extend((0..samples).map(|i| {
+        let t = f64::from(i) / 8000.0;
+        (128.0 + (t * 440.0 * std::f64::consts::TAU).sin() * 20.0) as u8
+    }));
     out
 }
 
@@ -62,6 +67,7 @@ fn request(url: &str) -> HlsRequest<'_> {
         language: None,
         playable: AIRPLAY,
         peers: LOOPBACK,
+        live: false,
     }
 }
 
@@ -143,11 +149,59 @@ async fn listed(base: &str) -> (f64, String) {
     (made, media)
 }
 
+/// Waits until the pacer holds the converter for a resume.
+async fn held(conversion: &HlsConversion) {
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let control = conversion.control.clone();
+    while control.pacer().wait(control.now()).is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the pacer never held the converter"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_movie_waits_for_the_receiver_to_play() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = file(&dir, "tone.wav", &wav(120));
+    let conversion = start(request(&source)).await.unwrap();
+    let base = conversion.url.trim_end_matches("index.m3u8").to_string();
+    // Not told anything, it makes the lead and holds there.
+    held(&conversion).await;
+    let (before, _) = listed(&base).await;
+    assert!(before >= LEAD_SECONDS, "{before}");
+    conversion.set_playing(true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while listed(&base).await.0 <= before {
+        assert!(Instant::now() < deadline, "it never went on");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_live_channel_never_pauses() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = file(&dir, "tone.wav", &wav(60));
+    let mut live = request(&source);
+    live.live = true;
+    let conversion = start(live).await.unwrap();
+    conversion.set_playing(false);
+    // The clock runs on: an hour from now, the converter is behind.
+    let control = conversion.control.clone();
+    assert_eq!(control.pacer().wait(control.now() + 3600.0), Some(0.0));
+    let base = conversion.url.trim_end_matches("index.m3u8").to_string();
+    let media = text(&format!("{base}media.m3u8")).await;
+    assert!(!media.contains("EXT-X-START"), "{media}");
+}
+
 #[tokio::test]
 async fn stays_a_little_ahead_of_playback() {
     let dir = tempfile::tempdir().unwrap();
     let source = file(&dir, "tone.wav", &wav(120));
     let conversion = start(request(&source)).await.unwrap();
+    conversion.set_playing(true);
     conversion.set_playing(false);
     let base = conversion.url.trim_end_matches("index.m3u8").to_string();
     // It runs until it's 20 s ahead of the time playback had before the
@@ -181,7 +235,7 @@ async fn drops_old_segments_from_the_window() {
     conversion.control.wake.notify_all();
     assert_eq!(ended(&mut conversion).await, Ok(()));
     let media = text(&format!("{base}media.m3u8")).await;
-    assert_eq!(media.matches("#EXTINF").count(), WINDOW, "{media}");
+    assert_eq!(media.matches("#EXTINF").count(), WINDOW.segments, "{media}");
     assert!(!media.contains("seg0.ts"), "{media}");
     // Gone from the server, which closes the connection with no answer.
     let gone = test_server::client()
@@ -326,14 +380,16 @@ fn names_mp3_when_it_copies_it() {
 }
 
 #[test]
-fn video_without_audio_is_fine_and_unknown_profiles_are_left_out() {
+fn video_without_audio_is_fine_and_an_unknown_profile_gets_a_safe_name() {
+    // Without the profile, the master must still say there's video.
     assert_eq!(
         plan(Video::H264, &[], &[], None, &playable()),
         Ok(OutputPlan {
             audio: Audio::None,
-            codecs: vec![],
+            codecs: vec![AVC_FALLBACK.to_string()],
         })
     );
+    assert_eq!(AVC_FALLBACK, "avc1.640028");
 }
 
 #[test]
@@ -388,6 +444,7 @@ fn control(started: Duration) -> Control {
         wake: Condvar::new(),
         stopped: AtomicBool::new(false),
         clock: Instant::now() - started,
+        live: false,
     }
 }
 
@@ -440,4 +497,113 @@ fn a_stop_ends_the_wait() {
     assert!(!waiting.join().unwrap());
     // Stopped already, it doesn't wait at all.
     assert!(!c.pace(1.0));
+}
+
+#[tokio::test]
+async fn serves_h264_with_its_codecs_from_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let media = Media {
+        seconds: 8.0,
+        ..Media::default()
+    };
+    let source = file(&dir, "h264.ts", &ts_bytes(dir.path(), &media));
+    let mut conversion = start(request(&source)).await.unwrap();
+    assert!(conversion.start.abs() < 0.05, "{}", conversion.start);
+    let master = text(&conversion.url).await;
+    assert!(
+        master.contains("CODECS=\"avc1.") && master.contains(",mp4a.40.2\""),
+        "{master}"
+    );
+    assert_eq!(ended(&mut conversion).await, Ok(()));
+    let base = conversion.url.trim_end_matches("index.m3u8").to_string();
+    let playlist = text(&format!("{base}media.m3u8")).await;
+    assert!(playlist.contains("#EXT-X-TARGETDURATION:10\n"), "{playlist}");
+    assert!(
+        playlist.contains("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n"),
+        "{playlist}"
+    );
+    // A keyframe a second, so segments of 2 s.
+    assert!(playlist.matches("#EXTINF:2.000,").count() >= 3, "{playlist}");
+    let (_, _, segment) = get(&format!("{base}seg0.ts")).await;
+    let back = file(&dir, "seg0.ts", &segment);
+    let opened = Source::open(&back, 0.0, None).unwrap();
+    assert_eq!(opened.video().0, Video::H264);
+    assert_eq!(opened.audio_tracks()[0].codec, "aac");
+}
+
+#[tokio::test]
+async fn a_resumed_movie_starts_at_the_keyframe_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let media = Media {
+        seconds: 12.0,
+        gop: 100,
+        ..Media::default()
+    };
+    let source = file(&dir, "h264.ts", &ts_bytes(dir.path(), &media));
+    let mut resume = request(&source);
+    resume.start_at = 5.5;
+    let conversion = start(resume).await.unwrap();
+    // Keyframes every 4 s: 5.5 s in starts at 4 s.
+    assert!((conversion.start - 4.0).abs() < 0.05, "{}", conversion.start);
+}
+
+#[tokio::test]
+async fn a_start_that_runs_out_of_time_hangs_up_on_the_source() {
+    // A server that takes the connection and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/movie/1.ts", listener.local_addr().unwrap());
+    let (closed_tx, closed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut buffer = [0u8; 1024];
+        // Reads the request, then waits for the converter to hang up.
+        while socket.read(&mut buffer).is_ok_and(|n| n > 0) {}
+        let _ = closed_tx.send(());
+    });
+    assert_eq!(
+        start_within(request(&url), Duration::from_millis(300))
+            .await
+            .err(),
+        Some(HlsError::Unreachable)
+    );
+    // Hung up long before the 15 s read timeout.
+    closed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the converter hung up");
+}
+
+fn sink() -> HlsSink {
+    HlsSink {
+        files: Files::default(),
+        playlist: MediaPlaylist::new(WINDOW, TARGET),
+        buffer: Vec::new(),
+        overflowed: false,
+        first_start: None,
+        codecs: Vec::new(),
+        master: false,
+        control: Arc::new(control(Duration::from_secs(1000))),
+        started: None,
+        duration: None,
+    }
+}
+
+#[test]
+fn a_segment_too_big_to_keep_stops_the_conversion() {
+    let mut sink = sink();
+    sink.write(&vec![0x47; MAX_SEGMENT_BYTES]);
+    assert!(!sink.overflowed);
+    sink.write(&[0x47]);
+    assert!(sink.overflowed);
+    assert_eq!(sink.buffer.len(), MAX_SEGMENT_BYTES);
+    assert!(!sink.cut(2.0, 0.0));
+}
+
+#[test]
+fn remembers_where_the_first_segment_started() {
+    let mut sink = sink();
+    sink.write(&[0x47; 188]);
+    assert!(sink.cut(2.0, 61.5));
+    sink.write(&[0x47; 188]);
+    assert!(sink.cut(2.0, 63.5));
+    assert_eq!(sink.first_start, Some(61.5));
 }

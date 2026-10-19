@@ -87,4 +87,6 @@ exclude_globs = [
     "crates/tauri-plugin-mpv/src/android.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
+    # Writes the tests' media. Only tests use it.
+    "crates/hls-remux/src/test_media.rs",
 ]

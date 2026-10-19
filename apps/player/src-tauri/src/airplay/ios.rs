@@ -45,6 +45,7 @@ pub async fn load_converted<R: Runtime>(
         language: None,
         playable: &AIRPLAY_AUDIO,
         peers,
+        live,
     })
     .await;
     let converted = match started {
@@ -54,8 +55,10 @@ pub async fn load_converted<R: Runtime>(
             return Err(e.for_player());
         }
     };
+    // The first segment starts at the keyframe before `start`, so the
+    // position counts from there.
     let playing = Converted {
-        offset: start,
+        offset: if live { 0.0 } else { converted.start },
         duration: converted.duration,
     };
     let result = tauri_plugin_mpv::airplay::load(
@@ -70,8 +73,9 @@ pub async fn load_converted<R: Runtime>(
     result
 }
 
-/// Runs the converter's pacer on the receiver's clock: it waits while the
-/// receiver is paused, so a paused movie doesn't keep converting.
+/// Runs the converter's pacer on the receiver's clock: it waits until the
+/// receiver plays, and while it's paused or stalled, so a paused movie
+/// doesn't keep converting. A live conversion ignores it.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
     app.listen_any(EVENT_STATE, |event| {
         let status = serde_json::from_str::<serde_json::Value>(event.payload())
@@ -79,10 +83,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
             .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_string));
         let Some(status) = status else { return };
         if let Some(conversion) = conversion().as_ref() {
-            conversion.set_playing(matches!(
-                status.as_str(),
-                "playing" | "buffering" | "opening"
-            ));
+            conversion.set_playing(status == "playing");
         }
     });
 }

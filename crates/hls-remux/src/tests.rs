@@ -5,6 +5,7 @@
 //! from loopback servers. The output is read back through the same API.
 
 use super::*;
+use crate::test_media::{ts_bytes, Media};
 use mvp_core::http::test_server::{refused_url, serve_once};
 use std::io::Write;
 use std::path::PathBuf;
@@ -62,6 +63,8 @@ fn file(dir: &TempDir, name: &str, bytes: &[u8]) -> String {
 struct Collected {
     bytes: Vec<u8>,
     segments: Vec<(usize, f64)>,
+    /// Where each segment started in the source.
+    starts: Vec<f64>,
     /// How many cuts to allow before asking it to stop.
     stop_after: Option<usize>,
 }
@@ -71,8 +74,9 @@ impl Sink for Collected {
         self.bytes.extend_from_slice(bytes);
     }
 
-    fn cut(&mut self, duration: f64) -> bool {
+    fn cut(&mut self, duration: f64, start: f64) -> bool {
         self.segments.push((self.bytes.len(), duration));
+        self.starts.push(start);
         self.stop_after.is_none_or(|n| self.segments.len() < n)
     }
 }
@@ -399,7 +403,185 @@ fn a_sink_gets_every_byte_but_none_from_nowhere() {
     on_write(ctx, bytes.as_ptr(), 0);
     on_write(ctx, std::ptr::null(), 3);
     on_write(ctx, bytes.as_ptr(), -1);
-    assert_eq!(on_cut(ctx, 2.0), 0);
+    assert_eq!(on_cut(ctx, 2.0, 6.0), 0);
     assert_eq!(out.bytes, vec![0x47, 1, 2]);
     assert_eq!(out.segments, vec![(3, 2.0)]);
+    assert_eq!(out.starts, vec![6.0]);
+}
+
+/// `parts` written one after the other into one file, as a stream whose
+/// timestamps jump or whose audio changes between them would arrive.
+fn joined(dir: &TempDir, parts: &[Media]) -> String {
+    let mut bytes = Vec::new();
+    for part in parts {
+        bytes.extend(ts_bytes(dir.path(), part));
+    }
+    file(dir, "joined.ts", &bytes)
+}
+
+fn longest(segments: &[(usize, f64)]) -> f64 {
+    segments.iter().map(|(_, d)| *d).fold(0.0, f64::max)
+}
+
+const STEREO_AAC: Audio = Audio::Aac {
+    track: 0,
+    downmix: false,
+};
+
+#[test]
+fn copies_h264_and_says_where_each_segment_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = file(&dir, "h264.ts", &ts_bytes(dir.path(), &Media::default()));
+    let opened = Source::open(&url, 0.0, None).unwrap();
+    let (video, extradata) = opened.video();
+    assert_eq!(video, Video::H264);
+    assert!(!extradata.is_empty());
+    assert_eq!(opened.audio_tracks()[0].codec, "mp2");
+    drop(opened);
+    let (result, out) = convert(&url, 0.0, STEREO_AAC, 1.0);
+    result.unwrap();
+    // A keyframe a second, so a segment a second, counted from the source's
+    // first timestamp, which MPEG-TS puts past 0.
+    assert_eq!(out.segments.len(), 4, "{:?}", out.segments);
+    for (i, start) in out.starts.iter().enumerate() {
+        assert!((start - i as f64).abs() < 0.05, "{:?}", out.starts);
+    }
+    assert!((total(&out.segments) - 3.96).abs() < 0.1, "{:?}", out.segments);
+}
+
+#[test]
+fn starts_from_the_sources_first_timestamp() {
+    let dir = tempfile::tempdir().unwrap();
+    let media = Media {
+        ts_offset: 50.0,
+        ..Media::default()
+    };
+    let url = file(&dir, "late.ts", &ts_bytes(dir.path(), &media));
+    let (result, out) = convert(&url, 2.0, STEREO_AAC, 1.0);
+    result.unwrap();
+    // 2 s in is the keyframe at 2 s, not the file's start.
+    assert!((out.starts[0] - 2.0).abs() < 0.05, "{:?}", out.starts);
+    assert!((total(&out.segments) - 1.96).abs() < 0.1, "{:?}", out.segments);
+}
+
+#[test]
+fn cuts_a_segment_whose_keyframes_are_too_far_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let media = Media {
+        seconds: 10.0,
+        gop: 250,
+        ..Media::default()
+    };
+    let url = file(&dir, "long-gop.ts", &ts_bytes(dir.path(), &media));
+    let (result, out) = convert(&url, 0.0, Audio::Copy(0), 1.0);
+    result.unwrap();
+    // One keyframe in 10 s: cut at four times the segment length anyway.
+    assert!(out.segments.len() >= 3, "{:?}", out.segments);
+    assert!(longest(&out.segments) <= 4.1, "{:?}", out.segments);
+}
+
+#[test]
+fn carries_on_across_a_jump_forward() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = joined(
+        &dir,
+        &[
+            Media::default(),
+            Media {
+                ts_offset: 1000.0,
+                ..Media::default()
+            },
+        ],
+    );
+    let (result, out) = convert(&url, 0.0, STEREO_AAC, 1.0);
+    result.unwrap();
+    assert!(longest(&out.segments) <= 1.1, "{:?}", out.segments);
+    assert!((total(&out.segments) - 8.0).abs() < 0.2, "{:?}", out.segments);
+}
+
+#[test]
+fn carries_on_across_a_jump_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = joined(
+        &dir,
+        &[
+            Media {
+                ts_offset: 90_000.0,
+                ..Media::default()
+            },
+            Media::default(),
+        ],
+    );
+    // Without the rebase, the muxer refuses the first packet after the jump.
+    let (result, out) = convert(&url, 0.0, Audio::Copy(0), 1.0);
+    result.unwrap();
+    assert!(longest(&out.segments) <= 1.1, "{:?}", out.segments);
+    assert!((total(&out.segments) - 8.0).abs() < 0.2, "{:?}", out.segments);
+    let back = Source::open(&file(&dir, "out.ts", &out.bytes), 0.0, None).unwrap();
+    let length = back.duration().unwrap();
+    assert!((length - 8.0).abs() < 0.3, "{length}");
+}
+
+#[test]
+fn converts_audio_that_changes_from_stereo_to_mono() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = joined(
+        &dir,
+        &[
+            Media {
+                channels: 2,
+                ..Media::default()
+            },
+            Media {
+                channels: 1,
+                ts_offset: 4.0,
+                ..Media::default()
+            },
+        ],
+    );
+    let (result, out) = convert(&url, 0.0, STEREO_AAC, 1.0);
+    result.unwrap();
+    let back = Source::open(&file(&dir, "out.ts", &out.bytes), 0.0, None).unwrap();
+    assert_eq!(back.audio_tracks()[0].codec, "aac");
+    let length = back.duration().unwrap();
+    assert!((length - 8.0).abs() < 0.3, "{length}");
+}
+
+#[test]
+fn a_cancel_stops_an_open_that_hangs() {
+    // A server that takes the connection and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/live/1.ts", listener.local_addr().unwrap());
+    let held = std::thread::spawn(move || listener.accept().map(|(socket, _)| socket));
+    let mut source = Source::new().unwrap();
+    let canceller = source.canceller();
+    let cancel = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        canceller.cancel();
+    });
+    let started = std::time::Instant::now();
+    assert_eq!(source.connect(&url, 0.0, None), Err(RemuxError::Cancelled));
+    // Long before the 15 s read timeout.
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    cancel.join().unwrap();
+    drop(held);
+}
+
+#[test]
+fn a_source_cancelled_first_never_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut source = Source::new().unwrap();
+    source.canceller().cancel();
+    assert_eq!(
+        source.connect(&file(&dir, "tone.wav", &wav(1)), 0.0, None),
+        Err(RemuxError::Cancelled)
+    );
+}
+
+#[test]
+fn a_source_opens_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = file(&dir, "tone.wav", &wav(1));
+    let mut source = Source::open(&url, 0.0, None).unwrap();
+    assert_eq!(source.connect(&url, 0.0, None), Err(RemuxError::Failed));
 }

@@ -22,6 +22,9 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(target_os = "linux", any(test, feature = "test-media")))]
+pub mod test_media;
+
 mod ffi {
     use std::ffi::{c_char, c_int, c_void};
 
@@ -38,14 +41,15 @@ mod ffi {
     }
 
     pub type WriteFn = extern "C" fn(*mut c_void, *const u8, c_int);
-    pub type CutFn = extern "C" fn(*mut c_void, f64) -> c_int;
+    pub type CutFn = extern "C" fn(*mut c_void, f64, f64) -> c_int;
 
     unsafe extern "C" {
+        pub fn cinette_remux_new(out: *mut *mut CinetteRemux) -> c_int;
         pub fn cinette_remux_open(
+            r: *mut CinetteRemux,
             url: *const c_char,
             start: f64,
             user_agent: *const c_char,
-            out: *mut *mut CinetteRemux,
         ) -> c_int;
         pub fn cinette_remux_audio_count(r: *const CinetteRemux) -> c_int;
         pub fn cinette_remux_audio_track(r: *const CinetteRemux, index: c_int)
@@ -149,9 +153,10 @@ pub enum Audio {
 pub trait Sink {
     /// The next bytes of MPEG-TS.
     fn write(&mut self, bytes: &[u8]);
-    /// The segment written since the last cut is `duration` seconds long.
-    /// This may block while the receiver catches up. Returns false to stop.
-    fn cut(&mut self, duration: f64) -> bool;
+    /// The segment written since the last cut is `duration` seconds long,
+    /// and it started `start` seconds into the source. This may block while
+    /// the receiver catches up. Returns false to stop.
+    fn cut(&mut self, duration: f64, start: f64) -> bool;
 }
 
 /// The C handle. Only [`Source::run`] uses it on one thread at a time;
@@ -187,25 +192,43 @@ pub struct Source {
 }
 
 impl Source {
-    /// Opens `url`, starting `start` seconds in when it's above 0. Blocks
-    /// while it connects and reads the stream's layout.
-    pub fn open(url: &str, start: f64, user_agent: Option<&str>) -> Result<Self, RemuxError> {
-        let url = CString::new(url).map_err(|_| RemuxError::Unreachable)?;
-        let agent = user_agent.and_then(|a| CString::new(a).ok());
+    /// A source that hasn't opened anything yet. Its [`Source::canceller`]
+    /// already works, so another thread can stop [`Source::connect`].
+    pub fn new() -> Result<Self, RemuxError> {
         let mut raw = std::ptr::null_mut();
-        let code = unsafe {
-            ffi::cinette_remux_open(
-                url.as_ptr(),
-                start,
-                agent.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
-                &mut raw,
-            )
-        };
-        check(code)?;
+        check(unsafe { ffi::cinette_remux_new(&mut raw) })?;
         let raw = NonNull::new(raw).ok_or(RemuxError::Failed)?;
         Ok(Self {
             handle: Arc::new(Handle(raw)),
         })
+    }
+
+    /// Opens `url`, starting `start` seconds in when it's above 0, counting
+    /// from the source's first timestamp. Blocks while it connects and
+    /// reads the stream's layout, until a cancel. A source opens once.
+    pub fn connect(
+        &mut self,
+        url: &str,
+        start: f64,
+        user_agent: Option<&str>,
+    ) -> Result<(), RemuxError> {
+        let url = CString::new(url).map_err(|_| RemuxError::Unreachable)?;
+        let agent = user_agent.and_then(|a| CString::new(a).ok());
+        check(unsafe {
+            ffi::cinette_remux_open(
+                self.raw(),
+                url.as_ptr(),
+                start,
+                agent.as_ref().map_or(std::ptr::null(), |a| a.as_ptr()),
+            )
+        })
+    }
+
+    /// [`Source::new`], then [`Source::connect`].
+    pub fn open(url: &str, start: f64, user_agent: Option<&str>) -> Result<Self, RemuxError> {
+        let mut source = Self::new()?;
+        source.connect(url, start, user_agent)?;
+        Ok(source)
     }
 
     fn raw(&self) -> *mut ffi::CinetteRemux {
@@ -328,8 +351,8 @@ extern "C" fn on_write(ctx: *mut c_void, data: *const u8, size: c_int) {
     let _ = panic::catch_unwind(AssertUnwindSafe(|| unsafe { sink(ctx) }.write(bytes)));
 }
 
-extern "C" fn on_cut(ctx: *mut c_void, duration: f64) -> c_int {
-    match panic::catch_unwind(AssertUnwindSafe(|| unsafe { sink(ctx) }.cut(duration))) {
+extern "C" fn on_cut(ctx: *mut c_void, duration: f64, start: f64) -> c_int {
+    match panic::catch_unwind(AssertUnwindSafe(|| unsafe { sink(ctx) }.cut(duration, start))) {
         Ok(true) => 0,
         _ => 1,
     }

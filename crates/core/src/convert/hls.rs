@@ -28,50 +28,87 @@ pub fn segment_name(sequence: u64) -> String {
     format!("seg{sequence}.ts")
 }
 
+/// How much a playlist keeps listed. Past any of these, the oldest
+/// segments leave, down to the newest one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Window {
+    pub segments: usize,
+    pub seconds: f64,
+    pub bytes: usize,
+}
+
+/// Seconds of media a receiver can start with, when there are fewer than
+/// three segments because the keyframes are far apart.
+pub const READY_SECONDS: f64 = 6.0;
+
 /// The segments a receiver can fetch, and the playlist that lists them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaPlaylist {
-    /// How many segments stay listed.
-    window: usize,
-    /// The listed segments' durations, oldest first.
-    segments: VecDeque<f64>,
+    window: Window,
+    /// The listed segments' durations and sizes, oldest first.
+    segments: VecDeque<(f64, usize)>,
     /// The first listed segment's sequence number.
     first: u64,
-    /// The longest segment so far, rounded up. A playlist's target duration
-    /// shouldn't drop, so it only grows.
+    /// The target duration. RFC 8216 says it must not change, so it's set
+    /// once, and the converter keeps every segment within it.
     target: u32,
+    /// Whether the receiver starts at the first segment, as a movie should,
+    /// rather than near the live edge.
+    from_start: bool,
     ended: bool,
 }
 
 impl MediaPlaylist {
-    /// A playlist that keeps the last `window` segments, at least one.
-    pub fn new(window: usize) -> Self {
+    /// A playlist that keeps what `window` allows, with segments of at most
+    /// `target` seconds.
+    pub fn new(window: Window, target: u32) -> Self {
         Self {
-            window: window.max(1),
+            window,
             segments: VecDeque::new(),
             first: 0,
-            target: 1,
+            target: target.max(1),
+            from_start: false,
             ended: false,
         }
     }
 
-    /// Adds the next segment, `duration` seconds long. Returns its sequence
-    /// number and, when the window was full, the one that left it.
-    pub fn push(&mut self, duration: f64) -> (u64, Option<u64>) {
+    /// Has the receiver start at the first segment. A playlist that hasn't
+    /// ended looks live, and a receiver joins live a few segments from the
+    /// end, so a movie would start late without it.
+    pub fn from_start(mut self) -> Self {
+        self.from_start = true;
+        self
+    }
+
+    /// Adds the next segment, `duration` seconds long and `bytes` big.
+    /// Returns its sequence number and the ones that left the window.
+    pub fn push(&mut self, duration: f64, bytes: usize) -> (u64, Vec<u64>) {
         let sequence = self.first + self.segments.len() as u64;
         let duration = if duration.is_finite() {
             duration.max(0.0)
         } else {
             0.0
         };
-        self.target = self.target.max(duration.ceil() as u32);
-        self.segments.push_back(duration);
-        let dropped = (self.segments.len() > self.window).then(|| {
+        self.segments.push_back((duration, bytes));
+        let mut dropped = Vec::new();
+        while self.segments.len() > 1 && self.over() {
             self.segments.pop_front();
+            dropped.push(self.first);
             self.first += 1;
-            self.first - 1
-        });
+        }
         (sequence, dropped)
+    }
+
+    /// Whether the listed segments are past one of the window's limits.
+    fn over(&self) -> bool {
+        self.segments.len() > self.window.segments
+            || self.seconds() > self.window.seconds
+            || self.segments.iter().map(|s| s.1).sum::<usize>() > self.window.bytes
+    }
+
+    /// The listed segments' length in seconds.
+    fn seconds(&self) -> f64 {
+        self.segments.iter().map(|s| s.0).sum()
     }
 
     /// The stream reached its end, so the playlist says no more come.
@@ -80,9 +117,11 @@ impl MediaPlaylist {
     }
 
     /// Whether a receiver can start: three segments, as Apple asks for live
-    /// HLS, or whatever there is once the stream ended.
+    /// HLS, or [`READY_SECONDS`] of media, or whatever there is once the
+    /// stream ended.
     pub fn ready(&self) -> bool {
-        self.segments.len() >= 3 || (self.ended && !self.segments.is_empty())
+        !self.segments.is_empty()
+            && (self.segments.len() >= 3 || self.seconds() >= READY_SECONDS || self.ended)
     }
 
     pub fn len(&self) -> usize {
@@ -98,7 +137,10 @@ impl MediaPlaylist {
         let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:3\n");
         let _ = writeln!(out, "#EXT-X-TARGETDURATION:{}", self.target);
         let _ = writeln!(out, "#EXT-X-MEDIA-SEQUENCE:{}", self.first);
-        for (i, duration) in self.segments.iter().enumerate() {
+        if self.from_start {
+            out.push_str("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n");
+        }
+        for (i, (duration, _)) in self.segments.iter().enumerate() {
             let _ = writeln!(out, "#EXTINF:{duration:.3},");
             let _ = writeln!(out, "{}", segment_name(self.first + i as u64));
         }
@@ -187,6 +229,16 @@ impl Pacer {
             made: 0.0,
             played: 0.0,
             since: Some(now),
+        }
+    }
+
+    /// A pacer whose clock waits for a [`Pacer::resume`], for a receiver
+    /// that hasn't started playing yet.
+    pub fn paused() -> Self {
+        Self {
+            made: 0.0,
+            played: 0.0,
+            since: None,
         }
     }
 

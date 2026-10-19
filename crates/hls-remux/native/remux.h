@@ -39,10 +39,10 @@ typedef struct CinetteRemux CinetteRemux;
 
 /* Bytes of MPEG-TS output, in order. */
 typedef void (*cinette_remux_write_fn)(void *ctx, const uint8_t *data, int size);
-/* The segment written since the last cut ended, `duration` seconds long.
- * It blocks while the caller wants the converter to wait. Returns nonzero
- * to stop. */
-typedef int (*cinette_remux_cut_fn)(void *ctx, double duration);
+/* The segment written since the last cut ended. It's `duration` seconds
+ * long, and it started `start` seconds into the source. It blocks while
+ * the caller wants the converter to wait. Returns nonzero to stop. */
+typedef int (*cinette_remux_cut_fn)(void *ctx, double duration, double start);
 
 /* One of the source's audio streams. */
 typedef struct {
@@ -53,10 +53,13 @@ typedef struct {
   int is_default;
 } CinetteAudioTrack;
 
-/* Opens `url`, starting `start` seconds in when it's above 0. Returns
- * CINETTE_REMUX_OK and sets `*out`, or an error. */
-int cinette_remux_open(const char *url, double start, const char *user_agent,
-                       CinetteRemux **out);
+/* Makes a converter that hasn't opened anything, so it can be cancelled
+ * while it opens. Returns CINETTE_REMUX_OK and sets `*out`, or an error.
+ * Free it with cinette_remux_close, whether it opened or not. */
+int cinette_remux_new(CinetteRemux **out);
+/* Opens `url`, starting `start` seconds in when it's above 0. Positions
+ * count from the source's first timestamp. A cancel stops it. */
+int cinette_remux_open(CinetteRemux *r, const char *url, double start, const char *user_agent);
 
 /* The source's audio streams, valid until cinette_remux_close. */
 int cinette_remux_audio_count(const CinetteRemux *r);
@@ -73,7 +76,8 @@ double cinette_remux_duration(const CinetteRemux *r);
  * 0, or -1 for none) by `audio_mode`. `downmix` asks the decoder for
  * stereo, which AC-3, E-AC-3 and DTS decoders do with the stream's own
  * levels. Segments are cut at video keyframes once they're at least
- * `segment` seconds long. */
+ * `segment` seconds long, and at any packet once they're four times that
+ * or 32 MB. Timestamps that jump are moved to carry on. */
 int cinette_remux_start(CinetteRemux *r, int audio, int audio_mode, int downmix, double segment,
                         cinette_remux_write_fn write, cinette_remux_cut_fn cut, void *ctx);
 

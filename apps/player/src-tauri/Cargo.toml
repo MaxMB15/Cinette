@@ -52,7 +52,7 @@ libc = "0.2"
 # The HLS converter's tests build its C against the system's FFmpeg. The
 # Linux app itself never links it.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-hls-remux = { path = "../../../crates/hls-remux" }
+hls-remux = { path = "../../../crates/hls-remux", features = ["test-media"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Hand Android's JVM to the certificate verifier that rustls uses there. See
