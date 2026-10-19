@@ -49,6 +49,14 @@ fn messages_read_back() {
                 limit: 10,
             },
         },
+        Message::Catalog {
+            id: 6,
+            query: CatalogQuery::Episodes {
+                series_id: "series-7".into(),
+                cursor: Some("ep-3".into()),
+                limit: 20,
+            },
+        },
         Message::State(VersionedState {
             epoch: "e".into(),
             version: 9,

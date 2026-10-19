@@ -125,6 +125,156 @@ fn a_groups_query_reads_and_writes_its_page() {
 }
 
 #[test]
+fn an_episodes_query_reads_and_writes_its_page() {
+    let query: CatalogQuery = serde_json::from_value(serde_json::json!({
+        "kind": "episodes", "seriesId": "series-7", "cursor": "ep-3", "limit": 20
+    }))
+    .unwrap();
+    assert_eq!(
+        query,
+        CatalogQuery::Episodes {
+            series_id: "series-7".into(),
+            cursor: Some("ep-3".into()),
+            limit: 20
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&query).unwrap(),
+        serde_json::json!({
+            "kind": "episodes", "seriesId": "series-7", "cursor": "ep-3", "limit": 20
+        })
+    );
+    let first = CatalogQuery::Episodes {
+        series_id: "series-7".into(),
+        cursor: None,
+        limit: 100,
+    };
+    assert_eq!(
+        serde_json::to_value(&first).unwrap(),
+        serde_json::json!({ "kind": "episodes", "seriesId": "series-7", "limit": 100 })
+    );
+}
+
+#[test]
+fn a_query_without_a_limit_asks_for_a_full_page() {
+    let read = |json| serde_json::from_value::<CatalogQuery>(json).unwrap();
+    assert_eq!(
+        read(serde_json::json!({ "kind": "groups", "contentType": "live" })),
+        CatalogQuery::Groups {
+            content_type: "live".into(),
+            cursor: None,
+            limit: MAX_PAGE as u32
+        }
+    );
+    assert_eq!(
+        read(serde_json::json!({ "kind": "episodes", "seriesId": "s" })),
+        CatalogQuery::Episodes {
+            series_id: "s".into(),
+            cursor: None,
+            limit: MAX_PAGE as u32
+        }
+    );
+    assert_eq!(
+        read(serde_json::json!({ "kind": "items", "contentType": "live", "group": "g" })),
+        CatalogQuery::Items {
+            content_type: "live".into(),
+            group: "g".into(),
+            cursor: None,
+            limit: MAX_PAGE as u32
+        }
+    );
+    assert_eq!(
+        read(serde_json::json!({ "kind": "search", "query": "news" })),
+        CatalogQuery::Search {
+            query: "news".into(),
+            content_type: None,
+            limit: MAX_PAGE as u32
+        }
+    );
+}
+
+fn names(page: &[CatalogItem]) -> Vec<&str> {
+    page.iter().map(|item| item.name.as_str()).collect()
+}
+
+#[test]
+fn group_page_lists_each_group_once_in_name_order() {
+    let all = ["news", "Sports", "Kids", "news", "", "Movies"];
+    let (page, next) = group_page(all, "live", None, 10);
+    assert_eq!(names(&page), ["", "Kids", "Movies", "news", "Sports"]);
+    assert_eq!(next, None);
+    // A group goes out as an item whose id, name and group are its name.
+    assert_eq!(
+        page[1],
+        CatalogItem {
+            id: "Kids".into(),
+            name: "Kids".into(),
+            content_type: "live".into(),
+            group: "Kids".into(),
+            ..CatalogItem::default()
+        }
+    );
+}
+
+#[test]
+fn group_page_pages_on_from_the_cursor() {
+    let all = ["A", "B", "C", "D", "E"];
+    let (page, next) = group_page(all, "movie", None, 2);
+    assert_eq!((names(&page), next.as_deref()), (vec!["A", "B"], Some("C")));
+    let (page, next) = group_page(all, "movie", Some("C"), 2);
+    assert_eq!((names(&page), next.as_deref()), (vec!["C", "D"], Some("E")));
+    // A page that ends at the last group has no next.
+    let (page, next) = group_page(all, "movie", Some("D"), 2);
+    assert_eq!((names(&page), next), (vec!["D", "E"], None));
+    let (page, next) = group_page(all, "movie", Some("E"), 2);
+    assert_eq!((names(&page), next), (vec!["E"], None));
+}
+
+#[test]
+fn group_page_of_nothing_is_empty() {
+    let (page, next) = group_page([], "live", None, 10);
+    assert!(page.is_empty());
+    assert_eq!(next, None);
+    let (page, next) = group_page(["A"], "live", Some("B"), 10);
+    assert!(page.is_empty());
+    assert_eq!(next, None);
+}
+
+#[test]
+fn a_cursor_for_a_group_thats_gone_starts_at_the_next_one() {
+    let (page, next) = group_page(["Arts", "Drama", "News"], "live", Some("Comedy"), 1);
+    assert_eq!(
+        (names(&page), next.as_deref()),
+        (vec!["Drama"], Some("News"))
+    );
+}
+
+#[test]
+fn names_that_differ_only_in_case_page_without_repeats_or_gaps() {
+    let all = ["news", "NEWS", "News", "Arts"];
+    let (page, next) = group_page(all, "live", None, 2);
+    assert_eq!(
+        (names(&page), next.as_deref()),
+        (vec!["Arts", "NEWS"], Some("News"))
+    );
+    let (page, next) = group_page(all, "live", next.as_deref(), 2);
+    assert_eq!((names(&page), next), (vec!["News", "news"], None));
+}
+
+#[test]
+fn a_group_whose_name_is_too_long_is_left_out() {
+    let long = "━".repeat(90);
+    assert!(!group_ok(&long));
+    assert!(group_ok(&"g".repeat(MAX_ID_BYTES)));
+    assert!(!group_ok(&"g".repeat(MAX_ID_BYTES + 1)));
+    let all = ["A", long.as_str(), "Z"];
+    let (page, next) = group_page(all, "live", None, 1);
+    assert_eq!((names(&page), next.as_deref()), (vec!["A"], Some("Z")));
+    let (page, next) = group_page(all, "live", next.as_deref(), 1);
+    assert_eq!((names(&page), next), (vec!["Z"], None));
+}
+
+#[test]
 fn validate_keeps_good_queries_and_caps_the_page() {
     let query = CatalogQuery::Search {
         query: "news".into(),
@@ -163,6 +313,14 @@ fn validate_keeps_good_queries_and_caps_the_page() {
     assert_eq!(groups(Some(""), 5).validate(), Some(groups(Some(""), 5)));
     let longest = "g".repeat(MAX_ID_BYTES);
     assert!(groups(Some(&longest), 5).validate().is_some());
+    // The limit counts bytes, not characters.
+    assert!(groups(Some(&"é".repeat(MAX_ID_BYTES / 2)), 5)
+        .validate()
+        .is_some());
+    assert_eq!(
+        groups(Some(&"é".repeat(MAX_ID_BYTES / 2 + 1)), 5).validate(),
+        None
+    );
     let episodes = |cursor: Option<&str>, limit| CatalogQuery::Episodes {
         series_id: "series-1".into(),
         cursor: cursor.map(str::to_owned),
@@ -173,6 +331,18 @@ fn validate_keeps_good_queries_and_caps_the_page() {
         episodes(Some("ep-101"), 900).validate(),
         Some(episodes(Some("ep-101"), MAX_PAGE as u32))
     );
+    let longest = "e".repeat(MAX_ID_BYTES);
+    assert_eq!(
+        episodes(Some(&longest), 5).validate(),
+        Some(episodes(Some(&longest), 5))
+    );
+    let items = |group: &str| CatalogQuery::Items {
+        content_type: "live".into(),
+        group: group.into(),
+        cursor: None,
+        limit: 5,
+    };
+    assert!(items(&"g".repeat(MAX_ID_BYTES)).validate().is_some());
 }
 
 #[test]
@@ -228,6 +398,11 @@ fn validate_refuses_bad_queries() {
         CatalogQuery::Episodes {
             series_id: "s".into(),
             cursor: Some(String::new()),
+            limit: 10,
+        },
+        CatalogQuery::Episodes {
+            series_id: "s".into(),
+            cursor: Some("e".repeat(MAX_ID_BYTES + 1)),
             limit: 10,
         },
     ];

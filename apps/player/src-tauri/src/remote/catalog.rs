@@ -11,7 +11,9 @@ use super::logos::on_a_provider_site;
 use super::target::CatalogPage;
 use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::models::channel::Channel;
-use mvp_core::remote::catalog::{provider_host, CatalogItem, CatalogQuery, MAX_PAGE};
+use mvp_core::remote::catalog::{
+    group_page, provider_host, CatalogItem, CatalogQuery, MAX_PAGE,
+};
 use mvp_core::remote::message::ErrorCode;
 use std::sync::Mutex;
 
@@ -157,35 +159,16 @@ pub(crate) fn answer_from(
             cursor,
             limit: wanted,
         } => {
-            let mut groups: Vec<&str> = channels
+            let names = channels
                 .iter()
                 .filter(|c| c.content_type == content_type)
-                .map(|c| c.group_title.as_str())
-                .collect();
-            groups.sort_by_cached_key(|g| (g.to_lowercase(), g.to_string()));
-            groups.dedup();
-            let start = match cursor {
-                None => 0,
-                Some(name) => groups
-                    .iter()
-                    .position(|g| *g == name)
-                    .ok_or(ErrorCode::NotFound)?,
-            };
-            let end = (start + limit(wanted)).min(groups.len());
-            // A group goes out as an item whose id and name are the group's
-            // name, which `items` takes back.
-            let page = groups[start..end]
-                .iter()
-                .map(|&g| CatalogItem {
-                    id: g.to_owned(),
-                    name: g.to_owned(),
-                    content_type: content_type.clone(),
-                    group: g.to_owned(),
-                    ..CatalogItem::default()
-                })
-                .collect();
-            let next = groups.get(end).map(|g| (*g).to_owned());
-            Ok((page, next))
+                .map(|c| c.group_title.as_str());
+            Ok(group_page(
+                names,
+                &content_type,
+                cursor.as_deref(),
+                limit(wanted),
+            ))
         }
         CatalogQuery::Items {
             content_type,
