@@ -9,7 +9,24 @@ fn main() {
         embed_macos_rpath();
     }
 
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
+        link_ios_cdylib_without_libmpv();
+    }
+
     tauri_build::build();
+}
+
+/// Cargo builds every crate type, and nothing uses the cdylib on iOS, where
+/// libmpv comes from MPVKit in the Xcode project. libmpv2-sys still asks for
+/// `-lmpv`, so an empty `libmpv.a` answers that, and the cdylib's mpv symbols
+/// are left undefined. The staticlib that Xcode links doesn't use either.
+fn link_ios_cdylib_without_libmpv() {
+    let dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("no-libmpv");
+    std::fs::create_dir_all(&dir).expect("create the folder for the empty libmpv");
+    // An ar archive with no members.
+    std::fs::write(dir.join("libmpv.a"), b"!<arch>\n").expect("write the empty libmpv");
+    println!("cargo:rustc-link-search=native={}", dir.display());
+    println!("cargo:rustc-link-arg-cdylib=-Wl,-undefined,dynamic_lookup");
 }
 
 /// Bake an rpath into the binary so it finds libmpv.2.dylib in libs/macos/
