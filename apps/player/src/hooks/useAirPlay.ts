@@ -199,8 +199,11 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const send = useCallback<AirPlay["send"]>(
 		async (channel, { anchor, startAt, stopLocal }) => {
 			const item = { kind: "local" as const, channel };
-			let stopped = false;
-			try {
+			// Whether this device stopped, which a failure reports. The React
+			// Compiler can't compile a try with a throw or a `??` in it, so
+			// failures are caught on the promise.
+			const progress = { stopped: false };
+			const attempt = async (): Promise<SendResult> => {
 				// The item is checked before the picker opens: picking a TV
 				// moves this device's sound there, even for an item it can't
 				// play.
@@ -221,25 +224,31 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 						: { sent: false, why: "blocked", decision: settled };
 				}
 				await stopLocal();
-				stopped = true;
+				progress.stopped = true;
 				if (!mounted.current) {
 					target.dispose();
 					return { sent: false, why: "cancelled" };
 				}
 				active.current = target;
 				setDestination(target);
-				try {
-					await target.load(item, { route: settled.route, startAt });
-				} catch (error) {
+				const failed = await target.load(item, { route: settled.route, startAt }).then(
+					() => null,
+					(error: unknown) => ({ error })
+				);
+				if (failed) {
 					// Nothing plays on the TV, so the panel goes, and the player
 					// says why.
 					await end(target);
-					throw error;
+					return { sent: false, why: "failed", error: failed.error, stopped: true };
 				}
 				return { sent: true };
-			} catch (error) {
-				return { sent: false, why: "failed", error, stopped };
-			}
+			};
+			return attempt().catch((error: unknown): SendResult => ({
+				sent: false,
+				why: "failed",
+				error,
+				stopped: progress.stopped,
+			}));
 		},
 		[route]
 	);
