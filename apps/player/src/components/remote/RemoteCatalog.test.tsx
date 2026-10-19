@@ -140,30 +140,67 @@ describe("RemoteCatalog", () => {
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
 	});
 
-	it("drops a page that comes after it moved on", async () => {
-		let release: (page: { items: CatalogItem[]; next: string | null }) => void = () => {};
-		let fail: (e: unknown) => void = () => {};
+	it("drops a page, or its failure, that comes after it moved on", async () => {
+		const pages: {
+			resolve: (page: { items: CatalogItem[]; next: string | null }) => void;
+			reject: (e: unknown) => void;
+		}[] = [];
 		vi.mocked(remoteCatalog).mockImplementation(async (_link: number, q: CatalogQuery) => {
 			if (q.kind === "groups")
 				return { items: [item("UK", "UK"), item("US", "US")], next: null };
 			if (q.kind === "items" && q.cursor === undefined)
 				return { items: [item(`${q.group}-1`, `${q.group} one`)], next: "more" };
-			return new Promise((r, j) => {
-				release = r;
-				fail = j;
-			});
+			return new Promise((resolve, reject) => pages.push({ resolve, reject }));
 		});
 		render(<RemoteCatalog link={link()} />);
-		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
-		fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
-		fireEvent.click(screen.getByRole("button", { name: "Back" }));
-		fireEvent.click(await screen.findByRole("button", { name: "US" }));
-		await screen.findByRole("button", { name: "US one" });
-		await act(async () => release({ items: [item("UK-2", "UK two")], next: null }));
+		const moveOn = async (from: string, to: string) => {
+			fireEvent.click(await screen.findByRole("button", { name: from }));
+			fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+			fireEvent.click(screen.getByRole("button", { name: "Back" }));
+			fireEvent.click(await screen.findByRole("button", { name: to }));
+			await screen.findByRole("button", { name: `${to} one` });
+		};
+		await moveOn("UK", "US");
+		await act(async () => pages[0].resolve({ items: [item("UK-2", "UK two")], next: null }));
 		expect(screen.queryByRole("button", { name: "UK two" })).toBeNull();
-		await act(async () => fail("late"));
+		fireEvent.click(screen.getByRole("button", { name: "Back" }));
+		await moveOn("UK", "US");
+		await act(async () => pages[1].reject("late"));
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
+	});
+
+	it("tries again as often as asked", async () => {
+		vi.mocked(remoteCatalog).mockRejectedValue("notConnected");
+		render(<RemoteCatalog link={link()} />);
+		await screen.findByText("Couldn't load this from Living Room.");
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		await screen.findByText("Couldn't load this from Living Room.");
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		await screen.findByText("Couldn't load this from Living Room.");
+		expect(remoteCatalog).toHaveBeenCalledTimes(3);
+	});
+
+	it("calls only a group with no name No group, not an item or a result", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		vi.mocked(remoteCatalog).mockImplementation(async (_link: number, q: CatalogQuery) => {
+			if (q.kind === "groups") return { items: [item("UK", "UK")], next: null };
+			return { items: [item("x", "")], next: null };
+		});
+		render(<RemoteCatalog link={link()} />);
+		await act(async () => {});
+		fireEvent.change(screen.getByRole("textbox"), { target: { value: "x" } });
+		await act(async () => vi.advanceTimersByTime(SEARCH_DELAY_MS));
+		await act(async () => {});
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.queryByText("No group"), "a search result").toBeNull();
+		fireEvent.change(screen.getByRole("textbox"), { target: { value: "" } });
+		await act(async () => vi.advanceTimersByTime(SEARCH_DELAY_MS));
+		await act(async () => {});
+		fireEvent.click(screen.getByRole("button", { name: "UK" }));
+		await act(async () => {});
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.queryByText("No group"), "an item in a group").toBeNull();
 	});
 
 	it("tries the first page again when asked", async () => {

@@ -177,7 +177,7 @@ describe("DevicesButton", () => {
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 
-	it("shows which device plays, and choosing this device returns", () => {
+	it("shows which device plays, and choosing this device returns", async () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		render(<DevicesButton />);
 		const button = screen.getByRole("button", { name: "Devices, playing on Living Room" });
@@ -192,6 +192,8 @@ describe("DevicesButton", () => {
 		fireEvent.click(within(picker).getByRole("button", { name: /This device/ }));
 		expect(control.leave).toHaveBeenCalledTimes(1);
 		expect(control.connect).not.toHaveBeenCalled();
+		await act(async () => {});
+		expect(screen.queryByRole("status"), "it worked, so nothing to say").toBeNull();
 	});
 
 	it("says when ending the session from the picker didn't work", async () => {
@@ -200,7 +202,9 @@ describe("DevicesButton", () => {
 		render(<DevicesButton />);
 		fireEvent.click(screen.getByRole("button", { name: "Devices, playing on Living Room" }));
 		fireEvent.click(screen.getByRole("button", { name: /This device/ }));
-		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
+		expect(await screen.findByRole("status")).toHaveTextContent(
+			"Couldn't end the session. Try again."
+		);
 		expect(screen.getByRole("status")).toHaveClass("bottom-20");
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
@@ -378,6 +382,7 @@ describe("RemoteBar", () => {
 	it("returns to independent playback", () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		render(<RemoteBar />);
+		expect(screen.queryByRole("status")).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		expect(control.leave).toHaveBeenCalledTimes(1);
 	});

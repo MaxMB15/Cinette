@@ -29,7 +29,8 @@ type Place =
 	| { kind: "group"; group: string }
 	| { kind: "episodes"; series: CatalogItem; from: Place };
 
-/** What the list shows. `more` is how the next page stands. */
+/** What the list shows. `more` is how the next page stands, if it's
+ *  been asked for. */
 type View =
 	| { status: "loading" }
 	| { status: "failed" }
@@ -37,7 +38,7 @@ type View =
 			status: "ready";
 			items: CatalogItem[];
 			next: string | null;
-			more: "idle" | "loading" | "failed";
+			more: "loading" | "failed" | null;
 	  };
 
 const LOADING: View = { status: "loading" };
@@ -80,11 +81,11 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	const [typed, setTyped] = useState("");
 	const [search, setSearch] = useState("");
 	const [view, setView] = useState<View>(LOADING);
-	// Bumped to load what's on screen again.
-	const [attempt, setAttempt] = useState(0);
+	// A new one loads what's on screen again.
+	const [attempt, setAttempt] = useState({});
 	const [message, setMessage] = useState<string | null>(null);
 	// Which view a page of "Load more" belongs to; a newer one drops it.
-	const shownRef = useRef(0);
+	const shownRef = useRef({});
 	const connected = link.phase.phase === "connected";
 
 	const searchRef = useLatestRef(search);
@@ -102,10 +103,10 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		// While the link is down nothing can come; it loads again once back.
 		if (!connected) return;
 		let current = true;
-		shownRef.current += 1;
+		shownRef.current = {};
 		remoteCatalog(link.id, queryFor(type, place, search))
 			.then(({ items, next }) => {
-				if (current) setView({ status: "ready", items, next, more: "idle" });
+				if (current) setView({ status: "ready", items, next, more: null });
 			})
 			.catch(() => {
 				if (current) setView({ status: "failed" });
@@ -122,18 +123,18 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 
 	const retry = () => {
 		setView(LOADING);
-		setAttempt((n) => n + 1);
+		setAttempt({});
 	};
 
 	const more = (shown: CatalogItem[], cursor: string) => {
 		const forView = shownRef.current;
-		const ready = (more: "idle" | "loading" | "failed", next: string | null = cursor) =>
-			setView({ status: "ready", items: shown, next, more });
+		const ready = (more: "loading" | "failed") =>
+			setView({ status: "ready", items: shown, next: cursor, more });
 		ready("loading");
 		remoteCatalog(link.id, queryFor(type, place, search, cursor))
 			.then(({ items, next }) => {
 				if (shownRef.current !== forView) return;
-				setView({ status: "ready", items: [...shown, ...items], next, more: "idle" });
+				setView({ status: "ready", items: [...shown, ...items], next, more: null });
 			})
 			.catch(() => {
 				if (shownRef.current === forView) ready("failed");

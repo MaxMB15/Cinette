@@ -54,7 +54,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 			<button
 				type="button"
 				title={link ? `Playing on ${link.name}` : "Play on another device"}
-				aria-label={link ? `Devices, playing on ${link.name}` : "Devices"}
+				aria-label={link ? `Devices, playing on ${link.name}` : undefined}
 				aria-haspopup="dialog"
 				onClick={() => setOpen(true)}
 				className={cn(
