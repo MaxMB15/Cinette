@@ -74,10 +74,13 @@ exclude_re = [
 gitignore = true
 
 # Mutation runs build on Linux, which never compiles the plugin's macOS and
-# iOS renderers. Their mutants would pass every test without being built.
+# iOS renderers or the Android code. Their mutants would pass every
+# test without being built.
 exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
+    "apps/player/src-tauri/src/android_tls.rs",
+    "crates/tauri-plugin-mpv/src/android.rs",
     # Bonjour discovery, likewise macOS only.
     "apps/player/src-tauri/src/discovery/macos.rs",
     # It only calls the library's run.

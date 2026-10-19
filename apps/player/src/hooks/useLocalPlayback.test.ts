@@ -49,7 +49,7 @@ const channel: Channel = {
 	sources: [],
 };
 
-const loadChannel = vi.fn();
+const loadChannel = vi.fn<(channel: Channel, startAt?: number) => Promise<void>>(async () => {});
 
 beforeEach(() => {
 	loadChannel.mockReset();
@@ -87,6 +87,41 @@ describe("useLocalPlayback", () => {
 		expect(loadChannel).toHaveBeenLastCalledWith(channel, undefined);
 	});
 
+	it("waits for the player to open the item, and passes on a failure", async () => {
+		let finish = () => {};
+		loadChannel.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (finish = resolve))
+		);
+		const { result } = renderHook(() => useLocalPlayback(player(), null, loadChannel));
+		let done = false;
+		const loading = result.current.load({ kind: "local", channel }).then(() => (done = true));
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(done).toBe(false);
+		finish();
+		await loading;
+		expect(done).toBe(true);
+		loadChannel.mockRejectedValueOnce(new Error("open failed"));
+		await expect(result.current.load({ kind: "local", channel })).rejects.toThrow(
+			"open failed"
+		);
+	});
+
+	it("stays the same object when the player passes a new loader, and uses the newest", async () => {
+		const first = vi.fn(async () => {});
+		const second = vi.fn(async () => {});
+		let load = first;
+		const p = player();
+		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, load));
+		const destination = result.current;
+		load = second;
+		rerender();
+		expect(result.current).toBe(destination);
+		await destination.load({ kind: "local", channel }, { startAt: 7 });
+		expect(first).not.toHaveBeenCalled();
+		expect(second).toHaveBeenCalledWith(channel, 7);
+	});
+
 	it("can't play another device's items", async () => {
 		const p = player();
 		const { result } = renderHook(() => useLocalPlayback(p, null, loadChannel));
@@ -121,10 +156,12 @@ describe("useLocalPlayback", () => {
 	it("can seek once the length is known", () => {
 		let p = player();
 		const { result, rerender } = renderHook(() => useLocalPlayback(p, channel, loadChannel));
-		expect(result.current.capabilities.seek).toBe(false);
+		const before = result.current;
+		expect(before.capabilities.seek).toBe(false);
 		p = player({ state: mpvState({ duration: 0.5 }) });
 		rerender();
 		expect(result.current.capabilities.seek).toBe(true);
+		expect(result.current).not.toBe(before);
 	});
 
 	it("stays the same object while the length changes but stays known", () => {

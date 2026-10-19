@@ -5,12 +5,17 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import App from "./App";
+import { withPerfCounters } from "./dev/perf";
 import "./styles/globals.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+const container = document.getElementById("root")!;
+const app = (
 	<React.StrictMode>
 		<BrowserRouter>
 			<App />
 		</BrowserRouter>
 	</React.StrictMode>
 );
+
+// A dev build can count renders and backend calls. See src/dev/perf.tsx.
+ReactDOM.createRoot(container).render(import.meta.env.DEV ? withPerfCounters(app, container) : app);
