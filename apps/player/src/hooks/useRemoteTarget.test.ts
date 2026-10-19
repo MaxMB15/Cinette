@@ -296,8 +296,27 @@ describe("usePublishRemoteState", () => {
 		const { destination } = fakeDestination();
 		const view = renderHook(() => usePublishRemoteState(destination, channel));
 		view.unmount();
-		await waitFor(() => expect(remoteSetState).toHaveBeenCalledWith(IDLE_REMOTE_STATE));
-		expect(IDLE_REMOTE_STATE).toMatchObject({ status: "idle", item: null });
+		await waitFor(() => expect(remoteSetState).toHaveBeenCalled());
+		expect(vi.mocked(remoteSetState).mock.calls.at(-1)?.[0]).toEqual({
+			status: "idle",
+			item: null,
+			position: 0,
+			duration: 0,
+			volume: null,
+			subtitles: [],
+			subtitleId: null,
+			audio: [],
+			audioId: null,
+			capabilities: {
+				pause: false,
+				seek: false,
+				volume: false,
+				subtitles: false,
+				audioTracks: false,
+				resumeAt: false,
+			},
+			error: null,
+		});
 	});
 
 	it("sends no idle state when the page swaps in a new destination", async () => {

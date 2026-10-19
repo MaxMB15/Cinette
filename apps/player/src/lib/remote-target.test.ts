@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
 	applyRemoteCommand,
+	IDLE_REMOTE_STATE,
 	getMountedPlayer,
 	remotePlayerState,
 	PLAYER_OPENS_WITHIN_MS,
@@ -209,6 +210,31 @@ const target = (player: ReturnType<typeof fakePlayer> | null) => ({
 		load: () => Promise.reject(new Error("not open")),
 	})),
 	stopWithoutPlayer: vi.fn<CommandTarget["stopWithoutPlayer"]>(() => Promise.resolve()),
+});
+
+describe("IDLE_REMOTE_STATE", () => {
+	it("says nothing plays and nothing can be done", () => {
+		expect(IDLE_REMOTE_STATE).toEqual({
+			status: "idle",
+			item: null,
+			position: 0,
+			duration: 0,
+			volume: null,
+			subtitles: [],
+			subtitleId: null,
+			audio: [],
+			audioId: null,
+			capabilities: {
+				pause: false,
+				seek: false,
+				volume: false,
+				subtitles: false,
+				audioTracks: false,
+				resumeAt: false,
+			},
+			error: null,
+		});
+	});
 });
 
 describe("applyRemoteCommand", () => {
