@@ -4,6 +4,10 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ## [Unreleased]
 
+### Changed
+
+- The channel list scrolls and searches with far less work. While you scroll, only the rows redraw, not the tabs and category filters around them, and typing a search no longer redraws every category. The app is now built with the React Compiler, which skips redrawing what hasn't changed (#307).
+
 ## [0.8.0] - 2026-10-17
 
 ### Added

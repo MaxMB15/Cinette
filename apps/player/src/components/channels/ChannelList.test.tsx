@@ -18,6 +18,7 @@ import { makeChannel, makeDownload, makeHistoryEntry } from "@/test/channel-fixt
 import { deferred } from "@/test/deferred";
 import { answerFrom } from "@/test/guide-answers";
 import { ChannelList } from "./ChannelList";
+import { ROW_CARD_LEFT_WIDTH } from "./ChannelCard";
 
 const state = vi.hoisted(() => ({
 	channels: [] as Channel[],
@@ -313,6 +314,10 @@ const renderList = async (List = ChannelList) => {
 	await flush();
 	return view;
 };
+
+/** The gridlines drawn behind the virtual rows, or null when there are none. */
+const rowGrid = (container: HTMLElement) =>
+	container.querySelector<HTMLElement>(".absolute.top-0.bottom-0.pointer-events-none.z-0");
 
 const tab = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
 
@@ -1377,7 +1382,12 @@ describe("ChannelList series", () => {
 		await renderList();
 
 		fireEvent.click(screen.getByText("Harbor Lights"));
-		await waitFor(() => expect(error).toHaveBeenCalled());
+		await waitFor(() =>
+			expect(error).toHaveBeenCalledWith(
+				"[ChannelList] failed to load series episodes:",
+				new Error("server down")
+			)
+		);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(tauri.getCachedSeriesEpisodes).not.toHaveBeenCalled();
 	});
@@ -1972,6 +1982,31 @@ describe("ChannelList history tab", () => {
 });
 
 describe("ChannelList virtual list", () => {
+	it("draws the guide's gridlines and the now line behind the live rows", async () => {
+		freezeClock();
+		state.channels = liveChannels(5);
+		const { container } = await renderList();
+
+		const grid = rowGrid(container)!;
+		expect(grid.style.left).toBe(`${ROW_CARD_LEFT_WIDTH}px`);
+		expect(grid.style.right).toBe("80px");
+		const lines = [...grid.children] as HTMLElement[];
+		expect(lines.length).toBeGreaterThan(1);
+		for (const line of lines) expect(line.style.left).toMatch(/^[\d.]+%$/);
+		expect(lines[lines.length - 1]).toHaveClass("bg-red-400/20");
+	});
+
+	it("draws no gridlines behind posters", async () => {
+		state.channels = [
+			...liveChannels(3),
+			makeChannel({ id: "m1", name: "Heat", contentType: "movie" }),
+		];
+		const { container } = await renderList();
+		await openTab("Movies");
+		expect(screen.getByText("Heat")).toBeInTheDocument();
+		expect(rowGrid(container)).toBeNull();
+	});
+
 	it("renders only the rows in view and the next ones as the list scrolls", async () => {
 		state.channels = liveChannels(300);
 		await renderList();
@@ -2037,6 +2072,14 @@ describe("ChannelList on a phone", () => {
 		vi.resetModules();
 		return (await import("./ChannelList")).ChannelList;
 	};
+
+	it("draws no guide gridlines, since its rows have no timeline", async () => {
+		const PhoneList = await loadPhoneList();
+		state.channels = liveChannels(3);
+		const { container } = await renderList(PhoneList);
+		expect(screen.getByText("Channel 1")).toBeInTheDocument();
+		expect(rowGrid(container)).toBeNull();
+	});
 
 	it("has no downloads tab or download filter", async () => {
 		const PhoneList = await loadPhoneList();

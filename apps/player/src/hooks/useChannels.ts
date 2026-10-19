@@ -227,11 +227,11 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 
 	// Adding a provider of any kind runs the same steps around a different backend call.
 	const addProvider = useCallback(
-		async (add: () => Promise<unknown>) => {
+		(add: () => Promise<unknown>): Promise<void> => {
 			setLoading(true);
 			setError(null);
 			const known = new Set(providersRef.current.map((p) => p.id));
-			try {
+			const steps = async () => {
 				await add();
 				const list = await refreshProviders();
 				await refreshChannels();
@@ -243,12 +243,15 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 						refreshGuide(autoRefresh, id);
 					}
 				}
-			} catch (e) {
-				setError(String(e));
-				throw e;
-			} finally {
-				setLoading(false);
-			}
+			};
+			// Promise callbacks in place of try and finally, which the React
+			// Compiler can't compile yet.
+			return steps()
+				.catch((e) => {
+					setError(String(e));
+					throw e;
+				})
+				.finally(() => setLoading(false));
 		},
 		// Stryker disable next-line ArrayDeclaration: every one of these stays the same object while the context provider is mounted, so an empty list gives the same callback.
 		[providersRef, refreshProviders, refreshChannels, autoRefresh]
