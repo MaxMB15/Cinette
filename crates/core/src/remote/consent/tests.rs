@@ -123,6 +123,7 @@ fn a_denied_device_waits_out_the_cooldown_but_a_dismissed_one_doesnt() {
         Err(CloseReason::Denied)
     );
     assert!(submit(&mut queue, after_backoff, 4, &dismissed).is_ok());
+    queue.withdraw(ConnId(4)).unwrap();
     let later = now + DENIAL_COOLDOWN;
     queue.expire(later);
     assert!(submit(&mut queue, later, 5, &denied).is_ok());
@@ -256,13 +257,28 @@ fn a_quiet_minute_after_the_wait_starts_the_backoff_again() {
 }
 
 #[test]
-fn dismissing_or_letting_a_request_run_out_starts_no_backoff() {
+fn dismissing_a_request_starts_no_backoff() {
     let now = Instant::now();
     let mut queue = ConsentQueue::new();
     let id = submit(&mut queue, now, 1, &peer("A")).unwrap();
     queue.answer(id, Answer::Dismiss, now);
-    submit(&mut queue, now, 2, &peer("B")).unwrap();
-    let later = now + CONSENT_TIMEOUT;
-    assert_eq!(queue.expire(later).len(), 1);
-    assert!(submit(&mut queue, later, 3, &peer("C")).is_ok());
+    assert!(submit(&mut queue, now, 2, &peer("B")).is_ok());
+}
+
+#[test]
+fn a_request_that_runs_out_backs_off_as_a_denial_does() {
+    let now = Instant::now();
+    let mut queue = ConsentQueue::new();
+    let mut at = now;
+    // Letting each one run out waits longer each time, as denials do.
+    for wait in [5, 10, 20] {
+        submit(&mut queue, at, 1, &peer("A")).unwrap();
+        at += CONSENT_TIMEOUT;
+        assert_eq!(queue.expire(at).len(), 1);
+        quiet_until(&mut queue, at + secs(wait));
+        at += secs(wait);
+    }
+    // Tidying up with nothing run out changes nothing.
+    queue.expire(at);
+    assert!(submit(&mut queue, at, 3, &peer("C")).is_ok());
 }

@@ -23,6 +23,8 @@ pub mod commands;
 mod conn;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod identity;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod local;
 pub mod logos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod service;

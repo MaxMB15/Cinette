@@ -90,6 +90,15 @@ is still ahead. `downloads/keep_awake.rs` keeps the computer awake while ffmpeg
 records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
 `schedule_recording` and `stop_recording`, and both refuse on iOS and Android.
 
+`remote/` lets one Cinette control another on the same network, on macOS and Linux.
+The target listens on TCP port 47130, or any free port when that one is taken, on one
+socket that takes IPv4 and IPv6. It only takes connections from this machine and from
+the subnets of its own network interfaces, so a computer with a public IPv4 or a global
+IPv6 address can't be reached from the internet. It advertises `_cinette._tcp` with
+DNS-SD. Every connection is encrypted with Noise XX. Unless the setting is Always
+allow, a new controller waits until the user allows it on this screen. The protocol is in
+`crates/core/src/remote/`.
+
 ### `crates/tauri-plugin-mpv`
 
 | File | Responsibility |

@@ -208,6 +208,7 @@ const target = (player: ReturnType<typeof fakePlayer> | null) => ({
 	waitForPlayer: vi.fn<CommandTarget["waitForPlayer"]>(async () => ({
 		load: () => Promise.reject(new Error("not open")),
 	})),
+	stopWithoutPlayer: vi.fn<CommandTarget["stopWithoutPlayer"]>(() => Promise.resolve()),
 });
 
 describe("applyRemoteCommand", () => {
@@ -254,11 +255,18 @@ describe("applyRemoteCommand", () => {
 		expect(t.waitForPlayer).not.toHaveBeenCalled();
 	});
 
-	it("stops the open player, and stopping nothing is fine", async () => {
+	it("stops the open player, or mpv when no player page is open", async () => {
 		const player = fakePlayer();
-		await expect(applyRemoteCommand({ action: "stop" }, target(player))).resolves.toBe("ok");
+		const open = target(player);
+		await expect(applyRemoteCommand({ action: "stop" }, open)).resolves.toBe("ok");
 		expect(player.stop).toHaveBeenCalledTimes(1);
-		await expect(applyRemoteCommand({ action: "stop" }, target(null))).resolves.toBe("ok");
+		expect(open.stopWithoutPlayer).not.toHaveBeenCalled();
+		// Back leaves mpv playing, so a stop with no page stops it there.
+		const closed = target(null);
+		await expect(applyRemoteCommand({ action: "stop" }, closed)).resolves.toBe("ok");
+		expect(closed.stopWithoutPlayer).toHaveBeenCalledTimes(1);
+		closed.stopWithoutPlayer.mockRejectedValueOnce(new Error("mpv"));
+		await expect(applyRemoteCommand({ action: "stop" }, closed)).resolves.toBe("failed");
 	});
 
 	it("fails other commands when no player is open", async () => {
