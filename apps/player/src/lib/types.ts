@@ -232,7 +232,8 @@ export interface SubtitleCue {
 	text: string;
 }
 
-export type Platform = "macos" | "ios" | "android" | "windows" | "linux";
+/** `tv` is Android TV, Google TV and Fire TV. Other Android devices are `android`. */
+export type Platform = "macos" | "ios" | "android" | "tv" | "windows" | "linux";
 export type LayoutMode = "desktop" | "tablet" | "mobile" | "tv";
 
 export interface GroupHierarchyEntry {

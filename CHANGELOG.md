@@ -4,6 +4,10 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ## [Unreleased]
 
+### Added
+
+- The player answers a keyboard's media keys. Play/pause, play and pause work as you'd expect, fast forward and rewind skip by the lengths set in Settings, and next and previous change the episode (#312).
+
 ### Changed
 
 - The channel list scrolls and searches with far less work. While you scroll, only the rows redraw, not the tabs and category filters around them, and typing a search no longer redraws every category. The app is now built with the React Compiler, which skips redrawing what hasn't changed (#307).
