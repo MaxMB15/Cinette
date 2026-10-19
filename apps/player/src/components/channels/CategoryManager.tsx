@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	RefreshCw,
 	Plus,
@@ -18,7 +19,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-	getGroupHierarchy,
 	deleteGroupHierarchy,
 	categorizeProvider,
 	fixUncategorizedGroups,
@@ -32,7 +32,11 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { groupSamples, groupTitles, superCategoryNames } from "@/lib/group-hierarchy";
 import type { Channel, GroupHierarchyEntry } from "@/lib/types";
 import { formatCount } from "@/lib/format";
+import { groupHierarchyQuery } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+
+/** The hierarchy while it loads, kept the same between renders. */
+const NO_ENTRIES: GroupHierarchyEntry[] = [];
 
 // Enough channel names for Gemini to tell what a group holds.
 const SAMPLES_PER_GROUP = 5;
@@ -88,7 +92,6 @@ interface CategoryManagerProps {
 	contentType: string;
 	channels: Channel[];
 	onClose: () => void;
-	onHierarchyChanged: () => void;
 }
 
 export const CategoryManager = ({
@@ -96,9 +99,12 @@ export const CategoryManager = ({
 	contentType,
 	channels,
 	onClose,
-	onHierarchyChanged,
 }: CategoryManagerProps) => {
-	const [entries, setEntries] = useState<GroupHierarchyEntry[]>([]);
+	// The channel list reads the same cached hierarchy, so it shows each change
+	// without being told.
+	const queryClient = useQueryClient();
+	const hierarchyQuery = groupHierarchyQuery(providerId, contentType);
+	const saved = useQuery(hierarchyQuery);
 	const [categorizing, setCategorizing] = useState(false);
 	const [fixingUncategorized, setFixingUncategorized] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -116,38 +122,39 @@ export const CategoryManager = ({
 	const [aiPromptCategory, setAiPromptCategory] = useState<string | null>(null);
 	const [aiPromptLoading, setAiPromptLoading] = useState(false);
 
-	const load = useCallback(
+	// No hierarchy yet, so show all provider groups as uncategorized.
+	const unsorted = useMemo(
 		() =>
-			getGroupHierarchy(providerId, contentType)
-				.then((h) => {
-					if (h.length > 0) {
-						setEntries(h);
-						// Remove empty categories that now have groups in DB
-						const dbCatNames = new Set(superCategoryNames(h));
-						setEmptyCategories((prev) => prev.filter((c) => !dbCatNames.has(c)));
-					} else {
-						// No hierarchy yet, so show all provider groups as uncategorized
-						setEntries(
-							groupTitles(channels, contentType).map((g, i) => ({
-								providerId,
-								contentType,
-								groupName: g,
-								superCategory: null,
-								sortOrder: i,
-								isUserOverride: false,
-							}))
-						);
-					}
-				})
-				.catch(() => {
-					// silent
-				}),
-		[providerId, contentType, channels]
+			groupTitles(channels, contentType).map((g, i): GroupHierarchyEntry => ({
+				providerId,
+				contentType,
+				groupName: g,
+				superCategory: null,
+				sortOrder: i,
+				// Stryker disable next-line BooleanLiteral: only categorized groups show the badge, and these are all uncategorized.
+				isUserOverride: false,
+			})),
+		[channels, contentType, providerId]
 	);
+	// Empty while it loads, and when it can't be read. A reload that fails
+	// keeps the last list it read.
+	const entries =
+		saved.data === undefined ? NO_ENTRIES : saved.data.length > 0 ? saved.data : unsorted;
 
-	useEffect(() => {
-		load();
-	}, [load]);
+	// Remove empty categories that now have groups in DB. It's cheap, and
+	// does nothing once they're gone, so it runs on every render.
+	if (saved.data) {
+		const dbCatNames = new Set(superCategoryNames(saved.data));
+		const stillEmpty = emptyCategories.filter((c) => !dbCatNames.has(c));
+		if (stillEmpty.length !== emptyCategories.length) setEmptyCategories(stillEmpty);
+	}
+
+	/** Loads the stored hierarchy again, for every screen that shows it. */
+	const reload = () => queryClient.invalidateQueries({ queryKey: hierarchyQuery.queryKey });
+
+	/** Shows a hierarchy Gemini returned, which the backend has already stored. */
+	const show = (result: GroupHierarchyEntry[]) =>
+		queryClient.setQueryData(hierarchyQuery.queryKey, result);
 
 	const dbCats = superCategoryNames(entries);
 	const superCats = [...dbCats, ...emptyCategories.filter((c) => !dbCats.includes(c))];
@@ -167,8 +174,7 @@ export const CategoryManager = ({
 	const applyChange = async (change: () => Promise<unknown>): Promise<boolean> => {
 		try {
 			await change();
-			await load();
-			onHierarchyChanged();
+			await reload();
 			return true;
 		} catch (e) {
 			setError(String(e));
@@ -208,8 +214,7 @@ export const CategoryManager = ({
 				apiKey,
 				groupsWithSamples
 			);
-			setEntries(result);
-			onHierarchyChanged();
+			show(result);
 		});
 	};
 
@@ -231,8 +236,7 @@ export const CategoryManager = ({
 				uncatGroups,
 				superCats
 			);
-			setEntries(result);
-			onHierarchyChanged();
+			show(result);
 		});
 	};
 
@@ -262,8 +266,7 @@ export const CategoryManager = ({
 				candidateGroups,
 				[aiPromptCategory]
 			);
-			setEntries(result);
-			onHierarchyChanged();
+			show(result);
 			setAiPromptCategory(null);
 		});
 	};

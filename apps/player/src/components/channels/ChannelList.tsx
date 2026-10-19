@@ -1265,7 +1265,6 @@ export const ChannelList = () => {
 						contentType={contentType}
 						channels={channels}
 						onClose={() => setShowCategoryManager(false)}
-						onHierarchyChanged={() => hierarchy.reload()}
 					/>
 				</div>
 			)}
