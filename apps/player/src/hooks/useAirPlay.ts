@@ -199,10 +199,9 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const send = useCallback<AirPlay["send"]>(
 		async (channel, { anchor, startAt, stopLocal }) => {
 			const item = { kind: "local" as const, channel };
-			// Whether this device stopped, which a failure reports. The React
-			// Compiler can't compile a try with a throw or a `??` in it, so
-			// failures are caught on the promise.
-			const progress = { stopped: false };
+			// The React Compiler can't compile a try with a throw or a `??` in
+			// it, so failures are caught on the promise. Only the load can fail
+			// after this device stopped, and it says so itself.
 			const attempt = async (): Promise<SendResult> => {
 				// The item is checked before the picker opens: picking a TV
 				// moves this device's sound there, even for an item it can't
@@ -224,22 +223,21 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 						: { sent: false, why: "blocked", decision: settled };
 				}
 				await stopLocal();
-				progress.stopped = true;
 				if (!mounted.current) {
 					target.dispose();
 					return { sent: false, why: "cancelled" };
 				}
 				active.current = target;
 				setDestination(target);
-				const failed = await target.load(item, { route: settled.route, startAt }).then(
-					() => null,
-					(error: unknown) => ({ error })
+				const loaded = await target.load(item, { route: settled.route, startAt }).then(
+					() => ({ ok: true as const }),
+					(error: unknown) => ({ ok: false as const, error })
 				);
-				if (failed) {
+				if (!loaded.ok) {
 					// Nothing plays on the TV, so the panel goes, and the player
 					// says why.
 					await end(target);
-					return { sent: false, why: "failed", error: failed.error, stopped: true };
+					return { sent: false, why: "failed", error: loaded.error, stopped: true };
 				}
 				return { sent: true };
 			};
@@ -247,7 +245,7 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 				sent: false,
 				why: "failed",
 				error,
-				stopped: progress.stopped,
+				stopped: false,
 			}));
 		},
 		[route]
