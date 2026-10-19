@@ -23,6 +23,9 @@ export default defineConfig({
 		pool: "vmThreads",
 		setupFiles: ["./src/test/polyfills.ts", "./src/test/setup.ts"],
 		include: ["src/**/*.{test,spec}.{ts,tsx}"],
+		// The measured flows in src/dev take a while and only print numbers.
+		// vitest.perf.config.ts runs them.
+		exclude: ["**/node_modules/**", "src/**/*.perf.test.tsx"],
 		globals: false,
 		coverage: {
 			provider: "v8",

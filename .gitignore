@@ -10,6 +10,9 @@ dist/
 apps/player/src-tauri/gen/*
 # The Xcode project is hand-edited (MPVKit, signing), so it's checked in.
 !apps/player/src-tauri/gen/apple/
+# So is the Android project. Its own .gitignore files leave out what the build
+# writes.
+!apps/player/src-tauri/gen/android/
 apps/player/src-tauri/target/
 
 # The app's folder before it moved to apps/player. Older checkouts keep their

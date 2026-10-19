@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Many IPTV servers only speak plain HTTP, so cleartext is allowed.
+
+    HTTPS trusts the user's CAs as well as the system's, so a server behind a
+    CA the user installed works. rustls-platform-verifier checks certificates
+    through Android's TrustManager, which follows this file.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

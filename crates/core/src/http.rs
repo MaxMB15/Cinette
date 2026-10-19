@@ -94,8 +94,12 @@ pub fn origin_for_log(url: &str) -> String {
 }
 
 fn build(builder: reqwest::ClientBuilder) -> reqwest::Client {
+    let builder = builder.connect_timeout(CONNECT_TIMEOUT);
+    // Android's rustls would offer HTTP/2 over ALPN. Desktop and iOS use TLS
+    // without ALPN, so HTTPS stays on HTTP/1.1 everywhere.
+    #[cfg(target_os = "android")]
+    let builder = builder.http1_only();
     builder
-        .connect_timeout(CONNECT_TIMEOUT)
         .build()
         // Same failure as reqwest::Client::new, which the services used before.
         .expect("HTTP client could not be built, the TLS backend failed to start")
