@@ -6,6 +6,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ### Added
 
+- On iPhone and iPad, the player has an AirPlay button when an AirPlay TV is in reach. It sends the channel, movie or episode that's playing to the TV, which plays it straight from your provider, and a movie or episode carries on from where it was. Streams the TV can't play as they are, such as MKV files and most raw MPEG-TS channels, stay on the iPhone and Cinette says why (#323).
 - The player answers a keyboard's media keys. Play/pause, play and pause work as you'd expect, fast forward and rewind skip by the lengths set in Settings, and next and previous change the episode (#312).
 
 ### Changed

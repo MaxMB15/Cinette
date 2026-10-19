@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-airplay-stop"
+description = "Enables the airplay_stop command without any pre-configured scope."
+commands.allow = ["airplay_stop"]
+
+[[permission]]
+identifier = "deny-airplay-stop"
+description = "Denies the airplay_stop command without any pre-configured scope."
+commands.deny = ["airplay_stop"]

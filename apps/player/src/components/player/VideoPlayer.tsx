@@ -17,6 +17,10 @@ import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } fr
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
+import { useAirPlay } from "@/hooks/useAirPlay";
+import { airplayBlockedMessage, airplayKey, airplayProgress } from "@/lib/airplay";
+import { AirPlayButton } from "@/components/player/AirPlayButton";
+import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -89,6 +93,8 @@ import { getPlatform, isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
+/** How long a note about AirPlay stays up. */
+const AIRPLAY_NOTICE_MS = 6000;
 /** How often (ms) watch progress is persisted while playing. */
 const PROGRESS_SAVE_INTERVAL = 5000;
 const MAX_VOLUME = 150;
@@ -209,7 +215,7 @@ export const PlayerView = () => {
 	useLeaveFullscreenOnUnmount();
 	// The phone layout hides the tab bar on this route, so the player needs
 	// its own way back.
-	const { layoutMode } = usePlatform();
+	const { layoutMode, platform } = usePlatform();
 	const showBack = layoutMode === "mobile";
 	// Phones and tablets set the volume with the hardware buttons. An Android
 	// TV box has no touch screen, so it keeps the volume and shortcut
@@ -492,6 +498,27 @@ export const PlayerView = () => {
 	// The player's controls go through the active destination, which is
 	// always this device for now.
 	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
+	// AirPlay video on iOS, with its own panel until the device picker
+	// takes over.
+	const airplay = useAirPlay(platform === "ios");
+	const tvRef = useLatestRef(airplay.destination);
+	// Why AirPlay stopped or didn't start, once the AirPlay button can't say.
+	const [airplayNotice, setAirplayNotice] = useState<string | null>(null);
+	useEffect(() => {
+		const timer = setTimeout(() => setAirplayNotice(null), AIRPLAY_NOTICE_MS);
+		return () => clearTimeout(timer);
+	}, [airplayNotice]);
+	// The receiver's position goes into the same resume point as local
+	// playback's, since mpv is stopped while AirPlay plays.
+	useEffect(() => {
+		const p = progressRef.current;
+		// flushProgress skips an item with no resume point, such as live.
+		if (!airplay.state) return;
+		const next = airplayProgress(p, airplay.state, Date.now(), PROGRESS_SAVE_INTERVAL);
+		if (!next) return;
+		Object.assign(p, next.progress);
+		if (next.save) flushProgress();
+	}, [airplay.state, flushProgress]);
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with
@@ -1145,6 +1172,16 @@ export const PlayerView = () => {
 			e.preventDefault();
 			if (e.repeat && !repeatsWhenHeld(action)) return;
 
+			// While the TV plays, the keys drive it, and nothing starts here.
+			const tv = tvRef.current;
+			if (tv) {
+				const key = airplayKey(action, tv.getState(), tv.capabilities);
+				if (key.kind === "play") void tv.play();
+				if (key.kind === "pause") void tv.pause();
+				if (key.kind === "seek") void tv.seek(key.to);
+				if (key.kind !== "pass") return;
+			}
+
 			const s = mpv.state;
 			switch (action.type) {
 				case "togglePlay":
@@ -1226,6 +1263,7 @@ export const PlayerView = () => {
 		[
 			mpv,
 			playback,
+			tvRef,
 			pendingResume,
 			showShortcuts,
 			isFullscreen,
@@ -1295,6 +1333,67 @@ export const PlayerView = () => {
 			onRemove={() => playerDl && removeDownload(playerDl.id)}
 		/>
 	) : undefined;
+
+	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
+	const sendToAirPlay = async (channel: Channel, anchor: DOMRect): Promise<string | null> => {
+		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
+		const result = await airplay.send(channel, {
+			anchor,
+			startAt,
+			stopLocal: async () => {
+				flushProgress();
+				await playback.stop();
+			},
+		});
+		if (result.sent || result.why === "cancelled") return null;
+		if (result.why === "blocked") return airplayBlockedMessage(result.decision);
+		console.warn("[VideoPlayer] AirPlay failed:", result.error);
+		// Once local playback has stopped, the AirPlay button is gone with
+		// the panel it gave way to, so the player says it.
+		if (result.stopped) {
+			setAirplayNotice("Couldn't start AirPlay. Nothing is playing.");
+			return null;
+		}
+		return "Couldn't start AirPlay.";
+	};
+	const tv = airplay.destination;
+	const castSlot =
+		airplay.available && activeChannel && !tv ? (
+			<AirPlayButton onSend={(anchor) => sendToAirPlay(activeChannel, anchor)} />
+		) : undefined;
+
+	const airplayPanel = tv ? (
+		<AirPlayPanel
+			name={tv.name}
+			// The hook's state is set exactly when its destination is.
+			state={airplay.state ?? tv.getState()}
+			capabilities={tv.capabilities}
+			onPlay={() => void tv.play()}
+			onPause={() => void tv.pause()}
+			onSeek={(position) => void tv.seek(position)}
+			onSubtitle={(id) => void tv.selectSubtitle(id)}
+			onAudio={(id) => void tv.selectAudio(id)}
+			onPlayHere={async (position, anchor) => {
+				flushProgress();
+				// AirPlay lets go of the stream before mpv opens it, since many
+				// accounts allow one connection at a time.
+				await airplay.returnHere(anchor);
+				// Stryker disable next-line ConditionalExpression: The panel only shows after a send, which needs a channel, and nothing clears the channel while it shows.
+				if (!activeChannel) return;
+				await playback
+					.load(
+						{ kind: "local", channel: activeChannel },
+						{ startAt: position > 0 ? position : undefined }
+					)
+					.catch(() => setAirplayNotice("Couldn't play it on this device."));
+			}}
+			onStop={async () => {
+				flushProgress();
+				await airplay.stop();
+				handleStop();
+			}}
+		/>
+	) : null;
 
 	// Resumes where the stream broke, not from the start of the movie or episode.
 	const retryStream = () => {
@@ -1415,7 +1514,17 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{!mpv.fallbackActive && (
+			{airplayPanel}
+			{airplayNotice && (
+				<p
+					role="alert"
+					className="absolute top-4 left-1/2 z-40 -translate-x-1/2 rounded bg-black/90 px-4 py-2 text-sm text-white"
+				>
+					{airplayNotice}
+				</p>
+			)}
+
+			{!mpv.fallbackActive && !airplay.destination && (
 				<Controls
 					state={{
 						isPlaying: mpv.state.isPlaying,
@@ -1458,6 +1567,7 @@ export const PlayerView = () => {
 					onShortcuts={touchDevice ? undefined : () => setShowShortcuts((v) => !v)}
 					showVolumeSlider={!touchDevice}
 					downloadSlot={downloadSlot}
+					castSlot={castSlot}
 				/>
 			)}
 

@@ -39,7 +39,8 @@ export interface ReceiverProfile {
 	/** Chromecast only fetches HLS from servers that send CORS headers. */
 	hlsNeedsCors: boolean;
 	/** What this device serves the receiver when it converts. HLS output
-	 *  uses fMP4 segments. */
+	 *  uses MPEG-TS segments: MPVKit's FFmpeg has no HLS muxer, so the iOS
+	 *  converter cuts TS itself, and the desktop's `-f hls` writes TS too. */
 	convertTo: "hls" | "fmp4" | "matroska";
 }
 
@@ -87,7 +88,7 @@ type Blocked = Extract<RouteDecision, { ok: false }>;
 type Converted = Extract<PlayRoute, { via: "converted" }>;
 
 const OUTPUT: Record<ReceiverProfile["convertTo"], Container> = {
-	hls: "hls-fmp4",
+	hls: "hls-ts",
 	fmp4: "mp4",
 	matroska: "mkv",
 };

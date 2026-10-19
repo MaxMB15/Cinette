@@ -1,5 +1,5 @@
 [default]
-description = "Allows all MPV player commands"
+description = "Allows all MPV player and AirPlay commands"
 permissions = [
     "allow-mpv-load",
     "allow-mpv-play",
@@ -16,4 +16,14 @@ permissions = [
     "allow-mpv-set-sub-delay",
     "allow-mpv-set-media-info",
     "allow-mpv-set-skip-intervals",
+    "allow-airplay-set-detection",
+    "allow-airplay-choose",
+    "allow-airplay-get-route",
+    "allow-airplay-play",
+    "allow-airplay-pause",
+    "allow-airplay-seek",
+    "allow-airplay-select-subtitle",
+    "allow-airplay-select-audio",
+    "allow-airplay-stop",
+    "allow-airplay-get-state",
 ]

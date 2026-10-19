@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+pub mod airplay;
 #[cfg(any(target_os = "ios", test))]
 mod artwork;
 mod commands;
@@ -74,6 +75,16 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::mpv_set_sub_delay,
             commands::mpv_set_media_info,
             commands::mpv_set_skip_intervals,
+            airplay::airplay_set_detection,
+            airplay::airplay_choose,
+            airplay::airplay_get_route,
+            airplay::airplay_play,
+            airplay::airplay_pause,
+            airplay::airplay_seek,
+            airplay::airplay_select_subtitle,
+            airplay::airplay_select_audio,
+            airplay::airplay_stop,
+            airplay::airplay_get_state,
         ])
         .setup(|app, _api| {
             #[cfg(target_os = "linux")]
@@ -84,6 +95,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 _api.register_ios_plugin(init_plugin_mpv)?;
                 ios::install(app);
             }
+            airplay::install(app);
             #[cfg(target_os = "android")]
             {
                 let handle = _api.register_android_plugin("app.cinette.mpv", "MpvPlugin")?;
