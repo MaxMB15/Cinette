@@ -8,6 +8,7 @@ import {
 	castProfile,
 	desktopSender,
 	iosSender,
+	NOT_READY,
 	REFUSED,
 } from "@/lib/route-profiles";
 import { chooseRoute, type StreamFormat } from "@/lib/route";
@@ -259,5 +260,12 @@ describe("iosSender", () => {
 			hardwareEncoder: false,
 			convertNeedsScreen: false,
 		});
+	});
+});
+
+describe("NOT_READY", () => {
+	it("is the error get_stream_formats sends while mpv opens the item", () => {
+		// The same text as `NOT_READY` in src-tauri/src/streams/mod.rs.
+		expect(NOT_READY).toBe("notReady");
 	});
 });

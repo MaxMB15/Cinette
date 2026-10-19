@@ -198,13 +198,13 @@ describe("backend commands", () => {
 			"getStreamFormats",
 			() => tauri.getStreamFormats(episode),
 			"get_stream_formats",
-			{ channel: episode, playing: undefined },
+			{ channel: episode },
 		],
 		[
 			"airplayLoad",
-			() => tauri.airplayLoad(episode, 1, 30),
+			() => tauri.airplayLoad(episode, 7, 1, 30),
 			"airplay_load",
-			{ channel: episode, source: 1, startAt: 30 },
+			{ channel: episode, generation: 7, source: 1, startAt: 30 },
 		],
 		[
 			"airplaySetDetection",

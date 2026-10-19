@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invoke";
 import type { AirPlayRoute } from "@/lib/airplay";
 import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
@@ -108,20 +108,25 @@ export const loadXtreamProvider = (
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
 
 /**
- * The formats `channel` comes in, for Cast and AirPlay. Pass `playing` while
- * mpv plays it, so the provider isn't asked for a second connection.
- * Rejects with `REFUSED` when the provider turns the login down.
+ * The formats `channel` comes in, for Cast and AirPlay. While mpv plays it,
+ * the backend asks mpv, so the provider isn't asked for a second
+ * connection. Rejects with `REFUSED` when the provider turns the login
+ * down, and with `NOT_READY` while mpv is still opening it.
  */
-export const getStreamFormats = (channel: Channel, playing?: PlayingInfo): Promise<StreamFormats> =>
-	invoke("get_stream_formats", { channel, playing });
+export const getStreamFormats = (channel: Channel): Promise<StreamFormats> =>
+	invoke("get_stream_formats", { channel });
 
 /**
  * Plays `channel` on the chosen AirPlay receiver, from the URL at `source`
- * in `getStreamFormats`' list. The URL stays in the backend. Stop local
- * playback first.
+ * in the `getStreamFormats` list named `generation`. The URL stays in the
+ * backend. Stop local playback first.
  */
-export const airplayLoad = (channel: Channel, source: number, startAt?: number): Promise<void> =>
-	invoke("airplay_load", { channel, source, startAt });
+export const airplayLoad = (
+	channel: Channel,
+	generation: number,
+	source: number,
+	startAt?: number
+): Promise<void> => invoke("airplay_load", { channel, generation, source, startAt });
 
 /** Looks for AirPlay receivers while the player is open. It costs power. */
 export const airplaySetDetection = (enabled: boolean): Promise<void> =>

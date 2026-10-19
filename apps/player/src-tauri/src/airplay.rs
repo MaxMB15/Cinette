@@ -8,30 +8,27 @@
 use mvp_core::models::channel::Channel;
 use tauri::{command, AppHandle, Runtime, State};
 
-use crate::commands::AppState;
-use crate::streams::{fetch_urls, StreamsState};
+use crate::streams::StreamsState;
 
 #[cfg(test)]
 mod tests;
 
-/// Plays `channel` over AirPlay from the URL at `source` in its list, as
-/// `get_stream_formats` numbered them. Local playback must already have
-/// stopped. `start_at` only counts for movies and episodes.
+/// Plays `channel` over AirPlay from the URL at `source` in the list that
+/// `get_stream_formats` named `generation`. A replaced list fails with
+/// `STALE`. Local playback must already have stopped. `start_at` only
+/// counts for movies and episodes.
 #[command]
 pub async fn airplay_load<R: Runtime>(
     app: AppHandle<R>,
-    state: State<'_, AppState>,
     streams: State<'_, StreamsState>,
     channel: Channel,
+    generation: u64,
     source: usize,
     start_at: Option<f64>,
 ) -> Result<(), String> {
-    let urls = fetch_urls(&state, &streams, &channel).await?;
-    let url = urls
-        .get(source)
-        .ok_or_else(|| "That stream format is no longer offered".to_string())?;
+    let url = streams.url(&channel.id, generation, source)?;
     // mutants: skip BinaryOperator: Only iOS reads live, and the plugin fails first elsewhere.
     let live = channel.content_type == "live";
     tracing::info!("[AirPlay] load source={source} live={live}");
-    tauri_plugin_mpv::airplay::load(&app, url, &channel.name, start_at, live)
+    tauri_plugin_mpv::airplay::load(&app, &url, &channel.name, start_at, live)
 }

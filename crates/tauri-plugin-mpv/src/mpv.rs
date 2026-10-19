@@ -26,6 +26,9 @@ use crate::linux::{
 #[cfg(target_os = "ios")]
 use crate::ios::{embedded_options as ios_embedded_options, IosMetalRenderer};
 
+#[cfg(target_os = "android")]
+use crate::android::{embedded_options as android_embedded_options, AndroidSurfaceRenderer};
+
 /// A platform renderer and the mpv options it needs.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) type EmbeddedRenderer = (Box<dyn PlatformRenderer>, Vec<(&'static str, &'static str)>);
@@ -196,7 +199,7 @@ impl MpvState {
 
     /// The platform's mpv options, with hardware decoding turned off if the
     /// user disabled it.
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
     fn options(
         &self,
         base: Vec<(&'static str, &'static str)>,
@@ -212,7 +215,7 @@ impl MpvState {
     /// The bounds are read with the renderer locked, so a `set_bounds` that
     /// runs after the old renderer is taken out and before this one is
     /// installed still reaches it.
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
     fn install_renderer(&self, mut renderer: Box<dyn PlatformRenderer>) {
         let replaced = {
             let mut active = lock_or_recover(&self.renderer);
@@ -410,7 +413,59 @@ impl MpvState {
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
+    /// Android has one window, so there's no fallback. If the surface isn't
+    /// there, the load fails and the frontend shows the error.
+    #[cfg(target_os = "android")]
+    fn load_impl<R: tauri::Runtime>(
+        &self,
+        url: &str,
+        start_pos: Option<f64>,
+        app: &tauri::AppHandle<R>,
+    ) -> Result<(), String> {
+        // Showing the view waits for the UI thread, so it happens before
+        // any lock is taken.
+        let mut surface_renderer = AndroidSurfaceRenderer::new()?;
+
+        {
+            use tauri::Emitter;
+            let app_clone = app.clone();
+            surface_renderer.set_first_frame_callback(Box::new(move || {
+                let _ = app_clone.emit("mpv://first-frame", ());
+            }));
+        }
+
+        let wid = surface_renderer.wid();
+        let mut options = vec![("wid", wid.as_str())];
+        options.extend(self.options(android_embedded_options()));
+
+        let attach_result = {
+            let mut engine = lock_or_recover(&self.inner);
+            match engine.create(&options) {
+                Ok(mpv) => surface_renderer.attach(mpv),
+                Err(e) => Err(e),
+            }
+        };
+        if let Err(e) = attach_result {
+            drop(surface_renderer);
+            lock_or_recover(&self.inner).stop();
+            return Err(e);
+        }
+
+        self.install_renderer(Box::new(surface_renderer));
+
+        let kept = lock_or_recover(&self.subtitles).clone();
+        let event_client = {
+            let mut engine = lock_or_recover(&self.inner);
+            kept.restore(&engine, false);
+            engine.loadfile(url, start_pos)?;
+            engine.set_current_url(url);
+            engine.create_event_client().ok()
+        };
+        self.spawn_reconnect_monitor(event_client, url, app);
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")))]
     fn load_impl<R: tauri::Runtime>(
         &self,
         url: &str,
@@ -652,6 +707,14 @@ impl MpvState {
         lock_or_recover(&self.inner).media_info()
     }
 
+    /// The URL loaded now and what mpv says about it, read together so they
+    /// belong to the same item. `None` when nothing is loaded.
+    pub fn playing(&self) -> Option<(String, MediaInfo)> {
+        let engine = lock_or_recover(&self.inner);
+        let url = engine.current_url()?.to_string();
+        Some((url, engine.media_info()))
+    }
+
     pub fn get_state(&self) -> PlayerState {
         let mut state = lock_or_recover(&self.inner).get_state();
         state.fallback_active = self.fallback_active.load(Ordering::Acquire);
@@ -662,7 +725,7 @@ impl MpvState {
 /// Replace the `hwdec` option with `no` when hardware decoding is disabled.
 /// Other options pass through unchanged.
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "linux", target_os = "ios")),
+    not(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android")),
     allow(dead_code)
 )]
 fn with_hwdec(
@@ -708,7 +771,7 @@ mod tests {
         assert_eq!(with_hwdec(opts.clone(), false), opts);
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "ios", target_os = "android"))]
     mod bounds {
         use crate::mpv::MpvState;
         use crate::test_support::{FakeRenderer, SharedLog};

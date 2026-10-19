@@ -6,8 +6,13 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ### Added
 
-- The project has a website at https://maxmb15.github.io/Cinette/. It shows what the app does and links each download of the latest release with its size (#288).
 - On iPhone and iPad, the player has an AirPlay button when an AirPlay TV is in reach. It sends the channel, movie or episode that's playing to the TV, which plays it straight from your provider, and a movie or episode carries on from where it was. Streams the TV can't play as they are, such as MKV files and most raw MPEG-TS channels, stay on the iPhone and Cinette says why (#323).
+
+## [0.8.0] - 2026-10-17
+
+### Added
+
+- The project has a website at https://maxmb15.github.io/Cinette/. It shows what the app does and links each download of the latest release with its size (#288).
 
 ### Changed
 
@@ -432,7 +437,8 @@ This version was not published. Its changes first shipped in 0.2.2.
 - Subtitle search through OpenSubtitles, with position and delay controls.
 - A banner that announces new versions.
 
-[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MaxMB15/Cinette/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MaxMB15/Cinette/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MaxMB15/Cinette/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/MaxMB15/Cinette/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MaxMB15/Cinette/compare/v0.5.3...v0.6.0

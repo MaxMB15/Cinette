@@ -6,6 +6,7 @@ import { act, renderHook } from "@testing-library/react";
 import type * as Bridge from "@/lib/tauri";
 import type { StreamFormat } from "@/lib/route";
 import type { AirPlayNativeState } from "@/lib/airplay";
+import { NOT_READY } from "@/lib/route-profiles";
 import { makeMovie } from "@/test/detail-fixtures";
 import { useAirPlay } from "./useAirPlay";
 
@@ -50,7 +51,6 @@ const tauri = vi.hoisted(() => ({
 	airplaySetDetection: vi.fn<typeof Bridge.airplaySetDetection>(async () => {}),
 	airplayStop: vi.fn<typeof Bridge.airplayStop>(async () => {}),
 	getStreamFormats: vi.fn<typeof Bridge.getStreamFormats>(),
-	mpvGetMediaInfo: vi.fn<typeof Bridge.mpvGetMediaInfo>(),
 }));
 
 vi.mock("@/lib/tauri", () => tauri);
@@ -58,7 +58,6 @@ vi.mock("@/lib/tauri", () => tauri);
 const tv = { id: "airplay:tv", name: "Living Room TV" };
 const anchor = new DOMRect(10, 20, 30, 40);
 const film = makeMovie({ id: "mv1", name: "A Film" });
-const info = { fileFormat: "mov", videoCodec: "h264", audioCodec: "aac", interlaced: false };
 
 /** Lets pending promises settle. */
 const flush = () =>
@@ -68,8 +67,12 @@ const flush = () =>
 
 beforeEach(() => {
 	events.handlers.clear();
-	tauri.getStreamFormats.mockResolvedValue({ formats: [mp4], sources: [2], duration: null });
-	tauri.mpvGetMediaInfo.mockResolvedValue(info);
+	tauri.getStreamFormats.mockResolvedValue({
+		formats: [mp4],
+		sources: [2],
+		duration: null,
+		generation: 5,
+	});
 });
 
 afterEach(() => {
@@ -167,10 +170,9 @@ describe("useAirPlay", () => {
 		await act(async () => {
 			expect(await sent).toEqual({ sent: true });
 		});
-		expect(tauri.mpvGetMediaInfo).toHaveBeenCalled();
-		expect(tauri.getStreamFormats).toHaveBeenCalledWith(film, info);
+		expect(tauri.getStreamFormats).toHaveBeenCalledWith(film);
 		expect(stopLocal).toHaveBeenCalled();
-		expect(tauri.airplayLoad).toHaveBeenCalledWith(film, 2, 600);
+		expect(tauri.airplayLoad).toHaveBeenCalledWith(film, 5, 2, 600);
 		expect(stopLocal.mock.invocationCallOrder[0]).toBeLessThan(
 			tauri.airplayLoad.mock.invocationCallOrder[0]
 		);
@@ -204,7 +206,7 @@ describe("useAirPlay", () => {
 			expect(await result.current.send(film, { anchor, stopLocal })).toEqual({ sent: true });
 		});
 		expect(tauri.airplayChoose).not.toHaveBeenCalled();
-		expect(tauri.airplayLoad).toHaveBeenCalledWith(film, 2, undefined);
+		expect(tauri.airplayLoad).toHaveBeenCalledWith(film, 5, 2, undefined);
 	});
 
 	it("ignores a route change to this device while the picker is up", async () => {
@@ -266,12 +268,37 @@ describe("useAirPlay", () => {
 		expect(events.count("airplay://picker-closed")).toBe(0);
 	});
 
+	it("waits half a second before asking again while mpv opens the item", async () => {
+		vi.useFakeTimers();
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.getStreamFormats.mockRejectedValueOnce(NOT_READY);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		let sent: Promise<unknown> = Promise.resolve();
+		act(() => {
+			sent = result.current.send(film, { anchor, stopLocal: async () => {} });
+		});
+		await flush();
+		expect(tauri.getStreamFormats).toHaveBeenCalledTimes(1);
+		act(() => vi.advanceTimersByTime(499));
+		await flush();
+		expect(tauri.getStreamFormats).toHaveBeenCalledTimes(1);
+		act(() => vi.advanceTimersByTime(1));
+		await flush();
+		// The check's second try, then the picked TV's own.
+		expect(tauri.getStreamFormats).toHaveBeenCalledTimes(3);
+		await act(async () => {
+			expect(await sent).toEqual({ sent: true });
+		});
+	});
+
 	it("keeps playing here when the TV can't take the stream", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		tauri.getStreamFormats.mockResolvedValue({
 			formats: [{ ...mp4, container: "mkv" }],
 			sources: [0],
 			duration: null,
+			generation: 0,
 		});
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
@@ -330,7 +357,12 @@ describe("useAirPlay", () => {
 });
 
 describe("useAirPlay's switching", () => {
-	const mkv = { formats: [{ ...mp4, container: "mkv" as const }], sources: [0], duration: null };
+	const mkv = {
+		formats: [{ ...mp4, container: "mkv" as const }],
+		sources: [0],
+		duration: null,
+		generation: 0,
+	};
 
 	it("checks the item before the picker, so a blocked one never moves the sound", async () => {
 		tauri.getStreamFormats.mockResolvedValue(mkv);
@@ -351,6 +383,7 @@ describe("useAirPlay's switching", () => {
 			formats: StreamFormat[];
 			sources: number[];
 			duration: null;
+			generation: number;
 		}) => void = () => {};
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		tauri.getStreamFormats.mockReturnValueOnce(new Promise((r) => (formats = r)));
@@ -359,7 +392,7 @@ describe("useAirPlay's switching", () => {
 		const stopLocal = vi.fn(async () => {});
 		const sent = result.current.send(film, { anchor, stopLocal });
 		unmount();
-		formats({ formats: [mp4], sources: [0], duration: null });
+		formats({ formats: [mp4], sources: [0], duration: null, generation: 0 });
 		expect(await sent).toEqual({ sent: false, why: "cancelled" });
 		expect(stopLocal).not.toHaveBeenCalled();
 		expect(tauri.airplayLoad).not.toHaveBeenCalled();
@@ -373,9 +406,10 @@ describe("useAirPlay's switching", () => {
 			formats: StreamFormat[];
 			sources: number[];
 			duration: null;
+			generation: number;
 		}) => void = () => {};
 		tauri.getStreamFormats
-			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null })
+			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null, generation: 0 })
 			.mockReturnValueOnce(new Promise((r) => (second = r)));
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
@@ -383,10 +417,13 @@ describe("useAirPlay's switching", () => {
 		const sent = result.current.send(film, { anchor, stopLocal });
 		await flush();
 		unmount();
-		second({ formats: [mp4], sources: [0], duration: null });
+		second({ formats: [mp4], sources: [0], duration: null, generation: 0 });
 		expect(await sent).toEqual({ sent: false, why: "cancelled" });
 		expect(stopLocal).not.toHaveBeenCalled();
 		expect(tauri.airplayLoad).not.toHaveBeenCalled();
+		// Neither destination still listens.
+		await flush();
+		expect(events.count("airplay://state")).toBe(0);
 	});
 
 	it("starts nothing when the page goes while this device stops", async () => {
@@ -410,13 +447,14 @@ describe("useAirPlay's switching", () => {
 			formats: StreamFormat[];
 			sources: number[];
 			duration: null;
+			generation: number;
 		}) => void = () => {};
 		tauri.getStreamFormats.mockReturnValueOnce(new Promise((r) => (formats = r)));
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
 		const sent = result.current.send(film, { anchor, stopLocal: async () => {} });
 		unmount();
-		formats({ formats: [mp4], sources: [0], duration: null });
+		formats({ formats: [mp4], sources: [0], duration: null, generation: 0 });
 		expect(await sent).toEqual({ sent: false, why: "cancelled" });
 		expect(tauri.airplayChoose).not.toHaveBeenCalled();
 	});
@@ -436,7 +474,7 @@ describe("useAirPlay's switching", () => {
 	it("blocks an item the receiver's own check turns down", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		tauri.getStreamFormats
-			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null })
+			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null, generation: 0 })
 			.mockResolvedValueOnce(mkv);
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();

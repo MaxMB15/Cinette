@@ -70,7 +70,8 @@ exclude_re = [
 gitignore = true
 
 # Mutation runs build on Linux, which never compiles the plugin's macOS and
-# iOS renderers. Their mutants would pass every test without being built.
+# iOS renderers or the Android code. Their mutants would pass every
+# test without being built.
 exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
@@ -78,6 +79,8 @@ exclude_globs = [
     # AirPlay's stand-in for other platforms. Every command checks ensure()
     # first, which fails, so nothing else in it ever runs.
     "crates/tauri-plugin-mpv/src/airplay/unavailable.rs",
+    "apps/player/src-tauri/src/android_tls.rs",
+    "crates/tauri-plugin-mpv/src/android.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
 ]
