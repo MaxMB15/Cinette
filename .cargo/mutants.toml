@@ -78,6 +78,8 @@ exclude_globs = [
     "apps/player/src-tauri/src/android_device.rs",
     "apps/player/src-tauri/src/android_tls.rs",
     "crates/tauri-plugin-mpv/src/android.rs",
+    # Bonjour discovery, likewise macOS only.
+    "apps/player/src-tauri/src/discovery/macos.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
 ]

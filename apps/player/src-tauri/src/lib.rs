@@ -6,6 +6,9 @@ mod android_device;
 #[cfg(target_os = "android")]
 mod android_tls;
 mod commands;
+/// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod discovery;
 mod downloads;
 #[cfg(desktop)]
 mod identifier;
