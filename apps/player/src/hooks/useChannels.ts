@@ -21,7 +21,7 @@ import {
 import { deriveCategories } from "@/lib/channels";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import { channelsQuery, providersQuery } from "@/lib/queries";
+import { channelsQuery, historyKey, providersQuery } from "@/lib/queries";
 import {
 	loadM3uPlaylist,
 	loadM3uFile as loadM3uFileApi,
@@ -197,9 +197,12 @@ export const useChannelsProvider = (): ChannelsContextValue => {
 	const refreshChannels = useCallback(
 		async (): Promise<void> => {
 			await reload<Channel[]>(channelsQuery().queryKey);
+			// A playlist refresh moves the watch history to the channels' new
+			// ids, so the history lists load again too.
+			void queryClient.invalidateQueries({ queryKey: historyKey() });
 		},
-		// Stryker disable next-line ArrayDeclaration: reload stays the same function while the provider is mounted, so an empty list gives the same callback.
-		[reload]
+		// Stryker disable next-line ArrayDeclaration: reload and the query client stay the same objects while the provider is mounted, so an empty list gives the same callback.
+		[reload, queryClient]
 	);
 
 	const refreshProviders = useCallback(

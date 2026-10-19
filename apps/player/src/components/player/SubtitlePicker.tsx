@@ -139,8 +139,12 @@ export const SubtitlePicker = ({
 			const delta = e.key === "ArrowRight" ? 0.1 : -0.1;
 			onDelayChange?.(Math.round((subtitleDelay + delta) * 10) / 10);
 		};
-		document.addEventListener("keydown", handleKey);
-		return () => document.removeEventListener("keydown", handleKey);
+		// The root element hears the key before the document, where the
+		// player's subtitle nudge listens, so stopping it here keeps the
+		// subtitles from moving as well.
+		const root = document.documentElement;
+		root.addEventListener("keydown", handleKey);
+		return () => root.removeEventListener("keydown", handleKey);
 	}, [delayHovered, subtitleDelay, onDelayChange]);
 
 	// ── Stop a hold the buttons never hear end ──────────────────────────────

@@ -85,7 +85,7 @@ import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
 import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
-import { isMobilePlatform } from "@/lib/platform";
+import { getPlatform, isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
@@ -215,6 +215,8 @@ export const PlayerView = () => {
 	// TV box has no touch screen, so it keeps the volume and shortcut
 	// controls for its remote.
 	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
+	// A TV is driven by its remote's D-pad.
+	const remote = getPlatform() === "tv";
 	const fullscreenButton = hasFullscreenButton(touchDevice, layoutMode);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
@@ -1118,8 +1120,13 @@ export const PlayerView = () => {
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
+			// The remote is a TV's only way to the controls, so any key shows
+			// them, and each one keeps them up while focus moves between them.
+			if (remote) revealControls();
+			// On a TV the D-pad moves between the controls once one has focus.
+			if (remote && isArrow && isKeyboardFocusedControl(e.target)) return;
 
-			const action = resolvePlayerHotkey(e, skip);
+			const action = resolvePlayerHotkey(e, skip, remote);
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
@@ -1127,6 +1134,12 @@ export const PlayerView = () => {
 			// still presses a button that has focus. Held down, it skips once.
 			if (action.type === "skipSegment") {
 				if (!e.repeat && skipSegment?.()) e.preventDefault();
+				// A remote's center button plays and pauses when there's nothing to skip.
+				else if (!e.repeat && remote) {
+					e.preventDefault();
+					if (mpv.state.isPaused || !mpv.state.isPlaying) playback.play();
+					else playback.pause();
+				}
 				return;
 			}
 			e.preventDefault();
@@ -1140,6 +1153,12 @@ export const PlayerView = () => {
 					} else {
 						playback.pause();
 					}
+					break;
+				case "play":
+					playback.play();
+					break;
+				case "pause":
+					playback.pause();
 					break;
 				case "toggleFullscreen":
 					toggleFullscreen();
@@ -1227,6 +1246,8 @@ export const PlayerView = () => {
 			skipBy,
 			seekTo,
 			skipSegment,
+			remote,
+			revealControls,
 		]
 	);
 
@@ -1417,6 +1438,8 @@ export const PlayerView = () => {
 					// or after it fails, and the spinner or the error has the middle
 					// to itself.
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
+					// Stryker disable next-line OptionalChaining: the bar only calls this while it's on the page, inside the container, so the ref is never null.
+					onHideWithFocus={remote ? () => containerRef.current?.focus() : undefined}
 					onVolumeChange={playback.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
