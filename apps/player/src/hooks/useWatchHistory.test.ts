@@ -124,7 +124,8 @@ describe("useWatchHistory", () => {
 	it("leaves the lists outside the history alone", async () => {
 		const client = createTestQueryClient();
 		const pinned = pinnedGroupsQuery("p1", "live").queryKey;
-		client.setQueryData(pinned, ["News"]);
+		const group = { providerId: "p1", contentType: "live", groupName: "News", sortOrder: 0 };
+		client.setQueryData(pinned, [group]);
 		const live = renderHook(() => useWatchHistory(50, "live", "failed:"), {
 			wrapper: wrapperFor(client),
 		});
@@ -132,7 +133,7 @@ describe("useWatchHistory", () => {
 
 		await act(async () => live.result.current.change(() => []));
 		expect(live.result.current.entries).toEqual([]);
-		expect(client.getQueryData(pinned)).toEqual(["News"]);
+		expect(client.getQueryData(pinned)).toEqual([group]);
 	});
 
 	it("loads the history again while the computer is offline", async () => {
