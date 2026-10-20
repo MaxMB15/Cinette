@@ -609,3 +609,12 @@ fn remembers_where_the_first_segment_started() {
     assert!(sink.cut(2.0, 63.5));
     assert_eq!(sink.first_start, Some(61.5));
 }
+
+#[test]
+fn keeps_the_memory_limits_it_says() {
+    // 200 MB in the window, 48 MB in one segment.
+    assert_eq!(WINDOW.bytes, 209_715_200);
+    assert_eq!(MAX_SEGMENT_BYTES, 50_331_648);
+    assert_eq!(WINDOW.segments, 15);
+    assert_eq!(WINDOW.seconds, 50.0);
+}
