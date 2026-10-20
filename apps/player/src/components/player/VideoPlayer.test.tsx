@@ -269,9 +269,14 @@ const fakeCast = vi.hoisted(() => {
 		check: vi.fn(),
 		release: vi.fn(),
 		destination: null,
+		current: () => current.destination,
 		state: null,
 		send: vi.fn<Cast["send"]>(async () => null),
-		stop: vi.fn<Cast["stop"]>(async () => {}),
+		// As the hook does, a stop ends the cast at once.
+		stop: vi.fn<Cast["stop"]>(async () => {
+			current = { ...current, destination: null, state: null };
+			listeners.forEach((listener) => listener());
+		}),
 		vpnActive: false,
 	});
 	let current = initial();
@@ -4262,5 +4267,101 @@ describe("Google Cast", () => {
 		fireEvent.pointerUp(slider);
 		await flush();
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	describe("changing what plays while it casts", () => {
+		const casting = (converted = false) => {
+			const destination = { ...tv(), converted: vi.fn(() => converted) };
+			act(() =>
+				fakeCast.set({
+					destination: destination as unknown as CastDestination,
+					state: castState(),
+				})
+			);
+			return destination;
+		};
+
+		it("sends the next episode to the receiver, from the panel or the keys", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			fakeMpv.actions.load.mockClear();
+			casting();
+			const send = vi.mocked(fakeCast.get().send);
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			expect(send).toHaveBeenCalledWith(
+				"cast:tv",
+				expect.objectContaining({ id: ep2.id }),
+				expect.objectContaining({ startAt: undefined })
+			);
+			// It asks before converting, since this cast doesn't yet.
+			expect(send.mock.calls[0][2].confirm).toBeDefined();
+			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+			// The player moves to the episode once it's going to the receiver.
+			expect(screen.queryByText("Show S01E02 Second")).toBeNull();
+			await act(() => send.mock.calls[0][2].stopLocal());
+			expect(screen.getByText("Show S01E02 Second")).toBeInTheDocument();
+			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+			await press("p");
+			expect(send).toHaveBeenLastCalledWith(
+				"cast:tv",
+				expect.objectContaining({ id: ep1.id }),
+				expect.anything()
+			);
+			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		});
+
+		it("doesn't ask again while this computer already converts", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting(true);
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			expect(vi.mocked(fakeCast.get().send).mock.calls[0][2].confirm).toBeUndefined();
+		});
+
+		it("asks before this computer starts converting, and a no keeps what plays", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			const send = vi.mocked(fakeCast.get().send);
+			const answers: boolean[] = [];
+			send.mockImplementation(async (_, __, opts) => {
+				answers.push(await opts.confirm!("on"));
+				return null;
+			});
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			const dialog = screen.getByRole("dialog", { name: "Play on Hotel TV?" });
+			expect(dialog.textContent).toContain("needs this computer to stay on");
+			fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+			await flush();
+			expect(answers).toEqual([false, true]);
+			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		it("says why the new item can't go to the receiver", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			vi.mocked(fakeCast.get().send).mockResolvedValueOnce("Can't play this format");
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			expect(screen.getByRole("alert").textContent).toBe("Can't play this format");
+		});
+
+		it("resumes a movie where it was left, on the receiver", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			vi.mocked(tauri.getPlaybackPosition).mockResolvedValue({
+				positionSeconds: 1200,
+				durationSeconds: 5400,
+			} as Awaited<ReturnType<typeof Bridge.getPlaybackPosition>>);
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: /Resume/ }));
+			await flush();
+			expect(vi.mocked(fakeCast.get().send).mock.calls[0][2].startAt).toBe(1200);
+		});
 	});
 });

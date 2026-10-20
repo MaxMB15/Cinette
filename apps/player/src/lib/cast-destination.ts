@@ -204,6 +204,8 @@ export interface CastDestination extends PlaybackDestination {
 	receive(update: CastUpdate): void;
 	/** Why the cast closed, once it has. */
 	closedReason(): CastSnapshot["closedReason"];
+	/** Whether this computer converts what the receiver plays now. */
+	converted(): boolean;
 }
 
 /** The backend's form of `route` for `formats`. */
@@ -411,5 +413,6 @@ export const createCastDestination = (
 		},
 		receive: (update) => publish(applyUpdate(snapshot, update, now())),
 		closedReason: () => snapshot.closedReason,
+		converted: () => snapshot.converted,
 	};
 };

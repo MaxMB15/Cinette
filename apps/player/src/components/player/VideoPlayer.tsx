@@ -32,6 +32,9 @@ import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { CastButton } from "@/components/player/CastButton";
 import { CastPanel } from "@/components/player/CastPanel";
 import { castControlMessage, showsCastButton } from "@/lib/cast";
+import { keepWarning } from "@/lib/device-picker";
+import { Dialog } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import type { PlaybackDestination } from "@/lib/destination";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { useLatestRef } from "@/hooks/useLatestRef";
@@ -454,14 +457,67 @@ export const PlayerView = () => {
 		recordPlayEnd(ch.id, Math.floor((Date.now() - startedAt) / 1000)).catch(() => {});
 	}, [activeChannelRef]);
 
+	// Why AirPlay or Cast stopped or didn't start, or a control failed.
+	const [notice, setNotice] = useState<string | null>(null);
+	useEffect(() => {
+		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+		return () => clearTimeout(timer);
+	}, [notice]);
+	// Google Cast from a computer.
+	const cast = useCast(platform === "macos" || platform === "linux", setNotice);
+	const castRef = useLatestRef(cast);
+	/** Asks before a cast switches to a route this computer converts. */
+	const [castConfirm, setCastConfirm] = useState<{
+		name: string;
+		keep: "on" | "onScreen";
+		answer: (ok: boolean) => void;
+	} | null>(null);
+	const confirmCast = useCallback(
+		(name: string, keep: "on" | "onScreen") =>
+			new Promise<boolean>((answer) => setCastConfirm({ name, keep, answer })),
+		[]
+	);
+
 	/**
 	 * Actually start playing `ch` (optionally from `startPos`), replacing
-	 * whatever is playing. Resolves once mpv has opened the stream, or at once
+	 * whatever is playing. While a Cast receiver plays, `ch` goes there
+	 * instead, by its own route for that receiver, after the confirm step
+	 * when this computer starts converting for it. Resolves once mpv has opened the stream, or at once
 	 * if another item replaced this one first, and rejects if mpv couldn't
 	 * open it. The player shows that error itself, so callers can ignore it.
 	 */
 	const commitPlayback = useCallback(
 		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
+			const casting = castRef.current.current();
+			if (casting) {
+				const startAt = ch.contentType === "live" ? undefined : startPos;
+				return castRef.current
+					.send(casting.id, ch, {
+						startAt,
+						confirm: casting.converted()
+							? undefined
+							: (keep) => confirmCast(casting.name, keep),
+						// Nothing plays here, so this only moves the player to the
+						// new item once it's going to the receiver.
+						stopLocal: async () => {
+							recordEnd();
+							playStartTimeRef.current = Date.now();
+							recordPlayStart(
+								ch.id,
+								ch.name,
+								ch.logoUrl ?? null,
+								ch.contentType
+							).catch(() => {});
+							progressRef.current = progressFor(ch, startAt);
+							setActiveChannelName(ch.name);
+							setActiveChannel(ch);
+							apply?.();
+						},
+					})
+					.then((why) => {
+						if (why) setNotice(why);
+					});
+			}
 			recordEnd();
 			playStartTimeRef.current = Date.now();
 			recordPlayStart(ch.id, ch.name, ch.logoUrl ?? null, ch.contentType).catch(() => {});
@@ -492,7 +548,7 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
-		[mpv, rememberLoadedUrl, recordEnd]
+		[mpv, rememberLoadedUrl, recordEnd, castRef, confirmCast]
 	);
 
 	/**
@@ -514,14 +570,6 @@ export const PlayerView = () => {
 	// AirPlay video on iOS, with its own panel until the device picker
 	// takes over.
 	const airplay = useAirPlay(platform === "ios");
-	// Why AirPlay or Cast stopped or didn't start, or a control failed.
-	const [notice, setNotice] = useState<string | null>(null);
-	useEffect(() => {
-		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
-		return () => clearTimeout(timer);
-	}, [notice]);
-	// Google Cast from a computer.
-	const cast = useCast(platform === "macos" || platform === "linux", setNotice);
 	// The receiver the player's controls drive instead of mpv, while one plays.
 	const tv: PlaybackDestination | null = airplay.destination ?? cast.destination;
 	const tvRef = useLatestRef(tv);
@@ -1192,9 +1240,12 @@ export const PlayerView = () => {
 			e.preventDefault();
 			if (e.repeat && !repeatsWhenHeld(action)) return;
 
-			// While the TV plays, the keys drive it, and nothing starts here.
+			// While the TV plays, the keys drive it, and nothing starts here. A
+			// Cast receiver also takes the next or previous episode, which
+			// goes there.
 			const tv = tvRef.current;
-			if (tv) {
+			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
+			if (tv && !(tv.kind === "cast" && episode)) {
 				const key = airplayKey(action, tv.getState(), tv.capabilities);
 				if (key.kind === "play") void tv.play();
 				if (key.kind === "pause") void tv.pause();
@@ -1426,6 +1477,8 @@ export const PlayerView = () => {
 				onPause={() => void castTv.pause().catch(castControlFailed)}
 				onSeek={(position) => void castTv.seek(position).catch(castControlFailed)}
 				onVolume={(volume) => void castTv.setVolume(volume).catch(castControlFailed)}
+				onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
+				onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
 				onPlayHere={async (position) => {
 					flushProgress();
 					// The receiver lets go of the stream before mpv opens it, since
@@ -1606,6 +1659,51 @@ export const PlayerView = () => {
 
 			{airplayPanel}
 			{castPanel}
+			{castConfirm && (
+				<Dialog
+					onClose={() => {
+						castConfirm.answer(false);
+						setCastConfirm(null);
+					}}
+					labelledBy="cast-confirm-title"
+					// Above the Cast panel and the notes, inside the player.
+					overlayClassName="z-50"
+					className="bg-card border border-border rounded-lg p-4 w-[360px] max-w-[calc(100vw-2rem)] shadow-xl"
+				>
+					<h2 id="cast-confirm-title" className="text-sm font-semibold mb-3">
+						Play on <bdi>{castConfirm.name}</bdi>?
+					</h2>
+					<p className="text-xs text-muted-foreground mb-4">
+						{keepWarning({
+							id: "cast",
+							kind: "cast",
+							name: castConfirm.name,
+							status: { via: "converted", keep: castConfirm.keep },
+						})}
+					</p>
+					<div className="flex justify-end gap-2">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => {
+								castConfirm.answer(false);
+								setCastConfirm(null);
+							}}
+						>
+							Cancel
+						</Button>
+						<Button
+							size="sm"
+							onClick={() => {
+								castConfirm.answer(true);
+								setCastConfirm(null);
+							}}
+						>
+							Confirm
+						</Button>
+					</div>
+				</Dialog>
+			)}
 			{notice && (
 				<p
 					role="alert"

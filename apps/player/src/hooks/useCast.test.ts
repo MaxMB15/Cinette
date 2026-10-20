@@ -240,6 +240,81 @@ describe("useCast", () => {
 		expect(result.current.state?.status).toBe("playing");
 	});
 
+	it("asks before this computer converts, and a no casts nothing", async () => {
+		tauri.getStreamFormats.mockResolvedValue({
+			formats: [ac3],
+			sources: [0],
+			duration: 5400,
+			generation: 5,
+		});
+		const { result } = await render();
+		const confirm = vi.fn(async () => false);
+		let why: string | null = "";
+		await act(async () => {
+			why = await result.current.send("cast:tv", film, { stopLocal, confirm });
+		});
+		expect(why).toBeNull();
+		expect(confirm).toHaveBeenCalledWith("on");
+		expect(stopLocal).not.toHaveBeenCalled();
+		expect(tauri.castLoad).not.toHaveBeenCalled();
+		expect(result.current.destination).toBeNull();
+		confirm.mockResolvedValueOnce(true);
+		await act(async () => {
+			await result.current.send("cast:tv", film, { stopLocal, confirm });
+		});
+		expect(stopLocal).toHaveBeenCalled();
+		expect(tauri.castLoad).toHaveBeenCalled();
+		expect(result.current.current()?.id).toBe("cast:tv");
+		// A direct route doesn't ask.
+		tauri.getStreamFormats.mockResolvedValue({
+			formats: [mp4],
+			sources: [0],
+			duration: 5400,
+			generation: 6,
+		});
+		const other = makeMovie({ id: "mv2", name: "Another" });
+		confirm.mockClear();
+		await act(async () => {
+			await result.current.send("cast:tv", other, { stopLocal, confirm });
+		});
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("keeps the routes the picker showed for the item it showed them for", async () => {
+		const { result } = await render();
+		act(() => result.current.check(film));
+		await flush();
+		const other = makeMovie({ id: "mv2", name: "Another" });
+		tauri.getStreamFormats.mockResolvedValue({
+			formats: [{ ...mp4, container: "other" }],
+			sources: [0],
+			duration: null,
+			generation: 6,
+		});
+		tauri.getConverterSupport.mockResolvedValue({ convert: false, hardwareEncoder: false });
+		let why: string | null = null;
+		await act(async () => {
+			why = await result.current.send("cast:tv", other, { stopLocal });
+		});
+		// The film's direct route isn't taken for another item.
+		expect(why).toBe("Can't play this format (other)");
+	});
+
+	it("knows at once when the cast stops", async () => {
+		const { result } = await render();
+		await act(async () => {
+			await result.current.send("cast:tv", film, { stopLocal });
+		});
+		expect(result.current.current()?.id).toBe("cast:tv");
+		let during: unknown = "unset";
+		await act(async () => {
+			const stopping = result.current.stop();
+			during = result.current.current();
+			await stopping;
+		});
+		expect(during).toBeNull();
+	});
+
 	it("works out the route at cast time when the picker didn't", async () => {
 		const { result } = await render();
 		await act(async () => {

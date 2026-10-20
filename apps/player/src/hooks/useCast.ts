@@ -47,6 +47,9 @@ const noState = () => () => {};
 const getNull = () => null;
 const NO_RECEIVERS: CastReceiver[] = [];
 
+/** The key of a route the picker showed. */
+const routeKey = (receiverId: string, channel: Channel) => `${receiverId}\n${channel.id}`;
+
 export interface Cast {
 	/** The receivers found, those that went away while held included. */
 	receivers: CastReceiver[];
@@ -64,17 +67,26 @@ export interface Cast {
 	release: () => void;
 	/** The receiver the player's controls drive, while casting. */
 	destination: CastDestination | null;
+	/** The same, as of now rather than the last render: a stop or a lost
+	 *  cast clears it at once. */
+	current: () => CastDestination | null;
 	/** Its state, or `null` while nothing is cast. */
 	state: PlaybackState | null;
 	/**
-	 * Casts `channel` to `receiverId` from `startAt`. `stopLocal` stops this
-	 * device's player first, since many accounts allow one connection at a
-	 * time. Resolves to why it couldn't, or `null`.
+	 * Casts `channel` to `receiverId` from `startAt`, by the route the picker
+	 * showed for it, or one worked out now. When this computer would convert
+	 * it, `confirm` asks first, and a no casts nothing. `stopLocal` then
+	 * stops this device's player, since many accounts allow one connection
+	 * at a time. Resolves to why it couldn't, or `null`.
 	 */
 	send: (
 		receiverId: string,
 		channel: Channel,
-		opts: { startAt?: number; stopLocal: () => Promise<void> }
+		opts: {
+			startAt?: number;
+			stopLocal: () => Promise<void>;
+			confirm?: (keep: "on" | "onScreen") => Promise<boolean>;
+		}
 	) => Promise<string | null>;
 	/** Ends the cast. */
 	stop: () => Promise<void>;
@@ -95,6 +107,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 	// receiver could fetch itself, so it never gets the provider's link.
 	const throughRef = useLatestRef(usePlayerPref(readStreamThrough, STREAM_THROUGH_EVENT));
 	const destinations = useRef(new Map<string, CastDestination>());
+	/** The routes the picker showed, by receiver and channel. */
 	const decisions = useRef(new Map<string, RouteDecision>());
 	const active = useRef<CastDestination | null>(null);
 	const checking = useRef(0);
@@ -175,7 +188,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					.catch((): RouteDecision => ({ ok: false, reason: "unreachable" }))
 					.then((decision) => {
 						if (run !== checking.current) return;
-						decisions.current.set(receiver.id, decision);
+						decisions.current.set(routeKey(receiver.id, channel), decision);
 						setStatuses((old) => new Map(old).set(receiver.id, castStatus(decision)));
 					});
 			}
@@ -214,11 +227,14 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			const target = destinationFor(receiver);
 			const item = { kind: "local" as const, channel };
 			const decision =
-				decisions.current.get(receiverId) ??
+				decisions.current.get(routeKey(receiverId, channel)) ??
 				(await target
 					.route(item)
 					.catch((): RouteDecision => ({ ok: false, reason: "unreachable" })));
 			if (!decision.ok) return blockerText(decision.reason, decision.detail);
+			const { route } = decision;
+			if (route.via === "converted" && opts.confirm && !(await opts.confirm(route.keep)))
+				return null;
 			await opts.stopLocal();
 			const old = active.current;
 			if (old && old !== target) void old.stop().catch(() => {});
@@ -226,7 +242,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			setDestination(target);
 			// On the promise, since the React Compiler can't compile a
 			// condition inside `catch`.
-			return target.load(item, { startAt: opts.startAt, route: decision.route }).then(
+			return target.load(item, { startAt: opts.startAt, route }).then(
 				() => null,
 				(e: unknown) => {
 					if (active.current === target) {
@@ -256,6 +272,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		check,
 		release,
 		destination,
+		current: useCallback(() => active.current, []),
 		state: destination ? state : null,
 		send,
 		stop,

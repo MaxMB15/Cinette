@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { Cast, Pause, Play } from "lucide-react";
+import { Cast, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { PlaybackCapabilities, PlaybackState } from "@/lib/destination";
@@ -17,6 +17,9 @@ interface CastPanelProps {
 	onSeek: (position: number) => void;
 	/** 0 to 100. */
 	onVolume: (volume: number) => void;
+	/** Casts the episode before or after this one, when there is one. */
+	onPrevEpisode?: () => void;
+	onNextEpisode?: () => void;
 	/** Ends the cast and plays here, from `position` for a movie or episode. */
 	onPlayHere: (position: number) => void;
 	/** Ends the cast and leaves the player. */
@@ -52,6 +55,8 @@ export const CastPanel = ({
 	onPause,
 	onSeek,
 	onVolume,
+	onPrevEpisode,
+	onNextEpisode,
 	onPlayHere,
 	onStop,
 }: CastPanelProps) => {
@@ -95,17 +100,45 @@ export const CastPanel = ({
 
 			{!over && (
 				<div className="flex w-full max-w-md flex-col items-center gap-3">
-					{capabilities.pause && (
-						<Button
-							variant="ghost"
-							size="icon"
-							className="h-12 w-12 text-white hover:bg-white/20"
-							onClick={playing ? onPause : onPlay}
-							aria-label={playing ? "Pause" : "Play"}
-						>
-							{playing ? <Pause className="h-7 w-7" /> : <Play className="h-7 w-7" />}
-						</Button>
-					)}
+					<div className="flex items-center gap-2">
+						{onPrevEpisode && (
+							<Button
+								variant="ghost"
+								size="icon"
+								className="text-white hover:bg-white/20"
+								onClick={onPrevEpisode}
+								aria-label="Previous episode"
+							>
+								<SkipBack className="h-5 w-5" />
+							</Button>
+						)}
+						{capabilities.pause && (
+							<Button
+								variant="ghost"
+								size="icon"
+								className="h-12 w-12 text-white hover:bg-white/20"
+								onClick={playing ? onPause : onPlay}
+								aria-label={playing ? "Pause" : "Play"}
+							>
+								{playing ? (
+									<Pause className="h-7 w-7" />
+								) : (
+									<Play className="h-7 w-7" />
+								)}
+							</Button>
+						)}
+						{onNextEpisode && (
+							<Button
+								variant="ghost"
+								size="icon"
+								className="text-white hover:bg-white/20"
+								onClick={onNextEpisode}
+								aria-label="Next episode"
+							>
+								<SkipForward className="h-5 w-5" />
+							</Button>
+						)}
+					</div>
 					{capabilities.seek && state.duration > 0 && (
 						<label className="flex w-full items-center gap-2 text-xs text-white/70">
 							<span>{formatTime(position)}</span>
