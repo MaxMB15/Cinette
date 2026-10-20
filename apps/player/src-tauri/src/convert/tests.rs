@@ -64,8 +64,7 @@ async fn serves_live_matroska_from_this_computers_address() {
     assert!(conversion.url.starts_with(&conversion.server.base));
     assert_eq!(*conversion.stalls.borrow(), 0);
 
-    let client = test_server::client();
-    let mut response = client.get(&conversion.url).send().await.unwrap();
+    let mut response = get(&conversion.url).await;
     assert_eq!(response.status(), 200);
     let headers = response.headers();
     assert_eq!(headers["content-type"], "video/x-matroska");
@@ -79,7 +78,7 @@ async fn serves_live_matroska_from_this_computers_address() {
 
     // A second request, as a receiver makes after a first look, gets the
     // header too, then starts at a cluster.
-    let mut again = client.get(&conversion.url).send().await.unwrap();
+    let mut again = get(&conversion.url).await;
     let pieces = header_and_a_cluster(&mut again).await;
     assert_eq!(pieces[0], Piece::Header(header.clone()));
     assert!(matches!(&pieces[1], Piece::Element { start: true, .. }));
@@ -479,28 +478,42 @@ fn live_wav(end: End) -> String {
     )
 }
 
-/// Reads a response until it has given the header and a whole cluster.
+/// Asks for `url`, waiting up to 10 s for the head of the answer.
+async fn get(url: &str) -> reqwest::Response {
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        test_server::client().get(url).send(),
+    )
+    .await
+    .expect("an answer within 10 s")
+    .unwrap()
+}
+
+/// Reads a response until it has given the header and a whole cluster,
+/// for up to 20 s.
 async fn header_and_a_cluster(response: &mut reqwest::Response) -> Vec<Piece> {
     let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
     let mut pieces = Vec::new();
-    while !pieces
-        .iter()
-        .any(|p| matches!(p, Piece::Element { start: true, .. }))
-    {
-        let chunk = tokio::time::timeout(Duration::from_secs(20), response.chunk())
-            .await
-            .expect("a cluster within 20 s")
-            .unwrap()
-            .expect("more of the stream");
-        pieces.extend(splitter.push(&chunk).unwrap());
-    }
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !pieces
+            .iter()
+            .any(|p| matches!(p, Piece::Element { start: true, .. }))
+        {
+            let chunk = response.chunk().await.unwrap().expect("more of the stream");
+            pieces.extend(splitter.push(&chunk).unwrap());
+        }
+    })
+    .await
+    .expect("a cluster within 20 s");
     pieces
 }
 
 #[tokio::test]
 async fn dropping_a_conversion_ends_its_ffmpeg() {
     let app = TestApp::new();
-    let conversion = start_copy(&app, &live_wav(End::Pause), LOOPBACK)
+    // A source that keeps sending. One that pauses holds ffmpeg's header
+    // back until its read times out, and then ffmpeg ends on its own.
+    let conversion = start_copy(&app, &live_wav(End::Never), LOOPBACK)
         .await
         .unwrap();
     let pid = conversion.pid.unwrap();
@@ -526,17 +539,18 @@ fn ffmpeg_runs_for(url: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Reads a response to its end, or until `limit` bytes.
-async fn read_to_end(response: &mut reqwest::Response, limit: usize) -> Vec<u8> {
+/// Reads a response to its end, for up to 30 s. It fails past 1 MiB,
+/// more than any source here converts to.
+async fn read_to_end(response: &mut reqwest::Response) -> Vec<u8> {
     let mut body = Vec::new();
-    while body.len() < limit {
-        let chunk = tokio::time::timeout(Duration::from_secs(30), response.chunk())
-            .await
-            .expect("more of the stream within 30 s")
-            .unwrap();
-        let Some(chunk) = chunk else { break };
-        body.extend_from_slice(&chunk);
-    }
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(chunk) = response.chunk().await.unwrap() {
+            body.extend_from_slice(&chunk);
+            assert!(body.len() <= 1 << 20, "a response of over 1 MiB");
+        }
+    })
+    .await
+    .expect("the stream within 30 s");
     body
 }
 
@@ -560,12 +574,8 @@ async fn a_file_is_read_at_its_own_pace_after_a_burst() {
     let source = file_source(wav(14));
     let started = std::time::Instant::now();
     let mut conversion = start_copy(&app, &source, LOOPBACK).await.unwrap();
-    let mut response = test_server::client()
-        .get(&conversion.url)
-        .send()
-        .await
-        .unwrap();
-    let body = read_to_end(&mut response, usize::MAX).await;
+    let mut response = get(&conversion.url).await;
+    let body = read_to_end(&mut response).await;
     assert_eq!(ended(&mut conversion).await, Ended::Finished);
     assert!(
         started.elapsed() >= Duration::from_secs(3),
@@ -654,11 +664,7 @@ async fn the_first_request_starts_at_the_start() {
         .unwrap();
     // ffmpeg bursts through the file before the receiver asks.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let mut response = test_server::client()
-        .get(&conversion.url)
-        .send()
-        .await
-        .unwrap();
+    let mut response = get(&conversion.url).await;
     let pieces = header_and_a_cluster(&mut response).await;
     let Piece::Element { bytes, .. } = &pieces[1] else {
         panic!("a cluster follows the header");
@@ -671,8 +677,8 @@ async fn starts_a_file_partway_through() {
     let app = TestApp::new();
     let source = file_source(wav(8));
     let whole = start_copy(&app, &source, LOOPBACK).await.unwrap();
-    let mut response = test_server::client().get(&whole.url).send().await.unwrap();
-    let whole = read_to_end(&mut response, usize::MAX).await;
+    let mut response = get(&whole.url).await;
+    let whole = read_to_end(&mut response).await;
     let plan = Plan {
         start_at: Some(6.0),
         ..copy_audio()
@@ -680,8 +686,8 @@ async fn starts_a_file_partway_through() {
     let mut later = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
         .await
         .unwrap();
-    let mut response = test_server::client().get(&later.url).send().await.unwrap();
-    let rest = read_to_end(&mut response, usize::MAX).await;
+    let mut response = get(&later.url).await;
+    let rest = read_to_end(&mut response).await;
     assert_eq!(ended(&mut later).await, Ended::Finished);
     // Two seconds of the eight.
     assert!(
@@ -828,27 +834,26 @@ async fn a_late_request_with_video_starts_at_a_keyframe() {
     let conversion = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
         .await
         .unwrap();
-    let client = test_server::client();
     // Read until a cluster that starts between keyframes has gone by.
-    let mut first = client.get(&conversion.url).send().await.unwrap();
+    let mut first = get(&conversion.url).await;
     let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
     let mut between = false;
-    while !between {
-        let chunk = tokio::time::timeout(Duration::from_secs(20), first.chunk())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        for piece in splitter.push(&chunk).unwrap() {
-            if let Piece::Element { bytes, start } = piece {
-                let key = cluster_start(&bytes).1;
-                assert_eq!(start, key == Some(true));
-                between |= key == Some(false);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !between {
+            let chunk = first.chunk().await.unwrap().unwrap();
+            for piece in splitter.push(&chunk).unwrap() {
+                if let Piece::Element { bytes, start } = piece {
+                    let key = cluster_start(&bytes).1;
+                    assert_eq!(start, key == Some(true));
+                    between |= key == Some(false);
+                }
             }
         }
-    }
+    })
+    .await
+    .expect("a cluster between keyframes within 20 s");
     drop(first);
-    let mut again = client.get(&conversion.url).send().await.unwrap();
+    let mut again = get(&conversion.url).await;
     let pieces = header_and_a_cluster(&mut again).await;
     let Piece::Element { bytes, .. } = &pieces[1] else {
         panic!("a cluster follows the header");
