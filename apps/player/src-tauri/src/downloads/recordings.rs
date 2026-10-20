@@ -1032,8 +1032,8 @@ fn modified_at(path: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::downloads::test_support::{
-        self, add_channel, missing_url, process_runs, stalls, video_url, wait_until, DownloadEvent,
-        Events,
+        self, add_channel, missing_url, process_runs, stalls, video_url, wait_until, wait_within,
+        DownloadEvent, Events,
     };
     use crate::test_support::{poison, TestApp};
     use chrono::NaiveDate;
@@ -1715,10 +1715,14 @@ mod tests {
     }
 
     /// Waits for the app to send a record of recording `id` that's no longer
-    /// recording, and returns it.
+    /// recording, and returns it. ffmpeg ends a few hundredths of a second
+    /// after these tests start or kill it. A recording that never started
+    /// never settles, and the test fails after five seconds, well before
+    /// cargo-mutants gives up on the run.
+    #[track_caller]
     fn settled(events: &Events, id: &str) -> DownloadRecord {
         let mut found = None;
-        wait_until("the recording settles", || {
+        wait_within(Duration::from_secs(5), "the recording settles", || {
             found = events
                 .progress(id)
                 .into_iter()
@@ -1881,6 +1885,13 @@ mod tests {
         };
         let started = Instant::now();
         run_check(&handle);
+        // The check claimed the recording before it waited, and found it
+        // stopped after. A check that never claimed it leaves it scheduled
+        // and the stopper waiting, so this comes before the join.
+        assert!(
+            test_support::download(&app, &rec.id).is_none(),
+            "the check didn't delete the stopped recording"
+        );
         stopper.join().unwrap();
 
         // The download went back in the queue, and the recording waited for
@@ -1890,7 +1901,6 @@ mod tests {
             .iter()
             .any(|r| r.status == DownloadStatus::Queued));
         assert!(started.elapsed() >= HANDOVER_PAUSE);
-        assert!(test_support::download(&app, &rec.id).is_none());
         assert!(events
             .sent()
             .contains(&DownloadEvent::Removed(rec.id.clone())));
