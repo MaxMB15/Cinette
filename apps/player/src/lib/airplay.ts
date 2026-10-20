@@ -145,6 +145,8 @@ export const airplayBlockedMessage = ({ reason, detail }: Blocked): string => {
 			return `AirPlay can't play ${what}.`;
 		case "interlaced":
 			return "AirPlay can't play interlaced video.";
+		case "hdr":
+			return "AirPlay can't play this HDR stream as it is, and Cinette doesn't convert HDR.";
 		case "audioOnly":
 			return "AirPlay TVs don't play streams without video.";
 		default:

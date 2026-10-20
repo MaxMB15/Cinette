@@ -492,6 +492,19 @@ describe("createAirPlayDestination", () => {
 		expect(bridge.endConversion).not.toHaveBeenCalled();
 	});
 
+	it("won't convert HDR the TV can't play, and says why", async () => {
+		const { bridge } = fakeBridge([{ ...mp4, container: "mkv", video: "hevc", hdr: true }]);
+		// Only a device that transcodes video gets this far with HEVC.
+		const transcoder = airplaySender({ convert: true, hardwareEncoder: true });
+		const d = createAirPlayDestination(receiver, bridge, transcoder);
+		const decision = await d.route({ kind: "local", channel: channel() });
+		expect(decision).toEqual({ ok: false, reason: "hdr" });
+		if (decision.ok) throw new Error("routed");
+		expect(airplayBlockedMessage(decision)).toBe(
+			"AirPlay can't play this HDR stream as it is, and Cinette doesn't convert HDR."
+		);
+	});
+
 	it("tells subscribers about a route's capabilities with the state that brings them", async () => {
 		const { bridge } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
 		const d = createAirPlayDestination(receiver, bridge, converter);
@@ -661,6 +674,11 @@ describe("airplayBlockedMessage", () => {
 			["videoCodec", undefined, "AirPlay can't play this stream."],
 			["interlaced", undefined, "AirPlay can't play interlaced video."],
 			["audioOnly", undefined, "AirPlay TVs don't play streams without video."],
+			[
+				"hdr",
+				undefined,
+				"AirPlay can't play this HDR stream as it is, and Cinette doesn't convert HDR.",
+			],
 			["unreachable", undefined, "Couldn't check the stream for AirPlay."],
 			["cors", undefined, "Couldn't check the stream for AirPlay."],
 		] as const;
