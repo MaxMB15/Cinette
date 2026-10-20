@@ -6,7 +6,8 @@
 //! sidecar lacks.
 
 use super::support::{
-    choose, decoded_codecs, read_encoders, read_names, run, run_within, test_encode_args, Listed,
+    choose, decoded_codecs, encoder_works, read_encoders, read_names, run, run_within,
+    test_encode_args, Finished, Listed, Unfinished,
 };
 use super::*;
 use crate::downloads::test_support::{missing_url, process_runs, video_url};
@@ -853,4 +854,11 @@ async fn a_late_request_with_video_starts_at_a_keyframe() {
         panic!("a cluster follows the header");
     };
     assert_eq!(cluster_start(bytes).1, Some(true));
+}
+
+#[test]
+fn a_hung_encoder_test_counts_as_no_encoder_this_time() {
+    assert_eq!(encoder_works(Ok(Some(vec![]))), (true, Finished(true)));
+    assert_eq!(encoder_works(Ok(None)), (false, Finished(true)));
+    assert_eq!(encoder_works(Err(Unfinished)), (false, Finished(false)));
 }

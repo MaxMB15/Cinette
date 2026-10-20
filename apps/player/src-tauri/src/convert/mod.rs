@@ -75,7 +75,11 @@ impl From<NoEncoder> for ConvertError {
 /// How a conversion ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ended {
-    /// ffmpeg reached the end of a file.
+    /// ffmpeg reached the end of a file. Up to [`LIVE_BYTES`] may still
+    /// be on their way to the receiver, so the conversion has to stay
+    /// until the receiver says it finished playing.
+    ///
+    /// [`LIVE_BYTES`]: crate::lan_server::LIVE_BYTES
     Finished,
     /// A live channel's connection ended. It has no end of its own, so
     /// it can be started again.
