@@ -259,7 +259,8 @@ export const createCinetteDestination = (
 			);
 			// The other device's state can come before its answer does. Once
 			// one as new as the answer is here, it says more than this would.
-			if (typeof version === "number" && seen >= version) return;
+			// An answer without a version is NaN here, which is never older.
+			if (Number(version) <= seen) return;
 			// It's opening there now. Until that device's next state says
 			// more, this one names the new item, so a command right after
 			// names it too. The tracks were the old item's.

@@ -331,6 +331,13 @@ describe("createCinetteDestination", () => {
 		expect(d.getState()).toMatchObject({ status: "opening", item: { ref: "movie-2" } });
 	});
 
+	it("shows the item opening when no state came before the answer", async () => {
+		const send = vi.fn(() => Promise.resolve<unknown>(0));
+		const d = createCinetteDestination("dev1", "TV", send);
+		await d.load({ kind: "remote", itemId: "movie-2", title: "Film" });
+		expect(d.getState()).toMatchObject({ status: "opening", item: { ref: "movie-2" } });
+	});
+
 	it("leaves the state as it was when a load is refused", async () => {
 		const send = vi.fn(() => Promise.reject("not_found"));
 		const d = createCinetteDestination("dev1", "TV", send);
