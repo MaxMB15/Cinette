@@ -29,7 +29,9 @@ use tokio::sync::{oneshot, watch};
 use crate::lan_server::{Files, LanServer, Peers};
 use crate::streams::REFUSED;
 
-#[cfg(test)]
+// They write their media with `hls_remux::test_media`, which only the
+// Linux tests have.
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 /// How long each segment is at least. Segments end at keyframes, so they

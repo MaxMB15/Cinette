@@ -19,7 +19,9 @@ use std::panic::{self, AssertUnwindSafe};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-#[cfg(test)]
+// The tests run where build.rs builds the C, on Linux, and write their
+// media with `test_media`, which only Linux has.
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 #[cfg(all(target_os = "linux", any(test, feature = "test-media")))]
