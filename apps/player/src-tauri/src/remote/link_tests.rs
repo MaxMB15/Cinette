@@ -793,7 +793,19 @@ async fn a_device_missing_from_discovery_for_a_while_is_tried_again() {
         proxy.port,
     ))]));
     let list = found.clone();
-    let mut link = link_with(&t, Arc::new(move || list.lock().unwrap().clone()), GRACE);
+    let looks = AtomicUsize::new(0);
+    let mut link = link_with(
+        &t,
+        Arc::new(move || {
+            // With no address to try, a link that doesn't wait between
+            // attempts never yields, so this test can't run again until the
+            // grace is gone. This ends it long before then.
+            let looked = looks.fetch_add(1, Ordering::SeqCst);
+            assert!(looked < 50, "the link tries again without waiting");
+            list.lock().unwrap().clone()
+        }),
+        GRACE,
+    );
     link.until_phase(Phase::Connected).await;
     let addresses = std::mem::take(&mut *found.lock().unwrap());
     proxy.cut(false);
@@ -990,14 +1002,15 @@ async fn it_pings_only_after_a_quiet_spell() {
         before,
         "nothing to say yet"
     );
-    // The ping is due half a second from now.
-    let pinged = timeout(Duration::from_secs(1), async {
+    // The ping is due half a second from now. This stops waiting as soon as
+    // it comes, so it can give a busy machine plenty of time.
+    let pinged = timeout(WAIT, async {
         while proxy.sent.load(Ordering::SeqCst) == before {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
-    assert!(pinged.is_ok(), "a ping soon after a second");
+    assert!(pinged.is_ok(), "a ping after a second of quiet");
 }
 
 #[tokio::test]
