@@ -31,7 +31,8 @@ use crate::streams::REFUSED;
 
 // They write their media with `hls_remux::test_media`, which only the
 // Linux tests have.
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests;
 
 /// How long each segment is at least. Segments end at keyframes, so they
