@@ -198,6 +198,11 @@ afterEach(() => {
 });
 
 describe("Settings when it opens", () => {
+	it("has the remote control card", async () => {
+		await renderSettings();
+		expect(screen.getByRole("region", { name: "Remote control settings" })).toBeInTheDocument();
+	});
+
 	it("fills in the saved keys, download folder, download count and version", async () => {
 		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 		vi.mocked(getOpenSubtitlesApiKey).mockResolvedValue("subs-test-key");

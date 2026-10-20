@@ -317,9 +317,18 @@ export const RemoteControlSettings = () => {
 					setError(null);
 					setDone(null);
 					remoteResetIdentity()
-						.then((running) => {
-							confirmedRef.current = running;
-							setForm((now) => ({ settings: running, name: now!.name }));
+						.then(({ deviceId, defaultName }) => {
+							// A reset changes only who this device is. A save
+							// still on its way says what it runs.
+							confirmedRef.current = {
+								...confirmedRef.current!,
+								deviceId,
+								defaultName,
+							};
+							setForm((now) => ({
+								settings: { ...now!.settings, deviceId, defaultName },
+								name: now!.name,
+							}));
 							setDone(RESET_DONE);
 						})
 						.catch(() => setError(RESET_FAILED));

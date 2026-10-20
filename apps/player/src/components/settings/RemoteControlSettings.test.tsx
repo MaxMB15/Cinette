@@ -302,6 +302,57 @@ describe("RemoteControlSettings", () => {
 		).toHaveAttribute("aria-pressed", "false");
 	});
 
+	it("builds a save queued behind one that failed on what the device runs then", async () => {
+		let failFirst: (e: unknown) => void = () => {};
+		vi.mocked(remoteSetSettings).mockImplementationOnce(
+			() => new Promise((_, reject) => (failFirst = reject))
+		);
+		await shown();
+		// The device runs Never allow though it couldn't save it.
+		vi.mocked(remoteGetSettings).mockResolvedValue({ ...defaults, remoteControl: "never" });
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalledTimes(1));
+		await act(async () => failFirst("disk full"));
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalledTimes(2));
+		expect(remoteSetSettings).toHaveBeenLastCalledWith({
+			discoverable: false,
+			remoteControl: "never",
+			deviceName: null,
+		});
+	});
+
+	it("keeps a save's choice when a reset that was on its way answers after it", async () => {
+		let reset: (s: RemoteSettings) => void = () => {};
+		vi.mocked(remoteResetIdentity).mockImplementationOnce(
+			() => new Promise((resolve) => (reset = resolve))
+		);
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reset" }));
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Never allow" })).toHaveAttribute(
+				"aria-pressed",
+				"true"
+			)
+		);
+		// The reset's answer carries the settings from before the save.
+		await act(async () => reset({ ...defaults, deviceId: "new", defaultName: "Den PC" }));
+		expect(screen.getByRole("button", { name: "Never allow" })).toHaveAttribute(
+			"aria-pressed",
+			"true"
+		);
+		expect(screen.getByLabelText("Device name")).toHaveAttribute("placeholder", "Den PC");
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalledTimes(2));
+		expect(remoteSetSettings).toHaveBeenLastCalledWith({
+			discoverable: false,
+			remoteControl: "never",
+			deviceName: null,
+		});
+	});
+
 	it("goes back to the last answer when it can't ask the device either", async () => {
 		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
 		await shown();
