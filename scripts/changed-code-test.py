@@ -747,7 +747,7 @@ class PlanShardsTest(RepoTest):
         self.commit("change one")
         with (
             mock.patch.object(cc, "has_cargo_mutants", return_value=True),
-            mock.patch.object(cc, "list_mutants", return_value=150),
+            mock.patch.object(cc, "list_mutants", return_value=100),
         ):
             status, out = self.plan()
         self.assertEqual(status, 0)

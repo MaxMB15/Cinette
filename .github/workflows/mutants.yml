@@ -194,7 +194,14 @@ jobs:
 
       # Each shard writes to a folder named after its crate and number, so the
       # report can download them all into one place.
+      #
+      # Most of the app's tests wait on a timer or a socket, not the CPU, so 16
+      # at a time on the runner's 4 cores take a third as long as the default
+      # of one per core. This goes on the step, not the job, since rust-cache
+      # would put a RUST variable in its cache key.
       - name: Test shard ${{ matrix.shard }} of ${{ matrix.package }}
+        env:
+          RUST_TEST_THREADS: 16
         run: |
           out="results/mutants-$PACKAGE-shard-$SHARD"
           mkdir -p "$out"

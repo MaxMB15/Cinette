@@ -385,7 +385,14 @@ jobs:
       # out. The check below reads those results, so only other codes fail
       # here. --in-place mutates the checkout itself, which reuses the cached
       # build, and each mutant runs the tests of its own crate.
+      #
+      # Most of the app's tests wait on a timer or a socket, not the CPU, so 16
+      # at a time on the runner's 4 cores take a third as long as the default
+      # of one per core. This goes on the step, not the job, since rust-cache
+      # would put a RUST variable in its cache key.
       - name: Test shard ${{ matrix.shard }} of ${{ matrix.package }}
+        env:
+          RUST_TEST_THREADS: 16
         run: |
           python3 scripts/changed-code.py rust-diff --base HEAD^1 --head HEAD "$RUNNER_TEMP/rust.diff"
           code=0
