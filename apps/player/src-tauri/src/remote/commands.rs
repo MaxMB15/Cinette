@@ -344,6 +344,23 @@ pub async fn remote_sessions<R: Runtime>(app: AppHandle<R>) -> Result<serde_json
     }
 }
 
+/// The consent request on screen, or null, for a webview that wasn't
+/// listening when `remote://consent` brought it, as after a reload.
+#[command]
+pub async fn remote_pending_consent<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        serde_json::to_value(imp::service(&app)?.pending_consent()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
 /// Ends one controller's session.
 #[command]
 pub async fn remote_disconnect<R: Runtime>(
@@ -414,6 +431,21 @@ pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json:
     {
         let _ = app;
         Err(UNAVAILABLE.into())
+    }
+}
+
+/// Whether macOS refuses this app the local network, so no device can be
+/// found. Always false elsewhere.
+// mutants: skip FnValue: mutation runs build on Linux, where nothing refuses local network access, so false is what the code returns there too.
+#[command]
+pub async fn remote_local_network_denied() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        crate::discovery::local_network_denied()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
     }
 }
 

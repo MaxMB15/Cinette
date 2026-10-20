@@ -18,6 +18,8 @@ import {
 } from "@/lib/remote-target";
 import {
 	mpvStop,
+	remoteAnswerConsent,
+	remotePendingConsent,
 	remoteFinishCommand,
 	remoteSessions,
 	remoteSetState,
@@ -144,4 +146,60 @@ export const usePublishRemoteState = (
 		const unsubscribe = player.subscribe(send);
 		return unsubscribe;
 	}, [connected, player, channelRef]);
+};
+
+/** A device asking to control this one, as `remote://consent` brings it. */
+export interface ConsentRequest {
+	request: number;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	code: string;
+	/** `performance.now()` when the request runs out. */
+	expiresAt: number;
+}
+
+type ConsentEvent = Omit<ConsentRequest, "expiresAt"> & { expiresInMs: number };
+
+/**
+ * The request on screen, if any, and the way to answer it. The Rust side
+ * keeps the queue and says which one to show, so there's one at a time.
+ */
+export const useConsentRequest = (): {
+	request: ConsentRequest | null;
+	answer: (request: ConsentRequest, allow: boolean) => void;
+} => {
+	const [request, setRequest] = useState<ConsentRequest | null>(null);
+	useTauriEvent<ConsentEvent>("remote://consent", ({ expiresInMs, ...event }) =>
+		setRequest({ ...event, expiresAt: performance.now() + expiresInMs })
+	);
+	// One that came before this page listened, as after a reload, would
+	// wait unseen until it ran out. An event since says more.
+	useEffect(
+		() => {
+			let current = true;
+			remotePendingConsent()
+				.then((pending) => {
+					if (!current || !pending) return;
+					const { expiresInMs, ...event } = pending;
+					const shown = { ...event, expiresAt: performance.now() + expiresInMs };
+					setRequest((seen) => seen ?? shown);
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
+	);
+	useTauriEvent<{ request: number }>("remote://consent-hidden", ({ request: hidden }) =>
+		setRequest((shown) => (shown?.request === hidden ? null : shown))
+	);
+	const answer = (shown: ConsentRequest, allow: boolean) => {
+		// Off screen at once; the Rust side shows the next one, if any.
+		setRequest(null);
+		remoteAnswerConsent(shown.request, allow).catch(() => {});
+	};
+	return { request, answer };
 };

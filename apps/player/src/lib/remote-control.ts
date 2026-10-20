@@ -26,6 +26,8 @@ export interface Link {
 	deviceId: string;
 	name: string;
 	phase: LinkPhase;
+	/** The verification code, once the handshake is done. */
+	code: string | null;
 	destination: CinetteDestination;
 }
 
@@ -86,8 +88,9 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 		if (phase.phase === "closed") {
 			set({ link: null, ended: { name: link.name, reason: phase.reason } });
 		} else if (phase.phase === "verifying") {
-			// The name the device gave once its key was checked.
-			set({ link: { ...link, name: phase.name, phase } });
+			// The name the device gave once its key was checked, and the code,
+			// which stays shown while that device asks.
+			set({ link: { ...link, name: phase.name, phase, code: phase.code } });
 		} else {
 			set({ link: { ...link, phase } });
 		}
@@ -125,7 +128,8 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 			// Events that came before listening started are in this list.
 			backend
 				.devices()
-				.then((devices) => set({ devices }))
+				// Anything but a list, as from a backend without remote control, is none.
+				.then((devices) => set({ devices: Array.isArray(devices) ? devices : [] }))
 				.catch(() => {});
 			// A link from before the page reloaded has no one to show it.
 			backend
@@ -151,6 +155,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 					deviceId: device.deviceId,
 					name: device.name,
 					phase: { phase: "connecting" },
+					code: null,
 					destination,
 				},
 				ended: null,

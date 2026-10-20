@@ -46,6 +46,8 @@ pub struct RemoteService {
     link: Arc<Mutex<Option<LinkHandle>>>,
     link_host: Arc<dyn LinkHost>,
     events: Arc<dyn ServiceEvents>,
+    /// The consent prompt on screen, as the target host keeps it.
+    prompt: Arc<Mutex<Option<ConsentPrompt>>>,
     /// The highest link number the webview has left. A connect numbered
     /// at or below it was overtaken by that leave on the way here.
     left_through: Mutex<u64>,
@@ -65,6 +67,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl RemoteService {
     pub fn settings(&self) -> RemoteSettings {
         lock(&self.state).settings.clone()
+    }
+
+    /// The request on screen, if one is and it hasn't run out, for a
+    /// webview that started listening after it came.
+    pub fn pending_consent(&self) -> Option<ConsentEvent> {
+        lock(&self.prompt)
+            .as_ref()
+            // mutants: skip BinaryOperator: > and >= differ only at one instant of a clock that never stops.
+            .filter(|p| p.expires_at > super::clock::now())
+            .map(consent_event)
     }
 
     pub fn device_id(&self) -> DeviceId {
@@ -223,6 +235,20 @@ pub struct ConsentEvent {
     pub expires_in_ms: u64,
 }
 
+fn consent_event(prompt: &ConsentPrompt) -> ConsentEvent {
+    ConsentEvent {
+        request: prompt.request,
+        device_id: prompt.device_id.to_string(),
+        name: prompt.name.clone(),
+        device_type: prompt.device_type,
+        code: prompt.code.clone(),
+        expires_in_ms: prompt
+            .expires_at
+            .saturating_duration_since(super::clock::now())
+            .as_millis() as u64,
+    }
+}
+
 /// One controller, as `remote://sessions` lists it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -289,6 +315,9 @@ struct TauriHost<R: Runtime> {
     /// One lock per series being loaded, so two queries for it make one
     /// load, and the second answers from what the first loaded.
     loading: Gates,
+    /// The consent prompt on screen, for a webview that wasn't listening
+    /// when it came.
+    prompt: Arc<Mutex<Option<ConsentPrompt>>>,
 }
 
 /// A lock for each key in use, made when the first user comes and dropped
@@ -390,18 +419,8 @@ impl<R: Runtime> TauriHost<R> {
 
 impl<R: Runtime> TargetHost for TauriHost<R> {
     fn show_consent(&self, prompt: &ConsentPrompt) {
-        let event = ConsentEvent {
-            request: prompt.request,
-            device_id: prompt.device_id.to_string(),
-            name: prompt.name.clone(),
-            device_type: prompt.device_type,
-            code: prompt.code.clone(),
-            expires_in_ms: prompt
-                .expires_at
-                .saturating_duration_since(super::clock::now())
-                .as_millis() as u64,
-        };
-        let _ = self.app.emit("remote://consent", event);
+        *lock(&self.prompt) = Some(prompt.clone());
+        let _ = self.app.emit("remote://consent", consent_event(prompt));
         // A dialog behind other windows would time out unseen. Requests
         // can come again and again, so this asks only now and then, and
         // never takes the focus, so a key pressed in another app can't
@@ -415,6 +434,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 
     fn hide_consent(&self, request: RequestId) {
+        lock(&self.prompt).take_if(|p| p.request == request);
         let _ = self.app.emit(
             "remote://consent-hidden",
             serde_json::json!({ "request": request }),
@@ -767,6 +787,7 @@ fn start_on<R: Runtime>(
     let key = identity::load_or_create(&key_dir)
         .map_err(|e| format!("couldn't load the device key: {e}"))?;
     let settings = load_settings(app);
+    let prompt = Arc::new(Mutex::new(None));
     let host = Arc::new(TauriHost {
         app: app.clone(),
         advertiser,
@@ -775,6 +796,7 @@ fn start_on<R: Runtime>(
         raised: Mutex::new(None),
         fetches: Mutex::new(Bucket::full()),
         loading: Gates::default(),
+        prompt: prompt.clone(),
     });
     let device_id = key.device_id();
     let handle = target::start_with(
@@ -809,6 +831,7 @@ fn start_on<R: Runtime>(
         devices,
         link,
         left_through: Mutex::new(0),
+        prompt,
     });
     Ok(())
 }

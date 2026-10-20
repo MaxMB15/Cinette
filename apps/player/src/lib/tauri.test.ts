@@ -711,6 +711,7 @@ describe("backend commands", () => {
 			{ request: 3, allow: true },
 		],
 		["remoteSessions", () => tauri.remoteSessions(), "remote_sessions"],
+		["remotePendingConsent", () => tauri.remotePendingConsent(), "remote_pending_consent"],
 		[
 			"remoteDisconnect",
 			() => tauri.remoteDisconnect("s1"),
@@ -730,6 +731,11 @@ describe("backend commands", () => {
 			{ token: 9, outcome: "staleItem" },
 		],
 		["remoteDevices", () => tauri.remoteDevices(), "remote_devices"],
+		[
+			"remoteLocalNetworkDenied",
+			() => tauri.remoteLocalNetworkDenied(),
+			"remote_local_network_denied",
+		],
 		[
 			"remoteConnect",
 			() => tauri.remoteConnect("abc", 5),

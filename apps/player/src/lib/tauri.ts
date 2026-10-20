@@ -651,6 +651,20 @@ export const remoteAnswerConsent = (request: number, allow: boolean): Promise<vo
 
 export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
 
+/** A device asking to control this one, as `remote://consent` brings it. */
+export interface RemoteConsentEvent {
+	request: number;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	code: string;
+	expiresInMs: number;
+}
+
+/** The request on screen now, for a page that wasn't listening when it came. */
+export const remotePendingConsent = (): Promise<RemoteConsentEvent | null> =>
+	invoke("remote_pending_consent");
+
 export const remoteDisconnect = (sessionId: string): Promise<void> =>
 	invoke("remote_disconnect", { sessionId });
 
@@ -683,6 +697,10 @@ export interface RemoteDevice {
 }
 
 export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devices");
+
+/** Whether macOS refuses Cinette the local network, so no device can be found. */
+export const remoteLocalNetworkDenied = (): Promise<boolean> =>
+	invoke("remote_local_network_denied");
 
 /** Asks a device for control. Progress comes as `remote://controller`.
  *  `link` is a number this side picks; that link's events carry it, and its
