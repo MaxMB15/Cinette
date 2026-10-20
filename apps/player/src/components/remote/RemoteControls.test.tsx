@@ -25,9 +25,11 @@ vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.li
 vi.mock("@/lib/tauri", () => ({
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
 	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
+	getVpnActive: vi.fn(() => Promise.resolve(false)),
 }));
 
-import { remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import { VPN_HINT } from "@/lib/cast";
 import {
 	ConnectStatusDialog,
 	ControllersBar,
@@ -216,6 +218,25 @@ describe("DevicesButton", () => {
 		expect(screen.getByRole("status")).toHaveClass("bottom-20");
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("says a VPN may hide the other devices when it found none", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		vi.mocked(getVpnActive).mockResolvedValueOnce(true);
+		control.state = { ...control.state, devices: [] };
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		await act(async () => {});
+		act(() => vi.advanceTimersByTime(LOOKING_MS));
+		expect(screen.getByRole("status")).toHaveTextContent(`${NONE_FOUND} ${VPN_HINT}`);
+		// It asks again each time, and a check that fails counts as no VPN.
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		vi.mocked(getVpnActive).mockRejectedValueOnce(new Error("no"));
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		await act(async () => {});
+		act(() => vi.advanceTimersByTime(LOOKING_MS));
+		expect(screen.getByRole("status").textContent).toBe(NONE_FOUND);
+		vi.useRealTimers();
 	});
 
 	it("looks for a moment before it says no other device was found", async () => {
