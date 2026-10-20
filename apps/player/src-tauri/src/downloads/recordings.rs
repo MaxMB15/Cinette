@@ -56,10 +56,18 @@ const CHECK_INTERVAL_SECS: i64 = 30;
 const STOP_GRACE: Duration = Duration::from_secs(15);
 /// How long a recording waits after it stops its provider's downloads or
 /// recordings, so the provider sees their connections close first.
-#[cfg(desktop)]
+#[cfg(all(desktop, not(test)))]
 const HANDOVER_PAUSE: Duration = Duration::from_secs(3);
+/// Tests wait less, still far longer than stopping a recording takes.
+#[cfg(all(desktop, test))]
+const HANDOVER_PAUSE: Duration = Duration::from_secs(1);
 /// How long quitting waits for recordings to close their files.
+#[cfg(not(test))]
 const EXIT_GRACE: Duration = Duration::from_secs(3);
+/// Tests wait less. Every test app quits, and most leave an ffmpeg running
+/// that ignores the request to stop.
+#[cfg(test)]
+const EXIT_GRACE: Duration = Duration::from_millis(300);
 /// How early ffmpeg may reach its length limit, in seconds. The limit counts
 /// the stream's own time, and a provider often sends the first seconds of a
 /// stream in a burst.
