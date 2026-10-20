@@ -418,6 +418,7 @@ pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json:
 
 /// Whether macOS refuses this app the local network, so no device can be
 /// found. Always false elsewhere.
+// mutants: skip FnValue: mutation runs build on Linux, where nothing refuses local network access, so false is what the code returns there too.
 #[command]
 pub async fn remote_local_network_denied() -> bool {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
