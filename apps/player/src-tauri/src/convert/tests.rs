@@ -570,21 +570,25 @@ async fn ended(conversion: &mut Conversion) -> Ended {
 #[tokio::test]
 async fn a_file_is_read_at_its_own_pace_after_a_burst() {
     let app = TestApp::new();
-    // Fourteen seconds: ten come at once, and four at their own pace.
-    let source = file_source(wav(14));
+    // Twelve seconds: ten come at once, and two at their own pace. ffmpeg
+    // reads it in pieces of half a second, the last of them a little over
+    // 1.75 s after the start.
+    let source = file_source(wav(12));
     let started = std::time::Instant::now();
     let mut conversion = start_copy(&app, &source, LOOPBACK).await.unwrap();
     let mut response = get(&conversion.url).await;
     let body = read_to_end(&mut response).await;
     assert_eq!(ended(&mut conversion).await, Ended::Finished);
     assert!(
-        started.elapsed() >= Duration::from_secs(3),
+        started.elapsed() >= Duration::from_millis(1500),
         "{:?}",
         started.elapsed()
     );
-    assert!(body.len() > 14 * 8000, "all of it came: {}", body.len());
+    assert!(body.len() > 12 * 8000, "all of it came: {}", body.len());
 
-    // A live channel isn't held back, and its end is a drop.
+    // A live channel isn't held back, and its end is a drop. Fourteen
+    // seconds would take four at their own pace.
+    let source = file_source(wav(14));
     let plan = Plan {
         live: true,
         ..copy_audio()
@@ -608,15 +612,17 @@ async fn a_live_channel_whose_connection_closes_has_dropped() {
         live: true,
         ..copy_audio()
     };
-    let mut conversion = start(
-        &app.handle(),
-        &live_wav(End::After(8)),
-        &plan,
-        NO_HARDWARE,
-        LOOPBACK,
-    )
-    .await
-    .unwrap();
+    // The audio of `live_wav`, five times as fast, so the connection
+    // closes sooner.
+    let source = live_source(
+        wav_head(None),
+        vec![vec![0x80u8; 4000]],
+        Duration::from_millis(25),
+        End::After(8),
+    );
+    let mut conversion = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
+        .await
+        .unwrap();
     assert_eq!(ended(&mut conversion).await, Ended::Dropped);
 }
 
@@ -822,9 +828,9 @@ fn h264(frames: u32, gop: u32) -> Vec<Vec<u8>> {
 #[tokio::test]
 async fn a_late_request_with_video_starts_at_a_keyframe() {
     let app = TestApp::new();
-    // A keyframe every 2.4 s, sent at four times its speed. ffmpeg starts a
+    // A keyframe every 2.4 s, sent at eight times its speed. ffmpeg starts a
     // cluster every second, so most start between keyframes.
-    let source = live_source(vec![], h264(600, 60), Duration::from_millis(10), End::Never);
+    let source = live_source(vec![], h264(600, 60), Duration::from_millis(5), End::Never);
     let plan = Plan {
         video: VideoPlan::Copy,
         audio: AudioPlan::None,

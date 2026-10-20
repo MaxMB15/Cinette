@@ -34,7 +34,11 @@ use tokio::task::{JoinHandle, JoinSet};
 mod tests;
 
 /// How long a connection gets to send its request.
+#[cfg(not(test))]
 const REQUEST_LIMIT: Duration = Duration::from_secs(5);
+/// Tests wait less, still ten times the pauses they make within a request.
+#[cfg(test)]
+const REQUEST_LIMIT: Duration = Duration::from_secs(2);
 /// How long one write may wait on a receiver that stopped reading before
 /// its request is dropped. Wi-Fi can stall for a few seconds.
 const WRITE_LIMIT: Duration = Duration::from_secs(15);
