@@ -218,6 +218,7 @@ export const castRouteOf = (route: PlayRoute, formats: StreamFormats): CastRoute
 			via: "converted",
 			generation: formats.generation,
 			source: formats.sources[route.format],
+			container: formats.formats[route.format].container,
 			video: route.video,
 			audio: route.audio,
 		};

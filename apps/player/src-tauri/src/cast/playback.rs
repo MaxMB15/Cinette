@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use mvp_core::cast::message::{LoadRequest, StreamType};
 use mvp_core::cast::session::Session;
-use mvp_core::convert::{pick_audio, AudioPlan, Plan, VideoPlan, CAST_AUDIO};
+use mvp_core::convert::{matroska_copies, pick_audio, AudioPlan, Plan, VideoPlan, CAST_AUDIO};
 use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::{provider_host, shareable_logo};
 use mvp_core::streams::format::Container;
@@ -48,10 +48,12 @@ pub enum CastRoute {
         source: usize,
         container: Container,
     },
-    /// This computer converts the URL at `source`.
+    /// This computer converts the URL at `source`, which comes as
+    /// `container`.
     Converted {
         generation: u64,
         source: usize,
+        container: Container,
         video: VideoChoice,
         audio: AudioChoice,
     },
@@ -215,7 +217,9 @@ async fn ensure_connected<R: Runtime>(app: &AppHandle<R>, receiver_id: &str) -> 
             Ok(())
         }
         Err(e) => {
-            super::update(app, |registry| registry.unreachable(receiver_id));
+            super::update(app, |registry| {
+                registry.unreachable(receiver_id, std::time::Instant::now())
+            });
             Err(match e {
                 tls::TlsError::NotPinned => "notPinned",
                 _ => "unreachable",
@@ -272,23 +276,41 @@ async fn check_playlist(url: &str) -> Result<(), String> {
     }
 }
 
-/// The plan for converting `url`, from what a probe finds in it.
-async fn conversion_plan<R: Runtime>(
-    app: &AppHandle<R>,
-    url: &str,
+/// What converting `url`, which comes as `container`, takes.
+struct ConversionInput<'a> {
+    url: &'a str,
+    container: Container,
     video: VideoChoice,
     audio: AudioChoice,
+    live: bool,
     start_at: Option<f64>,
+}
+
+/// The plan for converting `input.url`, from what a probe finds in it and
+/// what this computer's ffmpeg decodes.
+async fn conversion_plan<R: Runtime>(
+    app: &AppHandle<R>,
+    input: &ConversionInput<'_>,
+    decoders: &[String],
 ) -> Result<Plan, String> {
-    let probed = crate::streams::probe(app, url).await.map_err(|e| match e {
-        ProbeError::Refused(_) => REFUSED.to_string(),
-        _ => "unreachable".to_string(),
-    })?;
-    let (audio_track, audio) = match audio {
+    let probed = crate::streams::probe(app, input.url)
+        .await
+        .map_err(|e| match e {
+            ProbeError::Refused(_) => REFUSED.to_string(),
+            _ => "unreachable".to_string(),
+        })?;
+    // AAC from MPEG-TS or HLS can't be copied into the Matroska the
+    // converter writes, so it's converted like any other.
+    let playable = matroska_copies(input.container, &CAST_AUDIO);
+    let decodable: Vec<&str> = decoders.iter().map(String::as_str).collect();
+    let (audio_track, audio) = match input.audio {
         AudioChoice::None => (0, AudioPlan::None),
-        AudioChoice::Copy | AudioChoice::Aac => pick_audio(&probed.audio_tracks, None, &CAST_AUDIO),
+        // The test TV played 5.1 AAC with sound, so 5.1 stays 5.1.
+        AudioChoice::Copy | AudioChoice::Aac => {
+            pick_audio(&probed.audio_tracks, None, &playable, &decodable, true)
+        }
     };
-    let video = match (video, probed.video) {
+    let video = match (input.video, probed.video) {
         (VideoChoice::None, _) | (_, None) => VideoPlan::None,
         (VideoChoice::Copy, Some(_)) => VideoPlan::Copy,
         (VideoChoice::Transcode, Some(_)) => VideoPlan::Transcode {
@@ -298,7 +320,8 @@ async fn conversion_plan<R: Runtime>(
     Ok(Plan {
         video,
         audio,
-        start_at: start_at.filter(|_| probed.duration.is_some()),
+        live: input.live,
+        start_at: input.start_at.filter(|_| probed.duration.is_some()),
         audio_track,
     })
 }
@@ -306,19 +329,18 @@ async fn conversion_plan<R: Runtime>(
 /// Starts the converter for `url` and serves it to `receiver`.
 async fn start_conversion<R: Runtime>(
     app: &AppHandle<R>,
-    url: &str,
-    plan: &Plan,
+    input: &ConversionInput<'_>,
     receiver: IpAddr,
 ) -> Result<Conversion, String> {
-    let encoders = crate::convert::support::support(app)
-        .await
-        .encoders
-        .ok_or("noConverter")?;
-    crate::convert::start(app, url, plan, encoders, receiver)
+    let support = crate::convert::support::support(app).await;
+    let encoders = support.encoders.ok_or("noConverter")?;
+    let plan = conversion_plan(app, input, &support.decoders).await?;
+    crate::convert::start(app, input.url, &plan, encoders, receiver)
         .await
         .map_err(|e| match e {
             ConvertError::Refused(_) => REFUSED.to_string(),
             ConvertError::NoEncoder => "noEncoder".to_string(),
+            ConvertError::Unsupported => "unsupported".to_string(),
             ConvertError::NoRoute => "noRoute".to_string(),
             ConvertError::Unreachable => "unreachable".to_string(),
             ConvertError::Failed(_) => "converterFailed".to_string(),
@@ -328,9 +350,9 @@ async fn start_conversion<R: Runtime>(
 /// Plays `channel` on `receiver_id` the way `route` says, from `start_at`
 /// seconds for an item with a length. Connects first when needed. Rejects
 /// with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
-/// `noEncoder`, `noRoute`, `converterFailed` or `stale`, or, for a direct
-/// HLS route, `notPlaylist` or `cors`, after which the frontend routes the
-/// item again without that format.
+/// `noEncoder`, `unsupported`, `noRoute`, `converterFailed` or `stale`,
+/// or, for a direct HLS route, `notPlaylist` or `cors`, after which the
+/// frontend routes the item again without that format.
 pub async fn load<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
@@ -371,15 +393,27 @@ pub async fn load<R: Runtime>(
             request.content_type = content_type.into();
             request.hls_ts_segments = ts;
         }
-        CastRoute::Converted { video, audio, .. } => {
+        CastRoute::Converted {
+            container,
+            video,
+            audio,
+            ..
+        } => {
             let receiver = app
                 .state::<CastReceivers>()
                 .registry()
                 .get(receiver_id)
                 .map(|r| r.addr)
                 .ok_or("notFound")?;
-            let plan = conversion_plan(app, url, video, audio, start_at).await?;
-            let started = start_conversion(app, url, &plan, receiver).await?;
+            let input = ConversionInput {
+                url,
+                container,
+                video,
+                audio,
+                live,
+                start_at,
+            };
+            let started = start_conversion(app, &input, receiver).await?;
             // The converted stream starts where the plan does, and has no
             // length the receiver can seek in.
             request.url = started.url.clone();

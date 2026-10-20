@@ -14,7 +14,7 @@ use tauri::{Listener, Manager};
 use super::fake_receiver::{self, next_of};
 use super::receivers::CastReceiver;
 use super::update;
-use crate::downloads::test_support::{add_channel, video_url};
+use crate::downloads::test_support::add_channel;
 use crate::test_support::TestApp;
 
 /// Lists a receiver at `addr` as `cast:<id>`.
@@ -331,16 +331,43 @@ async fn casting_to_another_receiver_ends_the_first_cast() {
     );
 }
 
+/// A second of 16-bit mono WAV at 8192 Hz, which the sidecar decodes. The
+/// test server sends text, and every byte of this one is ASCII.
+fn wav16() -> String {
+    let samples: u32 = 8192 * 2;
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&(36 + samples).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    // The format chunk's length, then PCM, one channel, the sample rate,
+    // the byte rate, the bytes per sample and the bits per sample.
+    for (value, size) in [
+        (16, 4),
+        (1, 2),
+        (1, 2),
+        (8192, 4),
+        (16384, 4),
+        (2, 2),
+        (16, 2),
+    ] {
+        bytes.extend_from_slice(&u32::to_le_bytes(value)[..size]);
+    }
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&samples.to_le_bytes());
+    bytes.resize(bytes.len() + samples as usize, b'@');
+    String::from_utf8(bytes).expect("every byte is ASCII")
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_converted_route_serves_the_receiver_from_this_computer() {
     let app = TestApp::new();
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    let movie = channel("m-1", &video_url("cast"), "movie");
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    let movie = channel("m-1", &format!("{source}/movie/1.wav"), "movie");
     add_channel(&app, &movie);
-    let route = json!({ "via": "converted", "source": 0, "video": "copy", "audio": "aac" });
+    let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "aac" });
     let support = crate::convert::support::support(&app.handle()).await;
-    let result = load(&app, "cast:tv", &movie, route, Some(10.0));
+    let result = load(&app, "cast:tv", &movie, route, Some(0.5));
     if support.convert {
         result.unwrap();
         let loaded = next_of(&mut got, "LOAD").await;
@@ -352,7 +379,7 @@ async fn a_converted_route_serves_the_receiver_from_this_computer() {
         assert!(url.starts_with("http://127.0.0.1:"), "{url}");
         assert!(url.ends_with("/stream.mkv"), "{url}");
         // The receiver gets this computer's address, never the source's.
-        assert!(!url.contains("/video/"), "{url}");
+        assert!(!url.contains("/movie/"), "{url}");
     } else {
         // The pinned sidecar has no AAC encoder until build 3.
         assert_eq!(result, Err(json!("noConverter")));
@@ -370,14 +397,14 @@ async fn a_converted_route_says_when_the_provider_refuses() {
         "movie",
     );
     add_channel(&app, &movie);
-    let route = json!({ "via": "converted", "source": 0, "video": "none", "audio": "none" });
+    let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "none", "audio": "none" });
     assert_eq!(
         load(&app, "cast:tv", &movie, route, None),
         Err(json!("refused"))
     );
     let unreachable = channel("m-2", &format!("{}/1.mkv", refused_url()), "movie");
     add_channel(&app, &unreachable);
-    let route = json!({ "via": "converted", "source": 0, "video": "copy", "audio": "copy" });
+    let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "copy" });
     assert_eq!(
         load(&app, "cast:tv", &unreachable, route, None),
         Err(json!("unreachable"))

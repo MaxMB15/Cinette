@@ -645,6 +645,9 @@ export type CastRoute =
 			via: "converted";
 			generation: number;
 			source: number;
+			/** How the source comes, which decides whether its AAC can be
+			 *  copied into the converter's Matroska. */
+			container: Container;
 			video: "copy" | "transcode" | "none";
 			audio: "copy" | "aac" | "none";
 	  };
@@ -693,7 +696,8 @@ export const CAST_UPDATE_EVENT = "cast://update";
 /**
  * Play `channel` on a Cast receiver, connecting first when needed. Rejects
  * with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
- * `noEncoder`, `noRoute`, `converterFailed` or `noSource`.
+ * `noEncoder`, `unsupported`, `noRoute`, `converterFailed` or `stale`, or,
+ * for a direct HLS route, `notPlaylist` or `cors`.
  */
 export const castLoad = (
 	receiverId: string,

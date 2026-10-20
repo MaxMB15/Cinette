@@ -36,6 +36,7 @@ const hls: StreamFormat = {
 	interlaced: false,
 	audio: "aac",
 	cors: true,
+	hdr: false,
 };
 const ts: StreamFormat = { ...hls, container: "ts" };
 
@@ -274,6 +275,7 @@ describe("castRouteOf and throughThisDevice", () => {
 			via: "converted",
 			generation: 7,
 			source: 5,
+			container: "ts",
 			video: "transcode",
 			audio: "aac",
 		});
@@ -327,6 +329,7 @@ describe("createCastDestination", () => {
 			videoCodec: "h264",
 			audioCodec: "aac",
 			interlaced: false,
+			hdr: false,
 		};
 		const cast = createCastDestination(receiver, fake, { playing: () => playing });
 		expect(await cast.route(item)).toEqual({ ok: true, route: { via: "direct", format: 0 } });
@@ -418,16 +421,24 @@ describe("createCastDestination", () => {
 			status: "error",
 			error: { code: "openFailed", message: "notPlaylist" },
 		});
-		// Only the `.ts` form is left, which goes through the converter.
+		// Only the `.ts` form is left, which goes through the converter. Its
+		// AAC comes as ADTS, which the converter's Matroska can't copy.
 		expect(await cast.route(item)).toMatchObject({
 			ok: true,
-			route: { via: "converted", format: 0, video: "copy", audio: "copy" },
+			route: { via: "converted", format: 0, video: "copy", audio: "aac" },
 		});
 		await cast.load(item);
 		expect(fake.castLoad).toHaveBeenLastCalledWith(
 			"cast:tv",
 			channel,
-			{ via: "converted", generation: 7, source: 1, video: "copy", audio: "copy" },
+			{
+				via: "converted",
+				generation: 7,
+				source: 1,
+				container: "ts",
+				video: "copy",
+				audio: "aac",
+			},
 			undefined
 		);
 		expect(cast.getState().status).toBe("opening");
@@ -491,7 +502,14 @@ describe("createCastDestination", () => {
 		const cast = createCastDestination(receiver, fake);
 		const film = { kind: "local" as const, channel: movie };
 		await cast.load(film, { startAt: 60 });
-		const route = { via: "converted", generation: 7, source: 4, video: "copy", audio: "aac" };
+		const route = {
+			via: "converted",
+			generation: 7,
+			source: 4,
+			container: "ts",
+			video: "copy",
+			audio: "aac",
+		};
 		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState()).toMatchObject({ position: 65, duration: 5400 });
