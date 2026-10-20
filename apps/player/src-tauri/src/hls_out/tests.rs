@@ -322,7 +322,28 @@ fn track(codec: &str, language: Option<&str>, default: bool) -> hls_remux::Audio
         codec: codec.into(),
         language: language.map(str::to_string),
         default,
+        decodable: true,
     }
+}
+
+#[test]
+fn converts_a_track_it_can_decode_when_the_default_is_one_it_cant() {
+    let tracks = [
+        hls_remux::AudioTrack {
+            decodable: false,
+            ..track("truehd", None, true)
+        },
+        track("ac3", None, false),
+    ];
+    assert_eq!(
+        plan(Video::None, &[], &tracks, None, &playable())
+            .unwrap()
+            .audio,
+        Audio::Aac {
+            track: 1,
+            downmix: true
+        }
+    );
 }
 
 fn playable() -> Vec<String> {

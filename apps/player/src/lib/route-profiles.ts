@@ -103,6 +103,7 @@ export interface PlayingInfo {
 	videoCodec: string | null;
 	audioCodec: string | null;
 	interlaced: boolean;
+	hdr: boolean;
 }
 
 /** The formats an item comes in, best first, from `getStreamFormats`. */

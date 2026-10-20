@@ -129,12 +129,13 @@ fn serializes_as_the_frontend_names_them() {
         container: Container::HlsFmp4,
         video: Some(VideoCodec::Mpeg2),
         interlaced: true,
+        hdr: false,
         audio: Some(AudioCodec::Eac3),
         cors: false,
     };
     assert_eq!(
         serde_json::to_value(format).unwrap(),
-        serde_json::json!({ "container": "hls-fmp4", "video": "mpeg2", "interlaced": true, "audio": "eac3", "cors": false })
+        serde_json::json!({ "container": "hls-fmp4", "video": "mpeg2", "interlaced": true, "hdr": false, "audio": "eac3", "cors": false })
     );
     let audio_only = StreamFormat {
         container: Container::HlsTs,
@@ -159,6 +160,7 @@ fn reads_what_mpv_is_playing() {
             container: Container::Ts,
             video: Some(VideoCodec::Mpeg2),
             interlaced: true,
+            hdr: false,
             audio: Some(AudioCodec::Mp2),
             cors: false,
         }
@@ -207,6 +209,7 @@ fn parses_a_live_ts_probe() {
             container: Container::Ts,
             video: Some(VideoCodec::H264),
             interlaced: true,
+            hdr: false,
             audio: Some(AudioCodec::Mp2),
             audio_tracks: vec![
                 AudioTrack {
@@ -263,6 +266,23 @@ At least one output file must be specified
         ]
     );
     assert_eq!(probed.duration, Some(6130.5));
+}
+
+#[test]
+fn reads_hdr_from_the_transfer_function() {
+    for (colors, hdr) in [
+        ("yuv420p10le(tv, bt2020nc/bt2020/smpte2084)", true),
+        ("yuv420p10le(tv, bt2020nc/bt2020/arib-std-b67)", true),
+        ("yuv420p10le(tv, bt2020nc/bt2020/bt2020-10)", false),
+        ("yuv420p(tv, bt709)", false),
+    ] {
+        let text = format!(
+            "Input #0, matroska,webm, from 'x':\n  Stream #0:0: Video: hevc (Main 10), {colors}, 3840x2160\n  Stream #0:1: Video: h264, yuv420p(tv, bt709/bt709/smpte2084)\n"
+        );
+        assert_eq!(probe::parse(&text).unwrap().hdr, hdr, "{colors}");
+    }
+    let radio = "Input #0, mp3, from 'x':\n  Stream #0:0: Audio: mp3, 44100 Hz, stereo, smpte2084\n";
+    assert!(!probe::parse(radio).unwrap().hdr);
 }
 
 #[test]
@@ -525,6 +545,7 @@ fn codecs(container: Container) -> StreamFormat {
         container,
         video: Some(VideoCodec::H264),
         interlaced: true,
+        hdr: false,
         audio: Some(AudioCodec::Mp2),
         cors: true,
     }

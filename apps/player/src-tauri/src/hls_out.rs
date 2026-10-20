@@ -342,7 +342,7 @@ struct OutputPlan {
 fn plan(
     video: Video,
     extradata: &[u8],
-    tracks: &[hls_remux::AudioTrack],
+    source_tracks: &[hls_remux::AudioTrack],
     language: Option<&str>,
     playable: &[String],
 ) -> Result<OutputPlan, HlsError> {
@@ -354,7 +354,7 @@ fn plan(
         }
         Video::Hevc | Video::Other => return Err(HlsError::VideoCodec),
     }
-    let tracks: Vec<AudioTrack> = tracks
+    let tracks: Vec<AudioTrack> = source_tracks
         .iter()
         .map(|t| AudioTrack {
             codec: t.codec.clone(),
@@ -366,8 +366,14 @@ fn plan(
         })
         .collect();
     let playable: Vec<&str> = playable.iter().map(String::as_str).collect();
+    // What this device's FFmpeg can decode, as the converter found it.
+    let decodable: Vec<&str> = source_tracks
+        .iter()
+        .filter(|t| t.decodable)
+        .map(|t| t.codec.as_str())
+        .collect();
     // The converter makes stereo AAC only, so it never asks for 5.1.
-    let (track, audio) = match pick_audio(&tracks, language, &playable, false) {
+    let (track, audio) = match pick_audio(&tracks, language, &playable, &decodable, false) {
         (_, AudioPlan::None) => (None, Audio::None),
         (i, AudioPlan::Copy) => (Some(tracks[i].codec.as_str()), Audio::Copy(i)),
         (i, AudioPlan::Aac { downmix }) => (Some("aac"), Audio::Aac { track: i, downmix }),

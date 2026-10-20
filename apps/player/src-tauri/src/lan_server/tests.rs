@@ -8,11 +8,28 @@ use mvp_core::http::test_server;
 
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
-fn element(cluster: bool, byte: u8) -> Arc<Piece> {
-    Arc::new(Piece::Element {
-        bytes: vec![byte; 4],
-        cluster,
-    })
+/// A feed of at most `cap` bytes, with the header `HEAD`.
+fn feed(cap: usize, live: bool) -> LiveFeed {
+    LiveFeed::new("video/x-matroska", b"HEAD".to_vec(), cap, live)
+}
+
+/// Four bytes of `byte`.
+fn piece(byte: u8) -> Vec<u8> {
+    vec![byte; 4]
+}
+
+/// Reads `response` until it has `n` bytes.
+async fn read_bytes(response: &mut reqwest::Response, n: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    while body.len() < n {
+        let chunk = tokio::time::timeout(Duration::from_secs(10), response.chunk())
+            .await
+            .expect("more of the stream within 10 s")
+            .unwrap()
+            .expect("the stream goes on");
+        body.extend_from_slice(&chunk);
+    }
+    body
 }
 
 /// The server's `host:port`.
@@ -37,17 +54,10 @@ async fn raw(server: &LanServer, request: &[u8]) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn serves_a_live_pipe_from_the_next_start_point() {
+async fn the_first_request_gets_the_stream_from_its_first_piece() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
-    let (pieces, _) = broadcast::channel(16);
-    let url = server.set_live(
-        "stream.mkv",
-        LivePipe {
-            content_type: "video/x-matroska",
-            header: b"HEAD".to_vec(),
-            pieces: pieces.subscribe(),
-        },
-    );
+    let feed = feed(1 << 20, false);
+    let url = server.set_live("stream.mkv", feed.clone());
     assert_eq!(url, format!("{}stream.mkv", server.base));
     assert!(server.base.starts_with("http://127.0.0.1:"));
     let token = server
@@ -58,56 +68,186 @@ async fn serves_a_live_pipe_from_the_next_start_point() {
         .trim_end_matches('/');
     assert_eq!(token.len(), 64);
 
+    // Pieces written before anyone asks are kept for the first request,
+    // from the first start point.
+    feed.push(piece(1), false).await;
+    feed.push(piece(2), true).await;
+    feed.push(piece(3), false).await;
     let mut response = test_server::client().get(&url).send().await.unwrap();
     assert_eq!(response.headers()["content-type"], "video/x-matroska");
     assert!(response.headers().get("content-length").is_none());
-    // The request is in once the head is back. A piece that isn't a start
-    // point is skipped, and everything from the next one on comes through.
-    pieces.send(element(false, 1)).unwrap();
-    pieces.send(Arc::new(Piece::Header(b"x".to_vec()))).unwrap();
-    pieces.send(element(true, 2)).unwrap();
-    pieces.send(element(false, 3)).unwrap();
-    let mut body = Vec::new();
-    while body.len() < 12 {
-        body.extend_from_slice(&response.chunk().await.unwrap().unwrap());
-    }
-    assert_eq!(body, b"HEAD\x02\x02\x02\x02\x03\x03\x03\x03");
+    feed.push(piece(4), true).await;
+    assert_eq!(
+        read_bytes(&mut response, 16).await,
+        [b"HEAD".to_vec(), piece(2), piece(3), piece(4)].concat()
+    );
 
     // A HEAD request gets the head and no body.
     let head = test_server::client().head(&url).send().await.unwrap();
     assert_eq!(head.status(), 200);
     assert!(head.bytes().await.unwrap().is_empty());
 
-    // The pipe ending ends the response.
-    drop(pieces);
+    // The feed ending ends the response once it has everything.
+    feed.push(piece(4), false).await;
+    feed.end();
+    assert_eq!(read_bytes(&mut response, 4).await, piece(4));
     assert!(response.chunk().await.unwrap().is_none());
 }
 
 #[tokio::test]
-async fn a_receiver_that_falls_behind_is_dropped() {
+async fn a_request_that_comes_later_starts_at_the_last_start_point_sent() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
-    let (pieces, _) = broadcast::channel(1);
-    let url = server.set_live(
-        "stream.mkv",
-        LivePipe {
-            content_type: "video/x-matroska",
-            header: vec![],
-            pieces: pieces.subscribe(),
-        },
+    let feed = feed(1 << 20, true);
+    let url = server.set_live("stream.mkv", feed.clone());
+    let mut first = test_server::client().get(&url).send().await.unwrap();
+    for (byte, start) in [(1, true), (2, false), (3, true), (4, false)] {
+        feed.push(piece(byte), start).await;
+    }
+    read_bytes(&mut first, 20).await;
+    drop(first);
+    // It starts from the third piece, the last start point sent.
+    let mut again = test_server::client().get(&url).send().await.unwrap();
+    assert_eq!(
+        read_bytes(&mut again, 12).await,
+        [b"HEAD".to_vec(), piece(3), piece(4)].concat()
     );
+    feed.push(piece(5), false).await;
+    assert_eq!(read_bytes(&mut again, 4).await, piece(5));
+}
+
+#[tokio::test]
+async fn a_request_with_no_start_point_kept_waits_for_the_next() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = feed(1 << 20, true);
+    let url = server.set_live("stream.mkv", feed.clone());
+    feed.push(piece(1), false).await;
     let mut response = test_server::client().get(&url).send().await.unwrap();
-    for byte in 0..8 {
-        pieces.send(element(true, byte)).unwrap();
+    feed.push(piece(2), false).await;
+    feed.push(piece(3), true).await;
+    feed.push(piece(4), false).await;
+    assert_eq!(
+        read_bytes(&mut response, 12).await,
+        [b"HEAD".to_vec(), piece(3), piece(4)].concat()
+    );
+}
+
+#[tokio::test]
+async fn a_live_feed_no_one_reads_drops_its_oldest_pieces_to_a_start_point() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = feed(12, true);
+    let url = server.set_live("stream.mkv", feed.clone());
+    for (byte, start) in [(1, true), (2, false), (3, false), (4, true), (5, false)] {
+        // Never waits, though the feed holds only three.
+        tokio::time::timeout(Duration::from_secs(5), feed.push(piece(byte), start))
+            .await
+            .unwrap();
     }
-    // It may get a piece or two before the lag shows, then the end.
-    let mut ended = false;
-    for _ in 0..8 {
-        if response.chunk().await.ok().flatten().is_none() {
-            ended = true;
-            break;
-        }
+    let mut response = test_server::client().get(&url).send().await.unwrap();
+    assert_eq!(
+        read_bytes(&mut response, 12).await,
+        [b"HEAD".to_vec(), piece(4), piece(5)].concat()
+    );
+}
+
+#[tokio::test]
+async fn keeps_only_what_a_request_needs_or_starts_from() {
+    let feed = feed(1 << 20, true);
+    let mut reader = feed.reader();
+    for (byte, start) in [(1, true), (2, false), (3, true), (4, false)] {
+        feed.push(piece(byte), start).await;
+        reader.next().await.unwrap();
     }
-    assert!(ended);
+    feed.push(piece(5), false).await;
+    // The third piece is where a new request starts.
+    let state = feed.state();
+    assert_eq!((state.first, state.bytes), (2, 12));
+}
+
+#[tokio::test]
+async fn a_request_that_comes_later_counts_the_last_piece_sent() {
+    let feed = feed(1 << 20, true);
+    let mut first = feed.reader();
+    for (byte, start) in [(1, true), (2, false), (3, true)] {
+        feed.push(piece(byte), start).await;
+        first.next().await.unwrap();
+    }
+    let mut later = feed.reader();
+    assert_eq!(*later.next().await.unwrap(), piece(3)[..]);
+}
+
+#[test]
+fn each_request_keeps_its_own_place() {
+    let feed = feed(1 << 20, true);
+    let first = feed.reader();
+    let second = feed.reader();
+    assert_ne!(first.id, second.id);
+    assert_eq!(feed.state().readers.len(), 2);
+    drop(first);
+    assert_eq!(feed.state().readers.len(), 1);
+    drop(second);
+}
+
+#[tokio::test]
+async fn a_file_waits_for_its_reader_who_gets_every_byte_in_order() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = feed(64, false);
+    let url = server.set_live("stream.mkv", feed.clone());
+    let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let writer = {
+        let (feed, written) = (feed.clone(), written.clone());
+        tokio::spawn(async move {
+            for i in 0..200u8 {
+                feed.push(vec![i; 16], i % 10 == 0).await;
+                written.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            feed.end();
+        })
+    };
+    // With no one reading, the writer stops once the feed is full.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), 4);
+    let mut response = test_server::client().get(&url).send().await.unwrap();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.unwrap() {
+        body.extend_from_slice(&chunk);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    writer.await.unwrap();
+    let expected: Vec<u8> = (0..200u8).flat_map(|i| [i; 16]).collect();
+    assert_eq!(&body[..4], b"HEAD");
+    assert!(body[4..] == expected[..], "every piece, in order");
+}
+
+#[tokio::test]
+async fn a_receiver_that_stops_reading_is_dropped_and_counted() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    let feed = LiveFeed::with_write_limit(
+        "video/x-matroska",
+        vec![],
+        64 << 20,
+        false,
+        Duration::from_millis(200),
+    );
+    let mut stalls = feed.stalls();
+    let url = server.set_live("stream.mkv", feed.clone());
+    let path = url
+        .strip_prefix(&format!("http://{}", address(&server)))
+        .unwrap();
+    // A request that never reads its answer.
+    let mut socket = TcpStream::connect(address(&server)).await.unwrap();
+    socket
+        .write_all(format!("GET {path} HTTP/1.1\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    for _ in 0..256 {
+        feed.push(vec![0; 64 << 10], true).await;
+    }
+    tokio::time::timeout(Duration::from_secs(10), stalls.changed())
+        .await
+        .expect("the stall is counted")
+        .unwrap();
+    assert_eq!(*stalls.borrow(), 1);
+    drop(socket);
 }
 
 #[tokio::test]
@@ -197,23 +337,35 @@ async fn answers_a_head_that_arrives_in_parts_up_to_its_limit() {
 #[tokio::test]
 async fn stops_when_dropped_and_ends_its_requests() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
-    let (pieces, _) = broadcast::channel(4);
-    let url = server.set_live(
-        "stream.mkv",
-        LivePipe {
-            content_type: "video/x-matroska",
-            header: b"HEAD".to_vec(),
-            pieces: pieces.subscribe(),
-        },
-    );
+    let feed = feed(1 << 20, true);
+    let url = server.set_live("stream.mkv", feed.clone());
     let mut response = test_server::client().get(&url).send().await.unwrap();
-    assert_eq!(response.chunk().await.unwrap().unwrap().as_ref(), b"HEAD");
+    assert_eq!(read_bytes(&mut response, 4).await, b"HEAD");
     let address = address(&server);
     drop(server);
-    // The open request ends, though its pipe hasn't.
+    // The open request ends, though its feed hasn't.
     assert!(response.chunk().await.ok().flatten().is_none());
-    drop(pieces);
+    drop(feed);
     assert!(TcpStream::connect(&address).await.is_err());
+}
+
+#[tokio::test]
+async fn answers_at_most_16_requests_at_once() {
+    let server = LanServer::start(LOOPBACK).await.unwrap();
+    server.files.put("a.vtt", "text/vtt", b"WEBVTT\n".to_vec());
+    let mut idle = Vec::new();
+    for _ in 0..MAX_REQUESTS {
+        idle.push(TcpStream::connect(address(&server)).await.unwrap());
+    }
+    // Let the server take them all.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let client = test_server::client();
+    assert!(client.get(server.url("a.vtt")).send().await.is_err());
+    drop(idle);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let body = client.get(server.url("a.vtt")).send().await.unwrap();
+    assert_eq!(body.bytes().await.unwrap().as_ref(), b"WEBVTT\n");
+    assert_eq!(MAX_REQUESTS, 16);
 }
 
 /// Every loopback address reaches this computer on Linux, so 127.0.0.2 can
@@ -309,4 +461,149 @@ fn finds_the_route_to_a_receiver() {
         NoRoute.to_string(),
         "this device has no network address the receiver can reach"
     );
+}
+
+#[test]
+fn tells_a_lost_connection_from_a_lost_socket() {
+    use std::io::{Error, ErrorKind};
+    for kind in [
+        ErrorKind::ConnectionAborted,
+        ErrorKind::ConnectionReset,
+        ErrorKind::Interrupted,
+        ErrorKind::WouldBlock,
+    ] {
+        assert_eq!(
+            after_accept(&Error::from(kind)),
+            AfterAccept::Retry,
+            "{kind:?}"
+        );
+    }
+    for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+        assert_eq!(
+            after_accept(&Error::from_raw_os_error(code)),
+            AfterAccept::Pause,
+            "{code}"
+        );
+    }
+    for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
+        assert_eq!(
+            after_accept(&Error::from_raw_os_error(code)),
+            AfterAccept::Rebind,
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn takes_the_socket_for_gone_after_losing_too_many_connections_in_a_row() {
+    use std::io::{Error, ErrorKind};
+    let aborted = || Error::from(ErrorKind::ConnectionAborted);
+    let mut failures = AcceptFailures::default();
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    // Running out of file descriptors neither counts nor starts again.
+    let full = Error::from_raw_os_error(libc::EMFILE);
+    assert_eq!(failures.after(&full), AfterAccept::Pause);
+    assert_eq!(failures.after(&aborted()), AfterAccept::Rebind);
+    // The count starts again after listening again, or an accept.
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    failures.accepted();
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    let gone = Error::from_raw_os_error(libc::EBADF);
+    assert_eq!(failures.after(&gone), AfterAccept::Rebind);
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    assert_eq!(failures.after(&aborted()), AfterAccept::Rebind);
+}
+
+/// What a request from `source` for `path` gets back.
+#[cfg(target_os = "linux")]
+async fn get_from(source: IpAddr, server: &LanServer, path: &str) -> std::io::Result<Vec<u8>> {
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.bind(SocketAddr::new(source, 0))?;
+    let mut socket = socket.connect(address(server).parse().unwrap()).await?;
+    socket
+        .write_all(format!("GET {path} HTTP/1.1\r\n\r\n").as_bytes())
+        .await?;
+    let mut reply = Vec::new();
+    socket.read_to_end(&mut reply).await?;
+    Ok(reply)
+}
+
+/// Takes the listening socket away as iOS does from a suspended app: every
+/// accept fails from then on.
+#[cfg(target_os = "linux")]
+fn take_socket(fd: std::os::fd::RawFd) {
+    // SAFETY: shutdown takes any descriptor and changes no memory.
+    assert_eq!(unsafe { libc::shutdown(fd, libc::SHUT_RDWR) }, 0);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn listens_again_where_it_was_after_losing_its_socket() {
+    let receiver = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+    let server = LanServer::start(receiver).await.unwrap();
+    server.files.put("a.vtt", "text/vtt", b"WEBVTT\n".to_vec());
+    let path = server
+        .url("a.vtt")
+        .strip_prefix(&format!("http://{}", address(&server)))
+        .unwrap()
+        .to_string();
+    take_socket(server.fd);
+    let reply = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match get_from(receiver, &server, &path).await {
+                Ok(reply) if !reply.is_empty() => break reply,
+                _ => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("the server listens again");
+    assert!(reply.ends_with(b"WEBVTT\n"));
+    // Still only for the receiver, and only under its token.
+    assert!(get_from(LOOPBACK, &server, &path)
+        .await
+        .unwrap_or_default()
+        .is_empty());
+    let wrong = path.replace("/cast/", "/cast/0");
+    assert!(get_from(receiver, &server, &wrong)
+        .await
+        .unwrap_or_default()
+        .is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn stopping_ends_a_server_waiting_to_listen_again() {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&listener);
+    // Somewhere else holds the address it would listen on again.
+    let held = std::net::TcpListener::bind((LOOPBACK, 0)).unwrap();
+    let address = held.local_addr().unwrap();
+    let task = tokio::spawn(serve(
+        listener,
+        address,
+        Peers::Receiver(LOOPBACK),
+        "/cast/token/".to_string(),
+        Files::default(),
+        Arc::new(RwLock::new(None)),
+    ));
+    take_socket(fd);
+    // Long enough to fail to listen again at least once.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!task.is_finished());
+    // What dropping the server does.
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    drop(held);
+    tokio::time::sleep(REBIND_PAUSE * 2).await;
+    // Nothing went on to take the address once it was free.
+    std::net::TcpListener::bind(address).unwrap();
 }

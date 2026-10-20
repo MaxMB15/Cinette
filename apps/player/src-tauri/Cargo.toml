@@ -26,6 +26,8 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
+# The errors the converter's server tells apart when an accept fails.
+libc = "0.2"
 
 [dev-dependencies]
 # The mock runtime, so tests can build an app and call commands without a window.
@@ -39,7 +41,6 @@ rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser
 # decides whether that plugin can start on Linux.
 zbus = "5"

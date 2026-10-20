@@ -51,6 +51,8 @@ typedef struct {
   /* The language tag, or NULL. */
   const char *language;
   int is_default;
+  /* This FFmpeg has a decoder for it, so it can be converted. */
+  int decodable;
 } CinetteAudioTrack;
 
 /* Makes a converter that hasn't opened anything, so it can be cancelled

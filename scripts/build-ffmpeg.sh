@@ -70,11 +70,14 @@ MUXERS=avi,matroska,mov,mp4,mpegts,null,webm
 # rawvideo reads the hardware encoder check's blank frame.
 DEMUXERS=aac,ac3,asf,avi,eac3,flac,flv,h264,hevc,hls,live_flv,matroska,mov,mp3,mpegps,mpegts,mpegvideo,ogg,rawvideo,rtp,rtsp,sdp,srt,wav,webvtt
 PROTOCOLS=crypto,data,file,http,httpproxy,https,pipe,rtmp,rtmps,rtp,tcp,tls,udp
-PARSERS=aac,aac_latm,ac3,av1,dca,dvbsub,dvdsub,flac,h264,hevc,mpeg4video,mpegaudio,mpegvideo,opus,vorbis,vp8,vp9,vvc
+PARSERS=aac,aac_latm,ac3,av1,dca,dvbsub,dvdsub,flac,h264,hevc,mlp,mpeg4video,mpegaudio,mpegvideo,opus,vc1,vorbis,vp8,vp9,vvc
 BSFS=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,mpeg4_unpack_bframes,null,setts,vp9_superframe,vvc_mp4toannexb
-# Converting a stream for a Cast receiver decodes the audio it can't play,
-# DTS and Opus among it.
-DECODERS=aac,aac_latm,ac3,ass,dca,dvbsub,dvdsub,eac3,h264,hevc,movtext,mp2,mp3,mpeg2video,mpeg4,opus,rawvideo,subrip,webvtt
+# Converting a stream for a Cast receiver decodes the audio it can't play:
+# DTS and Opus, and the lossless and PCM tracks that films from VOD providers
+# carry, FLAC, TrueHD and MLP, ALAC and Blu-ray and DVD PCM. A full transcode
+# decodes the video, VP9 and VC-1 among it. There's no AV1: ffmpeg's own AV1
+# decoder only works through hardware decoding, which this build leaves out.
+DECODERS=aac,aac_latm,ac3,alac,ass,dca,dvbsub,dvdsub,eac3,flac,h264,hevc,mlp,movtext,mp2,mp3,mpeg2video,mpeg4,opus,pcm_bluray,pcm_dvd,pcm_s16le,pcm_s24le,rawvideo,subrip,truehd,vc1,vorbis,vp9,webvtt
 # Without -map, ffmpeg only keeps a subtitle track when it has an encoder for
 # the container's own subtitle format, ASS for Matroska and WebVTT for WebM.
 # The app copies the track, so neither runs. Converting turns audio a receiver

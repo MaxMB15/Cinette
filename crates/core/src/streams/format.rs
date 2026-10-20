@@ -56,6 +56,9 @@ pub struct StreamFormat {
     /// `None` when the stream has no video.
     pub video: Option<VideoCodec>,
     pub interlaced: bool,
+    /// HDR10 or HLG video, which a transcode can't tone map yet.
+    #[serde(default)]
+    pub hdr: bool,
     /// `None` when the stream has no audio.
     pub audio: Option<AudioCodec>,
     /// For HLS, whether the playlist and its segments send CORS headers.
@@ -101,7 +104,8 @@ pub fn audio_codec(name: &str) -> AudioCodec {
 }
 
 /// What mpv says about the item it's playing: `file-format`, the selected
-/// tracks' `codec`, and `video-frame-info/interlaced`.
+/// tracks' `codec`, `video-frame-info/interlaced`, and whether
+/// `video-params/gamma` is HDR.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayingInfo {
@@ -110,6 +114,8 @@ pub struct PlayingInfo {
     pub audio_codec: Option<String>,
     #[serde(default)]
     pub interlaced: bool,
+    #[serde(default)]
+    pub hdr: bool,
 }
 
 impl PlayingInfo {
@@ -123,6 +129,7 @@ impl PlayingInfo {
                 .map_or(Container::Other, container_from_demuxer),
             video: self.video_codec.as_deref().map(video_codec),
             interlaced: self.interlaced,
+            hdr: self.hdr,
             audio: self.audio_codec.as_deref().map(audio_codec),
             cors: false,
         }

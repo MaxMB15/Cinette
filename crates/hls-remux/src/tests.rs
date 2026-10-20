@@ -105,6 +105,7 @@ fn reads_a_sources_tracks_and_length() {
     assert_eq!(tracks.len(), 1);
     assert_eq!(tracks[0].codec, "pcm_s16le");
     assert_eq!(tracks[0].language, None);
+    assert!(tracks[0].decodable);
     assert_eq!(source.video(), (Video::None, Vec::new()));
     let duration = source.duration().unwrap();
     assert!((duration - 3.0).abs() < 0.05, "{duration}");
@@ -351,6 +352,7 @@ fn reads_the_c_answers() {
         codec: codec.as_ptr(),
         language: language.as_ptr(),
         is_default: 1,
+        decodable: 1,
     };
     assert_eq!(
         audio_track(&raw),
@@ -358,12 +360,14 @@ fn reads_the_c_answers() {
             codec: "ac3".into(),
             language: Some("eng".into()),
             default: true,
+            decodable: true,
         }
     );
     let bare = ffi::CinetteAudioTrack {
         codec: std::ptr::null(),
         language: std::ptr::null(),
         is_default: 0,
+        decodable: 0,
     };
     assert_eq!(
         audio_track(&bare),
@@ -371,6 +375,7 @@ fn reads_the_c_answers() {
             codec: String::new(),
             language: None,
             default: false,
+            decodable: false,
         }
     );
 

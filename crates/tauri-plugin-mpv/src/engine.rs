@@ -26,6 +26,14 @@ pub struct MediaInfo {
     pub audio_codec: Option<String>,
     /// The latest frame was interlaced.
     pub interlaced: bool,
+    /// The video is HDR: PQ, as HDR10 uses, or HLG.
+    pub hdr: bool,
+}
+
+/// Whether mpv's `video-params/gamma` is an HDR transfer: PQ, which HDR10
+/// and Dolby Vision use, or HLG.
+pub(crate) fn hdr_gamma(gamma: &str) -> bool {
+    matches!(gamma, "pq" | "hlg")
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -496,6 +504,7 @@ impl MpvEngine {
             interlaced: mpv
                 .get_property::<bool>("video-frame-info/interlaced")
                 .unwrap_or(false),
+            hdr: text("video-params/gamma").is_some_and(|g| hdr_gamma(&g)),
         }
     }
 

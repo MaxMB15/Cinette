@@ -38,6 +38,7 @@ mod ffi {
         pub codec: *const c_char,
         pub language: *const c_char,
         pub is_default: c_int,
+        pub decodable: c_int,
     }
 
     pub type WriteFn = extern "C" fn(*mut c_void, *const u8, c_int);
@@ -126,6 +127,8 @@ pub struct AudioTrack {
     pub codec: String,
     pub language: Option<String>,
     pub default: bool,
+    /// This FFmpeg can decode it, so it can be converted.
+    pub decodable: bool,
 }
 
 /// What the source's video is.
@@ -288,6 +291,7 @@ fn audio_track(raw: &ffi::CinetteAudioTrack) -> AudioTrack {
         codec: text(raw.codec).unwrap_or_default(),
         language: text(raw.language),
         default: raw.is_default != 0,
+        decodable: raw.decodable != 0,
     }
 }
 

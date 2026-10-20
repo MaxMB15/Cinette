@@ -206,13 +206,14 @@ int cinette_remux_open(CinetteRemux *r, const char *url, double start, const cha
 int cinette_remux_audio_count(const CinetteRemux *r) { return r->audio_count; }
 
 CinetteAudioTrack cinette_remux_audio_track(const CinetteRemux *r, int index) {
-  CinetteAudioTrack track = {"", NULL, 0};
+  CinetteAudioTrack track = {"", NULL, 0, 0};
   if (index < 0 || index >= r->audio_count) return track;
   const AVStream *st = r->in->streams[r->audio_streams[index]];
   track.codec = avcodec_get_name(st->codecpar->codec_id);
   const AVDictionaryEntry *language = av_dict_get(st->metadata, "language", NULL, 0);
   track.language = language ? language->value : NULL;
   track.is_default = (st->disposition & AV_DISPOSITION_DEFAULT) != 0;
+  track.decodable = avcodec_find_decoder(st->codecpar->codec_id) != NULL;
   return track;
 }
 

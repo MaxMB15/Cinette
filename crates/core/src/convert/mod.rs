@@ -53,14 +53,16 @@ const DECODER_DOWNMIX: [&str; 3] = ["ac3", "eac3", "dts"];
 /// Which audio track to keep, and how. A track in `language` comes first
 /// when there is one, and among those, one whose codec is in `playable`,
 /// the ffmpeg names of what the receiver plays as it is, so there's no
-/// second lossy pass. Otherwise the default track is converted, to 5.1 AAC
-/// when it's 5.1 and the receiver takes `surround`, and to stereo AAC
-/// otherwise. Stereo is the fallback for a receiver that plays 5.1 AAC
-/// without sound.
+/// second lossy pass. Otherwise the default track is converted, or the
+/// first one this device's ffmpeg can decode, by `decodable`, when it
+/// can't decode the default. It becomes 5.1 AAC when it's 5.1 and the
+/// receiver takes `surround`, and stereo AAC otherwise. Stereo is the
+/// fallback for a receiver that plays 5.1 AAC without sound.
 pub fn pick_audio(
     tracks: &[AudioTrack],
     language: Option<&str>,
     playable: &[&str],
+    decodable: &[&str],
     surround: bool,
 ) -> (usize, AudioPlan) {
     let in_language: Vec<usize> = (0..tracks.len())
@@ -82,14 +84,15 @@ pub fn pick_audio(
     {
         return (copy, AudioPlan::Copy);
     }
+    let first = ordered
+        .iter()
+        .copied()
+        .find(|&i| decodable.contains(&tracks[i].codec.as_str()))
+        .unwrap_or(first);
     let track = &tracks[first];
-    // `5.1` or `5.1(side)`, which AC-3, E-AC-3 and DTS decode to.
-    if surround
-        && track
-            .layout
-            .as_deref()
-            .is_some_and(|l| l.starts_with("5.1"))
-    {
+    // `5.1` or `5.1(side)`, which AC-3, E-AC-3 and DTS decode to. Layouts
+    // with height channels, such as `5.1.2`, become stereo.
+    if surround && matches!(track.layout.as_deref(), Some("5.1" | "5.1(side)")) {
         return (first, AudioPlan::Surround);
     }
     let downmix = DECODER_DOWNMIX.contains(&track.codec.as_str());
@@ -161,7 +164,14 @@ pub struct Encoders {
 pub struct Plan {
     pub video: VideoPlan,
     pub audio: AudioPlan,
-    /// Where to start, in seconds, for a file with a length.
+    /// A live channel, which comes at its own pace and has no end. A file
+    /// is read at its playing speed, after a burst that fills the
+    /// receiver's buffer.
+    pub live: bool,
+    /// Where to start, in seconds, for a file with a length. With copied
+    /// video, ffmpeg starts at the keyframe before it, up to one group of
+    /// pictures early, so the receiver's position runs that much ahead of
+    /// the item's.
     pub start_at: Option<f64>,
     /// Which of the source's audio tracks to keep, counting from 0.
     pub audio_track: usize,
@@ -171,6 +181,30 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("this device has no hardware video encoder")]
 pub struct NoEncoder;
+
+/// Whether ffmpeg's error text says it lacks a decoder or an encoder for
+/// the stream, or couldn't open the encoder, rather than that it couldn't
+/// read it.
+pub fn unsupported(stderr: &str) -> bool {
+    [
+        "no decoder found for",
+        "Decoder (codec",
+        "Unknown encoder",
+        "Encoder not found",
+        "Error while opening encoder",
+        "Could not open encoder",
+    ]
+    .iter()
+    .any(|marker| stderr.contains(marker))
+}
+
+/// How much of a file ffmpeg reads at full speed before it keeps to the
+/// file's own pace, in seconds.
+const BURST: &str = "10";
+
+/// The protocols a remote source may use, so a playlist entry can't point
+/// ffmpeg at a file on this device. HLS segments use the same ones.
+const REMOTE_PROTOCOLS: &str = "http,https,tcp,tls,crypto";
 
 /// The ffmpeg arguments that convert `url` by `plan` and write live
 /// Matroska to standard output.
@@ -196,6 +230,16 @@ pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, N
     if let AudioPlan::Aac { downmix: true } = plan.audio {
         args.extend(["-downmix".into(), "stereo".into()]);
     }
+    if url.starts_with("http://") || url.starts_with("https://") {
+        args.extend(["-protocol_whitelist".into(), REMOTE_PROTOCOLS.into()]);
+    }
+    if !plan.live {
+        // Otherwise ffmpeg reads a file as fast as the network goes, far
+        // ahead of the receiver.
+        args.extend(
+            ["-readrate", "1", "-readrate_initial_burst", BURST].map(String::from),
+        );
+    }
     if let Some(at) = plan.start_at.filter(|at| *at > 0.0) {
         args.extend(["-ss".into(), format!("{at:.3}")]);
     }
@@ -204,7 +248,9 @@ pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, N
         args.extend(["-map".into(), "0:v:0".into()]);
     }
     if plan.audio != AudioPlan::None {
-        args.extend(["-map".into(), format!("0:a:{}?", plan.audio_track)]);
+        // No `?`, so a track that isn't there fails rather than playing
+        // without sound.
+        args.extend(["-map".into(), format!("0:a:{}", plan.audio_track)]);
     }
     // Subtitles and data tracks stay behind. Subtitle files go to the
     // receiver on their own.
@@ -215,11 +261,13 @@ pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, N
         VideoPlan::Transcode { deinterlace } => {
             let encoder = encoders.video.ok_or(NoEncoder)?;
             // bwdif makes a frame of each field, so 50i stays 50 frames a
-            // second. Then 8-bit 4:2:0, which every H.264 receiver plays.
+            // second. Anything taller than 1080p is scaled down, since
+            // receivers without HEVC don't play H.264 above it. Then 8-bit
+            // 4:2:0, which every H.264 receiver plays.
             let filters = if deinterlace {
-                "bwdif=mode=send_field,format=yuv420p"
+                "bwdif=mode=send_field,scale=-2:'min(ih,1080)',format=yuv420p"
             } else {
-                "format=yuv420p"
+                "scale=-2:'min(ih,1080)',format=yuv420p"
             };
             args.extend(
                 [

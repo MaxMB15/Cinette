@@ -20,6 +20,8 @@ export interface StreamFormat {
 	/** `null` when the stream has no video. */
 	video: VideoCodec | null;
 	interlaced: boolean;
+	/** HDR10 or HLG video, which a transcode can't tone map yet. */
+	hdr: boolean;
 	/** `null` when the stream has no audio. */
 	audio: AudioCodec | null;
 	/** For HLS, whether the playlist and its segments send CORS headers. */
@@ -75,6 +77,7 @@ export type PlayBlocker =
 	| "container"
 	| "videoCodec"
 	| "interlaced"
+	| "hdr"
 	| "audioCodec"
 	| "audioOnly"
 	| "cors"
@@ -134,6 +137,8 @@ const convert = (
 			return f.interlaced && !r.interlaced
 				? { ok: false, reason: "interlaced" }
 				: { ok: false, reason: "videoCodec", detail: f.video };
+		// A transcode would wash HDR out to SDR, so it's refused for now.
+		if (!plays && f.hdr) return { ok: false, reason: "hdr" };
 		video = plays ? "copy" : "transcode";
 	}
 	let audio: Converted["audio"] = "none";

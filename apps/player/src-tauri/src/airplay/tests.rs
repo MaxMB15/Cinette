@@ -45,6 +45,7 @@ async fn list(app: &TestApp, channel: &Channel) -> u64 {
         video_codec: Some("h264".into()),
         audio_codec: Some("aac".into()),
         interlaced: false,
+        hdr: false,
     };
     let now = Some((channel.url.clone(), info));
     let listed = stream_formats(
