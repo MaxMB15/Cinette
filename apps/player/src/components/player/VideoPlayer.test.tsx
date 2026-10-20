@@ -23,6 +23,8 @@ import {
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
 import type { AirPlay } from "@/hooks/useAirPlay";
+import type { Cast } from "@/hooks/useCast";
+import type { CastDestination } from "@/lib/cast-destination";
 import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
@@ -254,6 +256,56 @@ vi.mock("@/hooks/useAirPlay", async () => {
 		useAirPlay: (enabled: boolean) => {
 			fakeAirPlay.enabled.push(enabled);
 			return useSyncExternalStore(fakeAirPlay.subscribe, fakeAirPlay.get);
+		},
+	};
+});
+
+/** Stands in for useCast, which has tests of its own. */
+const fakeCast = vi.hoisted(() => {
+	const initial = (): Cast => ({
+		receivers: [],
+		localNetworkDenied: false,
+		statuses: new Map(),
+		check: vi.fn(),
+		release: vi.fn(),
+		destination: null,
+		state: null,
+		send: vi.fn<Cast["send"]>(async () => null),
+		stop: vi.fn<Cast["stop"]>(async () => {}),
+		vpnActive: false,
+		streamThrough: false,
+		setStreamThrough: vi.fn(),
+	});
+	let current = initial();
+	const listeners = new Set<() => void>();
+	return {
+		enabled: [] as boolean[],
+		/** What the player gave the hook to say why a cast ended. */
+		report: (() => {}) as (message: string) => void,
+		get: () => current,
+		subscribe: (listener: () => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		reset: () => {
+			current = initial();
+		},
+		set: (patch: Partial<Cast>) => {
+			current = { ...current, ...patch };
+			listeners.forEach((listener) => listener());
+		},
+	};
+});
+
+vi.mock("@/hooks/useCast", async () => {
+	const { useSyncExternalStore } = await import("react");
+	return {
+		useCast: (enabled: boolean, report: (message: string) => void) => {
+			fakeCast.enabled.push(enabled);
+			fakeCast.report = report;
+			return useSyncExternalStore(fakeCast.subscribe, fakeCast.get);
 		},
 	};
 });
@@ -686,6 +738,7 @@ beforeEach(() => {
 	sessionStorage.clear();
 	fakeMpv.reset();
 	fakeAirPlay.reset();
+	fakeCast.reset();
 	fakeAirPlay.enabled = [];
 	env.channels = [];
 	env.downloads = [];
@@ -3953,5 +4006,263 @@ describe("AirPlay", () => {
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 		act(() => vi.advanceTimersByTime(3500));
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
+	});
+});
+
+describe("Google Cast", () => {
+	const castState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
+		status: "playing",
+		item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
+		position: 600,
+		positionAt: performance.now(),
+		duration: 5400,
+		volume: 40,
+		subtitles: [],
+		subtitleId: null,
+		audio: [],
+		audioId: null,
+		connection: "connected",
+		error: null,
+		...patch,
+	});
+
+	const receiver = (id: string, name: string, available = true) => ({
+		id,
+		name,
+		model: "Chromecast",
+		status: null,
+		available,
+	});
+
+	const tv = () => ({
+		id: "cast:tv",
+		kind: "cast" as const,
+		name: "Hotel TV",
+		catalog: { kind: "local" as const },
+		capabilities: {
+			seek: true,
+			pause: true,
+			volume: "absolute" as const,
+			subtitles: "none" as const,
+			externalSubtitles: false,
+			audioTracks: false,
+			resumeAt: true,
+			catalog: false,
+		},
+		route: vi.fn(),
+		load: vi.fn(),
+		play: vi.fn(async () => {}),
+		pause: vi.fn(async () => {}),
+		seek: vi.fn(async () => {}),
+		setVolume: vi.fn(async () => {}),
+		selectSubtitle: vi.fn(),
+		selectAudio: vi.fn(),
+		stop: vi.fn(async () => {}),
+		getState: vi.fn(() => castState()),
+		subscribe: vi.fn(() => () => {}),
+		receive: vi.fn(),
+		closedReason: vi.fn(() => null),
+	});
+
+	const castButton = () => screen.queryByRole("button", { name: "Cast" });
+
+	it("is only on for macOS and Linux", async () => {
+		await openItem(lanternKeeper());
+		expect(fakeCast.enabled[fakeCast.enabled.length - 1]).toBe(true);
+		setUpTouchScreen();
+		fakeCast.enabled = [];
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(fakeCast.enabled.every((on) => !on)).toBe(true);
+	});
+
+	it("shows its button once a receiver is found", async () => {
+		await openItem(lanternKeeper());
+		expect(castButton()).toBeNull();
+		act(() => fakeCast.set({ receivers: [receiver("cast:tv", "Hotel TV")] }));
+		expect(castButton()).not.toBeNull();
+	});
+
+	it("lists the receivers with how this item gets there, and casts from where it is", async () => {
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV"), receiver("cast:den", "Den", false)],
+			statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+		});
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 600, 5400) });
+		fireEvent.click(castButton()!);
+		await flush();
+		expect(fakeCast.get().check).toHaveBeenCalledWith(expect.objectContaining({ id: "mv1" }));
+		const picker = screen.getByRole("dialog", { name: "Play on" });
+		const group = within(picker).getByRole("region", { name: "Google Cast" });
+		expect(within(group).getByText("Plays directly")).toBeTruthy();
+		expect(within(group).getByText("Can't be reached")).toBeTruthy();
+		fireEvent.click(within(group).getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(fakeCast.get().release).toHaveBeenCalled();
+		const send = vi.mocked(fakeCast.get().send);
+		expect(send).toHaveBeenCalledWith(
+			"cast:tv",
+			expect.objectContaining({ id: "mv1" }),
+			expect.objectContaining({ startAt: 600 })
+		);
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		await act(() => send.mock.calls[0][2].stopLocal());
+		expect(fakeMpv.actions.stop).toHaveBeenCalled();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalled();
+	});
+
+	it("asks before this computer converts, and casts live from now", async () => {
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV")],
+			statuses: new Map([["cast:tv", { via: "converted" as const, keep: "on" as const }]]),
+		});
+		await openItem(makeNewsChannel());
+		await setMpv({ state: playing(NEWS_URL, 30, 0) });
+		fireEvent.click(castButton()!);
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+		const send = vi.mocked(fakeCast.get().send);
+		expect(send).not.toHaveBeenCalled();
+		expect(screen.getByText(/needs this computer to stay on/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+		await flush();
+		expect(send).toHaveBeenCalledTimes(1);
+		expect(send.mock.calls[0][2].startAt).toBeUndefined();
+	});
+
+	it("says why a cast didn't start", async () => {
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV")],
+			statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+		});
+		vi.mocked(fakeCast.get().send).mockResolvedValueOnce("Couldn't reach Hotel TV.");
+		await openItem(lanternKeeper());
+		fireEvent.click(castButton()!);
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Hotel TV.");
+	});
+
+	it("covers the player with the receiver's controls while it casts", async () => {
+		await openItem(lanternKeeper());
+		const destination = tv();
+		act(() =>
+			fakeCast.set({
+				destination: destination as unknown as CastDestination,
+				state: castState({ status: "paused" }),
+			})
+		);
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		expect(within(panel).getByText("Casting to Hotel TV")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Cast" })).toBeNull();
+		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
+		expect(destination.play).toHaveBeenCalled();
+		const slider = within(panel).getByRole("slider", { name: "Position" });
+		fireEvent.change(slider, { target: { value: "900" } });
+		expect(destination.seek).not.toHaveBeenCalled();
+		fireEvent.pointerUp(slider);
+		expect(destination.seek).toHaveBeenCalledWith(900);
+		fireEvent.change(within(panel).getByRole("slider", { name: "Volume" }), {
+			target: { value: "70" },
+		});
+		expect(destination.setVolume).toHaveBeenCalledWith(70);
+	});
+
+	it("plays here again from where the receiver was", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockClear();
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState({ status: "paused" }),
+			})
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
+		await flush();
+		expect(fakeCast.get().stop).toHaveBeenCalled();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 600);
+	});
+
+	it("stops the cast and leaves the player", async () => {
+		await openItem(lanternKeeper());
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState(),
+			})
+		);
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		fireEvent.click(within(panel).getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(fakeCast.get().stop).toHaveBeenCalled();
+		expect(screen.getByText("Channel list")).toBeTruthy();
+	});
+
+	it("says why a cast ended by itself, until it's dismissed", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeCast.report("Lost the connection to Hotel TV."));
+		expect(screen.getByRole("alert").textContent).toBe("Lost the connection to Hotel TV.");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("puts a note away after a while", async () => {
+		vi.useFakeTimers();
+		await openItem(lanternKeeper());
+		act(() => fakeCast.report("Lost the connection to Hotel TV."));
+		act(() => vi.advanceTimersByTime(5999));
+		expect(screen.queryByRole("alert")).not.toBeNull();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.queryByRole("alert")).toBeNull();
+		vi.useRealTimers();
+	});
+
+	it("shows its button with no receivers when it knows why, and says why", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeCast.set({ vpnActive: true }));
+		fireEvent.click(castButton()!);
+		await flush();
+		expect(screen.getByRole("dialog", { name: "Play on" }).textContent).toContain(
+			"A VPN is on."
+		);
+		fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+		act(() => fakeCast.set({ vpnActive: false, localNetworkDenied: true }));
+		expect(castButton()).not.toBeNull();
+		act(() => fakeCast.set({ localNetworkDenied: false }));
+		expect(castButton()).toBeNull();
+	});
+
+	it("says why a control failed while the cast is still connected", async () => {
+		await openItem(lanternKeeper());
+		const destination = tv();
+		destination.play.mockRejectedValueOnce("refused");
+		destination.pause.mockRejectedValueOnce("notConnected");
+		act(() =>
+			fakeCast.set({
+				destination: destination as unknown as CastDestination,
+				state: castState({ status: "paused" }),
+			})
+		);
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe(
+			"The provider refused the stream. The login may have expired."
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		act(() => fakeCast.set({ state: castState() }));
+		fireEvent.click(within(panel).getByRole("button", { name: "Pause" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Hotel TV didn't respond.");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		// Once the connection is going, the cast says so itself.
+		destination.getState.mockReturnValue(castState({ connection: "reconnecting" }));
+		destination.seek.mockRejectedValueOnce("unreachable");
+		const slider = within(panel).getByRole("slider", { name: "Position" });
+		fireEvent.change(slider, { target: { value: "900" } });
+		fireEvent.pointerUp(slider);
+		await flush();
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 });
