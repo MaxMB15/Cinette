@@ -217,6 +217,7 @@ describe("DevicesButton", () => {
 		control.state = { ...control.state, devices: [] };
 		render(<DevicesButton />);
 		const open = () => fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		const close = () => fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		open();
 		await act(async () => {});
 		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
@@ -225,8 +226,16 @@ describe("DevicesButton", () => {
 		act(() => vi.advanceTimersByTime(1));
 		expect(screen.getByRole("status")).toHaveTextContent(NONE_FOUND);
 		// Opened again, it looks again.
-		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		close();
 		open();
+		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
+		// Closed before its time and opened later, the old wait doesn't count.
+		act(() => vi.advanceTimersByTime(LOOKING_MS - 1000));
+		close();
+		act(() => vi.advanceTimersByTime(LOOKING_MS));
+		open();
+		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
+		act(() => vi.advanceTimersByTime(LOOKING_MS - 1));
 		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
 		vi.useRealTimers();
 	});
@@ -263,6 +272,7 @@ describe("ConnectStatusDialog", () => {
 	it("shows nothing without a link, or once connected", () => {
 		const { rerender } = render(<ConnectStatusDialog />);
 		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(screen.queryByRole("status"), "and no notice").toBeNull();
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		rerender(<ConnectStatusDialog />);
 		expect(screen.queryByRole("dialog")).toBeNull();
@@ -342,6 +352,7 @@ describe("RemoteBar", () => {
 		render(<RemoteBar />);
 		const bar = screen.getByRole("region", { name: "Remote control" });
 		expect(bar).toHaveTextContent("Playing on Living Room");
+		expect(within(bar).getByTitle("Living Room").textContent).toBe("Playing on Living Room");
 		expect(bar).toHaveTextContent("News at Ten");
 	});
 
@@ -403,7 +414,9 @@ describe("RemoteBar", () => {
 	it("says it's reconnecting", () => {
 		control.state = { ...control.state, link: link({ phase: "reconnecting", attempt: 2 }) };
 		render(<RemoteBar />);
-		expect(screen.getByRole("region")).toHaveTextContent("Reconnecting to Living Room…");
+		expect(within(screen.getByRole("region")).getByTitle("Living Room").textContent).toBe(
+			"Reconnecting to Living Room…"
+		);
 	});
 
 	it("waits for consent before showing", () => {

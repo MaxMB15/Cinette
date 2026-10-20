@@ -56,11 +56,15 @@ const ConsentPrompt = ({
 	const left = secondsLeft(request.expiresAt, now);
 	// A new request mounts a new prompt, so it waits again.
 	const [armedAt, setArmedAt] = useState(() => performance.now() + ARM_MS);
-	useEffect(() => {
-		const rearm = () => setArmedAt(performance.now() + ARM_MS);
-		window.addEventListener("focus", rearm);
-		return () => window.removeEventListener("focus", rearm);
-	}, []);
+	useEffect(
+		() => {
+			const rearm = () => setArmedAt(performance.now() + ARM_MS);
+			window.addEventListener("focus", rearm);
+			return () => window.removeEventListener("focus", rearm);
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
+	);
 	const armed = now >= armedAt;
 	// A pointer press that began before this prompt was on screen was
 	// meant for what was there before.

@@ -41,9 +41,14 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 			.then((refused) => setDenied(refused === true))
 			.catch(() => setDenied(false));
 	};
+	// Closed, it looks again from the start the next time it opens.
+	const close = () => {
+		setOpen(false);
+		setLooked(false);
+	};
 	const activeId = link ? cinetteId(link.deviceId) : LOCAL_ENTRY.id;
 	const select = (id: string) => {
-		setOpen(false);
+		close();
 		if (id === activeId) return;
 		// Choosing this device is returning to independent playback.
 		if (id === LOCAL_ENTRY.id) {
@@ -63,10 +68,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 				title={link ? `Playing on ${link.name}` : "Play on another device"}
 				aria-label={link ? `Devices, playing on ${link.name}` : undefined}
 				aria-haspopup="dialog"
-				onClick={() => {
-					setLooked(false);
-					setOpen(true);
-				}}
+				onClick={() => setOpen(true)}
 				className={cn(
 					"flex flex-col items-center justify-center w-full py-3 gap-1 transition-colors",
 					link ? "text-primary" : "text-muted-foreground hover:text-foreground",
@@ -78,7 +80,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 			</button>
 			<DevicePicker
 				open={open}
-				onClose={() => setOpen(false)}
+				onClose={close}
 				entries={cinetteEntries(devices)}
 				activeId={activeId}
 				onSelect={select}

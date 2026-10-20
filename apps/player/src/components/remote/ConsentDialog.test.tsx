@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import type { EventCallback } from "@tauri-apps/api/event";
@@ -124,6 +125,26 @@ describe("ConsentDialog", () => {
 		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
 	});
 
+	it("works exactly a moment after it shows", async () => {
+		await shownOnFakeTime();
+		ask(7);
+		armed();
+		expect(screen.getByRole("button", { name: "Allow" })).not.toHaveAttribute("aria-disabled");
+	});
+
+	it("stops listening for focus once it's answered", async () => {
+		const added = vi.spyOn(window, "addEventListener");
+		const removed = vi.spyOn(window, "removeEventListener");
+		await shown();
+		ask(7);
+		const listener = added.mock.calls.find(([type]) => type === "focus")?.[1];
+		expect(listener).toBeDefined();
+		fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+		expect(removed).toHaveBeenCalledWith("focus", listener);
+		added.mockRestore();
+		removed.mockRestore();
+	});
+
 	it("ignores a click whose press began before the prompt showed", async () => {
 		await shownOnFakeTime();
 		ask(7);
@@ -165,6 +186,33 @@ describe("ConsentDialog", () => {
 		expect(await screen.findByRole("dialog", { name: QUESTION })).toHaveTextContent(
 			"Expires in 12 s"
 		);
+	});
+
+	it("drops a waiting request that answers after its effect was cleaned up", async () => {
+		// StrictMode runs the effect, cleans it up and runs it again, so the
+		// first answer belongs to an effect that's gone.
+		let first: (pending: Awaited<ReturnType<typeof remotePendingConsent>>) => void = () => {};
+		vi.mocked(remotePendingConsent)
+			.mockReturnValueOnce(new Promise((r) => (first = r)))
+			.mockResolvedValueOnce(null);
+		render(
+			<StrictMode>
+				<ConsentDialog />
+			</StrictMode>
+		);
+		await act(async () => {});
+		expect(remotePendingConsent).toHaveBeenCalledTimes(2);
+		await act(async () =>
+			first({
+				request: 4,
+				deviceId: "old",
+				name: "Old",
+				deviceType: "mac",
+				code: "111111",
+				expiresInMs: 10_000,
+			})
+		);
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
 	it("keeps a request an event brought over the older one it asked for", async () => {

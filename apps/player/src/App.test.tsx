@@ -35,6 +35,12 @@ vi.mock("./components/settings/Settings", () => ({
 	),
 }));
 
+// The connect dialog has its own tests. Here it only shows that it's mounted.
+vi.mock("./components/remote/RemoteControls", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./components/remote/RemoteControls")>()),
+	ConnectStatusDialog: () => <p>Connect dialog</p>,
+}));
+
 let providers: Provider[] = [];
 
 /** What the Rust side answers, by command. */
@@ -133,6 +139,7 @@ describe("App", () => {
 		await waitFor(() =>
 			expect(listen).toHaveBeenCalledWith("remote://controller", expect.any(Function))
 		);
+		expect(screen.getByText("Connect dialog")).toBeInTheDocument();
 	});
 
 	it("shows the consent and connect dialogs only on the desktop", async () => {
@@ -143,6 +150,7 @@ describe("App", () => {
 		);
 		expect(listen).not.toHaveBeenCalledWith("remote://consent", expect.any(Function));
 		expect(listen).not.toHaveBeenCalledWith("remote://controller", expect.any(Function));
+		expect(screen.queryByText("Connect dialog")).toBeNull();
 	});
 
 	it("takes commands from other Cinette devices", async () => {

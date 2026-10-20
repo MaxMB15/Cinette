@@ -135,6 +135,10 @@ describe("keepOrder", () => {
 			["cinette:b", "cinette:a", "cinette:new"],
 		]);
 		expect(kept[1].heading).toBe("Cinette devices");
+		// The first id held stays first too.
+		expect(
+			keepOrder(groups, ["cinette:b", "cinette:a"])[1].entries.map((e) => e.id)
+		).toStrictEqual(["cinette:b", "cinette:a", "cinette:new"]);
 		expect(
 			groups[1].entries.map((e) => e.id),
 			"the groups given stay as they were"
