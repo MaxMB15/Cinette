@@ -238,7 +238,10 @@ async fn never_allow_ends_sessions_even_when_it_cant_be_saved() {
         "{error}"
     );
     assert_eq!(phone.closed().await, Some(CloseReason::Revoked));
-    assert_eq!(running.service_settings().remote_control, ControlMode::Never);
+    assert_eq!(
+        running.service_settings().remote_control,
+        ControlMode::Never
+    );
     // The store keeps what it had, so the next write doesn't save it.
     let store = running.app.handle().store(SETTINGS_STORE_FILE).unwrap();
     assert_eq!(store.get(SETTINGS_KEY), Some(saved));
@@ -251,6 +254,11 @@ async fn consent_goes_to_the_webview_and_its_answer_comes_back() {
     let code = phone.code().await;
     phone.pending().await;
     let consent = running.event("remote://consent").await;
+    // A page that wasn't listening yet finds it.
+    let pending = running.invoke("remote_pending_consent", json!({})).unwrap();
+    assert_eq!(pending["request"], consent["request"]);
+    assert_eq!(pending["code"], consent["code"]);
+    assert!(pending["expiresInMs"].as_u64().unwrap() <= consent["expiresInMs"].as_u64().unwrap());
     assert_eq!(consent["name"], json!("Phone"));
     assert_eq!(consent["deviceType"], json!("iphone"));
     assert_eq!(consent["code"], json!(code));
@@ -271,6 +279,11 @@ async fn consent_goes_to_the_webview_and_its_answer_comes_back() {
     assert_eq!(
         running.event("remote://consent-hidden").await,
         json!({ "request": consent["request"] })
+    );
+    assert_eq!(
+        running.invoke("remote_pending_consent", json!({})),
+        Ok(Value::Null),
+        "an answered request is gone"
     );
     let sessions = running.event("remote://sessions").await;
     assert_eq!(sessions[0]["name"], json!("Phone"));
@@ -615,6 +628,7 @@ fn commands_say_when_remote_control_did_not_start() {
     for (command, args) in [
         ("remote_get_settings", json!({})),
         ("remote_sessions", json!({})),
+        ("remote_pending_consent", json!({})),
         ("remote_disconnect", json!({ "sessionId": "s" })),
     ] {
         assert_eq!(

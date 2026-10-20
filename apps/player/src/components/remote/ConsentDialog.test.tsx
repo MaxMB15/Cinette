@@ -15,10 +15,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@/lib/tauri", () => ({
 	remoteAnswerConsent: vi.fn(() => Promise.resolve()),
+	remotePendingConsent: vi.fn(() => Promise.resolve(null)),
 }));
 
-import { remoteAnswerConsent } from "@/lib/tauri";
-import { ConsentDialog } from "./ConsentDialog";
+import { remoteAnswerConsent, remotePendingConsent } from "@/lib/tauri";
+import { ARM_MS, ConsentDialog } from "./ConsentDialog";
 
 const ask = (request = 3, expiresInMs = 30_000) =>
 	act(() =>
@@ -50,6 +51,17 @@ const shown = async () => {
 	await waitFor(() => expect(handlers.size).toBe(2));
 };
 
+/** The dialog with fake time, so a test can wait out the arm delay. */
+const shownOnFakeTime = async () => {
+	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+	render(<ConsentDialog />);
+	await act(async () => {});
+};
+
+const armed = () => act(() => vi.advanceTimersByTime(ARM_MS));
+
+const QUESTION = "Allow “Max's iPhone” to control this device?";
+
 beforeEach(() => {
 	handlers.clear();
 	vi.clearAllMocks();
@@ -68,26 +80,60 @@ describe("ConsentDialog", () => {
 	it("names the device, its type and the code", async () => {
 		await shown();
 		ask();
-		const dialog = screen.getByRole("dialog", {
-			name: "Allow Max's iPhone to control this device?",
-		});
+		const dialog = screen.getByRole("dialog", { name: QUESTION });
+		expect(screen.getByText("“Max's iPhone”").tagName, "the name is set apart").toBe("BDI");
 		expect(dialog).toHaveTextContent("iPhone on your network");
 		expect(screen.getByText("042 917")).toHaveAttribute("aria-hidden");
 		expect(screen.getByText("Code 0 4 2 9 1 7")).toHaveClass("sr-only");
 		expect(dialog).toHaveTextContent("Expires in 30 s");
 		expect(
-			screen.getByRole("heading", { name: "Allow Max's iPhone to control this device?" }),
+			screen.getByRole("heading", { name: QUESTION }),
 			"focus starts on the question, not on a button"
 		).toHaveFocus();
-		expect(screen.getByRole("button", { name: "Allow" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Allow" })).toHaveAttribute(
+			"aria-disabled",
+			"true"
+		);
 	});
 
-	it("allows", async () => {
-		await shown();
+	it("allows once it has been on screen for a moment", async () => {
+		await shownOnFakeTime();
 		ask(7);
-		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+		const allow = screen.getByRole("button", { name: "Allow" });
+		act(() => vi.advanceTimersByTime(ARM_MS - 250));
+		fireEvent.click(allow);
+		expect(remoteAnswerConsent, "too soon").not.toHaveBeenCalled();
+		armed();
+		expect(allow).not.toHaveAttribute("aria-disabled");
+		fireEvent.click(allow);
 		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("waits again when the window gains focus", async () => {
+		await shownOnFakeTime();
+		ask(7);
+		armed();
+		act(() => window.dispatchEvent(new Event("focus")));
+		const allow = screen.getByRole("button", { name: "Allow" });
+		expect(allow).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(allow);
+		expect(remoteAnswerConsent).not.toHaveBeenCalled();
+		armed();
+		fireEvent.click(allow);
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
+	});
+
+	it("ignores a click whose press began before the prompt showed", async () => {
+		await shownOnFakeTime();
+		ask(7);
+		armed();
+		const allow = screen.getByRole("button", { name: "Allow" });
+		fireEvent.click(allow, { detail: 1 });
+		expect(remoteAnswerConsent).not.toHaveBeenCalled();
+		fireEvent.pointerDown(allow);
+		fireEvent.click(allow, { detail: 1 });
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(7, true);
 	});
 
 	it("denies with the button, Escape or a click outside", async () => {
@@ -104,6 +150,40 @@ describe("ConsentDialog", () => {
 		fireEvent.click(screen.getByRole("dialog").parentElement!);
 		expect(remoteAnswerConsent).toHaveBeenLastCalledWith(3, false);
 		expect(remoteAnswerConsent).toHaveBeenCalledTimes(3);
+	});
+
+	it("shows a request that came before it listened", async () => {
+		vi.mocked(remotePendingConsent).mockResolvedValueOnce({
+			request: 4,
+			deviceId: "abc",
+			name: "Max's iPhone",
+			deviceType: "iphone",
+			code: "042917",
+			expiresInMs: 12_000,
+		});
+		await shown();
+		expect(await screen.findByRole("dialog", { name: QUESTION })).toHaveTextContent(
+			"Expires in 12 s"
+		);
+	});
+
+	it("keeps a request an event brought over the older one it asked for", async () => {
+		let answer: (pending: Awaited<ReturnType<typeof remotePendingConsent>>) => void = () => {};
+		vi.mocked(remotePendingConsent).mockReturnValueOnce(new Promise((r) => (answer = r)));
+		await shown();
+		ask(5);
+		await act(async () =>
+			answer({
+				request: 4,
+				deviceId: "old",
+				name: "Old",
+				deviceType: "mac",
+				code: "111111",
+				expiresInMs: 1_000,
+			})
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+		expect(remoteAnswerConsent).toHaveBeenCalledWith(5, false);
 	});
 
 	it("ignores a hidden request when none is shown", async () => {
@@ -132,10 +212,17 @@ describe("ConsentDialog", () => {
 		expect(remoteAnswerConsent).not.toHaveBeenCalled();
 	});
 
-	it("shows the next request in place of the first", async () => {
-		await shown();
+	it("shows the next request in place of the first, waiting again", async () => {
+		await shownOnFakeTime();
 		ask(1);
+		armed();
 		ask(2);
+		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+		expect(
+			remoteAnswerConsent,
+			"a double click can't allow the next one"
+		).not.toHaveBeenCalled();
+		armed();
 		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 		expect(remoteAnswerConsent).toHaveBeenCalledWith(2, true);
 	});
@@ -160,8 +247,9 @@ describe("ConsentDialog", () => {
 
 	it("keeps going when answering fails", async () => {
 		vi.mocked(remoteAnswerConsent).mockRejectedValueOnce("gone");
-		await shown();
+		await shownOnFakeTime();
 		ask(1);
+		armed();
 		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 		await act(async () => {});
 		expect(screen.queryByRole("dialog")).toBeNull();

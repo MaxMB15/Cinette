@@ -711,6 +711,7 @@ describe("backend commands", () => {
 			{ request: 3, allow: true },
 		],
 		["remoteSessions", () => tauri.remoteSessions(), "remote_sessions"],
+		["remotePendingConsent", () => tauri.remotePendingConsent(), "remote_pending_consent"],
 		[
 			"remoteDisconnect",
 			() => tauri.remoteDisconnect("s1"),

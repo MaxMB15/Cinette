@@ -651,6 +651,20 @@ export const remoteAnswerConsent = (request: number, allow: boolean): Promise<vo
 
 export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
 
+/** A device asking to control this one, as `remote://consent` brings it. */
+export interface RemoteConsentEvent {
+	request: number;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	code: string;
+	expiresInMs: number;
+}
+
+/** The request on screen now, for a page that wasn't listening when it came. */
+export const remotePendingConsent = (): Promise<RemoteConsentEvent | null> =>
+	invoke("remote_pending_consent");
+
 export const remoteDisconnect = (sessionId: string): Promise<void> =>
 	invoke("remote_disconnect", { sessionId });
 

@@ -32,6 +32,8 @@ export interface PickerEntry extends DestinationSummary {
 	opens?: boolean;
 	/** Why an unavailable row is, when there's more to say than that. */
 	why?: string;
+	/** A short id that tells the row from another with the same name. */
+	tag?: string;
 }
 
 export interface PickerGroup {
@@ -82,8 +84,15 @@ export const blockerText = (reason: PlayBlocker, detail?: string): string => {
 	}
 };
 
-/** The line under a row's name, or null when there's nothing to say. */
+/** The line under a row's name, or null when there's nothing to say. A
+ *  row's tag goes at the end. */
 export const statusText = (entry: PickerEntry): string | null => {
+	const line = lineText(entry);
+	if (!entry.tag) return line;
+	return line ? `${line} · ${entry.tag}` : entry.tag;
+};
+
+const lineText = (entry: PickerEntry): string | null => {
 	const { status } = entry;
 	if (status === undefined) {
 		return entry.kind === "cinette" && entry.deviceType
@@ -130,16 +139,42 @@ interface FoundDevice {
 	available: boolean;
 }
 
+/** The start of a device id, enough to tell two devices with one name apart. */
+export const shortId = (deviceId: string): string => `ID ${deviceId.slice(0, 6)}`;
+
 /** This device's row and one for each Cinette device. One that's gone or
- *  set to Never allow is listed as not available. */
-export const cinetteEntries = (devices: readonly FoundDevice[]): PickerEntry[] => [
-	LOCAL_ENTRY,
-	...devices.map((d): PickerEntry => ({
-		id: cinetteId(d.deviceId),
-		kind: "cinette",
-		name: d.name,
-		deviceType: d.deviceType,
-		...(d.available && d.controlAllowed ? {} : { status: "unavailable" as const }),
-		...(d.available && !d.controlAllowed ? { why: "Doesn't allow remote control" } : {}),
-	})),
-];
+ *  set to Never allow is listed as not available. Devices that share a name
+ *  show the start of their ids. */
+export const cinetteEntries = (devices: readonly FoundDevice[]): PickerEntry[] => {
+	const named = new Map<string, number>();
+	for (const d of devices) named.set(d.name, (named.get(d.name) ?? 0) + 1);
+	return [
+		LOCAL_ENTRY,
+		...devices.map((d): PickerEntry => ({
+			id: cinetteId(d.deviceId),
+			kind: "cinette",
+			name: d.name,
+			deviceType: d.deviceType,
+			...(d.available && d.controlAllowed ? {} : { status: "unavailable" as const }),
+			...(d.available && !d.controlAllowed ? { why: "Doesn't allow remote control" } : {}),
+			...(named.get(d.name)! > 1 ? { tag: shortId(d.deviceId) } : {}),
+		})),
+	];
+};
+
+/**
+ * `groups` with each group's rows in the order of `held`, the ids as they
+ * stood when the pointer came over the list, so a row that appears or
+ * moves meanwhile can't put another under the pointer. Rows `held` doesn't
+ * name go after, in their own order.
+ */
+export const keepOrder = (groups: PickerGroup[], held: readonly string[]): PickerGroup[] => {
+	const at = (id: string) => {
+		const i = held.indexOf(id);
+		return i < 0 ? held.length : i;
+	};
+	return groups.map((group) => ({
+		...group,
+		entries: [...group.entries].sort((a, b) => at(a.id) - at(b.id)),
+	}));
+};

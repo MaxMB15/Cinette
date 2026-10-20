@@ -151,6 +151,7 @@ register_commands![
     remote_commands::remote_reset_identity,
     remote_commands::remote_answer_consent,
     remote_commands::remote_sessions,
+    remote_commands::remote_pending_consent,
     remote_commands::remote_disconnect,
     remote_commands::remote_set_state,
     remote_commands::remote_finish_command,

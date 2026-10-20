@@ -86,6 +86,10 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	const [message, setMessage] = useState<string | null>(null);
 	// Which view a page of "Load more" belongs to; a newer one drops it.
 	const shownRef = useRef({});
+	// What the list on screen was loaded for, so a link that comes back
+	// keeps it, with the pages loaded since.
+	const loadedForRef = useRef<unknown[] | null>(null);
+	const viewRef = useLatestRef(view);
 	const connected = link.phase.phase === "connected";
 
 	const searchRef = useLatestRef(search);
@@ -100,13 +104,22 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	}, [typed, searchRef]);
 
 	useEffect(() => {
-		// While the link is down nothing can come; it loads again once back.
+		// While the link is down nothing can come.
 		if (!connected) return;
+		const wanted = [link.id, type, place, search, attempt];
+		const loadedFor = loadedForRef.current;
+		if (
+			viewRef.current.status === "ready" &&
+			loadedFor?.every((value, i) => Object.is(value, wanted[i]))
+		)
+			return;
 		let current = true;
 		shownRef.current = {};
 		remoteCatalog(link.id, queryFor(type, place, search))
 			.then(({ items, next }) => {
-				if (current) setView({ status: "ready", items, next, more: null });
+				if (!current) return;
+				loadedForRef.current = wanted;
+				setView({ status: "ready", items, next, more: null });
 			})
 			.catch(() => {
 				if (current) setView({ status: "failed" });
@@ -114,7 +127,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		return () => {
 			current = false;
 		};
-	}, [link.id, connected, type, place, search, attempt]);
+	}, [link.id, connected, type, place, search, attempt, viewRef]);
 
 	const go = (to: Place) => {
 		setView(LOADING);
@@ -159,8 +172,9 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		} else play(item);
 	};
 
-	const title =
-		place.kind === "group"
+	const title = search
+		? `Search results on ${link.name}`
+		: place.kind === "group"
 			? groupName(place.group)
 			: place.kind === "episodes"
 				? place.series.name

@@ -225,6 +225,29 @@ describe("RemoteCatalog", () => {
 		expect(remoteCatalog).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps the pages it loaded when the link drops and comes back", async () => {
+		answer({
+			[groups("live")]: { items: [item("UK", "UK")], next: null },
+			[groupItems("UK")]: { items: [item("a", "One")], next: "b" },
+			[groupItems("UK", "b")]: { items: [item("b", "Two")], next: null },
+		});
+		const up = link();
+		const view = render(<RemoteCatalog link={up} />);
+		fireEvent.click(await screen.findByRole("button", { name: "UK" }));
+		await screen.findByRole("button", { name: /One/ });
+		fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+		await screen.findByRole("button", { name: /Two/ });
+		const asked = vi.mocked(remoteCatalog).mock.calls.length;
+		view.rerender(
+			<RemoteCatalog link={{ ...up, phase: { phase: "reconnecting", attempt: 1 } }} />
+		);
+		view.rerender(<RemoteCatalog link={{ ...up, phase: { phase: "connected" } }} />);
+		await act(async () => {});
+		expect(remoteCatalog).toHaveBeenCalledTimes(asked);
+		expect(screen.getByRole("button", { name: /One/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Two/ })).toBeInTheDocument();
+	});
+
 	it("calls a group with no name No group", async () => {
 		answer({
 			[groups("live")]: { items: [item("", "")], next: null },
@@ -293,6 +316,9 @@ describe("RemoteCatalog", () => {
 			limit: PAGE,
 		});
 		await act(async () => {});
+		expect(screen.getByRole("heading"), "the results come from every group").toHaveTextContent(
+			"Search results on Living Room"
+		);
 		fireEvent.click(screen.getByRole("button", { name: /BBC One/ }));
 		await act(async () => {});
 		expect(send).toHaveBeenCalledWith({ action: "load", itemId: "live-1" });

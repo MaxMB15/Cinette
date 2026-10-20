@@ -34,6 +34,8 @@ import {
 	DevicesButton,
 	LEAVE_FAILED,
 	LOCAL_NETWORK_DENIED,
+	LOOKING,
+	LOOKING_MS,
 	NONE_FOUND,
 	RemoteBar,
 } from "./RemoteControls";
@@ -210,11 +212,23 @@ describe("DevicesButton", () => {
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 
-	it("says when no other device was found", async () => {
+	it("looks for a moment before it says no other device was found", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		control.state = { ...control.state, devices: [] };
 		render(<DevicesButton />);
-		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
-		expect(await screen.findByRole("status")).toHaveTextContent(NONE_FOUND);
+		const open = () => fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		open();
+		await act(async () => {});
+		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
+		act(() => vi.advanceTimersByTime(LOOKING_MS - 1));
+		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.getByRole("status")).toHaveTextContent(NONE_FOUND);
+		// Opened again, it looks again.
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		open();
+		expect(screen.getByRole("status")).toHaveTextContent(LOOKING);
+		vi.useRealTimers();
 	});
 
 	it("says a device set to Never allow doesn't allow it", () => {
@@ -292,6 +306,25 @@ describe("ConnectStatusDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		expect(control.leave).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("says so when cancelling fails, after the dialog has gone", async () => {
+		control.leave.mockRejectedValueOnce("unavailable");
+		control.state = { ...control.state, link: link({ phase: "pending", expiresInMs: 1 }) };
+		const { rerender } = render(<ConnectStatusDialog />);
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		control.state = { ...control.state, link: null };
+		rerender(<ConnectStatusDialog />);
+		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("sets the device's name apart from the sentence", () => {
+		control.state = { ...control.state, link: link({ phase: "connecting" }) };
+		render(<ConnectStatusDialog />);
+		expect(screen.getByText("Living Room").tagName).toBe("BDI");
 	});
 });
 
@@ -436,13 +469,13 @@ describe("ControllersBar", () => {
 		connected,
 	});
 
-	it("shows nothing while no device is connected", () => {
-		sessions.list = [session("s1", "Phone", false)];
+	it("shows nothing while no device controls this one", () => {
+		sessions.list = [];
 		render(<ControllersBar />);
 		expect(screen.queryByRole("region")).toBeNull();
 	});
 
-	it("names each connected device with a way to disconnect it", () => {
+	it("names each controlling device with a way to disconnect it", () => {
 		sessions.list = [
 			session("s1", "Phone", true),
 			session("s2", "Laptop", true),
@@ -451,9 +484,19 @@ describe("ControllersBar", () => {
 		render(<ControllersBar />);
 		const bar = screen.getByRole("region", { name: "Devices controlling this one" });
 		expect(bar).toHaveTextContent("Controlled from");
-		expect(bar).not.toHaveTextContent("Tablet");
+		expect(within(bar).getByText("Laptop").tagName).toBe("BDI");
+		expect(bar).not.toHaveTextContent("Laptop Reconnecting…");
 		fireEvent.click(screen.getByRole("button", { name: "Disconnect Laptop" }));
 		expect(remoteDisconnect).toHaveBeenCalledWith("s2");
+	});
+
+	it("keeps a device that's reconnecting, which can still be cut off", () => {
+		sessions.list = [session("s3", "Tablet", false)];
+		render(<ControllersBar />);
+		const bar = screen.getByRole("region", { name: "Devices controlling this one" });
+		expect(bar).toHaveTextContent("TabletReconnecting…");
+		fireEvent.click(screen.getByRole("button", { name: "Disconnect Tablet" }));
+		expect(remoteDisconnect).toHaveBeenCalledWith("s3");
 	});
 
 	it("keeps going when disconnecting fails", async () => {

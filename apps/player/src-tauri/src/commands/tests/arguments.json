@@ -113,6 +113,7 @@
 	"remote_reset_identity": {},
 	"remote_answer_consent": { "required": ["request", "allow"] },
 	"remote_sessions": {},
+	"remote_pending_consent": {},
 	"remote_disconnect": { "required": ["sessionId"] },
 	"remote_set_state": { "required": ["state"] },
 	"remote_finish_command": { "required": ["token", "outcome"] },

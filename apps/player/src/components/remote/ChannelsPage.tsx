@@ -4,13 +4,18 @@
 import { ChannelList } from "@/components/channels/ChannelList";
 import { RemoteCatalog } from "@/components/remote/RemoteCatalog";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
+import { isMobilePlatform } from "@/lib/platform";
 
 /**
  * The channels page: this device's channels, or, while another device is
  * the one that plays, that device's catalog, since its ids and channels are
  * its own.
  */
-export const ChannelsPage = () => {
+export const ChannelsPage = () =>
+	// Remote control runs on the desktop only.
+	isMobilePlatform() ? <ChannelList /> : <ChannelsOrRemote />;
+
+const ChannelsOrRemote = () => {
 	const { link } = useRemoteControl();
 	const remote = link?.phase.phase === "connected" || link?.phase.phase === "reconnecting";
 	return remote ? <RemoteCatalog key={link.deviceId} link={link} /> : <ChannelList />;

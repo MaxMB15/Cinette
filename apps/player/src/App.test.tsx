@@ -125,20 +125,24 @@ describe("App", () => {
 		expect(localStorage.getItem("donation-last-shown")).toMatch(/^\d+$/);
 	});
 
-	it("listens for consent requests on the desktop", async () => {
+	it("listens for consent requests and its own links on the desktop", async () => {
 		renderApp();
 		await waitFor(() =>
 			expect(listen).toHaveBeenCalledWith("remote://consent", expect.any(Function))
 		);
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://controller", expect.any(Function))
+		);
 	});
 
-	it("shows the consent dialog only on the desktop", async () => {
+	it("shows the consent and connect dialogs only on the desktop", async () => {
 		vi.mocked(osPlatform).mockReturnValue("ios");
 		renderApp();
 		await waitFor(() =>
 			expect(listen).toHaveBeenCalledWith("remote://command", expect.any(Function))
 		);
 		expect(listen).not.toHaveBeenCalledWith("remote://consent", expect.any(Function));
+		expect(listen).not.toHaveBeenCalledWith("remote://controller", expect.any(Function));
 	});
 
 	it("takes commands from other Cinette devices", async () => {

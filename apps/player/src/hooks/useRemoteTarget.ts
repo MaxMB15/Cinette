@@ -19,6 +19,7 @@ import {
 import {
 	mpvStop,
 	remoteAnswerConsent,
+	remotePendingConsent,
 	remoteFinishCommand,
 	remoteSessions,
 	remoteSetState,
@@ -171,6 +172,26 @@ export const useConsentRequest = (): {
 	const [request, setRequest] = useState<ConsentRequest | null>(null);
 	useTauriEvent<ConsentEvent>("remote://consent", ({ expiresInMs, ...event }) =>
 		setRequest({ ...event, expiresAt: performance.now() + expiresInMs })
+	);
+	// One that came before this page listened, as after a reload, would
+	// wait unseen until it ran out. An event since says more.
+	useEffect(
+		() => {
+			let current = true;
+			remotePendingConsent()
+				.then((pending) => {
+					if (!current || !pending) return;
+					const { expiresInMs, ...event } = pending;
+					const shown = { ...event, expiresAt: performance.now() + expiresInMs };
+					setRequest((seen) => seen ?? shown);
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
 	);
 	useTauriEvent<{ request: number }>("remote://consent-hidden", ({ request: hidden }) =>
 		setRequest((shown) => (shown?.request === hidden ? null : shown))
