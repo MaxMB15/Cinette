@@ -53,6 +53,14 @@ fn a_v4_mapped_interface_address_counts_as_ipv4() {
 fn this_machine_and_its_own_addresses_are_local_and_the_internet_isnt() {
     assert!(is_local_peer(ip("127.0.0.1")));
     for interface in if_addrs::get_if_addrs().unwrap() {
+        // An interface with no subnet, as a tunnel can have, takes in no one.
+        let no_subnet = match &interface.addr {
+            if_addrs::IfAddr::V4(a) => a.netmask.is_unspecified(),
+            if_addrs::IfAddr::V6(a) => a.netmask.is_unspecified(),
+        };
+        if no_subnet {
+            continue;
+        }
         assert!(is_local_peer(interface.ip()), "{}", interface.ip());
     }
     // A documentation address, which no test machine's network holds.
