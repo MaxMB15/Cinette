@@ -136,7 +136,7 @@ fn children(data: &[u8]) -> impl Iterator<Item = (u32, &[u8])> {
 
 /// An unsigned integer element's value.
 fn uint(data: &[u8]) -> u64 {
-    data.iter().fold(0, |acc, &b| acc << 8 | u64::from(b))
+    data.iter().fold(0, |acc, &b| (acc << 8) + u64::from(b))
 }
 
 /// The number of the first video track in Tracks' data.
@@ -191,7 +191,7 @@ fn vint(bytes: &[u8]) -> Option<(usize, u64)> {
         .get(1..len)?
         .iter()
         .fold(u64::from(first) & (0xFF >> len), |acc, &b| {
-            acc << 8 | u64::from(b)
+            (acc << 8) + u64::from(b)
         });
     Some((len, value))
 }

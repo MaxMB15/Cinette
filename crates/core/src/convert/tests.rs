@@ -463,16 +463,18 @@ fn splits_the_header_from_each_cluster() {
     );
 }
 
-/// A stream whose Tracks has audio as track 2 and video as track 1.
+/// A stream whose Tracks has audio as track 2 and video as track 3, with a
+/// Void after it.
 fn header_with_video() -> Vec<u8> {
     let audio = [element(&[0xD7], &[2]), element(&[0x83], &[2])].concat();
-    let video = [element(&[0x83], &[1]), element(&[0xD7], &[1])].concat();
+    let video = [element(&[0x83], &[1]), element(&[0xD7], &[3])].concat();
     let tracks = [element(&[0xAE], &audio), element(&[0xAE], &video)].concat();
     let mut out = element(EBML, &[0x42, 0x86, 0x81, 0x01]);
     out.extend_from_slice(SEGMENT);
     out.extend_from_slice(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
     out.extend(element(INFO, b"info"));
     out.extend(element(TRACKS, &tracks));
+    out.extend(element(&[0xEC], &[0]));
     out
 }
 
@@ -499,28 +501,37 @@ fn only_a_cluster_whose_first_video_frame_is_a_keyframe_is_a_start() {
     let crc = element(&[0xBF], &[0, 0, 0, 0]);
     let void = element(&[0xEC], &[0]);
     let clusters: Vec<(Vec<u8>, bool)> = vec![
-        ([timestamp.clone(), simple_block(1, true)].concat(), true),
+        ([timestamp.clone(), simple_block(3, true)].concat(), true),
         (
             [
                 crc.clone(),
                 void,
                 timestamp.clone(),
                 simple_block(2, true),
-                simple_block(1, false),
-                simple_block(1, true),
+                simple_block(3, false),
+                simple_block(3, true),
             ]
             .concat(),
             false,
         ),
         (
-            [crc, timestamp.clone(), block_group(1, true)].concat(),
+            [crc, timestamp.clone(), block_group(3, true)].concat(),
             true,
         ),
-        ([timestamp.clone(), block_group(1, false)].concat(), false),
-        ([block_group(2, true), simple_block(1, true)].concat(), true),
+        ([timestamp.clone(), block_group(3, false)].concat(), false),
+        ([block_group(2, true), simple_block(3, true)].concat(), true),
         // No video at all, or a block cut short.
         ([timestamp.clone(), simple_block(2, true)].concat(), false),
         ([timestamp, element(&[0xA3], &[0x81, 0])].concat(), false),
+        // The track number at its longest, and one too long.
+        (
+            element(&[0xA3], &[0x01, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0x80]),
+            true,
+        ),
+        (
+            element(&[0xA3], &[0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0x80]),
+            false,
+        ),
         (vec![], false),
     ];
     let mut stream = header_with_video();
@@ -546,8 +557,8 @@ fn only_a_cluster_whose_first_video_frame_is_a_keyframe_is_a_start() {
     assert!(matches!(pieces[1], Piece::Element { start: true, .. }));
     // Something other than a cluster is never a start.
     let mut stream = header_with_video();
-    stream.extend(element(CLUSTER, &simple_block(1, true)));
-    stream.extend(element(TAGS, &simple_block(1, true)));
+    stream.extend(element(CLUSTER, &simple_block(3, true)));
+    stream.extend(element(TAGS, &simple_block(3, true)));
     let pieces = MkvSplitter::default().push(&stream).unwrap();
     assert!(matches!(pieces[2], Piece::Element { start: false, .. }));
 }

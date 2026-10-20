@@ -163,6 +163,18 @@ async fn keeps_only_what_a_request_needs_or_starts_from() {
     assert_eq!((state.first, state.bytes), (2, 12));
 }
 
+#[tokio::test]
+async fn a_request_that_comes_later_counts_the_last_piece_sent() {
+    let feed = feed(1 << 20, true);
+    let mut first = feed.reader();
+    for (byte, start) in [(1, true), (2, false), (3, true)] {
+        feed.push(piece(byte), start).await;
+        first.next().await.unwrap();
+    }
+    let mut later = feed.reader();
+    assert_eq!(*later.next().await.unwrap(), piece(3)[..]);
+}
+
 #[test]
 fn each_request_keeps_its_own_place() {
     let feed = feed(1 << 20, true);
@@ -449,4 +461,149 @@ fn finds_the_route_to_a_receiver() {
         NoRoute.to_string(),
         "this device has no network address the receiver can reach"
     );
+}
+
+#[test]
+fn tells_a_lost_connection_from_a_lost_socket() {
+    use std::io::{Error, ErrorKind};
+    for kind in [
+        ErrorKind::ConnectionAborted,
+        ErrorKind::ConnectionReset,
+        ErrorKind::Interrupted,
+        ErrorKind::WouldBlock,
+    ] {
+        assert_eq!(
+            after_accept(&Error::from(kind)),
+            AfterAccept::Retry,
+            "{kind:?}"
+        );
+    }
+    for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+        assert_eq!(
+            after_accept(&Error::from_raw_os_error(code)),
+            AfterAccept::Pause,
+            "{code}"
+        );
+    }
+    for code in [libc::EBADF, libc::EINVAL, libc::ENOTSOCK] {
+        assert_eq!(
+            after_accept(&Error::from_raw_os_error(code)),
+            AfterAccept::Rebind,
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn takes_the_socket_for_gone_after_losing_too_many_connections_in_a_row() {
+    use std::io::{Error, ErrorKind};
+    let aborted = || Error::from(ErrorKind::ConnectionAborted);
+    let mut failures = AcceptFailures::default();
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    // Running out of file descriptors neither counts nor starts again.
+    let full = Error::from_raw_os_error(libc::EMFILE);
+    assert_eq!(failures.after(&full), AfterAccept::Pause);
+    assert_eq!(failures.after(&aborted()), AfterAccept::Rebind);
+    // The count starts again after listening again, or an accept.
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    failures.accepted();
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    let gone = Error::from_raw_os_error(libc::EBADF);
+    assert_eq!(failures.after(&gone), AfterAccept::Rebind);
+    for _ in 1..MAX_LOST {
+        assert_eq!(failures.after(&aborted()), AfterAccept::Retry);
+    }
+    assert_eq!(failures.after(&aborted()), AfterAccept::Rebind);
+}
+
+/// What a request from `source` for `path` gets back.
+#[cfg(target_os = "linux")]
+async fn get_from(source: IpAddr, server: &LanServer, path: &str) -> std::io::Result<Vec<u8>> {
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.bind(SocketAddr::new(source, 0))?;
+    let mut socket = socket.connect(address(server).parse().unwrap()).await?;
+    socket
+        .write_all(format!("GET {path} HTTP/1.1\r\n\r\n").as_bytes())
+        .await?;
+    let mut reply = Vec::new();
+    socket.read_to_end(&mut reply).await?;
+    Ok(reply)
+}
+
+/// Takes the listening socket away as iOS does from a suspended app: every
+/// accept fails from then on.
+#[cfg(target_os = "linux")]
+fn take_socket(fd: std::os::fd::RawFd) {
+    // SAFETY: shutdown takes any descriptor and changes no memory.
+    assert_eq!(unsafe { libc::shutdown(fd, libc::SHUT_RDWR) }, 0);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn listens_again_where_it_was_after_losing_its_socket() {
+    let receiver = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+    let server = LanServer::start(receiver).await.unwrap();
+    server.files.put("a.vtt", "text/vtt", b"WEBVTT\n".to_vec());
+    let path = server
+        .url("a.vtt")
+        .strip_prefix(&format!("http://{}", address(&server)))
+        .unwrap()
+        .to_string();
+    take_socket(server.fd);
+    let reply = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match get_from(receiver, &server, &path).await {
+                Ok(reply) if !reply.is_empty() => break reply,
+                _ => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("the server listens again");
+    assert!(reply.ends_with(b"WEBVTT\n"));
+    // Still only for the receiver, and only under its token.
+    assert!(get_from(LOOPBACK, &server, &path)
+        .await
+        .unwrap_or_default()
+        .is_empty());
+    let wrong = path.replace("/cast/", "/cast/0");
+    assert!(get_from(receiver, &server, &wrong)
+        .await
+        .unwrap_or_default()
+        .is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn stopping_ends_a_server_waiting_to_listen_again() {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&listener);
+    // Somewhere else holds the address it would listen on again.
+    let held = std::net::TcpListener::bind((LOOPBACK, 0)).unwrap();
+    let address = held.local_addr().unwrap();
+    let task = tokio::spawn(serve(
+        listener,
+        address,
+        Peers::Receiver(LOOPBACK),
+        "/cast/token/".to_string(),
+        Files::default(),
+        Arc::new(RwLock::new(None)),
+    ));
+    take_socket(fd);
+    // Long enough to fail to listen again at least once.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!task.is_finished());
+    // What dropping the server does.
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    drop(held);
+    tokio::time::sleep(REBIND_PAUSE * 2).await;
+    // Nothing went on to take the address once it was free.
+    std::net::TcpListener::bind(address).unwrap();
 }

@@ -44,6 +44,11 @@ const MAX_REQUESTS: usize = 16;
 /// How long the server waits after a failed accept, such as when the app
 /// is out of file descriptors for a moment.
 const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
+/// How long the server waits to listen again while its address is taken.
+const REBIND_PAUSE: Duration = Duration::from_secs(1);
+/// How many accepts in a row may lose their connection before the server
+/// takes its socket for gone. A socket iOS took back may fail that way.
+const MAX_LOST: u32 = 10;
 /// How much of a live stream is kept: tens of seconds of a 1080p stream.
 pub const LIVE_BYTES: usize = 32 << 20;
 
@@ -371,6 +376,9 @@ pub struct LanServer {
     pub files: Files,
     live: Arc<RwLock<Option<NamedPipe>>>,
     task: JoinHandle<()>,
+    /// The listening socket, which a test takes away as iOS does.
+    #[cfg(all(test, target_os = "linux"))]
+    fd: std::os::fd::RawFd,
 }
 
 impl Drop for LanServer {
@@ -398,7 +406,10 @@ impl LanServer {
         let listener = TcpListener::bind(SocketAddr::new(local, 0))
             .await
             .map_err(|_| NoRoute)?;
-        let port = listener.local_addr().map_err(|_| NoRoute)?.port();
+        let address = listener.local_addr().map_err(|_| NoRoute)?;
+        let port = address.port();
+        #[cfg(all(test, target_os = "linux"))]
+        let fd = std::os::fd::AsRawFd::as_raw_fd(&listener);
         let host = match local {
             IpAddr::V4(ip) => ip.to_string(),
             IpAddr::V6(ip) => format!("[{ip}]"),
@@ -408,6 +419,7 @@ impl LanServer {
         let live = Arc::new(RwLock::new(None));
         let task = tokio::spawn(serve(
             listener,
+            address,
             peers,
             prefix.clone(),
             files.clone(),
@@ -418,6 +430,8 @@ impl LanServer {
             files,
             live,
             task,
+            #[cfg(all(test, target_os = "linux"))]
+            fd,
         })
     }
 
@@ -451,9 +465,12 @@ pub fn route_to(receiver: IpAddr) -> Result<IpAddr, NoRoute> {
     Ok(local)
 }
 
-/// Accepts connections from `peers` until the server is dropped.
+/// Accepts connections from `peers` until the server is dropped. If the
+/// listening socket goes, it listens on `address` again, so the addresses
+/// the receiver has keep working.
 async fn serve(
-    listener: TcpListener,
+    mut listener: TcpListener,
+    address: SocketAddr,
     peers: Peers,
     prefix: String,
     files: Files,
@@ -462,14 +479,30 @@ async fn serve(
     // Dropped with this task, which ends every request still open.
     let mut requests = JoinSet::new();
     let slots = Arc::new(Semaphore::new(MAX_REQUESTS));
+    let mut failures = AcceptFailures::default();
     loop {
         let (socket, peer) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            // Such as running out of file descriptors, or a connection
-            // reset before it was accepted. Neither lasts.
+            Ok(accepted) => {
+                failures.accepted();
+                accepted
+            }
             Err(e) => {
-                tracing::debug!(kind = ?e.kind(), "the converter's server couldn't accept a connection");
-                tokio::time::sleep(ACCEPT_PAUSE).await;
+                match failures.after(&e) {
+                    AfterAccept::Retry => {
+                        tracing::warn!(kind = ?e.kind(), "the converter's server lost a connection before accepting it");
+                    }
+                    AfterAccept::Pause => {
+                        tracing::warn!(kind = ?e.kind(), "the converter's server is out of resources for a moment");
+                        tokio::time::sleep(ACCEPT_PAUSE).await;
+                    }
+                    AfterAccept::Rebind => {
+                        tracing::warn!(kind = ?e.kind(), "the converter's server lost its socket and listens again");
+                        drop(listener);
+                        // A socket that's taken back at once doesn't spin.
+                        tokio::time::sleep(ACCEPT_PAUSE).await;
+                        listener = rebind(address).await;
+                    }
+                }
                 continue;
             }
         };
@@ -488,6 +521,79 @@ async fn serve(
             let _ = answer(socket, &prefix, &files, &live).await;
             drop(slot);
         });
+    }
+}
+
+/// What the server does after a failed accept.
+#[derive(Debug, PartialEq, Eq)]
+enum AfterAccept {
+    /// A connection went before it was accepted. Others still come.
+    Retry,
+    /// The app is out of file descriptors or memory for a moment.
+    Pause,
+    /// The listening socket is gone, as when iOS takes it back from a
+    /// suspended app.
+    Rebind,
+}
+
+/// The accepts that failed since the last one that didn't.
+#[derive(Debug, Default)]
+struct AcceptFailures {
+    lost: u32,
+}
+
+impl AcceptFailures {
+    fn after(&mut self, e: &std::io::Error) -> AfterAccept {
+        match after_accept(e) {
+            AfterAccept::Retry if self.lost + 1 >= MAX_LOST => {
+                self.lost = 0;
+                AfterAccept::Rebind
+            }
+            AfterAccept::Retry => {
+                self.lost += 1;
+                AfterAccept::Retry
+            }
+            AfterAccept::Rebind => {
+                self.lost = 0;
+                AfterAccept::Rebind
+            }
+            AfterAccept::Pause => AfterAccept::Pause,
+        }
+    }
+
+    fn accepted(&mut self) {
+        self.lost = 0;
+    }
+}
+
+fn after_accept(e: &std::io::Error) -> AfterAccept {
+    use std::io::ErrorKind;
+    if matches!(
+        e.raw_os_error(),
+        Some(libc::EMFILE | libc::ENFILE | libc::ENOBUFS | libc::ENOMEM)
+    ) {
+        return AfterAccept::Pause;
+    }
+    match e.kind() {
+        ErrorKind::ConnectionAborted
+        | ErrorKind::ConnectionReset
+        | ErrorKind::Interrupted
+        | ErrorKind::WouldBlock => AfterAccept::Retry,
+        _ => AfterAccept::Rebind,
+    }
+}
+
+/// Listens on `address` again, trying each [`REBIND_PAUSE`] while it's
+/// taken. Dropping the server ends it.
+async fn rebind(address: SocketAddr) -> TcpListener {
+    loop {
+        match TcpListener::bind(address).await {
+            Ok(listener) => return listener,
+            Err(e) => {
+                tracing::warn!(kind = ?e.kind(), "the converter's server can't listen again yet");
+                tokio::time::sleep(REBIND_PAUSE).await;
+            }
+        }
     }
 }
 
