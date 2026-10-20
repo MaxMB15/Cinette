@@ -529,15 +529,14 @@ fn ffmpeg_runs_for(url: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Reads a response to its end, or until `limit` bytes, for up to 30 s.
-async fn read_to_end(response: &mut reqwest::Response, limit: usize) -> Vec<u8> {
+/// Reads a response to its end, for up to 30 s. It fails past 1 MiB,
+/// more than any source here converts to.
+async fn read_to_end(response: &mut reqwest::Response) -> Vec<u8> {
     let mut body = Vec::new();
     tokio::time::timeout(Duration::from_secs(30), async {
-        while body.len() < limit {
-            let Some(chunk) = response.chunk().await.unwrap() else {
-                break;
-            };
+        while let Some(chunk) = response.chunk().await.unwrap() {
             body.extend_from_slice(&chunk);
+            assert!(body.len() <= 1 << 20, "a response of over 1 MiB");
         }
     })
     .await
@@ -570,7 +569,7 @@ async fn a_file_is_read_at_its_own_pace_after_a_burst() {
         .send()
         .await
         .unwrap();
-    let body = read_to_end(&mut response, usize::MAX).await;
+    let body = read_to_end(&mut response).await;
     assert_eq!(ended(&mut conversion).await, Ended::Finished);
     assert!(
         started.elapsed() >= Duration::from_secs(3),
@@ -677,7 +676,7 @@ async fn starts_a_file_partway_through() {
     let source = file_source(wav(8));
     let whole = start_copy(&app, &source, LOOPBACK).await.unwrap();
     let mut response = test_server::client().get(&whole.url).send().await.unwrap();
-    let whole = read_to_end(&mut response, usize::MAX).await;
+    let whole = read_to_end(&mut response).await;
     let plan = Plan {
         start_at: Some(6.0),
         ..copy_audio()
@@ -686,7 +685,7 @@ async fn starts_a_file_partway_through() {
         .await
         .unwrap();
     let mut response = test_server::client().get(&later.url).send().await.unwrap();
-    let rest = read_to_end(&mut response, usize::MAX).await;
+    let rest = read_to_end(&mut response).await;
     assert_eq!(ended(&mut later).await, Ended::Finished);
     // Two seconds of the eight.
     assert!(

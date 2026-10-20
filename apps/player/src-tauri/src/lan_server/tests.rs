@@ -280,6 +280,7 @@ async fn a_file_waits_for_its_reader_who_gets_every_byte_in_order() {
     within(async {
         while let Some(chunk) = response.chunk().await.unwrap() {
             body.extend_from_slice(&chunk);
+            assert!(body.len() <= 4 + 200 * 16, "more than was written");
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
