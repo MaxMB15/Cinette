@@ -4,6 +4,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLatestRef } from "@/hooks/useLatestRef";
+import { usePlayerPref } from "@/hooks/usePlayerPref";
+import { readStreamThrough, STREAM_THROUGH_EVENT } from "@/lib/player-prefs";
 import {
 	createCastDestination,
 	type CastBackend,
@@ -38,26 +40,6 @@ const backend: CastBackend = {
 	castLoad,
 	castControl,
 	castStop,
-};
-
-/** Where "Stream through this computer" is kept. */
-const THROUGH_KEY = "cinette.cast.streamThrough";
-
-const readThrough = (): boolean => {
-	try {
-		return localStorage.getItem(THROUGH_KEY) === "1";
-	} catch {
-		return false;
-	}
-};
-
-const writeThrough = (on: boolean) => {
-	const value = on ? "1" : "0";
-	try {
-		localStorage.setItem(THROUGH_KEY, value);
-	} catch {
-		// Kept for this run only.
-	}
 };
 
 // Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.
@@ -96,10 +78,6 @@ export interface Cast {
 	) => Promise<string | null>;
 	/** Ends the cast. */
 	stop: () => Promise<void>;
-	/** "Stream through this computer": convert even what a receiver could
-	 *  fetch itself, so the receiver never gets the provider's link. */
-	streamThrough: boolean;
-	setStreamThrough: (on: boolean) => void;
 }
 
 /**
@@ -113,24 +91,28 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 	const [destination, setDestination] = useState<CastDestination | null>(null);
 	const [vpnActive, setVpnActive] = useState(false);
 	const reportRef = useLatestRef(report);
-	const [streamThrough, setThrough] = useState(readThrough);
-	const throughRef = useRef(streamThrough);
+	// "Stream through this computer", from Settings: convert even what a
+	// receiver could fetch itself, so it never gets the provider's link.
+	const throughRef = useLatestRef(usePlayerPref(readStreamThrough, STREAM_THROUGH_EVENT));
 	const destinations = useRef(new Map<string, CastDestination>());
 	const decisions = useRef(new Map<string, RouteDecision>());
 	const active = useRef<CastDestination | null>(null);
 	const checking = useRef(0);
 	const [held, setHeld] = useState<string[]>([]);
 
-	const destinationFor = useCallback((receiver: CastReceiver): CastDestination => {
-		let found = destinations.current.get(receiver.id);
-		if (!found) {
-			found = createCastDestination(receiver, backend, {
-				streamThrough: () => throughRef.current,
-			});
-			destinations.current.set(receiver.id, found);
-		}
-		return found;
-	}, []);
+	const destinationFor = useCallback(
+		(receiver: CastReceiver): CastDestination => {
+			let found = destinations.current.get(receiver.id);
+			if (!found) {
+				found = createCastDestination(receiver, backend, {
+					streamThrough: () => throughRef.current,
+				});
+				destinations.current.set(receiver.id, found);
+			}
+			return found;
+		},
+		[throughRef]
+	);
 
 	useEffect(() => {
 		if (!enabled) return;
@@ -266,12 +248,6 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		if (left) await left.stop();
 	}, []);
 
-	const setStreamThrough = useCallback((on: boolean) => {
-		throughRef.current = on;
-		setThrough(on);
-		writeThrough(on);
-	}, []);
-
 	return {
 		receivers,
 		localNetworkDenied: list?.localNetworkDenied ?? false,
@@ -283,7 +259,5 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		state: destination ? state : null,
 		send,
 		stop,
-		streamThrough,
-		setStreamThrough,
 	};
 };

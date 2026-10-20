@@ -8,6 +8,9 @@ import {
 	readVolumePreference,
 	writeVolumePreference,
 	readHwdecEnabled,
+	readStreamThrough,
+	STREAM_THROUGH_EVENT,
+	writeStreamThrough,
 	writeHwdecEnabled,
 	readSkipIntervals,
 	writeSkipInterval,
@@ -89,6 +92,25 @@ describe("player-prefs", () => {
 			expect(readHwdecEnabled()).toBe(false);
 			writeHwdecEnabled(true);
 			expect(readHwdecEnabled()).toBe(true);
+		});
+	});
+
+	describe("stream through this computer", () => {
+		it("is off when never set, and round-trips with an event for each change", () => {
+			expect(readStreamThrough()).toBe(false);
+			const listener = vi.fn();
+			window.addEventListener(STREAM_THROUGH_EVENT, listener);
+			try {
+				writeStreamThrough(true);
+				expect(readStreamThrough()).toBe(true);
+				expect(localStorage.getItem("mvp_cast_stream_through")).toBe("on");
+				writeStreamThrough(false);
+				expect(readStreamThrough()).toBe(false);
+				expect(localStorage.getItem("mvp_cast_stream_through")).toBe("off");
+				expect(listener).toHaveBeenCalledTimes(2);
+			} finally {
+				window.removeEventListener(STREAM_THROUGH_EVENT, listener);
+			}
 		});
 	});
 
@@ -179,6 +201,7 @@ describe("player-prefs when storage is unavailable", () => {
 			expect(readDefaultVolume()).toBe(100);
 			expect(readVolumePreference()).toEqual({ volume: 100, preMute: 100 });
 			expect(readHwdecEnabled()).toBe(true);
+			expect(readStreamThrough()).toBe(false);
 			expect(readSkipIntervals()).toEqual({ back: 10, forward: 10 });
 		} finally {
 			getItem.mockRestore();
@@ -189,16 +212,19 @@ describe("player-prefs when storage is unavailable", () => {
 		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
 		const listener = vi.fn();
 		window.addEventListener(SKIP_INTERVALS_EVENT, listener);
+		window.addEventListener(STREAM_THROUGH_EVENT, listener);
 		try {
 			expect(() => {
 				writeDefaultVolume(40);
 				writeVolumePreference({ volume: 40, preMute: 40 });
 				writeHwdecEnabled(false);
+				writeStreamThrough(true);
 				writeSkipInterval("forward", 30);
 			}).not.toThrow();
 			expect(listener).not.toHaveBeenCalled();
 		} finally {
 			window.removeEventListener(SKIP_INTERVALS_EVENT, listener);
+			window.removeEventListener(STREAM_THROUGH_EVENT, listener);
 			setItem.mockRestore();
 		}
 	});

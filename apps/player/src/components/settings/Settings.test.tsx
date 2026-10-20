@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -436,6 +436,32 @@ describe("Settings playback", () => {
 		fireEvent.click(toggle);
 		expect(toggle).toHaveTextContent("On");
 		expect(localStorage.getItem("mvp_hwdec")).toBe("on");
+	});
+
+	it("streams what's cast through this computer once that's on", async () => {
+		await renderSettings();
+		const toggle = screen.getByRole("button", { name: "Stream through this computer" });
+		expect(toggle).toHaveAttribute("aria-pressed", "false");
+		expect(
+			screen.getByText(/uses this computer's\s+connection and its VPN/)
+		).toBeInTheDocument();
+		fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-pressed", "true");
+		expect(toggle).toHaveTextContent("On");
+		expect(localStorage.getItem("mvp_cast_stream_through")).toBe("on");
+		fireEvent.click(toggle);
+		expect(toggle).toHaveTextContent("Off");
+		expect(localStorage.getItem("mvp_cast_stream_through")).toBe("off");
+	});
+
+	it("offers streaming through this device only where Cinette casts", async () => {
+		device.platform = "linux";
+		await renderSettings();
+		expect(screen.getByRole("button", { name: "Stream through this computer" })).toBeTruthy();
+		cleanup();
+		device.platform = "windows";
+		await renderSettings();
+		expect(screen.queryByRole("button", { name: "Stream through this computer" })).toBeNull();
 	});
 
 	it("starts with hardware decoding off when it was turned off before", async () => {

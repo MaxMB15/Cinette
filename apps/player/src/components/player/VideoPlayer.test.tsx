@@ -273,8 +273,6 @@ const fakeCast = vi.hoisted(() => {
 		send: vi.fn<Cast["send"]>(async () => null),
 		stop: vi.fn<Cast["stop"]>(async () => {}),
 		vpnActive: false,
-		streamThrough: false,
-		setStreamThrough: vi.fn(),
 	});
 	let current = initial();
 	const listeners = new Set<() => void>();

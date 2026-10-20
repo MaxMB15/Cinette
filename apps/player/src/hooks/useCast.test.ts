@@ -7,6 +7,7 @@ import type * as Bridge from "@/lib/tauri";
 import type { StreamFormats } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import { makeMovie } from "@/test/detail-fixtures";
+import { writeStreamThrough } from "@/lib/player-prefs";
 import { useCast } from "./useCast";
 
 /** Events the backend would send, by name. */
@@ -350,18 +351,18 @@ describe("useCast", () => {
 		expect(events.count("cast://update")).toBe(0);
 	});
 
-	it("streams through this computer once that's on, and remembers it", async () => {
+	it("streams through this computer once Settings turns that on", async () => {
 		const { result } = await render();
-		expect(result.current.streamThrough).toBe(false);
-		act(() => result.current.setStreamThrough(true));
-		expect(result.current.streamThrough).toBe(true);
+		act(() => result.current.check(film));
+		await flush();
+		expect(result.current.statuses.get("cast:tv")).toEqual({ via: "direct" });
+		act(() => writeStreamThrough(true));
 		act(() => result.current.check(film));
 		await flush();
 		expect(result.current.statuses.get("cast:tv")).toEqual({ via: "converted", keep: "on" });
-		const again = await render();
-		expect(again.result.current.streamThrough).toBe(true);
-		act(() => again.result.current.setStreamThrough(false));
-		const third = await render();
-		expect(third.result.current.streamThrough).toBe(false);
+		act(() => writeStreamThrough(false));
+		act(() => result.current.check(film));
+		await flush();
+		expect(result.current.statuses.get("cast:tv")).toEqual({ via: "direct" });
 	});
 });
