@@ -45,3 +45,99 @@ fn a_one_label_host_is_its_own_site() {
     assert!(on_a_provider_site("http://localhost/a.png", &provider));
     assert!(!on_a_provider_site("http://otherhost/a.png", &provider));
 }
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_logo_from_another_device_must_be_on_a_public_host() {
+    for ok in [
+        "https://logos.example/a.png",
+        "http://cdn.example.tv:8080/a.png",
+        "http://93.184.216.34/a.png",
+        "http://[2001:4860::1]/a.png",
+        "https://Logos.Example./a.png",
+    ] {
+        assert!(fetchable(ok), "{ok}");
+    }
+    for bad in [
+        "file:///etc/passwd",
+        "data:image/png;base64,AAAA",
+        "javascript:alert(1)",
+        "https://user:pw@logos.example/a.png",
+        "https://logos.example/a.png?track=1",
+        "https://logos.example/a.png#x",
+        "http://localhost/a.png",
+        "http://router/a.png",
+        "http://tv.local/a.png",
+        "http://app.localhost/a.png",
+        "http://127.0.0.1:47130/a.png",
+        "http://10.0.0.1/a.png",
+        "http://172.16.0.1/a.png",
+        "http://192.168.1.1/a.png",
+        "http://169.254.1.1/a.png",
+        "http://100.64.0.1/a.png",
+        "http://100.127.255.1/a.png",
+        "http://0.0.0.0/a.png",
+        "http://255.255.255.255/a.png",
+        "http://224.0.0.1/a.png",
+        "http://[::1]/a.png",
+        "http://[::]/a.png",
+        "http://[fd00::1]/a.png",
+        "http://[fc00::1]/a.png",
+        "http://[fe80::1]/a.png",
+        "http://[ff02::1]/a.png",
+        "http://[::ffff:192.168.1.1]/a.png",
+        "http://[::192.168.1.1]/a.png",
+        "http://[fec0::1]/a.png",
+        "http://192.0.0.8/a.png",
+        "http://198.18.0.1/a.png",
+        "http://198.19.255.1/a.png",
+        "http://240.0.0.1/a.png",
+        "http://router.lan/a.png",
+        "http://lan/a.png",
+        "http://nas.home/a.png",
+        "http://nas.home.arpa/a.png",
+        "http://wiki.internal/a.png",
+        "http://portal.intranet/a.png",
+        "http://mail.corp/a.png",
+        "http://box.private/a.png",
+        "http://fritz.box/a.png",
+        "http://FRITZ.BOX./a.png",
+        "http://speedport.ip/a.png",
+        "http://127.0.0.1.nip.io:8080/a.png",
+        "http://10.0.0.1.sslip.io/a.png",
+        "http://127.0.0.1.xip.io/a.png",
+        "not a url",
+    ] {
+        assert!(!fetchable(bad), "{bad}");
+    }
+    // Next to the shared address space, but outside it.
+    assert!(fetchable("http://100.128.0.1/a.png"));
+    assert!(fetchable("http://100.63.255.1/a.png"));
+    // Next to the other ranges, and names that only end the same way.
+    assert!(fetchable("http://192.0.1.8/a.png"));
+    assert!(fetchable("http://198.17.0.1/a.png"));
+    assert!(fetchable("http://198.20.0.1/a.png"));
+    assert!(fetchable("http://239.255.255.255.example/a.png"));
+    assert!(fetchable("http://[2001:db8::1:0:0:1]/a.png"));
+    assert!(fetchable("http://logos.plan.example/a.png"));
+    assert!(fetchable("http://myhome.example/a.png"));
+    assert!(fetchable("http://cdn.mylan.tv/a.png"));
+    assert!(fetchable("http://notnip.io/a.png"));
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn an_item_keeps_only_a_logo_it_may_load() {
+    let item = |logo: &str| CatalogItem {
+        id: "a".into(),
+        logo: Some(logo.into()),
+        ..CatalogItem::default()
+    };
+    assert_eq!(checked(item("http://192.168.1.1/a.png")).logo, None);
+    assert_eq!(
+        checked(item("https://logos.example/a.png")).logo.as_deref(),
+        Some("https://logos.example/a.png")
+    );
+    let none = CatalogItem::default();
+    assert_eq!(checked(none.clone()), none);
+}

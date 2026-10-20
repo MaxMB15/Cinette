@@ -729,6 +729,27 @@ describe("backend commands", () => {
 			"remote_finish_command",
 			{ token: 9, outcome: "staleItem" },
 		],
+		["remoteDevices", () => tauri.remoteDevices(), "remote_devices"],
+		[
+			"remoteConnect",
+			() => tauri.remoteConnect("abc", 5),
+			"remote_connect",
+			{ deviceId: "abc", link: 5 },
+		],
+		["remoteLink", () => tauri.remoteLink(), "remote_link"],
+		["remoteLeave", () => tauri.remoteLeave(4), "remote_leave", { link: 4 }],
+		[
+			"remoteCommand",
+			() => tauri.remoteCommand(5, { action: "seek", itemId: "live-1", to: 30 }),
+			"remote_command",
+			{ command: { action: "seek", itemId: "live-1", to: 30 }, link: 5 },
+		],
+		[
+			"remoteCatalog",
+			() => tauri.remoteCatalog(5, { kind: "search", query: "news", limit: 20 }),
+			"remote_catalog",
+			{ catalogQuery: { kind: "search", query: "news", limit: 20 }, link: 5 },
+		],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));

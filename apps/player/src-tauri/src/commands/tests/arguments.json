@@ -115,5 +115,11 @@
 	"remote_sessions": {},
 	"remote_disconnect": { "required": ["sessionId"] },
 	"remote_set_state": { "required": ["state"] },
-	"remote_finish_command": { "required": ["token", "outcome"] }
+	"remote_finish_command": { "required": ["token", "outcome"] },
+	"remote_devices": {},
+	"remote_connect": { "required": ["deviceId", "link"] },
+	"remote_link": {},
+	"remote_leave": { "required": ["link"] },
+	"remote_command": { "required": ["command", "link"] },
+	"remote_catalog": { "required": ["catalogQuery", "link"] }
 }

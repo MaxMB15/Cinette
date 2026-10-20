@@ -4,6 +4,8 @@
 //! Starts the target when the app starts, and connects it to Tauri: events
 //! for the webview, the cache for catalog answers, and DNS-SD.
 
+use super::devices::{Devices, RemoteDevice};
+use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
 use super::target::{self, CatalogPage, TargetHandle, TargetHost};
 use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
@@ -12,7 +14,10 @@ use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
-use mvp_core::remote::message::{Command, DeviceType};
+use mvp_core::remote::message::{
+    Command, DeviceType, Feature, Hello, VersionedState, PROTOCOL_VERSION,
+};
+use mvp_core::remote::sessions::RESUME_GRACE;
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use serde::Serialize;
@@ -22,6 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
+use tokio::sync::mpsc;
 
 /// This device's type, as other devices see it.
 #[cfg(target_os = "macos")]
@@ -29,17 +35,25 @@ pub const DEVICE_TYPE: DeviceType = DeviceType::Mac;
 #[cfg(target_os = "linux")]
 pub const DEVICE_TYPE: DeviceType = DeviceType::LinuxPc;
 
-/// The running target, as Tauri managed state.
+/// Remote control as Tauri managed state: the running target, the devices
+/// discovery found, and the device this one controls, if any.
 pub struct RemoteService {
     pub(crate) handle: TargetHandle,
     key_dir: PathBuf,
     state: Mutex<Saved>,
     resetting: Mutex<()>,
+    devices: Arc<Mutex<Devices>>,
+    link: Arc<Mutex<Option<LinkHandle>>>,
+    link_host: Arc<dyn LinkHost>,
+    events: Arc<dyn ServiceEvents>,
+    /// The highest link number the webview has left. A connect numbered
+    /// at or below it was overtaken by that leave on the way here.
+    left_through: Mutex<u64>,
 }
 
 struct Saved {
     settings: RemoteSettings,
-    device_id: DeviceId,
+    key: DeviceKey,
 }
 
 /// Locks a mutex, taking it over if a thread panicked holding it. The
@@ -54,7 +68,109 @@ impl RemoteService {
     }
 
     pub fn device_id(&self) -> DeviceId {
-        lock(&self.state).device_id.clone()
+        lock(&self.state).key.device_id()
+    }
+
+    /// The other Cinette devices discovery found.
+    pub fn devices(&self) -> Vec<RemoteDevice> {
+        lock(&self.devices).list()
+    }
+
+    /// The link numbered `link`, if it's the one this device holds now.
+    pub fn link(&self, link: u64) -> Option<LinkHandle> {
+        lock(&self.link)
+            .as_ref()
+            .filter(|l| l.generation() == link)
+            .cloned()
+    }
+
+    /// The number of the link this device holds now, if any.
+    pub fn current_link(&self) -> Option<u64> {
+        lock(&self.link).as_ref().map(LinkHandle::generation)
+    }
+
+    /// Starts asking `device` for control, leaving any device controlled now.
+    /// `link` numbers the new link.
+    pub fn connect(&self, device: DeviceId, link: u64) -> Result<(), String> {
+        if link <= *lock(&self.left_through) {
+            return Err("That connection was left already.".into());
+        }
+        let allowed = lock(&self.devices).get(&device).map(|d| d.control_allowed);
+        match allowed {
+            None => return Err("That device isn't on the network now.".into()),
+            Some(false) => return Err("That device doesn't allow remote control.".into()),
+            Some(true) => {}
+        }
+        let (key, name) = {
+            let saved = lock(&self.state);
+            (saved.key.clone(), saved.settings.name(DEVICE_TYPE))
+        };
+        let hello = Hello {
+            id: key.device_id(),
+            name,
+            device_type: DEVICE_TYPE,
+            versions: vec![PROTOCOL_VERSION],
+            features: vec![Feature::Control, Feature::Catalog],
+        };
+        let devices = self.devices.clone();
+        let target = device.clone();
+        let config = LinkConfig {
+            key,
+            hello,
+            target: device.clone(),
+            addresses: Arc::new(move || lock(&devices).addresses(&target)),
+            grace: RESUME_GRACE,
+            generation: link,
+            limits: link::Limits::STANDARD,
+            clock: Arc::new(super::clock::now),
+        };
+        lock(&self.devices).keep(Some(device));
+        // The slot stays locked until the new link is in it, so the link's
+        // first event already finds itself current.
+        let mut slot = lock(&self.link);
+        let old = slot.replace(link::start(config, self.link_host.clone()));
+        drop(slot);
+        if let Some(old) = old {
+            tauri::async_runtime::spawn(async move { old.leave().await });
+        }
+        Ok(())
+    }
+
+    /// Ends link `link`, or stops it asking. The other device keeps
+    /// playing. A link that another replaced meanwhile is gone already, so
+    /// a late leave for it leaves the new one alone. The webview asked, so
+    /// no `remote://controller` event says so.
+    pub async fn leave(&self, link: u64) {
+        {
+            let mut left = lock(&self.left_through);
+            *left = (*left).max(link);
+        }
+        let old = {
+            let mut slot = lock(&self.link);
+            if slot.as_ref().is_some_and(|l| l.generation() == link) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some(old) = old {
+            old.leave().await;
+        }
+        self.forget_kept();
+    }
+
+    /// Stops keeping the device left in the list, unless a link to another
+    /// started meanwhile, and says what the list is now.
+    fn forget_kept(&self) {
+        if lock(&self.link).is_some() {
+            return;
+        }
+        let list = {
+            let mut devices = lock(&self.devices);
+            devices.keep(None);
+            devices.list()
+        };
+        self.events.devices_changed(&list);
     }
 
     /// Hands the settings to the target, then saves them. The target takes
@@ -79,8 +195,17 @@ impl RemoteService {
         let key = DeviceKey::generate();
         identity::save(&self.key_dir, &key).map_err(|e| e.to_string())?;
         let id = key.device_id();
-        lock(&self.state).device_id = id.clone();
+        lock(&self.state).key = key.clone();
+        lock(&self.devices).set_own(id.clone());
         self.handle.reset_identity(key);
+        // A session this device holds on another one ends too, and the
+        // webview didn't ask, so it's told.
+        let old = lock(&self.link).take();
+        if let Some(old) = old {
+            self.events.left(old.generation(), old.device());
+            tauri::async_runtime::spawn(async move { old.leave().await });
+            self.forget_kept();
+        }
         tracing::info!("[remote] device identity reset; new id {id}");
         Ok(id)
     }
@@ -390,6 +515,193 @@ fn advertise_on_network(registration: &Registration) -> Option<Advertisement> {
         .ok()
 }
 
+/// What `remote://controller` carries: the device and where the connection
+/// to it stands.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerEvent<'a> {
+    pub device_id: String,
+    pub link: u64,
+    #[serde(flatten)]
+    pub phase: &'a Phase,
+}
+
+/// What `remote://state` carries.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateEvent {
+    pub device_id: String,
+    pub link: u64,
+    pub state: VersionedState,
+}
+
+/// What the service tells the webview besides what links report.
+trait ServiceEvents: Send + Sync {
+    /// The device list changed.
+    fn devices_changed(&self, devices: &[RemoteDevice]);
+    /// Link `link` to `device` ended without the webview asking.
+    fn left(&self, link: u64, device: &DeviceId);
+}
+
+/// States from a controlled device, kept to at most one every
+/// [`STATE_EVERY`] so a device that floods can't flood the webview.
+#[derive(Default)]
+struct Throttle {
+    last: Option<Instant>,
+    /// The newest state held back, sent when its turn comes.
+    held: Option<StateEvent>,
+}
+
+/// The shortest time between two `remote://state` events.
+const STATE_EVERY: Duration = Duration::from_millis(100);
+
+struct TauriLinkHost<R: Runtime> {
+    app: AppHandle<R>,
+    devices: Arc<Mutex<Devices>>,
+    link: Arc<Mutex<Option<LinkHandle>>>,
+    throttle: Arc<Mutex<Throttle>>,
+}
+
+impl<R: Runtime> TauriLinkHost<R> {
+    /// Whether `link` is still the one this device uses. One that was
+    /// replaced or left says nothing more to the webview.
+    fn current(&self, link: u64) -> bool {
+        lock(&self.link)
+            .as_ref()
+            .is_some_and(|l| l.generation() == link)
+    }
+}
+
+impl<R: Runtime> LinkHost for TauriLinkHost<R> {
+    fn phase(&self, link: u64, device: &DeviceId, phase: &Phase) {
+        if let Phase::Closed { reason } = phase {
+            tracing::info!("[remote] the session with {device} ended: {reason:?}");
+            let mut slot = lock(&self.link);
+            if !slot.as_ref().is_some_and(|l| l.generation() == link) {
+                return;
+            }
+            *slot = None;
+            drop(slot);
+            let list = {
+                let mut devices = lock(&self.devices);
+                devices.keep(None);
+                devices.list()
+            };
+            let _ = self.app.emit("remote://devices", list);
+        } else if !self.current(link) {
+            return;
+        }
+        let _ = self.app.emit(
+            "remote://controller",
+            ControllerEvent {
+                device_id: device.to_string(),
+                link,
+                phase,
+            },
+        );
+    }
+
+    fn state(&self, link: u64, device: &DeviceId, state: &VersionedState) {
+        if !self.current(link) {
+            return;
+        }
+        let mut state = state.clone();
+        state.state.item = state.state.item.map(super::logos::checked);
+        let event = StateEvent {
+            device_id: device.to_string(),
+            link,
+            state,
+        };
+        let mut throttle = lock(&self.throttle);
+        let now = Instant::now();
+        let wait = throttle.last.map_or(Duration::ZERO, |at| {
+            STATE_EVERY.saturating_sub(now.duration_since(at))
+        });
+        if wait.is_zero() {
+            throttle.last = Some(now);
+            let _ = self.app.emit("remote://state", event);
+            return;
+        }
+        // One held state at a time; a newer one takes its place.
+        let already_waiting = throttle.held.replace(event).is_some();
+        if already_waiting {
+            return;
+        }
+        let (app, slot, throttle) = (self.app.clone(), self.link.clone(), self.throttle.clone());
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let mut throttle = lock(&throttle);
+            let Some(event) = throttle.held.take() else {
+                return;
+            };
+            throttle.last = Some(Instant::now());
+            let current = lock(&slot).as_ref().map(LinkHandle::generation);
+            if current == Some(event.link) {
+                let _ = app.emit("remote://state", event);
+            }
+        });
+    }
+}
+
+impl<R: Runtime> ServiceEvents for TauriLinkHost<R> {
+    fn devices_changed(&self, devices: &[RemoteDevice]) {
+        let _ = self.app.emit("remote://devices", devices);
+    }
+
+    fn left(&self, link: u64, device: &DeviceId) {
+        let _ = self.app.emit(
+            "remote://controller",
+            ControllerEvent {
+                device_id: device.to_string(),
+                link,
+                phase: &Phase::Closed {
+                    reason: super::link::Ended::Left,
+                },
+            },
+        );
+    }
+}
+
+/// Browses for other Cinette devices on the network.
+fn browse_network() -> mpsc::UnboundedReceiver<discovery::Event> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    tauri::async_runtime::spawn(async move {
+        let mut browser = match discovery::browse(mvp_core::remote::target::SERVICE_TYPE) {
+            Ok(browser) => browser,
+            Err(e) => {
+                tracing::warn!("[remote] couldn't look for other devices: {e}");
+                return;
+            }
+        };
+        while let Some(event) = browser.next().await {
+            if tx.send(event).is_err() {
+                return;
+            }
+        }
+    });
+    rx
+}
+
+/// Keeps the device list up to date from discovery, and tells the webview
+/// when it changes.
+fn follow_discovery<R: Runtime>(
+    app: AppHandle<R>,
+    devices: Arc<Mutex<Devices>>,
+    mut found: mpsc::UnboundedReceiver<discovery::Event>,
+) {
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = found.recv().await {
+            let list = {
+                let mut devices = lock(&devices);
+                devices.apply(event).then(|| devices.list())
+            };
+            if let Some(list) = list {
+                let _ = app.emit("remote://devices", list);
+            }
+        }
+    });
+}
+
 /// Writes `settings` to the settings file. When that fails, the store keeps
 /// what it had, so a later write of the file doesn't save them after all.
 fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &RemoteSettings) -> Result<(), String> {
@@ -433,6 +745,7 @@ pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
             key_dir,
             listener,
             Box::new(advertise_on_network),
+            browse_network(),
             target::Limits::STANDARD,
         )
     });
@@ -448,6 +761,7 @@ fn start_on<R: Runtime>(
     key_dir: PathBuf,
     listener: tokio::net::TcpListener,
     advertiser: Advertiser,
+    found: mpsc::UnboundedReceiver<discovery::Event>,
     limits: target::Limits,
 ) -> Result<(), String> {
     let key = identity::load_or_create(&key_dir)
@@ -463,20 +777,38 @@ fn start_on<R: Runtime>(
         loading: Gates::default(),
     });
     let device_id = key.device_id();
-    let handle = target::start_with(listener, key, DEVICE_TYPE, settings.clone(), host, limits)
-        .map_err(|e| format!("couldn't listen: {e}"))?;
+    let handle = target::start_with(
+        listener,
+        key.clone(),
+        DEVICE_TYPE,
+        settings.clone(),
+        host,
+        limits,
+    )
+    .map_err(|e| format!("couldn't listen: {e}"))?;
+    let devices = Arc::new(Mutex::new(Devices::new(device_id.clone())));
+    let link = Arc::new(Mutex::new(None));
+    follow_discovery(app.clone(), devices.clone(), found);
     tracing::info!(
         "[remote] listening on port {} as {device_id}",
         handle.port()
     );
+    let link_host = Arc::new(TauriLinkHost {
+        app: app.clone(),
+        devices: devices.clone(),
+        link: link.clone(),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+    });
     app.manage(RemoteService {
         handle,
         key_dir,
-        state: Mutex::new(Saved {
-            settings,
-            device_id,
-        }),
+        state: Mutex::new(Saved { settings, key }),
+        link_host: link_host.clone(),
+        events: link_host,
         resetting: Mutex::new(()),
+        devices,
+        link,
+        left_through: Mutex::new(0),
     });
     Ok(())
 }
@@ -484,7 +816,12 @@ fn start_on<R: Runtime>(
 /// Closes every connection with `shutdown` and withdraws the record.
 pub fn stop_for_exit<R: Runtime>(app: &AppHandle<R>) {
     if let Some(service) = app.try_state::<RemoteService>() {
-        tauri::async_runtime::block_on(service.handle.shutdown());
+        tauri::async_runtime::block_on(async {
+            if let Some(link) = service.current_link() {
+                service.leave(link).await;
+            }
+            service.handle.shutdown().await;
+        });
     }
 }
 

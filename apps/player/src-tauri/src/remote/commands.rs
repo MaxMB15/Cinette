@@ -223,6 +223,24 @@ mod imp {
             .collect()
     }
 
+    pub fn not_connected() -> String {
+        "link_not_connected".to_owned()
+    }
+
+    /// The error code the webview gets: the other device's, as the protocol
+    /// spells it, or the link's own, which start with `link_`.
+    pub fn link_error(e: crate::remote::link::LinkError) -> String {
+        match e {
+            crate::remote::link::LinkError::NotConnected => not_connected(),
+            crate::remote::link::LinkError::TimedOut => "link_timed_out".to_owned(),
+            crate::remote::link::LinkError::Busy => "link_busy".to_owned(),
+            crate::remote::link::LinkError::Refused(code) => serde_json::to_value(code)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "failed".to_owned()),
+        }
+    }
+
     pub fn provider_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
         let state = app.state::<crate::commands::AppState>();
         let Ok(cache) = state.cache.lock() else {
@@ -381,6 +399,121 @@ pub async fn remote_finish_command<R: Runtime>(
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (app, token, outcome);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The other Cinette devices on the network.
+#[command]
+pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        serde_json::to_value(imp::service(&app)?.devices()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Asks a device for control. Progress comes as `remote://controller`.
+/// `link` is a number the webview picks to tell this link from others: its
+/// events carry it, and its commands name it.
+#[command]
+pub async fn remote_connect<R: Runtime>(
+    app: AppHandle<R>,
+    device_id: String,
+    link: u64,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let id = mvp_core::remote::identity::DeviceId::parse(&device_id)
+            .ok_or_else(|| "That isn't a device id.".to_owned())?;
+        imp::service(&app)?.connect(id, link)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, device_id, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The link this device holds now, if any, as the number `remote_connect`
+/// was given. A webview that reloaded uses it to drop a link it forgot.
+#[command]
+pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        Ok(imp::service(&app)?.current_link())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Ends link `link` to the controlled device, or stops it asking. That
+/// device keeps playing. Another link that took its place stays.
+#[command]
+pub async fn remote_leave<R: Runtime>(app: AppHandle<R>, link: u64) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        imp::service(&app)?.leave(link).await;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Sends a playback command to the controlled device through link `link`. Resolves with that
+/// device's state version once it carried the command out; fails with an
+/// error code as the protocol spells it, such as `stale_item`, or one of
+/// the link's own: `link_not_connected` with no session, `link_timed_out`
+/// when no answer came, and `link_busy` when too many wait for one.
+#[command]
+pub async fn remote_command<R: Runtime>(
+    app: AppHandle<R>,
+    command: mvp_core::remote::message::Command,
+    link: u64,
+) -> Result<u64, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
+        link.command(command).await.map_err(imp::link_error)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, command, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// A page of the controlled device's catalog, through link `link`.
+#[command]
+pub async fn remote_catalog<R: Runtime>(
+    app: AppHandle<R>,
+    catalog_query: mvp_core::remote::catalog::CatalogQuery,
+    link: u64,
+) -> Result<serde_json::Value, String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let link = imp::service(&app)?
+            .link(link)
+            .ok_or_else(imp::not_connected)?;
+        let (items, next) = link.catalog(catalog_query).await.map_err(imp::link_error)?;
+        let items: Vec<_> = items.into_iter().map(super::logos::checked).collect();
+        Ok(serde_json::json!({ "items": items, "next": next }))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, catalog_query, link);
         Err(UNAVAILABLE.into())
     }
 }
