@@ -64,8 +64,7 @@ async fn serves_live_matroska_from_this_computers_address() {
     assert!(conversion.url.starts_with(&conversion.server.base));
     assert_eq!(*conversion.stalls.borrow(), 0);
 
-    let client = test_server::client();
-    let mut response = client.get(&conversion.url).send().await.unwrap();
+    let mut response = get(&conversion.url).await;
     assert_eq!(response.status(), 200);
     let headers = response.headers();
     assert_eq!(headers["content-type"], "video/x-matroska");
@@ -79,7 +78,7 @@ async fn serves_live_matroska_from_this_computers_address() {
 
     // A second request, as a receiver makes after a first look, gets the
     // header too, then starts at a cluster.
-    let mut again = client.get(&conversion.url).send().await.unwrap();
+    let mut again = get(&conversion.url).await;
     let pieces = header_and_a_cluster(&mut again).await;
     assert_eq!(pieces[0], Piece::Header(header.clone()));
     assert!(matches!(&pieces[1], Piece::Element { start: true, .. }));
@@ -479,6 +478,17 @@ fn live_wav(end: End) -> String {
     )
 }
 
+/// Asks for `url`, waiting up to 10 s for the head of the answer.
+async fn get(url: &str) -> reqwest::Response {
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        test_server::client().get(url).send(),
+    )
+    .await
+    .expect("an answer within 10 s")
+    .unwrap()
+}
+
 /// Reads a response until it has given the header and a whole cluster,
 /// for up to 20 s.
 async fn header_and_a_cluster(response: &mut reqwest::Response) -> Vec<Piece> {
@@ -564,11 +574,7 @@ async fn a_file_is_read_at_its_own_pace_after_a_burst() {
     let source = file_source(wav(14));
     let started = std::time::Instant::now();
     let mut conversion = start_copy(&app, &source, LOOPBACK).await.unwrap();
-    let mut response = test_server::client()
-        .get(&conversion.url)
-        .send()
-        .await
-        .unwrap();
+    let mut response = get(&conversion.url).await;
     let body = read_to_end(&mut response).await;
     assert_eq!(ended(&mut conversion).await, Ended::Finished);
     assert!(
@@ -658,11 +664,7 @@ async fn the_first_request_starts_at_the_start() {
         .unwrap();
     // ffmpeg bursts through the file before the receiver asks.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let mut response = test_server::client()
-        .get(&conversion.url)
-        .send()
-        .await
-        .unwrap();
+    let mut response = get(&conversion.url).await;
     let pieces = header_and_a_cluster(&mut response).await;
     let Piece::Element { bytes, .. } = &pieces[1] else {
         panic!("a cluster follows the header");
@@ -675,7 +677,7 @@ async fn starts_a_file_partway_through() {
     let app = TestApp::new();
     let source = file_source(wav(8));
     let whole = start_copy(&app, &source, LOOPBACK).await.unwrap();
-    let mut response = test_server::client().get(&whole.url).send().await.unwrap();
+    let mut response = get(&whole.url).await;
     let whole = read_to_end(&mut response).await;
     let plan = Plan {
         start_at: Some(6.0),
@@ -684,7 +686,7 @@ async fn starts_a_file_partway_through() {
     let mut later = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
         .await
         .unwrap();
-    let mut response = test_server::client().get(&later.url).send().await.unwrap();
+    let mut response = get(&later.url).await;
     let rest = read_to_end(&mut response).await;
     assert_eq!(ended(&mut later).await, Ended::Finished);
     // Two seconds of the eight.
@@ -832,9 +834,8 @@ async fn a_late_request_with_video_starts_at_a_keyframe() {
     let conversion = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
         .await
         .unwrap();
-    let client = test_server::client();
     // Read until a cluster that starts between keyframes has gone by.
-    let mut first = client.get(&conversion.url).send().await.unwrap();
+    let mut first = get(&conversion.url).await;
     let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
     let mut between = false;
     tokio::time::timeout(Duration::from_secs(20), async {
@@ -852,7 +853,7 @@ async fn a_late_request_with_video_starts_at_a_keyframe() {
     .await
     .expect("a cluster between keyframes within 20 s");
     drop(first);
-    let mut again = client.get(&conversion.url).send().await.unwrap();
+    let mut again = get(&conversion.url).await;
     let pieces = header_and_a_cluster(&mut again).await;
     let Piece::Element { bytes, .. } = &pieces[1] else {
         panic!("a cluster follows the header");
