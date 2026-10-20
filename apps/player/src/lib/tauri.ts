@@ -3,6 +3,8 @@
 
 import { invoke } from "./invoke";
 import type { AirPlayRoute } from "@/lib/airplay";
+import type { CatalogItem } from "@/lib/cinette-destination";
+import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
 import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
@@ -611,3 +613,128 @@ export const getCastReceivers = (): Promise<CastReceiverList> => invoke("get_cas
  */
 export const holdCastReceivers = (ids: string[]): Promise<void> =>
 	invoke("hold_cast_receivers", { ids });
+
+/** Who may control this device from another Cinette device. */
+export type RemoteControlMode = "always" | "ask" | "never";
+
+/** The remote-control settings and this device's id. */
+export interface RemoteSettings {
+	discoverable: boolean;
+	remoteControl: RemoteControlMode;
+	/** The name the user gave this device, or null for the default. */
+	deviceName: string | null;
+	/** The name used when none is given: the device type, like "Mac". */
+	defaultName: string;
+	deviceId: string;
+}
+
+/** A device controlling this one, connected or waiting to resume. */
+export interface RemoteSession {
+	sessionId: string;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	connected: boolean;
+}
+
+export const remoteGetSettings = (): Promise<RemoteSettings> => invoke("remote_get_settings");
+
+/** Never allow ends every session at once. */
+export const remoteSetSettings = (settings: {
+	discoverable: boolean;
+	remoteControl: RemoteControlMode;
+	deviceName: string | null;
+}): Promise<RemoteSettings> => invoke("remote_set_settings", { settings });
+
+/** A new device id. Every session ends. */
+export const remoteResetIdentity = (): Promise<RemoteSettings> => invoke("remote_reset_identity");
+
+export const remoteAnswerConsent = (request: number, allow: boolean): Promise<void> =>
+	invoke("remote_answer_consent", { request, allow });
+
+export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
+
+/** A device asking to control this one, as `remote://consent` brings it. */
+export interface RemoteConsentEvent {
+	request: number;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	code: string;
+	expiresInMs: number;
+}
+
+/** The request on screen now, for a page that wasn't listening when it came. */
+export const remotePendingConsent = (): Promise<RemoteConsentEvent | null> =>
+	invoke("remote_pending_consent");
+
+export const remoteDisconnect = (sessionId: string): Promise<void> =>
+	invoke("remote_disconnect", { sessionId });
+
+// States go out one after another, so a slow "playing" can't land after
+// the idle state a closing player sends next.
+let lastRemoteState: Promise<void> = Promise.resolve();
+
+export const remoteSetState = (state: RemotePlayerState): Promise<void> => {
+	const result = lastRemoteState.then(() => invoke<void>("remote_set_state", { state }));
+	lastRemoteState = result.then(
+		() => {},
+		() => {}
+	);
+	return result;
+};
+
+export const remoteFinishCommand = (token: number, outcome: CommandOutcome): Promise<void> =>
+	invoke("remote_finish_command", { token, outcome });
+
+/** Another Cinette device on the network. */
+export interface RemoteDevice {
+	deviceId: string;
+	name: string;
+	/** Like `mac`, `linux-pc` or `fire-tv`. */
+	deviceType: string;
+	/** False when that device is set to Never allow. */
+	controlAllowed: boolean;
+	/** False when discovery lost it. */
+	available: boolean;
+}
+
+export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devices");
+
+/** Whether macOS refuses Cinette the local network, so no device can be found. */
+export const remoteLocalNetworkDenied = (): Promise<boolean> =>
+	invoke("remote_local_network_denied");
+
+/** Asks a device for control. Progress comes as `remote://controller`.
+ *  `link` is a number this side picks; that link's events carry it, and its
+ *  commands name it. */
+export const remoteConnect = (deviceId: string, link: number): Promise<void> =>
+	invoke("remote_connect", { deviceId, link });
+
+/** The link the backend holds now, if any. */
+export const remoteLink = (): Promise<number | null> => invoke("remote_link");
+
+/** Ends link `link` to the controlled device, or stops it asking. That
+ *  device keeps playing. A link that took its place stays, and a connect
+ *  numbered at or below `link` is refused from then on. */
+export const remoteLeave = (link: number): Promise<void> => invoke("remote_leave", { link });
+
+/** Resolves with the other device's state version once it carried the
+ *  command out. Rejects with the protocol's error code, like `stale_item`,
+ *  or `link_not_connected`. */
+export const remoteCommand = (link: number, command: RemoteCommand): Promise<number> =>
+	invoke("remote_command", { command, link });
+
+/** A query for the controlled device's catalog. */
+export type CatalogQuery =
+	| { kind: "groups"; contentType: string; cursor?: string; limit: number }
+	| { kind: "items"; contentType: string; group: string; cursor?: string; limit: number }
+	| { kind: "search"; query: string; contentType?: string; limit: number }
+	| { kind: "episodes"; seriesId: string; cursor?: string; limit: number };
+
+/** A page of the catalog of the device link `link` goes to. */
+export const remoteCatalog = (
+	link: number,
+	catalogQuery: CatalogQuery
+): Promise<{ items: CatalogItem[]; next: string | null }> =>
+	invoke("remote_catalog", { catalogQuery, link });

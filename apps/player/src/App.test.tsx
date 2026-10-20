@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { check } from "@tauri-apps/plugin-updater";
+import { listen } from "@tauri-apps/api/event";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import type { Provider } from "@/lib/types";
@@ -32,6 +33,12 @@ vi.mock("./components/settings/Settings", () => ({
 	Settings: ({ updateState }: { updateState: UpdateState }) => (
 		<p>Settings page, update {updateState.update?.version ?? "none"}</p>
 	),
+}));
+
+// The connect dialog has its own tests. Here it only shows that it's mounted.
+vi.mock("./components/remote/RemoteControls", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./components/remote/RemoteControls")>()),
+	ConnectStatusDialog: () => <p>Connect dialog</p>,
 }));
 
 let providers: Provider[] = [];
@@ -122,6 +129,35 @@ describe("App", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss donation prompt" }));
 		expect(screen.queryByText("Enjoying Cinette?")).not.toBeInTheDocument();
 		expect(localStorage.getItem("donation-last-shown")).toMatch(/^\d+$/);
+	});
+
+	it("listens for consent requests and its own links on the desktop", async () => {
+		renderApp();
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://consent", expect.any(Function))
+		);
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://controller", expect.any(Function))
+		);
+		expect(screen.getByText("Connect dialog")).toBeInTheDocument();
+	});
+
+	it("shows the consent and connect dialogs only on the desktop", async () => {
+		vi.mocked(osPlatform).mockReturnValue("ios");
+		renderApp();
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://command", expect.any(Function))
+		);
+		expect(listen).not.toHaveBeenCalledWith("remote://consent", expect.any(Function));
+		expect(listen).not.toHaveBeenCalledWith("remote://controller", expect.any(Function));
+		expect(screen.queryByText("Connect dialog")).toBeNull();
+	});
+
+	it("takes commands from other Cinette devices", async () => {
+		renderApp();
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://command", expect.any(Function))
+		);
 	});
 
 	it("skips the start screen for the rest of the session", async () => {

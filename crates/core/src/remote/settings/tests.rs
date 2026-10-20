@@ -102,6 +102,67 @@ fn every_device_type_has_its_own_default_name() {
 }
 
 #[test]
+fn clean_name_drops_what_could_reorder_or_hide_the_text_around_it() {
+    // A right-to-left override would turn the rest of a sentence around.
+    assert_eq!(clean_name("TV\u{202E}nwod"), Some("TVnwod".into()));
+    assert_eq!(clean_name("\u{2066}Den\u{2069}"), Some("Den".into()));
+    assert_eq!(clean_name("Den\u{200B}TV\u{FEFF}"), Some("DenTV".into()));
+    assert_eq!(
+        clean_name("Den\u{2028}TV\u{2029}x"),
+        Some("Den TV x".into())
+    );
+    assert_eq!(clean_name("a\u{AD}b\u{E0041}"), Some("ab".into()));
+    assert_eq!(clean_name("\u{200E}\u{200F}"), None);
+    // Letters and marks next to those stay.
+    assert_eq!(
+        clean_name("Café \u{5D0}\u{5D1}"),
+        Some("Café \u{5D0}\u{5D1}".into())
+    );
+    for c in [
+        '\u{600}',
+        '\u{605}',
+        '\u{61C}',
+        '\u{6DD}',
+        '\u{70F}',
+        '\u{890}',
+        '\u{8E2}',
+        '\u{180E}',
+        '\u{2060}',
+        '\u{2064}',
+        '\u{206F}',
+        '\u{FFF9}',
+        '\u{FFFB}',
+        '\u{110BD}',
+        '\u{110CD}',
+        '\u{13430}',
+        '\u{1343F}',
+        '\u{1BCA0}',
+        '\u{1BCA3}',
+        '\u{1D173}',
+        '\u{1D17A}',
+        '\u{E0001}',
+        '\u{E007F}',
+    ] {
+        assert_eq!(clean_name(&format!("a{c}b")), Some("ab".into()), "{c:?}");
+    }
+    // Just outside the ranges.
+    for c in [
+        '\u{606}',
+        '\u{2065}',
+        '\u{1D17B}',
+        '\u{E0080}',
+        '\u{2027}',
+        '\u{202F}',
+    ] {
+        assert_eq!(
+            clean_name(&format!("a{c}b")),
+            Some(format!("a{c}b")),
+            "{c:?}"
+        );
+    }
+}
+
+#[test]
 fn clean_name_drops_control_characters_and_cuts_long_names() {
     assert_eq!(clean_name("Den\u{0}TV\n"), Some("Den TV".into()));
     assert_eq!(clean_name(""), None);

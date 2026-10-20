@@ -10,10 +10,12 @@
 //! is refused without a dialog for [`DENIAL_COOLDOWN`], so it can't keep a
 //! dialog on screen.
 //!
-//! A device can make up a new id for each request, so a denial also turns
-//! away every new request for a while, from any device, with
-//! [`CloseReason::Busy`]. That's [`DENIAL_BACKOFF`] at first, twice as long
-//! after each denial that follows, and never more than [`DENIAL_COOLDOWN`].
+//! A device can make up a new id for each request, so a denial, or a
+//! request that ran out, also turns away every new request for a while,
+//! from any device, with [`CloseReason::Busy`]. That's [`DENIAL_BACKOFF`] at
+//! first, twice as long after each one that follows, and never more than
+//! [`DENIAL_COOLDOWN`]. Without it for a request that ran out, a device
+//! could keep a dialog up for good by asking again each time.
 //! Allowing a request, or a cooldown's time with no denial after the wait
 //! ends, starts it again from the beginning. Requests already waiting stay.
 
@@ -170,7 +172,8 @@ impl ConsentQueue {
         Some(Resolved { request, outcome })
     }
 
-    /// Refuses new requests for a while after a denial.
+    /// Refuses new requests for a while after a denial or a request that
+    /// ran out.
     fn back_off(&mut self, now: Instant) {
         if self
             .quiet_until
@@ -196,7 +199,7 @@ impl ConsentQueue {
         })
     }
 
-    /// Takes out the requests that ran out.
+    /// Takes out the requests that ran out, and backs off as for a denial.
     pub fn expire(&mut self, now: Instant) -> Vec<Resolved> {
         // Only forgets denials whose cooldown is over. Keeping one until the
         // moment after it ends changes nothing, since `submit` already lets
@@ -206,6 +209,9 @@ impl ConsentQueue {
         let (gone, kept): (Vec<_>, Vec<_>) =
             self.waiting.drain(..).partition(|r| now >= r.expires_at);
         self.waiting = kept.into();
+        if !gone.is_empty() {
+            self.back_off(now);
+        }
         gone.into_iter()
             .map(|request| Resolved {
                 request,

@@ -9,6 +9,8 @@ import { useEffect } from "react";
 import { mpvSetVisible } from "@/lib/tauri";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { Tv, List, FolderOpen, Settings as SettingsIcon } from "lucide-react";
+import { ControllersBar, DevicesButton, RemoteBar } from "@/components/remote/RemoteControls";
+import { isMobilePlatform } from "@/lib/platform";
 
 const navItems = [
 	{ to: "/", label: "Channels", icon: Tv },
@@ -60,12 +62,17 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 			{!compact && <Sidebar hidden={isFullscreen && isPlayer} />}
 			<main
 				className={cn(
-					"flex-1 overflow-hidden",
+					"flex-1 overflow-hidden flex flex-col",
 					compact && "min-h-0",
 					compact && !isPlayer && "pt-safe pl-safe pr-safe"
 				)}
 			>
-				<Outlet />
+				{/* Remote control runs on macOS and Linux for now. */}
+				{!isMobilePlatform() && <RemoteBar />}
+				{!isMobilePlatform() && <ControllersBar />}
+				<div className="flex-1 min-h-0">
+					<Outlet />
+				</div>
 			</main>
 			{compact && <TabBar hidden={isPlayer} />}
 		</div>
@@ -102,6 +109,7 @@ const Sidebar = ({ hidden }: { hidden: boolean }) => (
 				)}
 			</NavLink>
 		))}
+		{!isMobilePlatform() && <DevicesButton className="mt-auto" />}
 	</aside>
 );
 

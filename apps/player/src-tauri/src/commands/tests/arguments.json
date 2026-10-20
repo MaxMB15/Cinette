@@ -108,5 +108,21 @@
 	},
 	"stop_recording": { "required": ["id"] },
 	"get_cast_receivers": {},
-	"hold_cast_receivers": { "required": ["ids"] }
+	"hold_cast_receivers": { "required": ["ids"] },
+	"remote_get_settings": {},
+	"remote_set_settings": { "required": ["settings"] },
+	"remote_reset_identity": {},
+	"remote_answer_consent": { "required": ["request", "allow"] },
+	"remote_sessions": {},
+	"remote_pending_consent": {},
+	"remote_disconnect": { "required": ["sessionId"] },
+	"remote_set_state": { "required": ["state"] },
+	"remote_finish_command": { "required": ["token", "outcome"] },
+	"remote_devices": {},
+	"remote_local_network_denied": {},
+	"remote_connect": { "required": ["deviceId", "link"] },
+	"remote_link": {},
+	"remote_leave": { "required": ["link"] },
+	"remote_command": { "required": ["command", "link"] },
+	"remote_catalog": { "required": ["catalogQuery", "link"] }
 }
