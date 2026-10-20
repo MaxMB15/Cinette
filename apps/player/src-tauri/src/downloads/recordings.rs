@@ -2057,7 +2057,15 @@ mod tests {
         let pid = pid_of(&app, &id);
         let started = Instant::now();
 
-        stop_all_for_exit(&app.handle());
+        let quitting = {
+            let handle = app.handle();
+            std::thread::spawn(move || stop_all_for_exit(&handle))
+        };
+        // Long before this ffmpeg would give up on its stream by itself.
+        wait_within(Duration::from_secs(5), "quitting returns", || {
+            quitting.is_finished()
+        });
+        quitting.join().unwrap();
 
         assert!(app.downloads().exiting.load(Ordering::SeqCst));
         // This ffmpeg ignores the request to stop, so quitting waits the
