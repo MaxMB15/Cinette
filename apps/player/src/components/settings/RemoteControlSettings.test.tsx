@@ -145,7 +145,7 @@ describe("RemoteControlSettings", () => {
 	});
 
 	it("shows a change at once, so a second click before the answer undoes the first", async () => {
-		const answers: ((s: RemoteSettings) => void)[] = [];
+		const answers: (() => void)[] = [];
 		vi.mocked(remoteSetSettings).mockImplementation(
 			(sent) =>
 				new Promise((resolve) => answers.push(() => resolve({ ...defaults, ...sent })))
