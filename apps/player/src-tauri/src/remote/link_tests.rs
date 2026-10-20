@@ -120,6 +120,8 @@ struct Proxy {
     pipes: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// The bytes the link sent through so far.
     sent: Arc<AtomicUsize>,
+    /// The connections it took, refused ones too.
+    accepted: Arc<AtomicUsize>,
 }
 
 impl Proxy {
@@ -129,9 +131,12 @@ impl Proxy {
         let accepting = Arc::new(Mutex::new(true));
         let pipes: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::default();
         let sent = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
         let (open, list, count) = (accepting.clone(), pipes.clone(), sent.clone());
+        let taken = accepted.clone();
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
+                taken.fetch_add(1, Ordering::SeqCst);
                 if !*open.lock().unwrap() {
                     // Refused, as an unreachable device would be.
                     drop(inbound);
@@ -170,6 +175,7 @@ impl Proxy {
             accepting,
             pipes,
             sent,
+            accepted,
         }
     }
 
@@ -563,18 +569,35 @@ async fn gives_up_when_the_grace_runs_out() {
 }
 
 #[tokio::test]
-async fn a_drop_before_control_was_granted_is_lost() {
+async fn a_drop_before_control_was_granted_is_lost_without_trying_again() {
     let t = target(ControlMode::Ask).await;
     let proxy = Proxy::new(t.port).await;
-    let mut link = link_to(&t, proxy.port, GRACE);
+    // A long grace, so trying again would show.
+    let mut link = link_to(&t, proxy.port, Duration::from_secs(3600));
     link.until(|l| {
         l.phases()
             .iter()
             .any(|p| matches!(p, Phase::Pending { .. }))
     })
     .await;
-    proxy.cut(true);
+    // Cut, but still taking connections, as a target that closed on it.
+    proxy.cut(false);
     assert_eq!(link.closed().await, Ended::Lost);
+    // Longer than the first wait before trying again.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        proxy.accepted.load(Ordering::SeqCst),
+        1,
+        "there was no session to resume"
+    );
+    assert!(
+        !link
+            .phases()
+            .iter()
+            .any(|p| matches!(p, Phase::Reconnecting { .. })),
+        "{:?}",
+        link.phases()
+    );
 }
 
 #[tokio::test]
