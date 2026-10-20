@@ -157,9 +157,25 @@ impl FeedState {
             .find(|&n| self.is_start(n))
     }
 
+    /// The piece a request takes next: its next one, or for a request
+    /// waiting for a start point, the first one kept from there, or else
+    /// the end.
+    fn place(&self, (next, waiting): (u64, bool)) -> u64 {
+        let next = next.max(self.first);
+        if !waiting {
+            return next;
+        }
+        (next..self.end())
+            .find(|&n| self.is_start(n))
+            .unwrap_or(self.end())
+    }
+
     /// The first piece an open request still needs.
     fn needed(&self) -> Option<u64> {
-        self.readers.values().map(|&(next, _)| next).min()
+        self.readers
+            .values()
+            .map(|&reader| self.place(reader))
+            .min()
     }
 
     /// Drops the pieces before `keep`.
@@ -303,33 +319,20 @@ impl Reader {
         let mut changed = self.feed.0.changed.subscribe();
         loop {
             changed.borrow_and_update();
-            let skipped = {
+            {
                 let mut state = self.feed.state();
-                let (next, waiting) = state.readers.get(&self.id).copied()?;
-                let next = next.max(state.first);
-                if let Some((bytes, start)) = state.pieces.get((next - state.first) as usize) {
-                    let (bytes, start) = (bytes.clone(), *start);
-                    state.readers.insert(self.id, (next + 1, waiting && !start));
-                    if !waiting || start {
-                        state.frontier = state.frontier.max(next + 1);
-                        drop(state);
-                        self.feed.wake();
-                        return Some(bytes);
-                    }
-                    true
-                } else if state.ended && next >= state.end() {
-                    return None;
-                } else {
-                    false
+                let next = state.place(*state.readers.get(&self.id)?);
+                if let Some((bytes, _)) = state.pieces.get((next - state.first) as usize) {
+                    let bytes = bytes.clone();
+                    state.readers.insert(self.id, (next + 1, false));
+                    state.frontier = state.frontier.max(next + 1);
+                    drop(state);
+                    self.feed.wake();
+                    return Some(bytes);
                 }
-            };
-            if skipped {
-                // A push may be waiting for this request to move on. Letting
-                // the runtime run between pieces also lets a timeout around
-                // this end it.
-                self.feed.wake();
-                tokio::task::yield_now().await;
-                continue;
+                if state.ended && next >= state.end() {
+                    return None;
+                }
             }
             let _ = changed.changed().await;
         }

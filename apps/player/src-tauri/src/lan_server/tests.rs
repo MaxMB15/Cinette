@@ -196,7 +196,8 @@ async fn a_request_that_skips_to_a_start_point_makes_room_for_it() {
     let mut reader = feed.reader();
     within(feed.push(piece(1), false)).await;
     within(feed.push(piece(2), false)).await;
-    // The feed is full, so this waits for the request to move on.
+    // The feed is full, but the request skips what it holds, so it's
+    // dropped to make room.
     let pusher = tokio::spawn({
         let feed = feed.clone();
         async move { feed.push(piece(3), true).await }
@@ -205,6 +206,40 @@ async fn a_request_that_skips_to_a_start_point_makes_room_for_it() {
     let next = within(reader.next()).await.unwrap();
     assert_eq!(*next, piece(3)[..]);
     within(pusher).await.unwrap();
+}
+
+/// A waker that notes whether it was woken.
+#[derive(Default)]
+struct Woken(std::sync::atomic::AtomicBool);
+
+impl std::task::Wake for Woken {
+    fn wake(self: Arc<Self>) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_full_feed_sleeps_until_its_request_moves_on() {
+    use std::future::Future;
+    let woken = Arc::new(Woken::default());
+    let waker = std::task::Waker::from(woken.clone());
+    let mut cx = std::task::Context::from_waker(&waker);
+    let feed = feed(8, false);
+    let mut reader = feed.reader();
+    for (byte, start) in [(1, true), (2, false)] {
+        let push = std::pin::pin!(feed.push(piece(byte), start));
+        assert!(push.poll(&mut cx).is_ready());
+    }
+    // The request hasn't taken the first piece yet.
+    let mut push = std::pin::pin!(feed.push(piece(3), false));
+    assert!(push.as_mut().poll(&mut cx).is_pending());
+    assert!(!woken.0.load(std::sync::atomic::Ordering::SeqCst));
+    let next = std::pin::pin!(reader.next());
+    assert!(next.poll(&mut cx).is_ready());
+    assert!(woken.0.load(std::sync::atomic::Ordering::SeqCst));
+    // It drops the piece taken, then pushes.
+    assert!(push.as_mut().poll(&mut cx).is_pending());
+    assert!(push.poll(&mut cx).is_ready());
 }
 
 #[test]
