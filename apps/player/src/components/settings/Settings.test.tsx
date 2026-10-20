@@ -50,6 +50,11 @@ const downloads = vi.hoisted(() => ({
 	setRetentionDays: vi.fn(),
 }));
 
+// Remote control's card has tests of its own.
+vi.mock("@/components/settings/RemoteControlSettings", () => ({
+	RemoteControlSettings: () => <section aria-label="Remote control settings" />,
+}));
+
 vi.mock("@/lib/tauri", () => ({
 	getOmdbApiKey: vi.fn(),
 	setOmdbApiKey: vi.fn(),
@@ -193,6 +198,11 @@ afterEach(() => {
 });
 
 describe("Settings when it opens", () => {
+	it("has the remote control card", async () => {
+		await renderSettings();
+		expect(screen.getByRole("region", { name: "Remote control settings" })).toBeInTheDocument();
+	});
+
 	it("fills in the saved keys, download folder, download count and version", async () => {
 		vi.mocked(getOmdbApiKey).mockResolvedValue("omdb-test-key");
 		vi.mocked(getOpenSubtitlesApiKey).mockResolvedValue("subs-test-key");

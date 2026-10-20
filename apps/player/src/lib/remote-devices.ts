@@ -68,3 +68,18 @@ export const endedText = (name: string, reason: Ended): string | null => {
 			return `Lost the connection to ${name}.`;
 	}
 };
+
+/** The longest device name, in UTF-8 bytes, that goes out whole. */
+export const MAX_NAME_BYTES = 63;
+
+/** `typed`, cut to the characters that fit in {@link MAX_NAME_BYTES}. It
+ *  cuts by code point, as the core does, so the two agree. */
+export const fitName = (typed: string): string => {
+	const encoder = new TextEncoder();
+	let fitted = "";
+	for (const char of typed) {
+		if (encoder.encode(fitted + char).length > MAX_NAME_BYTES) break;
+		fitted += char;
+	}
+	return fitted;
+};

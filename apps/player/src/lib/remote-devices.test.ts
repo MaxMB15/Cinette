@@ -2,7 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect } from "vitest";
-import { deviceTypeName, endedText, formatCode, isTv, secondsLeft } from "./remote-devices";
+import {
+	deviceTypeName,
+	endedText,
+	fitName,
+	formatCode,
+	isTv,
+	MAX_NAME_BYTES,
+	secondsLeft,
+} from "./remote-devices";
 
 describe("deviceTypeName", () => {
 	it("names every type the protocol has", () => {
@@ -103,5 +111,16 @@ describe("endedText", () => {
 			[{ target: "protocol" }, "Lost the connection to TV."],
 		];
 		for (const [reason, text] of cases) expect(endedText("TV", reason)).toBe(text);
+	});
+});
+
+describe("fitName", () => {
+	it("keeps a name to what fits in 63 bytes", () => {
+		expect(MAX_NAME_BYTES).toBe(63);
+		expect(fitName("Den")).toBe("Den");
+		expect(fitName("x".repeat(70))).toBe("x".repeat(63));
+		expect(fitName("x".repeat(63))).toBe("x".repeat(63));
+		expect(fitName("😀".repeat(20))).toBe("😀".repeat(15));
+		expect(new TextEncoder().encode(fitName("é".repeat(40))).length).toBe(62);
 	});
 });
