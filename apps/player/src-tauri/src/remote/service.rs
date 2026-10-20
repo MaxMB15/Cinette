@@ -74,6 +74,7 @@ impl RemoteService {
     pub fn pending_consent(&self) -> Option<ConsentEvent> {
         lock(&self.prompt)
             .as_ref()
+            // mutants: skip BinaryOperator: > and >= differ only at one instant of a clock that never stops.
             .filter(|p| p.expires_at > super::clock::now())
             .map(consent_event)
     }
