@@ -366,7 +366,7 @@ fn a_page_that_fits_goes_out_whole() {
         items: sent,
         next,
         re,
-    } = fit_page(4, items.clone(), Some("10".into()))
+    } = fit_page(4, items.clone(), Some("10".into()), true)
     else {
         panic!()
     };
@@ -382,7 +382,7 @@ fn a_page_too_big_for_a_frame_is_cut_and_points_at_the_rest() {
     let items: Vec<_> = (0..100).map(big).collect();
     let Message::CatalogPage {
         items: sent, next, ..
-    } = fit_page(1, items, None)
+    } = fit_page(1, items, None, true)
     else {
         panic!()
     };
@@ -399,7 +399,7 @@ fn a_page_too_big_for_a_frame_is_cut_and_points_at_the_rest() {
 #[test]
 fn more_than_a_page_of_items_is_cut_to_a_page() {
     let items: Vec<_> = (0..150).map(|i| item(&format!("i{i}"))).collect();
-    let Message::CatalogPage { items: sent, .. } = fit_page(1, items, None) else {
+    let Message::CatalogPage { items: sent, .. } = fit_page(1, items, None, true) else {
         panic!()
     };
     assert_eq!(sent.len(), crate::remote::catalog::MAX_PAGE);
@@ -412,7 +412,7 @@ fn an_item_too_big_for_any_frame_fails() {
         ..item("i")
     };
     assert_eq!(
-        fit_page(2, vec![huge], None),
+        fit_page(2, vec![huge], None, true),
         Message::Error {
             re: Some(2),
             code: ErrorCode::Failed

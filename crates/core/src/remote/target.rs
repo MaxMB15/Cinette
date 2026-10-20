@@ -46,7 +46,7 @@ use super::message::{
 use super::sessions::{Session, Sessions};
 use super::settings::{ControlMode, Decision, RemoteSettings};
 use super::ConnId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
 /// How long a connection has to finish the handshake and ask.
@@ -164,6 +164,9 @@ struct Conn {
     last_heard: Instant,
     /// [`RATE`] for the messages after the handshake.
     messages: TokenBucket,
+    /// The catalog requests waiting for an answer that are searches, whose
+    /// pages have no cursor to go on from.
+    searches: HashSet<u64>,
 }
 
 /// Still in the handshake.
@@ -292,6 +295,7 @@ impl Target {
                 opened: now,
                 last_heard: now,
                 messages: TokenBucket::new(RATE, RATE),
+                searches: HashSet::new(),
             },
         );
         Some(conn)
@@ -506,11 +510,18 @@ impl Target {
                             (true, None) => {
                                 error(&mut auth, conn, Some(id), ErrorCode::Invalid, &mut actions)
                             }
-                            (true, Some(query)) => actions.push(Action::Catalog {
-                                conn,
-                                request: id,
-                                query,
-                            }),
+                            (true, Some(query)) => {
+                                if matches!(query, CatalogQuery::Search { .. })
+                                    && let Some(c) = self.conns.get_mut(&conn)
+                                {
+                                    c.searches.insert(id);
+                                }
+                                actions.push(Action::Catalog {
+                                    conn,
+                                    request: id,
+                                    query,
+                                })
+                            }
                         }
                         self.set_stage(conn, Stage::InSession(auth));
                     }
@@ -839,7 +850,8 @@ impl Target {
     }
 
     /// The answer to a catalog query. A page that doesn't fit in a frame is
-    /// cut short, and its `next` points at the first item left out.
+    /// cut short, and its `next` points at the first item left out, except
+    /// for a search, which has no cursor to go on from.
     pub fn finish_catalog(
         &mut self,
         conn: ConnId,
@@ -849,11 +861,13 @@ impl Target {
         let mut actions = Vec::new();
         if let Some(Conn {
             stage: Stage::InSession(auth),
+            searches,
             ..
         }) = self.conns.get_mut(&conn)
         {
+            let search = searches.remove(&request);
             let reply = match result {
-                Ok((items, next)) => fit_page(request, items, next),
+                Ok((items, next)) => fit_page(request, items, next, !search),
                 Err(code) => Message::Error {
                     re: Some(request),
                     code,
@@ -1062,8 +1076,14 @@ fn reply_error(
     }
 }
 
-/// A catalog page cut to fit in one frame.
-fn fit_page(request: u64, mut items: Vec<CatalogItem>, next: Option<String>) -> Message {
+/// `items` as one page, with `next`, cut to fit a frame. A page that can go
+/// on, `pages`, points at the first item it left out.
+fn fit_page(
+    request: u64,
+    mut items: Vec<CatalogItem>,
+    next: Option<String>,
+    pages: bool,
+) -> Message {
     items.truncate(super::catalog::MAX_PAGE);
     let page = |items: Vec<CatalogItem>, next| Message::CatalogPage {
         re: request,
@@ -1081,7 +1101,10 @@ fn fit_page(request: u64, mut items: Vec<CatalogItem>, next: Option<String>) -> 
     let mut keep = items.len();
     while keep > 1 {
         keep /= 2;
-        let rest = items.get(keep).map(|item| item.id.clone());
+        let rest = items
+            .get(keep)
+            .filter(|_| pages)
+            .map(|item| item.id.clone());
         let candidate = page(items[..keep].to_vec(), rest);
         if message::encode(&candidate).len() <= message::MAX_MESSAGE {
             return candidate;

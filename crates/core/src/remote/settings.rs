@@ -106,13 +106,22 @@ pub fn default_name(device_type: DeviceType) -> &'static str {
     }
 }
 
-/// A name with control characters removed, outer spaces trimmed and the
-/// length cut to [`MAX_NAME_BYTES`] at a character boundary. `None` when
-/// nothing is left.
+/// A name with control characters and line breaks turned to spaces,
+/// format characters such as bidi overrides and zero-width spaces left out,
+/// outer spaces trimmed and the length cut to [`MAX_NAME_BYTES`] at a
+/// character boundary. `None` when nothing is left. A name then can't
+/// reorder or hide the text shown around it.
 pub fn clean_name(name: &str) -> Option<String> {
     let mut cleaned: String = name
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .filter(|&c| !is_format(c))
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect::<String>()
         .trim()
         .to_owned();
@@ -126,6 +135,35 @@ pub fn clean_name(name: &str) -> Option<String> {
         cleaned.truncate(cleaned.trim_end().len());
     }
     (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// Whether `c` is a Unicode format character (category Cf), such as a
+/// bidi control, a zero-width space or joiner, or a tag character.
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61C}'
+            | '\u{6DD}'
+            | '\u{70F}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 #[cfg(test)]

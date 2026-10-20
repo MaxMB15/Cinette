@@ -10,6 +10,7 @@ import { deferred } from "@/test/deferred";
 import { mpvLoad, mpvStop } from "./tauri";
 import * as tauri from "./tauri";
 import type { Channel } from "./types";
+import type { RemotePlayerState } from "./remote-target";
 import commandArguments from "../../src-tauri/src/commands/tests/arguments.json";
 
 const ARGUMENTS_FILE = "src-tauri/src/commands/tests/arguments.json";
@@ -17,6 +18,30 @@ const ARGUMENTS_FILE = "src-tauri/src/commands/tests/arguments.json";
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const commands = () => invoke.mock.calls.map(([cmd]) => cmd);
+
+describe("remote states", () => {
+	beforeEach(() => invoke.mockReset());
+
+	it("go out in order, each after the one before has its answer", async () => {
+		const first = deferred();
+		invoke.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+		const playing = { status: "playing" } as RemotePlayerState;
+		const idle = { status: "idle" } as RemotePlayerState;
+
+		const sent = tauri.remoteSetState(playing);
+		const closed = tauri.remoteSetState(idle);
+		await flush();
+		expect(invoke.mock.calls).toEqual([["remote_set_state", { state: playing }]]);
+
+		first.reject(new Error("not running"));
+		await expect(sent).rejects.toThrow("not running");
+		await closed;
+		expect(invoke.mock.calls).toEqual([
+			["remote_set_state", { state: playing }],
+			["remote_set_state", { state: idle }],
+		]);
+	});
+});
 
 describe("mpv load and stop", () => {
 	beforeEach(() => invoke.mockReset());
@@ -122,6 +147,27 @@ describe("backend commands", () => {
 	const samples: [string, string[]][] = [["News", ["CNN", "BBC"]]];
 
 	type Case = [name: string, call: () => Promise<unknown>, command: string, args?: object];
+
+	const remoteState: RemotePlayerState = {
+		status: "idle",
+		item: null,
+		position: 0,
+		duration: 0,
+		volume: null,
+		subtitles: [],
+		subtitleId: null,
+		audio: [],
+		audioId: null,
+		capabilities: {
+			pause: false,
+			seek: false,
+			volume: false,
+			subtitles: false,
+			audioTracks: false,
+			resumeAt: false,
+		},
+		error: null,
+	};
 
 	const cases: Case[] = [
 		// mpv
@@ -656,6 +702,72 @@ describe("backend commands", () => {
 			() => tauri.holdCastReceivers(["cast:tv"]),
 			"hold_cast_receivers",
 			{ ids: ["cast:tv"] },
+		],
+		// remote control
+		["remoteGetSettings", () => tauri.remoteGetSettings(), "remote_get_settings"],
+		[
+			"remoteSetSettings",
+			() =>
+				tauri.remoteSetSettings({
+					discoverable: false,
+					remoteControl: "never",
+					deviceName: "Den",
+				}),
+			"remote_set_settings",
+			{ settings: { discoverable: false, remoteControl: "never", deviceName: "Den" } },
+		],
+		["remoteResetIdentity", () => tauri.remoteResetIdentity(), "remote_reset_identity"],
+		[
+			"remoteAnswerConsent",
+			() => tauri.remoteAnswerConsent(3, true),
+			"remote_answer_consent",
+			{ request: 3, allow: true },
+		],
+		["remoteSessions", () => tauri.remoteSessions(), "remote_sessions"],
+		["remotePendingConsent", () => tauri.remotePendingConsent(), "remote_pending_consent"],
+		[
+			"remoteDisconnect",
+			() => tauri.remoteDisconnect("s1"),
+			"remote_disconnect",
+			{ sessionId: "s1" },
+		],
+		[
+			"remoteSetState",
+			() => tauri.remoteSetState(remoteState),
+			"remote_set_state",
+			{ state: remoteState },
+		],
+		[
+			"remoteFinishCommand",
+			() => tauri.remoteFinishCommand(9, "staleItem"),
+			"remote_finish_command",
+			{ token: 9, outcome: "staleItem" },
+		],
+		["remoteDevices", () => tauri.remoteDevices(), "remote_devices"],
+		[
+			"remoteLocalNetworkDenied",
+			() => tauri.remoteLocalNetworkDenied(),
+			"remote_local_network_denied",
+		],
+		[
+			"remoteConnect",
+			() => tauri.remoteConnect("abc", 5),
+			"remote_connect",
+			{ deviceId: "abc", link: 5 },
+		],
+		["remoteLink", () => tauri.remoteLink(), "remote_link"],
+		["remoteLeave", () => tauri.remoteLeave(4), "remote_leave", { link: 4 }],
+		[
+			"remoteCommand",
+			() => tauri.remoteCommand(5, { action: "seek", itemId: "live-1", to: 30 }),
+			"remote_command",
+			{ command: { action: "seek", itemId: "live-1", to: 30 }, link: 5 },
+		],
+		[
+			"remoteCatalog",
+			() => tauri.remoteCatalog(5, { kind: "search", query: "news", limit: 20 }),
+			"remote_catalog",
+			{ catalogQuery: { kind: "search", query: "news", limit: 20 }, link: 5 },
 		],
 	];
 

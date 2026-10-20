@@ -75,6 +75,10 @@ exclude_re = [
     # Asks macOS whether it refuses local network access. On Linux, where
     # the mutation runs build, it's always false.
     'src-tauri/src/cast/mod\.rs:.*\blocal_network_denied\b',
+    # These bind remote control's real port and advertise this machine on the
+    # network. The tests start the target on loopback with start_on instead.
+    'src-tauri/src/remote/service\.rs:.*\b(start|advertise_on_network)\b',
+    'src-tauri/src/remote/target\.rs:.*\bbind_default\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This

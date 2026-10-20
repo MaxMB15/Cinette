@@ -2632,6 +2632,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "hls-remux",
+ "if-addrs",
  "jni 0.22.4",
  "libc",
  "mdns-sd",
@@ -2643,6 +2644,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "socket2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2659,6 +2661,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "zbus",
 ]
 
