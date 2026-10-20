@@ -36,6 +36,10 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+      # The HLS converter's C, built against MPVKit's FFmpeg. The Rust in
+      # crates/hls-remux calls it.
+      - path: ../../../../../crates/hls-remux/native
+        name: native
       - path: Assets.xcassets
       - path: Externals
       - path: max-video-player_iOS

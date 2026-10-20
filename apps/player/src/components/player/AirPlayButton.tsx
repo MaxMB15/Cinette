@@ -11,15 +11,66 @@ const NOTICE_MS = 6000;
 interface AirPlayButtonProps {
 	/**
 	 * Sends the current item to AirPlay, with the system picker anchored at
-	 * the button. Resolves to why it couldn't, or `null`.
+	 * the button. `confirm` asks the user, with `warning`, before this
+	 * device converts the stream. Resolves to why it couldn't, or `null`.
 	 */
-	onSend: (anchor: DOMRect) => Promise<string | null>;
+	onSend: (anchor: DOMRect, confirm: () => Promise<boolean>) => Promise<string | null>;
+	/** What the confirm step says before a conversion. */
+	warning: string;
 }
 
-/** The player's AirPlay button. Says why under it when an item can't go. */
-export const AirPlayButton = ({ onSend }: AirPlayButtonProps) => {
+/** Asks before this device converts a stream for the TV. */
+const ConfirmConvert = ({
+	warning,
+	onAnswer,
+}: {
+	warning: string;
+	onAnswer: (ok: boolean) => void;
+}) => (
+	<div
+		role="dialog"
+		aria-label="Convert on this device?"
+		className="absolute right-0 bottom-full mb-2 w-64 rounded bg-black/90 px-3 py-2 text-left text-xs text-white"
+	>
+		<p>{warning}</p>
+		<div className="mt-2 flex justify-end gap-2">
+			<Button variant="ghost" size="sm" onClick={() => onAnswer(false)}>
+				Cancel
+			</Button>
+			<Button variant="secondary" size="sm" onClick={() => onAnswer(true)}>
+				Send to TV
+			</Button>
+		</div>
+	</div>
+);
+
+/**
+ * The player's AirPlay button. It asks before this device converts a
+ * stream, and says why under it when an item can't go.
+ */
+export const AirPlayButton = ({ onSend, warning }: AirPlayButtonProps) => {
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
+	const [asking, setAsking] = useState<((ok: boolean) => void) | null>(null);
+
+	const confirm = () => new Promise<boolean>((resolve) => setAsking(() => resolve));
+
+	// While it asks, Escape says no. A question that goes unanswered, as
+	// when the button goes, is a no too, so the send it holds up ends. An
+	// answer already given stays: a promise settles once.
+	useEffect(() => {
+		if (!asking) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			asking(false);
+			setAsking(null);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("keydown", onKey);
+			asking(false);
+		};
+	}, [asking]);
 
 	// A reason that's gone already has nothing to clear, which is harmless.
 	useEffect(() => {
@@ -32,7 +83,7 @@ export const AirPlayButton = ({ onSend }: AirPlayButtonProps) => {
 		setBusy(true);
 		setNotice(null);
 		// On the promise, since the React Compiler can't compile `finally`.
-		const notice = await onSend(anchor).catch(() => "Couldn't start AirPlay.");
+		const notice = await onSend(anchor, confirm).catch(() => "Couldn't start AirPlay.");
 		setNotice(notice);
 		setBusy(false);
 	};
@@ -49,6 +100,15 @@ export const AirPlayButton = ({ onSend }: AirPlayButtonProps) => {
 			>
 				<Airplay className="h-5 w-5" />
 			</Button>
+			{asking && (
+				<ConfirmConvert
+					warning={warning}
+					onAnswer={(ok) => {
+						asking(ok);
+						setAsking(null);
+					}}
+				/>
+			)}
 			{notice && (
 				<p
 					role="alert"

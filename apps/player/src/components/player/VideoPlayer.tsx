@@ -18,7 +18,14 @@ import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useAirPlay } from "@/hooks/useAirPlay";
-import { airplayBlockedMessage, airplayKey, airplayProgress } from "@/lib/airplay";
+import {
+	CONVERT_WARNING,
+	airplayBlockedMessage,
+	airplayFailureMessage,
+	airplaySeekMessage,
+	airplayKey,
+	airplayProgress,
+} from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
@@ -1181,7 +1188,10 @@ export const PlayerView = () => {
 				const key = airplayKey(action, tv.getState(), tv.capabilities);
 				if (key.kind === "play") void tv.play();
 				if (key.kind === "pause") void tv.pause();
-				if (key.kind === "seek") void tv.seek(key.to);
+				if (key.kind === "seek")
+					tv.seek(key.to).catch((error: unknown) =>
+						setAirplayNotice(airplaySeekMessage(error))
+					);
 				if (key.kind !== "pass") return;
 			}
 
@@ -1338,11 +1348,16 @@ export const PlayerView = () => {
 	) : undefined;
 
 	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
-	const sendToAirPlay = async (channel: Channel, anchor: DOMRect): Promise<string | null> => {
+	const sendToAirPlay = async (
+		channel: Channel,
+		anchor: DOMRect,
+		confirm: () => Promise<boolean>
+	): Promise<string | null> => {
 		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
 		const result = await airplay.send(channel, {
 			anchor,
 			startAt,
+			confirm,
 			stopLocal: async () => {
 				flushProgress();
 				await playback.stop();
@@ -1351,18 +1366,22 @@ export const PlayerView = () => {
 		if (result.sent || result.why === "cancelled") return null;
 		if (result.why === "blocked") return airplayBlockedMessage(result.decision);
 		console.warn("[VideoPlayer] AirPlay failed:", result.error);
+		const message = airplayFailureMessage(result.error);
 		// Once local playback has stopped, the AirPlay button is gone with
 		// the panel it gave way to, so the player says it.
 		if (result.stopped) {
-			setAirplayNotice("Couldn't start AirPlay. Nothing is playing.");
+			setAirplayNotice(`${message} Nothing is playing.`);
 			return null;
 		}
-		return "Couldn't start AirPlay.";
+		return message;
 	};
 	const tv = airplay.destination;
 	const castSlot =
 		airplay.available && activeChannel && !tv ? (
-			<AirPlayButton onSend={(anchor) => sendToAirPlay(activeChannel, anchor)} />
+			<AirPlayButton
+				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+				warning={CONVERT_WARNING}
+			/>
 		) : undefined;
 
 	const airplayPanel = tv ? (
@@ -1373,7 +1392,11 @@ export const PlayerView = () => {
 			capabilities={tv.capabilities}
 			onPlay={() => void tv.play()}
 			onPause={() => void tv.pause()}
-			onSeek={(position) => void tv.seek(position)}
+			onSeek={(position) =>
+				tv
+					.seek(position)
+					.catch((error: unknown) => setAirplayNotice(airplaySeekMessage(error)))
+			}
 			onSubtitle={(id) => void tv.selectSubtitle(id)}
 			onAudio={(id) => void tv.selectAudio(id)}
 			onPlayHere={async (position, anchor) => {

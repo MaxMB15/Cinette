@@ -210,6 +210,12 @@ fn is_unsupported(error: &ReportError) -> bool {
 #[derive(Debug)]
 pub struct Tracker {
     live: bool,
+    /// Where a converted stream starts in the item, in seconds. AVPlayer
+    /// counts from the start of what it was given.
+    offset: f64,
+    /// The item's length, when AVPlayer can't know it: a converted stream
+    /// grows as it's made.
+    length: Option<f64>,
     ready: bool,
     external_seen: bool,
     /// Where the wait started, and the position then.
@@ -221,6 +227,8 @@ impl Tracker {
     pub fn new(live: bool) -> Self {
         Self {
             live,
+            offset: 0.0,
+            length: None,
             ready: false,
             external_seen: false,
             waiting_since: None,
@@ -228,12 +236,24 @@ impl Tracker {
         }
     }
 
+    /// A tracker for a stream this device converts, starting `converted.offset`
+    /// seconds into the item.
+    pub fn converted(live: bool, converted: Converted) -> Self {
+        Self {
+            offset: converted.offset.max(0.0),
+            length: converted.duration,
+            ..Self::new(live)
+        }
+    }
+
     pub fn update(&mut self, report: &Report, now: Instant) -> AirPlayState {
         let mut state = AirPlayState {
             status: Status::Opening,
-            position: report.position.max(0.0),
-            duration: match report.duration {
-                Some(d) if !self.live && d.is_finite() => d.max(0.0),
+            position: report.position.max(0.0) + self.offset,
+            duration: match (self.length, report.duration) {
+                _ if self.live => 0.0,
+                (Some(length), _) => length.max(0.0),
+                (None, Some(d)) if d.is_finite() => d.max(0.0),
                 _ => 0.0,
             },
             subtitle_id: report
@@ -331,8 +351,8 @@ pub struct AirPlay {
 
 impl AirPlay {
     /// Starts tracking a new item.
-    pub fn begin(&self, live: bool) {
-        *lock_or_recover(&self.tracker) = Some(Tracker::new(live));
+    pub fn begin(&self, tracker: Tracker) {
+        *lock_or_recover(&self.tracker) = Some(tracker);
         *lock_or_recover(&self.last) = None;
     }
 
@@ -352,6 +372,20 @@ impl AirPlay {
         }
         *last = Some(state.clone());
         Some(state)
+    }
+
+    /// Stops tracking, with the item in error as `code`.
+    pub fn fail(&self, code: &'static str) -> AirPlayState {
+        *lock_or_recover(&self.tracker) = None;
+        let mut last = lock_or_recover(&self.last);
+        let mut state = last.clone().unwrap_or_else(AirPlayState::idle);
+        state.status = Status::Error;
+        state.error = Some(PlaybackError {
+            code,
+            unsupported: false,
+        });
+        *last = Some(state.clone());
+        state
     }
 
     pub fn state(&self) -> AirPlayState {
@@ -377,6 +411,15 @@ pub(crate) fn handle_report<R: Runtime>(app: &AppHandle<R>, json: &str, now: Ins
     }
 }
 
+/// A stream this device converts for the receiver, as `load` gets it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Converted {
+    /// Where the conversion starts in the item, in seconds.
+    pub offset: f64,
+    /// The item's length, for a movie or an episode.
+    pub duration: Option<f64>,
+}
+
 /// Plays `url` over AirPlay from `start_at` seconds, after mpv has stopped.
 /// The receiver must already be chosen. `title` goes on the lock screen.
 /// Called by the app crate, which resolves the channel's URL; the frontend
@@ -387,10 +430,25 @@ pub fn load<R: Runtime>(
     title: &str,
     start_at: Option<f64>,
     live: bool,
+    converted: Option<Converted>,
 ) -> Result<(), String> {
     backend::ensure()?;
-    app.state::<AirPlay>().begin(live);
-    backend::load(url, title, start_position(start_at, live), live)
+    let (tracker, start) = match converted {
+        // The conversion starts where the item should, so AVPlayer starts
+        // at the beginning of what it's given.
+        Some(converted) => (Tracker::converted(live, converted), 0.0),
+        None => (Tracker::new(live), start_position(start_at, live)),
+    };
+    app.state::<AirPlay>().begin(tracker);
+    backend::load(url, title, start, live, converted.is_some())
+}
+
+/// Says the stream this device converts stopped, with `code` as its
+/// `PlaybackError`, after the converter ended on its own. AVPlayer may
+/// still play what it has, so its later reports don't change this.
+pub fn fail_converted<R: Runtime>(app: &AppHandle<R>, code: &'static str) {
+    let state = app.state::<AirPlay>().fail(code);
+    let _ = app.emit(EVENT_STATE, state);
 }
 
 /// Where AVPlayer starts: `start_at` for a movie or an episode, and the

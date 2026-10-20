@@ -42,6 +42,9 @@ const mp4: StreamFormat = {
 
 const tauri = vi.hoisted(() => ({
 	airplayChoose: vi.fn<typeof Bridge.airplayChoose>(async () => {}),
+	airplayConverterSupport: vi.fn<typeof Bridge.airplayConverterSupport>(),
+	airplayEndConversion: vi.fn<typeof Bridge.airplayEndConversion>(async () => {}),
+	airplayLoadConverted: vi.fn<typeof Bridge.airplayLoadConverted>(async () => {}),
 	airplayGetRoute: vi.fn<typeof Bridge.airplayGetRoute>(async () => null),
 	airplayLoad: vi.fn<typeof Bridge.airplayLoad>(async () => {}),
 	airplayPause: vi.fn<typeof Bridge.airplayPause>(async () => {}),
@@ -59,6 +62,8 @@ vi.mock("@/lib/tauri", () => tauri);
 const tv = { id: "airplay:tv", name: "Living Room TV" };
 const anchor = new DOMRect(10, 20, 30, 40);
 const film = makeMovie({ id: "mv1", name: "A Film" });
+/** The confirm step, which says yes unless a test says otherwise. */
+const confirm = vi.fn(async () => true);
 
 /** Lets pending promises settle. */
 const flush = () =>
@@ -74,6 +79,8 @@ beforeEach(() => {
 		duration: null,
 		generation: 5,
 	});
+	tauri.airplayConverterSupport.mockResolvedValue({ convert: false, hardwareEncoder: false });
+	confirm.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -162,7 +169,7 @@ describe("useAirPlay", () => {
 		const stopLocal = vi.fn(async () => {});
 		let sent: Promise<unknown> = Promise.resolve();
 		act(() => {
-			sent = result.current.send(film, { anchor, startAt: 600, stopLocal });
+			sent = result.current.send(film, { anchor, startAt: 600, stopLocal, confirm });
 		});
 		await flush();
 		expect(tauri.airplayChoose).toHaveBeenCalledWith({ x: 10, y: 20, width: 30, height: 40 });
@@ -204,7 +211,9 @@ describe("useAirPlay", () => {
 		await flush();
 		const stopLocal = vi.fn(async () => {});
 		await act(async () => {
-			expect(await result.current.send(film, { anchor, stopLocal })).toEqual({ sent: true });
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
+				sent: true,
+			});
 		});
 		expect(tauri.airplayChoose).not.toHaveBeenCalled();
 		expect(tauri.airplayLoad).toHaveBeenCalledWith(film, 5, 2, undefined);
@@ -215,7 +224,7 @@ describe("useAirPlay", () => {
 		await flush();
 		let sent: Promise<unknown> = Promise.resolve();
 		act(() => {
-			sent = result.current.send(film, { anchor, stopLocal: async () => {} });
+			sent = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		await flush();
 		act(() => events.emit("airplay://route", null));
@@ -231,7 +240,7 @@ describe("useAirPlay", () => {
 		await flush();
 		let sent: Promise<unknown> = Promise.resolve();
 		act(() => {
-			sent = result.current.send(film, { anchor, stopLocal: async () => {} });
+			sent = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		await flush();
 		act(() => events.emit("airplay://picker-closed", null));
@@ -251,7 +260,7 @@ describe("useAirPlay", () => {
 		const stopLocal = vi.fn(async () => {});
 		let sent: Promise<unknown> = Promise.resolve();
 		act(() => {
-			sent = result.current.send(film, { anchor, stopLocal });
+			sent = result.current.send(film, { anchor, stopLocal, confirm });
 		});
 		await flush();
 		act(() => events.emit("airplay://picker-closed", null));
@@ -277,7 +286,7 @@ describe("useAirPlay", () => {
 		await flush();
 		let sent: Promise<unknown> = Promise.resolve();
 		act(() => {
-			sent = result.current.send(film, { anchor, stopLocal: async () => {} });
+			sent = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		await flush();
 		expect(tauri.getStreamFormats).toHaveBeenCalledTimes(1);
@@ -305,7 +314,7 @@ describe("useAirPlay", () => {
 		await flush();
 		const stopLocal = vi.fn(async () => {});
 		await act(async () => {
-			expect(await result.current.send(film, { anchor, stopLocal })).toEqual({
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
 				sent: false,
 				why: "blocked",
 				decision: { ok: false, reason: "container", detail: "mkv" },
@@ -321,7 +330,9 @@ describe("useAirPlay", () => {
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
-			expect(await result.current.send(film, { anchor, stopLocal: async () => {} })).toEqual({
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toEqual({
 				sent: false,
 				why: "failed",
 				error: new Error("no picker"),
@@ -337,7 +348,7 @@ describe("useAirPlay", () => {
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
-			await result.current.send(film, { anchor, stopLocal: async () => {} });
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		expect(events.count("airplay://state")).toBe(1);
 		await act(() => result.current.stop());
@@ -347,7 +358,7 @@ describe("useAirPlay", () => {
 		expect(events.count("airplay://state")).toBe(0);
 
 		await act(async () => {
-			await result.current.send(film, { anchor, stopLocal: async () => {} });
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		tauri.airplayStop.mockRejectedValue(new Error("gone"));
 		unmount();
@@ -371,7 +382,7 @@ describe("useAirPlay's switching", () => {
 		await flush();
 		await act(async () => {
 			expect(
-				await result.current.send(film, { anchor, stopLocal: async () => {} })
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
 			).toMatchObject({ sent: false, why: "blocked" });
 		});
 		expect(tauri.airplayChoose).not.toHaveBeenCalled();
@@ -391,7 +402,7 @@ describe("useAirPlay's switching", () => {
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
 		const stopLocal = vi.fn(async () => {});
-		const sent = result.current.send(film, { anchor, stopLocal });
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
 		unmount();
 		formats({ formats: [mp4], sources: [0], duration: null, generation: 0 });
 		expect(await sent).toEqual({ sent: false, why: "cancelled" });
@@ -415,7 +426,7 @@ describe("useAirPlay's switching", () => {
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
 		const stopLocal = vi.fn(async () => {});
-		const sent = result.current.send(film, { anchor, stopLocal });
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
 		await flush();
 		unmount();
 		second({ formats: [mp4], sources: [0], duration: null, generation: 0 });
@@ -433,7 +444,7 @@ describe("useAirPlay's switching", () => {
 		await flush();
 		let stopped: () => void = () => {};
 		const stopLocal = vi.fn(() => new Promise<void>((r) => (stopped = r)));
-		const sent = result.current.send(film, { anchor, stopLocal });
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
 		await flush();
 		unmount();
 		stopped();
@@ -453,7 +464,7 @@ describe("useAirPlay's switching", () => {
 		tauri.getStreamFormats.mockReturnValueOnce(new Promise((r) => (formats = r)));
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
-		const sent = result.current.send(film, { anchor, stopLocal: async () => {} });
+		const sent = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		unmount();
 		formats({ formats: [mp4], sources: [0], duration: null, generation: 0 });
 		expect(await sent).toEqual({ sent: false, why: "cancelled" });
@@ -464,7 +475,7 @@ describe("useAirPlay's switching", () => {
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
 		const stopLocal = vi.fn(async () => {});
-		const sent = result.current.send(film, { anchor, stopLocal });
+		const sent = result.current.send(film, { anchor, stopLocal, confirm });
 		await flush();
 		unmount();
 		act(() => events.emit("airplay://route", tv));
@@ -481,7 +492,7 @@ describe("useAirPlay's switching", () => {
 		await flush();
 		const stopLocal = vi.fn(async () => {});
 		await act(async () => {
-			expect(await result.current.send(film, { anchor, stopLocal })).toEqual({
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
 				sent: false,
 				why: "blocked",
 				decision: { ok: false, reason: "container", detail: "mkv" },
@@ -496,7 +507,9 @@ describe("useAirPlay's switching", () => {
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
-			expect(await result.current.send(film, { anchor, stopLocal: async () => {} })).toEqual({
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toEqual({
 				sent: false,
 				why: "failed",
 				error: "That stream format is no longer offered",
@@ -514,7 +527,7 @@ describe("useAirPlay's switching", () => {
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
-			await result.current.send(film, { anchor, stopLocal: async () => {} });
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		let done: () => void = () => {};
 		tauri.airplayStop.mockReturnValueOnce(new Promise((r) => (done = r)));
@@ -543,7 +556,7 @@ describe("useAirPlay's switching", () => {
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
-			await result.current.send(film, { anchor, stopLocal: async () => {} });
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		let back: Promise<void> = Promise.resolve();
 		act(() => {
@@ -567,7 +580,7 @@ describe("useAirPlay's switching", () => {
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
-			await result.current.send(film, { anchor, stopLocal: async () => {} });
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
 		tauri.airplayChoose.mockRejectedValue(new Error("no picker"));
 		await act(() => result.current.returnHere(anchor));
@@ -579,5 +592,194 @@ describe("useAirPlay's switching", () => {
 		await flush();
 		await act(() => result.current.returnHere(anchor));
 		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+	});
+});
+
+describe("useAirPlay converting", () => {
+	const mkv = {
+		formats: [{ ...mp4, container: "mkv" as const }],
+		sources: [1],
+		duration: null,
+		generation: 5,
+	};
+
+	it("converts on this device when it can, after asking", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, startAt: 30, stopLocal, confirm })
+			).toEqual({ sent: true });
+		});
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(confirm.mock.invocationCallOrder[0]).toBeLessThan(
+			stopLocal.mock.invocationCallOrder[0]
+		);
+		expect(tauri.airplayLoadConverted).toHaveBeenCalledWith(film, 5, 1, 30);
+		expect(tauri.airplayLoad).not.toHaveBeenCalled();
+	});
+
+	it("asks before the picker, so a no never moves the sound", async () => {
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		confirm.mockResolvedValue(false);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		await act(async () => {
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
+				sent: false,
+				why: "cancelled",
+			});
+		});
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+		expect(stopLocal).not.toHaveBeenCalled();
+	});
+
+	it("asks once, before the picker, then sends to the TV picked", async () => {
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		let sent: Promise<unknown> = Promise.resolve();
+		act(() => {
+			sent = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		await flush();
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(confirm.mock.invocationCallOrder[0]).toBeLessThan(
+			tauri.airplayChoose.mock.invocationCallOrder[0]
+		);
+		act(() => events.emit("airplay://route", tv));
+		await act(async () => {
+			expect(await sent).toEqual({ sent: true });
+		});
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(tauri.airplayLoadConverted).toHaveBeenCalled();
+	});
+
+	it("asks after the picker when only the TV's check converts", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		tauri.getStreamFormats
+			.mockResolvedValueOnce({ formats: [mp4], sources: [0], duration: null, generation: 1 })
+			.mockResolvedValueOnce(mkv);
+		confirm.mockResolvedValue(false);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		await act(async () => {
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
+				sent: false,
+				why: "cancelled",
+			});
+		});
+		expect(confirm).toHaveBeenCalledTimes(1);
+		expect(stopLocal).not.toHaveBeenCalled();
+		expect(tauri.airplayLoadConverted).not.toHaveBeenCalled();
+		expect(events.count("airplay://state")).toBe(0);
+	});
+
+	it("doesn't ask for a stream the TV plays as it is", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toEqual({ sent: true });
+		});
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("keeps playing here when the user says no", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		confirm.mockResolvedValue(false);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		const stopLocal = vi.fn(async () => {});
+		await act(async () => {
+			expect(await result.current.send(film, { anchor, stopLocal, confirm })).toEqual({
+				sent: false,
+				why: "cancelled",
+			});
+		});
+		expect(stopLocal).not.toHaveBeenCalled();
+		expect(tauri.airplayLoadConverted).not.toHaveBeenCalled();
+		expect(events.count("airplay://state")).toBe(0);
+	});
+
+	it("doesn't ask for a direct route", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("can't convert until the backend says it can", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockRejectedValue(new Error("no"));
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toMatchObject({ sent: false, why: "blocked" });
+		});
+	});
+
+	it("ignores the support answer once it's gone", async () => {
+		let answer: (s: { convert: boolean; hardwareEncoder: boolean }) => void = () => {};
+		tauri.airplayConverterSupport
+			.mockReturnValueOnce(new Promise((r) => (answer = r)))
+			.mockResolvedValueOnce({ convert: false, hardwareEncoder: false });
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		const { result, rerender } = renderHook(({ on }) => useAirPlay(on), {
+			initialProps: { on: true },
+		});
+		rerender({ on: false });
+		rerender({ on: true });
+		await flush();
+		answer({ convert: true, hardwareEncoder: false });
+		await flush();
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toMatchObject({ sent: false, why: "blocked" });
+		});
+	});
+
+	it("takes the panel away when a conversion never starts", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		tauri.airplayConverterSupport.mockResolvedValue({ convert: true, hardwareEncoder: false });
+		tauri.getStreamFormats.mockResolvedValue(mkv);
+		tauri.airplayLoadConverted.mockRejectedValue("refused");
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		await act(async () => {
+			expect(
+				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
+			).toEqual({ sent: false, why: "failed", error: "refused", stopped: true });
+		});
+		await flush();
+		expect(result.current.destination).toBeNull();
+		expect(tauri.airplayEndConversion).toHaveBeenCalled();
+		expect(tauri.airplayStop).toHaveBeenCalled();
+		// The failed destination stopped listening for the TV's state.
+		expect(events.count("airplay://state")).toBe(0);
 	});
 });

@@ -4,11 +4,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	AIRPLAY_RECEIVER,
-	AIRPLAY_SENDER,
+	CONVERT_WARNING,
 	IDLE_NATIVE_STATE,
 	airplayBlockedMessage,
 	airplayCapabilities,
 	airplayErrorMessage,
+	airplayFailureMessage,
+	airplaySeekMessage,
+	SUPERSEDED,
+	airplaySender,
 	airplayKey,
 	airplayProgress,
 	airplayPlaybackState,
@@ -63,6 +67,8 @@ const fakeBridge = (formats: StreamFormat[] = [mp4], sources = [3]) => {
 			generation: 9,
 		})),
 		load: vi.fn(async () => {}),
+		loadConverted: vi.fn(async () => {}),
+		endConversion: vi.fn(async () => {}),
 		play: vi.fn(async () => {}),
 		pause: vi.fn(async () => {}),
 		seek: vi.fn(async () => {}),
@@ -81,6 +87,17 @@ const fakeBridge = (formats: StreamFormat[] = [mp4], sources = [3]) => {
 };
 
 const receiver = { id: "airplay:AB-12", name: "Living Room TV" };
+const noConverter = airplaySender({ convert: false, hardwareEncoder: false });
+const converter = airplaySender({ convert: true, hardwareEncoder: false });
+
+const converting = {
+	via: "converted" as const,
+	format: 0,
+	video: "copy" as const,
+	audio: "copy" as const,
+	output: "hls" as const,
+	keep: "on" as const,
+};
 
 /** Lets the bridge's `listen` promise settle. */
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -102,13 +119,18 @@ describe("the idle state", () => {
 });
 
 describe("the AirPlay profiles", () => {
-	it("uses the AirPlay 2 TV profile, and doesn't convert yet", () => {
+	it("uses the AirPlay 2 TV profile, and converts with the screen locked", () => {
 		expect(AIRPLAY_RECEIVER).toBe(airplayTvProfile);
-		expect(AIRPLAY_SENDER).toEqual({
-			convert: false,
+		expect(converter).toEqual({
+			convert: true,
 			hardwareEncoder: false,
 			convertNeedsScreen: false,
 		});
+		expect(airplaySender({ convert: true, hardwareEncoder: true }).hardwareEncoder).toBe(true);
+		expect(noConverter.convert).toBe(false);
+		expect(CONVERT_WARNING).toBe(
+			"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock."
+		);
 	});
 });
 
@@ -178,7 +200,7 @@ describe("airplayErrorMessage", () => {
 
 describe("airplayCapabilities", () => {
 	it("seeks and resumes VOD with a length, and never sets the volume", () => {
-		expect(airplayCapabilities(playing, false)).toEqual({
+		expect(airplayCapabilities(playing, false, false)).toEqual({
 			seek: true,
 			pause: true,
 			volume: "none",
@@ -191,23 +213,42 @@ describe("airplayCapabilities", () => {
 	});
 
 	it("doesn't seek live, or an item with no length yet", () => {
-		expect(airplayCapabilities(playing, true)).toMatchObject({ seek: false, resumeAt: false });
-		expect(airplayCapabilities({ ...playing, duration: 0 }, false).seek).toBe(false);
+		expect(airplayCapabilities(playing, true, false)).toMatchObject({
+			seek: false,
+			resumeAt: false,
+		});
+		expect(airplayCapabilities({ ...playing, duration: 0 }, false, false).seek).toBe(false);
+	});
+
+	it("converted, it keeps one audio track and pauses only what isn't live", () => {
+		const two = [{ label: "A" }, { label: "B" }];
+		expect(airplayCapabilities({ ...playing, audio: two }, false, true)).toMatchObject({
+			audioTracks: false,
+			pause: true,
+		});
+		expect(airplayCapabilities(playing, true, true).pause).toBe(false);
+		expect(airplayCapabilities(playing, true, false).pause).toBe(true);
 	});
 
 	it("offers subtitles when there are any, and audio when there's a choice", () => {
 		const one = [{ label: "A" }];
 		const two = [{ label: "A" }, { label: "B" }];
-		expect(airplayCapabilities({ ...playing, subtitles: one }, false).subtitles).toBe("select");
-		expect(airplayCapabilities({ ...playing, audio: one }, false).audioTracks).toBe(false);
-		expect(airplayCapabilities({ ...playing, audio: two }, false).audioTracks).toBe(true);
+		expect(airplayCapabilities({ ...playing, subtitles: one }, false, false).subtitles).toBe(
+			"select"
+		);
+		expect(airplayCapabilities({ ...playing, audio: one }, false, false).audioTracks).toBe(
+			false
+		);
+		expect(airplayCapabilities({ ...playing, audio: two }, false, false).audioTracks).toBe(
+			true
+		);
 	});
 });
 
 describe("createAirPlayDestination", () => {
 	it("names itself after the receiver and plays this device's catalog", () => {
 		const { bridge } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		expect(d.id).toBe("airplay:AB-12");
 		expect(d.kind).toBe("airplay");
 		expect(d.name).toBe("Living Room TV");
@@ -218,7 +259,7 @@ describe("createAirPlayDestination", () => {
 
 	it("routes an MP4 directly, and can't play another device's item", async () => {
 		const { bridge } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		const film = channel();
 		expect(await d.route({ kind: "local", channel: film })).toEqual({
 			ok: true,
@@ -239,7 +280,7 @@ describe("createAirPlayDestination", () => {
 			.mockRejectedValueOnce(NOT_READY)
 			.mockRejectedValueOnce(NOT_READY)
 			.mockResolvedValueOnce(listed);
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		expect(await d.route({ kind: "local", channel: channel() })).toMatchObject({ ok: true });
 		expect(bridge.formats).toHaveBeenCalledTimes(3);
 		expect(bridge.sleep).toHaveBeenCalledTimes(2);
@@ -249,7 +290,7 @@ describe("createAirPlayDestination", () => {
 	it("gives up after ten tries, and doesn't retry other errors", async () => {
 		const { bridge } = fakeBridge();
 		bridge.formats.mockRejectedValue(NOT_READY);
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		await expect(d.route({ kind: "local", channel: channel() })).rejects.toBe(NOT_READY);
 		expect(bridge.formats).toHaveBeenCalledTimes(10);
 		expect(bridge.sleep).toHaveBeenCalledTimes(9);
@@ -263,7 +304,7 @@ describe("createAirPlayDestination", () => {
 
 	it("says why when only a conversion would work", async () => {
 		const { bridge } = fakeBridge([{ ...mp4, container: "mkv" }]);
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		expect(await d.route({ kind: "local", channel: channel() })).toEqual({
 			ok: false,
 			reason: "container",
@@ -273,7 +314,7 @@ describe("createAirPlayDestination", () => {
 
 	it("loads the routed format by its source, at the start position", async () => {
 		const { bridge } = fakeBridge([{ ...mp4, container: "ts" }, mp4], [0, 4]);
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		const film = channel();
 		const states: PlaybackState[] = [];
 		d.subscribe((s) => states.push(s));
@@ -291,7 +332,7 @@ describe("createAirPlayDestination", () => {
 
 	it("starts live from now", async () => {
 		const { bridge, emit } = fakeBridge([{ ...mp4, container: "hls-ts" }], [0]);
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		await settle();
 		const live = channel({ id: "live-1", contentType: "live" });
 		const decision = await d.route({ kind: "local", channel: live });
@@ -303,25 +344,19 @@ describe("createAirPlayDestination", () => {
 		expect(d.capabilities.resumeAt).toBe(false);
 	});
 
-	it("refuses to load without a direct route checked first", async () => {
+	it("refuses to load without a route checked first", async () => {
 		const { bridge } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		const film = { kind: "local" as const, channel: channel() };
 		await expect(d.load(film)).rejects.toThrow(
-			"Converting a stream on this device isn't supported here"
+			"Playing this route on AirPlay isn't supported here"
 		);
-		await expect(
-			d.load(film, {
-				route: {
-					via: "converted",
-					format: 0,
-					video: "copy",
-					audio: "copy",
-					output: "hls",
-					keep: "on",
-				},
-			})
-		).rejects.toBeInstanceOf(UnsupportedError);
+		await expect(d.load(film, { route: { via: "local" } })).rejects.toBeInstanceOf(
+			UnsupportedError
+		);
+		await expect(d.load(film, { route: converting })).rejects.toThrow(
+			"Check the route before loading"
+		);
 		await expect(d.load(film, { route: { via: "direct", format: 0 } })).rejects.toThrow(
 			"Check the route before loading"
 		);
@@ -336,11 +371,187 @@ describe("createAirPlayDestination", () => {
 			)
 		).rejects.toThrow("Playing another device's item isn't supported here");
 		expect(bridge.load).not.toHaveBeenCalled();
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+	});
+
+	it("converts what the TV can't play, when this device can", async () => {
+		const { bridge, emit } = fakeBridge([{ ...mp4, container: "mkv" }], [2]);
+		const d = createAirPlayDestination(receiver, bridge, converter);
+		await settle();
+		const film = channel();
+		const decision = await d.route({ kind: "local", channel: film });
+		expect(decision).toEqual({ ok: true, route: converting });
+		if (!decision.ok) throw new Error("no route");
+		await d.load({ kind: "local", channel: film }, { route: decision.route, startAt: 41 });
+		expect(bridge.loadConverted).toHaveBeenCalledWith(film, 9, 2, 41);
+		expect(bridge.load).not.toHaveBeenCalled();
+		emit({ ...playing, audio: [{ label: "A" }, { label: "B" }] });
+		expect(d.capabilities).toMatchObject({ seek: true, pause: true, audioTracks: false });
+
+		// A seek converts again from there.
+		await d.seek(900);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 900);
+		expect(bridge.seek).not.toHaveBeenCalled();
+
+		// Stopping ends the conversion too.
+		await d.stop();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		expect(bridge.stop).toHaveBeenCalledTimes(1);
+		expect(bridge.endConversion.mock.invocationCallOrder[0]).toBeLessThan(
+			bridge.stop.mock.invocationCallOrder[0]
+		);
+		await d.stop();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	/** A destination that has loaded a converted movie, as `converts what the
+	 *  TV can't play` does. */
+	const convertedMovie = async () => {
+		const fake = fakeBridge([{ ...mp4, container: "mkv" }], [2]);
+		const d = createAirPlayDestination(receiver, fake.bridge, converter);
+		await settle();
+		const film = channel();
+		await d.route({ kind: "local", channel: film });
+		await d.load({ kind: "local", channel: film }, { route: converting });
+		fake.bridge.loadConverted.mockClear();
+		return { ...fake, d, film };
+	};
+
+	it("runs one converted seek at a time, and only the last of those asked meanwhile", async () => {
+		const { bridge, d, film } = await convertedMovie();
+		let finish: () => void = () => {};
+		bridge.loadConverted.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (finish = resolve))
+		);
+		const first = d.seek(100);
+		const second = d.seek(200);
+		const third = d.seek(300);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(1);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 100);
+		finish();
+		await Promise.all([first, second, third]);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(2);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 300);
+		// Done, the next seek runs straight away.
+		await d.seek(400);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(3);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 400);
+	});
+
+	it("takes a seek the backend says was overtaken as done, and passes on a real failure", async () => {
+		const { bridge, d } = await convertedMovie();
+		bridge.loadConverted.mockRejectedValueOnce(SUPERSEDED);
+		await expect(d.seek(100)).resolves.toBeUndefined();
+		bridge.loadConverted.mockRejectedValueOnce(REFUSED);
+		await expect(d.seek(200)).rejects.toBe(REFUSED);
+		// A failure doesn't leave the next seek waiting.
+		await d.seek(300);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(expect.anything(), 9, 2, 300);
+	});
+
+	it("ends the conversion when the TV is gone", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		emit({ ...playing, connection: "reconnecting" });
+		expect(bridge.endConversion).not.toHaveBeenCalled();
+		const states: PlaybackState[] = [];
+		d.subscribe((state) => states.push(state));
+		const both = [{ label: "A" }, { label: "B" }];
+		emit({ ...playing, audio: both });
+		expect(d.capabilities.audioTracks).toBe(false);
+		emit({ ...playing, audio: both, connection: "lost" });
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		// Ended already: what's left goes to the TV's own controls.
+		expect(d.capabilities.audioTracks).toBe(true);
+		expect(states).toHaveLength(2);
+		await d.seek(10);
+		expect(bridge.seek).toHaveBeenCalledWith(10);
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+		emit({ ...playing, connection: "lost" });
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		await d.stop();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("doesn't mind an end of the conversion that fails", async () => {
+		const { bridge, emit } = await convertedMovie();
+		bridge.endConversion.mockRejectedValueOnce(new Error("gone"));
+		emit({ ...playing, connection: "lost" });
+		await settle();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves a direct route playing when the TV is gone", async () => {
+		const { bridge, emit } = fakeBridge();
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		await settle();
+		const film = channel();
+		const decision = await d.route({ kind: "local", channel: film });
+		if (!decision.ok) throw new Error("no route");
+		await d.load({ kind: "local", channel: film }, { route: decision.route });
+		emit({ ...playing, connection: "lost" });
+		expect(bridge.endConversion).not.toHaveBeenCalled();
+	});
+
+	it("won't convert HDR the TV can't play, and says why", async () => {
+		const { bridge } = fakeBridge([{ ...mp4, container: "mkv", video: "hevc", hdr: true }]);
+		// Only a device that transcodes video gets this far with HEVC.
+		const transcoder = airplaySender({ convert: true, hardwareEncoder: true });
+		const d = createAirPlayDestination(receiver, bridge, transcoder);
+		const decision = await d.route({ kind: "local", channel: channel() });
+		expect(decision).toEqual({ ok: false, reason: "hdr" });
+		if (decision.ok) throw new Error("routed");
+		expect(airplayBlockedMessage(decision)).toBe(
+			"AirPlay can't play this HDR stream as it is, and Cinette doesn't convert HDR."
+		);
+	});
+
+	it("tells subscribers about a route's capabilities with the state that brings them", async () => {
+		const { bridge } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
+		const d = createAirPlayDestination(receiver, bridge, converter);
+		const live = channel({ id: "live-1", contentType: "live" });
+		await d.route({ kind: "local", channel: live });
+		const seen: boolean[] = [];
+		d.subscribe(() => seen.push(d.capabilities.pause));
+		await d.load({ kind: "local", channel: live }, { route: converting });
+		// Converted live can't pause, and the first state says so.
+		expect(seen).toEqual([false]);
+		await d.stop();
+		expect(seen).toEqual([false, true]);
+	});
+
+	it("can't pause a converted live channel, and seeks it nowhere", async () => {
+		const { bridge, emit } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
+		const d = createAirPlayDestination(receiver, bridge, converter);
+		await settle();
+		const live = channel({ id: "live-1", contentType: "live" });
+		const decision = await d.route({ kind: "local", channel: live });
+		if (!decision.ok) throw new Error("no route");
+		await d.load({ kind: "local", channel: live }, { route: decision.route, startAt: 41 });
+		expect(bridge.loadConverted).toHaveBeenCalledWith(live, 9, 0, undefined);
+		emit(playing);
+		expect(d.capabilities).toMatchObject({ pause: false, seek: false });
+		await d.seek(10);
+		expect(bridge.seek).toHaveBeenCalledWith(10);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes back to the receiver's own seeking after a direct load", async () => {
+		const { bridge } = fakeBridge([{ ...mp4, container: "mkv" }, mp4], [0, 1]);
+		const d = createAirPlayDestination(receiver, bridge, converter);
+		const film = channel();
+		await d.route({ kind: "local", channel: film });
+		await d.load({ kind: "local", channel: film }, { route: { ...converting, format: 0 } });
+		await d.load({ kind: "local", channel: film }, { route: { via: "direct", format: 1 } });
+		expect(bridge.load).toHaveBeenCalledWith(film, 9, 1, undefined);
+		await d.seek(5);
+		expect(bridge.seek).toHaveBeenCalledWith(5);
+		await d.stop();
+		expect(bridge.endConversion).not.toHaveBeenCalled();
 	});
 
 	it("follows the backend's state, and the capabilities with it", async () => {
 		const { bridge, emit } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		await settle();
 		const listener = vi.fn();
 		const unsubscribe = d.subscribe(listener);
@@ -357,7 +568,7 @@ describe("createAirPlayDestination", () => {
 
 	it("passes the controls through", async () => {
 		const { bridge } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		await d.play();
 		await d.pause();
 		await d.seek(90);
@@ -374,7 +585,7 @@ describe("createAirPlayDestination", () => {
 
 	it("rejects the volume and track ids it never gave out", async () => {
 		const { bridge } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		await expect(d.setVolume(50)).rejects.toThrow(
 			"Setting the TV's volume isn't supported here"
 		);
@@ -387,7 +598,7 @@ describe("createAirPlayDestination", () => {
 
 	it("goes idle when it stops", async () => {
 		const { bridge, emit } = fakeBridge();
-		const d = createAirPlayDestination(receiver, bridge);
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
 		await settle();
 		const film = channel();
 		const decision = await d.route({ kind: "local", channel: film });
@@ -404,7 +615,7 @@ describe("createAirPlayDestination", () => {
 
 	it("stops listening when disposed, even before listening started", async () => {
 		const first = fakeBridge();
-		const d = createAirPlayDestination(receiver, first.bridge);
+		const d = createAirPlayDestination(receiver, first.bridge, noConverter);
 		await settle();
 		const listener = vi.fn();
 		d.subscribe(listener);
@@ -416,9 +627,33 @@ describe("createAirPlayDestination", () => {
 		expect(first.unlisten).toHaveBeenCalledTimes(1);
 
 		const early = fakeBridge();
-		createAirPlayDestination(receiver, early.bridge).dispose();
+		createAirPlayDestination(receiver, early.bridge, noConverter).dispose();
 		await settle();
 		expect(early.unlisten).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("airplayFailureMessage", () => {
+	it("words the provider's refusal, passes the backend's message, or says it plainly", () => {
+		expect(airplayFailureMessage("refused")).toBe(airplayErrorMessage({ code: "refused" }));
+		expect(airplayFailureMessage("Connect to Wi-Fi to send this to the TV.")).toBe(
+			"Connect to Wi-Fi to send this to the TV."
+		);
+		expect(airplayFailureMessage("")).toBe("Couldn't start AirPlay.");
+		expect(airplayFailureMessage(new Error("x"))).toBe("Couldn't start AirPlay.");
+		expect(airplayFailureMessage(undefined)).toBe("Couldn't start AirPlay.");
+	});
+});
+
+describe("airplaySeekMessage", () => {
+	it("words the refusal, passes the backend's message, or says it plainly", () => {
+		expect(airplaySeekMessage(REFUSED)).toBe(airplayFailureMessage(REFUSED));
+		expect(airplaySeekMessage("Couldn't reach the stream to convert it.")).toBe(
+			"Couldn't reach the stream to convert it."
+		);
+		expect(airplaySeekMessage("")).toBe("Couldn't move the stream on the TV.");
+		expect(airplaySeekMessage(new Error("x"))).toBe("Couldn't move the stream on the TV.");
+		expect(SUPERSEDED).toBe("superseded");
 	});
 });
 
@@ -439,6 +674,11 @@ describe("airplayBlockedMessage", () => {
 			["videoCodec", undefined, "AirPlay can't play this stream."],
 			["interlaced", undefined, "AirPlay can't play interlaced video."],
 			["audioOnly", undefined, "AirPlay TVs don't play streams without video."],
+			[
+				"hdr",
+				undefined,
+				"AirPlay can't play this HDR stream as it is, and Cinette doesn't convert HDR.",
+			],
 			["unreachable", undefined, "Couldn't check the stream for AirPlay."],
 			["cors", undefined, "Couldn't check the stream for AirPlay."],
 		] as const;
@@ -448,7 +688,7 @@ describe("airplayBlockedMessage", () => {
 });
 
 describe("airplayKey", () => {
-	const caps = airplayCapabilities(playing, false);
+	const caps = airplayCapabilities(playing, false, false);
 	const state = airplayPlaybackState(playing, null, 0);
 	const at = (patch: Partial<PlaybackState>) => ({ ...state, ...patch });
 

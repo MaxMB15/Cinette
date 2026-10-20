@@ -14,6 +14,7 @@
 		173EBA65D9D93F603CA18113 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5AB281FCA910EAECBEBB2989 /* VideoToolbox.framework */; };
 		2E931F04F533D17EF3F62132 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AE63BAC66ABADB9B48AF1081 /* MetalKit.framework */; };
 		3A94F7CF32D9A29A39027A8C /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 6E263C64169EF5501D8190D3 /* main.mm */; };
+		36F23271A14825EECC15FEF1 /* remux.c in Sources */ = {isa = PBXBuildFile; fileRef = 2DCBD42EAF1CCD14703D1E52 /* remux.c */; };
 		3AC29C95A69924FAC4A7D551 /* libc++.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 6774CBCB99109191A3308924 /* libc++.tbd */; };
 		46404B825CAB811917E754FE /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D52155C8520BB9A497ED0B04 /* MediaPlayer.framework */; };
 		47B57B71C868FA32335D298A /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D9C9CAB487214ABE8A0F662C /* libbz2.tbd */; };
@@ -55,6 +56,8 @@
 		6360DB9922FE8C5DEB91CCF6 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		6774CBCB99109191A3308924 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
 		6E263C64169EF5501D8190D3 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
+		2DCBD42EAF1CCD14703D1E52 /* remux.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = remux.c; sourceTree = "<group>"; };
+		666798F8D63A830E3A90EC6B /* remux.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = remux.h; sourceTree = "<group>"; };
 		72912AEA6D28780BF989A1FC /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		74C3D89C3FA75A16C5104D8C /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		7F4F9640DA235AABAC7A9A15 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -120,6 +123,16 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
+		12CFEBFC8A06632B7F28F831 /* native */ = {
+			isa = PBXGroup;
+			children = (
+				2DCBD42EAF1CCD14703D1E52 /* remux.c */,
+				666798F8D63A830E3A90EC6B /* remux.h */,
+			);
+			name = native;
+			path = ../../../../../crates/hls-remux/native;
+			sourceTree = "<group>";
+		};
 		250502DE7E92187090F5754E /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -156,6 +169,7 @@
 				31E5083221F1CE8B84C69112 /* LaunchScreen.storyboard */,
 				DF438231A7157EB8BAA8398F /* Externals */,
 				5EF30F3E1B38371E61D05D96 /* max-video-player_iOS */,
+				12CFEBFC8A06632B7F28F831 /* native */,
 				250502DE7E92187090F5754E /* Sources */,
 				06DE240960E1A1BB17685ED0 /* src */,
 				E55CA236F6D7193FD204E1CE /* Frameworks */,
@@ -327,6 +341,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3A94F7CF32D9A29A39027A8C /* main.mm in Sources */,
+				36F23271A14825EECC15FEF1 /* remux.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

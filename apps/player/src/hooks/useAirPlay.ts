@@ -8,6 +8,7 @@ import {
 	AIRPLAY_PICKER_CLOSED_EVENT,
 	AIRPLAY_ROUTE_EVENT,
 	AIRPLAY_STATE_EVENT,
+	airplaySender,
 	createAirPlayDestination,
 	type AirPlayBridge,
 	type AirPlayDestination,
@@ -16,10 +17,14 @@ import {
 } from "@/lib/airplay";
 import type { PlaybackState } from "@/lib/destination";
 import type { RouteDecision } from "@/lib/route";
+import type { ConverterSupport } from "@/lib/route-profiles";
 import {
 	airplayChoose,
+	airplayConverterSupport,
+	airplayEndConversion,
 	airplayGetRoute,
 	airplayLoad,
+	airplayLoadConverted,
 	airplayPause,
 	airplayPlay,
 	airplaySeek,
@@ -34,11 +39,17 @@ import type { Channel } from "@/lib/types";
 /** How long after the picker closes a route change may still arrive. */
 const ROUTE_GRACE_MS = 1000;
 
+/** What a device that can't convert offers, until the backend says. */
+// Stryker disable next-line ObjectLiteral, BooleanLiteral: A sender that can't convert never reads hardwareEncoder, and a missing convert is false too.
+const NO_CONVERTER: ConverterSupport = { convert: false, hardwareEncoder: false };
+
 const bridge: AirPlayBridge = {
 	// This device plays the channel while the picker is open, so the
 	// backend asks mpv, and the provider isn't asked for a second connection.
 	formats: getStreamFormats,
 	load: airplayLoad,
+	loadConverted: airplayLoadConverted,
+	endConversion: airplayEndConversion,
 	play: airplayPlay,
 	pause: airplayPause,
 	seek: airplaySeek,
@@ -119,13 +130,19 @@ export interface AirPlay {
 	state: PlaybackState | null;
 	/**
 	 * Has the user pick a receiver, then sends `channel` there from
-	 * `startAt`. `stopLocal` stops this device's player once the route is
-	 * known, before the receiver connects, since many accounts allow one
-	 * connection at a time.
+	 * `startAt`. When this device has to convert the stream, `confirm` asks
+	 * the user first. `stopLocal` stops this device's player once the route
+	 * is settled, before the receiver connects, since many accounts allow
+	 * one connection at a time.
 	 */
 	send: (
 		channel: Channel,
-		opts: { anchor: DOMRect; startAt?: number; stopLocal: () => Promise<void> }
+		opts: {
+			anchor: DOMRect;
+			startAt?: number;
+			stopLocal: () => Promise<void>;
+			confirm: () => Promise<boolean>;
+		}
 	) => Promise<SendResult>;
 	/** Stops AirPlay video, and resolves once it has. */
 	stop: () => Promise<void>;
@@ -145,6 +162,7 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	const [available, setAvailable] = useState(false);
 	const [route, setRoute] = useState<AirPlayRoute | null>(null);
 	const [destination, setDestination] = useState<AirPlayDestination | null>(null);
+	const [support, setSupport] = useState(NO_CONVERTER);
 	// The destination AirPlay plays on, for the cleanup when the page goes
 	// and for sends that finish after it has.
 	const active = useRef<AirPlayDestination | null>(null);
@@ -176,6 +194,11 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 				if (current) setRoute(r);
 			})
 			.catch(() => {});
+		void airplayConverterSupport()
+			.then((s) => {
+				if (current) setSupport(s);
+			})
+			.catch(() => {});
 		return () => {
 			current = false;
 			for (const p of unlisten) void p.then((fn) => fn());
@@ -197,8 +220,9 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	};
 
 	const send = useCallback<AirPlay["send"]>(
-		async (channel, { anchor, startAt, stopLocal }) => {
+		async (channel, { anchor, startAt, stopLocal, confirm }) => {
 			const item = { kind: "local" as const, channel };
+			const sender = airplaySender(support);
 			// The React Compiler can't compile a try with a throw or a `??` in
 			// it, so failures are caught on the promise. Only the load can fail
 			// after this device stopped, and it says so itself.
@@ -206,13 +230,16 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 				// The item is checked before the picker opens: picking a TV
 				// moves this device's sound there, even for an item it can't
 				// play.
-				const check = createAirPlayDestination(ANY_RECEIVER, bridge);
+				const check = createAirPlayDestination(ANY_RECEIVER, bridge, sender);
 				const decision = await check.route(item).finally(() => check.dispose());
 				if (!decision.ok) return { sent: false, why: "blocked", decision };
+				// Asked before the picker too, so saying no leaves the sound here.
+				const converts = decision.route.via === "converted";
+				if (converts && !(await confirm())) return { sent: false, why: "cancelled" };
 				if (!mounted.current) return { sent: false, why: "cancelled" };
 				const picked = route ?? (await choose(anchor));
 				if (!picked || !mounted.current) return { sent: false, why: "cancelled" };
-				const target = createAirPlayDestination(picked, bridge);
+				const target = createAirPlayDestination(picked, bridge, sender);
 				const settled = await target.route(item);
 				// The page went while the check ran: nothing starts, and this
 				// device keeps playing.
@@ -221,6 +248,12 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 					return settled.ok
 						? { sent: false, why: "cancelled" }
 						: { sent: false, why: "blocked", decision: settled };
+				}
+				// The formats can change between the check and now, so a route
+				// that only converts now still asks.
+				if (settled.route.via === "converted" && !converts && !(await confirm())) {
+					target.dispose();
+					return { sent: false, why: "cancelled" };
 				}
 				await stopLocal();
 				if (!mounted.current) {
@@ -248,7 +281,7 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 				stopped: false,
 			}));
 		},
-		[route]
+		[route, support]
 	);
 
 	const stop = async () => {

@@ -21,7 +21,13 @@ unsafe extern "C" {
     );
     fn mvp_ios_airplay_set_detection(enabled: bool);
     fn mvp_ios_airplay_choose(x: f64, y: f64, width: f64, height: f64);
-    fn mvp_ios_airplay_load(url: *const c_char, title: *const c_char, start: f64, live: bool);
+    fn mvp_ios_airplay_load(
+        url: *const c_char,
+        title: *const c_char,
+        start: f64,
+        live: bool,
+        converted: bool,
+    );
     fn mvp_ios_airplay_play();
     fn mvp_ios_airplay_pause();
     fn mvp_ios_airplay_seek(position: f64);
@@ -118,11 +124,11 @@ extern "C" fn on_report(json: *const c_char) {
     }
 }
 
-pub fn load(url: &str, title: &str, start: f64, live: bool) -> Result<(), String> {
+pub fn load(url: &str, title: &str, start: f64, live: bool, converted: bool) -> Result<(), String> {
     let url = CString::new(url).map_err(|_| "The stream address isn't valid".to_string())?;
     // A title with a NUL in it just goes without one.
     let title = CString::new(title).unwrap_or_default();
-    unsafe { mvp_ios_airplay_load(url.as_ptr(), title.as_ptr(), start, live) };
+    unsafe { mvp_ios_airplay_load(url.as_ptr(), title.as_ptr(), start, live, converted) };
     Ok(())
 }
 

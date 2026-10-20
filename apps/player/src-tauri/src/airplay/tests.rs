@@ -109,3 +109,49 @@ async fn refuses_a_replaced_list() {
     list(&app, &channel).await;
     assert_eq!(load(&app, channel, first, 0).await, Err(STALE.to_string()));
 }
+
+#[tokio::test]
+async fn converting_is_only_on_ios() {
+    let app = TestApp::new();
+    let channel = add_m3u_channel(&app);
+    let generation = list(&app, &channel).await;
+    let handle = app.handle();
+    let converted = airplay_load_converted(
+        handle.clone(),
+        handle.state::<StreamsState>(),
+        channel.clone(),
+        generation,
+        0,
+        None,
+    )
+    .await;
+    assert_eq!(
+        converted,
+        Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string())
+    );
+    // The format is checked first, as for a direct load.
+    let gone = airplay_load_converted(
+        handle.clone(),
+        handle.state::<StreamsState>(),
+        channel,
+        generation,
+        3,
+        None,
+    )
+    .await;
+    assert_eq!(gone, Err(STALE.to_string()));
+    assert_eq!(airplay_end_conversion().await, Ok(()));
+    assert_eq!(
+        airplay_converter_support().await,
+        Ok(ConverterSupport {
+            convert: false,
+            hardware_encoder: false
+        })
+    );
+    install(&handle);
+}
+
+#[test]
+fn copies_the_audio_airplay_plays() {
+    assert_eq!(AIRPLAY_AUDIO, ["aac", "mp3"]);
+}

@@ -61,6 +61,9 @@ exclude_re = [
     'replace (omdb_api_key|saved_key|non_empty_key) -> .* with (Ok\()?Some\(',
     'replace trimmed_key -> .* with Some\("xyzzy"\)',
     'delete ! in non_empty_key',
+    # Only iOS has a Wi-Fi interface list to read. The choice made from it
+    # stays in.
+    'src-tauri/src/wifi\.rs:.*\binterfaces\b',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's
@@ -89,6 +92,7 @@ exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
     "crates/tauri-plugin-mpv/src/airplay/ios.rs",
+    "apps/player/src-tauri/src/airplay/ios.rs",
     # AirPlay's stand-in for other platforms. Every command checks ensure()
     # first, which fails, so nothing else in it ever runs.
     "crates/tauri-plugin-mpv/src/airplay/unavailable.rs",
@@ -99,4 +103,6 @@ exclude_globs = [
     "apps/player/src-tauri/src/discovery/macos.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
+    # Writes the tests' media. Only tests use it.
+    "crates/hls-remux/src/test_media.rs",
 ]

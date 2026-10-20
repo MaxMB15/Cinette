@@ -39,6 +39,8 @@ mvp-core = { path = "../../../crates/core", features = ["test-util"] }
 # A second connection to a test's cache, so a test can break it in ways the
 # app never does. The same version and features as mvp-core's.
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
+# A paused clock, for the AirPlay conversions' timeouts.
+tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser
@@ -62,6 +64,15 @@ socket2 = "0.6"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 oslog = { version = "0.2", default-features = false }
+# Converts streams for AirPlay. Xcode builds its C against MPVKit's FFmpeg.
+hls-remux = { path = "../../../crates/hls-remux" }
+# getifaddrs, for this device's Wi-Fi address.
+libc = "0.2"
+
+# The HLS converter's tests build its C against the system's FFmpeg. The
+# Linux app itself never links it.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+hls-remux = { path = "../../../crates/hls-remux", features = ["test-media"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Hand Android's JVM to the certificate verifier that rustls uses there. See

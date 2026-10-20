@@ -3658,6 +3658,24 @@ describe("AirPlay", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
+	it("asks before this device converts the stream", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		const send = vi.mocked(fakeAirPlay.get().send);
+		let answered: boolean | null = null;
+		send.mockImplementationOnce(async (_, opts) => {
+			answered = await opts.confirm();
+			return { sent: true };
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const dialog = screen.getByRole("dialog", { name: "Convert on this device?" });
+		expect(dialog.textContent).toContain("This iPhone converts the stream");
+		fireEvent.click(within(dialog).getByRole("button", { name: "Send to TV" }));
+		await flush();
+		expect(answered).toBe(true);
+	});
+
 	it("sends live from now", async () => {
 		fakeAirPlay.set({ available: true });
 		await openItem(makeNewsChannel());
@@ -3692,6 +3710,28 @@ describe("AirPlay", () => {
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't start AirPlay.");
 		expect(warn).toHaveBeenCalledWith("[VideoPlayer] AirPlay failed:", error);
+
+		send.mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: "refused",
+			stopped: false,
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.getByRole("alert").textContent).toMatch(/^The provider refused the stream/);
+
+		send.mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: "Connect to Wi-Fi to send this to the TV.",
+			stopped: false,
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe(
+			"Connect to Wi-Fi to send this to the TV."
+		);
 	});
 
 	it("covers the player with its own controls while the TV plays", async () => {
@@ -3813,6 +3853,24 @@ describe("AirPlay", () => {
 		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
 	});
 
+	it("says when a seek on the TV fails, from the keys or the panel", async () => {
+		await openItem(lanternKeeper(), { episodes: [] });
+		const destination = tv();
+		destination.seek.mockRejectedValueOnce("refused");
+		act(() => fakeAirPlay.set({ destination, state: tvState() }));
+		await press("ArrowRight");
+		await flush();
+		expect(screen.getByText(/^The provider refused the stream/)).toBeTruthy();
+
+		destination.seek.mockRejectedValueOnce(new Error("gone"));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		fireEvent.change(within(panel).getByRole("slider", { name: "Position" }), {
+			target: { value: "900" },
+		});
+		await flush();
+		expect(screen.getByText("Couldn't move the stream on the TV.")).toBeTruthy();
+	});
+
 	it("plays a paused TV from the keyboard", async () => {
 		await openItem(lanternKeeper());
 		const destination = { ...tv(), getState: vi.fn(() => tvState({ status: "paused" })) };
@@ -3859,7 +3917,7 @@ describe("AirPlay", () => {
 		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
 			sent: false,
 			why: "failed",
-			error: "nope",
+			error: new Error("nope"),
 			stopped: true,
 		});
 		fireEvent.click(airplayButton()!);

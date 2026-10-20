@@ -50,6 +50,9 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
 
   private var title: String?
   private var live = false
+  /// The stream is one this device converts. Its timeline is a sliding
+  /// window, so the lock screen's seeks don't work on it.
+  private var converted = false
   private var startAt = 0.0
   private var started = false
   private var ended = false
@@ -145,10 +148,11 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
 
   // MARK: Playback
 
-  func load(url: URL, title: String?, startAt: Double, live: Bool) {
+  func load(url: URL, title: String?, startAt: Double, live: Bool, converted: Bool) {
     stopPlayer()
     self.title = title
     self.live = live
+    self.converted = converted
     self.startAt = startAt
     started = false
     ended = false
@@ -319,6 +323,12 @@ final class AirPlayHost: NSObject, AVRoutePickerViewDelegate {
   /// AirPlay isn't active, so mpv gets the command.
   func handleRemote(_ command: MvpRemoteCommand, _ value: Double) -> Bool {
     guard isActive, let player else { return false }
+    // A converted live channel can't pause: its converter would stop
+    // reading, and the provider would drop the connection. A converted
+    // stream's seeks go through the player, which converts again from
+    // there. Both are taken here so mpv doesn't act on them either.
+    if converted && (command == .skip || command == .seekTo) { return true }
+    if converted && live && (command == .pause || command == .togglePlayPause) { return true }
     switch command {
     case .play: player.play()
     case .pause: player.pause()
@@ -455,7 +465,8 @@ func mvpIosAirPlayChoose(_ x: Double, _ y: Double, _ width: Double, _ height: Do
 
 @_cdecl("mvp_ios_airplay_load")
 func mvpIosAirPlayLoad(
-  _ url: UnsafePointer<CChar>?, _ title: UnsafePointer<CChar>?, _ startAt: Double, _ live: Bool
+  _ url: UnsafePointer<CChar>?, _ title: UnsafePointer<CChar>?, _ startAt: Double, _ live: Bool,
+  _ converted: Bool
 ) {
   // Copy the strings now. Rust frees them when this function returns.
   guard let url = url.flatMap({ URL(string: String(cString: $0)) }) else {
@@ -465,7 +476,8 @@ func mvpIosAirPlayLoad(
   }
   let name = title.map { String(cString: $0) }
   DispatchQueue.main.async {
-    AirPlayHost.shared.load(url: url, title: name, startAt: startAt, live: live)
+    AirPlayHost.shared.load(
+      url: url, title: name, startAt: startAt, live: live, converted: converted)
   }
 }
 
