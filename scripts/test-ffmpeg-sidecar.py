@@ -46,6 +46,37 @@ from pathlib import Path
 # lines no longer match.
 DOWNLOAD_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max 30 -i URL -c copy -movflags +faststart -f mp4 -progress pipe:1 -nostats -y DEST"
 RECORDING_ARGS = "-hide_banner -loglevel error -reconnect 1 -reconnect_delay_max 30 -rw_timeout 15000000 -reconnect_on_network_error 1 -stats_period 5 -i URL -c copy -f mpegts -progress pipe:1 -nostats -t 60 -y DEST"
+# What converting a stream for a Cast receiver runs, from
+# mvp_core::convert::args with a server's URL, copying the video and turning
+# the audio into AAC. A file is read at its own pace after a 10-second burst,
+# which covers the whole of a test file. The app writes to pipe:1, and the
+# test writes to a file in its place.
+CONVERT_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+# The same for AC-3, E-AC-3 and DTS, whose decoders mix down to stereo.
+CONVERT_DOWNMIX_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -downmix stereo -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+# The same for a 5.1 source, which stays 5.1. The side channels that
+# decoders give are renamed back ones, which ffmpeg's AAC encoder needs.
+CONVERT_SURROUND_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -af channelmap=channel_layout=5.1 -c:a aac -b:a 448k -f matroska -live 1 -flush_packets 1 pipe:1"
+# A live channel, which isn't paced.
+CONVERT_LIVE_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+# Copying both tracks from two seconds in. AAC is only copied from MP4 and
+# Matroska (mvp_core::convert::matroska_copies).
+CONVERT_SEEK_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -ss 2.000 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a copy -f matroska -live 1 -flush_packets 1 pipe:1"
+# On macOS, with Apple's AAC encoder, and a full transcode on VideoToolbox
+# that deinterlaces and scales anything above 1080p down.
+CONVERT_MAC_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT_MAC_SURROUND_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 448k -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT_MAC_TRANSCODE_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -vf bwdif=mode=send_field,scale=-2:'min(ih,1080)',format=yuv420p -c:v h264_videotoolbox -b:v 10M -maxrate 12M -bufsize 20M -force_key_frames expr:gte(t,n_forced*2) -c:a aac_at -aac_at_mode cvbr -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT = {
+    "aac": CONVERT_ARGS,
+    "downmix": CONVERT_DOWNMIX_ARGS,
+    "surround": CONVERT_SURROUND_ARGS,
+    "live": CONVERT_LIVE_ARGS,
+    "seek": CONVERT_SEEK_ARGS,
+    "mac": CONVERT_MAC_ARGS,
+    "mac-surround": CONVERT_MAC_SURROUND_ARGS,
+    "mac-transcode": CONVERT_MAC_TRANSCODE_ARGS,
+}
 
 # muxer_for_container in crates/core/src/downloads/ffmpeg.rs.
 MUXERS = {
@@ -86,11 +117,17 @@ CHILD_ENV = {name: value for name, value in os.environ.items() if name.lower() n
 # what the cases below use.
 PROTOCOLS = {"file", "http", "https", "pipe", "rtmp", "rtmps", "rtp", "tcp", "tls", "udp"}
 DEMUXERS = {"hls", "live_flv", "rtp", "rtsp", "sdp"}
+# The decoders a conversion needs for the audio and video that VOD providers
+# send, which the cases below have no file for.
+DECODERS = {
+    "alac", "flac", "mlp", "pcm_bluray", "pcm_dvd", "pcm_s16le", "pcm_s24le", "truehd",
+    "vc1", "vorbis", "vp9",
+}
 
 
 def make_media(ffmpeg: str, folder: Path) -> None:
     www = folder / "www"
-    for path in (www, www / "hls", www / "hls-fmp4", www / "hls-aes"):
+    for path in (www, www / "hls", www / "hls-fmp4", www / "hls-aes", www / "hls-eac3"):
         path.mkdir(parents=True, exist_ok=True)
 
     def run(*args: object) -> None:
@@ -121,6 +158,11 @@ def make_media(ffmpeg: str, folder: Path) -> None:
     run(*av, "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
         "-c:a", "ac3", www / "hevc.ts")
     run(*av, "-c:v", "mpeg2video", "-c:a", "mp2", www / "mpeg2.ts")
+    # The tone in all six channels, laid out as AC-3 decodes 5.1.
+    six = "pan=5.1(side)|" + "|".join(f"c{i}=c0" for i in range(6))
+    run(*av, *h264, "-af", six, "-c:a", "ac3", www / "ac3-51.mkv")
+    # ffmpeg's own DTS encoder is marked experimental.
+    run(*av, *h264, "-c:a", "dca", "-strict", "-2", www / "dts.mkv")
     run(*av, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
         "-c:a", "libopus", www / "vp9.webm")
     run(*av, "-c:v", "mpeg4", "-c:a", "libmp3lame", www / "mpeg4.avi")
@@ -137,6 +179,8 @@ def make_media(ffmpeg: str, folder: Path) -> None:
         www / "hls" / "index.m3u8")
     run("-i", www / "av.mp4", *hls, "-hls_segment_type", "fmp4",
         "-hls_segment_filename", www / "hls-fmp4" / "seg%d.m4s", www / "hls-fmp4" / "index.m3u8")
+    run(*av, *h264, "-c:a", "eac3", "-f", "hls", "-hls_time", "1", "-hls_playlist_type", "vod",
+        "-hls_segment_filename", www / "hls-eac3" / "seg%d.ts", www / "hls-eac3" / "index.m3u8")
     key = www / "hls-aes" / "key.bin"
     key.write_bytes(os.urandom(16))
     key_info = folder / "key-info.txt"
@@ -320,6 +364,12 @@ class Case:
     # crates/core/src/downloads/recording.rs reads these lines.
     error: str = ""
     recording: bool = False
+    # Run the arguments CONVERT names instead of a download's or a
+    # recording's. "surround" and "mac-surround" also check that the AAC is
+    # standard 5.1. Conversions write live Matroska, which records no length,
+    # so they set length=None. The "mac" ones only run where the build has
+    # aac_at, and "mac-transcode" where VideoToolbox encodes.
+    convert: str = ""
     # "http", "https", or "tls13" or "tls12", a server that only takes that
     # TLS version.
     server: str = "http"
@@ -355,6 +405,30 @@ def cases() -> list[Case]:
         Case("MPEG-TS into MP4", "/media/av.ts", "mp4", av),
         # The app's own download tests serve WAV.
         Case("WAV into MKV", "/media/sound.wav", "mkv", ["pcm_u8"]),
+        Case("Converting MPEG-2 and MP2 for Cast", "/media/mpeg2.ts", "mkv",
+             ["aac", "mpeg2video"], convert="aac", length=None),
+        Case("Converting HEVC and AC-3 for Cast", "/media/hevc.ts", "mkv", ["aac", "hevc"],
+             convert="downmix", length=None),
+        Case("Converting DTS for Cast", "/media/dts.mkv", "mkv", av, convert="downmix",
+             length=None),
+        Case("Converting Opus for Cast", "/media/vp9.webm", "mkv", ["aac", "vp9"],
+             convert="aac", length=None),
+        Case("Converting AC-3 5.1 to 5.1 AAC for Cast", "/media/ac3-51.mkv", "mkv", av,
+             convert="surround", length=None),
+        Case("Converting E-AC-3 in HLS for Cast", "/media/hls-eac3/index.m3u8", "mkv", av,
+             convert="downmix", length=None),
+        Case("Converting HLS with AES-128 for Cast", "/media/hls-aes/index.m3u8", "mkv", av,
+             convert="aac", length=None),
+        Case("Converting a live channel for Cast", "/media/av.ts", "mkv", av, convert="live",
+             length=None),
+        Case("Converting from two seconds in for Cast", "/media/av.mkv", "mkv", av,
+             convert="seek", length=None),
+        Case("Converting MPEG-2 and MP2 with Apple's AAC", "/media/mpeg2.ts", "mkv",
+             ["aac", "mpeg2video"], convert="mac", length=None),
+        Case("Converting AC-3 5.1 with Apple's AAC", "/media/ac3-51.mkv", "mkv", av,
+             convert="mac-surround", length=None),
+        Case("Transcoding MPEG-2 on VideoToolbox", "/media/mpeg2.ts", "mkv", av,
+             convert="mac-transcode", length=None),
         Case("HLS", "/media/hls/index.m3u8", "mkv", av),
         Case("HLS with fMP4 segments", "/media/hls-fmp4/index.m3u8", "mkv", av),
         Case("HLS with AES-128", "/media/hls-aes/index.m3u8", "mkv", av),
@@ -394,6 +468,10 @@ def cases() -> list[Case]:
 
 
 def app_args(case: Case, url: str, dest: Path) -> list[str]:
+    if case.convert:
+        args = CONVERT[case.convert].split()
+        return [url if arg == "http://URL" else str(dest) if arg == "pipe:1" else arg
+                for arg in args]
     args = (RECORDING_ARGS if case.recording else DOWNLOAD_ARGS).split()
     muxer = MUXERS[case.container]
     if muxer not in ("mp4", "mov") and "-movflags" in args:
@@ -522,10 +600,11 @@ def check(ffmpeg: str, reader: str, case: Case, urls: dict[str, str], out: Path)
         return ""
     if run.code != 0:
         return f"ffmpeg exited with {run.code}: {errors}"
-    if "progress=end" not in run.stdout:
+    # A conversion writes no progress, since the app reads its output.
+    if not case.convert and "progress=end" not in run.stdout:
         return "the progress never said progress=end"
     sizes = re.findall(r"^total_size=(\d+)$", run.stdout, re.M)
-    if not sizes or int(sizes[-1]) <= 0:
+    if not case.convert and (not sizes or int(sizes[-1]) <= 0):
         return f"the progress gave no size above 0: {sizes}"
     if not dest.is_file() or dest.stat().st_size == 0:
         return "ffmpeg wrote nothing"
@@ -538,6 +617,8 @@ def check(ffmpeg: str, reader: str, case: Case, urls: dict[str, str], out: Path)
     codecs, seconds, listing = read_back(reader, dest)
     if codecs != sorted(case.codecs):
         return f"the file holds {codecs}, not {sorted(case.codecs)}:\n{listing}"
+    if case.convert.endswith("surround") and not re.search(r"Audio: aac.*, 5\.1,", listing):
+        return f"the AAC isn't standard 5.1:\n{listing}"
     if case.length is not None and (seconds is None or abs(seconds - case.length) > 0.5):
         return f"the file runs {seconds} seconds, not {case.length}"
     return ""
@@ -551,6 +632,26 @@ def listing(ffmpeg: str, flag: str) -> str:
         stdin=subprocess.DEVNULL,
         timeout=30,
     ).stdout
+
+
+def names(text: str) -> list[str]:
+    """The names in a list from -encoders or -decoders."""
+    return [parts[1] for parts in map(str.split, text.splitlines()) if len(parts) >= 2]
+
+
+def videotoolbox_encodes(ffmpeg: str) -> bool:
+    """Whether h264_videotoolbox encodes a frame, as the app checks."""
+    if "h264_videotoolbox" not in names(listing(ffmpeg, "-encoders")):
+        return False
+    frame = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "rawvideo",
+         "-pix_fmt", "yuv420p", "-s", "64x64", "-i", "pipe:0", "-frames:v", "1",
+         "-c:v", "h264_videotoolbox", "-f", "null", "-"],
+        input=bytes(6144),
+        capture_output=True,
+        timeout=30,
+    )
+    return frame.returncode == 0
 
 
 def check_build(ffmpeg: str) -> list[tuple[str, str]]:
@@ -568,6 +669,9 @@ def check_build(ffmpeg: str) -> list[tuple[str, str]]:
     missing = sorted(DEMUXERS - demuxers)
     if missing:
         failures.append(("Demuxers", f"missing {missing}"))
+    missing = sorted(DECODERS - set(names(listing(ffmpeg, "-decoders"))))
+    if missing:
+        failures.append(("Decoders", f"missing {missing}"))
     license_text = " ".join(listing(ffmpeg, "-L").split())
     if "GNU Lesser General Public License" not in license_text or "version 3" not in license_text:
         failures.append(("License", f"not LGPL version 3: {license_text[:200]}"))
@@ -594,7 +698,17 @@ def test(ffmpeg: str, folder: Path, reader: str) -> int:
     failures = check_build(ffmpeg)
     for name, why in failures:
         print(f"FAIL {name}: {why}")
-    all_cases = cases()
+    # The macOS cases need Apple's encoders, which only the macOS build has.
+    # VideoToolbox can be missing on a runner without a GPU.
+    mac = "aac_at" in names(listing(ffmpeg, "-encoders"))
+    transcode = mac and videotoolbox_encodes(ffmpeg)
+    all_cases = [
+        case for case in cases()
+        if not case.convert.startswith("mac") or (mac and (case.convert != "mac-transcode" or transcode))
+    ]
+    skipped = len(cases()) - len(all_cases)
+    if skipped:
+        print(f"skip {skipped} macOS conversion cases this build can't run")
 
     def timed(case: Case, out: Path) -> tuple[str, float]:
         started = time.monotonic()
@@ -616,7 +730,7 @@ def test(ffmpeg: str, folder: Path, reader: str) -> int:
     for server in servers.values():
         server.stop.set()
         server.shutdown()
-    print(f"{len(all_cases) + 3 - len(failures)} of {len(all_cases) + 3} checks passed")
+    print(f"{len(all_cases) + 4 - len(failures)} of {len(all_cases) + 4} checks passed")
     return 1 if failures else 0
 
 

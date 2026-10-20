@@ -40,6 +40,7 @@ const mp4: StreamFormat = {
 	container: "mp4",
 	video: "h264",
 	interlaced: false,
+	hdr: false,
 	audio: "aac",
 	cors: false,
 };

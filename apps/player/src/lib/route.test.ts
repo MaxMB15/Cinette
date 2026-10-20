@@ -8,6 +8,7 @@ const format = (over: Partial<StreamFormat> = {}): StreamFormat => ({
 	container: "mp4",
 	video: "h264",
 	interlaced: false,
+	hdr: false,
 	audio: "aac",
 	cors: false,
 	...over,
@@ -122,7 +123,9 @@ describe("chooseRoute", () => {
 	});
 
 	it("remuxes a container the receiver can't take, copying both tracks", () => {
-		expect(chooseRoute([format({ container: "ts" })], cast, desktop)).toEqual(converted());
+		expect(chooseRoute([format({ container: "ts", audio: "mp3" })], cast, desktop)).toEqual(
+			converted()
+		);
 		expect(chooseRoute([format({ container: "mkv" })], airplay, desktop)).toEqual(
 			converted({ output: "hls" })
 		);
@@ -137,10 +140,34 @@ describe("chooseRoute", () => {
 		);
 	});
 
-	it("handles a stream with no video or no audio", () => {
-		expect(chooseRoute([format({ container: "ts", video: null })], cast, desktop)).toEqual(
-			converted({ video: "none" })
+	it("converts AAC that comes as ADTS for Matroska, which can't copy it", () => {
+		for (const container of ["ts", "hls-ts", "other"] as const)
+			expect(
+				chooseRoute(
+					[format({ container })],
+					{ ...cast, hlsNeedsCors: true, containers: [] },
+					desktop
+				)
+			).toEqual(converted({ audio: "aac" }));
+		for (const container of ["mp4", "mkv", "hls-fmp4"] as const)
+			expect(
+				chooseRoute([format({ container })], { ...cast, containers: [] }, desktop)
+			).toEqual(converted());
+		// HLS output takes it as it is.
+		expect(chooseRoute([format({ container: "ts" })], airplay, desktop)).toEqual(
+			converted({ output: "hls" })
 		);
+		// A format that copies the audio costs less.
+		const hlsFmp4 = format({ container: "hls-fmp4" });
+		expect(chooseRoute([format({ container: "ts" }), hlsFmp4], cast, desktop)).toEqual(
+			converted({ format: 1 })
+		);
+	});
+
+	it("handles a stream with no video or no audio", () => {
+		expect(
+			chooseRoute([format({ container: "ts", video: null, audio: "mp3" })], cast, desktop)
+		).toEqual(converted({ video: "none" }));
 		expect(chooseRoute([format({ container: "ts", audio: null })], cast, desktop)).toEqual(
 			converted({ audio: "none" })
 		);
@@ -173,20 +200,38 @@ describe("chooseRoute", () => {
 		).toEqual({ ok: false, reason: "videoCodec", detail: "mpeg2" });
 	});
 
+	it("copies HDR video but doesn't transcode it", () => {
+		const hw = { ...desktop, hardwareEncoder: true };
+		const hdr = format({ container: "ts", video: "hevc", hdr: true, audio: "mp3" });
+		expect(chooseRoute([hdr], cast, hw)).toEqual(converted());
+		expect(chooseRoute([{ ...hdr, container: "mp4" }], cast, hw)).toEqual({
+			ok: true,
+			route: { via: "direct", format: 0 },
+		});
+		const h264Only = { ...cast, video: { h264: cast.video.h264 } };
+		expect(chooseRoute([hdr], h264Only, hw)).toEqual({ ok: false, reason: "hdr" });
+		// Without an encoder, that's the reason.
+		expect(chooseRoute([hdr], h264Only, desktop)).toEqual({
+			ok: false,
+			reason: "videoCodec",
+			detail: "hevc",
+		});
+	});
+
 	it("copies interlaced video to a receiver that plays it", () => {
-		const f = format({ container: "ts", interlaced: true });
+		const f = format({ container: "ts", interlaced: true, audio: "mp3" });
 		expect(chooseRoute([f], { ...cast, interlaced: true }, desktop)).toEqual(converted());
 	});
 
 	it("says to keep Cinette on screen when the conversion needs it", () => {
 		const ios = { ...desktop, convertNeedsScreen: true };
-		expect(chooseRoute([format({ container: "ts" })], cast, ios)).toEqual(
+		expect(chooseRoute([format({ container: "ts", audio: "mp3" })], cast, ios)).toEqual(
 			converted({ keep: "onScreen" })
 		);
 	});
 
 	it("converts the first format that can be converted", () => {
-		const list = [format({ video: "mpeg2" }), format({ container: "ts" })];
+		const list = [format({ video: "mpeg2" }), format({ container: "ts", audio: "mp3" })];
 		expect(chooseRoute(list, cast, desktop)).toEqual(converted({ format: 1 }));
 	});
 
@@ -205,7 +250,7 @@ describe("chooseRoute", () => {
 	});
 
 	it("plays HEVC only in the containers the receiver takes it in", () => {
-		const hevc = format({ video: "hevc", container: "hls-ts", cors: true });
+		const hevc = format({ video: "hevc", container: "hls-ts", cors: true, audio: "mp3" });
 		expect(chooseRoute([hevc], cast, none)).toEqual({
 			ok: false,
 			reason: "videoCodec",
@@ -264,9 +309,9 @@ describe("chooseRoute", () => {
 
 	it("converts the format that costs least, the earlier one on a tie", () => {
 		const hw = { ...desktop, hardwareEncoder: true };
-		const transcode = format({ container: "ts", interlaced: true });
+		const transcode = format({ container: "ts", interlaced: true, audio: "mp3" });
 		const audio = format({ container: "ts", audio: "dts" });
-		const remux = format({ container: "ts" });
+		const remux = format({ container: "ts", audio: "mp3" });
 		expect(chooseRoute([transcode, audio, remux], cast, hw)).toEqual(converted({ format: 2 }));
 		expect(chooseRoute([transcode, audio], cast, hw)).toEqual(
 			converted({ format: 1, audio: "aac" })

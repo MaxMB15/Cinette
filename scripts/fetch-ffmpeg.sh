@@ -60,14 +60,14 @@ case "$PLATFORM" in
     case "$TARGET_TRIPLE" in
       x86_64-apple-darwin)
         # Intel, built on GitHub's macos-15-intel runner.
-        FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-x86_64.tar.xz"
-        SHA256=ecedf4d5d3b3e69a6d846186de044ed078cb1680eedde2012370617c90af2641
+        FILE="$SIDECAR-$FFMPEG_VERSION-build3-macos-x86_64.tar.xz"
+        SHA256=abd0a2c220bf0c2887221cc8535911ab752f4355c97f22a52029d7c49f7b9bdc
         ;;
       *)
         # Apple Silicon, built on GitHub's macos-15 runner. The TARGETS check
         # below turns away any other target.
-        FILE="$SIDECAR-$FFMPEG_VERSION-build2-macos-arm64.tar.xz"
-        SHA256=512919842746ec801af6e5328a519b5edd9a3c2ba2bebbeaf1d3cf05f79394be
+        FILE="$SIDECAR-$FFMPEG_VERSION-build3-macos-arm64.tar.xz"
+        SHA256=c19b722843fe9b67578d0c48ad172010f138f3f71b9655d35ad922b163579c8f
         ;;
     esac
     ;;
@@ -76,8 +76,8 @@ case "$PLATFORM" in
     # later.
     FFMPEG_VERSION=8.1.3
     TARGETS="x86_64-unknown-linux-gnu"
-    FILE="$SIDECAR-$FFMPEG_VERSION-build2-linux-x86_64.tar.xz"
-    SHA256=410f2dfb926797da3c774123044df02573cf92d60f5d1b04367435116518af24
+    FILE="$SIDECAR-$FFMPEG_VERSION-build3-linux-x86_64.tar.xz"
+    SHA256=259334278fad99a360089c70986af1a5260496749544dcb51f43ca6b06c29c4a
     ;;
   windows)
     # x86_64, from BtbN's FFmpeg-Builds. It's the release/8.1 branch 9 commits

@@ -8,12 +8,16 @@ mod android_device;
 mod android_tls;
 mod cast;
 mod commands;
+mod convert;
 /// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod discovery;
 mod downloads;
 #[cfg(desktop)]
 mod identifier;
+#[cfg(desktop)]
+mod keep_awake;
+mod lan_server;
 mod logging;
 mod progress;
 mod remote;
@@ -206,6 +210,7 @@ register_commands![
     commands::delete_playback_position,
     progress::hand_off_progress,
     streams::get_stream_formats,
+    convert::get_converter_support,
     airplay::airplay_load,
     commands::get_group_hierarchy,
     commands::update_group_hierarchy_entry,

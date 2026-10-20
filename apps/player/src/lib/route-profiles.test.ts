@@ -17,6 +17,7 @@ const format = (f: Partial<StreamFormat>): StreamFormat => ({
 	container: "hls-ts",
 	video: "h264",
 	interlaced: false,
+	hdr: false,
 	audio: "aac",
 	cors: true,
 	...f,
@@ -77,15 +78,16 @@ describe("Cast routes from the research table", () => {
 		});
 	});
 
-	it("remuxes raw TS, and HLS without CORS, on this computer", () => {
+	it("remuxes raw TS, and HLS without CORS, on this computer, converting its AAC", () => {
 		const live = [format({ cors: false }), format({ container: "ts" })];
+		// AAC in TS comes as ADTS, which Matroska on a pipe can't copy.
 		expect(chooseRoute(live, cast, mac)).toEqual({
 			ok: true,
 			route: {
 				via: "converted",
 				format: 0,
 				video: "copy",
-				audio: "copy",
+				audio: "aac",
 				output: "matroska",
 				keep: "on",
 			},

@@ -32,6 +32,7 @@ snow = { version = "0.10", default-features = false, features = ["use-chacha20po
 # the public half of a saved key.
 blake2 = { version = "0.10", default-features = false }
 curve25519-dalek = { version = "4.1", default-features = false }
+# The converter's unguessable paths.
 getrandom = "0.3"
 
 # reqwest 0.13 switched its default TLS to rustls with aws-lc. Desktop and iOS

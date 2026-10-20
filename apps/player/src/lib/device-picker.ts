@@ -71,6 +71,8 @@ export const blockerText = (reason: PlayBlocker, detail?: string): string => {
 			return `Can't play this video${named}`;
 		case "interlaced":
 			return "Can't play interlaced video";
+		case "hdr":
+			return "Can't convert HDR video";
 		case "audioCodec":
 			return `Can't play this sound${named}`;
 		case "audioOnly":

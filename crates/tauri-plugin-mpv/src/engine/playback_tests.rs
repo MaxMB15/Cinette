@@ -622,6 +622,7 @@ fn reports_what_the_item_is_made_of() {
             video_codec: None,
             audio_codec: Some("pcm_s16le".into()),
             interlaced: false,
+            hdr: false,
         }
     );
 
@@ -635,6 +636,20 @@ fn reports_what_the_item_is_made_of() {
     assert_eq!(info.video_codec.as_deref(), Some("rawvideo"));
     assert_eq!(info.audio_codec, None);
     assert!(!info.interlaced);
+    assert!(!info.hdr);
+}
+
+#[test]
+fn pq_and_hlg_are_hdr() {
+    for (gamma, hdr) in [
+        ("pq", true),
+        ("hlg", true),
+        ("bt.1886", false),
+        ("srgb", false),
+        ("auto", false),
+    ] {
+        assert_eq!(super::hdr_gamma(gamma), hdr, "{gamma}");
+    }
 }
 
 #[test]

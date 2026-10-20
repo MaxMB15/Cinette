@@ -64,12 +64,21 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 | `downloads/` | Download model, file paths, ffmpeg invocation, retention, and `recording.rs`, which names recording files and plans when each recording starts, merges, stops or is missed |
 | `cast/` | Google Cast's CASTV2 protocol with no I/O: the length-prefixed frames, the CastMessage protobuf, and a session that connects to a receiver, launches the Default Media Receiver and loads, controls and follows the media. The app supplies the TLS connection |
 | `models/` | `Channel`, `Playlist` and related types |
+| `streams/` | The URLs an item can be fetched from, and what each holds: the probe's parser, the HLS segment and CORS check, for Cast and AirPlay |
+| `convert/` | Converting a stream for a receiver that can't play it: ffmpeg's arguments, splitting live Matroska at the clusters that start with a keyframe, and the server's HTTP |
 
 ### `apps/player/src-tauri`
 
 The app itself. `lib.rs` opens the database in the app data folder and registers the
 plugins, and `commands.rs` exposes the core features to the frontend as Tauri commands.
-`downloads/` queues downloads and runs the bundled ffmpeg sidecar.
+`downloads/` queues downloads and runs the bundled ffmpeg sidecar. `streams/` tells the
+frontend which formats an item comes in, probing it with the sidecar when mpv isn't
+playing it. `convert/` runs the sidecar to convert a stream for a receiver and serves
+it from this computer's address on the local network, only to that receiver and under
+a random path. ffmpeg reads a file at its playing speed after a 10-second burst, and
+`lan_server.rs` keeps up to 32 MB of the stream in one buffer that every request reads
+from. A full buffer holds ffmpeg back, and a receiver that stops reading for 15 seconds
+is dropped and counted.
 
 Recordings of live channels share the downloads table, with the kind `recording`.
 Besides `completed` and `failed`, they have three states of their own, `scheduled`,
@@ -86,8 +95,8 @@ starts. A recording whose stream fails tries again up to 3 times, after 30 secon
 minute and two minutes. Errors keep the provider's address but never the stream's,
 which holds the login. At launch, a recording cut off by a quit or crash keeps its file
 and is marked finished, and a new recording takes the rest when at least a minute of it
-is still ahead. `downloads/keep_awake.rs` keeps the computer awake while ffmpeg
-records, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
+is still ahead. `keep_awake.rs` keeps the computer awake while ffmpeg records, or
+converts a stream for a TV, with `caffeinate` on macOS and `systemd-inhibit` on Linux. The commands are
 `schedule_recording` and `stop_recording`, and both refuse on iOS and Android.
 
 `cast/` lists the Google Cast receivers on the local network. The first

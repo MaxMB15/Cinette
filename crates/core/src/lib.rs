@@ -6,6 +6,8 @@
 
 /// Optional AI helpers for organizing playlists.
 pub mod ai;
+/// Converting a stream on this device for a receiver that can't play it.
+pub mod convert;
 /// The SQLite store for providers, channels, guides, metadata and watch history.
 pub mod cache;
 /// Playing on a Google Cast receiver.

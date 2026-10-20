@@ -5,7 +5,7 @@ import { invoke } from "./invoke";
 import type { AirPlayRoute } from "@/lib/airplay";
 import type { CatalogItem } from "@/lib/cinette-destination";
 import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
-import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
+import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
 	Channel,
@@ -108,6 +108,9 @@ export const loadXtreamProvider = (
 ): Promise<Channel[]> => invoke("load_xtream_provider", { name, url, username, password });
 
 export const getProviders = (): Promise<Provider[]> => invoke("get_providers");
+
+/** What this computer's bundled ffmpeg can convert for a receiver. */
+export const getConverterSupport = (): Promise<ConverterSupport> => invoke("get_converter_support");
 
 /**
  * The formats `channel` comes in, for Cast and AirPlay. While mpv plays it,

@@ -69,6 +69,7 @@ describe("blockerText", () => {
 		expect(blockerText("container")).toBe("Can't play this format");
 		expect(blockerText("videoCodec", "mpeg2")).toBe("Can't play this video (mpeg2)");
 		expect(blockerText("interlaced")).toBe("Can't play interlaced video");
+		expect(blockerText("hdr")).toBe("Can't convert HDR video");
 		expect(blockerText("audioCodec")).toBe("Can't play this sound");
 		expect(blockerText("audioOnly")).toBe("Doesn't play sound on its own");
 		expect(blockerText("cors")).toBe("The provider doesn't allow it");

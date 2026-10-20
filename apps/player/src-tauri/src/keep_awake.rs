@@ -1,16 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Keeps the computer from going to sleep while a recording runs. It starts
-//! the system's own tool for this, which exits by itself when the
-//! recording's ffmpeg does. macOS has `caffeinate`, and Linux has
-//! `systemd-inhibit`. Where the tool is missing, the recording still runs.
+//! Keeps the computer from going to sleep while a recording runs, or while
+//! it converts a stream for a TV. It starts the system's own tool for this,
+//! which exits by itself when that ffmpeg does. macOS has `caffeinate`, and
+//! Linux has `systemd-inhibit`. Where the tool is missing, the work still
+//! runs.
 
 use std::process::{Command, Stdio};
 
+/// Why the computer stays awake, which Linux shows the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    Recording,
+    Casting,
+}
+
+impl Reason {
+    fn text(self) -> &'static str {
+        match self {
+            Reason::Recording => "Recording a live channel",
+            Reason::Casting => "Converting a stream for a TV",
+        }
+    }
+}
+
 /// The command that keeps the computer awake until the process `pid` exits,
 /// or `None` where the app has no way to do that.
-fn command(pid: u32) -> Option<(&'static str, Vec<String>)> {
+fn command(pid: u32, why: Reason) -> Option<(&'static str, Vec<String>)> {
     if cfg!(target_os = "macos") {
         // -i stops idle sleep, and -w ends the hold when `pid` exits.
         Some((
@@ -25,7 +42,7 @@ fn command(pid: u32) -> Option<(&'static str, Vec<String>)> {
             vec![
                 "--what=idle:sleep".into(),
                 "--who=Cinette".into(),
-                "--why=Recording a live channel".into(),
+                format!("--why={}", why.text()),
                 "--mode=block".into(),
                 "tail".into(),
                 format!("--pid={pid}"),
@@ -39,8 +56,8 @@ fn command(pid: u32) -> Option<(&'static str, Vec<String>)> {
 }
 
 /// Keep the computer awake while the process `pid` runs.
-pub fn hold_while_running(pid: u32) {
-    let Some((program, args)) = command(pid) else {
+pub fn hold_while_running(pid: u32, why: Reason) {
+    let Some((program, args)) = command(pid, why) else {
         return;
     };
     let spawned = Command::new(program)
@@ -58,7 +75,7 @@ pub fn hold_while_running(pid: u32) {
                     let _ = child.wait();
                 });
         }
-        Err(e) => tracing::warn!("Could not keep the computer awake for a recording: {e}"),
+        Err(e) => tracing::warn!("Could not keep the computer awake ({}): {e}", why.text()),
     }
 }
 
@@ -69,7 +86,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn holds_until_the_recording_exits_on_macos() {
-        let (program, args) = command(42).unwrap();
+        let (program, args) = command(42, Reason::Recording).unwrap();
         assert_eq!(program, "/usr/bin/caffeinate");
         assert_eq!(args, vec!["-i", "-w", "42"]);
     }
@@ -77,9 +94,12 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn holds_until_the_recording_exits_on_linux() {
-        let (program, args) = command(42).unwrap();
+        let (program, args) = command(42, Reason::Recording).unwrap();
         assert_eq!(program, "systemd-inhibit");
         assert!(args.contains(&"--pid=42".to_string()));
         assert!(args.contains(&"--mode=block".to_string()));
+        assert!(args.contains(&"--why=Recording a live channel".to_string()));
+        let (_, args) = command(42, Reason::Casting).unwrap();
+        assert!(args.contains(&"--why=Converting a stream for a TV".to_string()));
     }
 }

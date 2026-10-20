@@ -10,8 +10,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["process", "time"] }
+tokio = { workspace = true, features = ["net", "process", "sync", "time"] }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-os = "2"
@@ -25,6 +26,8 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 futures-util = "0.3"
 tempfile = "3"
+# The errors the converter's server tells apart when an accept fails.
+libc = "0.2"
 # Reads the logo addresses other Cinette devices send. The same version as mvp-core's.
 url = "2"
 
@@ -38,7 +41,6 @@ mvp-core = { path = "../../../crates/core", features = ["test-util"] }
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser
 # decides whether that plugin can start on Linux.
 zbus = "5"
