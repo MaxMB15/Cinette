@@ -693,7 +693,9 @@ export const remoteConnect = (deviceId: string, link: number): Promise<void> =>
 /** The link the backend holds now, if any. */
 export const remoteLink = (): Promise<number | null> => invoke("remote_link");
 
-/** Ends the session with the controlled device. It keeps playing. */
+/** Ends link `link` to the controlled device, or stops it asking. That
+ *  device keeps playing. A link that took its place stays, and a connect
+ *  numbered at or below `link` is refused from then on. */
 export const remoteLeave = (link: number): Promise<void> => invoke("remote_leave", { link });
 
 /** Resolves with the other device's state version once it carried the

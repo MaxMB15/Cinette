@@ -771,6 +771,109 @@ async fn a_device_that_takes_the_connection_but_never_answers_is_unreachable() {
     held.abort();
 }
 
+/// A listener that takes connections and closes each at once.
+async fn closing_decoy() -> (u16, JoinHandle<()>) {
+    let decoy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = decoy.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        while let Ok((stream, _)) = decoy.accept().await {
+            drop(stream);
+        }
+    });
+    (port, task)
+}
+
+/// A listener that takes connections and never says a word.
+async fn silent_decoy() -> (u16, JoinHandle<()>) {
+    let decoy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = decoy.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((stream, _)) = decoy.accept().await {
+            open.push(stream);
+        }
+    });
+    (port, task)
+}
+
+fn at(ports: Vec<u16>) -> Addresses {
+    Arc::new(move || {
+        ports
+            .iter()
+            .map(|&port| SocketAddr::from(([127, 0, 0, 1], port)))
+            .collect()
+    })
+}
+
+#[tokio::test]
+async fn an_address_that_closes_or_says_nothing_is_passed_over_for_the_next() {
+    let t = target(ControlMode::Always).await;
+    let (closes, a) = closing_decoy().await;
+    let (silent, b) = silent_decoy().await;
+    let limits = Limits {
+        handshake: Duration::from_millis(300),
+        ..Limits::STANDARD
+    };
+    let mut link = link_timed(&t, at(vec![closes, silent, t.port]), GRACE, limits);
+    link.until_phase(Phase::Connected).await;
+    assert!(link.handle.command(Command::Stop).await.is_ok());
+    a.abort();
+    b.abort();
+}
+
+#[tokio::test]
+async fn with_no_address_the_device_it_ends_with_the_most_telling_reason() {
+    let t = target(ControlMode::Always).await;
+    let impostor = target(ControlMode::Always).await;
+    let (closes, a) = closing_decoy().await;
+    let (silent, b) = silent_decoy().await;
+    let limits = Limits {
+        handshake: Duration::from_millis(300),
+        ..Limits::STANDARD
+    };
+    // Another device's key says more than a closed connection.
+    let mut link = link_timed(&t, at(vec![closes, impostor.port, silent]), GRACE, limits);
+    assert_eq!(
+        link.closed().await,
+        Ended::Target(CloseReason::IdentityMismatch)
+    );
+    // And a closed connection more than no answer.
+    let mut link = link_timed(&t, at(vec![silent, closes]), GRACE, limits);
+    assert_eq!(link.closed().await, Ended::Lost);
+    a.abort();
+    b.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_after_the_code_isnt_tried_at_the_next_address() {
+    let mut t = target(ControlMode::Ask).await;
+    let other = target_keyed(ControlMode::Always, t.key.clone()).await;
+    let mut link = link_with(&t, at(vec![t.port, other.port]), GRACE);
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    t.handle.answer(request, Answer::Deny);
+    assert_eq!(link.closed().await, Ended::Target(CloseReason::Denied));
+    assert!(other.handle.sessions().await.is_empty());
+}
+
+#[test]
+fn the_more_telling_reason_wins() {
+    let mismatch = Ended::Target(CloseReason::IdentityMismatch);
+    assert_eq!(more_telling(None, Ended::Unreachable), Ended::Unreachable);
+    assert_eq!(
+        more_telling(Some(Ended::Unreachable), Ended::Lost),
+        Ended::Lost
+    );
+    assert_eq!(
+        more_telling(Some(Ended::Lost), Ended::Unreachable),
+        Ended::Lost
+    );
+    assert_eq!(more_telling(Some(Ended::Lost), mismatch), mismatch);
+    assert_eq!(more_telling(Some(mismatch), Ended::Lost), mismatch);
+    // On a tie, the first stays.
+    let protocol = Ended::Target(CloseReason::Protocol);
+    assert_eq!(more_telling(Some(mismatch), protocol), mismatch);
+}
+
 #[tokio::test]
 async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
     let mut t = target(ControlMode::Ask).await;

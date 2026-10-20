@@ -46,6 +46,9 @@ pub struct RemoteService {
     link: Arc<Mutex<Option<LinkHandle>>>,
     link_host: Arc<dyn LinkHost>,
     events: Arc<dyn ServiceEvents>,
+    /// The highest link number the webview has left. A connect numbered
+    /// at or below it was overtaken by that leave on the way here.
+    left_through: Mutex<u64>,
 }
 
 struct Saved {
@@ -89,6 +92,9 @@ impl RemoteService {
     /// Starts asking `device` for control, leaving any device controlled now.
     /// `link` numbers the new link.
     pub fn connect(&self, device: DeviceId, link: u64) -> Result<(), String> {
+        if link <= *lock(&self.left_through) {
+            return Err("That connection was left already.".into());
+        }
         let allowed = lock(&self.devices).get(&device).map(|d| d.control_allowed);
         match allowed {
             None => return Err("That device isn't on the network now.".into()),
@@ -135,6 +141,10 @@ impl RemoteService {
     /// a late leave for it leaves the new one alone. The webview asked, so
     /// no `remote://controller` event says so.
     pub async fn leave(&self, link: u64) {
+        {
+            let mut left = lock(&self.left_through);
+            *left = (*left).max(link);
+        }
         let old = {
             let mut slot = lock(&self.link);
             if slot.as_ref().is_some_and(|l| l.generation() == link) {
@@ -798,6 +808,7 @@ fn start_on<R: Runtime>(
         resetting: Mutex::new(()),
         devices,
         link,
+        left_through: Mutex::new(0),
     });
     Ok(())
 }
