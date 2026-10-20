@@ -202,6 +202,8 @@ export interface CastOptions {
 export interface CastDestination extends PlaybackDestination {
 	/** An update the backend sent for this receiver. */
 	receive(update: CastUpdate): void;
+	/** Why the cast closed, once it has. */
+	closedReason(): CastSnapshot["closedReason"];
 }
 
 /** The backend's form of `route` for `formats`. */
@@ -244,6 +246,14 @@ export const throughThisDevice = (route: PlayRoute, formats: StreamFormats): Pla
  *  cast time, so the item routes again without that format. */
 const FORMAT_FAILED = ["notPlaylist", "cors"];
 
+/**
+ * How long a converted file can stay paused and still go on with Play. The
+ * converter drops a receiver that stops reading for 15 s, and a paused one
+ * stops once its buffer is full, so after this Play converts again from
+ * where it paused.
+ */
+export const PAUSE_LIMIT_MS = 10_000;
+
 /** What `castLoad` rejects with when the formats were listed before the
  *  backend's newest list of the item's URLs. */
 export const STALE = "stale";
@@ -273,6 +283,8 @@ export const createCastDestination = (
 	/** What's loaded, to load again from elsewhere when a converted stream
 	 *  seeks. */
 	let loaded: { channel: Channel; route: CastRoute; formats: StreamFormats } | null = null;
+	/** When the user paused, while paused. */
+	let pausedAt: number | null = null;
 
 	const channelOf = (item: PlaybackItem): Channel => {
 		if (item.kind !== "local") throw new UnsupportedError("Casting another device's item");
@@ -312,6 +324,8 @@ export const createCastDestination = (
 		const converted = route.via === "converted";
 		publish({
 			...snapshot,
+			// A closed cast connects again for this load.
+			...(snapshot.phase === "closed" ? { phase: "connecting", closedReason: null } : {}),
 			error: null,
 			loading: true,
 			item: { title: channel.name, contentType: channel.contentType, ref: channel.id },
@@ -358,12 +372,23 @@ export const createCastDestination = (
 				throw e;
 			}
 		},
-		play: () => control({ action: "play" }),
-		pause: () => control({ action: "pause" }),
+		play: async () => {
+			const since = pausedAt;
+			pausedAt = null;
+			const file = snapshot.converted && snapshot.item?.contentType !== "live";
+			if (loaded === null || !file || since === null || now() - since < PAUSE_LIMIT_MS)
+				return control({ action: "play" });
+			await send(loaded.channel, loaded.route, loaded.formats, state.position);
+		},
+		pause: async () => {
+			await control({ action: "pause" });
+			pausedAt = now();
+		},
 		seek: async (seconds) => {
 			if (!snapshot.converted || loaded === null)
 				return control({ action: "seek", to: seconds });
 			// The converter starts again from there.
+			pausedAt = null;
 			await send(loaded.channel, loaded.route, loaded.formats, seconds);
 		},
 		setVolume: (volume) => control({ action: "volume", level: volume / 100 }),
@@ -385,5 +410,6 @@ export const createCastDestination = (
 			};
 		},
 		receive: (update) => publish(applyUpdate(snapshot, update, now())),
+		closedReason: () => snapshot.closedReason,
 	};
 };

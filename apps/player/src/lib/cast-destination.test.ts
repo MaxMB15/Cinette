@@ -13,6 +13,7 @@ import {
 	throughThisDevice,
 	type CastBackend,
 	type CastSnapshot,
+	PAUSE_LIMIT_MS,
 } from "@/lib/cast-destination";
 import type { PlayRoute, StreamFormat } from "@/lib/route";
 import type { StreamFormats } from "@/lib/route-profiles";
@@ -545,5 +546,91 @@ describe("createCastDestination", () => {
 		cast.receive({ kind: "closed", reason: "appStopped" });
 		expect(cast.getState().status).toBe("idle");
 		expect(cast.getState()).toBe(cast.getState());
+	});
+
+	it("says why it closed, and connects again for the next load", async () => {
+		const cast = createCastDestination(receiver, backend());
+		expect(cast.closedReason()).toBeNull();
+		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "closed", reason: "connectionLost" });
+		expect(cast.closedReason()).toBe("connectionLost");
+		expect(cast.getState().connection).toBe("lost");
+		await cast.load(item);
+		expect(cast.closedReason()).toBeNull();
+		expect(cast.getState().connection).toBe("reconnecting");
+		// A load on a cast that's still open keeps it connected.
+		cast.receive({ kind: "ready" });
+		await cast.load(item);
+		expect(cast.getState().connection).toBe("connected");
+	});
+
+	it("converts a file again from where it paused once the pause ran long", async () => {
+		let clock = 1000;
+		const film: StreamFormats = {
+			formats: [{ ...ts, audio: "ac3" }],
+			sources: [4],
+			duration: 5400,
+			generation: 7,
+		};
+		const fake = backend(film);
+		const cast = createCastDestination(receiver, fake, { now: () => clock });
+		const movieItem = { kind: "local" as const, channel: movie };
+		await cast.load(movieItem, { startAt: 60 });
+		cast.receive({ kind: "media", media: media({ position: 30, duration: null, live: true }) });
+		await cast.pause();
+		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "pause" });
+		cast.receive({
+			kind: "media",
+			media: media({ player: "paused", position: 30, duration: null, live: true }),
+		});
+		// A short pause goes on where it was.
+		clock += PAUSE_LIMIT_MS - 1;
+		await cast.play();
+		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "play" });
+		expect(fake.castLoad).toHaveBeenCalledTimes(1);
+		// A long one converts again from the place it paused.
+		await cast.pause();
+		clock += PAUSE_LIMIT_MS;
+		await cast.play();
+		expect(fake.castLoad).toHaveBeenCalledTimes(2);
+		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, expect.anything(), 90);
+		// Play without a pause before it just plays.
+		await cast.play();
+		expect(fake.castLoad).toHaveBeenCalledTimes(2);
+	});
+
+	it("goes on after a long pause of a stream the receiver fetches, or live", async () => {
+		let clock = 0;
+		const fake = backend();
+		const cast = createCastDestination(receiver, fake, { now: () => clock });
+		await cast.load(item);
+		await cast.pause();
+		clock += PAUSE_LIMIT_MS * 2;
+		await cast.play();
+		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "play" });
+		expect(fake.castLoad).toHaveBeenCalledTimes(1);
+		// Live through the converter has no place to go back to.
+		const through = createCastDestination(receiver, fake, {
+			now: () => clock,
+			streamThrough: () => true,
+		});
+		await through.load(item);
+		await through.pause();
+		clock += PAUSE_LIMIT_MS * 2;
+		await through.play();
+		expect(fake.castLoad).toHaveBeenCalledTimes(2);
+		// A seek after a pause converts from there, and Play then just plays.
+		const filmBackend = backend({ ...xtream, duration: 600 });
+		const film = createCastDestination(receiver, filmBackend, {
+			now: () => clock,
+			streamThrough: () => true,
+		});
+		await film.load({ kind: "local", channel: movie });
+		await film.pause();
+		await film.seek(100);
+		clock += PAUSE_LIMIT_MS * 2;
+		await film.play();
+		expect(filmBackend.castLoad).toHaveBeenCalledTimes(2);
+		expect(filmBackend.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "play" });
 	});
 });
