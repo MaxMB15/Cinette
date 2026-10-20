@@ -495,7 +495,7 @@ async fn a_probe_that_runs_too_long_stops_its_ffmpeg() {
     });
     let url = format!("http://{address}/live/u/SECRET/slow.ts");
     let app = TestApp::new();
-    let probed = probe_within(&app.handle(), &url, Duration::from_secs(2)).await;
+    let probed = probe_within(&app.handle(), &url, Duration::from_millis(500)).await;
     assert_eq!(probed.err(), Some(ProbeError::Unreachable));
     for _ in 0..50 {
         if !ffmpeg_runs_for(&url) {

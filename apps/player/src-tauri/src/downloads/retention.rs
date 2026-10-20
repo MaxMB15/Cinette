@@ -190,7 +190,8 @@ mod tests {
     fn the_app_waits_before_its_first_check() {
         let (app, file) = app_with_a_due_download();
         start(&app.handle());
-        std::thread::sleep(Duration::from_secs(2));
+        // A check at launch would be done long before this.
+        std::thread::sleep(Duration::from_millis(500));
         assert!(download(&app, "a").is_some() && file.exists());
     }
 

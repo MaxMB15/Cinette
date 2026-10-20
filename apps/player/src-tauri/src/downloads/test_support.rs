@@ -240,8 +240,14 @@ impl Events {
 /// it takes too long, at the line of the test that waited, with `what` in
 /// the message.
 #[track_caller]
-pub(crate) fn wait_until(what: &'static str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + WAIT_LIMIT;
+pub(crate) fn wait_until(what: &'static str, done: impl FnMut() -> bool) {
+    wait_within(WAIT_LIMIT, what, done);
+}
+
+/// Like `wait_until`, but gives up after `limit`.
+#[track_caller]
+pub(crate) fn wait_within(limit: Duration, what: &'static str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + limit;
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting until {what}");
         std::thread::sleep(Duration::from_millis(10));

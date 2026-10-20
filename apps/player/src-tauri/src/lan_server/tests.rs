@@ -371,7 +371,8 @@ async fn answers_nothing_outside_its_token() {
     // A head that never ends, or one with nothing in it, gets nothing.
     assert!(raw(&server, &vec![b'a'; MAX_HEAD + 1024]).await.is_empty());
     assert!(raw(&server, b"GET\r\n\r\n").await.is_empty());
-    // A connection that closes at once gets nothing either.
+    // A connection that sends nothing gets nothing, and the server closes it
+    // once its time to send a request runs out.
     assert!(raw(&server, b"").await.is_empty());
 }
 
