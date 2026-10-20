@@ -4,9 +4,10 @@
 use super::mkv::{MkvError, MkvSplitter, Piece};
 use super::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
 use super::{
-    args, pick_audio, unsupported, AacEncoder, AudioPlan, Encoders, HardwareEncoder, NoEncoder,
-    Plan, VideoPlan, CAST_AUDIO,
+    args, matroska_copies, pick_audio, unsupported, AacEncoder, AudioPlan, Encoders,
+    HardwareEncoder, NoEncoder, Plan, VideoPlan, CAST_AUDIO,
 };
+use crate::streams::format::Container;
 use crate::streams::probe::AudioTrack;
 
 const URL: &str = "http://srv/live/u/p/1.ts";
@@ -756,4 +757,22 @@ fn the_sidecar_test_runs_the_converters_arguments() {
         "scripts/test-ffmpeg-sidecar.py should have these lines:\n{}",
         missing.join("\n")
     );
+}
+
+#[test]
+fn copies_aac_into_matroska_only_from_mp4_and_matroska() {
+    for container in [Container::Mp4, Container::Mkv, Container::HlsFmp4] {
+        assert_eq!(
+            matroska_copies(container, &CAST_AUDIO),
+            CAST_AUDIO,
+            "{container:?}"
+        );
+    }
+    for container in [Container::Ts, Container::HlsTs, Container::Other] {
+        assert_eq!(
+            matroska_copies(container, &CAST_AUDIO),
+            ["mp3", "opus", "vorbis"],
+            "{container:?}"
+        );
+    }
 }

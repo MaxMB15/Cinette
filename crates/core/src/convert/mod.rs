@@ -15,6 +15,7 @@ pub mod serve;
 #[cfg(test)]
 mod tests;
 
+use crate::streams::format::Container;
 use crate::streams::probe::AudioTrack;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,24 @@ pub enum AudioPlan {
 /// The audio codecs a Cast receiver plays as they are, by ffmpeg's names,
 /// for [`pick_audio`]. Each destination passes its own list.
 pub const CAST_AUDIO: [&str; 4] = ["aac", "mp3", "opus", "vorbis"];
+/// The codecs in `playable` that ffmpeg can copy from `container` into the
+/// live Matroska it writes, for [`pick_audio`]. AAC in MPEG-TS and HLS comes
+/// as ADTS, which carries its settings in every frame. Matroska written to a
+/// pipe needs them in its header, before the first frame, so ffmpeg can't
+/// write it, and that AAC is converted instead. Only MP4 and Matroska are
+/// known to carry them up front.
+pub fn matroska_copies<'a>(container: Container, playable: &[&'a str]) -> Vec<&'a str> {
+    let adts = !matches!(
+        container,
+        Container::Mp4 | Container::Mkv | Container::HlsFmp4
+    );
+    playable
+        .iter()
+        .copied()
+        .filter(|&codec| !(adts && codec == "aac"))
+        .collect()
+}
+
 /// The codecs whose decoders mix down to stereo themselves.
 const DECODER_DOWNMIX: [&str; 3] = ["ac3", "eac3", "dts"];
 
@@ -235,9 +254,7 @@ pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, N
     if !plan.live {
         // Otherwise ffmpeg reads a file as fast as the network goes, far
         // ahead of the receiver.
-        args.extend(
-            ["-readrate", "1", "-readrate_initial_burst", BURST].map(String::from),
-        );
+        args.extend(["-readrate", "1", "-readrate_initial_burst", BURST].map(String::from));
     }
     if let Some(at) = plan.start_at.filter(|at| *at > 0.0) {
         args.extend(["-ss".into(), format!("{at:.3}")]);
