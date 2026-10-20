@@ -18,13 +18,20 @@ fn piece(byte: u8) -> Vec<u8> {
     vec![byte; 4]
 }
 
+/// Waits up to five seconds for `future`. A broken feed fails the test
+/// then, instead of leaving it waiting for a piece that never comes.
+async fn within<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(5), future)
+        .await
+        .expect("done within 5 s")
+}
+
 /// Reads `response` until it has `n` bytes.
 async fn read_bytes(response: &mut reqwest::Response, n: usize) -> Vec<u8> {
     let mut body = Vec::new();
     while body.len() < n {
-        let chunk = tokio::time::timeout(Duration::from_secs(10), response.chunk())
+        let chunk = within(response.chunk())
             .await
-            .expect("more of the stream within 10 s")
             .unwrap()
             .expect("the stream goes on");
         body.extend_from_slice(&chunk);
@@ -70,13 +77,15 @@ async fn the_first_request_gets_the_stream_from_its_first_piece() {
 
     // Pieces written before anyone asks are kept for the first request,
     // from the first start point.
-    feed.push(piece(1), false).await;
-    feed.push(piece(2), true).await;
-    feed.push(piece(3), false).await;
-    let mut response = test_server::client().get(&url).send().await.unwrap();
+    within(feed.push(piece(1), false)).await;
+    within(feed.push(piece(2), true)).await;
+    within(feed.push(piece(3), false)).await;
+    let mut response = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
     assert_eq!(response.headers()["content-type"], "video/x-matroska");
     assert!(response.headers().get("content-length").is_none());
-    feed.push(piece(4), true).await;
+    within(feed.push(piece(4), true)).await;
     assert_eq!(
         read_bytes(&mut response, 16).await,
         [b"HEAD".to_vec(), piece(2), piece(3), piece(4)].concat()
@@ -88,10 +97,10 @@ async fn the_first_request_gets_the_stream_from_its_first_piece() {
     assert!(head.bytes().await.unwrap().is_empty());
 
     // The feed ending ends the response once it has everything.
-    feed.push(piece(4), false).await;
+    within(feed.push(piece(4), false)).await;
     feed.end();
     assert_eq!(read_bytes(&mut response, 4).await, piece(4));
-    assert!(response.chunk().await.unwrap().is_none());
+    assert!(within(response.chunk()).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -99,19 +108,23 @@ async fn a_request_that_comes_later_starts_at_the_last_start_point_sent() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
     let feed = feed(1 << 20, true);
     let url = server.set_live("stream.mkv", feed.clone());
-    let mut first = test_server::client().get(&url).send().await.unwrap();
+    let mut first = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
     for (byte, start) in [(1, true), (2, false), (3, true), (4, false)] {
-        feed.push(piece(byte), start).await;
+        within(feed.push(piece(byte), start)).await;
     }
     read_bytes(&mut first, 20).await;
     drop(first);
     // It starts from the third piece, the last start point sent.
-    let mut again = test_server::client().get(&url).send().await.unwrap();
+    let mut again = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
     assert_eq!(
         read_bytes(&mut again, 12).await,
         [b"HEAD".to_vec(), piece(3), piece(4)].concat()
     );
-    feed.push(piece(5), false).await;
+    within(feed.push(piece(5), false)).await;
     assert_eq!(read_bytes(&mut again, 4).await, piece(5));
 }
 
@@ -120,11 +133,13 @@ async fn a_request_with_no_start_point_kept_waits_for_the_next() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
     let feed = feed(1 << 20, true);
     let url = server.set_live("stream.mkv", feed.clone());
-    feed.push(piece(1), false).await;
-    let mut response = test_server::client().get(&url).send().await.unwrap();
-    feed.push(piece(2), false).await;
-    feed.push(piece(3), true).await;
-    feed.push(piece(4), false).await;
+    within(feed.push(piece(1), false)).await;
+    let mut response = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
+    within(feed.push(piece(2), false)).await;
+    within(feed.push(piece(3), true)).await;
+    within(feed.push(piece(4), false)).await;
     assert_eq!(
         read_bytes(&mut response, 12).await,
         [b"HEAD".to_vec(), piece(3), piece(4)].concat()
@@ -138,11 +153,11 @@ async fn a_live_feed_no_one_reads_drops_its_oldest_pieces_to_a_start_point() {
     let url = server.set_live("stream.mkv", feed.clone());
     for (byte, start) in [(1, true), (2, false), (3, false), (4, true), (5, false)] {
         // Never waits, though the feed holds only three.
-        tokio::time::timeout(Duration::from_secs(5), feed.push(piece(byte), start))
-            .await
-            .unwrap();
+        within(feed.push(piece(byte), start)).await;
     }
-    let mut response = test_server::client().get(&url).send().await.unwrap();
+    let mut response = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
     assert_eq!(
         read_bytes(&mut response, 12).await,
         [b"HEAD".to_vec(), piece(4), piece(5)].concat()
@@ -154,10 +169,10 @@ async fn keeps_only_what_a_request_needs_or_starts_from() {
     let feed = feed(1 << 20, true);
     let mut reader = feed.reader();
     for (byte, start) in [(1, true), (2, false), (3, true), (4, false)] {
-        feed.push(piece(byte), start).await;
-        reader.next().await.unwrap();
+        within(feed.push(piece(byte), start)).await;
+        within(reader.next()).await.unwrap();
     }
-    feed.push(piece(5), false).await;
+    within(feed.push(piece(5), false)).await;
     // The third piece is where a new request starts.
     let state = feed.state();
     assert_eq!((state.first, state.bytes), (2, 12));
@@ -168,31 +183,28 @@ async fn a_request_that_comes_later_counts_the_last_piece_sent() {
     let feed = feed(1 << 20, true);
     let mut first = feed.reader();
     for (byte, start) in [(1, true), (2, false), (3, true)] {
-        feed.push(piece(byte), start).await;
-        first.next().await.unwrap();
+        within(feed.push(piece(byte), start)).await;
+        within(first.next()).await.unwrap();
     }
     let mut later = feed.reader();
-    assert_eq!(*later.next().await.unwrap(), piece(3)[..]);
+    assert_eq!(*within(later.next()).await.unwrap(), piece(3)[..]);
 }
 
 #[tokio::test]
 async fn a_request_that_skips_to_a_start_point_makes_room_for_it() {
     let feed = feed(8, false);
     let mut reader = feed.reader();
-    feed.push(piece(1), false).await;
-    feed.push(piece(2), false).await;
+    within(feed.push(piece(1), false)).await;
+    within(feed.push(piece(2), false)).await;
     // The feed is full, so this waits for the request to move on.
     let pusher = tokio::spawn({
         let feed = feed.clone();
         async move { feed.push(piece(3), true).await }
     });
     tokio::task::yield_now().await;
-    let next = tokio::time::timeout(Duration::from_secs(5), reader.next())
-        .await
-        .expect("the push gets room")
-        .unwrap();
+    let next = within(reader.next()).await.unwrap();
     assert_eq!(*next, piece(3)[..]);
-    pusher.await.unwrap();
+    within(pusher).await.unwrap();
 }
 
 #[test]
@@ -226,13 +238,18 @@ async fn a_file_waits_for_its_reader_who_gets_every_byte_in_order() {
     // With no one reading, the writer stops once the feed is full.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), 4);
-    let mut response = test_server::client().get(&url).send().await.unwrap();
+    let mut response = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.unwrap() {
-        body.extend_from_slice(&chunk);
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-    writer.await.unwrap();
+    within(async {
+        while let Some(chunk) = response.chunk().await.unwrap() {
+            body.extend_from_slice(&chunk);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    within(writer).await.unwrap();
     let expected: Vec<u8> = (0..200u8).flat_map(|i| [i; 16]).collect();
     assert_eq!(&body[..4], b"HEAD");
     assert!(body[4..] == expected[..], "every piece, in order");
@@ -260,7 +277,7 @@ async fn a_receiver_that_stops_reading_is_dropped_and_counted() {
         .await
         .unwrap();
     for _ in 0..256 {
-        feed.push(vec![0; 64 << 10], true).await;
+        within(feed.push(vec![0; 64 << 10], true)).await;
     }
     tokio::time::timeout(Duration::from_secs(10), stalls.changed())
         .await
@@ -359,12 +376,14 @@ async fn stops_when_dropped_and_ends_its_requests() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
     let feed = feed(1 << 20, true);
     let url = server.set_live("stream.mkv", feed.clone());
-    let mut response = test_server::client().get(&url).send().await.unwrap();
+    let mut response = within(test_server::client().get(&url).send())
+        .await
+        .unwrap();
     assert_eq!(read_bytes(&mut response, 4).await, b"HEAD");
     let address = address(&server);
     drop(server);
     // The open request ends, though its feed hasn't.
-    assert!(response.chunk().await.ok().flatten().is_none());
+    assert!(within(response.chunk()).await.ok().flatten().is_none());
     drop(feed);
     assert!(TcpStream::connect(&address).await.is_err());
 }

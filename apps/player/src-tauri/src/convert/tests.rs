@@ -479,21 +479,22 @@ fn live_wav(end: End) -> String {
     )
 }
 
-/// Reads a response until it has given the header and a whole cluster.
+/// Reads a response until it has given the header and a whole cluster,
+/// for up to 20 s.
 async fn header_and_a_cluster(response: &mut reqwest::Response) -> Vec<Piece> {
     let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
     let mut pieces = Vec::new();
-    while !pieces
-        .iter()
-        .any(|p| matches!(p, Piece::Element { start: true, .. }))
-    {
-        let chunk = tokio::time::timeout(Duration::from_secs(20), response.chunk())
-            .await
-            .expect("a cluster within 20 s")
-            .unwrap()
-            .expect("more of the stream");
-        pieces.extend(splitter.push(&chunk).unwrap());
-    }
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !pieces
+            .iter()
+            .any(|p| matches!(p, Piece::Element { start: true, .. }))
+        {
+            let chunk = response.chunk().await.unwrap().expect("more of the stream");
+            pieces.extend(splitter.push(&chunk).unwrap());
+        }
+    })
+    .await
+    .expect("a cluster within 20 s");
     pieces
 }
 
@@ -528,17 +529,19 @@ fn ffmpeg_runs_for(url: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Reads a response to its end, or until `limit` bytes.
+/// Reads a response to its end, or until `limit` bytes, for up to 30 s.
 async fn read_to_end(response: &mut reqwest::Response, limit: usize) -> Vec<u8> {
     let mut body = Vec::new();
-    while body.len() < limit {
-        let chunk = tokio::time::timeout(Duration::from_secs(30), response.chunk())
-            .await
-            .expect("more of the stream within 30 s")
-            .unwrap();
-        let Some(chunk) = chunk else { break };
-        body.extend_from_slice(&chunk);
-    }
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while body.len() < limit {
+            let Some(chunk) = response.chunk().await.unwrap() else {
+                break;
+            };
+            body.extend_from_slice(&chunk);
+        }
+    })
+    .await
+    .expect("the stream within 30 s");
     body
 }
 
@@ -835,20 +838,20 @@ async fn a_late_request_with_video_starts_at_a_keyframe() {
     let mut first = client.get(&conversion.url).send().await.unwrap();
     let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
     let mut between = false;
-    while !between {
-        let chunk = tokio::time::timeout(Duration::from_secs(20), first.chunk())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        for piece in splitter.push(&chunk).unwrap() {
-            if let Piece::Element { bytes, start } = piece {
-                let key = cluster_start(&bytes).1;
-                assert_eq!(start, key == Some(true));
-                between |= key == Some(false);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !between {
+            let chunk = first.chunk().await.unwrap().unwrap();
+            for piece in splitter.push(&chunk).unwrap() {
+                if let Piece::Element { bytes, start } = piece {
+                    let key = cluster_start(&bytes).1;
+                    assert_eq!(start, key == Some(true));
+                    between |= key == Some(false);
+                }
             }
         }
-    }
+    })
+    .await
+    .expect("a cluster between keyframes within 20 s");
     drop(first);
     let mut again = client.get(&conversion.url).send().await.unwrap();
     let pieces = header_and_a_cluster(&mut again).await;
