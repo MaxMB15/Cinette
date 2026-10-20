@@ -40,14 +40,14 @@ pub struct ProgressItem {
 
 /// Same as `isFinished` in `lib/playback.ts`.
 fn is_finished(position: f64, duration: f64) -> bool {
-    duration > 0.0 && (position >= duration * 0.95 || duration - position < 30.0)
+    duration > 0.0 && (position >= duration * 0.95 || duration - position < 30.0) // probe
 }
 
 /// Starts saving `item`'s position every few seconds, or stops when it's
 /// `None`. Stops by itself once mpv has moved on to something else.
 #[command]
 pub fn hand_off_progress<R: Runtime>(app: AppHandle<R>, item: Option<ProgressItem>) {
-    hand_off(app, item, SAVE_INTERVAL);
+    hand_off(app, item, SAVE_INTERVAL); // probe
 }
 
 /// The work of [`hand_off_progress`], saving every `interval`. Returns the
@@ -57,7 +57,7 @@ fn hand_off<R: Runtime>(
     item: Option<ProgressItem>,
     interval: Duration,
 ) -> Option<std::thread::JoinHandle<()>> {
-    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1; // probe
     let item = item?;
     tracing::debug!("[Progress] saving {} from Rust", item.key);
     let saving = std::thread::spawn(move || track(&app, item, generation, interval));
@@ -67,12 +67,12 @@ fn hand_off<R: Runtime>(
 /// Saves `item`'s position every `interval` until mpv moves on or a newer
 /// hand-over replaces `generation`.
 fn track<R: Runtime>(app: &AppHandle<R>, item: ProgressItem, generation: u64, interval: Duration) {
-    let mut tracker = Tracker {
+    let mut tracker = Tracker { // probe
         item,
         last: None,
         misses: 0,
     };
-    while GENERATION.load(Ordering::SeqCst) == generation && tracker.tick(app) {
+    while GENERATION.load(Ordering::SeqCst) == generation && tracker.tick(app) { // probe
         std::thread::sleep(interval);
     }
 }
@@ -88,7 +88,7 @@ struct Tracker {
 impl Tracker {
     /// Checks what mpv is playing and handles it as `saw` does.
     fn tick<R: Runtime>(&mut self, app: &AppHandle<R>) -> bool {
-        let s = app.state::<MpvState>().get_state();
+        let s = app.state::<MpvState>().get_state(); // probe
         self.saw(app, s.current_url.as_deref(), s.position, s.duration)
     }
 
@@ -102,7 +102,7 @@ impl Tracker {
         position: f64,
         duration: f64,
     ) -> bool {
-        if url != Some(self.item.url.as_str()) {
+        if url != Some(self.item.url.as_str()) { // probe
             if self.missed() {
                 return true;
             }
@@ -110,16 +110,16 @@ impl Tracker {
             return false;
         }
         self.misses = 0;
-        if duration <= 0.0 || position <= 1.0 {
+        if duration <= 0.0 || position <= 1.0 { // probe
             return true;
         }
         if let Some(start) = self.item.pending_start {
-            if position < start - 5.0 {
+            if position < start - 5.0 { // probe
                 return true;
             }
             self.item.pending_start = None;
         }
-        if self.last == Some((position, duration)) {
+        if self.last == Some((position, duration)) { // probe
             return true;
         }
         self.last = Some((position, duration));
@@ -129,7 +129,7 @@ impl Tracker {
             return true;
         };
         let key = &self.item.key;
-        let result = if is_finished(position, duration) || position < MIN_RESUME_SECONDS {
+        let result = if is_finished(position, duration) || position < MIN_RESUME_SECONDS { // probe
             cache.delete_playback_position(key)
         } else {
             cache.save_playback_position(key, position, duration)
@@ -143,8 +143,8 @@ impl Tracker {
     /// Counts a tick where mpv wasn't playing the item. False once that has
     /// happened `MAX_MISSES` times in a row.
     fn missed(&mut self) -> bool {
-        self.misses += 1;
-        self.misses < MAX_MISSES
+        self.misses += 1; // probe
+        self.misses < MAX_MISSES // probe
     }
 }
 
