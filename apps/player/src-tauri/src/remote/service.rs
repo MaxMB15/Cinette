@@ -46,6 +46,9 @@ pub struct RemoteService {
     link: Arc<Mutex<Option<LinkHandle>>>,
     link_host: Arc<dyn LinkHost>,
     events: Arc<dyn ServiceEvents>,
+    /// The highest link number the webview has left. A connect numbered
+    /// at or below it was overtaken by that leave on the way here.
+    left_through: Mutex<u64>,
 }
 
 struct Saved {
@@ -89,6 +92,9 @@ impl RemoteService {
     /// Starts asking `device` for control, leaving any device controlled now.
     /// `link` numbers the new link.
     pub fn connect(&self, device: DeviceId, link: u64) -> Result<(), String> {
+        if link <= *lock(&self.left_through) {
+            return Err("That connection was left already.".into());
+        }
         let allowed = lock(&self.devices).get(&device).map(|d| d.control_allowed);
         match allowed {
             None => return Err("That device isn't on the network now.".into()),
@@ -135,6 +141,10 @@ impl RemoteService {
     /// a late leave for it leaves the new one alone. The webview asked, so
     /// no `remote://controller` event says so.
     pub async fn leave(&self, link: u64) {
+        {
+            let mut left = lock(&self.left_through);
+            *left = (*left).max(link);
+        }
         let old = {
             let mut slot = lock(&self.link);
             if slot.as_ref().is_some_and(|l| l.generation() == link) {
@@ -325,6 +335,7 @@ impl Bucket {
         if let Some(since) = self.since {
             let earned = now.saturating_duration_since(since).as_millis() / FETCH_EVERY.as_millis();
             let earned = u32::try_from(earned).unwrap_or(u32::MAX);
+            // mutants: skip BinaryOperator: with nothing earned, adding no tokens and moving the clock by nothing changes nothing.
             if earned > 0 {
                 self.tokens = self.tokens.saturating_add(earned).min(FETCH_BURST);
                 self.since = Some(since + FETCH_EVERY * earned);
@@ -475,6 +486,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 }
 
+// mutants: skip FnValue: it only acts on a real window, which the mock runtime doesn't have.
 /// Brings a minimized or hidden main window back without focusing it, and
 /// asks for attention: the Dock icon bounces, or the taskbar entry flashes.
 fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
@@ -482,6 +494,7 @@ fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
         if window.is_minimized().unwrap_or(false) {
             let _ = window.unminimize();
         }
+        // mutants: skip UnaryOperator: the mock runtime has no window to show or hide.
         if !window.is_visible().unwrap_or(true) {
             let _ = window.show();
         }
@@ -795,6 +808,7 @@ fn start_on<R: Runtime>(
         resetting: Mutex::new(()),
         devices,
         link,
+        left_through: Mutex::new(0),
     });
     Ok(())
 }

@@ -19,6 +19,30 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const commands = () => invoke.mock.calls.map(([cmd]) => cmd);
 
+describe("remote states", () => {
+	beforeEach(() => invoke.mockReset());
+
+	it("go out in order, each after the one before has its answer", async () => {
+		const first = deferred();
+		invoke.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+		const playing = { status: "playing" } as RemotePlayerState;
+		const idle = { status: "idle" } as RemotePlayerState;
+
+		const sent = tauri.remoteSetState(playing);
+		const closed = tauri.remoteSetState(idle);
+		await flush();
+		expect(invoke.mock.calls).toEqual([["remote_set_state", { state: playing }]]);
+
+		first.reject(new Error("not running"));
+		await expect(sent).rejects.toThrow("not running");
+		await closed;
+		expect(invoke.mock.calls).toEqual([
+			["remote_set_state", { state: playing }],
+			["remote_set_state", { state: idle }],
+		]);
+	});
+});
+
 describe("mpv load and stop", () => {
 	beforeEach(() => invoke.mockReset());
 

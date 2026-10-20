@@ -246,8 +246,9 @@ pub fn start(config: LinkConfig, host: Arc<dyn LinkHost>) -> LinkHandle {
 enum Outcome {
     /// For good, for this reason.
     Ended(Ended),
-    /// The address had another device's key, before any session came back.
-    WrongKey,
+    /// The address didn't turn out to be the device: it closed, said
+    /// nothing, broke the handshake or had another key, for this reason.
+    NotThere(Ended),
     /// It dropped. The session, if there is one, may resume.
     Dropped,
 }
@@ -276,9 +277,10 @@ async fn run(
             .into_iter()
             .take(MAX_ADDRESSES)
             .collect();
-        // An address with someone else's key is passed over for the next.
+        // An address that doesn't turn out to be the device, such as one
+        // with someone else's key, is passed over for the next.
         let mut from = 0;
-        let mut wrong_key = false;
+        let mut why_not: Option<Ended> = None;
         let outcome = loop {
             break match connect_any(&addresses[from..], &mut inbox).await {
                 Reached::Left => Outcome::Ended(Ended::Left),
@@ -298,8 +300,8 @@ async fn run(
                         dropped_at = None;
                         attempt = 0;
                     }
-                    if let Outcome::WrongKey = result {
-                        wrong_key = true;
+                    if let Outcome::NotThere(why) = result {
+                        why_not = Some(more_telling(why_not, why));
                         from += at + 1;
                         continue;
                     }
@@ -307,15 +309,12 @@ async fn run(
                 }
                 // During a resume, discovery may find the right address yet.
                 Reached::Nowhere if session.is_some() => Outcome::Dropped,
-                Reached::Nowhere if wrong_key => {
-                    Outcome::Ended(Ended::Target(CloseReason::IdentityMismatch))
-                }
-                Reached::Nowhere => Outcome::Ended(Ended::Unreachable),
+                Reached::Nowhere => Outcome::Ended(why_not.unwrap_or(Ended::Unreachable)),
             };
         };
         let ended = match outcome {
             Outcome::Ended(ended) => Some(ended),
-            Outcome::WrongKey => unreachable!("the loop above tries the next address"),
+            Outcome::NotThere(_) => unreachable!("the loop above tries the next address"),
             Outcome::Dropped if session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
                 let since = *dropped_at.get_or_insert_with(|| (config.clock)());
@@ -337,6 +336,20 @@ async fn run(
             host.phase(link, &device, &Phase::Closed { reason });
             return;
         }
+    }
+}
+
+/// The more telling of two reasons no address was the device: the other
+/// device's own reason, then a connection that closed, then none answering.
+fn more_telling(old: Option<Ended>, new: Ended) -> Ended {
+    let rank = |e: &Ended| match e {
+        Ended::Target(_) => 2,
+        Ended::Lost => 1,
+        _ => 0,
+    };
+    match old {
+        Some(old) if rank(&old) >= rank(&new) => old,
+        _ => new,
     }
 }
 
@@ -466,7 +479,11 @@ async fn connection(
                     Some(((), Read::Frame(frame))) => frame,
                     _ => {
                         finish(waiting);
-                        return Outcome::Dropped;
+                        return if verified {
+                            Outcome::Dropped
+                        } else {
+                            Outcome::NotThere(Ended::Lost)
+                        };
                     }
                 };
                 last_heard = (config.clock)();
@@ -479,7 +496,10 @@ async fn connection(
                     match event {
                         Event::Verified { code, peer } => {
                             verified = true;
-                            let verifying = Phase::Verifying { code: code.to_string(), name: peer.name };
+                            let verifying = Phase::Verifying {
+                                code: code.to_string(),
+                                name: peer.name,
+                            };
                             if resuming {
                                 code_for_a_new_request = Some(verifying);
                             } else {
@@ -517,11 +537,12 @@ async fn connection(
                             // The other device can send these as often as it likes.
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
-                        Event::Closed(CloseReason::IdentityMismatch) if !*session_back => {
+                        Event::Closed(reason) if !verified => {
                             // Another device is at this address, which it
-                            // may have taken over, or claims the target's id.
+                            // may have taken over, or claims the target's id
+                            // or breaks the handshake.
                             finish(waiting);
-                            return Outcome::WrongKey;
+                            return Outcome::NotThere(Ended::Target(reason));
                         }
                         Event::Closed(reason) => {
                             finish(waiting);
@@ -587,21 +608,17 @@ async fn connection(
         }
         if !given_up.events.is_empty() {
             finish(waiting);
+            if !verified {
+                return Outcome::NotThere(Ended::Unreachable);
+            }
             if resuming {
                 return Outcome::Dropped;
             }
-            return Outcome::Ended(if verified {
-                Ended::Target(CloseReason::Timeout)
-            } else {
-                Ended::Unreachable
-            });
+            return Outcome::Ended(Ended::Target(CloseReason::Timeout));
         }
         if !verified && now.duration_since(opened) >= config.limits.handshake {
             finish(waiting);
-            if resuming {
-                return Outcome::Dropped;
-            }
-            return Outcome::Ended(Ended::Unreachable);
+            return Outcome::NotThere(Ended::Unreachable);
         }
         let late: Vec<u64> = waiting
             .iter()

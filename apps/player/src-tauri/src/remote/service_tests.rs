@@ -853,7 +853,7 @@ async fn a_device_that_goes_away_leaves_the_list() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_late_leave_for_an_old_link_leaves_the_new_one() {
+async fn a_late_leave_for_an_old_link_keeps_the_new_one() {
     let (mut mac, tv) = pair("always").await;
     let tv_id = tv.device_id().to_string();
     mac.event("remote://devices").await;
@@ -867,6 +867,17 @@ async fn a_late_leave_for_an_old_link_leaves_the_new_one() {
     phase(&mut mac, "connected").await;
     mac.invoke("remote_leave", json!({ "link": 2 })).unwrap();
     assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
+    // A connect the leave overtook on the way, numbered at or below it, is
+    // refused, so it can't leave a link no one tracks.
+    for link in [1, 2] {
+        assert_eq!(
+            mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": link })),
+            Err(json!("That connection was left already."))
+        );
+    }
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 3 }))
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -971,6 +982,32 @@ fn provider_loads_come_four_at_once_then_one_a_second() {
         assert!(bucket.take(later));
     }
     assert!(!bucket.take(later));
+}
+
+#[test]
+fn a_token_earned_partway_through_isnt_lost_by_taking_one() {
+    let start = Instant::now();
+    let mut bucket = Bucket::full();
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(start));
+    }
+    // Half a second into the second interval, the first one's token goes;
+    // the second one's still comes a second after the first.
+    assert!(bucket.take(start + Duration::from_millis(1500)));
+    assert!(bucket.take(start + FETCH_EVERY * 2));
+}
+
+#[test]
+fn tokens_earned_together_are_handed_out_once() {
+    let start = Instant::now();
+    let mut bucket = Bucket::full();
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(start));
+    }
+    let later = start + FETCH_EVERY * 2;
+    assert!(bucket.take(later));
+    assert!(bucket.take(later));
+    assert!(!bucket.take(later), "two intervals earn two");
 }
 
 #[test]

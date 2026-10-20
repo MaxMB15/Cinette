@@ -227,7 +227,8 @@ mod imp {
         "link_not_connected".to_owned()
     }
 
-    /// The error code the webview gets, as the protocol spells it.
+    /// The error code the webview gets: the other device's, as the protocol
+    /// spells it, or the link's own, which start with `link_`.
     pub fn link_error(e: crate::remote::link::LinkError) -> String {
         match e {
             crate::remote::link::LinkError::NotConnected => not_connected(),
