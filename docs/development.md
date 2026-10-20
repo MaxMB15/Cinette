@@ -546,10 +546,11 @@ require that one. It runs three checks.
 - cargo-mutants mutates the changed lines of each crate, and a change that no test
   catches fails the job unless a skip comment covers it. A change that runs past the
   timeout counts as caught, and one that doesn't build doesn't count. The run is split
-  into shards of about 100 changes for `mvp-core`, 55 for the plugin and 45 for the app,
-  at most eight a crate, so a shard takes about 12 minutes plus its build. A shard
-  fails when it writes no results, results with no changes in them, or results the
-  check can't read.
+  into shards of about 60 changes for `mvp-core`, 55 for the plugin and 30 for the app,
+  at most eight a crate, so a shard takes about 15 minutes plus its setup. Each shard
+  runs 16 tests at a time, since most of the app's tests wait rather than compute. A
+  shard fails when it writes no results, results with no changes in them, or results
+  the check can't read.
 
 The lines that count are in the `.ts` and `.tsx` files in `apps/player/src` and in the
 `.rs` files in each crate's `src` folder. Tests don't count. That's `*.test.ts` and

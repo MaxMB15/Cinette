@@ -110,10 +110,10 @@ STRYKER_BAD_NAME = re.compile(r'[,*?{}!()\[\]"\\\x00-\x1f\x7f]')
 # Where Stryker's parser ends a line and git doesn't.
 STRYKER_BREAKS = re.compile(rb"\xe2\x80[\xa8\xa9]|\r(?!\n)")
 
-# Mutants per shard for each crate. A mutant in mvp-core takes about 7
-# seconds in CI, one in the plugin about 13 and one in the app 10 to 18, so a
-# shard takes about 12 minutes plus its build.
-MUTANTS_PER_SHARD = {"mvp-core": 100, "tauri-plugin-mpv": 55, "max-video-player": 45}
+# Mutants per shard for each crate. A mutant in mvp-core takes about 15
+# seconds in CI, one in the plugin about 13 and one in the app about 30 with
+# 16 test threads, so a shard takes about 15 minutes plus its setup.
+MUTANTS_PER_SHARD = {"mvp-core": 60, "tauri-plugin-mpv": 55, "max-video-player": 30}
 MAX_SHARDS = 8
 
 GENRES = ("FnValue", "BinaryOperator", "UnaryOperator", "MatchArm", "MatchArmGuard", "StructField")
