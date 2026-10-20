@@ -785,15 +785,18 @@ async fn until_one_stays_open(port: u16) -> tokio::net::TcpStream {
 async fn one_address_gets_four_connections_at_a_time() {
     let h = Harness::start(ControlMode::Always).await;
     let port = h.handle.port();
+    // The target takes connections in the order they open.
     let mut open = Vec::new();
     for _ in 0..MAX_PER_ADDRESS {
-        open.push(until_one_stays_open(port).await);
+        open.push(quiet_connection(port).await);
     }
     let mut fifth = quiet_connection(port).await;
-    assert!(was_closed(&mut fifth).await, "the fifth is turned away");
-    for stream in &mut open {
-        assert!(!was_closed(stream).await, "the first four stay open");
-    }
+    let (fifth_closed, closed) = tokio::join!(
+        was_closed(&mut fifth),
+        futures_util::future::join_all(open.iter_mut().map(was_closed)),
+    );
+    assert!(fifth_closed, "the fifth is turned away");
+    assert_eq!(closed, [false; MAX_PER_ADDRESS], "the first four stay open");
 
     // One that goes frees its slot.
     drop(open.pop());

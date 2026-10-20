@@ -196,6 +196,8 @@ impl Proxy {
 #[derive(Default)]
 struct Seen {
     phases: Vec<Phase>,
+    /// When each of `phases` came.
+    phased_at: Vec<Instant>,
     states: Vec<VersionedState>,
 }
 
@@ -206,7 +208,10 @@ struct Recorder {
 
 impl LinkHost for Recorder {
     fn phase(&self, _: u64, _: &DeviceId, phase: &Phase) {
-        self.seen.lock().unwrap().phases.push(phase.clone());
+        let mut seen = self.seen.lock().unwrap();
+        seen.phases.push(phase.clone());
+        seen.phased_at.push(Instant::now());
+        drop(seen);
         let _ = self.tx.send(());
     }
     fn state(&self, _: u64, _: &DeviceId, state: &VersionedState) {
@@ -228,6 +233,13 @@ impl Link {
 
     fn states(&self) -> Vec<VersionedState> {
         self.recorder.seen.lock().unwrap().states.clone()
+    }
+
+    /// When the link first reported `phase`.
+    fn phased_at(&self, phase: &Phase) -> Instant {
+        let seen = self.recorder.seen.lock().unwrap();
+        let at = seen.phases.iter().position(|p| p == phase).unwrap();
+        seen.phased_at[at]
     }
 
     /// Waits until `done` holds.
@@ -264,7 +276,7 @@ fn link_to(target: &Target, port: u16, grace: Duration) -> Link {
 }
 
 fn link_with(target: &Target, addresses: Addresses, grace: Duration) -> Link {
-    link_timed(target, addresses, grace, Limits::STANDARD)
+    link_timed(target, addresses, grace, QUICK)
 }
 
 fn link_timed(target: &Target, addresses: Addresses, grace: Duration, limits: Limits) -> Link {
@@ -318,6 +330,21 @@ fn link_clocked(
 }
 
 const GRACE: Duration = Duration::from_secs(30);
+
+/// The app's limits, but the link looks at the clock every 50 ms rather than
+/// every 2 s, and waits a tenth as long between attempts. A test that waits
+/// for a timeout then sees it soon after it runs out.
+const QUICK: Limits = Limits {
+    nap: Duration::from_millis(50),
+    backoff: quick_backoff,
+    ..Limits::STANDARD
+};
+
+/// The app's waits between attempts, a tenth as long: 100 ms, 200 ms,
+/// 400 ms, then 800 ms over and over.
+fn quick_backoff(attempt: u32) -> Duration {
+    backoff(attempt) / 10
+}
 
 #[tokio::test]
 async fn connects_and_attaches_to_what_plays() {
@@ -548,15 +575,29 @@ async fn commands_while_reconnecting_are_not_sent() {
 async fn gives_up_when_the_grace_runs_out() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
-    let mut link = link_to(&t, proxy.port, Duration::from_millis(1500));
+    let port = proxy.port;
+    let limits = Limits {
+        // A short first wait, then one far longer than the grace.
+        backoff: |attempt| match attempt {
+            0 => Duration::from_millis(100),
+            _ => Duration::from_secs(10),
+        },
+        ..QUICK
+    };
+    let mut link = link_timed(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        Duration::from_millis(300),
+        limits,
+    );
     link.until_phase(Phase::Connected).await;
     proxy.cut(true);
     let cut = Instant::now();
     assert_eq!(link.closed().await, Ended::Lost);
-    // The second wait is cut to the half second of grace left, rather than
-    // the two seconds that would run past it.
+    // The second wait is cut to the fifth of a second of grace left, rather
+    // than the ten seconds that would run past it.
     assert!(
-        cut.elapsed() < Duration::from_millis(2600),
+        cut.elapsed() < Duration::from_secs(3),
         "{:?}",
         cut.elapsed()
     );
@@ -583,8 +624,8 @@ async fn a_drop_before_control_was_granted_is_lost_without_trying_again() {
     // Cut, but still taking connections, as a target that closed on it.
     proxy.cut(false);
     assert_eq!(link.closed().await, Ended::Lost);
-    // Longer than the first wait before trying again.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Five times the first wait before trying again.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
         proxy.accepted.load(Ordering::SeqCst),
         1,
@@ -717,8 +758,15 @@ async fn phases_read_as_the_webview_expects() {
 
 #[test]
 fn the_waits_between_attempts_grow_and_then_repeat() {
-    let waits: Vec<u64> = (0..7).map(|a| backoff(a).as_secs()).collect();
+    let waits: Vec<u64> = (0..7)
+        .map(|a| (Limits::STANDARD.backoff)(a).as_secs())
+        .collect();
     assert_eq!(waits, [1, 2, 4, 8, 8, 8, 8]);
+}
+
+#[test]
+fn the_link_looks_at_the_clock_every_two_seconds() {
+    assert_eq!(Limits::STANDARD.nap, Duration::from_secs(2));
 }
 
 #[tokio::test]
@@ -728,15 +776,11 @@ async fn it_waits_longer_before_each_attempt() {
     let mut link = link_to(&t, proxy.port, GRACE);
     link.until_phase(Phase::Connected).await;
     proxy.cut(true);
-    link.until_phase(Phase::Reconnecting { attempt: 1 }).await;
-    let first = Instant::now();
     link.until_phase(Phase::Reconnecting { attempt: 2 }).await;
-    // The second wait is two seconds.
-    assert!(
-        first.elapsed() >= Duration::from_millis(1500),
-        "{:?}",
-        first.elapsed()
-    );
+    // The second wait is 200 ms, twice the first.
+    let waited = link.phased_at(&Phase::Reconnecting { attempt: 2 })
+        - link.phased_at(&Phase::Reconnecting { attempt: 1 });
+    assert!(waited >= Duration::from_millis(180), "{waited:?}");
     link.handle.leave().await;
 }
 
@@ -782,7 +826,7 @@ async fn a_device_that_takes_the_connection_but_never_answers_is_unreachable() {
     });
     let limits = Limits {
         handshake: Duration::from_millis(300),
-        ..Limits::STANDARD
+        ..QUICK
     };
     let mut link = link_timed(
         &t,
@@ -835,7 +879,7 @@ async fn an_address_that_closes_or_says_nothing_is_passed_over_for_the_next() {
     let (silent, b) = silent_decoy().await;
     let limits = Limits {
         handshake: Duration::from_millis(300),
-        ..Limits::STANDARD
+        ..QUICK
     };
     let mut link = link_timed(&t, at(vec![closes, silent, t.port]), GRACE, limits);
     link.until_phase(Phase::Connected).await;
@@ -852,7 +896,7 @@ async fn with_no_address_the_device_it_ends_with_the_most_telling_reason() {
     let (silent, b) = silent_decoy().await;
     let limits = Limits {
         handshake: Duration::from_millis(300),
-        ..Limits::STANDARD
+        ..QUICK
     };
     // Another device's key says more than a closed connection.
     let mut link = link_timed(&t, at(vec![closes, impostor.port, silent]), GRACE, limits);
@@ -902,7 +946,7 @@ async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
     let mut t = target(ControlMode::Ask).await;
     let limits = Limits {
         handshake: Duration::from_millis(300),
-        ..Limits::STANDARD
+        ..QUICK
     };
     let port = t.port;
     let mut link = link_timed(
@@ -912,8 +956,8 @@ async fn a_slow_answer_to_control_is_waited_for_past_the_handshake_time() {
         limits,
     );
     let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
-    // Longer than the handshake may take, and longer than a nap.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // Longer than the handshake may take, and many naps.
+    tokio::time::sleep(Duration::from_secs(1)).await;
     t.handle.answer(request, Answer::Allow);
     link.until_phase(Phase::Connected).await;
     assert!(!link
@@ -927,8 +971,8 @@ async fn it_pings_only_after_a_quiet_spell() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
     let limits = Limits {
-        ping: Duration::from_secs(4),
-        ..Limits::STANDARD
+        ping: Duration::from_secs(1),
+        ..QUICK
     };
     let port = proxy.port;
     let mut link = link_timed(
@@ -939,18 +983,21 @@ async fn it_pings_only_after_a_quiet_spell() {
     );
     link.until_phase(Phase::Connected).await;
     let before = proxy.sent.load(Ordering::SeqCst);
-    // More than a nap, less than the ping interval.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    // Many naps, but half the ping interval.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
         proxy.sent.load(Ordering::SeqCst),
         before,
         "nothing to say yet"
     );
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        proxy.sent.load(Ordering::SeqCst) > before,
-        "a ping after four seconds"
-    );
+    // The ping is due half a second from now.
+    let pinged = timeout(Duration::from_secs(1), async {
+        while proxy.sent.load(Ordering::SeqCst) == before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(pinged.is_ok(), "a ping soon after a second");
 }
 
 #[tokio::test]
@@ -965,7 +1012,7 @@ async fn gives_up_on_a_device_that_never_answers_and_withdraws_the_request() {
         &t,
         Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
         GRACE,
-        Limits::STANDARD,
+        QUICK,
         clock,
     );
     let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
@@ -1031,8 +1078,11 @@ async fn leaving_while_a_connection_is_being_opened_stops_at_once() {
     let mut queued = Vec::new();
     for _ in 0..8 {
         let attempt = TcpStream::connect(("127.0.0.1", port));
-        if let Ok(Ok(stream)) = timeout(Duration::from_millis(200), attempt).await {
-            queued.push(stream);
+        match timeout(Duration::from_millis(200), attempt).await {
+            Ok(Ok(stream)) => queued.push(stream),
+            Ok(Err(_)) => {}
+            // This one waits, so the queue is full.
+            Err(_) => break,
         }
     }
     assert!(queued.len() < 8, "the queue never filled");
@@ -1055,7 +1105,7 @@ async fn a_command_with_no_answer_times_out() {
     t.silent.store(true, Ordering::SeqCst);
     let limits = Limits {
         request: Duration::from_millis(300),
-        ..Limits::STANDARD
+        ..QUICK
     };
     let port = t.port;
     let mut link = link_timed(
@@ -1080,7 +1130,7 @@ async fn only_so_many_wait_for_answers() {
     t.silent.store(true, Ordering::SeqCst);
     let limits = Limits {
         waiting: 1,
-        ..Limits::STANDARD
+        ..QUICK
     };
     let port = t.port;
     let mut link = link_timed(
