@@ -653,8 +653,18 @@ export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_ses
 export const remoteDisconnect = (sessionId: string): Promise<void> =>
 	invoke("remote_disconnect", { sessionId });
 
-export const remoteSetState = (state: RemotePlayerState): Promise<void> =>
-	invoke("remote_set_state", { state });
+// States go out one after another, so a slow "playing" can't land after
+// the idle state a closing player sends next.
+let lastRemoteState: Promise<void> = Promise.resolve();
+
+export const remoteSetState = (state: RemotePlayerState): Promise<void> => {
+	const result = lastRemoteState.then(() => invoke<void>("remote_set_state", { state }));
+	lastRemoteState = result.then(
+		() => {},
+		() => {}
+	);
+	return result;
+};
 
 export const remoteFinishCommand = (token: number, outcome: CommandOutcome): Promise<void> =>
 	invoke("remote_finish_command", { token, outcome });

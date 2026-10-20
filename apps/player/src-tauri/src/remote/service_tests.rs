@@ -649,6 +649,32 @@ fn provider_loads_come_four_at_once_then_one_a_second() {
 }
 
 #[test]
+fn a_token_earned_partway_through_isnt_lost_by_taking_one() {
+    let start = Instant::now();
+    let mut bucket = Bucket::full();
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(start));
+    }
+    // Half a second into the second interval, the first one's token goes;
+    // the second one's still comes a second after the first.
+    assert!(bucket.take(start + Duration::from_millis(1500)));
+    assert!(bucket.take(start + FETCH_EVERY * 2));
+}
+
+#[test]
+fn tokens_earned_together_are_handed_out_once() {
+    let start = Instant::now();
+    let mut bucket = Bucket::full();
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(start));
+    }
+    let later = start + FETCH_EVERY * 2;
+    assert!(bucket.take(later));
+    assert!(bucket.take(later));
+    assert!(!bucket.take(later), "two intervals earn two");
+}
+
+#[test]
 fn a_gate_lasts_while_anyone_holds_it() {
     let gates = Gates::default();
     let first = gates.enter("series-1");

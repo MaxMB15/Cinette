@@ -210,6 +210,7 @@ impl Bucket {
         if let Some(since) = self.since {
             let earned = now.saturating_duration_since(since).as_millis() / FETCH_EVERY.as_millis();
             let earned = u32::try_from(earned).unwrap_or(u32::MAX);
+            // mutants: skip BinaryOperator: with nothing earned, adding no tokens and moving the clock by nothing changes nothing.
             if earned > 0 {
                 self.tokens = self.tokens.saturating_add(earned).min(FETCH_BURST);
                 self.since = Some(since + FETCH_EVERY * earned);
@@ -360,6 +361,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 }
 
+// mutants: skip FnValue: it only acts on a real window, which the mock runtime doesn't have.
 /// Brings a minimized or hidden main window back without focusing it, and
 /// asks for attention: the Dock icon bounces, or the taskbar entry flashes.
 fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
@@ -367,6 +369,7 @@ fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
         if window.is_minimized().unwrap_or(false) {
             let _ = window.unminimize();
         }
+        // mutants: skip UnaryOperator: the mock runtime has no window to show or hide.
         if !window.is_visible().unwrap_or(true) {
             let _ = window.show();
         }
