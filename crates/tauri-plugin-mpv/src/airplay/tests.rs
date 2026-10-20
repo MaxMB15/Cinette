@@ -132,7 +132,8 @@ fn a_failure_before_the_item_is_ready_is_open_failed() {
         state.error,
         Some(PlaybackError {
             code: "openFailed",
-            unsupported: false
+            unsupported: false,
+            not_picked: false,
         })
     );
 }
@@ -519,6 +520,7 @@ fn a_failed_conversion_ends_the_item_where_it_was() {
         Some(PlaybackError {
             code: "refused",
             unsupported: false,
+            not_picked: false,
         })
     );
     // Everything else stays as AVPlayer last had it.
@@ -541,6 +543,7 @@ fn a_failure_with_nothing_tracked_starts_from_idle() {
             error: Some(PlaybackError {
                 code: "failed",
                 unsupported: false,
+                not_picked: false,
             }),
             ..AirPlayState::idle()
         }
@@ -557,4 +560,52 @@ fn emits_a_failed_conversion() {
     let state = events.wait_for(EVENT_STATE);
     assert_eq!(state["status"], json!("error"));
     assert_eq!(state["error"], json!({ "code": "failed" }));
+}
+
+#[test]
+fn a_receiver_that_never_took_the_video_ends_the_item_as_not_picked() {
+    let airplay = AirPlay::default();
+    let now = Instant::now();
+    airplay.begin(Tracker::new(false));
+    let opening = airplay.report(&report("opening"), now).unwrap();
+    let state = airplay.not_picked();
+    assert_eq!(state.status, Status::Error);
+    assert_eq!(
+        state.error,
+        Some(PlaybackError {
+            code: "openFailed",
+            unsupported: false,
+            not_picked: true,
+        })
+    );
+    assert_eq!(state.position, opening.position);
+    // Nothing tracked now, so a late report changes nothing.
+    assert_eq!(airplay.report(&report("playing"), now), None);
+    assert_eq!(airplay.state(), state);
+}
+
+#[test]
+fn emits_a_pick_that_found_no_receiver() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE]);
+    let handle = app.handle();
+    handle.state::<AirPlay>().begin(Tracker::new(false));
+    not_picked(&handle);
+    let state = events.wait_for(EVENT_STATE);
+    assert_eq!(state["status"], json!("error"));
+    assert_eq!(
+        state["error"],
+        json!({ "code": "openFailed", "notPicked": true })
+    );
+}
+
+#[test]
+fn emits_the_state_of_a_report_given_as_it_is() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE]);
+    let app_handle = app.handle();
+    app_handle.state::<AirPlay>().begin(Tracker::new(false));
+    handle(&app_handle, &report("playing"), Instant::now());
+    let state = events.wait_for(EVENT_STATE);
+    assert_eq!(state["status"], json!("playing"));
 }

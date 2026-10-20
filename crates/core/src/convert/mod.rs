@@ -12,6 +12,7 @@
 pub mod hls;
 pub mod mkv;
 pub mod serve;
+pub mod ts;
 
 #[cfg(test)]
 mod tests;
@@ -225,9 +226,29 @@ const BURST: &str = "10";
 /// ffmpeg at a file on this device. HLS segments use the same ones.
 const REMOTE_PROTOCOLS: &str = "http,https,tcp,tls,crypto";
 
+/// What ffmpeg writes to standard output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Output {
+    /// Live Matroska, which Cast receivers play.
+    Matroska,
+    /// MPEG-TS, which [`ts::TsSegmenter`] cuts into HLS segments.
+    MpegTs,
+}
+
 /// The ffmpeg arguments that convert `url` by `plan` and write live
 /// Matroska to standard output.
 pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, NoEncoder> {
+    output_args(url, plan, encoders, Output::Matroska)
+}
+
+/// The ffmpeg arguments that convert `url` by `plan` and write `output` to
+/// standard output.
+pub fn output_args(
+    url: &str,
+    plan: &Plan,
+    encoders: Encoders,
+    output: Output,
+) -> Result<Vec<String>, NoEncoder> {
     let mut args: Vec<String> = [
         "-hide_banner",
         "-nostdin",
@@ -322,18 +343,19 @@ pub fn args(url: &str, plan: &Plan, encoders: Encoders) -> Result<Vec<String>, N
             args.extend(encoders.aac.surround_args().iter().map(|a| a.to_string()));
         }
     }
-    args.extend(
-        [
+    let format: &[&str] = match output {
+        Output::Matroska => &[
             "-f",
             "matroska",
             // No seeking back to fill in sizes and cues, which a pipe can't do.
             "-live",
             "1",
-            "-flush_packets",
-            "1",
-            "pipe:1",
-        ]
-        .map(String::from),
-    );
+        ],
+        // Keyframes carry the random access flag, which segments are cut
+        // at. MPEG-TS needs no seeking back.
+        Output::MpegTs => &["-f", "mpegts"],
+    };
+    args.extend(format.iter().map(|a| a.to_string()));
+    args.extend(["-flush_packets", "1", "pipe:1"].map(String::from));
     Ok(args)
 }

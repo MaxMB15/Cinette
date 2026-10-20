@@ -587,6 +587,19 @@ describe("useAirPlay's switching", () => {
 		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
 	});
 
+	it("only stops AirPlay to come back on a Mac, whose sound never left", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true, true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		await act(() => result.current.returnHere(anchor));
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+		expect(result.current.destination).toBeNull();
+	});
+
 	it("doesn't open the picker to come back when the sound is already here", async () => {
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();

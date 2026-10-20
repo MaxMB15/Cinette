@@ -375,7 +375,7 @@ impl Files {
         self.write().remove(name);
     }
 
-    fn get(&self, name: &str) -> Option<File> {
+    pub(crate) fn get(&self, name: &str) -> Option<File> {
         self.0
             .read()
             .unwrap_or_else(|p| p.into_inner())

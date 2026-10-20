@@ -31,6 +31,7 @@ use crate::lan_server::{LanServer, LiveFeed, LIVE_BYTES};
 #[cfg(desktop)]
 use crate::keep_awake;
 
+pub mod hls;
 pub mod support;
 
 #[cfg(test)]

@@ -13,8 +13,9 @@
 //! The stream URL comes from the app crate through [`load`] and goes
 //! straight to Swift. It never reaches the frontend, an event or a log.
 //!
-//! Only iOS has AirPlay so far. Elsewhere every command fails with
-//! [`UNAVAILABLE`].
+//! iOS and macOS have AirPlay. macOS has no Swift side: `airplay/macos.rs`
+//! does the same through the objc2 bindings, and reports to the same
+//! tracker. Elsewhere every command fails with [`UNAVAILABLE`].
 
 use crate::lock::lock_or_recover;
 use serde::{Deserialize, Serialize};
@@ -26,9 +27,13 @@ use tauri::{command, AppHandle, Emitter, Manager, Runtime, State};
 mod ios;
 #[cfg(target_os = "ios")]
 use ios as backend;
-#[cfg(not(target_os = "ios"))]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as backend;
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 mod unavailable;
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 use unavailable as backend;
 #[cfg(test)]
 mod tests;
@@ -144,6 +149,10 @@ pub struct PlaybackError {
     /// might work.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub unsupported: bool,
+    /// No receiver took the video: on macOS, the picker closed without
+    /// one, or with this Mac.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub not_picked: bool,
 }
 
 /// What the frontend shows, in the terms of `PlaybackState`. The frontend
@@ -315,6 +324,7 @@ impl Tracker {
         PlaybackError {
             code,
             unsupported: error.is_some_and(is_unsupported),
+            not_picked: false,
         }
     }
 
@@ -376,14 +386,28 @@ impl AirPlay {
 
     /// Stops tracking, with the item in error as `code`.
     pub fn fail(&self, code: &'static str) -> AirPlayState {
+        self.fail_with(PlaybackError {
+            code,
+            unsupported: false,
+            not_picked: false,
+        })
+    }
+
+    /// Stops tracking, after no receiver took the video.
+    pub fn not_picked(&self) -> AirPlayState {
+        self.fail_with(PlaybackError {
+            code: "openFailed",
+            unsupported: false,
+            not_picked: true,
+        })
+    }
+
+    fn fail_with(&self, error: PlaybackError) -> AirPlayState {
         *lock_or_recover(&self.tracker) = None;
         let mut last = lock_or_recover(&self.last);
         let mut state = last.clone().unwrap_or_else(AirPlayState::idle);
         state.status = Status::Error;
-        state.error = Some(PlaybackError {
-            code,
-            unsupported: false,
-        });
+        state.error = Some(error);
         *last = Some(state.clone());
         state
     }
@@ -399,16 +423,25 @@ impl AirPlay {
 /// report that doesn't parse is dropped.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) fn handle_report<R: Runtime>(app: &AppHandle<R>, json: &str, now: Instant) {
-    let report: Report = match serde_json::from_str(json) {
-        Ok(report) => report,
-        Err(e) => {
-            tracing::warn!("[AirPlay] unreadable report from Swift: {e}");
-            return;
-        }
-    };
-    if let Some(state) = app.state::<AirPlay>().report(&report, now) {
+    match serde_json::from_str(json) {
+        Ok(report) => handle(app, &report, now),
+        Err(e) => tracing::warn!("[AirPlay] unreadable report from Swift: {e}"),
+    }
+}
+
+/// Emits the state for `report`, if it changed.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+pub(crate) fn handle<R: Runtime>(app: &AppHandle<R>, report: &Report, now: Instant) {
+    if let Some(state) = app.state::<AirPlay>().report(report, now) {
         let _ = app.emit(EVENT_STATE, state);
     }
+}
+
+/// Says no receiver took the video, so nothing plays.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn not_picked<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AirPlay>().not_picked();
+    let _ = app.emit(EVENT_STATE, state);
 }
 
 /// A stream this device converts for the receiver, as `load` gets it.

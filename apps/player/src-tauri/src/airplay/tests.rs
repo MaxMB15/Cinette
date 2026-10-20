@@ -142,7 +142,7 @@ async fn converting_is_only_on_ios() {
     assert_eq!(gone, Err(STALE.to_string()));
     assert_eq!(airplay_end_conversion().await, Ok(()));
     assert_eq!(
-        airplay_converter_support().await,
+        airplay_converter_support(handle.clone()).await,
         Ok(ConverterSupport {
             convert: false,
             hardware_encoder: false

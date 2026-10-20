@@ -72,3 +72,26 @@ fn reads_prefix_lengths() {
     assert_eq!(prefix(Ipv4Addr::new(255, 0, 255, 0)), None);
     assert_eq!(prefix(Ipv4Addr::new(0, 255, 255, 255)), None);
 }
+
+#[test]
+fn serves_the_subnet_of_the_default_routes_address() {
+    let found = [
+        interface("lo0", [127, 0, 0, 1], [255, 0, 0, 0]),
+        interface("en0", [192, 168, 1, 23], [255, 255, 255, 0]),
+        interface("en7", [10, 0, 4, 9], [255, 255, 252, 0]),
+    ];
+    assert_eq!(
+        peers_at(Ipv4Addr::new(10, 0, 4, 9), &found),
+        Some(Peers::Subnet {
+            local: Ipv4Addr::new(10, 0, 4, 9),
+            prefix: 22
+        })
+    );
+    assert_eq!(peers_at(Ipv4Addr::new(10, 0, 4, 10), &found), None);
+    // The same rules as on Wi-Fi.
+    assert_eq!(peers_at(Ipv4Addr::LOCALHOST, &found), None);
+    let wide = [interface("en7", [10, 0, 0, 5], [255, 0, 0, 0])];
+    assert_eq!(peers_at(Ipv4Addr::new(10, 0, 0, 5), &wide), None);
+    let link_local = [interface("en7", [169, 254, 3, 4], [255, 255, 0, 0])];
+    assert_eq!(peers_at(Ipv4Addr::new(169, 254, 3, 4), &link_local), None);
+}

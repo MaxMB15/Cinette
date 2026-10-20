@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	AIRPLAY_RECEIVER,
 	CONVERT_WARNING,
+	MAC_CONVERT_WARNING,
+	convertWarning,
 	IDLE_NATIVE_STATE,
 	airplayBlockedMessage,
 	airplayCapabilities,
@@ -21,7 +23,7 @@ import {
 	type AirPlayNativeState,
 } from "@/lib/airplay";
 import { UnsupportedError, type PlaybackState } from "@/lib/destination";
-import { airplayTvProfile, NOT_READY, REFUSED } from "@/lib/route-profiles";
+import { airplayTvProfile, desktopSender, NOT_READY, REFUSED } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import type { Channel } from "@/lib/types";
 
@@ -132,6 +134,19 @@ describe("the AirPlay profiles", () => {
 			"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock."
 		);
 	});
+
+	it("is the same profile as a Mac's", () => {
+		const support = { convert: true, hardwareEncoder: true };
+		expect(airplaySender(support)).toEqual(desktopSender(support));
+	});
+
+	it("warns about the device that converts", () => {
+		expect(convertWarning(false)).toBe(CONVERT_WARNING);
+		expect(convertWarning(true)).toBe(MAC_CONVERT_WARNING);
+		expect(MAC_CONVERT_WARNING).toBe(
+			"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network."
+		);
+	});
 });
 
 describe("airplayPlaybackState", () => {
@@ -194,6 +209,12 @@ describe("airplayErrorMessage", () => {
 		);
 		expect(airplayErrorMessage({ code: "failed", unsupported: false })).toBe(
 			"The stream stopped on the TV."
+		);
+		expect(airplayErrorMessage({ code: "openFailed", notPicked: true })).toBe(
+			"No TV took the video. Pick a TV in the AirPlay menu, not this Mac."
+		);
+		expect(airplayErrorMessage({ code: "openFailed", notPicked: false })).toBe(
+			"Couldn't start the stream on the TV."
 		);
 	});
 });

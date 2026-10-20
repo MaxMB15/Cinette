@@ -479,17 +479,6 @@ fn the_clock_counts_from_the_start() {
 }
 
 #[test]
-fn the_master_declares_a_fifth_more_than_the_first_segment_took() {
-    // 1 MB in 2 s is 4 Mb/s, so 4.8 Mb/s.
-    assert_eq!(bandwidth(1_000_000, 2.0), 4_800_000);
-    assert_eq!(bandwidth(1_000_000, 4.0), 2_400_000);
-    // A tiny segment still declares the minimum.
-    assert_eq!(bandwidth(1000, 2.0), MIN_BANDWIDTH);
-    // A segment with no length counts as a tenth of a second.
-    assert_eq!(bandwidth(100_000, 0.0), 9_600_000);
-}
-
-#[test]
 fn paces_by_the_playback_clock_while_playing() {
     // Playing since the clock started, a second ago: 1 s played. Making
     // LEAD + 1.5 s puts it half a second past the lead, so it waits.
@@ -633,9 +622,6 @@ fn remembers_where_the_first_segment_started() {
 
 #[test]
 fn keeps_the_memory_limits_it_says() {
-    // 200 MB in the window, 48 MB in one segment.
-    assert_eq!(WINDOW.bytes, 209_715_200);
+    // 48 MB in one segment. The window's are mvp-core's.
     assert_eq!(MAX_SEGMENT_BYTES, 50_331_648);
-    assert_eq!(WINDOW.segments, 15);
-    assert_eq!(WINDOW.seconds, 50.0);
 }

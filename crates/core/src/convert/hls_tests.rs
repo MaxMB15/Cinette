@@ -284,3 +284,26 @@ fn the_pacer_waits_for_a_resume_at_exactly_the_lead() {
     pacer.resume(0.0);
     assert_eq!(pacer.wait(0.0), Some(0.0));
 }
+
+#[test]
+fn the_master_declares_a_fifth_more_than_the_first_segment_took() {
+    // 1 MB in 2 s is 4 Mb/s, so 4.8 Mb/s.
+    assert_eq!(bandwidth(1_000_000, 2.0), 4_800_000);
+    assert_eq!(bandwidth(1_000_000, 4.0), 2_400_000);
+    // A tiny segment still declares the minimum.
+    assert_eq!(bandwidth(1000, 2.0), MIN_BANDWIDTH);
+    assert_eq!(MIN_BANDWIDTH, 500_000);
+    // A segment with no length counts as a tenth of a second.
+    assert_eq!(bandwidth(100_000, 0.0), 9_600_000);
+}
+
+#[test]
+fn keeps_the_output_settings_it_says() {
+    // 200 MB in the window.
+    assert_eq!(WINDOW.bytes, 209_715_200);
+    assert_eq!(WINDOW.segments, 15);
+    assert_eq!(WINDOW.seconds, 50.0);
+    assert_eq!(SEGMENT, 2.0);
+    assert_eq!(TARGET, 10);
+    assert_eq!(AVC_FALLBACK, "avc1.640028");
+}

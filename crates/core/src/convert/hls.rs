@@ -41,6 +41,36 @@ pub struct Window {
 /// three segments because the keyframes are far apart.
 pub const READY_SECONDS: f64 = 6.0;
 
+/// How long each segment is at least. Segments end at keyframes, so they
+/// run longer when the source's keyframes are further apart.
+pub const SEGMENT: f64 = 2.0;
+/// The playlists' target duration. Both converters cut a segment at 4×
+/// [`SEGMENT`] without a keyframe, and the C one closes timestamp gaps
+/// over 2 s, so none runs longer.
+pub const TARGET: u32 = 10;
+/// What stays on the server: the segments around the playback position.
+/// The pacer keeps the converter 20 s ahead, so 50 s leaves 30 s behind
+/// the receiver, and the bytes keep a high bitrate out of the memory.
+pub const WINDOW: Window = Window {
+    segments: 15,
+    seconds: 50.0,
+    bytes: 200 * 1024 * 1024,
+};
+/// The `CODECS` name for H.264 whose profile can't be read, such as MPEG-TS
+/// that carries its SPS in the stream: High profile, level 4.0. A master
+/// playlist naming only the audio would tell the receiver there's no video.
+pub const AVC_FALLBACK: &str = "avc1.640028";
+/// The least bandwidth the master playlist declares.
+pub const MIN_BANDWIDTH: u64 = 500_000;
+
+/// The bandwidth the master playlist declares, from the first segment's
+/// size and length: a fifth more than it took, and at least
+/// [`MIN_BANDWIDTH`].
+pub fn bandwidth(bytes: usize, duration: f64) -> u64 {
+    let bits = bytes as f64 * 8.0 / duration.max(0.1);
+    ((bits * 1.2) as u64).max(MIN_BANDWIDTH)
+}
+
 /// The segments a receiver can fetch, and the playlist that lists them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaPlaylist {

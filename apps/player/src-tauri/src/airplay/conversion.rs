@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! The order of converted AirPlay loads, apart from the platform, so it can
-//! be tested anywhere. iOS runs it with `hls_out`'s conversions.
+//! be tested anywhere. iOS runs it with `hls_out`'s conversions, and macOS
+//! with the bundled ffmpeg's.
 //!
 //! - One load runs at a time. A load or a stop that comes later makes an
 //!   older load give up, so quick seeks collapse into the last one.
@@ -20,7 +21,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::hls_out::{Ended, HlsError};
+use crate::convert::hls::{Ended, HlsError};
 
 #[cfg(test)]
 #[path = "conversion_tests.rs"]

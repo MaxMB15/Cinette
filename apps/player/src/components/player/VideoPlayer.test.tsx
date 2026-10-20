@@ -231,6 +231,7 @@ const fakeAirPlay = vi.hoisted(() => {
 	const listeners = new Set<() => void>();
 	return {
 		enabled: [] as boolean[],
+		macs: [] as boolean[],
 		get: () => current,
 		subscribe: (listener: () => void) => {
 			listeners.add(listener);
@@ -251,8 +252,9 @@ const fakeAirPlay = vi.hoisted(() => {
 vi.mock("@/hooks/useAirPlay", async () => {
 	const { useSyncExternalStore } = await import("react");
 	return {
-		useAirPlay: (enabled: boolean) => {
+		useAirPlay: (enabled: boolean, mac = false) => {
 			fakeAirPlay.enabled.push(enabled);
+			fakeAirPlay.macs.push(mac);
 			return useSyncExternalStore(fakeAirPlay.subscribe, fakeAirPlay.get);
 		},
 	};
@@ -687,6 +689,7 @@ beforeEach(() => {
 	fakeMpv.reset();
 	fakeAirPlay.reset();
 	fakeAirPlay.enabled = [];
+	fakeAirPlay.macs = [];
 	env.channels = [];
 	env.downloads = [];
 	env.layoutMode = "desktop";
@@ -3623,13 +3626,19 @@ describe("AirPlay", () => {
 
 	const airplayButton = () => screen.queryByRole("button", { name: "AirPlay" });
 
-	it("is only on for iOS", async () => {
+	it("is only on for iOS and macOS, and knows which", async () => {
+		const last = (list: boolean[]) => list[list.length - 1];
 		await openItem(lanternKeeper());
-		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
+		expect(last(fakeAirPlay.enabled)).toBe(true);
+		expect(last(fakeAirPlay.macs)).toBe(true);
 		setUpTouchScreen();
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(last(fakeAirPlay.enabled)).toBe(true);
+		expect(last(fakeAirPlay.macs)).toBe(false);
+		env.os = "linux";
 		fakeAirPlay.enabled = [];
 		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
-		expect(fakeAirPlay.enabled[fakeAirPlay.enabled.length - 1]).toBe(true);
+		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
 	});
 
 	it("shows its button only while a receiver is in reach", async () => {
@@ -3670,10 +3679,33 @@ describe("AirPlay", () => {
 		fireEvent.click(airplayButton()!);
 		await flush();
 		const dialog = screen.getByRole("dialog", { name: "Convert on this device?" });
-		expect(dialog.textContent).toContain("This iPhone converts the stream");
+		expect(dialog.textContent).toContain("This Mac converts the stream");
 		fireEvent.click(within(dialog).getByRole("button", { name: "Send to TV" }));
 		await flush();
 		expect(answered).toBe(true);
+	});
+
+	it("says an iPhone converts on iOS", async () => {
+		setUpTouchScreen();
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		vi.mocked(fakeAirPlay.get().send).mockImplementationOnce(async (_, opts) => {
+			await opts.confirm();
+			return { sent: true };
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const dialog = screen.getByRole("dialog", { name: "Convert on this device?" });
+		expect(dialog.textContent).toContain("This iPhone converts the stream");
+	});
+
+	it("says to pick this device to play here only where the sound moved", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		expect(screen.queryByText(/Choose this iPhone/)).toBeNull();
+		setUpTouchScreen();
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(screen.getByText(/Choose this iPhone/)).toBeInTheDocument();
 	});
 
 	it("sends live from now", async () => {

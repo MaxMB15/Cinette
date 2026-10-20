@@ -55,6 +55,9 @@ export interface AirPlayNativeState {
 		code: PlaybackError["code"];
 		/** The receiver couldn't play the stream as it is. */
 		unsupported?: boolean;
+		/** No receiver took the video: on a Mac, the picker closed without
+		 *  one, or with this Mac. */
+		notPicked?: boolean;
 	} | null;
 }
 
@@ -81,14 +84,23 @@ export const IDLE_NATIVE_STATE: AirPlayNativeState = {
  */
 export const AIRPLAY_RECEIVER = airplayTvProfile;
 
-/** This device, for AirPlay. A conversion keeps going with the screen
- *  locked, through the audio background mode. */
+/** This device, for AirPlay. On an iPhone or iPad, a conversion keeps
+ *  going with the screen locked, through the audio background mode. A Mac
+ *  converts with the bundled ffmpeg and stays awake while it does, so its
+ *  `desktopSender` is this same profile. */
 export const airplaySender = (support: ConverterSupport): SenderProfile =>
 	iosSender(support, { needsScreen: false });
 
 /** What the confirm step says before a conversion starts. */
 export const CONVERT_WARNING =
 	"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock.";
+
+/** The same, on a Mac. */
+export const MAC_CONVERT_WARNING =
+	"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network.";
+
+/** The confirm step's warning for this device. */
+export const convertWarning = (mac: boolean) => (mac ? MAC_CONVERT_WARNING : CONVERT_WARNING);
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
@@ -97,6 +109,8 @@ const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 export const airplayErrorMessage = (error: NonNullable<AirPlayNativeState["error"]>) => {
 	if (error.code === "refused")
 		return "The provider refused the stream. The login may have expired, or another device may be using it.";
+	if (error.notPicked)
+		return "No TV took the video. Pick a TV in the AirPlay menu, not this Mac.";
 	if (error.unsupported) return "The TV can't play this stream as it is.";
 	if (error.code === "openFailed") return "Couldn't start the stream on the TV.";
 	return "The stream stopped on the TV.";

@@ -19,7 +19,7 @@ import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useAirPlay } from "@/hooks/useAirPlay";
 import {
-	CONVERT_WARNING,
+	convertWarning,
 	airplayBlockedMessage,
 	airplayFailureMessage,
 	airplaySeekMessage,
@@ -508,7 +508,8 @@ export const PlayerView = () => {
 	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
 	// AirPlay video on iOS, with its own panel until the device picker
 	// takes over.
-	const airplay = useAirPlay(platform === "ios");
+	const mac = platform === "macos";
+	const airplay = useAirPlay(platform === "ios" || mac, mac);
 	const tvRef = useLatestRef(airplay.destination);
 	// Why AirPlay stopped or didn't start, once the AirPlay button can't say.
 	const [airplayNotice, setAirplayNotice] = useState<string | null>(null);
@@ -1380,7 +1381,7 @@ export const PlayerView = () => {
 		airplay.available && activeChannel && !tv ? (
 			<AirPlayButton
 				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
-				warning={CONVERT_WARNING}
+				warning={convertWarning(mac)}
 			/>
 		) : undefined;
 
@@ -1418,6 +1419,7 @@ export const PlayerView = () => {
 				await airplay.stop();
 				handleStop();
 			}}
+			picksHere={!mac}
 		/>
 	) : null;
 
