@@ -11,11 +11,22 @@ const COMMANDS: &[&str] = &[
     "mpv_set_bounds",
     "mpv_set_visible",
     "mpv_get_state",
+    "mpv_get_media_info",
     "mpv_sub_add",
     "mpv_sub_remove",
     "mpv_set_sub_delay",
     "mpv_set_media_info",
     "mpv_set_skip_intervals",
+    "airplay_set_detection",
+    "airplay_choose",
+    "airplay_get_route",
+    "airplay_play",
+    "airplay_pause",
+    "airplay_seek",
+    "airplay_select_subtitle",
+    "airplay_select_audio",
+    "airplay_stop",
+    "airplay_get_state",
 ];
 
 fn main() {

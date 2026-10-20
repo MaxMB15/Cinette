@@ -149,6 +149,17 @@
 		linear-gradient(#000, #000) right / env(safe-area-inset-right) 100% no-repeat;
 }
 
+/* A TV is read from across the room and driven with a D-pad. TvLayout puts
+   the class on the root element, so every rem size grows by an eighth, and
+   whatever has focus gets a ring thick enough to find at a glance. */
+html.tv {
+	font-size: 112.5%;
+}
+html.tv :focus-visible {
+	outline: 3px solid var(--color-ring);
+	outline-offset: 2px;
+}
+
 /* Transparent video area for MPV rendering beneath */
 .video-surface {
 	background: transparent;

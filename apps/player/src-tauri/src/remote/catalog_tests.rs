@@ -218,6 +218,7 @@ fn answer_reads_the_cache_and_hides_provider_hosts() {
         .save_channels("p1", &[on_epg_host, on_server])
         .unwrap();
 
+    let cache = Mutex::new(cache);
     let page = answer(&cache, items_query(None, 10)).unwrap();
     assert_eq!(page.0.len(), 2);
     assert!(page.0.iter().all(|i| i.logo.is_none()), "{page:?}");
@@ -240,6 +241,7 @@ fn episodes_come_from_the_cache() {
     ep.season = Some(1);
     ep.episode = Some(1);
     cache.save_series_episodes("p1-series-9", &[ep]).unwrap();
+    let cache = Mutex::new(cache);
     let page = answer(
         &cache,
         CatalogQuery::Episodes {
@@ -313,11 +315,23 @@ mod loading_episodes {
     }
 
     #[tokio::test]
+    async fn the_provider_isnt_asked_past_the_limit() {
+        let (url, requests) =
+            serve_routes(vec![route("action=get_series_info", "200 OK", SERIES_INFO)]);
+        let cache = series_on(&url, &[cached_episode()]);
+        assert_eq!(
+            episodes(&cache, "p1-series-7", || false).await,
+            Err(ErrorCode::RateLimited)
+        );
+        assert_eq!(requests.try_iter().count(), 0);
+    }
+
+    #[tokio::test]
     async fn an_xtream_series_is_loaded_from_its_provider() {
         let (url, requests) =
             serve_routes(vec![route("action=get_series_info", "200 OK", SERIES_INFO)]);
         let cache = series_on(&url, &[cached_episode()]);
-        let episodes = episodes(&cache, "p1-series-7").await.unwrap();
+        let episodes = episodes(&cache, "p1-series-7", || true).await.unwrap();
         assert_eq!(names(&episodes), ["The Show S01E01 First"]);
         assert_eq!(episodes[0].id, "p1-xt-ep-7-s1-0");
         assert!(requests
@@ -329,7 +343,7 @@ mod loading_episodes {
     async fn the_cached_episodes_stand_in_when_the_provider_fails() {
         let (url, _requests) = serve_routes(vec![route("action=", "500 Oops", "")]);
         let cache = series_on(&url, &[cached_episode()]);
-        let episodes = episodes(&cache, "p1-series-7").await.unwrap();
+        let episodes = episodes(&cache, "p1-series-7", || true).await.unwrap();
         assert_eq!(names(&episodes), ["Cached"]);
     }
 
@@ -341,7 +355,7 @@ mod loading_episodes {
             r#"{"info":{},"episodes":{}}"#,
         )]);
         let cache = series_on(&url, &[cached_episode()]);
-        let episodes = episodes(&cache, "p1-series-7").await.unwrap();
+        let episodes = episodes(&cache, "p1-series-7", || true).await.unwrap();
         assert_eq!(names(&episodes), ["Cached"]);
     }
 
@@ -350,7 +364,7 @@ mod loading_episodes {
         let (url, _requests) = serve_routes(vec![route("action=", "500 Oops", "")]);
         let cache = series_on(&url, &[]);
         assert_eq!(
-            episodes(&cache, "p1-series-7").await,
+            episodes(&cache, "p1-series-7", || true).await,
             Err(ErrorCode::Failed)
         );
     }
@@ -368,10 +382,10 @@ mod loading_episodes {
                 .save_series_episodes("p1-series-8", &[cached_episode()])
                 .unwrap();
         }
-        let loaded = episodes(&cache, "p1-series-8").await.unwrap();
+        let loaded = episodes(&cache, "p1-series-8", || false).await.unwrap();
         assert_eq!(names(&loaded), ["Cached"]);
         assert_eq!(
-            episodes(&cache, "p1-series-404").await,
+            episodes(&cache, "p1-series-404", || false).await,
             Err(ErrorCode::NotFound)
         );
         {
@@ -380,7 +394,7 @@ mod loading_episodes {
                 .save_series_episodes("p1-series-gone", &[cached_episode()])
                 .unwrap();
         }
-        let kept = episodes(&cache, "p1-series-gone").await.unwrap();
+        let kept = episodes(&cache, "p1-series-gone", || false).await.unwrap();
         assert_eq!(
             names(&kept),
             ["Cached"],
@@ -391,7 +405,7 @@ mod loading_episodes {
     #[test]
     fn a_page_of_episodes_hides_provider_logos_and_stops_at_a_page() {
         let cache = series_on("http://iptv.example:8080", &[]);
-        let cache = cache.lock().unwrap();
+        let providers = cache.lock().unwrap().get_providers().unwrap();
         let many: Vec<Channel> = (0..MAX_PAGE + 3)
             .map(|i| {
                 let mut ep = channel(&format!("ep{i}"), "x", "series", "Drama");
@@ -399,20 +413,20 @@ mod loading_episodes {
                 ep
             })
             .collect();
-        let (items, next) = episode_page(&cache, &many, None, 500).unwrap();
+        let (items, next) = episode_page(&providers, &many, None, 500).unwrap();
         assert_eq!(items.len(), MAX_PAGE);
         assert_eq!(next.as_deref(), Some("ep100"));
-        let (rest, next) = episode_page(&cache, &many, next, 10).unwrap();
+        let (rest, next) = episode_page(&providers, &many, next, 10).unwrap();
         let ids: Vec<&str> = rest.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, ["ep100", "ep101", "ep102"]);
         assert_eq!(next, None);
-        let (two, next) = episode_page(&cache, &many, Some("ep1".into()), 2).unwrap();
+        let (two, next) = episode_page(&providers, &many, Some("ep1".into()), 2).unwrap();
         assert_eq!(two.len(), 2);
         assert_eq!(next.as_deref(), Some("ep3"));
-        let (one, _) = episode_page(&cache, &many, None, 0).unwrap();
+        let (one, _) = episode_page(&providers, &many, None, 0).unwrap();
         assert_eq!(one.len(), 1, "at least one");
         assert_eq!(
-            episode_page(&cache, &many, Some("gone".into()), 10),
+            episode_page(&providers, &many, Some("gone".into()), 10),
             Err(ErrorCode::NotFound)
         );
         assert!(items.iter().all(|i| i.logo.is_none()));
@@ -449,6 +463,7 @@ fn no_logo_goes_out_from_the_site_a_stream_comes_from() {
     cache
         .save_channels("p1", &[on_panel, backup, elsewhere])
         .unwrap();
+    let cache = Mutex::new(cache);
     let (items, _) = answer(&cache, items_query(None, 10)).unwrap();
     let logo = |id: &str| {
         let item = items.iter().find(|i| i.id == id).unwrap();

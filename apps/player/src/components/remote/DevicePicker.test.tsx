@@ -120,6 +120,35 @@ describe("DevicePicker", () => {
 		}
 	});
 
+	it("keeps the rows in place while the pointer is over them", () => {
+		const { view } = picker();
+		const names = () =>
+			within(screen.getAllByRole("region")[1])
+				.getAllByRole("button")
+				.map((b) => b.querySelector("[title]")?.getAttribute("title"));
+		const list = screen.getByRole("region", { name: "This device" }).parentElement!;
+		fireEvent.pointerEnter(list);
+		// A new TV would sort first.
+		const arrived: PickerEntry = {
+			id: "cinette:attic",
+			kind: "cinette",
+			name: "Attic TV",
+			deviceType: "android-tv",
+		};
+		view.rerender(
+			<DevicePicker
+				open
+				entries={[...entries, arrived]}
+				activeId="local"
+				onClose={() => {}}
+				onSelect={() => {}}
+			/>
+		);
+		expect(names()).toEqual(["Living Room", "Den", "Attic TV"]);
+		fireEvent.pointerLeave(list);
+		expect(names()).toEqual(["Attic TV", "Living Room", "Den"]);
+	});
+
 	it("marks the row that plays now", () => {
 		picker({ activeId: "cinette:tv" });
 		expect(row(/Living Room/)).toHaveAttribute("aria-current", "true");

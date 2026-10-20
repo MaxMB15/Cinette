@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
@@ -28,15 +28,27 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [denied, setDenied] = useState(false);
+	// Discovery gets a moment before the picker says it found nothing.
+	const [looked, setLooked] = useState(false);
+	useEffect(() => {
+		if (!open) return;
+		const timer = setTimeout(() => setLooked(true), LOOKING_MS);
+		return () => clearTimeout(timer);
+	}, [open]);
 	// Asked each time the picker opens, since the user can allow it meanwhile.
 	const checkNetwork = () => {
 		remoteLocalNetworkDenied()
 			.then((refused) => setDenied(refused === true))
 			.catch(() => setDenied(false));
 	};
+	// Closed, it looks again from the start the next time it opens.
+	const close = () => {
+		setOpen(false);
+		setLooked(false);
+	};
 	const activeId = link ? cinetteId(link.deviceId) : LOCAL_ENTRY.id;
 	const select = (id: string) => {
-		setOpen(false);
+		close();
 		if (id === activeId) return;
 		// Choosing this device is returning to independent playback.
 		if (id === LOCAL_ENTRY.id) {
@@ -68,12 +80,20 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 			</button>
 			<DevicePicker
 				open={open}
-				onClose={() => setOpen(false)}
+				onClose={close}
 				entries={cinetteEntries(devices)}
 				activeId={activeId}
 				onSelect={select}
 				onOpen={checkNetwork}
-				notice={denied ? LOCAL_NETWORK_DENIED : devices.length === 0 ? NONE_FOUND : null}
+				notice={
+					denied
+						? LOCAL_NETWORK_DENIED
+						: devices.length > 0
+							? null
+							: looked
+								? NONE_FOUND
+								: LOOKING
+				}
 			/>
 			{error && <Notice message={error} onDismiss={() => setError(null)} raised />}
 			{leaveFailed && (
@@ -86,6 +106,12 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 /** What the picker says while macOS keeps Cinette off the local network. */
 export const LOCAL_NETWORK_DENIED =
 	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
+
+/** How long the picker looks before it says it found no device. */
+export const LOOKING_MS = 3000;
+
+/** What the picker says while it hasn't found a device yet. */
+export const LOOKING = "Looking for other Cinette devices on this network…";
 
 /** What the picker says when it found no other device. */
 export const NONE_FOUND =
@@ -133,45 +159,57 @@ const Notice = ({
 export const ConnectStatusDialog = () => {
 	const { link, leave } = useRemoteControl();
 	const titleId = useId();
-	if (!link) return null;
-	const { phase } = link;
-	if (phase.phase !== "connecting" && phase.phase !== "verifying" && phase.phase !== "pending")
-		return null;
+	const [leaveFailed, setLeaveFailed] = useState(false);
+	const cancel = () => {
+		setLeaveFailed(false);
+		leave().catch(() => setLeaveFailed(true));
+	};
+	const failed = leaveFailed && (
+		<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
+	);
+	const phase = link?.phase.phase;
+	if (!link || (phase !== "connecting" && phase !== "verifying" && phase !== "pending"))
+		return failed || null;
 	const code = link.code;
-	return createPortal(
-		<Dialog
-			onClose={() => void leave()}
-			labelledBy={titleId}
-			overlayClassName="z-10000"
-			className="bg-card border border-border rounded-lg p-5 w-[320px] max-w-[calc(100vw-2rem)] shadow-xl"
-		>
-			<h2 id={titleId} className="text-base font-semibold mb-1 break-words">
-				{phase.phase === "pending"
-					? `Waiting for ${link.name} to allow it`
-					: `Connecting to ${link.name}`}
-			</h2>
-			<p className="text-xs text-muted-foreground mb-4">
-				{code
-					? "Check that this code matches the one on that device."
-					: "Looking for it on the network…"}
-			</p>
-			{code && (
-				<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-5">
-					<span aria-hidden>{formatCode(code)}</span>
-					<span className="sr-only">Code {code.split("").join(" ")}</span>
-				</p>
-			)}
-			<div className="flex justify-end">
-				<button
-					type="button"
-					className={`${BUTTON} hover:bg-accent`}
-					onClick={() => void leave()}
+	return (
+		<>
+			{failed}
+			{createPortal(
+				<Dialog
+					onClose={cancel}
+					labelledBy={titleId}
+					overlayClassName="z-10000"
+					className="bg-card border border-border rounded-lg p-5 w-[320px] max-w-[calc(100vw-2rem)] shadow-xl"
 				>
-					Cancel
-				</button>
-			</div>
-		</Dialog>,
-		document.body
+					<h2 id={titleId} className="text-base font-semibold mb-1 break-words">
+						{phase === "pending" ? "Waiting for " : "Connecting to "}
+						<bdi className="font-bold">{link.name}</bdi>
+						{phase === "pending" ? " to allow it" : ""}
+					</h2>
+					<p className="text-xs text-muted-foreground mb-4">
+						{code
+							? "Check that this code matches the one on that device."
+							: "Looking for it on the network…"}
+					</p>
+					{code && (
+						<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-5">
+							<span aria-hidden>{formatCode(code)}</span>
+							<span className="sr-only">Code {code.split("").join(" ")}</span>
+						</p>
+					)}
+					<div className="flex justify-end">
+						<button
+							type="button"
+							className={`${BUTTON} hover:bg-accent`}
+							onClick={cancel}
+						>
+							Cancel
+						</button>
+					</div>
+				</Dialog>,
+				document.body
+			)}
+		</>
 	);
 };
 
@@ -222,8 +260,7 @@ const NowPlaying = ({ destination }: { destination: CinetteDestination }) => {
  */
 export const ControllersBar = () => {
 	const sessions = useRemoteSessions();
-	const connected = sessions.filter((s) => s.connected);
-	if (connected.length === 0) return null;
+	if (sessions.length === 0) return null;
 	return (
 		<div
 			role="region"
@@ -232,14 +269,21 @@ export const ControllersBar = () => {
 		>
 			<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
 			<span className="font-medium">Controlled from</span>
-			{connected.map((s) => (
+			{sessions.map((s) => (
 				<span key={s.sessionId} className="flex items-center gap-1 min-w-0">
-					<span className="truncate max-w-64" title={s.name}>
+					<bdi className="truncate max-w-64 font-medium" title={s.name}>
 						{s.name}
-					</span>
+					</bdi>
+					{/* One that dropped can come back without asking for 30 s,
+					    so it stays here, and can be cut off. */}
+					{!s.connected && (
+						<span className="text-xs text-muted-foreground shrink-0">
+							Reconnecting…
+						</span>
+					)}
 					<button
 						type="button"
-						className={`${BUTTON} hover:bg-accent`}
+						className={`${BUTTON} shrink-0 hover:bg-accent`}
 						aria-label={`Disconnect ${s.name}`}
 						onClick={() => void remoteDisconnect(s.sessionId).catch(() => {})}
 					>
@@ -269,9 +313,9 @@ export const RemoteBar = () => {
 			>
 				<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
 				<span className="font-medium min-w-0 truncate" title={link.name}>
-					{link.phase.phase === "reconnecting"
-						? `Reconnecting to ${link.name}…`
-						: `Playing on ${link.name}`}
+					{link.phase.phase === "reconnecting" ? "Reconnecting to " : "Playing on "}
+					<bdi>{link.name}</bdi>
+					{link.phase.phase === "reconnecting" ? "…" : ""}
 				</span>
 				<NowPlaying destination={link.destination} />
 				<button

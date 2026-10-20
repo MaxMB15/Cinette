@@ -22,7 +22,8 @@ import {
 } from "react-router";
 import type * as Bridge from "@/lib/tauri";
 import type { useMpv } from "@/hooks/useMpv";
-import type { PlaybackDestination } from "@/lib/destination";
+import type { AirPlay } from "@/hooks/useAirPlay";
+import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
 import type { MovieInfoDrawer } from "@/components/channels/MovieInfoDrawer";
 import type { SeriesDetailModal } from "@/components/channels/SeriesDetailModal";
 import type { LiveInfoDrawer } from "@/components/channels/LiveInfoDrawer";
@@ -213,6 +214,47 @@ vi.mock("@/hooks/useDownloads", async (importOriginal) => {
 			downloads: env.downloads,
 			...actual.groupDownloads(env.downloads),
 		}),
+	};
+});
+
+/** Stands in for useAirPlay, which has tests of its own. */
+const fakeAirPlay = vi.hoisted(() => {
+	const initial = (): AirPlay => ({
+		available: false,
+		destination: null,
+		state: null,
+		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
+		stop: vi.fn<AirPlay["stop"]>(async () => {}),
+		returnHere: vi.fn<AirPlay["returnHere"]>(async () => {}),
+	});
+	let current = initial();
+	const listeners = new Set<() => void>();
+	return {
+		enabled: [] as boolean[],
+		get: () => current,
+		subscribe: (listener: () => void) => {
+			listeners.add(listener);
+			return () => {
+				listeners.delete(listener);
+			};
+		},
+		reset: () => {
+			current = initial();
+		},
+		set: (patch: Partial<AirPlay>) => {
+			current = { ...current, ...patch };
+			listeners.forEach((listener) => listener());
+		},
+	};
+});
+
+vi.mock("@/hooks/useAirPlay", async () => {
+	const { useSyncExternalStore } = await import("react");
+	return {
+		useAirPlay: (enabled: boolean) => {
+			fakeAirPlay.enabled.push(enabled);
+			return useSyncExternalStore(fakeAirPlay.subscribe, fakeAirPlay.get);
+		},
 	};
 });
 
@@ -643,6 +685,8 @@ beforeEach(() => {
 	localStorage.clear();
 	sessionStorage.clear();
 	fakeMpv.reset();
+	fakeAirPlay.reset();
+	fakeAirPlay.enabled = [];
 	env.channels = [];
 	env.downloads = [];
 	env.layoutMode = "desktop";
@@ -1691,6 +1735,103 @@ describe("keyboard shortcuts", () => {
 		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
 	});
 
+	it("plays and pauses with the media keys", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+		expect(await press("MediaPlay")).toBe(false);
+		expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+		expect(await press("MediaPause")).toBe(false);
+		expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+	});
+
+	it("seeks with the arrows on a desktop even while a control has keyboard focus", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+		screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+		expect(await press("ArrowRight")).toBe(false);
+		expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+	});
+
+	describe("on a TV", () => {
+		beforeEach(() => {
+			env.os = "android";
+			window.__CINETTE_TV__ = true;
+		});
+
+		afterEach(() => {
+			delete window.__CINETTE_TV__;
+		});
+
+		it("plays and pauses with the center button when there's nothing to skip", async () => {
+			await openItem(lanternKeeper());
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.play).toHaveBeenCalledTimes(1);
+			await setMpv({ state: playing(MOVIE_URL, 10, 3600) });
+			expect(await press("Enter")).toBe(false);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+			// Held down, it doesn't flip back and forth.
+			expect(await press("Enter", { repeat: true })).toBe(true);
+			expect(fakeMpv.actions.pause).toHaveBeenCalledTimes(1);
+		});
+
+		it("leaves Up and Down to move focus, since the TV has its own volume", async () => {
+			await openItem(lanternKeeper());
+			expect(await press("ArrowUp")).toBe(true);
+			expect(await press("ArrowDown")).toBe(true);
+			expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
+		});
+
+		it("still seeks with Left and Right", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			expect(await press("ArrowRight")).toBe(false);
+			expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+		});
+
+		it("leaves the arrows to move between the controls once one has focus", async () => {
+			await openItem(lanternKeeper());
+			await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+			screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+			expect(await press("ArrowRight")).toBe(true);
+			expect(fakeMpv.actions.seek).not.toHaveBeenCalled();
+		});
+
+		describe("as the controls show and hide", () => {
+			beforeEach(() => {
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			});
+
+			it("shows them on any key, and keeps them up while focus moves between them", async () => {
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+				act(() => vi.advanceTimersByTime(4000));
+				expect(controlBar()).toHaveClass("opacity-0");
+				// Down moves focus into the controls, so they show.
+				await press("ArrowDown");
+				expect(controlBar()).toHaveClass("opacity-100");
+
+				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+				act(() => vi.advanceTimersByTime(3000));
+				await press("ArrowLeft");
+				act(() => vi.advanceTimersByTime(3000));
+				expect(controlBar()).toHaveClass("opacity-100");
+				act(() => vi.advanceTimersByTime(1000));
+				expect(controlBar()).toHaveClass("opacity-0");
+			});
+
+			it("gives the player focus back as they hide, so Left and Right seek again", async () => {
+				await openItem(lanternKeeper());
+				await setMpv({ state: playing(MOVIE_URL, 100, 3600) });
+				screen.getByRole("button", { name: "Skip forward 10 seconds" }).focus();
+				act(() => vi.advanceTimersByTime(4000));
+				expect(controlBar()).toHaveClass("opacity-0");
+				expect(document.activeElement).toBe(playerArea());
+				expect(await press("ArrowRight")).toBe(false);
+				expect(fakeMpv.actions.seek).toHaveBeenLastCalledWith(110);
+			});
+		});
+	});
+
 	it("goes full screen with F or a double click", async () => {
 		renderPlayer(null);
 		await flush();
@@ -1932,6 +2073,22 @@ describe("showing and hiding the controls", () => {
 		act(() => vi.advanceTimersByTime(4000));
 		await press("ArrowUp");
 		expect(screen.getByText("The Lantern Keeper")).toBeInTheDocument();
+	});
+
+	it("stays hidden on a desktop for a key that isn't a shortcut", async () => {
+		await openItem(lanternKeeper());
+		act(() => vi.advanceTimersByTime(4000));
+		await press("x");
+		expect(controlBar()).toHaveClass("opacity-0");
+	});
+
+	it("leaves keyboard focus on a control as they hide on a desktop", async () => {
+		await openItem(lanternKeeper());
+		const stop = screen.getByRole("button", { name: "Stop" });
+		stop.focus();
+		act(() => vi.advanceTimersByTime(4000));
+		expect(controlBar()).toHaveClass("opacity-0");
+		expect(document.activeElement).toBe(stop);
 	});
 
 	describe("on a touch screen", () => {
@@ -3412,5 +3569,331 @@ describe("remote control", () => {
 		expect(getMountedPlayer()?.getState().item?.ref).toBe("ch1");
 		view.unmount();
 		expect(getMountedPlayer()).toBeNull();
+	});
+});
+
+describe("AirPlay", () => {
+	const tvState = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
+		status: "playing",
+		item: { title: "The Lantern Keeper", contentType: "movie", ref: "mv1" },
+		position: 600,
+		positionAt: 0,
+		duration: 5400,
+		volume: 100,
+		subtitles: [{ id: "0", label: "English" }],
+		subtitleId: null,
+		audio: [
+			{ id: "0", label: "Main" },
+			{ id: "1", label: "Commentary" },
+		],
+		audioId: "0",
+		connection: "connected",
+		error: null,
+		...patch,
+	});
+
+	const tv = () => ({
+		id: "airplay:tv",
+		kind: "airplay" as const,
+		name: "Living Room TV",
+		catalog: { kind: "local" as const },
+		capabilities: {
+			seek: true,
+			pause: true,
+			volume: "none" as const,
+			subtitles: "select" as const,
+			externalSubtitles: false,
+			audioTracks: true,
+			resumeAt: true,
+			catalog: false,
+		},
+		route: vi.fn(),
+		load: vi.fn(),
+		play: vi.fn(async () => {}),
+		pause: vi.fn(async () => {}),
+		seek: vi.fn(async () => {}),
+		setVolume: vi.fn(),
+		selectSubtitle: vi.fn(async () => {}),
+		selectAudio: vi.fn(async () => {}),
+		stop: vi.fn(),
+		getState: vi.fn(() => tvState()),
+		subscribe: vi.fn(),
+		dispose: vi.fn(),
+	});
+
+	const airplayButton = () => screen.queryByRole("button", { name: "AirPlay" });
+
+	it("is only on for iOS", async () => {
+		await openItem(lanternKeeper());
+		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
+		setUpTouchScreen();
+		fakeAirPlay.enabled = [];
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(fakeAirPlay.enabled[fakeAirPlay.enabled.length - 1]).toBe(true);
+	});
+
+	it("shows its button only while a receiver is in reach", async () => {
+		await openItem(lanternKeeper());
+		expect(airplayButton()).toBeNull();
+		act(() => fakeAirPlay.set({ available: true }));
+		expect(airplayButton()).not.toBeNull();
+	});
+
+	it("sends the movie from where it is, after stopping it here", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 600, 5400) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const send = vi.mocked(fakeAirPlay.get().send);
+		expect(send).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "mv1" }),
+			expect.objectContaining({ startAt: 600 })
+		);
+		expect(send.mock.calls[0][1].anchor).toBeDefined();
+		expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
+		await act(() => send.mock.calls[0][1].stopLocal());
+		expect(fakeMpv.actions.stop).toHaveBeenCalled();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalled();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("sends live from now", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(makeNewsChannel());
+		await setMpv({ state: playing(NEWS_URL, 30, 0) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(vi.mocked(fakeAirPlay.get().send).mock.calls[0][1].startAt).toBeUndefined();
+	});
+
+	it("says why it can't send, and nothing when the picker is closed", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		const send = vi.mocked(fakeAirPlay.get().send);
+		send.mockResolvedValueOnce({ sent: false, why: "cancelled" });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		send.mockResolvedValueOnce({
+			sent: false,
+			why: "blocked",
+			decision: { ok: false, reason: "container", detail: "mkv" },
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
+
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const error = new Error("x");
+		send.mockResolvedValueOnce({ sent: false, why: "failed", error, stopped: false });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't start AirPlay.");
+		expect(warn).toHaveBeenCalledWith("[VideoPlayer] AirPlay failed:", error);
+	});
+
+	it("covers the player with its own controls while the TV plays", async () => {
+		await openItem(lanternKeeper());
+		const destination = tv();
+		act(() => fakeAirPlay.set({ available: true, destination, state: tvState() }));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		expect(within(panel).getByText("Playing on Living Room TV")).toBeTruthy();
+		expect(airplayButton()).toBeNull();
+		expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+
+		fireEvent.click(within(panel).getByRole("button", { name: "Pause" }));
+		expect(destination.pause).toHaveBeenCalled();
+		act(() => fakeAirPlay.set({ state: tvState({ status: "paused" }) }));
+		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
+		expect(destination.play).toHaveBeenCalled();
+		fireEvent.change(within(panel).getByRole("slider", { name: "Position" }), {
+			target: { value: "900" },
+		});
+		expect(destination.seek).toHaveBeenCalledWith(900);
+		fireEvent.change(within(panel).getByRole("combobox", { name: "Subtitles" }), {
+			target: { value: "0" },
+		});
+		expect(destination.selectSubtitle).toHaveBeenCalledWith("0");
+		fireEvent.change(within(panel).getByRole("combobox", { name: "Audio" }), {
+			target: { value: "1" },
+		});
+		expect(destination.selectAudio).toHaveBeenCalledWith("1");
+	});
+
+	it("plays here again from where the TV was", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockClear();
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		// The last reading came too soon after the one before to be saved.
+		act(() => fakeAirPlay.set({ state: tvState({ position: 605 }) }));
+		await flush();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeAirPlay.set({ state: tvState({ position: 606 }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		const returnHere = vi.mocked(fakeAirPlay.get().returnHere);
+		let letGo: () => void = () => {};
+		returnHere.mockReturnValueOnce(new Promise((r) => (letGo = r)));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:06" }));
+		await flush();
+		// It waits for AirPlay to let go of the stream and the sound.
+		expect(returnHere).toHaveBeenCalledWith(expect.any(Object));
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		// The position the TV had is saved as soon as Play here is pressed.
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 606, 5400);
+		await act(async () => letGo());
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 606);
+	});
+
+	it("says so when it can't play here again", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
+	});
+
+	it("plays live here again from now", async () => {
+		await openItem(makeNewsChannel());
+		fakeMpv.actions.load.mockClear();
+		const destination = { ...tv(), capabilities: { ...tv().capabilities, resumeAt: false } };
+		act(() => fakeAirPlay.set({ destination, state: tvState({ duration: 0 }) }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(NEWS_URL, undefined);
+	});
+
+	it("stops AirPlay and leaves the player", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		act(() => fakeAirPlay.set({ state: tvState({ position: 700 }) }));
+		await flush();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeAirPlay.set({ state: tvState({ position: 701 }) }));
+		await flush();
+		const stop = vi.mocked(fakeAirPlay.get().stop);
+		let stopped: () => void = () => {};
+		stop.mockReturnValueOnce(new Promise((r) => (stopped = r)));
+		fireEvent.click(within(panel).getByRole("button", { name: "Stop" }));
+		await flush();
+		// It saves where the TV was, and leaves once AirPlay has stopped.
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
+		expect(screen.queryByText("Channel list")).toBeNull();
+		await act(async () => stopped());
+		await flush();
+		expect(screen.getByText("Channel list")).toBeTruthy();
+	});
+
+	it("drives the TV with the keyboard, and starts nothing here", async () => {
+		await openItem(lanternKeeper(), { episodes: [] });
+		fakeMpv.actions.load.mockClear();
+		const destination = tv();
+		act(() => fakeAirPlay.set({ destination, state: tvState() }));
+		await press(" ");
+		expect(destination.pause).toHaveBeenCalledTimes(1);
+		expect(destination.play).not.toHaveBeenCalled();
+		expect(destination.seek).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+		await press("ArrowRight");
+		expect(destination.seek).toHaveBeenCalledWith(610);
+		expect(destination.play).not.toHaveBeenCalled();
+		expect(destination.pause).toHaveBeenCalledTimes(1);
+		await press("5");
+		expect(destination.seek).toHaveBeenLastCalledWith(2700);
+		// Volume, info and the rest do nothing.
+		await press("ArrowUp");
+		await press("i");
+		expect(fakeMpv.actions.setVolume).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
+	});
+
+	it("plays a paused TV from the keyboard", async () => {
+		await openItem(lanternKeeper());
+		const destination = { ...tv(), getState: vi.fn(() => tvState({ status: "paused" })) };
+		act(() => fakeAirPlay.set({ destination, state: tvState({ status: "paused" }) }));
+		await press(" ");
+		expect(destination.play).toHaveBeenCalled();
+		expect(destination.pause).not.toHaveBeenCalled();
+		expect(destination.seek).not.toHaveBeenCalled();
+	});
+
+	it("still goes full screen from the keyboard", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		await press("f");
+		expect(fullscreenSpy).toHaveBeenCalledWith(true);
+	});
+
+	it("saves the position on the TV as the resume point", async () => {
+		await openItem(lanternKeeper());
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState({ position: 900 }) }));
+		await flush();
+		// The first reading saves at once, then every few seconds.
+		act(() => fakeAirPlay.set({ state: tvState({ position: 901 }) }));
+		await flush();
+		act(() => fakeAirPlay.set({ state: tvState({ position: 1200, status: "paused" }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).toHaveBeenLastCalledWith(MOVIE_KEY, 1200, 5400);
+		// No length yet, or the very start, saves nothing.
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() =>
+			fakeAirPlay.set({ state: tvState({ position: 1300, duration: 0, status: "paused" }) })
+		);
+		act(() => fakeAirPlay.set({ state: tvState({ position: 0.5, status: "paused" }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("says so in the player when AirPlay fails after this device stopped", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		vi.useFakeTimers();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: "nope",
+			stopped: true,
+		});
+		fireEvent.click(airplayButton()!);
+		await act(async () => {
+			for (let i = 0; i < 30; i++) await Promise.resolve();
+		});
+		const alert = screen.getByRole("alert");
+		expect(alert.textContent).toBe("Couldn't start AirPlay. Nothing is playing.");
+		act(() => vi.advanceTimersByTime(5999));
+		expect(screen.queryByRole("alert")).not.toBeNull();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.queryByRole("alert")).toBeNull();
+
+		// A second note gets its own six seconds, whatever the first one's
+		// timer had left.
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
+			sent: false,
+			why: "failed",
+			error: "nope",
+			stopped: true,
+		});
+		fireEvent.click(airplayButton()!);
+		await act(async () => {
+			for (let i = 0; i < 30; i++) await Promise.resolve();
+		});
+		act(() => vi.advanceTimersByTime(3000));
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
+		await act(async () => {
+			for (let i = 0; i < 30; i++) await Promise.resolve();
+		});
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
+		act(() => vi.advanceTimersByTime(3500));
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 	});
 });

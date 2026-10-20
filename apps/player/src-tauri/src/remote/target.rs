@@ -15,6 +15,7 @@
 
 use super::clock;
 use super::conn::{self, Backlogged, Read, Writer};
+use super::local::is_local_peer;
 use crate::discovery::{Registration, Txt};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::consent::{Answer, RequestId};
@@ -41,6 +42,11 @@ const MAX_PER_ADDRESS: usize = 4;
 /// The most catalog queries answered at once, over all connections. Each
 /// takes a blocking thread, and an episodes query asks the provider.
 const MAX_CATALOG_JOBS: usize = 4;
+
+/// The shortest time between two loads from controllers. A quicker one is
+/// refused, so a controller can't make this device switch streams many
+/// times a second and hammer the provider's server.
+const MIN_LOAD_GAP: Duration = Duration::from_secs(1);
 
 /// One run of the core [`Target`]. A new identity starts a new one, whose
 /// connection and request numbers start again, so anything still on its way
@@ -147,17 +153,15 @@ impl TargetHandle {
 
 /// Binds the port remote control listens on: [`DEFAULT_PORT`] on every
 /// address when it's free, any free port otherwise. One socket on `[::]`
-/// takes IPv4 too; where that fails, `0.0.0.0`.
+/// takes IPv4 too, even where the system makes IPv6 sockets IPv6 only;
+/// where that fails, `0.0.0.0`.
 pub async fn bind_default() -> std::io::Result<TcpListener> {
-    let candidates = [
-        format!("[::]:{DEFAULT_PORT}"),
-        format!("0.0.0.0:{DEFAULT_PORT}"),
-        "[::]:0".to_owned(),
-        "0.0.0.0:0".to_owned(),
-    ];
     let mut last = None;
-    for address in candidates {
-        match TcpListener::bind(&address).await {
+    for port in [DEFAULT_PORT, 0] {
+        if let Ok(listener) = bind_dual_stack(port) {
+            return TcpListener::from_std(listener);
+        }
+        match TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).await {
             Ok(listener) => return Ok(listener),
             Err(e) => last = Some(e),
         }
@@ -165,26 +169,24 @@ pub async fn bind_default() -> std::io::Result<TcpListener> {
     Err(last.unwrap_or_else(|| std::io::Error::other("no address to bind")))
 }
 
+/// A listener on `[::]:port` that takes IPv4 connections as well.
+fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(false)?;
+    // As tokio's own bind does, so a restart can take the port at once.
+    socket.set_reuse_address(true)?;
+    socket.bind(&std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)).into())?;
+    socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
+}
+
 /// The port remote control uses when it's free, so a firewall rule can name it.
 pub const DEFAULT_PORT: u16 = 47130;
 
-/// Starts the target on `listener`.
-pub fn start(
-    listener: TcpListener,
-    key: DeviceKey,
-    device_type: DeviceType,
-    settings: RemoteSettings,
-    host: Arc<dyn TargetHost>,
-) -> std::io::Result<TargetHandle> {
-    let limits = Limits {
-        command_timeout: COMMAND_TIMEOUT,
-        per_address: MAX_PER_ADDRESS,
-    };
-    start_with(listener, key, device_type, settings, host, limits)
-}
-
-/// [`start`], with other limits.
-fn start_with(
+/// Starts the target on `listener`, within `limits`.
+pub(crate) fn start_with(
     listener: TcpListener,
     key: DeviceKey,
     device_type: DeviceType,
@@ -229,6 +231,7 @@ fn start_with(
         reads,
         pending: HashMap::new(),
         next_token: 0,
+        last_load: None,
         limits,
     };
     tokio::spawn(task.run(rx, read_rx, accept));
@@ -259,16 +262,31 @@ struct Task {
     /// Commands the player hasn't finished, by token.
     pending: HashMap<u64, Pending>,
     next_token: u64,
+    /// When a controller's load last went to the player.
+    last_load: Option<Instant>,
     limits: Limits,
 }
 
-/// What [`start`] sets and tests change.
+/// What the target allows. The app uses [`Limits::STANDARD`]; tests change it.
 #[derive(Debug, Clone, Copy)]
-struct Limits {
+pub(crate) struct Limits {
     /// The time the player has for each command.
-    command_timeout: Duration,
+    pub(crate) command_timeout: Duration,
     /// See [`MAX_PER_ADDRESS`].
-    per_address: usize,
+    pub(crate) per_address: usize,
+    /// Whether a peer is on the local network. Anyone else is turned away.
+    pub(crate) local: fn(IpAddr) -> bool,
+    /// See [`MIN_LOAD_GAP`].
+    pub(crate) load_gap: Duration,
+}
+
+impl Limits {
+    pub(crate) const STANDARD: Self = Self {
+        command_timeout: COMMAND_TIMEOUT,
+        per_address: MAX_PER_ADDRESS,
+        local: is_local_peer,
+        load_gap: MIN_LOAD_GAP,
+    };
 }
 
 impl Task {
@@ -347,10 +365,15 @@ impl Task {
         }
     }
 
-    /// Hands a new connection to the core, unless this device is hidden
-    /// with no session to resume, or `from` has enough open already.
-    /// Dropping the stream closes it before the core says who this is.
+    /// Hands a new connection to the core, unless `from` isn't on the local
+    /// network, this device is hidden with no session to resume, or `from`
+    /// has enough open already. Dropping the stream closes it before the
+    /// core says who this is.
     fn accept(&mut self, stream: TcpStream, from: IpAddr, now: Instant) {
+        if !(self.limits.local)(from) {
+            tracing::info!("[remote] turned away a connection from outside the local network");
+            return;
+        }
         if !self.target.settings().discoverable && self.target.sessions().is_empty() {
             tracing::info!("[remote] not discoverable; turned a connection away");
             return;
@@ -463,6 +486,23 @@ impl Task {
                     request,
                     command,
                 } => {
+                    if matches!(command, Command::Load { .. }) {
+                        let now = clock::now();
+                        if self
+                            .last_load
+                            // mutants: skip BinaryOperator: < and <= differ only at one instant of a clock that never stops
+                            .is_some_and(|at| now.saturating_duration_since(at) < self.limits.load_gap)
+                        {
+                            let actions = self.target.finish_command(
+                                conn,
+                                request,
+                                Err(ErrorCode::RateLimited),
+                            );
+                            self.carry_out(actions);
+                            continue;
+                        }
+                        self.last_load = Some(now);
+                    }
                     self.next_token += 1;
                     let token = self.next_token;
                     self.pending.insert(

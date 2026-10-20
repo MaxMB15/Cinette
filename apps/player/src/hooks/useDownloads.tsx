@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useCallback, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { isActiveDownload } from "@/lib/download-status";
-import { getDownloadRetention, listDownloads, setDownloadRetention } from "@/lib/tauri";
+import { setDownloadRetention } from "@/lib/tauri";
+import { downloadRetentionQuery, downloadsQuery } from "@/lib/queries";
 import type { DownloadRecord, AggregateDownloadState } from "@/lib/types";
 
 /** Pure: compute a series card's aggregate state from its episode downloads. */
@@ -76,39 +78,60 @@ interface DownloadsContextValue {
 
 const DownloadsContext = createContext<DownloadsContextValue | null>(null);
 
+const NO_DOWNLOADS: DownloadRecord[] = [];
+
 export const DownloadsProvider = ({ children }: { children: ReactNode }) => {
-	const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
-	const [retentionDays, setRetentionState] = useState<number | null>(null);
+	const queryClient = useQueryClient();
+	const downloads = useQuery(downloadsQuery()).data ?? NO_DOWNLOADS;
+	// A setting that can't be read counts as keeping downloads until removed.
+	const retentionDays = useQuery(downloadRetentionQuery()).data ?? null;
 
-	const refresh = useCallback(() => listDownloads().then(setDownloads), []);
+	const refresh = useCallback(
+		async () => {
+			// It rejects when the list can't load, as listDownloads did.
+			await queryClient.refetchQueries(
+				{ queryKey: downloadsQuery().queryKey },
+				{ throwOnError: true }
+			);
+		},
+		// Stryker disable next-line ArrayDeclaration: the query client stays the same object while the provider is mounted, so an empty list gives the same callback.
+		[queryClient]
+	);
 
-	const setRetentionDays = useCallback(async (days: number | null) => {
-		const deleted = await setDownloadRetention(days);
-		setRetentionState(days);
-		return deleted;
-	}, []);
+	const setRetentionDays = useCallback(
+		async (days: number | null) => {
+			const deleted = await setDownloadRetention(days);
+			queryClient.setQueryData(downloadRetentionQuery().queryKey, days);
+			return deleted;
+		},
+		// Stryker disable next-line ArrayDeclaration: the query client stays the same object while the provider is mounted, so an empty list gives the same callback.
+		[queryClient]
+	);
 
-	useEffect(() => {
-		refresh();
-		getDownloadRetention()
-			.then(setRetentionState)
-			.catch(() => {});
-		const unlistenProgress = listen<DownloadRecord>("download://progress", (e) => {
-			setDownloads((prev) => {
-				const next = prev.filter((d) => d.id !== e.payload.id);
-				next.push(e.payload);
-				return next;
+	useEffect(
+		() => {
+			const key = downloadsQuery().queryKey;
+			const unlistenProgress = listen<DownloadRecord>("download://progress", (e) => {
+				queryClient.setQueryData(key, (prev = NO_DOWNLOADS) => {
+					const next = prev.filter((d) => d.id !== e.payload.id);
+					next.push(e.payload);
+					return next;
+				});
 			});
-		});
-		// Sent when a download is removed, by the user or the retention setting.
-		const unlistenRemoved = listen<string>("download://removed", (e) => {
-			setDownloads((prev) => prev.filter((d) => d.id !== e.payload));
-		});
-		return () => {
-			unlistenProgress.then((f) => f());
-			unlistenRemoved.then((f) => f());
-		};
-	}, [refresh]);
+			// Sent when a download is removed, by the user or the retention setting.
+			const unlistenRemoved = listen<string>("download://removed", (e) => {
+				queryClient.setQueryData(key, (prev = NO_DOWNLOADS) =>
+					prev.filter((d) => d.id !== e.payload)
+				);
+			});
+			return () => {
+				unlistenProgress.then((f) => f());
+				unlistenRemoved.then((f) => f());
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: the query client stays the same object while the provider is mounted, so the effect runs once either way.
+		[queryClient]
+	);
 
 	const { byChannel, bySeries } = groupDownloads(downloads);
 

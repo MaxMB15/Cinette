@@ -3,6 +3,8 @@
 	"load_m3u_file": { "required": ["name", "path"] },
 	"load_xtream_provider": { "required": ["name", "url", "username", "password"] },
 	"get_providers": {},
+	"get_stream_formats": { "required": ["channel"] },
+	"airplay_load": { "required": ["channel", "generation", "source"], "optional": ["startAt"] },
 	"remove_provider": { "required": ["id"] },
 	"get_all_channels": {},
 	"toggle_favorite": { "required": ["channelId"] },
@@ -104,11 +106,14 @@
 		"optional": ["program"]
 	},
 	"stop_recording": { "required": ["id"] },
+	"get_cast_receivers": {},
+	"hold_cast_receivers": { "required": ["ids"] },
 	"remote_get_settings": {},
 	"remote_set_settings": { "required": ["settings"] },
 	"remote_reset_identity": {},
 	"remote_answer_consent": { "required": ["request", "allow"] },
 	"remote_sessions": {},
+	"remote_pending_consent": {},
 	"remote_disconnect": { "required": ["sessionId"] },
 	"remote_set_state": { "required": ["state"] },
 	"remote_finish_command": { "required": ["token", "outcome"] },
@@ -116,7 +121,7 @@
 	"remote_local_network_denied": {},
 	"remote_connect": { "required": ["deviceId", "link"] },
 	"remote_link": {},
-	"remote_leave": {},
+	"remote_leave": { "required": ["link"] },
 	"remote_command": { "required": ["command", "link"] },
 	"remote_catalog": { "required": ["catalogQuery", "link"] }
 }

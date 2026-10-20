@@ -11,6 +11,7 @@ use super::logos::on_a_provider_site;
 use super::target::CatalogPage;
 use mvp_core::cache::store::{CacheError, CacheStore};
 use mvp_core::models::channel::Channel;
+use mvp_core::models::playlist::Provider;
 use mvp_core::remote::catalog::{
     group_page, provider_host, CatalogItem, CatalogQuery, MAX_PAGE,
 };
@@ -19,33 +20,48 @@ use std::sync::Mutex;
 
 /// Answers `query` from the cache: what this device can play right now.
 /// Episodes come from what [`episodes`] loaded, through [`episode_page`];
-/// here they're only the ones already cached.
-pub fn answer(cache: &CacheStore, query: CatalogQuery) -> CatalogPage {
-    match query {
-        CatalogQuery::Episodes {
-            series_id,
-            cursor,
-            limit,
-        } => {
-            let episodes = cache.get_series_episodes(&series_id).map_err(failed)?;
-            episode_page(cache, &episodes, cursor, limit)
-        }
-        query => {
-            let channels = cache.get_all_channels().map_err(failed)?;
-            let hosts = hosts(cache, &channels)?;
-            answer_from(&channels, &hosts, query)
-        }
+/// here they're only the ones already cached. The cache is locked only
+/// while the rows are read, so a big catalog doesn't hold up the app's own
+/// use of it while the rows are searched and sorted.
+pub fn answer(cache: &Mutex<CacheStore>, query: CatalogQuery) -> CatalogPage {
+    if let CatalogQuery::Episodes {
+        series_id,
+        cursor,
+        limit,
+    } = query
+    {
+        let (episodes, providers) = read(cache, |c| {
+            Ok((c.get_series_episodes(&series_id)?, c.get_providers()?))
+        })?;
+        return episode_page(&providers, &episodes, cursor, limit);
     }
+    let (channels, providers) = read(cache, |c| Ok((c.get_all_channels()?, c.get_providers()?)))?;
+    let hosts = match query {
+        // mutants: skip MatchArm: groups carry no logo, so hosts would only make them slower.
+        CatalogQuery::Groups { .. } => Vec::new(),
+        _ => hosts(&providers, &channels),
+    };
+    answer_from(&channels, &hosts, query)
+}
+
+/// What `read` gets from the cache, with the lock held only for that.
+pub(crate) fn read<T>(
+    cache: &Mutex<CacheStore>,
+    read: impl FnOnce(&CacheStore) -> Result<T, CacheError>,
+) -> Result<T, ErrorCode> {
+    let cache = cache.lock().map_err(|_| ErrorCode::Failed)?;
+    read(&cache).map_err(failed)
 }
 
 /// The page of `episodes` from `cursor`, the id of its first episode.
+/// `providers` are this device's, for [`hosts`].
 pub fn episode_page(
-    cache: &CacheStore,
+    providers: &[Provider],
     episodes: &[Channel],
     cursor: Option<String>,
     limit: u32,
 ) -> CatalogPage {
-    let hosts = hosts(cache, episodes)?;
+    let hosts = hosts(providers, episodes);
     let start = match cursor {
         None => 0,
         Some(id) => episodes
@@ -65,9 +81,12 @@ pub fn episode_page(
 /// The episodes of `series_id`, loaded the way the series list loads them
 /// when the series is opened: an Xtream series from its provider, with the
 /// cached ones when that fails or finds none, anything else from the cache.
+/// The provider is asked only if `may_ask` says so; otherwise the answer is
+/// [`ErrorCode::RateLimited`].
 pub async fn episodes(
     cache: &Mutex<CacheStore>,
     series_id: &str,
+    may_ask: impl FnOnce() -> bool,
 ) -> Result<Vec<Channel>, ErrorCode> {
     let (series, cached) = {
         let cache = cache.lock().map_err(|_| ErrorCode::Failed)?;
@@ -87,6 +106,9 @@ pub async fn episodes(
     };
     if !series.url.starts_with("xtream://series/") {
         return Ok(cached);
+    }
+    if !may_ask() {
+        return Err(ErrorCode::RateLimited);
     }
     match crate::commands::fetch_series_episodes(cache, series_id).await {
         Ok(loaded) if !loaded.is_empty() => Ok(loaded),
@@ -116,8 +138,7 @@ fn page_size(limit: u32) -> usize {
 /// The hosts no logo may be on: those of this device's providers, their
 /// guides, and every stream in `channels`. A provider often keeps its logos
 /// next to its streams, on a host its playlist's address doesn't name.
-pub(crate) fn hosts(cache: &CacheStore, channels: &[Channel]) -> Result<Vec<String>, ErrorCode> {
-    let providers = cache.get_providers().map_err(failed)?;
+pub(crate) fn hosts(providers: &[Provider], channels: &[Channel]) -> Vec<String> {
     let servers = providers
         .iter()
         .flat_map(|p| [Some(p.url.as_str()), p.epg_url.as_deref()])
@@ -128,7 +149,7 @@ pub(crate) fn hosts(cache: &CacheStore, channels: &[Channel]) -> Result<Vec<Stri
     let mut hosts: Vec<String> = servers.chain(streams).filter_map(provider_host).collect();
     hosts.sort_unstable();
     hosts.dedup();
-    Ok(hosts)
+    hosts
 }
 
 /// `channel` as a controller sees it. The core drops a logo on one of

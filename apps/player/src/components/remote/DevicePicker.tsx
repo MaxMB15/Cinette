@@ -9,6 +9,7 @@ import { useLatestRef } from "@/hooks/useLatestRef";
 import {
 	groupEntries,
 	isDisabled,
+	keepOrder,
 	keepWarning,
 	statusText,
 	type PickerEntry,
@@ -73,6 +74,9 @@ export const DevicePicker = ({
 }: DevicePickerProps) => {
 	const titleId = useId();
 	const [confirming, setConfirming] = useState<PickerEntry | null>(null);
+	// The rows' order when the pointer came over the list, kept while it's
+	// there so a device that appears can't move another under it.
+	const [held, setHeld] = useState<string[] | null>(null);
 	const onOpenRef = useLatestRef(onOpen);
 	useEffect(() => {
 		if (open) onOpenRef.current?.();
@@ -94,6 +98,8 @@ export const DevicePicker = ({
 	};
 
 	const warning = confirming && keepWarning(confirming);
+	const grouped = groupEntries(entries);
+	const groups = held ? keepOrder(grouped, held) : grouped;
 	return createPortal(
 		<Dialog
 			onClose={() => (confirming ? setConfirming(null) : onClose())}
@@ -129,13 +135,19 @@ export const DevicePicker = ({
 					</div>
 				</div>
 			) : (
-				<div className="space-y-3">
+				<div
+					className="space-y-3"
+					onPointerEnter={() =>
+						setHeld(grouped.flatMap((g) => g.entries.map((e) => e.id)))
+					}
+					onPointerLeave={() => setHeld(null)}
+				>
 					{notice && (
 						<p role="status" className="text-xs text-muted-foreground">
 							{notice}
 						</p>
 					)}
-					{groupEntries(entries).map((group) => (
+					{groups.map((group) => (
 						<section key={group.kind} aria-label={group.heading ?? "This device"}>
 							{group.heading && (
 								<h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1">
@@ -164,7 +176,10 @@ export const DevicePicker = ({
 											>
 												<EntryIcon entry={entry} />
 												<span className="flex-1 min-w-0">
-													<span className="block text-sm truncate">
+													<span
+														className="block text-sm truncate"
+														title={entry.name}
+													>
 														{entry.name}
 													</span>
 													{line && (

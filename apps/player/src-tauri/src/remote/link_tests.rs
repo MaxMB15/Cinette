@@ -69,9 +69,13 @@ struct Target {
 }
 
 async fn target(mode: ControlMode) -> Target {
+    target_keyed(mode, DeviceKey::generate()).await
+}
+
+/// A target with `key`, as one that restarted has its old key.
+async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let key = DeviceKey::generate();
     let (tx, prompts) = mpsc::unbounded_channel();
     let (hide, hidden) = mpsc::unbounded_channel();
     let silent = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -85,12 +89,16 @@ async fn target(mode: ControlMode) -> Target {
         remote_control: mode,
         ..RemoteSettings::default()
     };
-    let handle = target::start(
+    let handle = target::start_with(
         listener,
         key.clone(),
         DeviceType::FireTv,
         settings,
         player.clone(),
+        target::Limits {
+            load_gap: Duration::ZERO,
+            ..target::Limits::STANDARD
+        },
     )
     .unwrap();
     *player.target.lock().unwrap() = Some(handle.clone());
@@ -112,6 +120,8 @@ struct Proxy {
     pipes: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// The bytes the link sent through so far.
     sent: Arc<AtomicUsize>,
+    /// The connections it took, refused ones too.
+    accepted: Arc<AtomicUsize>,
 }
 
 impl Proxy {
@@ -121,9 +131,12 @@ impl Proxy {
         let accepting = Arc::new(Mutex::new(true));
         let pipes: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::default();
         let sent = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
         let (open, list, count) = (accepting.clone(), pipes.clone(), sent.clone());
+        let taken = accepted.clone();
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
+                taken.fetch_add(1, Ordering::SeqCst);
                 if !*open.lock().unwrap() {
                     // Refused, as an unreachable device would be.
                     drop(inbound);
@@ -162,6 +175,7 @@ impl Proxy {
             accepting,
             pipes,
             sent,
+            accepted,
         }
     }
 
@@ -453,6 +467,61 @@ async fn a_dropped_connection_resumes_without_asking_again() {
 }
 
 #[tokio::test]
+async fn a_resume_a_restarted_target_asks_about_shows_its_code() {
+    let mut t = target(ControlMode::Ask).await;
+    let proxy = Proxy::new(t.port).await;
+    let at = Arc::new(std::sync::atomic::AtomicU16::new(proxy.port));
+    let to = at.clone();
+    let addresses: Addresses = Arc::new(move || {
+        vec![SocketAddr::from((
+            [127, 0, 0, 1],
+            to.load(Ordering::SeqCst),
+        ))]
+    });
+    let mut link = link_with(&t, addresses, GRACE);
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    t.handle.answer(request, Answer::Allow);
+    link.until_phase(Phase::Connected).await;
+
+    // The target restarts with its key but none of its sessions.
+    let mut restarted = target_keyed(ControlMode::Ask, t.key.clone()).await;
+    at.store(restarted.port, Ordering::SeqCst);
+    proxy.cut(true);
+    let (_, shown) = timeout(WAIT, restarted.prompts.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    link.until(|l| {
+        l.phases()
+            .iter()
+            .filter(|p| matches!(p, Phase::Pending { .. }))
+            .count()
+            == 2
+    })
+    .await;
+    let phases = link.phases();
+    let after = phases.iter().rposition(|p| *p == Phase::Connected).unwrap();
+    let codes: Vec<&str> = phases[after..]
+        .iter()
+        .filter_map(|p| match p {
+            Phase::Verifying { code, .. } => Some(code.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(codes, [shown.as_str()], "{phases:?}");
+    let verifying = phases
+        .iter()
+        .rposition(|p| matches!(p, Phase::Verifying { .. }));
+    let pending = phases
+        .iter()
+        .rposition(|p| matches!(p, Phase::Pending { .. }));
+    assert!(
+        verifying < pending,
+        "the code comes before the wait: {phases:?}"
+    );
+}
+
+#[tokio::test]
 async fn commands_while_reconnecting_are_not_sent() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
@@ -500,18 +569,35 @@ async fn gives_up_when_the_grace_runs_out() {
 }
 
 #[tokio::test]
-async fn a_drop_before_control_was_granted_is_lost() {
+async fn a_drop_before_control_was_granted_is_lost_without_trying_again() {
     let t = target(ControlMode::Ask).await;
     let proxy = Proxy::new(t.port).await;
-    let mut link = link_to(&t, proxy.port, GRACE);
+    // A long grace, so trying again would show.
+    let mut link = link_to(&t, proxy.port, Duration::from_secs(3600));
     link.until(|l| {
         l.phases()
             .iter()
             .any(|p| matches!(p, Phase::Pending { .. }))
     })
     .await;
-    proxy.cut(true);
+    // Cut, but still taking connections, as a target that closed on it.
+    proxy.cut(false);
     assert_eq!(link.closed().await, Ended::Lost);
+    // Longer than the first wait before trying again.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        proxy.accepted.load(Ordering::SeqCst),
+        1,
+        "there was no session to resume"
+    );
+    assert!(
+        !link
+            .phases()
+            .iter()
+            .any(|p| matches!(p, Phase::Reconnecting { .. })),
+        "{:?}",
+        link.phases()
+    );
 }
 
 #[tokio::test]
@@ -582,6 +668,24 @@ async fn the_wrong_key_at_the_address_is_refused() {
         link.closed().await,
         Ended::Target(CloseReason::IdentityMismatch)
     );
+}
+
+#[tokio::test]
+async fn an_address_with_the_wrong_key_is_passed_over_for_the_next() {
+    let t = target(ControlMode::Always).await;
+    let impostor = target(ControlMode::Always).await;
+    // Someone else claims the target's id, at an address listed first.
+    let (wrong, right) = (impostor.port, t.port);
+    let addresses: Addresses = Arc::new(move || {
+        vec![
+            SocketAddr::from(([127, 0, 0, 1], wrong)),
+            SocketAddr::from(([127, 0, 0, 1], right)),
+        ]
+    });
+    let mut link = link_with(&t, addresses, GRACE);
+    link.until_phase(Phase::Connected).await;
+    assert!(link.handle.command(Command::Stop).await.is_ok());
+    assert_eq!(t.handle.sessions().await.len(), 1);
 }
 
 #[tokio::test]
@@ -688,6 +792,109 @@ async fn a_device_that_takes_the_connection_but_never_answers_is_unreachable() {
     );
     assert_eq!(link.closed().await, Ended::Unreachable);
     held.abort();
+}
+
+/// A listener that takes connections and closes each at once.
+async fn closing_decoy() -> (u16, JoinHandle<()>) {
+    let decoy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = decoy.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        while let Ok((stream, _)) = decoy.accept().await {
+            drop(stream);
+        }
+    });
+    (port, task)
+}
+
+/// A listener that takes connections and never says a word.
+async fn silent_decoy() -> (u16, JoinHandle<()>) {
+    let decoy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = decoy.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((stream, _)) = decoy.accept().await {
+            open.push(stream);
+        }
+    });
+    (port, task)
+}
+
+fn at(ports: Vec<u16>) -> Addresses {
+    Arc::new(move || {
+        ports
+            .iter()
+            .map(|&port| SocketAddr::from(([127, 0, 0, 1], port)))
+            .collect()
+    })
+}
+
+#[tokio::test]
+async fn an_address_that_closes_or_says_nothing_is_passed_over_for_the_next() {
+    let t = target(ControlMode::Always).await;
+    let (closes, a) = closing_decoy().await;
+    let (silent, b) = silent_decoy().await;
+    let limits = Limits {
+        handshake: Duration::from_millis(300),
+        ..Limits::STANDARD
+    };
+    let mut link = link_timed(&t, at(vec![closes, silent, t.port]), GRACE, limits);
+    link.until_phase(Phase::Connected).await;
+    assert!(link.handle.command(Command::Stop).await.is_ok());
+    a.abort();
+    b.abort();
+}
+
+#[tokio::test]
+async fn with_no_address_the_device_it_ends_with_the_most_telling_reason() {
+    let t = target(ControlMode::Always).await;
+    let impostor = target(ControlMode::Always).await;
+    let (closes, a) = closing_decoy().await;
+    let (silent, b) = silent_decoy().await;
+    let limits = Limits {
+        handshake: Duration::from_millis(300),
+        ..Limits::STANDARD
+    };
+    // Another device's key says more than a closed connection.
+    let mut link = link_timed(&t, at(vec![closes, impostor.port, silent]), GRACE, limits);
+    assert_eq!(
+        link.closed().await,
+        Ended::Target(CloseReason::IdentityMismatch)
+    );
+    // And a closed connection more than no answer.
+    let mut link = link_timed(&t, at(vec![silent, closes]), GRACE, limits);
+    assert_eq!(link.closed().await, Ended::Lost);
+    a.abort();
+    b.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_after_the_code_isnt_tried_at_the_next_address() {
+    let mut t = target(ControlMode::Ask).await;
+    let other = target_keyed(ControlMode::Always, t.key.clone()).await;
+    let mut link = link_with(&t, at(vec![t.port, other.port]), GRACE);
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    t.handle.answer(request, Answer::Deny);
+    assert_eq!(link.closed().await, Ended::Target(CloseReason::Denied));
+    assert!(other.handle.sessions().await.is_empty());
+}
+
+#[test]
+fn the_more_telling_reason_wins() {
+    let mismatch = Ended::Target(CloseReason::IdentityMismatch);
+    assert_eq!(more_telling(None, Ended::Unreachable), Ended::Unreachable);
+    assert_eq!(
+        more_telling(Some(Ended::Unreachable), Ended::Lost),
+        Ended::Lost
+    );
+    assert_eq!(
+        more_telling(Some(Ended::Lost), Ended::Unreachable),
+        Ended::Lost
+    );
+    assert_eq!(more_telling(Some(Ended::Lost), mismatch), mismatch);
+    assert_eq!(more_telling(Some(mismatch), Ended::Lost), mismatch);
+    // On a tie, the first stays.
+    let protocol = Ended::Target(CloseReason::Protocol);
+    assert_eq!(more_telling(Some(mismatch), protocol), mismatch);
 }
 
 #[tokio::test]

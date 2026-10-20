@@ -5,6 +5,8 @@ import { describe, it, expect } from "vitest";
 import {
 	blockerText,
 	cinetteEntries,
+	keepOrder,
+	shortId,
 	cinetteId,
 	LOCAL_ENTRY,
 	groupEntries,
@@ -107,6 +109,43 @@ describe("keepWarning", () => {
 	});
 });
 
+describe("shortId and tags", () => {
+	it("shows the start of the id after the row's line", () => {
+		expect(shortId("abcdefghij")).toBe("ID abcdef");
+		expect(statusText({ ...tv, tag: "ID abcdef" })).toBe("Fire TV · ID abcdef");
+		expect(statusText({ ...tv, deviceType: undefined, tag: "ID abcdef" })).toBe("ID abcdef");
+		expect(statusText({ ...tv, status: "unavailable", tag: "ID x" })).toBe(
+			"Not available · ID x"
+		);
+	});
+});
+
+describe("keepOrder", () => {
+	it("keeps rows where they were and puts new ones after", () => {
+		const row = (id: string): PickerEntry => ({ id, kind: "cinette", name: id });
+		const groups = groupEntries([
+			LOCAL_ENTRY,
+			row("cinette:a"),
+			row("cinette:new"),
+			row("cinette:b"),
+		]);
+		const kept = keepOrder(groups, ["local", "cinette:b", "cinette:a"]);
+		expect(kept.map((g) => g.entries.map((e) => e.id))).toStrictEqual([
+			["local"],
+			["cinette:b", "cinette:a", "cinette:new"],
+		]);
+		expect(kept[1].heading).toBe("Cinette devices");
+		// The first id held stays first too.
+		expect(
+			keepOrder(groups, ["cinette:b", "cinette:a"])[1].entries.map((e) => e.id)
+		).toStrictEqual(["cinette:b", "cinette:a", "cinette:new"]);
+		expect(
+			groups[1].entries.map((e) => e.id),
+			"the groups given stay as they were"
+		).toStrictEqual(["cinette:a", "cinette:b", "cinette:new"]);
+	});
+});
+
 describe("cinetteEntries", () => {
 	it("lists this device first, then each Cinette device", () => {
 		const device = {
@@ -124,13 +163,20 @@ describe("cinetteEntries", () => {
 			])
 		).toStrictEqual([
 			{ id: "local", kind: "local", name: "This device" },
-			{ id: "cinette:tv", kind: "cinette", name: "Living Room", deviceType: "fire-tv" },
+			{
+				id: "cinette:tv",
+				kind: "cinette",
+				name: "Living Room",
+				deviceType: "fire-tv",
+				tag: "ID tv",
+			},
 			{
 				id: "cinette:gone",
 				kind: "cinette",
 				name: "Living Room",
 				deviceType: "fire-tv",
 				status: "unavailable",
+				tag: "ID gone",
 			},
 			{
 				id: "cinette:never",
@@ -139,8 +185,16 @@ describe("cinetteEntries", () => {
 				deviceType: "fire-tv",
 				status: "unavailable",
 				why: "Doesn't allow remote control",
+				tag: "ID never",
 			},
 		]);
+		// A name of its own needs no id.
+		expect(cinetteEntries([device])[1]).toStrictEqual({
+			id: "cinette:tv",
+			kind: "cinette",
+			name: "Living Room",
+			deviceType: "fire-tv",
+		});
 		expect(cinetteId("x")).toBe("cinette:x");
 		expect(LOCAL_ENTRY.id).toBe("local");
 	});

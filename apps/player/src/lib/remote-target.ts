@@ -116,6 +116,28 @@ export const remotePlayerState = (
 	};
 };
 
+/** What a player sends when it closes: nothing playing, nothing to do. */
+export const IDLE_REMOTE_STATE: RemotePlayerState = {
+	status: "idle",
+	item: null,
+	position: 0,
+	duration: 0,
+	volume: null,
+	subtitles: [],
+	subtitleId: null,
+	audio: [],
+	audioId: null,
+	capabilities: {
+		pause: false,
+		seek: false,
+		volume: false,
+		subtitles: false,
+		audioTracks: false,
+		resumeAt: false,
+	},
+	error: null,
+};
+
 /** The hosts of `urls`, leaving out what isn't a URL. */
 const hostsOf = (urls: string[]): string[] =>
 	urls.flatMap((url) => {
@@ -138,6 +160,9 @@ export interface CommandTarget {
 	/** The player's destination once the page has opened, or one whose
 	 *  load fails if it didn't in time. */
 	waitForPlayer: () => Promise<Pick<PlaybackDestination, "load">>;
+	/** Stops mpv when no player page is open. Leaving the page with Back
+	 *  keeps it playing. */
+	stopWithoutPlayer: () => Promise<void>;
 }
 
 const outcomeOf = async (run: () => Promise<void>): Promise<CommandOutcome> => {
@@ -170,8 +195,8 @@ export const applyRemoteCommand = async (
 		return outcomeOf(() => opened.load({ kind: "local", channel }, { startAt }));
 	}
 	if (command.action === "stop") {
-		// With no player open, nothing plays, which is what stop asks for.
-		return player ? outcomeOf(() => player.stop()) : "ok";
+		// mpv can play on after its page closed, so stop it either way.
+		return outcomeOf(() => (player ? player.stop() : target.stopWithoutPlayer()));
 	}
 	if (!player) return "failed";
 	if (command.action !== "volume" && player.getState().item?.ref !== command.itemId)

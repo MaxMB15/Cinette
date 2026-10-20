@@ -961,6 +961,55 @@ fn browsing_sends_the_player_nothing() {
 }
 
 #[test]
+fn a_search_page_cut_to_fit_has_no_cursor_but_an_items_page_does() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    let phone = net.connect("Phone");
+    let big = |i: usize| CatalogItem {
+        name: "x".repeat(1000),
+        ..item(&format!("i{i}"))
+    };
+    let many: Vec<CatalogItem> = (0..100).map(big).collect();
+    let search = net.query(
+        phone,
+        CatalogQuery::Search {
+            query: "x".into(),
+            content_type: None,
+            limit: 100,
+        },
+    );
+    let browse = net.query(
+        phone,
+        CatalogQuery::Items {
+            content_type: "live".into(),
+            group: "g".into(),
+            cursor: None,
+            limit: 100,
+        },
+    );
+    for (conn, request, _) in net.queries.clone() {
+        let actions = net
+            .target
+            .finish_catalog(conn, request, Ok((many.clone(), None)));
+        net.handle(actions);
+    }
+    let next_of = |id: u64| {
+        net.clients[phone].events.iter().find_map(|e| match e {
+            Event::Page {
+                request,
+                items,
+                next,
+            } if *request == id => Some((items.len(), next.clone())),
+            _ => None,
+        })
+    };
+    let (shown, next) = next_of(search).unwrap();
+    assert!(shown < 100);
+    assert_eq!(next, None, "a search can't go on from a cursor");
+    let (shown, next) = next_of(browse).unwrap();
+    assert_eq!(next, Some(format!("i{shown}")));
+}
+
+#[test]
 fn a_controller_that_hasnt_been_let_in_cant_send_commands() {
     let mut net = Net::new(RemoteSettings::default());
     let phone = net.connect("Phone");

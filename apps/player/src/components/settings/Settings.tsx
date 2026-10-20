@@ -13,6 +13,7 @@ import { usePlatform } from "@/hooks/usePlatform";
 import { isMobilePlatform } from "@/lib/platform";
 import type { UpdateState } from "@/hooks/useUpdateChecker";
 import { getVersion } from "@tauri-apps/api/app";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	Settings as SettingsIcon,
 	CircleCheckBig,
@@ -38,6 +39,7 @@ import {
 	setDownloadConcurrency,
 	countDownloadsDue,
 } from "@/lib/tauri";
+import { historyKey, reloadClearedCaches } from "@/lib/queries";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { RemoteControlSettings } from "@/components/settings/RemoteControlSettings";
 import { useDownloads } from "@/hooks/useDownloads";
@@ -146,6 +148,7 @@ interface SettingsProps {
 
 export const Settings = ({ updateState }: SettingsProps) => {
 	const { platform } = usePlatform();
+	const queryClient = useQueryClient();
 	const [appVersion, setAppVersion] = useState("");
 	const [hwAccel, setHwAccel] = useState(readHwdecEnabled);
 	const [defaultVolume, setDefaultVolume] = useState(readDefaultVolume);
@@ -249,6 +252,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		if (!confirmed) return;
 		try {
 			await clearWatchHistory();
+			// The history lists start over, rather than show the cleared
+			// entries until they load again.
+			queryClient.removeQueries({ queryKey: historyKey() });
 			setHistoryStatus("cleared");
 			setHistoryError(null);
 			if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
@@ -266,6 +272,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 		if (!confirmed) return;
 		try {
 			await clearAllCaches();
+			reloadClearedCaches(queryClient).catch(() => {});
 			setCacheStatus("cleared");
 			setCacheError(null);
 			if (cacheTimerRef.current) clearTimeout(cacheTimerRef.current);

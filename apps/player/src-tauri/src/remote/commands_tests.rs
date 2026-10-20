@@ -159,3 +159,9 @@ fn a_logo_on_the_site_the_item_streams_from_stays_home() {
         None
     );
 }
+
+#[test]
+fn local_network_access_isnt_refused_until_something_refuses_it() {
+    // Nothing in a test run asks macOS, and Linux never refuses.
+    assert!(!tauri::async_runtime::block_on(remote_local_network_denied()));
+}

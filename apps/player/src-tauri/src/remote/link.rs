@@ -246,6 +246,9 @@ pub fn start(config: LinkConfig, host: Arc<dyn LinkHost>) -> LinkHandle {
 enum Outcome {
     /// For good, for this reason.
     Ended(Ended),
+    /// The address didn't turn out to be the device: it closed, said
+    /// nothing, broke the handshake or had another key, for this reason.
+    NotThere(Ended),
     /// It dropped. The session, if there is one, may resume.
     Dropped,
 }
@@ -270,31 +273,48 @@ async fn run(
                 Phase::Reconnecting { attempt }
             },
         );
-        let outcome = match connect_any(&(config.addresses)(), &mut inbox).await {
-            Reached::Left => Outcome::Ended(Ended::Left),
-            Reached::Stream(stream) => {
-                let mut session_back = false;
-                let result = connection(
-                    &config,
-                    &host,
-                    stream,
-                    &mut session,
-                    &mut session_back,
-                    &mut inbox,
-                )
-                .await;
-                if session_back {
-                    // The session came back, so a later drop starts afresh.
-                    dropped_at = None;
-                    attempt = 0;
+        let addresses: Vec<SocketAddr> = (config.addresses)()
+            .into_iter()
+            .take(MAX_ADDRESSES)
+            .collect();
+        // An address that doesn't turn out to be the device, such as one
+        // with someone else's key, is passed over for the next.
+        let mut from = 0;
+        let mut why_not: Option<Ended> = None;
+        let outcome = loop {
+            break match connect_any(&addresses[from..], &mut inbox).await {
+                Reached::Left => Outcome::Ended(Ended::Left),
+                Reached::Stream(stream, at) => {
+                    let mut session_back = false;
+                    let result = connection(
+                        &config,
+                        &host,
+                        stream,
+                        &mut session,
+                        &mut session_back,
+                        &mut inbox,
+                    )
+                    .await;
+                    if session_back {
+                        // The session came back, so a later drop starts afresh.
+                        dropped_at = None;
+                        attempt = 0;
+                    }
+                    if let Outcome::NotThere(why) = result {
+                        why_not = Some(more_telling(why_not, why));
+                        from += at + 1;
+                        continue;
+                    }
+                    result
                 }
-                result
-            }
-            Reached::Nowhere if session.is_some() => Outcome::Dropped,
-            Reached::Nowhere => Outcome::Ended(Ended::Unreachable),
+                // During a resume, discovery may find the right address yet.
+                Reached::Nowhere if session.is_some() => Outcome::Dropped,
+                Reached::Nowhere => Outcome::Ended(why_not.unwrap_or(Ended::Unreachable)),
+            };
         };
         let ended = match outcome {
             Outcome::Ended(ended) => Some(ended),
+            Outcome::NotThere(_) => unreachable!("the loop above tries the next address"),
             Outcome::Dropped if session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
                 let since = *dropped_at.get_or_insert_with(|| (config.clock)());
@@ -316,6 +336,20 @@ async fn run(
             host.phase(link, &device, &Phase::Closed { reason });
             return;
         }
+    }
+}
+
+/// The more telling of two reasons no address was the device: the other
+/// device's own reason, then a connection that closed, then none answering.
+fn more_telling(old: Option<Ended>, new: Ended) -> Ended {
+    let rank = |e: &Ended| match e {
+        Ended::Target(_) => 2,
+        Ended::Lost => 1,
+        _ => 0,
+    };
+    match old {
+        Some(old) if rank(&old) >= rank(&new) => old,
+        _ => new,
     }
 }
 
@@ -341,23 +375,23 @@ async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input
 
 /// How a connection attempt ended.
 enum Reached {
-    Stream(TcpStream),
+    /// Connected to the address at this index.
+    Stream(TcpStream, usize),
     Nowhere,
     /// This device left meanwhile.
     Left,
 }
 
-/// The first of `addrs` that takes a connection, trying at most
-/// [`MAX_ADDRESSES`]. Leaving stops it at once.
+/// The first of `addrs` that takes a connection. Leaving stops it at once.
 async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<Input>) -> Reached {
-    for addr in addrs.iter().take(MAX_ADDRESSES) {
+    for (at, addr) in addrs.iter().enumerate() {
         let attempt = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr));
         tokio::pin!(attempt);
         loop {
             tokio::select! {
                 result = &mut attempt => {
                     if let Ok(Ok(stream)) = result {
-                        return Reached::Stream(stream);
+                        return Reached::Stream(stream, at);
                     }
                     break;
                 }
@@ -427,6 +461,10 @@ async fn connection(
     // A resume that goes wrong before the session is back can try again,
     // within the grace, rather than end the session.
     let resuming = session.is_some();
+    // A resume skips the code, which was compared already. But a target
+    // that restarted no longer knows the session, takes it as a new
+    // request and asks again, and then the user needs this code.
+    let mut code_for_a_new_request: Option<Phase> = None;
 
     let finish = |waiting: HashMap<u64, (Waiting, Instant)>| {
         for (_, (w, _)) in waiting {
@@ -441,7 +479,11 @@ async fn connection(
                     Some(((), Read::Frame(frame))) => frame,
                     _ => {
                         finish(waiting);
-                        return Outcome::Dropped;
+                        return if verified {
+                            Outcome::Dropped
+                        } else {
+                            Outcome::NotThere(Ended::Lost)
+                        };
                     }
                 };
                 last_heard = (config.clock)();
@@ -454,17 +496,26 @@ async fn connection(
                     match event {
                         Event::Verified { code, peer } => {
                             verified = true;
-                            // A resume skips the code: it was compared already.
-                            if !resuming {
-                                let code = code.to_string();
-                                host.phase(link, device, &Phase::Verifying { code, name: peer.name });
+                            let verifying = Phase::Verifying {
+                                code: code.to_string(),
+                                name: peer.name,
+                            };
+                            if resuming {
+                                code_for_a_new_request = Some(verifying);
+                            } else {
+                                host.phase(link, device, &verifying);
                             }
                         }
-                        Event::Pending { expires_in } => host.phase(
-                            link,
-                            device,
-                            &Phase::Pending { expires_in_ms: u64::from(expires_in) * 1000 },
-                        ),
+                        Event::Pending { expires_in } => {
+                            if let Some(verifying) = code_for_a_new_request.take() {
+                                host.phase(link, device, &verifying);
+                            }
+                            host.phase(
+                                link,
+                                device,
+                                &Phase::Pending { expires_in_ms: u64::from(expires_in) * 1000 },
+                            );
+                        }
                         Event::Connected { session_id, state } => {
                             *session = Some(session_id);
                             *session_back = true;
@@ -486,16 +537,15 @@ async fn connection(
                             // The other device can send these as often as it likes.
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
-                        Event::Closed(CloseReason::IdentityMismatch) if resuming && !*session_back => {
-                            // Another device has its old address; discovery
-                            // may find the right one.
+                        Event::Closed(reason) if !verified => {
+                            // Another device is at this address, which it
+                            // may have taken over, or claims the target's id
+                            // or breaks the handshake.
                             finish(waiting);
-                            return Outcome::Dropped;
+                            return Outcome::NotThere(Ended::Target(reason));
                         }
                         Event::Closed(reason) => {
                             finish(waiting);
-                            // A resume the target no longer knows, after it
-                            // restarted, is a new request; it asks again.
                             return Outcome::Ended(Ended::Target(reason));
                         }
                     }
@@ -558,21 +608,17 @@ async fn connection(
         }
         if !given_up.events.is_empty() {
             finish(waiting);
+            if !verified {
+                return Outcome::NotThere(Ended::Unreachable);
+            }
             if resuming {
                 return Outcome::Dropped;
             }
-            return Outcome::Ended(if verified {
-                Ended::Target(CloseReason::Timeout)
-            } else {
-                Ended::Unreachable
-            });
+            return Outcome::Ended(Ended::Target(CloseReason::Timeout));
         }
         if !verified && now.duration_since(opened) >= config.limits.handshake {
             finish(waiting);
-            if resuming {
-                return Outcome::Dropped;
-            }
-            return Outcome::Ended(Ended::Unreachable);
+            return Outcome::NotThere(Ended::Unreachable);
         }
         let late: Vec<u64> = waiting
             .iter()

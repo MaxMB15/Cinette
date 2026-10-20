@@ -86,6 +86,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	const [message, setMessage] = useState<string | null>(null);
 	// Which view a page of "Load more" belongs to; a newer one drops it.
 	const shownRef = useRef({});
+	const viewRef = useLatestRef(view);
 	const connected = link.phase.phase === "connected";
 
 	const searchRef = useLatestRef(search);
@@ -100,8 +101,12 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 	}, [typed, searchRef]);
 
 	useEffect(() => {
-		// While the link is down nothing can come; it loads again once back.
+		// While the link is down nothing can come.
 		if (!connected) return;
+		// Every change of what to show sets the view loading first, so a
+		// list that's ready is one a link that came back can keep, with the
+		// pages loaded since.
+		if (viewRef.current.status === "ready") return;
 		let current = true;
 		shownRef.current = {};
 		remoteCatalog(link.id, queryFor(type, place, search))
@@ -114,7 +119,7 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		return () => {
 			current = false;
 		};
-	}, [link.id, connected, type, place, search, attempt]);
+	}, [link.id, connected, type, place, search, attempt, viewRef]);
 
 	const go = (to: Place) => {
 		setView(LOADING);
@@ -159,8 +164,9 @@ export const RemoteCatalog = ({ link }: { link: Link }) => {
 		} else play(item);
 	};
 
-	const title =
-		place.kind === "group"
+	const title = search
+		? `Search results on ${link.name}`
+		: place.kind === "group"
 			? groupName(place.group)
 			: place.kind === "episodes"
 				? place.series.name

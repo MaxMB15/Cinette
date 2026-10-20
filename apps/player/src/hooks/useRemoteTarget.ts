@@ -10,13 +10,16 @@ import type { PlaybackDestination } from "@/lib/destination";
 import {
 	applyRemoteCommand,
 	getMountedPlayer,
+	IDLE_REMOTE_STATE,
 	remotePlayerState,
 	setMountedPlayer,
 	waitForMountedPlayer,
 	type RemoteCommand,
 } from "@/lib/remote-target";
 import {
+	mpvStop,
 	remoteAnswerConsent,
+	remotePendingConsent,
 	remoteFinishCommand,
 	remoteSessions,
 	remoteSetState,
@@ -71,6 +74,7 @@ export const useRemoteTarget = (): void => {
 					channel?.id === id ? channel : channelsRef.current.find((c) => c.id === id),
 				openPlayer: () => navigateRef.current("/player"),
 				waitForPlayer: waitForMountedPlayer,
+				stopWithoutPlayer: mpvStop,
 			})
 				.then((outcome) => remoteFinishCommand(token, outcome))
 				.catch(() => {});
@@ -116,7 +120,14 @@ export const usePublishRemoteState = (
 	useEffect(() => {
 		setMountedPlayer(player);
 		return () => {
-			if (getMountedPlayer() === player) setMountedPlayer(null);
+			if (getMountedPlayer() !== player) return;
+			setMountedPlayer(null);
+			// The page closed before it could report the player idle, so
+			// controllers would keep showing what played. A new destination
+			// for the same page takes over in the same commit, and says more.
+			queueMicrotask(() => {
+				if (getMountedPlayer() === null) remoteSetState(IDLE_REMOTE_STATE).catch(() => {});
+			});
 		};
 	}, [player]);
 
@@ -161,6 +172,26 @@ export const useConsentRequest = (): {
 	const [request, setRequest] = useState<ConsentRequest | null>(null);
 	useTauriEvent<ConsentEvent>("remote://consent", ({ expiresInMs, ...event }) =>
 		setRequest({ ...event, expiresAt: performance.now() + expiresInMs })
+	);
+	// One that came before this page listened, as after a reload, would
+	// wait unseen until it ran out. An event since says more.
+	useEffect(
+		() => {
+			let current = true;
+			remotePendingConsent()
+				.then((pending) => {
+					if (!current || !pending) return;
+					const { expiresInMs, ...event } = pending;
+					const shown = { ...event, expiresAt: performance.now() + expiresInMs };
+					setRequest((seen) => seen ?? shown);
+				})
+				.catch(() => {});
+			return () => {
+				current = false;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
+		[]
 	);
 	useTauriEvent<{ request: number }>("remote://consent-hidden", ({ request: hidden }) =>
 		setRequest((shown) => (shown?.request === hidden ? null : shown))

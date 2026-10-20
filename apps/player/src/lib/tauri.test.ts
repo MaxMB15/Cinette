@@ -19,6 +19,30 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const commands = () => invoke.mock.calls.map(([cmd]) => cmd);
 
+describe("remote states", () => {
+	beforeEach(() => invoke.mockReset());
+
+	it("go out in order, each after the one before has its answer", async () => {
+		const first = deferred();
+		invoke.mockReturnValueOnce(first.promise).mockResolvedValue(undefined);
+		const playing = { status: "playing" } as RemotePlayerState;
+		const idle = { status: "idle" } as RemotePlayerState;
+
+		const sent = tauri.remoteSetState(playing);
+		const closed = tauri.remoteSetState(idle);
+		await flush();
+		expect(invoke.mock.calls).toEqual([["remote_set_state", { state: playing }]]);
+
+		first.reject(new Error("not running"));
+		await expect(sent).rejects.toThrow("not running");
+		await closed;
+		expect(invoke.mock.calls).toEqual([
+			["remote_set_state", { state: playing }],
+			["remote_set_state", { state: idle }],
+		]);
+	});
+});
+
 describe("mpv load and stop", () => {
 	beforeEach(() => invoke.mockReset());
 
@@ -153,6 +177,7 @@ describe("backend commands", () => {
 		["mpvSeek", () => tauri.mpvSeek(42.5), "plugin:mpv|mpv_seek", { position: 42.5 }],
 		["mpvSetVolume", () => tauri.mpvSetVolume(80), "plugin:mpv|mpv_set_volume", { volume: 80 }],
 		["mpvGetState", () => tauri.mpvGetState(), "plugin:mpv|mpv_get_state"],
+		["mpvGetMediaInfo", () => tauri.mpvGetMediaInfo(), "plugin:mpv|mpv_get_media_info"],
 		[
 			"mpvSetVisible",
 			() => tauri.mpvSetVisible(false),
@@ -215,6 +240,47 @@ describe("backend commands", () => {
 			{ name: "Xt", url: "http://xt.example", username: "user", password: "secret" },
 		],
 		["getProviders", () => tauri.getProviders(), "get_providers"],
+		[
+			"getStreamFormats",
+			() => tauri.getStreamFormats(episode),
+			"get_stream_formats",
+			{ channel: episode },
+		],
+		[
+			"airplayLoad",
+			() => tauri.airplayLoad(episode, 7, 1, 30),
+			"airplay_load",
+			{ channel: episode, generation: 7, source: 1, startAt: 30 },
+		],
+		[
+			"airplaySetDetection",
+			() => tauri.airplaySetDetection(true),
+			"plugin:mpv|airplay_set_detection",
+			{ enabled: true },
+		],
+		[
+			"airplayChoose",
+			() => tauri.airplayChoose({ x: 1, y: 2, width: 3, height: 4 }),
+			"plugin:mpv|airplay_choose",
+			{ x: 1, y: 2, width: 3, height: 4 },
+		],
+		["airplayGetRoute", () => tauri.airplayGetRoute(), "plugin:mpv|airplay_get_route"],
+		["airplayPlay", () => tauri.airplayPlay(), "plugin:mpv|airplay_play"],
+		["airplayPause", () => tauri.airplayPause(), "plugin:mpv|airplay_pause"],
+		["airplaySeek", () => tauri.airplaySeek(12), "plugin:mpv|airplay_seek", { position: 12 }],
+		[
+			"airplaySelectSubtitle",
+			() => tauri.airplaySelectSubtitle(null),
+			"plugin:mpv|airplay_select_subtitle",
+			{ index: null },
+		],
+		[
+			"airplaySelectAudio",
+			() => tauri.airplaySelectAudio(2),
+			"plugin:mpv|airplay_select_audio",
+			{ index: 2 },
+		],
+		["airplayStop", () => tauri.airplayStop(), "plugin:mpv|airplay_stop"],
 		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
 		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],
 		[
@@ -617,6 +683,13 @@ describe("backend commands", () => {
 			},
 		],
 		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
+		["getCastReceivers", () => tauri.getCastReceivers(), "get_cast_receivers"],
+		[
+			"holdCastReceivers",
+			() => tauri.holdCastReceivers(["cast:tv"]),
+			"hold_cast_receivers",
+			{ ids: ["cast:tv"] },
+		],
 		// remote control
 		["remoteGetSettings", () => tauri.remoteGetSettings(), "remote_get_settings"],
 		[
@@ -638,6 +711,7 @@ describe("backend commands", () => {
 			{ request: 3, allow: true },
 		],
 		["remoteSessions", () => tauri.remoteSessions(), "remote_sessions"],
+		["remotePendingConsent", () => tauri.remotePendingConsent(), "remote_pending_consent"],
 		[
 			"remoteDisconnect",
 			() => tauri.remoteDisconnect("s1"),
@@ -669,7 +743,7 @@ describe("backend commands", () => {
 			{ deviceId: "abc", link: 5 },
 		],
 		["remoteLink", () => tauri.remoteLink(), "remote_link"],
-		["remoteLeave", () => tauri.remoteLeave(), "remote_leave"],
+		["remoteLeave", () => tauri.remoteLeave(4), "remote_leave", { link: 4 }],
 		[
 			"remoteCommand",
 			() => tauri.remoteCommand(5, { action: "seek", itemId: "live-1", to: 30 }),
@@ -703,6 +777,10 @@ describe("backend commands", () => {
 	it("passes a backend error on to the caller", async () => {
 		invoke.mockRejectedValueOnce("provider not found");
 		await expect(tauri.removeProvider("missing")).rejects.toBe("provider not found");
+	});
+
+	it("listens for receivers on the event cast/mod.rs emits", () => {
+		expect(tauri.CAST_RECEIVERS_EVENT).toBe("cast://receivers");
 	});
 
 	/**
