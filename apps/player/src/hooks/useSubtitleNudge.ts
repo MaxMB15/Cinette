@@ -8,6 +8,10 @@ import { isSubtitleNudgeKey, nudgeSubtitle, type SubtitlePosition } from "@/lib/
 /**
  * While `active`, the arrow keys move the subtitles a step at a time. A modal
  * open over the player, such as a confirm, keeps its keys.
+ *
+ * It listens on the document, which hears a key before the window does, so
+ * a TV remote's window listener (`useTvRemote`) sees the key was used and
+ * doesn't move focus as well.
  */
 export const useSubtitleNudge = (
 	active: boolean,
@@ -21,7 +25,7 @@ export const useSubtitleNudge = (
 			const key = e.key;
 			setPosition((p) => nudgeSubtitle(p, key));
 		};
-		window.addEventListener("keydown", handleKey);
-		return () => window.removeEventListener("keydown", handleKey);
+		document.addEventListener("keydown", handleKey);
+		return () => document.removeEventListener("keydown", handleKey);
 	}, [active, setPosition]);
 };

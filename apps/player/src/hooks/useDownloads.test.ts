@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { renderHook, act, waitFor, cleanup } from "@testing-library/react";
+import { wrapperFor } from "@/test/query";
 import {
 	aggregateForSeries,
 	DownloadsProvider,
@@ -138,8 +139,13 @@ describe("groupDownloads", () => {
 });
 
 describe("DownloadsProvider", () => {
+	// Each test gets a new cache, as each app does.
+	let Cache = wrapperFor();
+	beforeEach(() => {
+		Cache = wrapperFor();
+	});
 	const wrapper = ({ children }: { children: ReactNode }) =>
-		createElement(DownloadsProvider, null, children);
+		createElement(Cache, null, createElement(DownloadsProvider, null, children));
 
 	/** Mounts the provider and waits until it has loaded and is listening. */
 	const mount = async () => {
@@ -149,8 +155,9 @@ describe("DownloadsProvider", () => {
 		return hook;
 	};
 
+	// The cache tells the hook on a microtask, which an async act waits for.
 	const emit = (name: string, payload: unknown) =>
-		act(() => events.handlers.get(name)?.({ payload }));
+		act(async () => events.handlers.get(name)?.({ payload }));
 
 	const movie = rec({ id: "d1", channelId: "mv-1", kind: "movie", seriesChannelId: null });
 
@@ -185,22 +192,28 @@ describe("DownloadsProvider", () => {
 	it("updates a download in place as progress comes in and adds new ones", async () => {
 		const { result } = await mount();
 
-		emit("download://progress", { ...movie, status: "downloading", downloadedBytes: 512 });
+		await emit("download://progress", {
+			...movie,
+			status: "downloading",
+			downloadedBytes: 512,
+		});
 		expect(result.current.downloads).toHaveLength(1);
 		expect(result.current.downloads[0]).toMatchObject({ id: "d1", downloadedBytes: 512 });
 
 		const episode = rec({ id: "d2", channelId: "ep-1", status: "queued" });
-		emit("download://progress", episode);
+		await emit("download://progress", episode);
 		expect(result.current.downloads.map((d) => d.id)).toEqual(["d1", "d2"]);
 		expect(result.current.bySeries.get("S1")).toEqual([episode]);
 	});
 
 	it("drops a download the backend removed", async () => {
+		const episode = rec({ id: "d2", channelId: "ep-1" });
+		vi.mocked(listDownloads).mockResolvedValue([movie, episode]);
 		const { result } = await mount();
 
-		emit("download://removed", "d1");
+		await emit("download://removed", "d1");
 
-		expect(result.current.downloads).toEqual([]);
+		expect(result.current.downloads).toEqual([episode]);
 		expect(result.current.byChannel.has("mv-1")).toBe(false);
 	});
 
@@ -212,6 +225,29 @@ describe("DownloadsProvider", () => {
 		await act(() => result.current.refresh());
 
 		expect(result.current.downloads).toEqual([movie, episode]);
+		// The retention setting doesn't load again with it.
+		expect(getDownloadRetention).toHaveBeenCalledOnce();
+	});
+
+	it("starts with no downloads, and keeps one reported before the list loads", async () => {
+		vi.mocked(listDownloads).mockReturnValue(new Promise(() => {}));
+		const { result } = renderHook(() => useDownloads(), { wrapper });
+		expect(result.current.downloads).toEqual([]);
+		await waitFor(() => expect(events.handlers.size).toBe(2));
+
+		await emit("download://progress", movie);
+		expect(result.current.downloads).toEqual([movie]);
+	});
+
+	it("rejects a reload that fails, and keeps the list it had", async () => {
+		const { result } = await mount();
+		vi.mocked(listDownloads).mockRejectedValueOnce(new Error("store locked"));
+
+		let caught: unknown = null;
+		await act(() => result.current.refresh().catch((e: unknown) => (caught = e)));
+
+		expect(caught).toEqual(new Error("store locked"));
+		expect(result.current.downloads).toEqual([movie]);
 	});
 
 	it("saves the retention setting and reports how many downloads it deleted", async () => {

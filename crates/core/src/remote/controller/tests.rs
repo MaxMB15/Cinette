@@ -73,7 +73,9 @@ fn nothing_can_be_sent_before_control_is_granted() {
     assert_eq!(c.command(Command::Stop), Err(NotConnected));
     assert_eq!(
         c.catalog(crate::remote::catalog::CatalogQuery::Groups {
-            content_type: "live".into()
+            content_type: "live".into(),
+            cursor: None,
+            limit: 10,
         }),
         Err(NotConnected)
     );

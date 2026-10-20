@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-airplay-select-subtitle"
+description = "Enables the airplay_select_subtitle command without any pre-configured scope."
+commands.allow = ["airplay_select_subtitle"]
+
+[[permission]]
+identifier = "deny-airplay-select-subtitle"
+description = "Denies the airplay_select_subtitle command without any pre-configured scope."
+commands.deny = ["airplay_select_subtitle"]

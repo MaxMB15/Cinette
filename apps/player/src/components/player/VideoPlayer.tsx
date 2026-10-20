@@ -17,6 +17,10 @@ import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } fr
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
+import { useAirPlay } from "@/hooks/useAirPlay";
+import { airplayBlockedMessage, airplayKey, airplayProgress } from "@/lib/airplay";
+import { AirPlayButton } from "@/components/player/AirPlayButton";
+import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -85,10 +89,12 @@ import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
 import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
-import { isMobilePlatform } from "@/lib/platform";
+import { getPlatform, isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { ChevronLeft } from "lucide-react";
 
+/** How long a note about AirPlay stays up. */
+const AIRPLAY_NOTICE_MS = 6000;
 /** How often (ms) watch progress is persisted while playing. */
 const PROGRESS_SAVE_INTERVAL = 5000;
 const MAX_VOLUME = 150;
@@ -209,12 +215,14 @@ export const PlayerView = () => {
 	useLeaveFullscreenOnUnmount();
 	// The phone layout hides the tab bar on this route, so the player needs
 	// its own way back.
-	const { layoutMode } = usePlatform();
+	const { layoutMode, platform } = usePlatform();
 	const showBack = layoutMode === "mobile";
 	// Phones and tablets set the volume with the hardware buttons. An Android
 	// TV box has no touch screen, so it keeps the volume and shortcut
 	// controls for its remote.
 	const touchDevice = isMobilePlatform() && navigator.maxTouchPoints > 0;
+	// A TV is driven by its remote's D-pad.
+	const remote = getPlatform() === "tv";
 	const fullscreenButton = hasFullscreenButton(touchDevice, layoutMode);
 	const [showSubtitlePicker, setShowSubtitlePicker] = useState(false);
 	const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
@@ -490,6 +498,27 @@ export const PlayerView = () => {
 	// The player's controls go through the active destination, which is
 	// always this device for now.
 	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
+	// AirPlay video on iOS, with its own panel until the device picker
+	// takes over.
+	const airplay = useAirPlay(platform === "ios");
+	const tvRef = useLatestRef(airplay.destination);
+	// Why AirPlay stopped or didn't start, once the AirPlay button can't say.
+	const [airplayNotice, setAirplayNotice] = useState<string | null>(null);
+	useEffect(() => {
+		const timer = setTimeout(() => setAirplayNotice(null), AIRPLAY_NOTICE_MS);
+		return () => clearTimeout(timer);
+	}, [airplayNotice]);
+	// The receiver's position goes into the same resume point as local
+	// playback's, since mpv is stopped while AirPlay plays.
+	useEffect(() => {
+		const p = progressRef.current;
+		// flushProgress skips an item with no resume point, such as live.
+		if (!airplay.state) return;
+		const next = airplayProgress(p, airplay.state, Date.now(), PROGRESS_SAVE_INTERVAL);
+		if (!next) return;
+		Object.assign(p, next.progress);
+		if (next.save) flushProgress();
+	}, [airplay.state, flushProgress]);
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with
@@ -1118,8 +1147,13 @@ export const PlayerView = () => {
 			// position/delay handlers — don't let them also seek or change volume.
 			const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key);
 			if (subtitleEditMode && isArrow) return;
+			// The remote is a TV's only way to the controls, so any key shows
+			// them, and each one keeps them up while focus moves between them.
+			if (remote) revealControls();
+			// On a TV the D-pad moves between the controls once one has focus.
+			if (remote && isArrow && isKeyboardFocusedControl(e.target)) return;
 
-			const action = resolvePlayerHotkey(e, skip);
+			const action = resolvePlayerHotkey(e, skip, remote);
 			if (!action) return;
 			if (showShortcuts && action.type !== "toggleShortcuts" && action.type !== "escape")
 				return;
@@ -1127,10 +1161,26 @@ export const PlayerView = () => {
 			// still presses a button that has focus. Held down, it skips once.
 			if (action.type === "skipSegment") {
 				if (!e.repeat && skipSegment?.()) e.preventDefault();
+				// A remote's center button plays and pauses when there's nothing to skip.
+				else if (!e.repeat && remote) {
+					e.preventDefault();
+					if (mpv.state.isPaused || !mpv.state.isPlaying) playback.play();
+					else playback.pause();
+				}
 				return;
 			}
 			e.preventDefault();
 			if (e.repeat && !repeatsWhenHeld(action)) return;
+
+			// While the TV plays, the keys drive it, and nothing starts here.
+			const tv = tvRef.current;
+			if (tv) {
+				const key = airplayKey(action, tv.getState(), tv.capabilities);
+				if (key.kind === "play") void tv.play();
+				if (key.kind === "pause") void tv.pause();
+				if (key.kind === "seek") void tv.seek(key.to);
+				if (key.kind !== "pass") return;
+			}
 
 			const s = mpv.state;
 			switch (action.type) {
@@ -1140,6 +1190,12 @@ export const PlayerView = () => {
 					} else {
 						playback.pause();
 					}
+					break;
+				case "play":
+					playback.play();
+					break;
+				case "pause":
+					playback.pause();
 					break;
 				case "toggleFullscreen":
 					toggleFullscreen();
@@ -1207,6 +1263,7 @@ export const PlayerView = () => {
 		[
 			mpv,
 			playback,
+			tvRef,
 			pendingResume,
 			showShortcuts,
 			isFullscreen,
@@ -1227,6 +1284,8 @@ export const PlayerView = () => {
 			skipBy,
 			seekTo,
 			skipSegment,
+			remote,
+			revealControls,
 		]
 	);
 
@@ -1274,6 +1333,67 @@ export const PlayerView = () => {
 			onRemove={() => playerDl && removeDownload(playerDl.id)}
 		/>
 	) : undefined;
+
+	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
+	const sendToAirPlay = async (channel: Channel, anchor: DOMRect): Promise<string | null> => {
+		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
+		const result = await airplay.send(channel, {
+			anchor,
+			startAt,
+			stopLocal: async () => {
+				flushProgress();
+				await playback.stop();
+			},
+		});
+		if (result.sent || result.why === "cancelled") return null;
+		if (result.why === "blocked") return airplayBlockedMessage(result.decision);
+		console.warn("[VideoPlayer] AirPlay failed:", result.error);
+		// Once local playback has stopped, the AirPlay button is gone with
+		// the panel it gave way to, so the player says it.
+		if (result.stopped) {
+			setAirplayNotice("Couldn't start AirPlay. Nothing is playing.");
+			return null;
+		}
+		return "Couldn't start AirPlay.";
+	};
+	const tv = airplay.destination;
+	const castSlot =
+		airplay.available && activeChannel && !tv ? (
+			<AirPlayButton onSend={(anchor) => sendToAirPlay(activeChannel, anchor)} />
+		) : undefined;
+
+	const airplayPanel = tv ? (
+		<AirPlayPanel
+			name={tv.name}
+			// The hook's state is set exactly when its destination is.
+			state={airplay.state ?? tv.getState()}
+			capabilities={tv.capabilities}
+			onPlay={() => void tv.play()}
+			onPause={() => void tv.pause()}
+			onSeek={(position) => void tv.seek(position)}
+			onSubtitle={(id) => void tv.selectSubtitle(id)}
+			onAudio={(id) => void tv.selectAudio(id)}
+			onPlayHere={async (position, anchor) => {
+				flushProgress();
+				// AirPlay lets go of the stream before mpv opens it, since many
+				// accounts allow one connection at a time.
+				await airplay.returnHere(anchor);
+				// Stryker disable next-line ConditionalExpression: The panel only shows after a send, which needs a channel, and nothing clears the channel while it shows.
+				if (!activeChannel) return;
+				await playback
+					.load(
+						{ kind: "local", channel: activeChannel },
+						{ startAt: position > 0 ? position : undefined }
+					)
+					.catch(() => setAirplayNotice("Couldn't play it on this device."));
+			}}
+			onStop={async () => {
+				flushProgress();
+				await airplay.stop();
+				handleStop();
+			}}
+		/>
+	) : null;
 
 	// Resumes where the stream broke, not from the start of the movie or episode.
 	const retryStream = () => {
@@ -1394,7 +1514,17 @@ export const PlayerView = () => {
 				/>
 			)}
 
-			{!mpv.fallbackActive && (
+			{airplayPanel}
+			{airplayNotice && (
+				<p
+					role="alert"
+					className="absolute top-4 left-1/2 z-40 -translate-x-1/2 rounded bg-black/90 px-4 py-2 text-sm text-white"
+				>
+					{airplayNotice}
+				</p>
+			)}
+
+			{!mpv.fallbackActive && !airplay.destination && (
 				<Controls
 					state={{
 						isPlaying: mpv.state.isPlaying,
@@ -1417,6 +1547,8 @@ export const PlayerView = () => {
 					// or after it fails, and the spinner or the error has the middle
 					// to itself.
 					hideCenterControls={mpv.opening || mpv.openFailed || mpv.loadFailed}
+					// Stryker disable next-line OptionalChaining: the bar only calls this while it's on the page, inside the container, so the ref is never null.
+					onHideWithFocus={remote ? () => containerRef.current?.focus() : undefined}
 					onVolumeChange={playback.setVolume}
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
@@ -1435,6 +1567,7 @@ export const PlayerView = () => {
 					onShortcuts={touchDevice ? undefined : () => setShowShortcuts((v) => !v)}
 					showVolumeSlider={!touchDevice}
 					downloadSlot={downloadSlot}
+					castSlot={castSlot}
 				/>
 			)}
 

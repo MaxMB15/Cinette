@@ -5,6 +5,7 @@
 	"get_providers": {},
 	"get_converter_support": {},
 	"get_stream_formats": { "required": ["channel"] },
+	"airplay_load": { "required": ["channel", "generation", "source"], "optional": ["startAt"] },
 	"remove_provider": { "required": ["id"] },
 	"get_all_channels": {},
 	"toggle_favorite": { "required": ["channelId"] },
@@ -105,5 +106,7 @@
 		"required": ["channelId", "startAt", "endAt"],
 		"optional": ["program"]
 	},
-	"stop_recording": { "required": ["id"] }
+	"stop_recording": { "required": ["id"] },
+	"get_cast_receivers": {},
+	"hold_cast_receivers": { "required": ["ids"] }
 }

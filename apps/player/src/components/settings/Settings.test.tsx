@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import type { QueryClient } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getVersion } from "@tauri-apps/api/app";
@@ -33,6 +34,9 @@ import {
 import type { LayoutMode, Platform } from "@/lib/types";
 import { fakeUpdate, makeUpdateState } from "@/test/app-fixtures";
 import { deferred } from "@/test/deferred";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
+import { makeHistoryEntry } from "@/test/channel-fixtures";
+import { historyKey, omdbQuery, watchHistoryQuery } from "@/lib/queries";
 import { REPO_URL } from "./LegalNotices";
 import { Settings } from "./Settings";
 
@@ -88,17 +92,20 @@ vi.mock("@/hooks/useDownloads", () => ({
 interface RenderOptions {
 	update?: UpdateState;
 	routeState?: unknown;
+	client?: QueryClient;
 }
 
 /** Renders Settings and lets the saved settings load. */
 const renderSettings = async ({
 	update = makeUpdateState(),
 	routeState = null,
+	client = createTestQueryClient(),
 }: RenderOptions = {}) => {
 	const view = render(
 		<MemoryRouter initialEntries={[{ pathname: "/settings", state: routeState }]}>
 			<Settings updateState={update} />
-		</MemoryRouter>
+		</MemoryRouter>,
+		{ wrapper: wrapperFor(client) }
 	);
 	await act(async () => {});
 	return view;
@@ -939,6 +946,61 @@ describe.each([
 		await click(screen.getByRole("button", { name: button }));
 		expect(screen.queryByText(failure)).toBeNull();
 		expect(screen.getByText(done)).toBeInTheDocument();
+	});
+});
+
+describe("Settings watch history cache", () => {
+	const seeded = () => {
+		const client = createTestQueryClient();
+		client.setQueryData(watchHistoryQuery(200).queryKey, [makeHistoryEntry()]);
+		client.setQueryData(watchHistoryQuery(10, "movie").queryKey, [makeHistoryEntry()]);
+		client.setQueryData(["local", "providers"], []);
+		return client;
+	};
+
+	it("drops every cached history list once the history is cleared", async () => {
+		vi.mocked(ask).mockResolvedValue(true);
+		const client = seeded();
+		await renderSettings({ client });
+		await click(screen.getByRole("button", { name: "Clear All History…" }));
+
+		expect(client.getQueryCache().findAll({ queryKey: historyKey() })).toEqual([]);
+		expect(client.getQueryData(["local", "providers"])).toEqual([]);
+	});
+
+	it("keeps the cached history when it can't be cleared", async () => {
+		vi.mocked(ask).mockResolvedValue(true);
+		vi.mocked(clearWatchHistory).mockRejectedValueOnce(new Error("db locked"));
+		const client = seeded();
+		await renderSettings({ client });
+		await click(screen.getByRole("button", { name: "Clear All History…" }));
+
+		expect(client.getQueryCache().findAll({ queryKey: historyKey() })).toHaveLength(2);
+	});
+});
+
+describe("Settings details cache", () => {
+	it("loads cached details again once the caches are cleared", async () => {
+		vi.mocked(ask).mockResolvedValue(true);
+		const client = createTestQueryClient();
+		const details: readonly unknown[] = omdbQuery("mv1", "Sintel", "movie").queryKey;
+		client.setQueryData(details, { title: "Sintel" });
+		await renderSettings({ client });
+		await click(screen.getByRole("button", { name: "Clear All Caches…" }));
+
+		expect(client.getQueryState(details)?.isInvalidated).toBe(true);
+	});
+
+	it("keeps the cached details when the caches can't be cleared", async () => {
+		vi.mocked(ask).mockResolvedValue(true);
+		vi.mocked(clearAllCaches).mockRejectedValueOnce(new Error("db locked"));
+		const client = createTestQueryClient();
+		const details: readonly unknown[] = omdbQuery("mv1", "Sintel", "movie").queryKey;
+		client.setQueryData(details, { title: "Sintel" });
+		await renderSettings({ client });
+		await click(screen.getByRole("button", { name: "Clear All Caches…" }));
+
+		expect(client.getQueryState(details)?.isInvalidated).toBe(false);
 	});
 });
 

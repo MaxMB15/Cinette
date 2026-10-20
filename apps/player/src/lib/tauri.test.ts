@@ -201,6 +201,41 @@ describe("backend commands", () => {
 			"get_stream_formats",
 			{ channel: episode },
 		],
+		[
+			"airplayLoad",
+			() => tauri.airplayLoad(episode, 7, 1, 30),
+			"airplay_load",
+			{ channel: episode, generation: 7, source: 1, startAt: 30 },
+		],
+		[
+			"airplaySetDetection",
+			() => tauri.airplaySetDetection(true),
+			"plugin:mpv|airplay_set_detection",
+			{ enabled: true },
+		],
+		[
+			"airplayChoose",
+			() => tauri.airplayChoose({ x: 1, y: 2, width: 3, height: 4 }),
+			"plugin:mpv|airplay_choose",
+			{ x: 1, y: 2, width: 3, height: 4 },
+		],
+		["airplayGetRoute", () => tauri.airplayGetRoute(), "plugin:mpv|airplay_get_route"],
+		["airplayPlay", () => tauri.airplayPlay(), "plugin:mpv|airplay_play"],
+		["airplayPause", () => tauri.airplayPause(), "plugin:mpv|airplay_pause"],
+		["airplaySeek", () => tauri.airplaySeek(12), "plugin:mpv|airplay_seek", { position: 12 }],
+		[
+			"airplaySelectSubtitle",
+			() => tauri.airplaySelectSubtitle(null),
+			"plugin:mpv|airplay_select_subtitle",
+			{ index: null },
+		],
+		[
+			"airplaySelectAudio",
+			() => tauri.airplaySelectAudio(2),
+			"plugin:mpv|airplay_select_audio",
+			{ index: 2 },
+		],
+		["airplayStop", () => tauri.airplayStop(), "plugin:mpv|airplay_stop"],
 		["removeProvider", () => tauri.removeProvider("p1"), "remove_provider", { id: "p1" }],
 		["getAllChannels", () => tauri.getAllChannels(), "get_all_channels"],
 		[
@@ -603,6 +638,13 @@ describe("backend commands", () => {
 			},
 		],
 		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
+		["getCastReceivers", () => tauri.getCastReceivers(), "get_cast_receivers"],
+		[
+			"holdCastReceivers",
+			() => tauri.holdCastReceivers(["cast:tv"]),
+			"hold_cast_receivers",
+			{ ids: ["cast:tv"] },
+		],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));
@@ -624,6 +666,10 @@ describe("backend commands", () => {
 	it("passes a backend error on to the caller", async () => {
 		invoke.mockRejectedValueOnce("provider not found");
 		await expect(tauri.removeProvider("missing")).rejects.toBe("provider not found");
+	});
+
+	it("listens for receivers on the event cast/mod.rs emits", () => {
+		expect(tauri.CAST_RECEIVERS_EVENT).toBe("cast://receivers");
 	});
 
 	/**

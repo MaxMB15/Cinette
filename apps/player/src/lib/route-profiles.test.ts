@@ -2,7 +2,15 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, expect, it } from "vitest";
-import { castProfile, desktopSender, NOT_READY, REFUSED } from "@/lib/route-profiles";
+import {
+	airplayTvProfile,
+	appleTvProfile,
+	castProfile,
+	desktopSender,
+	iosSender,
+	NOT_READY,
+	REFUSED,
+} from "@/lib/route-profiles";
 import { chooseRoute, type StreamFormat } from "@/lib/route";
 
 const format = (f: Partial<StreamFormat>): StreamFormat => ({
@@ -141,6 +149,118 @@ describe("REFUSED", () => {
 	it("is the error get_stream_formats sends for a 401 or 403", () => {
 		// The same text as `REFUSED` in src-tauri/src/streams/mod.rs.
 		expect(REFUSED).toBe("refused");
+	});
+});
+
+describe("AirPlay profiles", () => {
+	it("lists what each receiver plays", () => {
+		expect(appleTvProfile).toEqual({
+			containers: ["hls-ts", "hls-fmp4", "mp4"],
+			video: { h264: ["hls-ts", "hls-fmp4", "mp4"], hevc: ["hls-fmp4", "mp4"] },
+			audio: ["aac", "mp3", "ac3", "eac3"],
+			interlaced: false,
+			audioOnly: true,
+			hlsNeedsCors: false,
+			convertTo: "hls",
+		});
+		expect(airplayTvProfile).toEqual({
+			containers: ["hls-ts", "hls-fmp4", "mp4"],
+			video: { h264: ["hls-ts", "hls-fmp4", "mp4"] },
+			audio: ["aac", "mp3"],
+			interlaced: false,
+			audioOnly: false,
+			hlsNeedsCors: false,
+			convertTo: "hls",
+		});
+	});
+
+	const iphone = iosSender({ convert: true, hardwareEncoder: true }, { needsScreen: false });
+
+	it("plays H.264 in HLS and MP4 on every receiver, and never MKV or raw TS", () => {
+		for (const profile of [appleTvProfile, airplayTvProfile]) {
+			for (const container of ["hls-ts", "hls-fmp4", "mp4"] as const)
+				expect(chooseRoute([format({ container })], profile, iphone)).toEqual({
+					ok: true,
+					route: { via: "direct", format: 0 },
+				});
+			for (const container of ["mkv", "ts"] as const)
+				expect(chooseRoute([format({ container })], profile, iphone)).toMatchObject({
+					ok: true,
+					route: { via: "converted", output: "hls", video: "copy", audio: "copy" },
+				});
+		}
+	});
+
+	it("needs no CORS for HLS", () => {
+		const f = format({ cors: false });
+		expect(chooseRoute([f], airplayTvProfile, iphone)).toMatchObject({
+			route: { via: "direct" },
+		});
+		expect(chooseRoute([f], appleTvProfile, iphone)).toMatchObject({
+			route: { via: "direct" },
+		});
+	});
+
+	it("plays AC-3 and HEVC on an Apple TV only", () => {
+		const ac3 = format({ container: "mp4", audio: "ac3" });
+		expect(chooseRoute([ac3], appleTvProfile, iphone)).toMatchObject({
+			route: { via: "direct" },
+		});
+		expect(chooseRoute([ac3], airplayTvProfile, iphone)).toMatchObject({
+			route: { via: "converted", audio: "aac" },
+		});
+		const hevc = format({ container: "hls-fmp4", video: "hevc" });
+		expect(chooseRoute([hevc], appleTvProfile, iphone)).toMatchObject({
+			route: { via: "direct" },
+		});
+		expect(chooseRoute([hevc], airplayTvProfile, iphone)).toMatchObject({
+			route: { via: "converted", video: "transcode" },
+		});
+	});
+
+	it("doesn't play audio alone on a TV", () => {
+		const radio = format({ video: null });
+		expect(chooseRoute([radio], appleTvProfile, iphone)).toMatchObject({
+			route: { via: "direct" },
+		});
+		expect(chooseRoute([radio], airplayTvProfile, iphone)).toEqual({
+			ok: false,
+			reason: "audioOnly",
+		});
+	});
+
+	it("never plays interlaced video directly", () => {
+		for (const profile of [appleTvProfile, airplayTvProfile])
+			expect(profile.interlaced).toBe(false);
+	});
+});
+
+describe("iosSender", () => {
+	it("keeps the screen rule to the destination", () => {
+		expect(iosSender({ convert: true, hardwareEncoder: true }, { needsScreen: false })).toEqual(
+			{
+				convert: true,
+				hardwareEncoder: true,
+				convertNeedsScreen: false,
+			}
+		);
+		expect(iosSender({ convert: true, hardwareEncoder: false }, { needsScreen: true })).toEqual(
+			{
+				convert: true,
+				hardwareEncoder: false,
+				convertNeedsScreen: true,
+			}
+		);
+	});
+
+	it("has no encoder without a converter", () => {
+		expect(
+			iosSender({ convert: false, hardwareEncoder: true }, { needsScreen: false })
+		).toEqual({
+			convert: false,
+			hardwareEncoder: false,
+			convertNeedsScreen: false,
+		});
 	});
 });
 

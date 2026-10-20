@@ -37,6 +37,7 @@ import {
 	omdbQuery,
 	pinnedGroupsQuery,
 	providersQuery,
+	reloadClearedCaches,
 	SCHEDULE_STEP,
 	scheduleQuery,
 	whatsonQuery,
@@ -263,5 +264,39 @@ describe("details queries", () => {
 			["tt1", "movie"],
 			["tt2", "show"],
 		]);
+	});
+});
+
+describe("reloadClearedCaches", () => {
+	it("marks the details, ratings and guide stale, and nothing else", async () => {
+		const client = createTestQueryClient();
+		const cleared: (readonly unknown[])[] = [
+			omdbQuery("mv1", "Sintel", "movie").queryKey,
+			whatsonQuery("tt1", "movie").queryKey,
+			guideQuery(morning, "v1").queryKey,
+			channelGuideQuery(morning, "v1", "news.tv").queryKey,
+			scheduleQuery("news.tv", 3600, 1).queryKey,
+			guideSearchQuery("news").queryKey,
+		];
+		const kept: (readonly unknown[])[] = [
+			providersQuery().queryKey,
+			channelsQuery().queryKey,
+			pinnedGroupsQuery("p1", "live").queryKey,
+		];
+		for (const key of [...cleared, ...kept]) client.setQueryData(key, "cached");
+
+		await reloadClearedCaches(client);
+
+		const stale = (key: readonly unknown[]) => client.getQueryState(key)?.isInvalidated;
+		expect(cleared.map(stale)).toEqual(cleared.map(() => true));
+		expect(kept.map(stale)).toEqual(kept.map(() => false));
+	});
+
+	it("leaves another source's details alone", async () => {
+		const client = createTestQueryClient();
+		const elsewhere = ["tv", "omdb", "mv1"] as const;
+		client.setQueryData(elsewhere, { title: "Sintel" });
+		await reloadClearedCaches(client);
+		expect(client.getQueryState(elsewhere)?.isInvalidated).toBe(false);
 	});
 });

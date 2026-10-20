@@ -55,13 +55,16 @@ targets:
         # key App Store Connect asks about it for every build.
         ITSAppUsesNonExemptEncryption: false
         # Channel logos are often plain HTTP. mpv and reqwest open their own
-        # sockets, which App Transport Security doesn't cover.
+        # sockets, which App Transport Security doesn't cover. AVPlayer does
+        # go through it, and AirPlay hands it the provider's stream URL,
+        # which is usually plain HTTP, so media loads are allowed too.
         NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsForMedia: true
           NSAllowsArbitraryLoadsInWebContent: true
           NSAllowsLocalNetworking: true
-        # iOS asks before the app reaches a server on the local network, such
-        # as a provider on a home server, and shows this text.
-        NSLocalNetworkUsageDescription: Cinette connects to IPTV servers on your local network to load playlists and play channels.
+        # iOS asks before the app reaches the local network, such as a
+        # provider on a home server or a TV, and shows this text.
+        NSLocalNetworkUsageDescription: Cinette uses your local network to reach IPTV servers, to find TVs and other devices running Cinette, and to send video to them.
         # The app is always dark, so the launch screen, the keyboard and system
         # sheets use dark colors too.
         UIUserInterfaceStyle: Dark
@@ -100,6 +103,8 @@ targets:
       - package: MPVKit
         product: MPVKit
       - sdk: AVFoundation.framework
+      # AVRoutePickerView and AVRouteDetector, for AirPlay.
+      - sdk: AVKit.framework
       - sdk: AudioToolbox.framework
       - sdk: CoreFoundation.framework
       - sdk: CoreGraphics.framework
