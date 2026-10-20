@@ -186,6 +186,7 @@ describe("RemoteControlSettings", () => {
 		fireEvent.click(
 			within(screen.getByRole("dialog")).getByRole("button", { name: "Always allow" })
 		);
+		expect(screen.queryByRole("dialog")).toBeNull();
 		await act(async () => {});
 		expect(remoteSetSettings).toHaveBeenLastCalledWith({
 			discoverable: true,
@@ -271,6 +272,36 @@ describe("RemoteControlSettings", () => {
 		});
 	});
 
+	it("keeps showing a newer change while an older one fails", async () => {
+		vi.mocked(remoteSetSettings)
+			.mockRejectedValueOnce("disk full")
+			.mockImplementationOnce(() => new Promise(() => {}));
+		await shown();
+		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalledTimes(2));
+		expect(
+			screen.getByRole("button", { name: "Discoverable on this network" }),
+			"the newer change still shows"
+		).toHaveAttribute("aria-pressed", "false");
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("keeps showing a newer change while an older one fails with no answer", async () => {
+		vi.mocked(remoteSetSettings)
+			.mockRejectedValueOnce("disk full")
+			.mockImplementationOnce(() => new Promise(() => {}));
+		await shown();
+		vi.mocked(remoteGetSettings).mockRejectedValue("gone");
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalledTimes(2));
+		expect(
+			screen.getByRole("button", { name: "Discoverable on this network" })
+		).toHaveAttribute("aria-pressed", "false");
+	});
+
 	it("goes back to the last answer when it can't ask the device either", async () => {
 		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
 		await shown();
@@ -293,6 +324,7 @@ describe("RemoteControlSettings", () => {
 		fireEvent.change(field, { target: { value: "Den" } });
 		fireEvent.keyDown(field, { key: "Enter" });
 		fireEvent.change(field, { target: { value: "Den TV" } });
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalled());
 		await act(async () => finish());
 		expect(field).toHaveValue("Den TV");
 	});
@@ -372,6 +404,32 @@ describe("RemoteControlSettings", () => {
 		expect(remoteResetIdentity).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(await screen.findByRole("status")).toHaveTextContent(RESET_DONE);
+	});
+
+	it("clears what the last save or reset said once something new is done", async () => {
+		vi.mocked(remoteResetIdentity).mockResolvedValue(defaults);
+		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
+		await shown();
+		const reset = () => {
+			fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+			fireEvent.click(
+				within(screen.getByRole("dialog")).getByRole("button", { name: "Reset" })
+			);
+		};
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+		reset();
+		expect(screen.queryByRole("alert"), "a reset clears a save's error").toBeNull();
+		expect(await screen.findByRole("status")).toHaveTextContent(RESET_DONE);
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		expect(screen.queryByRole("status"), "a save clears a reset's note").toBeNull();
+		await act(async () => {});
+		reset();
+		await screen.findByRole("status");
+		vi.mocked(remoteResetIdentity).mockRejectedValueOnce("no key");
+		reset();
+		expect(screen.queryByRole("status"), "a reset clears the last one's note").toBeNull();
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't reset");
 	});
 
 	it("says when resetting failed", async () => {

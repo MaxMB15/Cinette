@@ -119,9 +119,10 @@ export const RemoteControlSettings = () => {
 	 *  user typed since `typed` went out. */
 	const show = (running: RemoteSettings, typed: string) => {
 		confirmedRef.current = running;
+		// The form is there: this runs only after it loaded.
 		setForm((now) => ({
 			settings: running,
-			name: now && now.name !== typed ? now.name : (running.deviceName ?? ""),
+			name: now!.name !== typed ? now!.name : (running.deviceName ?? ""),
 		}));
 	};
 
@@ -318,7 +319,7 @@ export const RemoteControlSettings = () => {
 					remoteResetIdentity()
 						.then((running) => {
 							confirmedRef.current = running;
-							setForm((now) => ({ settings: running, name: now?.name ?? "" }));
+							setForm((now) => ({ settings: running, name: now!.name }));
 							setDone(RESET_DONE);
 						})
 						.catch(() => setError(RESET_FAILED));
