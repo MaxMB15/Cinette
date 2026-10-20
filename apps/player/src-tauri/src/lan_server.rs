@@ -304,6 +304,9 @@ impl Reader {
                     let (bytes, start) = (bytes.clone(), *start);
                     state.readers.insert(self.id, (next + 1, waiting && !start));
                     if waiting && !start {
+                        // A push may be waiting for this request to move on.
+                        drop(state);
+                        self.feed.wake();
                         continue;
                     }
                     state.frontier = state.frontier.max(next + 1);

@@ -124,14 +124,31 @@ const FRAME_BYTES: usize = 6144;
 
 /// What this computer's ffmpeg can do, asked once a run. A check that
 /// couldn't finish, as when the sidecar is missing or a run hangs, isn't
-/// kept, so the next call tries again.
+/// kept, so the next call tries again. When only the hardware encoder's
+/// test hangs, this call converts without it.
 pub async fn support<R: Runtime>(app: &AppHandle<R>) -> Support {
     static SUPPORT: OnceCell<Support> = OnceCell::const_new();
-    SUPPORT
-        .get_or_try_init(|| check(app))
-        .await
-        .cloned()
-        .unwrap_or(NONE)
+    if let Some(known) = SUPPORT.get() {
+        return known.clone();
+    }
+    match check(app).await {
+        Ok((support, Finished(true))) => SUPPORT.get_or_init(|| async { support }).await.clone(),
+        Ok((support, Finished(false))) => support,
+        Err(Unfinished) => NONE,
+    }
+}
+
+/// Whether every run of a check finished, so it can be kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Finished(pub bool);
+
+/// Whether the hardware encoder works, from its test encode. A test that
+/// hung counts as no encoder, but the check isn't finished.
+pub(super) fn encoder_works(test: Result<Option<Vec<u8>>, Unfinished>) -> (bool, Finished) {
+    match test {
+        Ok(output) => (output.is_some(), Finished(true)),
+        Err(Unfinished) => (false, Finished(false)),
+    }
 }
 
 const NONE: Support = Support {
@@ -145,31 +162,34 @@ const NONE: Support = Support {
 #[derive(Debug)]
 pub(super) struct Unfinished;
 
-async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<Support, Unfinished> {
+async fn check<R: Runtime>(app: &AppHandle<R>) -> Result<(Support, Finished), Unfinished> {
     let list = run(app, &["-hide_banner", "-encoders"], None)
         .await?
         .ok_or(Unfinished)?;
     let listed = read_encoders(&String::from_utf8_lossy(&list));
     let Some(mut encoders) = choose(listed, cfg!(target_os = "macos")) else {
-        return Ok(NONE);
+        return Ok((NONE, Finished(true)));
     };
     let decoders = run(app, &["-hide_banner", "-decoders"], None)
         .await?
         .ok_or(Unfinished)?;
     let decoders = decoded_codecs(&read_names(&String::from_utf8_lossy(&decoders)));
     // A listed hardware encoder can still fail, as in a virtual machine.
+    let mut finished = Finished(true);
     if let Some(encoder) = encoders.video {
         let args = test_encode_args(encoder);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let works = run(app, &args, Some(&[0; FRAME_BYTES])).await?.is_some();
+        let works;
+        (works, finished) = encoder_works(run(app, &args, Some(&[0; FRAME_BYTES])).await);
         encoders.video = encoders.video.filter(|_| works);
     }
-    Ok(Support {
+    let support = Support {
         convert: true,
         encoders: Some(encoders),
         hardware_encoder: encoders.video.is_some(),
         decoders,
-    })
+    };
+    Ok((support, finished))
 }
 
 /// Runs the sidecar and returns its standard output, or `None` when it

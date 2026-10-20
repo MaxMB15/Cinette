@@ -59,7 +59,8 @@ CONVERT_DOWNMIX_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reco
 CONVERT_SURROUND_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -af channelmap=channel_layout=5.1 -c:a aac -b:a 448k -f matroska -live 1 -flush_packets 1 pipe:1"
 # A live channel, which isn't paced.
 CONVERT_LIVE_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
-# Copying both tracks from two seconds in.
+# Copying both tracks from two seconds in. AAC is only copied from MP4 and
+# Matroska (mvp_core::convert::matroska_copies).
 CONVERT_SEEK_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -ss 2.000 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a copy -f matroska -live 1 -flush_packets 1 pipe:1"
 # On macOS, with Apple's AAC encoder, and a full transcode on VideoToolbox
 # that deinterlaces and scales anything above 1080p down.
@@ -420,7 +421,7 @@ def cases() -> list[Case]:
              convert="aac", length=None),
         Case("Converting a live channel for Cast", "/media/av.ts", "mkv", av, convert="live",
              length=None),
-        Case("Converting from two seconds in for Cast", "/media/av.ts", "mkv", av,
+        Case("Converting from two seconds in for Cast", "/media/av.mkv", "mkv", av,
              convert="seek", length=None),
         Case("Converting MPEG-2 and MP2 with Apple's AAC", "/media/mpeg2.ts", "mkv",
              ["aac", "mpeg2video"], convert="mac", length=None),

@@ -175,6 +175,26 @@ async fn a_request_that_comes_later_counts_the_last_piece_sent() {
     assert_eq!(*later.next().await.unwrap(), piece(3)[..]);
 }
 
+#[tokio::test]
+async fn a_request_that_skips_to_a_start_point_makes_room_for_it() {
+    let feed = feed(8, false);
+    let mut reader = feed.reader();
+    feed.push(piece(1), false).await;
+    feed.push(piece(2), false).await;
+    // The feed is full, so this waits for the request to move on.
+    let pusher = tokio::spawn({
+        let feed = feed.clone();
+        async move { feed.push(piece(3), true).await }
+    });
+    tokio::task::yield_now().await;
+    let next = tokio::time::timeout(Duration::from_secs(5), reader.next())
+        .await
+        .expect("the push gets room")
+        .unwrap();
+    assert_eq!(*next, piece(3)[..]);
+    pusher.await.unwrap();
+}
+
 #[test]
 fn each_request_keeps_its_own_place() {
     let feed = feed(1 << 20, true);

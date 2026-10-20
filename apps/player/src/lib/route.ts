@@ -96,6 +96,15 @@ const OUTPUT: Record<ReceiverProfile["convertTo"], Container> = {
 	matroska: "mkv",
 };
 
+/** The containers whose AAC comes with its settings up front. Anywhere else,
+ *  as in MPEG-TS, AAC comes as ADTS, which Matroska written to a pipe can't
+ *  take, so it's converted. The same rule as `matroska_copies` in mvp-core. */
+const AAC_SETTINGS_FIRST: readonly Container[] = ["mp4", "mkv", "hls-fmp4"];
+
+const copiesAudio = (f: StreamFormat, audio: AudioCodec, r: ReceiverProfile) =>
+	r.audio.includes(audio) &&
+	!(r.convertTo === "matroska" && audio === "aac" && !AAC_SETTINGS_FIRST.includes(f.container));
+
 const playsVideo = (r: ReceiverProfile, video: VideoCodec, container: Container) =>
 	r.video[video]?.includes(container) ?? false;
 
@@ -142,7 +151,7 @@ const convert = (
 		video = plays ? "copy" : "transcode";
 	}
 	let audio: Converted["audio"] = "none";
-	if (f.audio !== null) audio = r.audio.includes(f.audio) ? "copy" : "aac";
+	if (f.audio !== null) audio = copiesAudio(f, f.audio, r) ? "copy" : "aac";
 	return {
 		ok: true,
 		route: {
