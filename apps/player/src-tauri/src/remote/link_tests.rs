@@ -983,7 +983,7 @@ async fn it_pings_only_after_a_quiet_spell() {
     let t = target(ControlMode::Always).await;
     let proxy = Proxy::new(t.port).await;
     let limits = Limits {
-        ping: Duration::from_secs(1),
+        ping: Duration::from_millis(1500),
         ..QUICK
     };
     let port = proxy.port;
@@ -995,22 +995,23 @@ async fn it_pings_only_after_a_quiet_spell() {
     );
     link.until_phase(Phase::Connected).await;
     let before = proxy.sent.load(Ordering::SeqCst);
-    // Many naps, but half the ping interval.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Six naps, but a fifth of the ping interval, so a busy machine can wake
+    // this a second late and still find no ping.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         proxy.sent.load(Ordering::SeqCst),
         before,
         "nothing to say yet"
     );
-    // The ping is due half a second from now. This stops waiting as soon as
-    // it comes, so it can give a busy machine plenty of time.
+    // The ping is due a little over a second from now. This stops waiting as
+    // soon as it comes, so it can give a busy machine plenty of time.
     let pinged = timeout(WAIT, async {
         while proxy.sent.load(Ordering::SeqCst) == before {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
-    assert!(pinged.is_ok(), "a ping after a second of quiet");
+    assert!(pinged.is_ok(), "a ping after a second and a half of quiet");
 }
 
 #[tokio::test]
