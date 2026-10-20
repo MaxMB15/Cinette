@@ -46,6 +46,7 @@ import { makeEpisode, makeMovie, makeNewsChannel, makeOmdb } from "@/test/detail
 import { deferred } from "@/test/deferred";
 import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
+import { getMountedPlayer } from "@/lib/remote-target";
 import { PlayerView } from "./VideoPlayer";
 
 type Mpv = ReturnType<typeof useMpv>;
@@ -100,6 +101,9 @@ const tauri = vi.hoisted(() => ({
 	stopDownload: vi.fn<typeof Bridge.stopDownload>(async () => {}),
 	removeDownload: vi.fn<typeof Bridge.removeDownload>(async () => {}),
 	getSkipSegments: vi.fn<typeof Bridge.getSkipSegments>(async () => []),
+	// No device controls this one in these tests.
+	remoteSessions: vi.fn<typeof Bridge.remoteSessions>(async () => []),
+	remoteSetState: vi.fn<typeof Bridge.remoteSetState>(async () => {}),
 }));
 
 /**
@@ -3556,6 +3560,15 @@ describe("phones, tablets and TV boxes", () => {
 		expect(screen.getByRole("slider", { name: "Volume" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Fullscreen" })).toBeInTheDocument();
+	});
+});
+
+describe("remote control", () => {
+	it("is the player other devices' commands go to while it's open", async () => {
+		const view = await openItem(makeNewsChannel());
+		expect(getMountedPlayer()?.getState().item?.ref).toBe("ch1");
+		view.unmount();
+		expect(getMountedPlayer()).toBeNull();
 	});
 });
 

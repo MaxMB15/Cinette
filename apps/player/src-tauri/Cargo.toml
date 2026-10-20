@@ -42,10 +42,19 @@ libc = "0.2"
 zbus = "5"
 # DNS-SD for Cinette devices and Cast receivers, without needing Avahi.
 mdns-sd = { version = "0.21", default-features = false }
+# The interfaces' subnets, so remote control only takes local peers. The
+# same version as mdns-sd's.
+if-addrs = "0.15"
+# The remote-control listener's dual-stack socket. The same version as tokio's.
+socket2 = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # poll and the socket types for Bonjour's dns_sd.h.
 libc = "0.2"
+# The interfaces' subnets, so remote control only takes local peers.
+if-addrs = "0.15"
+# The remote-control listener's dual-stack socket. The same version as tokio's.
+socket2 = "0.6"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 oslog = { version = "0.2", default-features = false }

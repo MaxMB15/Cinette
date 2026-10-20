@@ -3,6 +3,7 @@
 
 import { invoke } from "./invoke";
 import type { AirPlayRoute } from "@/lib/airplay";
+import type { CommandOutcome, RemotePlayerState } from "@/lib/remote-target";
 import type { PlayingInfo, StreamFormats } from "@/lib/route-profiles";
 import type {
 	MpvPlayerState,
@@ -608,3 +609,62 @@ export const getCastReceivers = (): Promise<CastReceiverList> => invoke("get_cas
  */
 export const holdCastReceivers = (ids: string[]): Promise<void> =>
 	invoke("hold_cast_receivers", { ids });
+
+/** Who may control this device from another Cinette device. */
+export type RemoteControlMode = "always" | "ask" | "never";
+
+/** The remote-control settings and this device's id. */
+export interface RemoteSettings {
+	discoverable: boolean;
+	remoteControl: RemoteControlMode;
+	/** The name the user gave this device, or null for the default. */
+	deviceName: string | null;
+	/** The name used when none is given: the device type, like "Mac". */
+	defaultName: string;
+	deviceId: string;
+}
+
+/** A device controlling this one, connected or waiting to resume. */
+export interface RemoteSession {
+	sessionId: string;
+	deviceId: string;
+	name: string;
+	deviceType: string;
+	connected: boolean;
+}
+
+export const remoteGetSettings = (): Promise<RemoteSettings> => invoke("remote_get_settings");
+
+/** Never allow ends every session at once. */
+export const remoteSetSettings = (settings: {
+	discoverable: boolean;
+	remoteControl: RemoteControlMode;
+	deviceName: string | null;
+}): Promise<RemoteSettings> => invoke("remote_set_settings", { settings });
+
+/** A new device id. Every session ends. */
+export const remoteResetIdentity = (): Promise<RemoteSettings> => invoke("remote_reset_identity");
+
+export const remoteAnswerConsent = (request: number, allow: boolean): Promise<void> =>
+	invoke("remote_answer_consent", { request, allow });
+
+export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
+
+export const remoteDisconnect = (sessionId: string): Promise<void> =>
+	invoke("remote_disconnect", { sessionId });
+
+// States go out one after another, so a slow "playing" can't land after
+// the idle state a closing player sends next.
+let lastRemoteState: Promise<void> = Promise.resolve();
+
+export const remoteSetState = (state: RemotePlayerState): Promise<void> => {
+	const result = lastRemoteState.then(() => invoke<void>("remote_set_state", { state }));
+	lastRemoteState = result.then(
+		() => {},
+		() => {}
+	);
+	return result;
+};
+
+export const remoteFinishCommand = (token: number, outcome: CommandOutcome): Promise<void> =>
+	invoke("remote_finish_command", { token, outcome });

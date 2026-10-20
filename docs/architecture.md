@@ -102,6 +102,15 @@ rows. Then it stays listed as unavailable. A receiver that couldn't be reached s
 unavailable for 30 seconds. At most 128 receivers are listed, and a browse that ends
 takes what it found with it. iOS doesn't browse yet, so it lists none.
 
+`remote/` lets one Cinette control another on the same network, on macOS and Linux.
+The target listens on TCP port 47130, or any free port when that one is taken, on one
+socket that takes IPv4 and IPv6. It only takes connections from this machine and from
+the subnets of its own network interfaces, so a computer with a public IPv4 or a global
+IPv6 address can't be reached from the internet. It advertises `_cinette._tcp` with
+DNS-SD. Every connection is encrypted with Noise XX. Unless the setting is Always
+allow, a new controller waits until the user allows it on this screen. The protocol is in
+`crates/core/src/remote/`.
+
 ### `crates/tauri-plugin-mpv`
 
 | File | Responsibility |
