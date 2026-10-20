@@ -8,7 +8,7 @@ import type { StreamFormats } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import { makeMovie } from "@/test/detail-fixtures";
 import { writeStreamThrough } from "@/lib/player-prefs";
-import { useCast } from "./useCast";
+import { RELEASE_RETRY_MS, useCast } from "./useCast";
 
 /** Events the backend would send, by name. */
 const events = vi.hoisted(() => {
@@ -36,6 +36,7 @@ const tauri = vi.hoisted(() => ({
 	CAST_UPDATE_EVENT: "cast://update",
 	castControl: vi.fn<typeof Bridge.castControl>(async () => {}),
 	castLoad: vi.fn<typeof Bridge.castLoad>(async () => {}),
+	castRelease: vi.fn<typeof Bridge.castRelease>(async () => {}),
 	castStop: vi.fn<typeof Bridge.castStop>(async () => {}),
 	getCastReceivers: vi.fn<typeof Bridge.getCastReceivers>(),
 	getConverterSupport: vi.fn<typeof Bridge.getConverterSupport>(),
@@ -313,6 +314,116 @@ describe("useCast", () => {
 			await stopping;
 		});
 		expect(during).toBeNull();
+	});
+
+	describe("switching to another item on an account with one connection", () => {
+		const other = makeMovie({ id: "mv2", name: "Another" });
+		const formats = (generation: number): StreamFormats => ({
+			formats: [mp4],
+			sources: [0],
+			duration: 5400,
+			generation,
+		});
+
+		/** A provider that refuses a second connection while the cast holds one. */
+		const oneConnection = () => {
+			let held = true;
+			tauri.castRelease.mockImplementation(async () => {
+				held = false;
+			});
+			tauri.getStreamFormats.mockImplementation(async () => {
+				if (held) throw "refused";
+				return formats(6);
+			});
+		};
+
+		const casting = async () => {
+			const hook = await render();
+			await act(async () => {
+				await hook.result.current.send("cast:tv", film, { stopLocal });
+			});
+			return hook;
+		};
+
+		it("lets go of the stream, then looks again and plays the new item", async () => {
+			const { result } = await casting();
+			oneConnection();
+			let why: string | null = "";
+			await act(async () => {
+				why = await result.current.send("cast:tv", other, { stopLocal });
+			});
+			expect(why).toBeNull();
+			expect(tauri.castRelease).toHaveBeenCalledWith("cast:tv");
+			expect(tauri.castStop).not.toHaveBeenCalled();
+			expect(tauri.castLoad).toHaveBeenLastCalledWith(
+				"cast:tv",
+				other,
+				expect.objectContaining({ via: "direct", generation: 6 }),
+				undefined
+			);
+			expect(result.current.destination?.id).toBe("cast:tv");
+		});
+
+		it("waits a moment longer for a receiver that's slow to hang up", async () => {
+			vi.useFakeTimers();
+			try {
+				const { result } = await casting();
+				let tries = 0;
+				tauri.getStreamFormats.mockImplementation(async () => {
+					tries++;
+					if (tries < 3) throw "refused";
+					return formats(6);
+				});
+				let why: string | null = "";
+				const sent = result.current
+					.send("cast:tv", other, { stopLocal })
+					.then((w) => (why = w));
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS[1]);
+				});
+				expect(tries).toBe(3);
+				await act(() => sent);
+				expect(why).toBeNull();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("says why once it let go and the provider still refuses, never before", async () => {
+			vi.useFakeTimers();
+			try {
+				const { result } = await casting();
+				tauri.getStreamFormats.mockRejectedValue("refused");
+				let why: string | null = "";
+				const sent = result.current
+					.send("cast:tv", other, { stopLocal })
+					.then((w) => (why = w));
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS.reduce((a, b) => a + b, 0));
+				});
+				await act(() => sent);
+				expect(tauri.castRelease).toHaveBeenCalledTimes(1);
+				expect(tauri.getStreamFormats).toHaveBeenCalledTimes(
+					1 + RELEASE_RETRY_MS.length + 1
+				);
+				expect(why).toBe(
+					"The provider refused the stream. The login may have expired. Nothing is playing."
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("doesn't let go of anything for a first cast that can't be routed", async () => {
+			tauri.getStreamFormats.mockRejectedValue("refused");
+			const { result } = await render();
+			let why: string | null = "";
+			await act(async () => {
+				why = await result.current.send("cast:tv", film, { stopLocal });
+			});
+			expect(why).toBe("Couldn't reach the stream");
+			expect(tauri.castRelease).not.toHaveBeenCalled();
+		});
 	});
 
 	it("works out the route at cast time when the picker didn't", async () => {

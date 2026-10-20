@@ -4172,6 +4172,23 @@ describe("Google Cast", () => {
 		expect(destination.setVolume).toHaveBeenCalledWith(70);
 	});
 
+	it("says it stopped once the receiver let go and nothing else came", async () => {
+		await openItem(lanternKeeper());
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState({ status: "idle" }),
+			})
+		);
+		const panel = screen.getByRole("region", { name: "Google Cast" });
+		expect(within(panel).getByText("Stopped on Hotel TV")).toBeTruthy();
+		expect(within(panel).queryByRole("button", { name: "Play" })).toBeNull();
+		expect(within(panel).getByRole("button", { name: "Play here from 10:00" })).toBeTruthy();
+		// Idle with nothing loaded yet is still casting.
+		act(() => fakeCast.set({ state: castState({ status: "idle", item: null }) }));
+		expect(within(panel).getByText("Casting to Hotel TV")).toBeTruthy();
+	});
+
 	it("plays here again from where the receiver was", async () => {
 		await openItem(lanternKeeper());
 		fakeMpv.actions.load.mockClear();

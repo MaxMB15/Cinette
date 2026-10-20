@@ -186,6 +186,7 @@ export interface CastBackend {
 	) => Promise<void>;
 	castControl: (receiverId: string, action: CastAction) => Promise<void>;
 	castStop: (receiverId: string) => Promise<void>;
+	castRelease: (receiverId: string) => Promise<void>;
 }
 
 export interface CastOptions {
@@ -206,6 +207,9 @@ export interface CastDestination extends PlaybackDestination {
 	closedReason(): CastSnapshot["closedReason"];
 	/** Whether this computer converts what the receiver plays now. */
 	converted(): boolean;
+	/** Has the receiver and this computer let go of the provider's stream,
+	 *  and keeps the cast, for an account that allows one connection. */
+	release(): Promise<void>;
 }
 
 /** The backend's form of `route` for `formats`. */
@@ -414,5 +418,10 @@ export const createCastDestination = (
 		receive: (update) => publish(applyUpdate(snapshot, update, now())),
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,
+		release: async () => {
+			loaded = null;
+			pausedAt = null;
+			await backend.castRelease(receiver.id);
+		},
 	};
 };

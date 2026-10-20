@@ -20,6 +20,7 @@ import {
 	CAST_UPDATE_EVENT,
 	castControl,
 	castLoad,
+	castRelease,
 	castStop,
 	getCastReceivers,
 	getConverterSupport,
@@ -40,12 +41,25 @@ const backend: CastBackend = {
 	castLoad,
 	castControl,
 	castStop,
+	castRelease,
 };
 
 // Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.
 const noState = () => () => {};
 const getNull = () => null;
 const NO_RECEIVERS: CastReceiver[] = [];
+
+/**
+ * How long to wait before each new look at an item, after a switch let go
+ * of the stream. The receiver may take a moment to hang up on the
+ * provider.
+ */
+export const RELEASE_RETRY_MS = [0, 1000, 2000];
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** What working out a route came to: a decision, or why it couldn't. */
+type Routed = { decision: RouteDecision } | { error: unknown };
 
 /** The key of a route the picker showed. */
 const routeKey = (receiverId: string, channel: Channel) => `${receiverId}\n${channel.id}`;
@@ -226,11 +240,29 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			if (!receiver) return "That receiver is gone.";
 			const target = destinationFor(receiver);
 			const item = { kind: "local" as const, channel };
-			const decision =
-				decisions.current.get(routeKey(receiverId, channel)) ??
-				(await target
-					.route(item)
-					.catch((): RouteDecision => ({ ok: false, reason: "unreachable" })));
+			const look = (): Promise<Routed> =>
+				target.route(item).then(
+					(decision) => ({ decision }),
+					(error: unknown) => ({ error })
+				);
+			const shown = decisions.current.get(routeKey(receiverId, channel));
+			let routed: Routed = shown ? { decision: shown } : await look();
+			// While this receiver plays, the provider may refuse a second
+			// connection, as many accounts allow one. It lets go of the
+			// stream, keeping the cast, and looks again.
+			const switching = active.current === target;
+			if ("error" in routed && switching) {
+				await target.release().catch(() => {});
+				for (const ms of RELEASE_RETRY_MS) {
+					await wait(ms);
+					routed = await look();
+					if (!("error" in routed)) break;
+				}
+				if ("error" in routed)
+					return `${castFailureMessage(receiver.name, routed.error)} Nothing is playing.`;
+			}
+			if ("error" in routed) return blockerText("unreachable");
+			const { decision } = routed;
 			if (!decision.ok) return blockerText(decision.reason, decision.detail);
 			const { route } = decision;
 			if (route.via === "converted" && opts.confirm && !(await opts.confirm(route.keep)))

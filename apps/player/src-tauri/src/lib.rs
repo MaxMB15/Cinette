@@ -264,6 +264,7 @@ register_commands![
     cast::cast_load,
     cast::cast_control,
     cast::cast_stop,
+    cast::cast_release,
     cast::get_vpn_active,
 ];
 

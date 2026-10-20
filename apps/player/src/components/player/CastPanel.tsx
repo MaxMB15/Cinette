@@ -60,7 +60,12 @@ export const CastPanel = ({
 	onPlayHere,
 	onStop,
 }: CastPanelProps) => {
-	const over = state.error !== null || state.status === "ended";
+	// Idle with an item is stopped, as after a switch let go of the stream
+	// and the user didn't go on.
+	const over =
+		state.error !== null ||
+		state.status === "ended" ||
+		(state.status === "idle" && state.item !== null);
 	const playing = state.status === "playing" || state.status === "buffering";
 	const line = statusLine(state);
 	const [now, setNow] = useState(() => performance.now());

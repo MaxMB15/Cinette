@@ -163,9 +163,29 @@ async fn plays_an_item_directly_and_controls_it() {
         Err(json!("notConnected"))
     );
 
+    // Letting go of the stream stops the media and keeps the cast.
+    app.invoke("cast_release", json!({ "receiverId": "cast:tv" }))
+        .unwrap();
+    let released = next_of(&mut got, "STOP").await;
+    assert_eq!(released.namespace, mvp_core::cast::message::NS_MEDIA);
+    control(&app, "cast:tv", json!({ "action": "play" })).unwrap();
+    next_of(&mut got, "PLAY").await;
+    assert_eq!(
+        app.invoke("cast_release", json!({ "receiverId": "cast:other" })),
+        Err(json!("notConnected"))
+    );
+
     app.invoke("cast_stop", json!({ "receiverId": "cast:tv" }))
         .unwrap();
-    next_of(&mut got, "STOP").await;
+    // It stops the media, then the receiver app.
+    assert_eq!(
+        next_of(&mut got, "STOP").await.namespace,
+        mvp_core::cast::message::NS_MEDIA
+    );
+    assert_eq!(
+        next_of(&mut got, "STOP").await.namespace,
+        mvp_core::cast::message::NS_RECEIVER
+    );
     assert_eq!(
         control(&app, "cast:tv", json!({ "action": "play" })),
         Err(json!("notConnected"))
@@ -331,10 +351,18 @@ async fn casting_to_another_receiver_ends_the_first_cast() {
     );
 }
 
-/// A second of 16-bit mono WAV at 8192 Hz, which the sidecar decodes. The
+/// Whether an ffmpeg with `url` among its arguments runs.
+fn ffmpeg_runs_for(url: &str) -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-f", url])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Eight seconds of 16-bit mono WAV at 8192 Hz, which the sidecar decodes. The
 /// test server sends text, and every byte of this one is ASCII.
 fn wav16() -> String {
-    let samples: u32 = 8192 * 2;
+    let samples: u32 = 8 * 8192 * 2;
     let mut bytes = b"RIFF".to_vec();
     bytes.extend_from_slice(&(36 + samples).to_le_bytes());
     bytes.extend_from_slice(b"WAVEfmt ");
@@ -380,6 +408,13 @@ async fn a_converted_route_serves_the_receiver_from_this_computer() {
         assert!(url.ends_with("/stream.mkv"), "{url}");
         // The receiver gets this computer's address, never the source's.
         assert!(!url.contains("/movie/"), "{url}");
+        // Letting go of the stream stops the converter, and so its
+        // connection to the source, before it answers.
+        let source_url = movie.url.clone();
+        assert!(ffmpeg_runs_for(&source_url));
+        app.invoke("cast_release", json!({ "receiverId": "cast:tv" }))
+            .unwrap();
+        assert!(!ffmpeg_runs_for(&source_url));
     } else {
         // The pinned sidecar has no AAC encoder until build 3.
         assert_eq!(result, Err(json!("noConverter")));

@@ -69,6 +69,7 @@ const backend = (formats: StreamFormats = xtream, convert = true) => {
 		castLoad: vi.fn(async () => {}),
 		castControl: vi.fn(async () => {}),
 		castStop: vi.fn(async () => {}),
+		castRelease: vi.fn(async () => {}),
 	};
 	return fake satisfies CastBackend;
 };
@@ -632,5 +633,30 @@ describe("createCastDestination", () => {
 		await film.play();
 		expect(filmBackend.castLoad).toHaveBeenCalledTimes(2);
 		expect(filmBackend.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "play" });
+	});
+
+	it("lets go of the stream and keeps the cast", async () => {
+		let clock = 0;
+		const film: StreamFormats = {
+			formats: [{ ...ts, audio: "ac3" }],
+			sources: [4],
+			duration: 5400,
+			generation: 7,
+		};
+		const fake = backend(film);
+		const cast = createCastDestination(receiver, fake, { now: () => clock });
+		await cast.load({ kind: "local", channel: movie });
+		await cast.pause();
+		await cast.release();
+		expect(fake.castRelease).toHaveBeenCalledWith("cast:tv");
+		expect(fake.castStop).not.toHaveBeenCalled();
+		// Nothing is loaded now, so Play after a long pause converts nothing.
+		clock += PAUSE_LIMIT_MS * 2;
+		await cast.play();
+		expect(fake.castLoad).toHaveBeenCalledTimes(1);
+		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "play" });
+		// A seek goes to the receiver too.
+		await cast.seek(30);
+		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "seek", to: 30 });
 	});
 });

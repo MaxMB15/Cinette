@@ -491,6 +491,28 @@ pub fn control(state: &CastPlayback, receiver_id: &str, action: CastAction) -> R
         .map_err(|_| "notConnected".to_string())
 }
 
+/// Has the cast on `receiver_id` let go of the provider's stream, and keeps
+/// it: the receiver stops its media, and the converter stops and waits for
+/// ffmpeg to exit. A switch to another item does this before it asks the
+/// provider for the new one, for accounts that allow one connection.
+/// Rejects with `notConnected` when nothing is cast there.
+pub async fn release(state: &CastPlayback, receiver_id: &str) -> Result<(), String> {
+    let (commands, conversion) = {
+        let mut active = lock(&state.active);
+        let active = active
+            .as_mut()
+            .filter(|a| a.receiver_id == receiver_id)
+            .ok_or("notConnected")?;
+        (active.commands.clone(), active.conversion.take())
+    };
+    // A receiver with no media has nothing to stop, which is fine.
+    let _ = commands.send(Command::StopMedia);
+    if let Some(conversion) = conversion {
+        conversion.stop().await;
+    }
+    Ok(())
+}
+
 /// Ends the cast on `receiver_id`: the receiver goes back to what it
 /// showed, and the converter stops.
 pub fn stop(state: &CastPlayback, receiver_id: &str) {

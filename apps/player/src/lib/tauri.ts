@@ -710,6 +710,14 @@ export const castLoad = (
 export const castControl = (receiverId: string, action: CastAction): Promise<void> =>
 	invoke("cast_control", { receiverId, action });
 
+/**
+ * Have the cast let go of the provider's stream and keep it: the receiver
+ * stops its media, and this computer's converter stops. Resolves once it
+ * has. Rejects with `notConnected` when nothing is cast to that receiver.
+ */
+export const castRelease = (receiverId: string): Promise<void> =>
+	invoke("cast_release", { receiverId });
+
 /** End the cast. The receiver goes back to what it showed. */
 export const castStop = (receiverId: string): Promise<void> => invoke("cast_stop", { receiverId });
 

@@ -295,6 +295,25 @@ pub fn cast_stop<R: Runtime>(app: AppHandle<R>, receiver_id: String) {
     let _ = (app, receiver_id);
 }
 
+/// Has the cast let go of the provider's stream and keeps it, for a switch
+/// to another item on an account that allows one connection. Resolves once
+/// the converter, if any, has stopped.
+#[tauri::command]
+pub async fn cast_release<R: Runtime>(
+    app: AppHandle<R>,
+    receiver_id: String,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        playback::release(&app.state::<playback::CastPlayback>(), &receiver_id).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, receiver_id);
+        Err(UNSUPPORTED.into())
+    }
+}
+
 /// What the commands say where casting isn't built yet.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const UNSUPPORTED: &str = "unsupported";
