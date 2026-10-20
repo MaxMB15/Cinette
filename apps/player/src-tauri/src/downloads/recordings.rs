@@ -430,19 +430,24 @@ fn try_begin<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     tauri::async_runtime::spawn(watch(app.clone(), id.to_string(), pid, claim.url, rx));
 
     // A stop that came while ffmpeg started found nothing to stop yet.
-    let ended = {
+    let latest = {
         let app_state = app.state::<AppState>();
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
         cache.get_download(id).map_err(|e| e.to_string())?
-    }
-    .is_none_or(|r| {
-        r.status != DownloadStatus::Recording
-            || r.end_at.is_some_and(|end| end <= manager::now_secs())
-    });
-    if ended {
+    };
+    if ended_meanwhile(latest.as_ref(), manager::now_secs()) {
         ask_to_stop(app, id);
     }
     Ok(())
+}
+
+/// Whether a recording, read again once its ffmpeg runs, was stopped, ended
+/// or removed while ffmpeg started. `None` is one that's gone.
+#[cfg(desktop)]
+fn ended_meanwhile(rec: Option<&DownloadRecord>, now: i64) -> bool {
+    rec.is_none_or(|r| {
+        r.status != DownloadStatus::Recording || r.end_at.is_some_and(|end| end <= now)
+    })
 }
 
 /// Run `f` on the cache and log what goes wrong.
@@ -1010,6 +1015,7 @@ pub fn stop_all_for_exit<R: Runtime>(app: &AppHandle<R>) {
         let _ = run.child.write(b"q");
     }
     let deadline = Instant::now() + EXIT_GRACE;
+    // mutants: skip BinaryOperator: < and <= differ only at one instant of a clock that never stops.
     while Instant::now() < deadline && !recorder.running().is_empty() {
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -1377,6 +1383,24 @@ mod tests {
             &download("movie", "xt-1-vod-0", DownloadStatus::Downloading),
         );
         assert_eq!(end_now(&cache, "movie", 400).unwrap(), Stopped::Nothing);
+    }
+
+    #[test]
+    fn a_recording_read_again_has_ended_at_its_end_or_once_it_stops_recording() {
+        let mut rec = download("rec", "xt-1-xt-0", DownloadStatus::Recording);
+        assert!(!ended_meanwhile(Some(&rec), 500), "it records with no end");
+        rec.end_at = Some(501);
+        assert!(!ended_meanwhile(Some(&rec), 500), "its end is still ahead");
+        rec.end_at = Some(500);
+        assert!(ended_meanwhile(Some(&rec), 500), "it ends now");
+        rec.end_at = Some(499);
+        assert!(ended_meanwhile(Some(&rec), 500), "its end went by");
+
+        // A record that isn't recording any more has ended, whatever its end.
+        rec.end_at = Some(1_000);
+        rec.status = DownloadStatus::Completed;
+        assert!(ended_meanwhile(Some(&rec), 500), "it stopped recording");
+        assert!(ended_meanwhile(None, 500), "it's gone");
     }
 
     /// A recording of "City News" from 100 to 1 000 that started at 100 and
