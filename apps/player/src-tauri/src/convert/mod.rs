@@ -122,6 +122,10 @@ impl Conversion {
 /// Starts converting `source` by `plan` for the receiver at `receiver`.
 /// Returns once ffmpeg has written the stream's header, so a source that
 /// refuses the login fails here, before the receiver is told anything.
+/// ffmpeg writes it once it has read enough to know the stream, which can
+/// take a few seconds. A source that stops sending before then holds it
+/// back until the read times out, and ffmpeg then writes what it has and
+/// ends, so `ended` can change as soon as this returns.
 pub async fn start<R: Runtime>(
     app: &AppHandle<R>,
     source: &str,

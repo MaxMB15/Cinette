@@ -500,7 +500,9 @@ async fn header_and_a_cluster(response: &mut reqwest::Response) -> Vec<Piece> {
 #[tokio::test]
 async fn dropping_a_conversion_ends_its_ffmpeg() {
     let app = TestApp::new();
-    let conversion = start_copy(&app, &live_wav(End::Pause), LOOPBACK)
+    // A source that keeps sending. One that pauses holds ffmpeg's header
+    // back until its read times out, and then ffmpeg ends on its own.
+    let conversion = start_copy(&app, &live_wav(End::Never), LOOPBACK)
         .await
         .unwrap();
     let pid = conversion.pid.unwrap();
