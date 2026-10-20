@@ -473,6 +473,9 @@ describe("RemoteBar", () => {
 		expect(screen.getByRole("status")).toHaveTextContent(
 			"Living Room disconnected this device."
 		);
+		// It sits at the bottom, below where a raised notice goes.
+		expect(screen.getByRole("status")).toHaveClass("bottom-4");
+		expect(screen.getByRole("status")).not.toHaveClass("bottom-20");
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
 		rerender(<RemoteBar />);
