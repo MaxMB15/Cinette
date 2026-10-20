@@ -22,7 +22,13 @@ import {
 	remoteResetIdentity,
 	remoteSetSettings,
 } from "@/lib/tauri";
-import { MAX_NAME_BYTES, RemoteControlSettings, fitName } from "./RemoteControlSettings";
+import {
+	ALWAYS_WARNING,
+	NOT_STARTED,
+	RESET_DONE,
+	RemoteControlSettings,
+	SAVE_FAILED,
+} from "./RemoteControlSettings";
 
 const defaults: RemoteSettings = {
 	discoverable: true,
@@ -50,10 +56,21 @@ beforeEach(() => {
 
 describe("RemoteControlSettings", () => {
 	it("shows nothing where remote control doesn't run", async () => {
-		vi.mocked(remoteGetSettings).mockRejectedValue("unavailable");
+		vi.mocked(remoteGetSettings).mockRejectedValue(
+			"Remote control isn't available on this device yet."
+		);
 		const { container } = render(<RemoteControlSettings />);
 		await act(async () => {});
 		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("says so when remote control didn't start", async () => {
+		vi.mocked(remoteGetSettings).mockRejectedValue(
+			"Remote control didn't start on this device."
+		);
+		render(<RemoteControlSettings />);
+		expect(await screen.findByRole("alert")).toHaveTextContent(NOT_STARTED);
+		expect(screen.getByText("Remote control", { selector: "h3,div" })).toBeInTheDocument();
 	});
 
 	it("drops settings that load after it closed", async () => {
@@ -95,9 +112,12 @@ describe("RemoteControlSettings", () => {
 			"aria-pressed",
 			"true"
 		);
+		// Each choice says what it means before it's made.
 		expect(
 			screen.getByText(/asks each time another one wants to control it/)
 		).toBeInTheDocument();
+		expect(screen.getByText(/with no dialog and no code to compare/)).toBeInTheDocument();
+		expect(screen.getByText(/No device can control this one/)).toBeInTheDocument();
 		expect(screen.getByLabelText("Device name")).toHaveAttribute("placeholder", "Linux PC");
 		expect(screen.getByLabelText("Device name")).toHaveValue("");
 		expect(screen.getByText(/Devices already connected stay connected/)).toBeInTheDocument();
@@ -124,7 +144,30 @@ describe("RemoteControlSettings", () => {
 		expect(off).not.toHaveClass("bg-primary");
 	});
 
-	it("changes who may control it and says what each choice means", async () => {
+	it("shows a change at once, so a second click before the answer undoes the first", async () => {
+		const answers: ((s: RemoteSettings) => void)[] = [];
+		vi.mocked(remoteSetSettings).mockImplementation(
+			(sent) =>
+				new Promise((resolve) => answers.push(() => resolve({ ...defaults, ...sent })))
+		);
+		await shown();
+		const button = () => screen.getByRole("button", { name: "Discoverable on this network" });
+		fireEvent.click(button());
+		expect(button()).toHaveAttribute("aria-pressed", "false");
+		fireEvent.click(button());
+		expect(button()).toHaveAttribute("aria-pressed", "true");
+		await waitFor(() => expect(answers).toHaveLength(1));
+		await act(async () => answers[0]());
+		await waitFor(() => expect(answers).toHaveLength(2));
+		await act(async () => answers[1]());
+		expect(vi.mocked(remoteSetSettings).mock.calls.map(([s]) => s.discoverable)).toEqual([
+			false,
+			true,
+		]);
+		expect(button()).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("changes who may control it, asking before Always allow", async () => {
 		await shown();
 		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
 		await act(async () => {});
@@ -133,13 +176,29 @@ describe("RemoteControlSettings", () => {
 			remoteControl: "never",
 			deviceName: null,
 		});
-		expect(await screen.findByText(/Choosing this ends every session now/)).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
-		expect(
-			await screen.findByText(
-				/Any device on this network can control playback here and browse what this device can play, with no dialog and no code to compare. Only choose this on a network you trust/
-			)
-		).toBeInTheDocument();
+		const dialog = screen.getByRole("dialog", { name: "Always allow remote control?" });
+		expect(dialog).toHaveTextContent(ALWAYS_WARNING);
+		expect(ALWAYS_WARNING).toMatch(/Only choose this on a network you trust/);
+		fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+		expect(remoteSetSettings).toHaveBeenCalledTimes(1);
+		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+		fireEvent.click(
+			within(screen.getByRole("dialog")).getByRole("button", { name: "Always allow" })
+		);
+		await act(async () => {});
+		expect(remoteSetSettings).toHaveBeenLastCalledWith({
+			discoverable: true,
+			remoteControl: "always",
+			deviceName: null,
+		});
+	});
+
+	it("saves nothing when the choice already made is clicked", async () => {
+		await shown();
+		fireEvent.click(screen.getByRole("button", { name: "Only when allowed" }));
+		await act(async () => {});
+		expect(remoteSetSettings).not.toHaveBeenCalled();
 	});
 
 	it("saves the name when the field loses focus or on Enter, and only when it changed", async () => {
@@ -177,15 +236,65 @@ describe("RemoteControlSettings", () => {
 		await waitFor(() => expect(field).toHaveValue(""));
 	});
 
-	it("says when saving failed", async () => {
+	it("says when saving failed, and shows what the device runs", async () => {
 		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
 		await shown();
+		// Never allow holds until Cinette quits, even unsaved.
+		vi.mocked(remoteGetSettings).mockResolvedValue({ ...defaults, remoteControl: "never" });
 		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent(
-			"Couldn't save the remote control settings. Try again."
+		expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+		expect(screen.getByRole("button", { name: "Never allow" })).toHaveAttribute(
+			"aria-pressed",
+			"true"
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+		fireEvent.click(screen.getByRole("button", { name: "Only when allowed" }));
 		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+	});
+
+	it("doesn't send a change that failed and the device dropped with the next save", async () => {
+		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
+		await shown();
+		// The device answers that it still runs Only when allowed.
+		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+		expect(screen.getByRole("button", { name: "Only when allowed" })).toHaveAttribute(
+			"aria-pressed",
+			"true"
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Discoverable on this network" }));
+		await act(async () => {});
+		expect(remoteSetSettings).toHaveBeenLastCalledWith({
+			discoverable: false,
+			remoteControl: "ask",
+			deviceName: null,
+		});
+	});
+
+	it("goes back to the last answer when it can't ask the device either", async () => {
+		vi.mocked(remoteSetSettings).mockRejectedValueOnce("disk full");
+		await shown();
+		vi.mocked(remoteGetSettings).mockRejectedValue("gone");
+		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+		expect(screen.getByRole("button", { name: "Only when allowed" })).toHaveAttribute(
+			"aria-pressed",
+			"true"
+		);
+	});
+
+	it("keeps what is typed in the name field while a save is on its way", async () => {
+		let finish: () => void = () => {};
+		vi.mocked(remoteSetSettings).mockImplementationOnce(
+			(sent) => new Promise((resolve) => (finish = () => resolve({ ...defaults, ...sent })))
+		);
+		await shown();
+		const field = screen.getByLabelText("Device name");
+		fireEvent.change(field, { target: { value: "Den" } });
+		fireEvent.keyDown(field, { key: "Enter" });
+		fireEvent.change(field, { target: { value: "Den TV" } });
+		await act(async () => finish());
+		expect(field).toHaveValue("Den TV");
 	});
 
 	it("lists the devices controlling it, each with Disconnect", async () => {
@@ -209,11 +318,26 @@ describe("RemoteControlSettings", () => {
 		expect(screen.getByText("Phone").closest("li")?.textContent).toBe(
 			"Phone · iPhoneDisconnect"
 		);
+		expect(screen.getByText("Phone").tagName, "the name is set apart").toBe("BDI");
 		expect(screen.getByText("Laptop").closest("li")).toHaveTextContent(
 			"Laptop · Mac · reconnecting"
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Disconnect Laptop" }));
 		expect(remoteDisconnect).toHaveBeenCalledWith("s2");
+	});
+
+	it("tells two devices with one name apart", async () => {
+		sessions.list = ["d1abcdefgh", "d2abcdefgh"].map((deviceId, i) => ({
+			sessionId: `s${i}`,
+			deviceId,
+			name: "Phone",
+			deviceType: "iphone",
+			connected: true,
+		}));
+		await shown();
+		expect(screen.getAllByText(/iPhone · ID d1abcd|iPhone · ID d2abcd/)).toHaveLength(2);
+		fireEvent.click(screen.getByRole("button", { name: "Disconnect Phone · ID d2abcd" }));
+		expect(remoteDisconnect).toHaveBeenCalledWith("s1");
 	});
 
 	it("keeps going when disconnecting fails", async () => {
@@ -247,6 +371,7 @@ describe("RemoteControlSettings", () => {
 		fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reset" }));
 		expect(remoteResetIdentity).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(await screen.findByRole("status")).toHaveTextContent(RESET_DONE);
 	});
 
 	it("says when resetting failed", async () => {
@@ -298,15 +423,16 @@ describe("RemoteControlSettings", () => {
 		await shown();
 		const mode = (name: string) => screen.getByRole("button", { name });
 		fireEvent.click(mode("Never allow"));
-		fireEvent.click(mode("Always allow"));
+		fireEvent.click(mode("Only when allowed"));
 		await act(async () => {});
 		await act(async () => answers[0]({ ...defaults, remoteControl: "never" }));
 		expect(mode("Never allow"), "a newer save is on its way").toHaveAttribute(
 			"aria-pressed",
 			"false"
 		);
-		await act(async () => answers[1]({ ...defaults, remoteControl: "always" }));
-		expect(mode("Always allow")).toHaveAttribute("aria-pressed", "true");
+		await waitFor(() => expect(answers).toHaveLength(2));
+		await act(async () => answers[1]({ ...defaults, remoteControl: "ask" }));
+		expect(mode("Only when allowed")).toHaveAttribute("aria-pressed", "true");
 	});
 
 	it("says nothing about an older save that failed", async () => {
@@ -316,11 +442,12 @@ describe("RemoteControlSettings", () => {
 			.mockImplementationOnce(async (sent) => ({ ...defaults, ...sent }));
 		await shown();
 		fireEvent.click(screen.getByRole("button", { name: "Never allow" }));
-		fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+		fireEvent.click(screen.getByRole("button", { name: "Only when allowed" }));
 		await act(async () => {});
 		await act(async () => failFirst("late"));
+		await waitFor(() => expect(remoteSetSettings).toHaveBeenCalledTimes(2));
 		await waitFor(() =>
-			expect(screen.getByRole("button", { name: "Always allow" })).toHaveAttribute(
+			expect(screen.getByRole("button", { name: "Only when allowed" })).toHaveAttribute(
 				"aria-pressed",
 				"true"
 			)
@@ -329,12 +456,6 @@ describe("RemoteControlSettings", () => {
 	});
 
 	it("keeps a name to what fits in 63 bytes", async () => {
-		expect(MAX_NAME_BYTES).toBe(63);
-		expect(fitName("Den")).toBe("Den");
-		expect(fitName("x".repeat(70))).toBe("x".repeat(63));
-		// Each of these takes 4 bytes, so 15 fit.
-		expect(fitName("😀".repeat(20))).toBe("😀".repeat(15));
-		expect(new TextEncoder().encode(fitName("é".repeat(40))).length).toBe(62);
 		await shown();
 		const field = screen.getByLabelText("Device name");
 		fireEvent.change(field, { target: { value: "Ж".repeat(40) } });

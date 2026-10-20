@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { useRemoteSessions } from "@/hooks/useRemoteTarget";
-import { deviceTypeName } from "@/lib/remote-devices";
+import { shortId } from "@/lib/device-picker";
+import { deviceTypeName, fitName } from "@/lib/remote-devices";
 import {
 	remoteDisconnect,
 	remoteGetSettings,
@@ -18,10 +19,18 @@ import {
 	type RemoteSettings,
 } from "@/lib/tauri";
 
-/** What shows when the settings couldn't be saved. */
-export const SAVE_FAILED = "Couldn't save the remote control settings. Try again.";
+/** What shows when the settings couldn't be saved. The device keeps
+ *  them until Cinette quits, which the card then shows. */
+export const SAVE_FAILED =
+	"Couldn't save the remote control settings, so this lasts only until Cinette quits. Try again.";
 /** What shows when a new identity couldn't be made. */
 export const RESET_FAILED = "Couldn't reset the device identity. Try again.";
+/** What shows once a new identity was made. */
+export const RESET_DONE = "This device has a new identity. Other devices see it as new.";
+/** What the card says when the remote control service didn't start. */
+export const NOT_STARTED = "Remote control didn't start on this device.";
+/** What the backend answers where remote control doesn't run at all. */
+const UNAVAILABLE = "Remote control isn't available on this device yet.";
 
 const MODES: { value: RemoteControlMode; label: string }[] = [
 	{ value: "always", label: "Always allow" },
@@ -29,27 +38,23 @@ const MODES: { value: RemoteControlMode; label: string }[] = [
 	{ value: "never", label: "Never allow" },
 ];
 
-const MODE_TEXT: Record<RemoteControlMode, string> = {
-	always: "Any device on this network can control playback here and browse what this device can play, with no dialog and no code to compare. Only choose this on a network you trust.",
+/** What each choice means, all shown before one is made. */
+export const MODE_TEXT: Record<RemoteControlMode, string> = {
+	always: "Any device on this network can control playback here and browse what this device can play, with no dialog and no code to compare.",
 	ask: "This device asks each time another one wants to control it, and shows a code to compare.",
-	never: "No device can control this one. Choosing this ends every session now.",
+	never: "No device can control this one, and choosing it ends every session.",
 };
 
-/** The longest name, in UTF-8 bytes, that goes out whole. */
-export const MAX_NAME_BYTES = 63;
-
-/** `typed`, cut to the characters that fit in {@link MAX_NAME_BYTES}. */
-export const fitName = (typed: string): string => {
-	const encoder = new TextEncoder();
-	let fitted = "";
-	for (const char of typed) {
-		if (encoder.encode(fitted + char).length > MAX_NAME_BYTES) break;
-		fitted += char;
-	}
-	return fitted;
-};
+/** The warning Always allow is confirmed with. */
+export const ALWAYS_WARNING = `${MODE_TEXT.always} Only choose this on a network you trust.`;
 
 type Saveable = Pick<RemoteSettings, "discoverable" | "remoteControl" | "deviceName">;
+
+const saveable = (s: Saveable): Saveable => ({
+	discoverable: s.discoverable,
+	remoteControl: s.remoteControl,
+	deviceName: s.deviceName,
+});
 
 /**
  * Remote control between Cinette devices: whether others can find this
@@ -57,31 +62,33 @@ type Saveable = Pick<RemoteSettings, "discoverable" | "remoteControl" | "deviceN
  * a new identity. Shows nothing where remote control doesn't run.
  */
 export const RemoteControlSettings = () => {
-	// The saved settings, and the name as typed so far.
+	// The settings shown, a change included before its save is back, and
+	// the name as typed so far.
 	const [form, setForm] = useState<{ settings: RemoteSettings; name: string } | null>(null);
+	const [loadError, setLoadError] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [confirmReset, setConfirmReset] = useState(false);
+	const [done, setDone] = useState<string | null>(null);
+	const [confirm, setConfirm] = useState<"reset" | "always" | null>(null);
 	const sessions = useRemoteSessions();
-	// The settings as last sent, so a change made before the last save is
-	// back builds on it rather than undoing it.
-	const sentRef = useRef<Saveable | null>(null);
+	// What the device runs, as its last answer said. Each save builds on
+	// it when its turn comes, so a change that failed isn't sent again.
+	const confirmedRef = useRef<RemoteSettings | null>(null);
 	// Saves go one after another; only the newest one's answer shows.
 	const queueRef = useRef<Promise<unknown>>(Promise.resolve());
 	const latestRef = useRef({});
-
-	const show = (settings: RemoteSettings) => {
-		sentRef.current = settings;
-		setForm({ settings, name: settings.deviceName ?? "" });
-	};
 
 	useEffect(
 		() => {
 			let current = true;
 			remoteGetSettings()
 				.then((loaded) => {
-					if (current) show(loaded);
+					if (!current) return;
+					confirmedRef.current = loaded;
+					setForm({ settings: loaded, name: loaded.deviceName ?? "" });
 				})
-				.catch(() => {});
+				.catch((e: unknown) => {
+					if (current && e !== UNAVAILABLE) setLoadError(NOT_STARTED);
+				});
 			return () => {
 				current = false;
 			};
@@ -90,37 +97,84 @@ export const RemoteControlSettings = () => {
 		[]
 	);
 
+	if (loadError) {
+		return (
+			<Card>
+				<CardHeader>
+					<CardTitle className="text-base">Remote control</CardTitle>
+				</CardHeader>
+				<CardContent>
+					<p role="alert" className="text-xs text-red-500">
+						{loadError}
+					</p>
+				</CardContent>
+			</Card>
+		);
+	}
 	if (!form) return null;
 	const { settings, name } = form;
 	const setName = (typed: string) => setForm({ settings, name: fitName(typed) });
 
+	/** `running`, from the device, shown. The name field keeps what the
+	 *  user typed since `typed` went out. */
+	const show = (running: RemoteSettings, typed: string) => {
+		confirmedRef.current = running;
+		setForm((now) => ({
+			settings: running,
+			name: now && now.name !== typed ? now.name : (running.deviceName ?? ""),
+		}));
+	};
+
 	const save = (change: Partial<Saveable>) => {
 		setError(null);
-		const base = sentRef.current ?? settings;
-		const next: Saveable = {
-			discoverable: base.discoverable,
-			remoteControl: base.remoteControl,
-			deviceName: base.deviceName,
-			...change,
-		};
-		sentRef.current = next;
+		setDone(null);
+		// It shows at once, so a second click builds on the first.
+		setForm({ settings: { ...settings, ...change }, name });
+		const typed = name;
 		const mine = {};
 		latestRef.current = mine;
 		queueRef.current = queueRef.current
-			.then(() => remoteSetSettings(next))
+			.then(() =>
+				// The form shows only once the settings loaded and set this.
+				remoteSetSettings({ ...saveable(confirmedRef.current!), ...change })
+			)
 			.then((saved) => {
-				if (mine === latestRef.current) show(saved);
+				confirmedRef.current = saved;
+				if (mine === latestRef.current) show(saved, typed);
 			})
-			.catch(() => {
-				if (mine === latestRef.current) setError(SAVE_FAILED);
-			});
+			.catch(() =>
+				// The device may run the change anyway, as Never allow does,
+				// so the card shows what it runs.
+				remoteGetSettings()
+					.then((running) => {
+						confirmedRef.current = running;
+						if (mine === latestRef.current) show(running, typed);
+					})
+					.catch(() => {
+						// With no answer either, it goes back to the last one.
+						if (mine === latestRef.current) show(confirmedRef.current!, typed);
+					})
+					.finally(() => {
+						if (mine === latestRef.current) setError(SAVE_FAILED);
+					})
+			);
 	};
 
 	const saveName = () => {
 		const typed = name.trim();
-		if (typed === ((sentRef.current ?? settings).deviceName ?? "")) return;
+		if (typed === (settings.deviceName ?? "")) return;
 		save({ deviceName: typed === "" ? null : typed });
 	};
+
+	const chooseMode = (mode: RemoteControlMode) => {
+		if (mode === settings.remoteControl) return;
+		if (mode === "always") setConfirm("always");
+		else save({ remoteControl: mode });
+	};
+
+	// Two devices with one name show the start of their ids.
+	const named = new Map<string, number>();
+	for (const s of sessions) named.set(s.name, (named.get(s.name) ?? 0) + 1);
 
 	return (
 		<Card>
@@ -153,12 +207,17 @@ export const RemoteControlSettings = () => {
 					<SegmentedControl
 						aria-label="Remote control"
 						value={settings.remoteControl}
-						onChange={(mode) => save({ remoteControl: mode })}
+						onChange={chooseMode}
 						options={MODES}
 					/>
-					<p className="text-xs text-muted-foreground mt-2">
-						{MODE_TEXT[settings.remoteControl]}
-					</p>
+					<dl className="text-xs text-muted-foreground mt-2 space-y-1">
+						{MODES.map(({ value, label }) => (
+							<div key={value}>
+								<dt className="inline font-medium text-foreground">{label}: </dt>
+								<dd className="inline">{MODE_TEXT[value]}</dd>
+							</div>
+						))}
+					</dl>
 				</div>
 
 				<div>
@@ -188,31 +247,37 @@ export const RemoteControlSettings = () => {
 						</p>
 					) : (
 						<ul className="space-y-2">
-							{sessions.map((s) => (
-								<li
-									key={s.sessionId}
-									className="flex items-center justify-between gap-3"
-								>
-									<span className="text-sm">
-										{s.name}
-										<span className="text-xs text-muted-foreground">
-											{" "}
-											· {deviceTypeName(s.deviceType)}
-											{s.connected ? "" : " · reconnecting"}
-										</span>
-									</span>
-									<Button
-										variant="secondary"
-										size="sm"
-										aria-label={`Disconnect ${s.name}`}
-										onClick={() =>
-											void remoteDisconnect(s.sessionId).catch(() => {})
-										}
+							{sessions.map((s) => {
+								const tag =
+									named.get(s.name)! > 1 ? ` · ${shortId(s.deviceId)}` : "";
+								return (
+									<li
+										key={s.sessionId}
+										className="flex items-center justify-between gap-3"
 									>
-										Disconnect
-									</Button>
-								</li>
-							))}
+										<span className="text-sm min-w-0 break-words">
+											<bdi className="font-medium">{s.name}</bdi>
+											<span className="text-xs text-muted-foreground">
+												{" "}
+												· {deviceTypeName(s.deviceType)}
+												{tag}
+												{s.connected ? "" : " · reconnecting"}
+											</span>
+										</span>
+										<Button
+											variant="secondary"
+											size="sm"
+											className="shrink-0"
+											aria-label={`Disconnect ${s.name}${tag}`}
+											onClick={() =>
+												void remoteDisconnect(s.sessionId).catch(() => {})
+											}
+										>
+											Disconnect
+										</Button>
+									</li>
+								);
+							})}
 						</ul>
 					)}
 				</div>
@@ -224,7 +289,7 @@ export const RemoteControlSettings = () => {
 							Other devices see this one as new, and every session ends.
 						</p>
 					</div>
-					<Button variant="secondary" size="sm" onClick={() => setConfirmReset(true)}>
+					<Button variant="secondary" size="sm" onClick={() => setConfirm("reset")}>
 						Reset
 					</Button>
 				</div>
@@ -234,18 +299,40 @@ export const RemoteControlSettings = () => {
 						{error}
 					</p>
 				)}
+				{done && (
+					<p role="status" className="text-xs text-muted-foreground">
+						{done}
+					</p>
+				)}
 			</CardContent>
 			<ConfirmDialog
-				open={confirmReset}
+				open={confirm === "reset"}
 				title="Reset device identity?"
 				message="Every device controlling this one is disconnected, and other devices see this one as new."
 				confirmLabel="Reset"
-				onCancel={() => setConfirmReset(false)}
+				onCancel={() => setConfirm(null)}
 				onConfirm={() => {
-					setConfirmReset(false);
+					setConfirm(null);
+					setError(null);
+					setDone(null);
 					remoteResetIdentity()
-						.then(show)
+						.then((running) => {
+							confirmedRef.current = running;
+							setForm((now) => ({ settings: running, name: now?.name ?? "" }));
+							setDone(RESET_DONE);
+						})
 						.catch(() => setError(RESET_FAILED));
+				}}
+			/>
+			<ConfirmDialog
+				open={confirm === "always"}
+				title="Always allow remote control?"
+				message={ALWAYS_WARNING}
+				confirmLabel="Always allow"
+				onCancel={() => setConfirm(null)}
+				onConfirm={() => {
+					setConfirm(null);
+					save({ remoteControl: "always" });
 				}}
 			/>
 		</Card>
