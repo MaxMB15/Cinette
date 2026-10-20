@@ -150,6 +150,32 @@ async fn a_live_feed_no_one_reads_drops_its_oldest_pieces_to_a_start_point() {
 }
 
 #[tokio::test]
+async fn keeps_only_what_a_request_needs_or_starts_from() {
+    let feed = feed(1 << 20, true);
+    let mut reader = feed.reader();
+    for (byte, start) in [(1, true), (2, false), (3, true), (4, false)] {
+        feed.push(piece(byte), start).await;
+        reader.next().await.unwrap();
+    }
+    feed.push(piece(5), false).await;
+    // The third piece is where a new request starts.
+    let state = feed.state();
+    assert_eq!((state.first, state.bytes), (2, 12));
+}
+
+#[test]
+fn each_request_keeps_its_own_place() {
+    let feed = feed(1 << 20, true);
+    let first = feed.reader();
+    let second = feed.reader();
+    assert_ne!(first.id, second.id);
+    assert_eq!(feed.state().readers.len(), 2);
+    drop(first);
+    assert_eq!(feed.state().readers.len(), 1);
+    drop(second);
+}
+
+#[tokio::test]
 async fn a_file_waits_for_its_reader_who_gets_every_byte_in_order() {
     let server = LanServer::start(LOOPBACK).await.unwrap();
     let feed = feed(64, false);
