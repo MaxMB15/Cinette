@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated October 17, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad.
+Last updated October 20, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad.
 
 The developer of Cinette receives no data from the app. The app has no accounts, ads or analytics, and no server of its own. Your data stays on your device. The app sends data only to the services listed under "Who the app talks to", and only when you use a feature that needs one.
 
@@ -37,6 +37,7 @@ The app connects to these, and only when it needs them:
 - SkipDB at api.skipdb.tv and IntroDB at api.introdb.app, for the times of intros, recaps and credits, if you add an OMDb key. When you play a movie or episode that OMDb found, the app sends its IMDb ID to both, with the season and episode for a series. SkipDB also gets the length of the video, to check the times against it.
 - OpenSubtitles, to find and download subtitles, if you add a key. It sends the IMDb ID, and the season and episode for a series.
 - Google Gemini, if you add a key, when you test the key or use one of the AI actions in Manage Categories, which are Re-categorize All, Assign All with AI and Find & Add Groups. An AI action sends your group and category names, and a few channel, movie or series names from each group. It doesn't send what you watch.
+- An AirPlay TV you pick, on iPhone and iPad. The app gives the TV the stream's address, login included, so the TV plays it straight from your provider. When the TV can't play a stream as it is, the iPhone converts it and serves it to the TV over your Wi-Fi instead. Then the TV gets only an address on the iPhone, with a random part that changes each time, and only devices on that Wi-Fi network can reach it.
 - GitHub, on macOS and Linux only, to check for a new version when the app starts and every two hours after that, and to download it.
 
 Each of these sees your IP address and what the app sends it, and handles that under its own terms and privacy policy:

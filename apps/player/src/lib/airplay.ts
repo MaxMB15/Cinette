@@ -118,7 +118,7 @@ export const SUPERSEDED = "superseded";
 
 /** What the player says when a seek on the TV failed. */
 export const airplaySeekMessage = (error: unknown): string =>
-	error === REFUSED || (typeof error === "string" && error !== "")
+	typeof error === "string" && error !== ""
 		? airplayFailureMessage(error)
 		: "Couldn't move the stream on the TV.";
 

@@ -67,6 +67,18 @@ sudo apt-get install -y \
   patchelf
 ```
 
+The workspace's `cargo build` and `cargo test` also need FFmpeg's development
+packages, which `crates/hls-remux` builds its C against for its tests, and
+libx264, which the tests encode their H.264 with. The Linux app itself never
+links them:
+
+```bash
+sudo apt-get install -y \
+  libavformat-dev libavcodec-dev libavutil-dev libswresample-dev
+```
+
+Debian's and Ubuntu's `libavcodec` include libx264.
+
 The system `libmpv-dev` is enough for development on Debian 12, Ubuntu 24.04 and
 later. Ubuntu 22.04 has mpv 0.34, which the app can't use. To build libmpv from
 source instead, as the AppImage does:
