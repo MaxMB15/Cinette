@@ -443,9 +443,10 @@ cargo mutants --no-config --gitignore true -f crates/tauri-plugin-mpv/src/macos.
 
 The [Changed code](#changed-code) workflow tests the lines a pull request changes in
 each crate, and fails on a missed change. The Mutation testing workflow tests every
-crate on `dev` each Monday, in four shards for `mvp-core` and the plugin and eight for
-the app. A missed change doesn't fail that run. Only an error does, such as a build
-that breaks. Its report job lists the missed changes by file.
+crate on `dev` each Monday, in four shards for `mvp-core` and the plugin, one for
+`hls-remux` and sixteen for the app. A missed change doesn't fail that run. Only an
+error does, such as a build that breaks. Its report job lists the missed changes by
+file.
 
 [StrykerJS](https://stryker-mutator.io) does the same for the frontend helpers in
 `apps/player/src/lib`. It changes one thing at a time, such as a condition or a

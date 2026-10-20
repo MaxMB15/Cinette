@@ -69,7 +69,9 @@ jobs:
         run: gh workflow run mutants.yml --repo "$GITHUB_REPOSITORY" --ref dev -f package=all
 
   # Lists a job for each shard of each crate the run tests. The app's mutants
-  # take the longest to build and test, so it gets the most shards.
+  # take the longest to build and test, so it gets the most shards. It has
+  # about 1,700 mutants at about 25 seconds each, so 16 shards take about 45
+  # minutes each plus their setup.
   plan:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -86,14 +88,14 @@ jobs:
             [ {package: "mvp-core", shards: 4},
               {package: "tauri-plugin-mpv", shards: 4},
               {package: "hls-remux", shards: 1},
-              {package: "max-video-player", shards: 8} ]
+              {package: "max-video-player", shards: 16} ]
             | map(select($only == "all" or .package == $only))
             | {include: [.[] | .package as $p | .shards as $n
                 | range($n) | {package: $p, shard: ., shards: $n}]}')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   # The app's tests run the real ffmpeg sidecar. This job downloads it once for
-  # all of the app's shards, so its host sees one download a run, not eight.
+  # all of the app's shards, so its host sees one download a run, not sixteen.
   sidecar:
     needs: plan
     if: contains(needs.plan.outputs.matrix, 'max-video-player')
