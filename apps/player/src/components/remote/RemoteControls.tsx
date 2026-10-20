@@ -118,7 +118,8 @@ export const NONE_FOUND =
 	"No other Cinette device on this network yet. Cinette needs to be open on it, with discovery on.";
 
 /** What shows when ending a session didn't work. */
-export const LEAVE_FAILED = "Couldn't end the session. Try again.";
+export const LEAVE_FAILED =
+	"Couldn't end the session. If the other device still shows this one, disconnect it there.";
 
 /** A note at the bottom of the screen. A `raised` one sits above the
  *  others, so two don't cover each other. */
@@ -255,8 +256,9 @@ const NowPlaying = ({ destination }: { destination: CinetteDestination }) => {
 };
 
 /**
- * The devices controlling this one, each with Disconnect. Shown on every
- * page while any is connected, so they can be cut off at any time.
+ * The devices controlling this one, each with Disconnect, a reconnecting
+ * one too. Shown on every page while any is, so they can be cut off at
+ * any time.
  */
 export const ControllersBar = () => {
 	const sessions = useRemoteSessions();
@@ -304,6 +306,11 @@ export const RemoteBar = () => {
 	const { link, ended, leave } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
 	const [leaveFailed, setLeaveFailed] = useState(false);
+	// Leaving clears the link here before the backend answers, so this
+	// shows whatever the bar shows by then.
+	const failed = leaveFailed && (
+		<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
+	);
 	if (link && (link.phase.phase === "connected" || link.phase.phase === "reconnecting")) {
 		return (
 			<div
@@ -328,13 +335,15 @@ export const RemoteBar = () => {
 				>
 					Return to independent playback
 				</button>
-				{leaveFailed && (
-					<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} />
-				)}
+				{failed}
 			</div>
 		);
 	}
 	const text = ended && ended !== dismissed ? endedText(ended.name, ended.reason) : null;
-	if (!text) return null;
-	return <Notice message={text} onDismiss={() => setDismissed(ended)} />;
+	return (
+		<>
+			{failed}
+			{text && <Notice message={text} onDismiss={() => setDismissed(ended)} />}
+		</>
+	);
 };

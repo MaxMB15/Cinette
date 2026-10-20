@@ -5,6 +5,7 @@ import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { Airplay, Cast, Check, Laptop, Loader2, MonitorSmartphone, Tv } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
+import { useChanged } from "@/hooks/useChanged";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import {
 	groupEntries,
@@ -77,6 +78,11 @@ export const DevicePicker = ({
 	// The rows' order when the pointer came over the list, kept while it's
 	// there so a device that appears can't move another under it.
 	const [held, setHeld] = useState<string[] | null>(null);
+	// Closed with the pointer still over it, as after a click on a row,
+	// it heard no pointerleave, so it lets go of the order when it closes
+	// or opens.
+	const openChanged = useChanged(open);
+	if (openChanged && held) setHeld(null);
 	const onOpenRef = useLatestRef(onOpen);
 	useEffect(() => {
 		if (open) onOpenRef.current?.();
@@ -109,7 +115,13 @@ export const DevicePicker = ({
 			className="bg-card border border-border rounded-lg p-4 w-[360px] max-w-[calc(100vw-2rem)] max-h-[80vh] overflow-y-auto shadow-xl"
 		>
 			<h2 id={titleId} className="text-sm font-semibold mb-3">
-				{confirming ? `Play on ${confirming.name}?` : "Play on"}
+				{confirming ? (
+					<>
+						Play on <bdi>{confirming.name}</bdi>?
+					</>
+				) : (
+					"Play on"
+				)}
 			</h2>
 			{confirming ? (
 				<div>

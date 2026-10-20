@@ -83,6 +83,13 @@ const link = (phase: Link["phase"], code: string | null = null): Link => {
 	return { id: 3, deviceId: "tv1", name: "Living Room", phase, code, destination };
 };
 
+/** A leave as the store does it: the link goes here at once, and then
+ *  the backend fails. */
+const leavesThenFails = () => {
+	control.state = { ...control.state, link: null };
+	return Promise.reject("unavailable");
+};
+
 beforeEach(() => {
 	control.state = { devices: [tv, den], link: null, ended: null };
 	control.connect.mockReset().mockResolvedValue(undefined);
@@ -199,14 +206,13 @@ describe("DevicesButton", () => {
 	});
 
 	it("says when ending the session from the picker didn't work", async () => {
-		control.leave.mockRejectedValueOnce("gone");
+		control.leave.mockImplementationOnce(leavesThenFails);
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
-		render(<DevicesButton />);
+		const { rerender } = render(<DevicesButton />);
 		fireEvent.click(screen.getByRole("button", { name: "Devices, playing on Living Room" }));
 		fireEvent.click(screen.getByRole("button", { name: /This device/ }));
-		expect(await screen.findByRole("status")).toHaveTextContent(
-			"Couldn't end the session. Try again."
-		);
+		rerender(<DevicesButton />);
+		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
 		expect(screen.getByRole("status")).toHaveClass("bottom-20");
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
@@ -320,11 +326,10 @@ describe("ConnectStatusDialog", () => {
 	});
 
 	it("says so when cancelling fails, after the dialog has gone", async () => {
-		control.leave.mockRejectedValueOnce("unavailable");
+		control.leave.mockImplementationOnce(leavesThenFails);
 		control.state = { ...control.state, link: link({ phase: "pending", expiresInMs: 1 }) };
 		const { rerender } = render(<ConnectStatusDialog />);
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-		control.state = { ...control.state, link: null };
 		rerender(<ConnectStatusDialog />);
 		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
@@ -433,15 +438,26 @@ describe("RemoteBar", () => {
 		expect(control.leave).toHaveBeenCalledTimes(1);
 	});
 
-	it("says when returning to independent playback didn't work", async () => {
+	it("says when returning to independent playback didn't work, once the bar has gone", async () => {
+		control.leave.mockImplementationOnce(leavesThenFails);
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		const { rerender } = render(<RemoteBar />);
+		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
+		rerender(<RemoteBar />);
+		expect(screen.queryByRole("region"), "the link is gone here at once").toBeNull();
+		expect(LEAVE_FAILED).toMatch(/disconnect it there/);
+		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
+		expect(screen.getByRole("status")).toHaveClass("bottom-20");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("says it while the link is still there too", async () => {
 		control.leave.mockRejectedValueOnce("gone");
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		render(<RemoteBar />);
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		expect(await screen.findByRole("status")).toHaveTextContent(LEAVE_FAILED);
-		expect(screen.getByRole("status")).toHaveClass("bottom-4");
-		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-		expect(screen.queryByRole("status")).toBeNull();
 		// A second try that works says nothing.
 		fireEvent.click(screen.getByRole("button", { name: "Return to independent playback" }));
 		await act(async () => {});

@@ -90,7 +90,7 @@ const ConsentPrompt = ({
 				tabIndex={0}
 				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden"
 			>
-				Allow <bdi className="font-bold">“{request.name}”</bdi> to control this device?
+				Allow “<bdi className="font-bold">{request.name}</bdi>” to control this device?
 			</h2>
 			<p className="text-xs text-muted-foreground mb-4">
 				{deviceTypeName(request.deviceType)} on your network. It will be able to play, pause

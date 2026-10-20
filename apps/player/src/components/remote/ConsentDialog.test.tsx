@@ -82,7 +82,7 @@ describe("ConsentDialog", () => {
 		await shown();
 		ask();
 		const dialog = screen.getByRole("dialog", { name: QUESTION });
-		expect(screen.getByText("“Max's iPhone”").tagName, "the name is set apart").toBe("BDI");
+		expect(screen.getByText("Max's iPhone").tagName, "the name is set apart").toBe("BDI");
 		expect(dialog).toHaveTextContent("iPhone on your network");
 		expect(screen.getByText("042 917")).toHaveAttribute("aria-hidden");
 		expect(screen.getByText("Code 0 4 2 9 1 7")).toHaveClass("sr-only");
