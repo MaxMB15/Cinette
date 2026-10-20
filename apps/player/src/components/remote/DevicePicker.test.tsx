@@ -149,6 +149,26 @@ describe("DevicePicker", () => {
 		expect(names()).toEqual(["Attic TV", "Living Room", "Den"]);
 	});
 
+	it("lets go of the held order when it closes with the pointer over it", () => {
+		const props = { activeId: "local", onClose: () => {}, onSelect: () => {} };
+		const view = render(<DevicePicker open entries={entries} {...props} />);
+		const list = screen.getByRole("region", { name: "This device" }).parentElement!;
+		fireEvent.pointerEnter(list);
+		view.rerender(<DevicePicker open={false} entries={entries} {...props} />);
+		const arrived: PickerEntry = {
+			id: "cinette:attic",
+			kind: "cinette",
+			name: "Attic TV",
+			deviceType: "android-tv",
+		};
+		view.rerender(<DevicePicker open entries={[...entries, arrived]} {...props} />);
+		expect(
+			within(screen.getAllByRole("region")[1])
+				.getAllByRole("button")
+				.map((b) => b.querySelector("[title]")?.getAttribute("title"))
+		).toEqual(["Attic TV", "Living Room", "Den"]);
+	});
+
 	it("marks the row that plays now", () => {
 		picker({ activeId: "cinette:tv" });
 		expect(row(/Living Room/)).toHaveAttribute("aria-current", "true");
