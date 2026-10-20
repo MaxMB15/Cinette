@@ -11,7 +11,7 @@ import {
 	type ComponentProps,
 	type ReactNode,
 } from "react";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import {
 	MemoryRouter,
 	Route,
@@ -4339,6 +4339,26 @@ describe("Google Cast", () => {
 			await flush();
 			expect(answers).toEqual([false, true]);
 			expect(screen.queryByRole("dialog")).toBeNull();
+		});
+
+		it("answers no to a question a newer one replaces, or that the page leaves open", async () => {
+			await openItem(ep2, { episodes: [ep1, ep2, ep3] });
+			casting();
+			const answers: boolean[] = [];
+			vi.mocked(fakeCast.get().send).mockImplementation(async (_, __, opts) => {
+				answers.push(await opts.confirm!("on"));
+				return null;
+			});
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: "Previous episode" }));
+			await flush();
+			// The first question was answered no once the second came.
+			expect(answers).toEqual([false]);
+			expect(screen.getAllByRole("dialog", { name: "Play on Hotel TV?" })).toHaveLength(1);
+			cleanup();
+			await flush();
+			expect(answers).toEqual([false, false]);
 		});
 
 		it("says why the new item can't go to the receiver", async () => {

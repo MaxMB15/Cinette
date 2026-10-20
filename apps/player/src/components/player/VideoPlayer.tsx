@@ -472,11 +472,23 @@ export const PlayerView = () => {
 		keep: "on" | "onScreen";
 		answer: (ok: boolean) => void;
 	} | null>(null);
+	// The question waiting for an answer, so a newer one, or leaving the
+	// page, answers it with no and the cast it holds up ends.
+	const castQuestion = useRef<((ok: boolean) => void) | null>(null);
 	const confirmCast = useCallback(
 		(name: string, keep: "on" | "onScreen") =>
-			new Promise<boolean>((answer) => setCastConfirm({ name, keep, answer })),
+			new Promise<boolean>((resolve) => {
+				castQuestion.current?.(false);
+				const answer = (ok: boolean) => {
+					if (castQuestion.current === answer) castQuestion.current = null;
+					resolve(ok);
+				};
+				castQuestion.current = answer;
+				setCastConfirm({ name, keep, answer });
+			}),
 		[]
 	);
+	useEffect(() => () => castQuestion.current?.(false), []);
 
 	/**
 	 * Actually start playing `ch` (optionally from `startPos`), replacing
