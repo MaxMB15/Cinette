@@ -246,6 +246,8 @@ pub fn start(config: LinkConfig, host: Arc<dyn LinkHost>) -> LinkHandle {
 enum Outcome {
     /// For good, for this reason.
     Ended(Ended),
+    /// The address had another device's key, before any session came back.
+    WrongKey,
     /// It dropped. The session, if there is one, may resume.
     Dropped,
 }
@@ -270,31 +272,50 @@ async fn run(
                 Phase::Reconnecting { attempt }
             },
         );
-        let outcome = match connect_any(&(config.addresses)(), &mut inbox).await {
-            Reached::Left => Outcome::Ended(Ended::Left),
-            Reached::Stream(stream) => {
-                let mut session_back = false;
-                let result = connection(
-                    &config,
-                    &host,
-                    stream,
-                    &mut session,
-                    &mut session_back,
-                    &mut inbox,
-                )
-                .await;
-                if session_back {
-                    // The session came back, so a later drop starts afresh.
-                    dropped_at = None;
-                    attempt = 0;
+        let addresses: Vec<SocketAddr> = (config.addresses)()
+            .into_iter()
+            .take(MAX_ADDRESSES)
+            .collect();
+        // An address with someone else's key is passed over for the next.
+        let mut from = 0;
+        let mut wrong_key = false;
+        let outcome = loop {
+            break match connect_any(&addresses[from..], &mut inbox).await {
+                Reached::Left => Outcome::Ended(Ended::Left),
+                Reached::Stream(stream, at) => {
+                    let mut session_back = false;
+                    let result = connection(
+                        &config,
+                        &host,
+                        stream,
+                        &mut session,
+                        &mut session_back,
+                        &mut inbox,
+                    )
+                    .await;
+                    if session_back {
+                        // The session came back, so a later drop starts afresh.
+                        dropped_at = None;
+                        attempt = 0;
+                    }
+                    if let Outcome::WrongKey = result {
+                        wrong_key = true;
+                        from += at + 1;
+                        continue;
+                    }
+                    result
                 }
-                result
-            }
-            Reached::Nowhere if session.is_some() => Outcome::Dropped,
-            Reached::Nowhere => Outcome::Ended(Ended::Unreachable),
+                // During a resume, discovery may find the right address yet.
+                Reached::Nowhere if session.is_some() => Outcome::Dropped,
+                Reached::Nowhere if wrong_key => {
+                    Outcome::Ended(Ended::Target(CloseReason::IdentityMismatch))
+                }
+                Reached::Nowhere => Outcome::Ended(Ended::Unreachable),
+            };
         };
         let ended = match outcome {
             Outcome::Ended(ended) => Some(ended),
+            Outcome::WrongKey => unreachable!("the loop above tries the next address"),
             Outcome::Dropped if session.is_none() => Some(Ended::Lost),
             Outcome::Dropped => {
                 let since = *dropped_at.get_or_insert_with(|| (config.clock)());
@@ -341,23 +362,23 @@ async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input
 
 /// How a connection attempt ended.
 enum Reached {
-    Stream(TcpStream),
+    /// Connected to the address at this index.
+    Stream(TcpStream, usize),
     Nowhere,
     /// This device left meanwhile.
     Left,
 }
 
-/// The first of `addrs` that takes a connection, trying at most
-/// [`MAX_ADDRESSES`]. Leaving stops it at once.
+/// The first of `addrs` that takes a connection. Leaving stops it at once.
 async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<Input>) -> Reached {
-    for addr in addrs.iter().take(MAX_ADDRESSES) {
+    for (at, addr) in addrs.iter().enumerate() {
         let attempt = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr));
         tokio::pin!(attempt);
         loop {
             tokio::select! {
                 result = &mut attempt => {
                     if let Ok(Ok(stream)) = result {
-                        return Reached::Stream(stream);
+                        return Reached::Stream(stream, at);
                     }
                     break;
                 }
@@ -427,6 +448,10 @@ async fn connection(
     // A resume that goes wrong before the session is back can try again,
     // within the grace, rather than end the session.
     let resuming = session.is_some();
+    // A resume skips the code, which was compared already. But a target
+    // that restarted no longer knows the session, takes it as a new
+    // request and asks again, and then the user needs this code.
+    let mut code_for_a_new_request: Option<Phase> = None;
 
     let finish = |waiting: HashMap<u64, (Waiting, Instant)>| {
         for (_, (w, _)) in waiting {
@@ -454,17 +479,23 @@ async fn connection(
                     match event {
                         Event::Verified { code, peer } => {
                             verified = true;
-                            // A resume skips the code: it was compared already.
-                            if !resuming {
-                                let code = code.to_string();
-                                host.phase(link, device, &Phase::Verifying { code, name: peer.name });
+                            let verifying = Phase::Verifying { code: code.to_string(), name: peer.name };
+                            if resuming {
+                                code_for_a_new_request = Some(verifying);
+                            } else {
+                                host.phase(link, device, &verifying);
                             }
                         }
-                        Event::Pending { expires_in } => host.phase(
-                            link,
-                            device,
-                            &Phase::Pending { expires_in_ms: u64::from(expires_in) * 1000 },
-                        ),
+                        Event::Pending { expires_in } => {
+                            if let Some(verifying) = code_for_a_new_request.take() {
+                                host.phase(link, device, &verifying);
+                            }
+                            host.phase(
+                                link,
+                                device,
+                                &Phase::Pending { expires_in_ms: u64::from(expires_in) * 1000 },
+                            );
+                        }
                         Event::Connected { session_id, state } => {
                             *session = Some(session_id);
                             *session_back = true;
@@ -486,16 +517,14 @@ async fn connection(
                             // The other device can send these as often as it likes.
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
-                        Event::Closed(CloseReason::IdentityMismatch) if resuming && !*session_back => {
-                            // Another device has its old address; discovery
-                            // may find the right one.
+                        Event::Closed(CloseReason::IdentityMismatch) if !*session_back => {
+                            // Another device is at this address, which it
+                            // may have taken over, or claims the target's id.
                             finish(waiting);
-                            return Outcome::Dropped;
+                            return Outcome::WrongKey;
                         }
                         Event::Closed(reason) => {
                             finish(waiting);
-                            // A resume the target no longer knows, after it
-                            // restarted, is a new request; it asks again.
                             return Outcome::Ended(Ended::Target(reason));
                         }
                     }

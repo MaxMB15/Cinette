@@ -86,6 +86,26 @@ fn a_logo_from_another_device_must_be_on_a_public_host() {
         "http://[fe80::1]/a.png",
         "http://[ff02::1]/a.png",
         "http://[::ffff:192.168.1.1]/a.png",
+        "http://[::192.168.1.1]/a.png",
+        "http://[fec0::1]/a.png",
+        "http://192.0.0.8/a.png",
+        "http://198.18.0.1/a.png",
+        "http://198.19.255.1/a.png",
+        "http://240.0.0.1/a.png",
+        "http://router.lan/a.png",
+        "http://lan/a.png",
+        "http://nas.home/a.png",
+        "http://nas.home.arpa/a.png",
+        "http://wiki.internal/a.png",
+        "http://portal.intranet/a.png",
+        "http://mail.corp/a.png",
+        "http://box.private/a.png",
+        "http://fritz.box/a.png",
+        "http://FRITZ.BOX./a.png",
+        "http://speedport.ip/a.png",
+        "http://127.0.0.1.nip.io:8080/a.png",
+        "http://10.0.0.1.sslip.io/a.png",
+        "http://127.0.0.1.xip.io/a.png",
         "not a url",
     ] {
         assert!(!fetchable(bad), "{bad}");
@@ -93,6 +113,16 @@ fn a_logo_from_another_device_must_be_on_a_public_host() {
     // Next to the shared address space, but outside it.
     assert!(fetchable("http://100.128.0.1/a.png"));
     assert!(fetchable("http://100.63.255.1/a.png"));
+    // Next to the other ranges, and names that only end the same way.
+    assert!(fetchable("http://192.0.1.8/a.png"));
+    assert!(fetchable("http://198.17.0.1/a.png"));
+    assert!(fetchable("http://198.20.0.1/a.png"));
+    assert!(fetchable("http://239.255.255.255.example/a.png"));
+    assert!(fetchable("http://[2001:db8::1:0:0:1]/a.png"));
+    assert!(fetchable("http://logos.plan.example/a.png"));
+    assert!(fetchable("http://myhome.example/a.png"));
+    assert!(fetchable("http://cdn.mylan.tv/a.png"));
+    assert!(fetchable("http://notnip.io/a.png"));
 }
 
 #[test]

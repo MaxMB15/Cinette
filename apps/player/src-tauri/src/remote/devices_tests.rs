@@ -257,6 +257,22 @@ fn a_record_claiming_a_device_id_doesnt_hide_its_addresses() {
 }
 
 #[test]
+fn a_later_record_saying_no_doesnt_hide_a_device_that_allows_control() {
+    let tv = id();
+    let mut devices = Devices::new(id());
+    devices.apply(found("Living Room", &tv, &[]));
+    devices.apply(found("Impostor", &tv, &[("rc", "0"), ("n", "Living Room")]));
+    let list = devices.list();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].control_allowed, "{list:?}");
+    assert!(devices.get(&tv).unwrap().control_allowed);
+    // With every record saying no, it doesn't.
+    devices.apply(found("Living Room", &tv, &[("rc", "0")]));
+    assert!(!devices.get(&tv).unwrap().control_allowed);
+    assert_eq!(devices.get(&id()), None);
+}
+
+#[test]
 fn the_list_stops_at_its_limit_until_one_goes() {
     let mut devices = Devices::new(id());
     for n in 0..MAX_INSTANCES {

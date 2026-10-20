@@ -132,6 +132,9 @@ struct AuthResponse {
 struct UserInfo {
     auth: Option<u8>,
     status: Option<String>,
+    /// Such as `["m3u8", "ts", "rtmp"]`. Read loosely, since panels differ.
+    #[serde(default)]
+    allowed_output_formats: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,19 +204,35 @@ impl XtreamClient {
     /// Checks the login. Panels report a good login either as `auth` 1 or as an
     /// `Active` status, so either one counts.
     pub async fn authenticate(&self) -> Result<(), XtreamError> {
+        self.user_info().await.map(|_| ())
+    }
+
+    /// The stream formats the panel lets this login fetch, such as `m3u8`
+    /// and `ts`, in lowercase. Empty when the panel doesn't say.
+    pub async fn output_formats(&self) -> Result<Vec<String>, XtreamError> {
+        let info = self.user_info().await?;
+        let formats = match info.allowed_output_formats {
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|f| f.trim().to_ascii_lowercase())
+                .filter(|f| !f.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok(formats)
+    }
+
+    /// The login's details, once the panel accepted it.
+    async fn user_info(&self) -> Result<UserInfo, XtreamError> {
         let url = self.credentials.api_url("", &[]);
         let resp: AuthResponse = self.small_request(&url).send().await?.json().await?;
 
         match resp.user_info {
-            Some(info) => {
-                let authed = info.auth == Some(1) || info.status.as_deref() == Some("Active");
-                if authed {
-                    Ok(())
-                } else {
-                    Err(XtreamError::AuthFailed)
-                }
+            Some(info) if info.auth == Some(1) || info.status.as_deref() == Some("Active") => {
+                Ok(info)
             }
-            None => Err(XtreamError::AuthFailed),
+            _ => Err(XtreamError::AuthFailed),
         }
     }
 
@@ -1319,6 +1338,25 @@ mod tests {
                 assert!(matches!(result, Err(XtreamError::AuthFailed)), "{body}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn reads_the_output_formats_the_login_allows() {
+        for (body, expected) in [
+            (
+                r#"{"user_info":{"auth":1,"allowed_output_formats":["m3u8"," TS ",""]}}"#,
+                vec!["m3u8", "ts"],
+            ),
+            (r#"{"user_info":{"auth":1,"allowed_output_formats":["ts",3]}}"#, vec!["ts"]),
+            (r#"{"user_info":{"auth":1,"allowed_output_formats":"ts"}}"#, vec![]),
+            (r#"{"user_info":{"auth":1}}"#, vec![]),
+        ] {
+            let formats = panel(&serve_once("200 OK", body)).output_formats().await.unwrap();
+            assert_eq!(formats, expected, "{body}");
+        }
+        let refused = r#"{"user_info":{"auth":0,"allowed_output_formats":["ts"]}}"#;
+        let result = panel(&serve_once("200 OK", refused)).output_formats().await;
+        assert!(matches!(result, Err(XtreamError::AuthFailed)));
     }
 
     #[tokio::test]

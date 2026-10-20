@@ -10,12 +10,14 @@ import type { PlaybackDestination } from "@/lib/destination";
 import {
 	applyRemoteCommand,
 	getMountedPlayer,
+	IDLE_REMOTE_STATE,
 	remotePlayerState,
 	setMountedPlayer,
 	waitForMountedPlayer,
 	type RemoteCommand,
 } from "@/lib/remote-target";
 import {
+	mpvStop,
 	remoteAnswerConsent,
 	remoteFinishCommand,
 	remoteSessions,
@@ -71,6 +73,7 @@ export const useRemoteTarget = (): void => {
 					channel?.id === id ? channel : channelsRef.current.find((c) => c.id === id),
 				openPlayer: () => navigateRef.current("/player"),
 				waitForPlayer: waitForMountedPlayer,
+				stopWithoutPlayer: mpvStop,
 			})
 				.then((outcome) => remoteFinishCommand(token, outcome))
 				.catch(() => {});
@@ -116,7 +119,14 @@ export const usePublishRemoteState = (
 	useEffect(() => {
 		setMountedPlayer(player);
 		return () => {
-			if (getMountedPlayer() === player) setMountedPlayer(null);
+			if (getMountedPlayer() !== player) return;
+			setMountedPlayer(null);
+			// The page closed before it could report the player idle, so
+			// controllers would keep showing what played. A new destination
+			// for the same page takes over in the same commit, and says more.
+			queueMicrotask(() => {
+				if (getMountedPlayer() === null) remoteSetState(IDLE_REMOTE_STATE).catch(() => {});
+			});
 		};
 	}, [player]);
 

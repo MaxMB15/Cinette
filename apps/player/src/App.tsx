@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
+import { useState } from "react";
 import { Routes, Route } from "react-router";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { AppLayout } from "./components/AppLayout";
 import { PlayerView } from "./components/player/VideoPlayer";
 import { ChannelsPage } from "./components/remote/ChannelsPage";
@@ -21,8 +23,20 @@ import { useRemoteTarget } from "./hooks/useRemoteTarget";
 import { FullscreenProvider } from "./lib/fullscreen-context";
 import { DownloadsProvider } from "@/hooks/useDownloads";
 import { isMobilePlatform } from "@/lib/platform";
+import { createQueryClient } from "@/lib/query-client";
 
 export default function App() {
+	// One cache per mount of the app, so each test that renders it starts empty.
+	const [queryClient] = useState(createQueryClient);
+	return (
+		<QueryClientProvider client={queryClient}>
+			<AppProviders />
+		</QueryClientProvider>
+	);
+}
+
+// Inner component so useChannelsProvider can reach the query cache.
+const AppProviders = () => {
 	const channelsValue = useChannelsProvider();
 	const updateState = useUpdateChecker();
 
@@ -35,7 +49,7 @@ export default function App() {
 			</FullscreenProvider>
 		</ChannelsContext.Provider>
 	);
-}
+};
 
 // Inner component so useSplashScreen can access ChannelsContext via useChannels.
 interface AppRoutesProps {

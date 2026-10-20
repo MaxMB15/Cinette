@@ -224,15 +224,15 @@ mod imp {
     }
 
     pub fn not_connected() -> String {
-        "notConnected".to_owned()
+        "link_not_connected".to_owned()
     }
 
     /// The error code the webview gets, as the protocol spells it.
     pub fn link_error(e: crate::remote::link::LinkError) -> String {
         match e {
             crate::remote::link::LinkError::NotConnected => not_connected(),
-            crate::remote::link::LinkError::TimedOut => "timedOut".to_owned(),
-            crate::remote::link::LinkError::Busy => "busy".to_owned(),
+            crate::remote::link::LinkError::TimedOut => "link_timed_out".to_owned(),
+            crate::remote::link::LinkError::Busy => "link_busy".to_owned(),
             crate::remote::link::LinkError::Refused(code) => serde_json::to_value(code)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
@@ -467,26 +467,27 @@ pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, S
     }
 }
 
-/// Ends the session with the controlled device, or stops asking. That
-/// device keeps playing.
+/// Ends link `link` to the controlled device, or stops it asking. That
+/// device keeps playing. Another link that took its place stays.
 #[command]
-pub async fn remote_leave<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+pub async fn remote_leave<R: Runtime>(app: AppHandle<R>, link: u64) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        imp::service(&app)?.leave().await;
+        imp::service(&app)?.leave(link).await;
         Ok(())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = app;
+        let _ = (app, link);
         Err(UNAVAILABLE.into())
     }
 }
 
 /// Sends a playback command to the controlled device through link `link`. Resolves with that
 /// device's state version once it carried the command out; fails with an
-/// error code as the protocol spells it, such as `stale_item`, or
-/// `notConnected` when there is no session.
+/// error code as the protocol spells it, such as `stale_item`, or one of
+/// the link's own: `link_not_connected` with no session, `link_timed_out`
+/// when no answer came, and `link_busy` when too many wait for one.
 #[command]
 pub async fn remote_command<R: Runtime>(
     app: AppHandle<R>,

@@ -97,7 +97,9 @@ impl Harness {
     async fn start_with_timeout(mode: ControlMode, command_timeout: Duration) -> Self {
         let limits = Limits {
             command_timeout,
-            per_address: MAX_PER_ADDRESS,
+            // Tests load one item after another at once.
+            load_gap: Duration::ZERO,
+            ..Limits::STANDARD
         };
         Self::start_with_limits(mode, limits).await
     }
@@ -191,12 +193,13 @@ async fn advertises_the_cores_record_under_the_device_id() {
         catalog_calls: Mutex::new(Vec::new()),
         held: (Mutex::new(false), std::sync::Condvar::new()),
     });
-    let _handle = start(
+    let _handle = start_with(
         listener,
         key.clone(),
         DeviceType::LinuxPc,
         RemoteSettings::default(),
         host,
+        Limits::STANDARD,
     )
     .unwrap();
     let Some(Seen::Advertise(Some(r))) = seen.recv().await else {
@@ -331,6 +334,48 @@ async fn commands_go_to_the_player_and_its_answer_comes_back() {
             .await,
         Err(ErrorCode::StaleItem)
     );
+}
+
+#[tokio::test]
+async fn a_load_right_after_another_is_refused_but_other_commands_go_on() {
+    let limits = Limits {
+        load_gap: Duration::from_secs(3600),
+        ..Limits::STANDARD
+    };
+    let mut h = Harness::start_with_limits(ControlMode::Always, limits).await;
+    h.handle.set_state(playing("live-7"));
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    let load = |item: &str| Command::Load {
+        item_id: item.into(),
+        start_at: None,
+    };
+    let (id, bytes) = phone.controller.command(load("live-1")).unwrap();
+    phone.write(&bytes).await;
+    let token = h
+        .wait_for(|s| match s {
+            Seen::Apply(token, Command::Load { .. }) => Some(*token),
+            _ => None,
+        })
+        .await;
+    h.handle.finish_command(token, Ok(()));
+    phone
+        .wait_for(|e| matches!(e, Event::Reply { request, .. } if *request == id).then_some(()))
+        .await;
+    assert_eq!(
+        phone.command(load("live-2")).await,
+        Err(ErrorCode::RateLimited)
+    );
+    // A pause isn't a load, so it goes to the player.
+    let (_, bytes) = phone
+        .controller
+        .command(Command::Pause {
+            item_id: "live-7".into(),
+        })
+        .unwrap();
+    phone.write(&bytes).await;
+    h.wait_for(|s| matches!(s, Seen::Apply(_, Command::Pause { .. })).then_some(()))
+        .await;
 }
 
 #[tokio::test]
@@ -673,6 +718,41 @@ async fn a_hidden_device_with_no_session_closes_connections_before_saying_who_it
     );
 }
 
+#[tokio::test]
+async fn a_peer_outside_the_local_network_is_turned_away_before_the_handshake() {
+    let limits = Limits {
+        local: |_| false,
+        ..Limits::STANDARD
+    };
+    let h = Harness::start_with_limits(ControlMode::Always, limits).await;
+    let mut phone = h.connect("Phone").await;
+    assert_eq!(phone.closed().await, None, "closed without a word");
+    assert!(
+        !phone
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Verified { .. })),
+        "{:?}",
+        phone.events
+    );
+}
+
+#[tokio::test]
+async fn the_default_listener_takes_ipv4_even_on_an_ipv6_socket() {
+    let listener = bind_default().await.unwrap();
+    let address = listener.local_addr().unwrap();
+    if address.is_ipv6() {
+        let only_v6 = socket2::SockRef::from(&listener).only_v6().unwrap();
+        assert!(!only_v6, "the [::] socket takes IPv4 too");
+    }
+    let accepted = tokio::spawn(async move { listener.accept().await.map(|(_, from)| from) });
+    tokio::net::TcpStream::connect(("127.0.0.1", address.port()))
+        .await
+        .unwrap();
+    let from = timeout(WAIT, accepted).await.unwrap().unwrap().unwrap();
+    assert!(from.ip().to_canonical().is_loopback(), "{from}");
+}
+
 /// A connection that sends nothing, so the core waits for its handshake.
 async fn quiet_connection(port: u16) -> tokio::net::TcpStream {
     tokio::net::TcpStream::connect(("127.0.0.1", port))
@@ -780,8 +860,8 @@ async fn a_connection_gets_one_catalog_answer_at_a_time() {
 async fn only_a_few_catalog_answers_are_worked_on_at_once() {
     // Every phone here comes from 127.0.0.1.
     let limits = Limits {
-        command_timeout: COMMAND_TIMEOUT,
         per_address: MAX_CATALOG_JOBS + 1,
+        ..Limits::STANDARD
     };
     let h = Harness::start_with_limits(ControlMode::Always, limits).await;
     let mut phones = Vec::new();

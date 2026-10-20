@@ -193,7 +193,10 @@ fn sample(argument: &str) -> Value {
         "groupsWithSamples" | "uncategorizedGroups" | "existingCategories" => json!([]),
         "episodes" | "ids" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
-        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt" => json!(1),
+        | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt"
+        | "source" | "generation" => {
+            json!(1)
+        }
         "keep" | "allow" => json!(true),
         "request" | "token" => json!(1),
         "outcome" => json!("ok"),
@@ -204,7 +207,7 @@ fn sample(argument: &str) -> Value {
             "status": "idle", "item": null, "position": 0, "duration": 0, "volume": null,
             "subtitleId": null, "audioId": null, "error": null
         }),
-        "episode" => serde_json::to_value(Channel::default()).unwrap(),
+        "episode" | "channel" => serde_json::to_value(Channel::default()).unwrap(),
         _ => json!("x"),
     }
 }

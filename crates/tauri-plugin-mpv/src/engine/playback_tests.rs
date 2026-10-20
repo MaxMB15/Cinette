@@ -3,7 +3,7 @@
 
 //! The engine against a real, headless mpv playing generated local files.
 
-use super::{MpvEngine, PlayerState};
+use super::{MediaInfo, MpvEngine, PlayerState};
 use crate::test_support::{
     after_seconds, headless, wait_for, wait_for_position, wait_until, wav, y4m, MediaDir, Reply,
     Server, POSITION_SLACK,
@@ -393,6 +393,12 @@ fn adds_a_subtitle_when_the_file_starts() {
     let tracks = |engine: &MpvEngine| mpv(engine).get_property::<i64>("track-list/count").unwrap();
     let selected = |engine: &MpvEngine| mpv(engine).get_property::<String>("sid").unwrap();
     let visible = |engine: &MpvEngine| mpv(engine).get_property::<bool>("sub-visibility").unwrap();
+    // The file of the selected subtitle track, or nothing when none is selected.
+    let selected_file = |engine: &MpvEngine| {
+        mpv(engine)
+            .get_property::<String>("current-tracks/sub/external-filename")
+            .unwrap_or_default()
+    };
 
     // Before any file, mpv draws the track only when it was asked to.
     let mut first = engine(&[("pause", "yes"), ("sub-visibility", "no")]);
@@ -415,7 +421,9 @@ fn adds_a_subtitle_when_the_file_starts() {
     assert!(!visible(&second));
 
     // Nor while it closes the file that plays to load another, as a
-    // reconnect does.
+    // reconnect does. The new file can open first and add the track from
+    // `sub-files`. The add then puts a copy in its place, which mpv numbers
+    // 2, so only the file and the count say it worked.
     let other = media.file("other.wav", &wav(10));
     second.loadfile(&other, None).unwrap();
     second.sub_add(&subtitles, true).unwrap();
@@ -428,7 +436,7 @@ fn adds_a_subtitle_when_the_file_starts() {
                 .is_ok_and(|s| !s)
     });
     assert_eq!(tracks(&second), 2);
-    assert_eq!(selected(&second), "1");
+    assert!(selected_file(&second).ends_with("/en.srt"));
     assert!(visible(&second));
 
     // While it opens the file, here until the server sends the stream, mpv
@@ -597,4 +605,57 @@ fn configure_audio_turns_sound_on_at_full_volume() {
     assert_eq!(player.get_property::<String>("aid").unwrap(), "auto");
     assert!(!player.get_property::<bool>("mute").unwrap());
     assert_eq!(player.get_property::<f64>("volume").unwrap(), 100.0);
+}
+
+#[test]
+fn reports_what_the_item_is_made_of() {
+    let media = MediaDir::new();
+    let mut engine = engine(&[("pause", "yes")]);
+    assert_eq!(engine.media_info(), MediaInfo::default());
+
+    let audio = media.file("tone.wav", &wav(4));
+    start(&mut engine, &audio, None);
+    assert_eq!(
+        engine.media_info(),
+        MediaInfo {
+            file_format: Some("wav".into()),
+            video_codec: None,
+            audio_codec: Some("pcm_s16le".into()),
+            interlaced: false,
+        }
+    );
+
+    let video = media.file("blank.y4m", &y4m(4));
+    reload(&engine, &video);
+    let info = wait_for("a video frame", || {
+        let info = engine.media_info();
+        info.video_codec.is_some().then_some(info)
+    });
+    assert_eq!(info.file_format.as_deref(), Some("yuv4mpegpipe"));
+    assert_eq!(info.video_codec.as_deref(), Some("rawvideo"));
+    assert_eq!(info.audio_codec, None);
+    assert!(!info.interlaced);
+}
+
+#[test]
+fn media_info_is_empty_without_an_instance() {
+    assert_eq!(MpvEngine::new().media_info(), MediaInfo::default());
+}
+
+#[test]
+fn reports_interlaced_video() {
+    let media = MediaDir::new();
+    let mut engine = engine(&[("pause", "yes")]);
+    // The same blank video, marked top field first.
+    let mut bytes = y4m(4);
+    let header_end = bytes.iter().position(|&b| b == b'\n').unwrap();
+    let header = String::from_utf8(bytes[..header_end].to_vec())
+        .unwrap()
+        .replace(" Ip ", " It ");
+    bytes.splice(..header_end, header.into_bytes());
+    let video = media.file("interlaced.y4m", &bytes);
+    start(&mut engine, &video, None);
+    wait_until("the frame to show as interlaced", || {
+        engine.media_info().interlaced
+    });
 }

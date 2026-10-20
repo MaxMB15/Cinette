@@ -13,7 +13,8 @@ use mvp_core::models::channel::Channel;
 use mvp_core::models::playlist::{Provider, ProviderType};
 use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::controller::Event;
-use mvp_core::remote::message::CloseReason;
+use mvp_core::remote::message::{CloseReason, ErrorCode};
+use mvp_core::remote::settings::ControlMode;
 use serde_json::{json, Value};
 use tauri::test::MockRuntime;
 use tauri::Listener;
@@ -69,6 +70,11 @@ impl Running {
                 None
             }),
             found_rx,
+            // Tests load one item after another at once.
+            target::Limits {
+                load_gap: Duration::ZERO,
+                ..target::Limits::STANDARD
+            },
         )
         .unwrap();
         Self {
@@ -210,6 +216,32 @@ async fn saving_settings_writes_them_and_tells_the_target() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(running.last_advertised().unwrap().instance, "Den");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn never_allow_ends_sessions_even_when_it_cant_be_saved() {
+    let running = Running::start(|_| {}).await;
+    let mut phone = connected(&running).await;
+    let saved = saved_settings(&running.app);
+    // A folder where the file goes makes every write of it fail.
+    let file = running.app.app_dir().join(SETTINGS_STORE_FILE);
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    let error = running
+        .invoke(
+            "remote_set_settings",
+            json!({ "settings": { "discoverable": true, "remoteControl": "never", "deviceName": null } }),
+        )
+        .unwrap_err();
+    assert!(
+        error.as_str().unwrap().contains("couldn't be saved"),
+        "{error}"
+    );
+    assert_eq!(phone.closed().await, Some(CloseReason::Revoked));
+    assert_eq!(running.service_settings().remote_control, ControlMode::Never);
+    // The store keeps what it had, so the next write doesn't save it.
+    let store = running.app.handle().store(SETTINGS_STORE_FILE).unwrap();
+    assert_eq!(store.get(SETTINGS_KEY), Some(saved));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -716,7 +748,7 @@ async fn one_instance_controls_another() {
 
     // Leaving ends the session on both sides. The webview asked, so no
     // event tells it.
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
     let deadline = std::time::Instant::now() + WAIT;
     while tv.invoke("remote_sessions", json!({})).unwrap() != json!([]) {
         assert!(std::time::Instant::now() < deadline);
@@ -727,7 +759,7 @@ async fn one_instance_controls_another() {
             "remote_command",
             json!({ "command": { "action": "stop" }, "link": 1 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
 }
 
@@ -754,7 +786,7 @@ async fn the_target_disconnecting_ends_the_link() {
             "remote_catalog",
             json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 100 }, "link": 1 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
 }
 
@@ -802,10 +834,10 @@ async fn only_devices_on_the_network_that_allow_control_can_be_asked() {
             "remote_command",
             json!({ "command": { "action": "stop" }, "link": 1 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
     // Leaving with nothing to leave is fine.
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -821,6 +853,23 @@ async fn a_device_that_goes_away_leaves_the_list() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_late_leave_for_an_old_link_leaves_the_new_one() {
+    let (mut mac, tv) = pair("always").await;
+    let tv_id = tv.device_id().to_string();
+    mac.event("remote://devices").await;
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
+        .unwrap();
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 2 }))
+        .unwrap();
+    // The leave for link 1 arrives after link 2 took its place.
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(2)));
+    phase(&mut mac, "connected").await;
+    mac.invoke("remote_leave", json!({ "link": 2 })).unwrap();
+    assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn connecting_again_is_not_undone_by_the_old_link_ending() {
     let (mut mac, mut tv) = pair("always").await;
     let tv_id = tv.device_id().to_string();
@@ -828,7 +877,7 @@ async fn connecting_again_is_not_undone_by_the_old_link_ending() {
     mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     phase(&mut mac, "connected").await;
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 1 })).unwrap();
     mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 2 }))
         .unwrap();
     phase(&mut mac, "connected").await;
@@ -894,12 +943,49 @@ async fn only_the_current_link_reaches_the_webview() {
 }
 
 #[test]
-fn consent_brings_the_window_up_at_most_every_thirty_seconds() {
-    let now = Instant::now() + Duration::from_secs(120);
+fn consent_asks_for_attention_at_most_every_two_minutes() {
+    let now = Instant::now() + Duration::from_secs(300);
     assert!(may_raise(None, now));
-    assert!(!may_raise(Some(now - Duration::from_secs(29)), now));
+    assert!(!may_raise(Some(now - Duration::from_secs(119)), now));
     assert!(may_raise(Some(now - RAISE_EVERY), now));
-    assert!(may_raise(Some(now - Duration::from_secs(31)), now));
+    assert!(may_raise(Some(now - Duration::from_secs(121)), now));
+}
+
+#[test]
+fn provider_loads_come_four_at_once_then_one_a_second() {
+    let start = Instant::now();
+    let mut bucket = Bucket::full();
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(start));
+    }
+    assert!(!bucket.take(start));
+    assert!(!bucket.take(start + Duration::from_millis(999)));
+    assert!(bucket.take(start + FETCH_EVERY));
+    assert!(!bucket.take(start + FETCH_EVERY));
+    // Half a second's wait carries over to the next token.
+    assert!(!bucket.take(start + Duration::from_millis(1500)));
+    assert!(bucket.take(start + FETCH_EVERY * 2));
+    // A long wait fills it, but no further than the burst.
+    let later = start + Duration::from_secs(60);
+    for _ in 0..FETCH_BURST {
+        assert!(bucket.take(later));
+    }
+    assert!(!bucket.take(later));
+}
+
+#[test]
+fn a_gate_lasts_while_anyone_holds_it() {
+    let gates = Gates::default();
+    let first = gates.enter("series-1");
+    let second = gates.enter("series-1");
+    assert!(Arc::ptr_eq(&first, &second), "one lock for one series");
+    let other = gates.enter("series-2");
+    assert!(!Arc::ptr_eq(&first, &other));
+    gates.leave(first);
+    assert_eq!(gates.len(), 2, "series-1 is still being loaded");
+    gates.leave(second);
+    gates.leave(other);
+    assert_eq!(gates.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -975,19 +1061,19 @@ async fn links_are_named_by_the_webview_and_only_the_current_one_takes_commands(
             "remote_command",
             json!({ "command": { "action": "stop" }, "link": 40 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
     assert_eq!(
         mac.invoke(
             "remote_catalog",
             json!({ "catalogQuery": { "kind": "groups", "contentType": "live", "limit": 1 }, "link": 40 })
         ),
-        Err(json!("notConnected"))
+        Err(json!("link_not_connected"))
     );
 
     // Leaving says what the list is now, since the left device is no
     // longer kept in it.
-    mac.invoke("remote_leave", json!({})).unwrap();
+    mac.invoke("remote_leave", json!({ "link": 41 })).unwrap();
     mac.event("remote://devices").await;
     assert_eq!(mac.invoke("remote_link", json!({})), Ok(json!(null)));
 }

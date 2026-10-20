@@ -1,6 +1,6 @@
 ## Default Permission
 
-Allows all MPV player commands
+Allows all MPV player and AirPlay commands
 
 #### This default permission set includes the following:
 
@@ -13,11 +13,22 @@ Allows all MPV player commands
 - `allow-mpv-set-bounds`
 - `allow-mpv-set-visible`
 - `allow-mpv-get-state`
+- `allow-mpv-get-media-info`
 - `allow-mpv-sub-add`
 - `allow-mpv-sub-remove`
 - `allow-mpv-set-sub-delay`
 - `allow-mpv-set-media-info`
 - `allow-mpv-set-skip-intervals`
+- `allow-airplay-set-detection`
+- `allow-airplay-choose`
+- `allow-airplay-get-route`
+- `allow-airplay-play`
+- `allow-airplay-pause`
+- `allow-airplay-seek`
+- `allow-airplay-select-subtitle`
+- `allow-airplay-select-audio`
+- `allow-airplay-stop`
+- `allow-airplay-get-state`
 
 ## Permission Table
 
@@ -27,6 +38,292 @@ Allows all MPV player commands
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`mpv:allow-airplay-choose`
+
+</td>
+<td>
+
+Enables the airplay_choose command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-choose`
+
+</td>
+<td>
+
+Denies the airplay_choose command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-get-route`
+
+</td>
+<td>
+
+Enables the airplay_get_route command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-get-route`
+
+</td>
+<td>
+
+Denies the airplay_get_route command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-get-state`
+
+</td>
+<td>
+
+Enables the airplay_get_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-get-state`
+
+</td>
+<td>
+
+Denies the airplay_get_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-pause`
+
+</td>
+<td>
+
+Enables the airplay_pause command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-pause`
+
+</td>
+<td>
+
+Denies the airplay_pause command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-play`
+
+</td>
+<td>
+
+Enables the airplay_play command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-play`
+
+</td>
+<td>
+
+Denies the airplay_play command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-seek`
+
+</td>
+<td>
+
+Enables the airplay_seek command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-seek`
+
+</td>
+<td>
+
+Denies the airplay_seek command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-select-audio`
+
+</td>
+<td>
+
+Enables the airplay_select_audio command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-select-audio`
+
+</td>
+<td>
+
+Denies the airplay_select_audio command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-select-subtitle`
+
+</td>
+<td>
+
+Enables the airplay_select_subtitle command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-select-subtitle`
+
+</td>
+<td>
+
+Denies the airplay_select_subtitle command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-set-detection`
+
+</td>
+<td>
+
+Enables the airplay_set_detection command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-set-detection`
+
+</td>
+<td>
+
+Denies the airplay_set_detection command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-airplay-stop`
+
+</td>
+<td>
+
+Enables the airplay_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-airplay-stop`
+
+</td>
+<td>
+
+Denies the airplay_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:allow-mpv-get-media-info`
+
+</td>
+<td>
+
+Enables the mpv_get_media_info command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`mpv:deny-mpv-get-media-info`
+
+</td>
+<td>
+
+Denies the mpv_get_media_info command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>

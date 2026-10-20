@@ -15,13 +15,13 @@ use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
 use mvp_core::remote::message::{
-    Command, DeviceType, ErrorCode, Feature, Hello, VersionedState, PROTOCOL_VERSION,
+    Command, DeviceType, Feature, Hello, VersionedState, PROTOCOL_VERSION,
 };
 use mvp_core::remote::sessions::RESUME_GRACE;
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use serde::Serialize;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -130,10 +130,19 @@ impl RemoteService {
         Ok(())
     }
 
-    /// Ends the session, or stops asking. The other device keeps playing.
-    /// The webview asked, so no `remote://controller` event says so.
-    pub async fn leave(&self) {
-        let old = lock(&self.link).take();
+    /// Ends link `link`, or stops it asking. The other device keeps
+    /// playing. A link that another replaced meanwhile is gone already, so
+    /// a late leave for it leaves the new one alone. The webview asked, so
+    /// no `remote://controller` event says so.
+    pub async fn leave(&self, link: u64) {
+        let old = {
+            let mut slot = lock(&self.link);
+            if slot.as_ref().is_some_and(|l| l.generation() == link) {
+                slot.take()
+            } else {
+                None
+            }
+        };
         if let Some(old) = old {
             old.leave().await;
         }
@@ -154,21 +163,19 @@ impl RemoteService {
         self.events.devices_changed(&list);
     }
 
-    /// Saves the settings and hands them to the target.
+    /// Hands the settings to the target, then saves them. The target takes
+    /// them first, so Never allow ends the sessions even when the file
+    /// can't be written; the error then says the choice won't last past a
+    /// restart. One call at a time, so the file and the target agree.
     pub fn set_settings<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         settings: RemoteSettings,
     ) -> Result<(), String> {
-        let store = app.store(SETTINGS_STORE_FILE).map_err(|e| e.to_string())?;
-        store.set(
-            SETTINGS_KEY,
-            serde_json::to_value(&settings).map_err(|e| e.to_string())?,
-        );
-        store.save().map_err(|e| e.to_string())?;
-        lock(&self.state).settings = settings.clone();
-        self.handle.update_settings(settings);
-        Ok(())
+        let mut state = lock(&self.state);
+        state.settings = settings.clone();
+        self.handle.update_settings(settings.clone());
+        save_settings(app, &settings)
     }
 
     /// Makes and saves a new key, so a new device id. Every session ends.
@@ -246,8 +253,14 @@ const REMEMBERED_SERIES: usize = 4;
 /// How long a series' episodes are answered from what was loaded before
 /// the provider is asked again.
 const FRESH_FOR: Duration = Duration::from_secs(60);
-/// The shortest time between two consent requests that raise the window.
-const RAISE_EVERY: Duration = Duration::from_secs(30);
+/// How many series a controller may have loaded from the provider at once,
+/// before it has to wait for [`FETCH_EVERY`] to pass for each one more.
+const FETCH_BURST: u32 = 4;
+/// How often a controller may load one more series from the provider, so
+/// browsing can't make the provider turn this device's account away.
+const FETCH_EVERY: Duration = Duration::from_secs(1);
+/// The shortest time between two consent requests that ask for attention.
+const RAISE_EVERY: Duration = Duration::from_secs(120);
 
 /// Puts a record on the network, or doesn't.
 type Advertiser = Box<dyn Fn(&Registration) -> Option<Advertisement> + Send + Sync>;
@@ -261,6 +274,71 @@ struct TauriHost<R: Runtime> {
     episodes: Mutex<VecDeque<Remembered>>,
     /// When a consent request last brought the window up.
     raised: Mutex<Option<Instant>>,
+    /// The provider loads controllers may still make.
+    fetches: Mutex<Bucket>,
+    /// One lock per series being loaded, so two queries for it make one
+    /// load, and the second answers from what the first loaded.
+    loading: Gates,
+}
+
+/// A lock for each key in use, made when the first user comes and dropped
+/// when the last one goes.
+#[derive(Debug, Default)]
+struct Gates(Mutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl Gates {
+    /// The lock for `key`, to hold while working on it.
+    fn enter(&self, key: &str) -> Arc<Mutex<()>> {
+        lock(&self.0).entry(key.to_owned()).or_default().clone()
+    }
+
+    /// Done with `gate`. The last one out takes its lock away.
+    fn leave(&self, gate: Arc<Mutex<()>>) {
+        drop(gate);
+        lock(&self.0).retain(|_, gate| Arc::strong_count(gate) > 1);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        lock(&self.0).len()
+    }
+}
+
+/// A token bucket: [`FETCH_BURST`] at once, then one per [`FETCH_EVERY`].
+#[derive(Debug)]
+struct Bucket {
+    tokens: u32,
+    /// When the last token came, or the bucket was full.
+    since: Option<Instant>,
+}
+
+impl Bucket {
+    const fn full() -> Self {
+        Self {
+            tokens: FETCH_BURST,
+            since: None,
+        }
+    }
+
+    /// Takes a token if there's one by `now`.
+    fn take(&mut self, now: Instant) -> bool {
+        if let Some(since) = self.since {
+            let earned = now.saturating_duration_since(since).as_millis() / FETCH_EVERY.as_millis();
+            let earned = u32::try_from(earned).unwrap_or(u32::MAX);
+            if earned > 0 {
+                self.tokens = self.tokens.saturating_add(earned).min(FETCH_BURST);
+                self.since = Some(since + FETCH_EVERY * earned);
+            }
+        }
+        if self.tokens == 0 {
+            return false;
+        }
+        if self.tokens == FETCH_BURST {
+            self.since = Some(now);
+        }
+        self.tokens -= 1;
+        true
+    }
 }
 
 struct Remembered {
@@ -314,12 +392,14 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         };
         let _ = self.app.emit("remote://consent", event);
         // A dialog behind other windows would time out unseen. Requests
-        // can come again and again, so the window comes up only now and then.
+        // can come again and again, so this asks only now and then, and
+        // never takes the focus, so a key pressed in another app can't
+        // answer the dialog.
         let mut raised = lock(&self.raised);
         let now = Instant::now();
         if may_raise(*raised, now) {
             *raised = Some(now);
-            crate::show_main_window(&self.app);
+            ask_for_attention(&self.app);
         }
     }
 
@@ -363,21 +443,26 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         {
             // A later page, or the same series asked again soon, comes from
             // what was loaded, so paging doesn't ask the provider each time.
-            let episodes = match self.fresh(&series_id) {
-                Some(episodes) => episodes,
-                None => {
-                    // This runs on a blocking thread, which can wait for the provider.
-                    let loaded = tokio::runtime::Handle::current()
-                        .block_on(super::catalog::episodes(&state.cache, &series_id))?;
-                    self.remember(series_id, loaded.clone());
-                    loaded
+            let gate = self.loading.enter(&series_id);
+            let episodes = {
+                // This runs on a blocking thread, which can wait.
+                let _one = lock(&gate);
+                match self.fresh(&series_id) {
+                    Some(episodes) => Ok(episodes),
+                    None => {
+                        let may_ask = || lock(&self.fetches).take(Instant::now());
+                        tokio::runtime::Handle::current()
+                            .block_on(super::catalog::episodes(&state.cache, &series_id, may_ask))
+                            .inspect(|loaded| self.remember(series_id.clone(), loaded.clone()))
+                    }
                 }
             };
-            let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
-            return super::catalog::episode_page(&cache, &episodes, cursor, limit);
+            self.loading.leave(gate);
+            let episodes = episodes?;
+            let providers = super::catalog::read(&state.cache, |c| c.get_providers())?;
+            return super::catalog::episode_page(&providers, &episodes, cursor, limit);
         }
-        let cache = state.cache.lock().map_err(|_| ErrorCode::Failed)?;
-        super::catalog::answer(&cache, query)
+        super::catalog::answer(&state.cache, query)
     }
 
     fn advertise(&self, registration: Option<Registration>) {
@@ -390,7 +475,21 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 }
 
-/// Whether a consent request may bring the window up `now`, when one last
+/// Brings a minimized or hidden main window back without focusing it, and
+/// asks for attention: the Dock icon bounces, or the taskbar entry flashes.
+fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_minimized().unwrap_or(false) {
+            let _ = window.unminimize();
+        }
+        if !window.is_visible().unwrap_or(true) {
+            let _ = window.show();
+        }
+        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+    }
+}
+
+/// Whether a consent request may ask for attention `now`, when one last
 /// did at `last`.
 fn may_raise(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|at| now.duration_since(at) >= RAISE_EVERY)
@@ -590,6 +689,29 @@ fn follow_discovery<R: Runtime>(
     });
 }
 
+/// Writes `settings` to the settings file. When that fails, the store keeps
+/// what it had, so a later write of the file doesn't save them after all.
+fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &RemoteSettings) -> Result<(), String> {
+    let couldnt = |e: &dyn std::fmt::Display| {
+        format!("This works until Cinette quits, but it couldn't be saved: {e}")
+    };
+    let store = app.store(SETTINGS_STORE_FILE).map_err(|e| couldnt(&e))?;
+    let before = store.get(SETTINGS_KEY);
+    store.set(
+        SETTINGS_KEY,
+        serde_json::to_value(settings).map_err(|e| couldnt(&e))?,
+    );
+    store.save().map_err(|e| {
+        match before {
+            Some(value) => store.set(SETTINGS_KEY, value),
+            None => {
+                store.delete(SETTINGS_KEY);
+            }
+        }
+        couldnt(&e)
+    })
+}
+
 /// The saved settings, or the defaults.
 fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
     app.store(SETTINGS_STORE_FILE)
@@ -611,6 +733,7 @@ pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
             listener,
             Box::new(advertise_on_network),
             browse_network(),
+            target::Limits::STANDARD,
         )
     });
     if let Err(e) = started {
@@ -618,7 +741,7 @@ pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
     }
 }
 
-/// [`start`] on `listener`, advertising through `advertiser`. Call it inside
+/// [`start`] on `listener`, advertising through `advertiser`, with `limits`. Call it inside
 /// the async runtime.
 fn start_on<R: Runtime>(
     app: &AppHandle<R>,
@@ -626,6 +749,7 @@ fn start_on<R: Runtime>(
     listener: tokio::net::TcpListener,
     advertiser: Advertiser,
     found: mpsc::UnboundedReceiver<discovery::Event>,
+    limits: target::Limits,
 ) -> Result<(), String> {
     let key = identity::load_or_create(&key_dir)
         .map_err(|e| format!("couldn't load the device key: {e}"))?;
@@ -636,10 +760,19 @@ fn start_on<R: Runtime>(
         advertisement: Mutex::new(None),
         episodes: Mutex::new(VecDeque::new()),
         raised: Mutex::new(None),
+        fetches: Mutex::new(Bucket::full()),
+        loading: Gates::default(),
     });
     let device_id = key.device_id();
-    let handle = target::start(listener, key.clone(), DEVICE_TYPE, settings.clone(), host)
-        .map_err(|e| format!("couldn't listen: {e}"))?;
+    let handle = target::start_with(
+        listener,
+        key.clone(),
+        DEVICE_TYPE,
+        settings.clone(),
+        host,
+        limits,
+    )
+    .map_err(|e| format!("couldn't listen: {e}"))?;
     let devices = Arc::new(Mutex::new(Devices::new(device_id.clone())));
     let link = Arc::new(Mutex::new(None));
     follow_discovery(app.clone(), devices.clone(), found);
@@ -670,7 +803,9 @@ fn start_on<R: Runtime>(
 pub fn stop_for_exit<R: Runtime>(app: &AppHandle<R>) {
     if let Some(service) = app.try_state::<RemoteService>() {
         tauri::async_runtime::block_on(async {
-            service.leave().await;
+            if let Some(link) = service.current_link() {
+                service.leave(link).await;
+            }
             service.handle.shutdown().await;
         });
     }

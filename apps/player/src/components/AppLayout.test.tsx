@@ -132,6 +132,31 @@ describe("AppLayout", () => {
 		expect(screen.queryByRole("navigation")).toBeNull();
 	});
 
+	it("shows the video view on a TV only on the player page", () => {
+		platform.layoutMode = "tv";
+		render(tree("/player"));
+		expect(mpvSetVisible).toHaveBeenLastCalledWith(true);
+
+		fireEvent.click(screen.getByRole("link", { name: "Channels" }));
+		expect(mpvSetVisible).toHaveBeenLastCalledWith(false);
+	});
+
+	it("gives the page the TV sizes while the TV layout shows", () => {
+		platform.layoutMode = "tv";
+		const { unmount } = render(tree("/"));
+		expect(document.documentElement).toHaveClass("tv");
+		expect(window.__cinetteBack).toBeTypeOf("function");
+
+		unmount();
+		expect(document.documentElement).not.toHaveClass("tv");
+	});
+
+	it("leaves the TV sizes out of the other layouts", () => {
+		render(tree("/"));
+		expect(document.documentElement).not.toHaveClass("tv");
+		expect(window.__cinetteBack).toBeUndefined();
+	});
+
 	it("moves the TV menu's highlight to the page it opens", () => {
 		platform.layoutMode = "tv";
 		render(tree("/"));

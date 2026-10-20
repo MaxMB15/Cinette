@@ -15,15 +15,16 @@ let shared: RemoteControl | null = null;
 /** How many components use it, so it follows events only while they do,
  *  or while a link is open, whose events can't be missed. */
 let users = 0;
-let stopping: Promise<() => void> | null = null;
+/** What `start` gave, once it has started: the way to stop following events. */
+let stopListening: Promise<() => void> | null = null;
 
 /** Stops following events once no one uses the store and no link is open.
  *  It's checked when a user goes and whenever the store changes, which is
  *  how a link that ends with no one looking is seen. */
 const stopWhenIdle = (control: RemoteControl) => {
-	if (users > 0 || !stopping || control.getState().link) return;
-	const done = stopping;
-	stopping = null;
+	if (users > 0 || !stopListening || control.getState().link) return;
+	const done = stopListening;
+	stopListening = null;
 	void done.then((stop) => stop());
 };
 
@@ -58,7 +59,7 @@ export const useRemoteControl = (): RemoteControlState & {
 		() => {
 			users += 1;
 			// The React Compiler can't compile ??=.
-			if (!stopping) stopping = control.start().catch(() => () => {});
+			if (!stopListening) stopListening = control.start().catch(() => () => {});
 			return () => {
 				users -= 1;
 				stopWhenIdle(control);

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useState, useEffect, useCallback } from "react";
 import { Trash, LoaderCircle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getWatchHistory, deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
+import { deleteHistoryEntry, clearWatchHistory } from "@/lib/tauri";
+import { useWatchHistory } from "@/hooks/useWatchHistory";
 import { ask } from "@tauri-apps/plugin-dialog";
 import type { WatchHistoryEntry } from "@/lib/types";
 import { ChannelLogo } from "./ChannelLogo";
@@ -32,36 +32,25 @@ const ContentTypeBadge = ({ type }: { type: string }) => {
 };
 
 export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
-	const [entries, setEntries] = useState<WatchHistoryEntry[]>([]);
-	const [loading, setLoading] = useState(true);
-	useEffect(() => {
-		let current = true;
-		getWatchHistory(200)
-			.then((data) => {
-				if (current) setEntries(data);
-			})
-			.catch((e) => console.error("[HistoryTab] failed to fetch history:", e))
-			.finally(() => {
-				if (current) setLoading(false);
-			});
-		return () => {
-			current = false;
-		};
-	}, []);
+	const { entries, loading, change } = useWatchHistory(
+		200,
+		undefined,
+		"[HistoryTab] failed to fetch history:"
+	);
 
 	// The entry leaves the list in place. Loading the history again would show
 	// the spinner in its place and lose the scroll position.
-	const handleDelete = useCallback(async (e: React.MouseEvent, channelId: string) => {
+	const handleDelete = async (e: React.MouseEvent, channelId: string) => {
 		e.stopPropagation();
 		try {
 			await deleteHistoryEntry(channelId);
-			setEntries((prev) => prev.filter((entry) => entry.channelId !== channelId));
+			change((prev) => prev.filter((entry) => entry.channelId !== channelId));
 		} catch (err) {
 			console.error("[HistoryTab] failed to delete entry:", err);
 		}
-	}, []);
+	};
 
-	const handleClearAll = useCallback(async () => {
+	const handleClearAll = async () => {
 		const confirmed = await ask("Clear all watch history?", {
 			title: "Clear History",
 			kind: "warning",
@@ -69,11 +58,11 @@ export const HistoryTab = ({ onPlay }: HistoryTabProps) => {
 		if (!confirmed) return;
 		try {
 			await clearWatchHistory();
-			setEntries([]);
+			change(() => []);
 		} catch (err) {
 			console.error("[HistoryTab] failed to clear history:", err);
 		}
-	}, []);
+	};
 
 	if (loading) {
 		return (

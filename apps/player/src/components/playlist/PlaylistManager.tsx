@@ -35,30 +35,30 @@ export const PlaylistManager = () => {
 		Record<string, { message: string; lastUpdated?: string }>
 	>({});
 
-	const refreshNow = async (id: string) => {
+	const refreshNow = (id: string): Promise<void> => {
 		setRefreshingIds((s) => new Set(s).add(id));
 		setRefreshErrors((errors) => {
 			const next = { ...errors };
 			delete next[id];
 			return next;
 		});
-		try {
-			await refreshProvider(id);
-		} catch (e) {
-			const lastUpdated = providers.find((p) => p.id === id)?.lastUpdated;
-			setRefreshErrors((errors) => ({
-				...errors,
-				[id]: { message: String(e), lastUpdated },
-			}));
-			// Rethrown so the settings modal can show the error next to its own button.
-			throw e;
-		} finally {
-			setRefreshingIds((s) => {
-				const next = new Set(s);
-				next.delete(id);
-				return next;
+		return refreshProvider(id)
+			.catch((e) => {
+				const lastUpdated = providers.find((p) => p.id === id)?.lastUpdated;
+				setRefreshErrors((errors) => ({
+					...errors,
+					[id]: { message: String(e), lastUpdated },
+				}));
+				// Rethrown so the settings modal can show the error next to its own button.
+				throw e;
+			})
+			.finally(() => {
+				setRefreshingIds((s) => {
+					const next = new Set(s);
+					next.delete(id);
+					return next;
+				});
 			});
-		}
 	};
 
 	// The card already shows the error, so the click has nothing left to handle.
