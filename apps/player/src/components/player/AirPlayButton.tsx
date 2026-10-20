@@ -4,6 +4,7 @@
 import { Airplay } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useLatestRef } from "@/hooks/useLatestRef";
 
 /** How long a reason stays up. */
 const NOTICE_MS = 6000;
@@ -19,30 +20,40 @@ interface AirPlayButtonProps {
 	warning: string;
 }
 
-/** Asks before this device converts a stream for the TV. */
+/** Asks before this device converts a stream for the TV. Escape says no. */
 const ConfirmConvert = ({
 	warning,
 	onAnswer,
 }: {
 	warning: string;
 	onAnswer: (ok: boolean) => void;
-}) => (
-	<div
-		role="dialog"
-		aria-label="Convert on this device?"
-		className="absolute right-0 bottom-full mb-2 w-64 rounded bg-black/90 px-3 py-2 text-left text-xs text-white"
-	>
-		<p>{warning}</p>
-		<div className="mt-2 flex justify-end gap-2">
-			<Button variant="ghost" size="sm" onClick={() => onAnswer(false)}>
-				Cancel
-			</Button>
-			<Button variant="secondary" size="sm" onClick={() => onAnswer(true)}>
-				Send to TV
-			</Button>
+}) => {
+	const answer = useLatestRef(onAnswer);
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") answer.current(false);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [answer]);
+	return (
+		<div
+			role="dialog"
+			aria-label="Convert on this device?"
+			className="absolute right-0 bottom-full mb-2 w-64 rounded bg-black/90 px-3 py-2 text-left text-xs text-white"
+		>
+			<p>{warning}</p>
+			<div className="mt-2 flex justify-end gap-2">
+				<Button variant="ghost" size="sm" onClick={() => onAnswer(false)}>
+					Cancel
+				</Button>
+				<Button variant="secondary" size="sm" onClick={() => onAnswer(true)}>
+					Send to TV
+				</Button>
+			</div>
 		</div>
-	</div>
-);
+	);
+};
 
 /**
  * The player's AirPlay button. It asks before this device converts a
@@ -54,6 +65,11 @@ export const AirPlayButton = ({ onSend, warning }: AirPlayButtonProps) => {
 	const [asking, setAsking] = useState<((ok: boolean) => void) | null>(null);
 
 	const confirm = () => new Promise<boolean>((resolve) => setAsking(() => resolve));
+
+	// A question still open when the button goes is a no, so the send it
+	// holds up ends.
+	const open = useLatestRef(asking);
+	useEffect(() => () => open.current?.(false), [open]);
 
 	// A reason that's gone already has nothing to clear, which is harmless.
 	useEffect(() => {

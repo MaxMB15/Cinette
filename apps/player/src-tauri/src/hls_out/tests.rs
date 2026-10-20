@@ -86,10 +86,12 @@ async fn text(url: &str) -> String {
     String::from_utf8(get(url).await.2).unwrap()
 }
 
-/// Waits for the converter to stop.
+/// Waits for the converter to stop. The limit only catches a converter
+/// that never stops: a busy machine running every test at once can take a
+/// while.
 async fn ended(conversion: &mut HlsConversion) -> Ended {
     let ended = tokio::time::timeout(
-        Duration::from_secs(20),
+        Duration::from_secs(60),
         conversion.ended.wait_for(Option::is_some),
     )
     .await

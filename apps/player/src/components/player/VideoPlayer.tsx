@@ -22,6 +22,7 @@ import {
 	CONVERT_WARNING,
 	airplayBlockedMessage,
 	airplayFailureMessage,
+	airplaySeekMessage,
 	airplayKey,
 	airplayProgress,
 } from "@/lib/airplay";
@@ -1184,7 +1185,10 @@ export const PlayerView = () => {
 				const key = airplayKey(action, tv.getState(), tv.capabilities);
 				if (key.kind === "play") void tv.play();
 				if (key.kind === "pause") void tv.pause();
-				if (key.kind === "seek") void tv.seek(key.to);
+				if (key.kind === "seek")
+					tv.seek(key.to).catch((error: unknown) =>
+						setAirplayNotice(airplaySeekMessage(error))
+					);
 				if (key.kind !== "pass") return;
 			}
 
@@ -1385,7 +1389,11 @@ export const PlayerView = () => {
 			capabilities={tv.capabilities}
 			onPlay={() => void tv.play()}
 			onPause={() => void tv.pause()}
-			onSeek={(position) => void tv.seek(position)}
+			onSeek={(position) =>
+				tv
+					.seek(position)
+					.catch((error: unknown) => setAirplayNotice(airplaySeekMessage(error)))
+			}
 			onSubtitle={(id) => void tv.selectSubtitle(id)}
 			onAudio={(id) => void tv.selectAudio(id)}
 			onPlayHere={async (position, anchor) => {

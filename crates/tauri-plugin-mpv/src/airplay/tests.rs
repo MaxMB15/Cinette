@@ -505,3 +505,56 @@ fn a_converted_stream_without_a_length_uses_avplayers() {
         3600.0
     );
 }
+
+#[test]
+fn a_failed_conversion_ends_the_item_where_it_was() {
+    let airplay = AirPlay::default();
+    let now = Instant::now();
+    airplay.begin(Tracker::new(false));
+    let playing = airplay.report(&report("playing"), now).unwrap();
+    let failed = airplay.fail("refused");
+    assert_eq!(failed.status, Status::Error);
+    assert_eq!(
+        failed.error,
+        Some(PlaybackError {
+            code: "refused",
+            unsupported: false,
+        })
+    );
+    // Everything else stays as AVPlayer last had it.
+    assert_eq!(failed.position, playing.position);
+    assert_eq!(failed.duration, playing.duration);
+    assert_eq!(airplay.state(), failed);
+    // AVPlayer playing out what it has doesn't hide the failure.
+    assert_eq!(airplay.report(&report("playing"), now), None);
+    assert_eq!(airplay.state(), failed);
+}
+
+#[test]
+fn a_failure_with_nothing_tracked_starts_from_idle() {
+    let airplay = AirPlay::default();
+    let failed = airplay.fail("failed");
+    assert_eq!(
+        failed,
+        AirPlayState {
+            status: Status::Error,
+            error: Some(PlaybackError {
+                code: "failed",
+                unsupported: false,
+            }),
+            ..AirPlayState::idle()
+        }
+    );
+}
+
+#[test]
+fn emits_a_failed_conversion() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE]);
+    let handle = app.handle();
+    handle.state::<AirPlay>().begin(Tracker::new(true));
+    fail_converted(&handle, "failed");
+    let state = events.wait_for(EVENT_STATE);
+    assert_eq!(state["status"], json!("error"));
+    assert_eq!(state["error"], json!({ "code": "failed" }));
+}

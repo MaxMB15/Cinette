@@ -3840,6 +3840,24 @@ describe("AirPlay", () => {
 		expect(fakeMpv.actions.play).not.toHaveBeenCalled();
 	});
 
+	it("says when a seek on the TV fails, from the keys or the panel", async () => {
+		await openItem(lanternKeeper(), { episodes: [] });
+		const destination = tv();
+		destination.seek.mockRejectedValueOnce("refused");
+		act(() => fakeAirPlay.set({ destination, state: tvState() }));
+		await press("ArrowRight");
+		await flush();
+		expect(screen.getByText(/^The provider refused the stream/)).toBeTruthy();
+
+		destination.seek.mockRejectedValueOnce(new Error("gone"));
+		const panel = screen.getByRole("region", { name: "AirPlay" });
+		fireEvent.change(within(panel).getByRole("slider", { name: "Position" }), {
+			target: { value: "900" },
+		});
+		await flush();
+		expect(screen.getByText("Couldn't move the stream on the TV.")).toBeTruthy();
+	});
+
 	it("plays a paused TV from the keyboard", async () => {
 		await openItem(lanternKeeper());
 		const destination = { ...tv(), getState: vi.fn(() => tvState({ status: "paused" })) };

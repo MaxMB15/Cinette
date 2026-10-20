@@ -374,6 +374,20 @@ impl AirPlay {
         Some(state)
     }
 
+    /// Stops tracking, with the item in error as `code`.
+    pub fn fail(&self, code: &'static str) -> AirPlayState {
+        *lock_or_recover(&self.tracker) = None;
+        let mut last = lock_or_recover(&self.last);
+        let mut state = last.clone().unwrap_or_else(AirPlayState::idle);
+        state.status = Status::Error;
+        state.error = Some(PlaybackError {
+            code,
+            unsupported: false,
+        });
+        *last = Some(state.clone());
+        state
+    }
+
     pub fn state(&self) -> AirPlayState {
         lock_or_recover(&self.last)
             .clone()
@@ -397,10 +411,6 @@ pub(crate) fn handle_report<R: Runtime>(app: &AppHandle<R>, json: &str, now: Ins
     }
 }
 
-/// Plays `url` over AirPlay from `start_at` seconds, after mpv has stopped.
-/// The receiver must already be chosen. `title` goes on the lock screen.
-/// Called by the app crate, which resolves the channel's URL; the frontend
-/// never sees it.
 /// A stream this device converts for the receiver, as `load` gets it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Converted {
@@ -410,6 +420,10 @@ pub struct Converted {
     pub duration: Option<f64>,
 }
 
+/// Plays `url` over AirPlay from `start_at` seconds, after mpv has stopped.
+/// The receiver must already be chosen. `title` goes on the lock screen.
+/// Called by the app crate, which resolves the channel's URL; the frontend
+/// never sees it.
 pub fn load<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,
@@ -426,7 +440,15 @@ pub fn load<R: Runtime>(
         None => (Tracker::new(live), start_position(start_at, live)),
     };
     app.state::<AirPlay>().begin(tracker);
-    backend::load(url, title, start, live)
+    backend::load(url, title, start, live, converted.is_some())
+}
+
+/// Says the stream this device converts stopped, with `code` as its
+/// `PlaybackError`, after the converter ended on its own. AVPlayer may
+/// still play what it has, so its later reports don't change this.
+pub fn fail_converted<R: Runtime>(app: &AppHandle<R>, code: &'static str) {
+    let state = app.state::<AirPlay>().fail(code);
+    let _ = app.emit(EVENT_STATE, state);
 }
 
 /// Where AVPlayer starts: `start_at` for a movie or an episode, and the

@@ -1,28 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! The conversion AirPlay plays from on iOS. One runs at a time, and it
-//! stops when AirPlay ends or the next one starts.
+//! The conversions AirPlay plays from on iOS. [`super::conversion`] runs
+//! them in order, and this file joins it to `hls_out` and the mpv plugin.
 
-use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
 
 use mvp_core::models::channel::Channel;
 use tauri::{AppHandle, Listener, Runtime};
 use tauri_plugin_mpv::airplay::{Converted, EVENT_STATE};
+use tokio::sync::watch;
 
+use super::conversion::{Conversions, Running};
 use super::AIRPLAY_AUDIO;
-use crate::hls_out::{self, HlsConversion, HlsError, HlsRequest};
+use crate::hls_out::{self, Ended, HlsConversion, HlsError, HlsRequest};
 use crate::wifi;
 
-static CONVERSION: Mutex<Option<HlsConversion>> = Mutex::new(None);
+impl Running for HlsConversion {
+    fn ended(&self) -> watch::Receiver<Option<Ended>> {
+        self.ended.clone()
+    }
 
-fn conversion() -> std::sync::MutexGuard<'static, Option<HlsConversion>> {
-    CONVERSION.lock().unwrap_or_else(|p| p.into_inner())
+    fn set_playing(&self, playing: bool) {
+        HlsConversion::set_playing(self, playing);
+    }
 }
 
+static CONVERSIONS: OnceLock<Arc<Conversions<HlsConversion>>> = OnceLock::new();
+
 pub fn end_conversion() {
-    let old = conversion().take();
-    drop(old);
+    if let Some(conversions) = CONVERSIONS.get() {
+        conversions.stop();
+    }
 }
 
 pub async fn load_converted<R: Runtime>(
@@ -31,14 +40,17 @@ pub async fn load_converted<R: Runtime>(
     channel: &Channel,
     start_at: Option<f64>,
 ) -> Result<(), String> {
-    end_conversion();
+    let conversions = CONVERSIONS
+        .get()
+        .ok_or_else(|| HlsError::Failed.for_player())?
+        .clone();
     let live = channel.content_type == "live";
     let start = start_at.filter(|_| !live).unwrap_or(0.0);
     let peers =
         wifi::wifi_peers(&wifi::interfaces()).ok_or_else(|| HlsError::NoNetwork.for_player())?;
     let agent = format!("Cinette/{}", app.package_info().version);
     tracing::info!("[AirPlay] converting live={live}");
-    let started = hls_out::start(HlsRequest {
+    let request = HlsRequest {
         url,
         start_at: start,
         user_agent: Some(&agent),
@@ -46,44 +58,37 @@ pub async fn load_converted<R: Runtime>(
         playable: &AIRPLAY_AUDIO,
         peers,
         live,
-    })
-    .await;
-    let converted = match started {
-        Ok(converted) => converted,
-        Err(e) => {
-            tracing::warn!("[AirPlay] the conversion didn't start: {e}");
-            return Err(e.for_player());
-        }
     };
-    // The first segment starts at the keyframe before `start`, so the
-    // position counts from there.
-    let playing = Converted {
-        offset: if live { 0.0 } else { converted.start },
-        duration: converted.duration,
-    };
-    let result = tauri_plugin_mpv::airplay::load(
-        app,
-        &converted.url,
-        &channel.name,
-        None,
-        live,
-        Some(playing),
-    );
-    *conversion() = Some(converted);
-    result
+    let title = channel.name.as_str();
+    conversions
+        .load(live, hls_out::start(request), |converted| {
+            // The first segment starts at the keyframe before `start`, so
+            // the position counts from there.
+            let playing = Converted {
+                offset: if live { 0.0 } else { converted.start },
+                duration: converted.duration,
+            };
+            tauri_plugin_mpv::airplay::load(app, &converted.url, title, None, live, Some(playing))
+        })
+        .await
 }
 
-/// Runs the converter's pacer on the receiver's clock: it waits until the
-/// receiver plays, and while it's paused or stalled, so a paused movie
-/// doesn't keep converting. A live conversion ignores it.
+/// Runs the converter's pacer on the receiver's state, and has a
+/// conversion that ends on its own show as the item's error.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
-    app.listen_any(EVENT_STATE, |event| {
+    let failing = app.clone();
+    let conversions = Conversions::new(move |code| {
+        tauri_plugin_mpv::airplay::fail_converted(&failing, code);
+    });
+    if CONVERSIONS.set(conversions.clone()).is_err() {
+        return;
+    }
+    app.listen_any(EVENT_STATE, move |event| {
         let status = serde_json::from_str::<serde_json::Value>(event.payload())
             .ok()
             .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_string));
-        let Some(status) = status else { return };
-        if let Some(conversion) = conversion().as_ref() {
-            conversion.set_playing(status == "playing");
+        if let Some(status) = status {
+            conversions.set_status(&status);
         }
     });
 }

@@ -11,6 +11,8 @@ use tauri::{command, AppHandle, Runtime, State};
 
 use crate::streams::StreamsState;
 
+#[cfg(any(target_os = "ios", all(test, target_os = "linux")))]
+mod conversion;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(test)]

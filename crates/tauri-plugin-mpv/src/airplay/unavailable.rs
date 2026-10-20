@@ -13,7 +13,13 @@ pub fn ensure() -> Result<(), String> {
 
 pub fn install<R: Runtime>(_app: &AppHandle<R>) {}
 
-pub fn load(_url: &str, _title: &str, _start: f64, _live: bool) -> Result<(), String> {
+pub fn load(
+    _url: &str,
+    _title: &str,
+    _start: f64,
+    _live: bool,
+    _converted: bool,
+) -> Result<(), String> {
     Err(UNAVAILABLE.into())
 }
 

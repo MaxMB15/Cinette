@@ -233,6 +233,9 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 				const check = createAirPlayDestination(ANY_RECEIVER, bridge, sender);
 				const decision = await check.route(item).finally(() => check.dispose());
 				if (!decision.ok) return { sent: false, why: "blocked", decision };
+				// Asked before the picker too, so saying no leaves the sound here.
+				const converts = decision.route.via === "converted";
+				if (converts && !(await confirm())) return { sent: false, why: "cancelled" };
 				if (!mounted.current) return { sent: false, why: "cancelled" };
 				const picked = route ?? (await choose(anchor));
 				if (!picked || !mounted.current) return { sent: false, why: "cancelled" };
@@ -246,7 +249,9 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 						? { sent: false, why: "cancelled" }
 						: { sent: false, why: "blocked", decision: settled };
 				}
-				if (settled.route.via === "converted" && !(await confirm())) {
+				// The formats can change between the check and now, so a route
+				// that only converts now still asks.
+				if (settled.route.via === "converted" && !converts && !(await confirm())) {
 					target.dispose();
 					return { sent: false, why: "cancelled" };
 				}

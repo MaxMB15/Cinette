@@ -109,4 +109,41 @@ describe("AirPlayButton's confirm step", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(notice()).toBe("Not sent.");
 	});
+
+	it("takes Escape as a no, and ignores other keys", async () => {
+		let asked: Promise<boolean> = Promise.resolve(true);
+		const onSend = vi.fn(async (_: DOMRect, confirm: () => Promise<boolean>) => {
+			asked = confirm();
+			return (await asked) ? null : "Not sent.";
+		});
+		render(<AirPlayButton onSend={onSend} warning="Keep it on." />);
+		await act(async () => fireEvent.click(button()));
+		await act(async () => fireEvent.keyDown(window, { key: "Enter" }));
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		await act(async () => fireEvent.keyDown(window, { key: "Escape" }));
+		expect(await asked).toBe(false);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(notice()).toBe("Not sent.");
+	});
+
+	it("answers no when it goes while asking, and stops listening for Escape", async () => {
+		let asked: Promise<boolean> = Promise.resolve(true);
+		const onSend = vi.fn(async (_: DOMRect, confirm: () => Promise<boolean>) => {
+			asked = confirm();
+			await asked;
+			return null;
+		});
+		const removed = vi.spyOn(window, "removeEventListener");
+		const { unmount } = render(<AirPlayButton onSend={onSend} warning="Keep it on." />);
+		await act(async () => fireEvent.click(button()));
+		unmount();
+		expect(await asked).toBe(false);
+		expect(removed).toHaveBeenCalledWith("keydown", expect.any(Function));
+		removed.mockRestore();
+	});
+
+	it("goes quietly when nothing was asked", () => {
+		const { unmount } = render(<AirPlayButton onSend={vi.fn()} warning="Keep it on." />);
+		expect(() => unmount()).not.toThrow();
+	});
 });

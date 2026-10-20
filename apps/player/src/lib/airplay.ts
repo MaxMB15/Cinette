@@ -112,6 +112,16 @@ export const airplayFailureMessage = (error: unknown): string => {
 	return "Couldn't start AirPlay.";
 };
 
+/** What a converted load answers when a later load or a stop came first.
+ *  The same text as `SUPERSEDED` in src-tauri/src/airplay/conversion.rs. */
+export const SUPERSEDED = "superseded";
+
+/** What the player says when a seek on the TV failed. */
+export const airplaySeekMessage = (error: unknown): string =>
+	error === REFUSED || (typeof error === "string" && error !== "")
+		? airplayFailureMessage(error)
+		: "Couldn't move the stream on the TV.";
+
 const NAMES: Record<string, string> = {
 	mkv: "MKV files",
 	ts: "this raw MPEG-TS stream",
@@ -329,12 +339,45 @@ export const createAirPlayDestination = (
 	void bridge
 		.listen((next) => {
 			native = next;
+			// The TV is gone, so nothing will fetch what this device converts.
+			if (converted && next.connection === "lost") {
+				converted = null;
+				void bridge.endConversion().catch(() => {});
+			}
 			publish();
 		})
 		.then((stop) => {
 			if (disposed) stop();
 			else unlisten = stop;
 		});
+
+	/** The converted seek that runs, and the position asked for since. A
+	 *  seek converts again from there, so quick seeks wait for the one
+	 *  running, and only the last of them runs next. */
+	let seeking: Promise<void> | null = null;
+	let wanted: number | null = null;
+
+	const reconvert = async (from: NonNullable<typeof converted>) => {
+		while (wanted !== null) {
+			const at = wanted;
+			wanted = null;
+			await bridge
+				.loadConverted(from.channel, from.generation, from.source, at)
+				// A later seek or a stop took over, which is fine.
+				.catch((error: unknown) => {
+					if (error !== SUPERSEDED) throw error;
+				});
+		}
+	};
+
+	const seekConverted = (from: NonNullable<typeof converted>, seconds: number) => {
+		wanted = seconds;
+		if (!seeking)
+			seeking = reconvert(from).finally(() => {
+				seeking = null;
+			});
+		return seeking;
+	};
 
 	const index = (trackId: string) => {
 		const i = Number(trackId);
@@ -383,14 +426,7 @@ export const createAirPlayDestination = (
 		// A converted movie only has the segments around where it plays, so
 		// a seek converts again from there.
 		seek: (seconds) =>
-			converted && !live
-				? bridge.loadConverted(
-						converted.channel,
-						converted.generation,
-						converted.source,
-						seconds
-					)
-				: bridge.seek(seconds),
+			converted && !live ? seekConverted(converted, seconds) : bridge.seek(seconds),
 		setVolume: () => Promise.reject(new UnsupportedError("Setting the TV's volume")),
 		selectSubtitle: async (trackId) =>
 			bridge.selectSubtitle(trackId === null ? null : index(trackId)),

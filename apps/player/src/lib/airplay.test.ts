@@ -10,6 +10,8 @@ import {
 	airplayCapabilities,
 	airplayErrorMessage,
 	airplayFailureMessage,
+	airplaySeekMessage,
+	SUPERSEDED,
 	airplaySender,
 	airplayKey,
 	airplayProgress,
@@ -401,6 +403,94 @@ describe("createAirPlayDestination", () => {
 		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
 	});
 
+	/** A destination that has loaded a converted movie, as `converts what the
+	 *  TV can't play` does. */
+	const convertedMovie = async () => {
+		const fake = fakeBridge([{ ...mp4, container: "mkv" }], [2]);
+		const d = createAirPlayDestination(receiver, fake.bridge, converter);
+		await settle();
+		const film = channel();
+		await d.route({ kind: "local", channel: film });
+		await d.load({ kind: "local", channel: film }, { route: converting });
+		fake.bridge.loadConverted.mockClear();
+		return { ...fake, d, film };
+	};
+
+	it("runs one converted seek at a time, and only the last of those asked meanwhile", async () => {
+		const { bridge, d, film } = await convertedMovie();
+		let finish: () => void = () => {};
+		bridge.loadConverted.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (finish = resolve))
+		);
+		const first = d.seek(100);
+		const second = d.seek(200);
+		const third = d.seek(300);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(1);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 100);
+		finish();
+		await Promise.all([first, second, third]);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(2);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 300);
+		// Done, the next seek runs straight away.
+		await d.seek(400);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(3);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(film, 9, 2, 400);
+	});
+
+	it("takes a seek the backend says was overtaken as done, and passes on a real failure", async () => {
+		const { bridge, d } = await convertedMovie();
+		bridge.loadConverted.mockRejectedValueOnce(SUPERSEDED);
+		await expect(d.seek(100)).resolves.toBeUndefined();
+		bridge.loadConverted.mockRejectedValueOnce(REFUSED);
+		await expect(d.seek(200)).rejects.toBe(REFUSED);
+		// A failure doesn't leave the next seek waiting.
+		await d.seek(300);
+		expect(bridge.loadConverted).toHaveBeenLastCalledWith(expect.anything(), 9, 2, 300);
+	});
+
+	it("ends the conversion when the TV is gone", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		emit({ ...playing, connection: "reconnecting" });
+		expect(bridge.endConversion).not.toHaveBeenCalled();
+		const states: PlaybackState[] = [];
+		d.subscribe((state) => states.push(state));
+		const both = [{ label: "A" }, { label: "B" }];
+		emit({ ...playing, audio: both });
+		expect(d.capabilities.audioTracks).toBe(false);
+		emit({ ...playing, audio: both, connection: "lost" });
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		// Ended already: what's left goes to the TV's own controls.
+		expect(d.capabilities.audioTracks).toBe(true);
+		expect(states).toHaveLength(2);
+		await d.seek(10);
+		expect(bridge.seek).toHaveBeenCalledWith(10);
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+		emit({ ...playing, connection: "lost" });
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		await d.stop();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("doesn't mind an end of the conversion that fails", async () => {
+		const { bridge, emit } = await convertedMovie();
+		bridge.endConversion.mockRejectedValueOnce(new Error("gone"));
+		emit({ ...playing, connection: "lost" });
+		await settle();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves a direct route playing when the TV is gone", async () => {
+		const { bridge, emit } = fakeBridge();
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		await settle();
+		const film = channel();
+		const decision = await d.route({ kind: "local", channel: film });
+		if (!decision.ok) throw new Error("no route");
+		await d.load({ kind: "local", channel: film }, { route: decision.route });
+		emit({ ...playing, connection: "lost" });
+		expect(bridge.endConversion).not.toHaveBeenCalled();
+	});
+
 	it("tells subscribers about a route's capabilities with the state that brings them", async () => {
 		const { bridge } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
 		const d = createAirPlayDestination(receiver, bridge, converter);
@@ -538,6 +628,18 @@ describe("airplayFailureMessage", () => {
 		expect(airplayFailureMessage("")).toBe("Couldn't start AirPlay.");
 		expect(airplayFailureMessage(new Error("x"))).toBe("Couldn't start AirPlay.");
 		expect(airplayFailureMessage(undefined)).toBe("Couldn't start AirPlay.");
+	});
+});
+
+describe("airplaySeekMessage", () => {
+	it("words the refusal, passes the backend's message, or says it plainly", () => {
+		expect(airplaySeekMessage(REFUSED)).toBe(airplayFailureMessage(REFUSED));
+		expect(airplaySeekMessage("Couldn't reach the stream to convert it.")).toBe(
+			"Couldn't reach the stream to convert it."
+		);
+		expect(airplaySeekMessage("")).toBe("Couldn't move the stream on the TV.");
+		expect(airplaySeekMessage(new Error("x"))).toBe("Couldn't move the stream on the TV.");
+		expect(SUPERSEDED).toBe("superseded");
 	});
 });
 
