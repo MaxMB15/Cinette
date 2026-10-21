@@ -11,6 +11,7 @@
  */
 
 import {
+	positionNow,
 	UnsupportedError,
 	type PlaybackCapabilities,
 	type PlaybackDestination,
@@ -101,7 +102,8 @@ export const MAC_CONVERT_WARNING =
 	"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network.";
 
 /** The confirm step's warning for this device. */
-export const convertWarning = (mac: boolean) => (mac ? MAC_CONVERT_WARNING : CONVERT_WARNING);
+export const airplayConvertWarning = (mac: boolean) =>
+	mac ? MAC_CONVERT_WARNING : CONVERT_WARNING;
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
@@ -256,7 +258,8 @@ export type AirPlayKey =
 export const airplayKey = (
 	action: PlayerAction,
 	state: PlaybackState,
-	capabilities: PlaybackCapabilities
+	capabilities: PlaybackCapabilities,
+	now = state.positionAt
 ): AirPlayKey => {
 	const seekTo = (to: number): AirPlayKey =>
 		capabilities.seek
@@ -268,7 +271,8 @@ export const airplayKey = (
 			if (state.status !== "playing" && state.status !== "buffering") return { kind: "play" };
 			return capabilities.pause ? { kind: "pause" } : { kind: "ignore" };
 		case "seekBy":
-			return seekTo(state.position + action.seconds);
+			// From where it is now, not where it last said.
+			return seekTo(positionNow(state, now) + action.seconds);
 		case "seekToPercent":
 			return seekTo((state.duration * action.percent) / 100);
 		case "toggleFullscreen":

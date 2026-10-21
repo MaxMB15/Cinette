@@ -6,7 +6,7 @@ import {
 	AIRPLAY_RECEIVER,
 	CONVERT_WARNING,
 	MAC_CONVERT_WARNING,
-	convertWarning,
+	airplayConvertWarning,
 	IDLE_NATIVE_STATE,
 	airplayBlockedMessage,
 	airplayCapabilities,
@@ -141,8 +141,8 @@ describe("the AirPlay profiles", () => {
 	});
 
 	it("warns about the device that converts", () => {
-		expect(convertWarning(false)).toBe(CONVERT_WARNING);
-		expect(convertWarning(true)).toBe(MAC_CONVERT_WARNING);
+		expect(airplayConvertWarning(false)).toBe(CONVERT_WARNING);
+		expect(airplayConvertWarning(true)).toBe(MAC_CONVERT_WARNING);
 		expect(MAC_CONVERT_WARNING).toBe(
 			"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network."
 		);
@@ -802,6 +802,19 @@ describe("airplayKey", () => {
 				caps
 			)
 		).toEqual({ kind: "play" });
+	});
+
+	it("skips from where the TV is now, not where it last said", () => {
+		const said = at({ status: "playing", position: 100, positionAt: 1000, duration: 600 });
+		// Four seconds later, a 10 s skip goes to 114.
+		expect(airplayKey({ type: "seekBy", seconds: 10 }, said, caps, 5000)).toEqual({
+			kind: "seek",
+			to: 114,
+		});
+		// Paused, it's where it said.
+		expect(
+			airplayKey({ type: "seekBy", seconds: 10 }, { ...said, status: "paused" }, caps, 5000)
+		).toEqual({ kind: "seek", to: 110 });
 	});
 
 	it("seeks within the item, when the TV can", () => {

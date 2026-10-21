@@ -89,7 +89,7 @@ pub struct Registry {
     claims: BTreeMap<String, Vec<String>>,
     /// Held receivers that went away, by id.
     gone: BTreeMap<String, CastReceiver>,
-    /// When each receiver that couldn't be reached was marked so, by id.
+    /// Until when each receiver that couldn't be reached shows so, by id.
     unreachable: HashMap<String, Instant>,
     held: HashSet<String>,
     revision: u64,
@@ -231,27 +231,20 @@ impl Registry {
 
     /// A connection to `id` failed at `now`.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    // The Cast destination uses it from step 6.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn unreachable(&mut self, id: &str, now: Instant) -> bool {
+    pub fn unreachable(&mut self, id: &str, until: Instant) -> bool {
         if !self.claims.contains_key(id) {
             return false;
         }
         self.changing(|registry| {
-            registry.unreachable.insert(id.to_string(), now);
+            registry.unreachable.insert(id.to_string(), until);
         })
     }
 
-    /// Ends the marks from [`Self::unreachable`] that are older than
-    /// [`UNREACHABLE_FOR`] at `now`.
+    /// Ends the marks from [`Self::unreachable`] that are over at `now`.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    // The Cast destination uses it from step 6.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn expire(&mut self, now: Instant) -> bool {
         self.changing(|registry| {
-            registry
-                .unreachable
-                .retain(|_, at| now.duration_since(*at) < UNREACHABLE_FOR);
+            registry.unreachable.retain(|_, until| *until > now);
         })
     }
 

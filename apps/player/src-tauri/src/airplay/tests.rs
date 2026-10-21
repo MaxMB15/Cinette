@@ -114,7 +114,11 @@ async fn refuses_a_replaced_list() {
     let app = TestApp::new();
     let channel = add_m3u_channel(&app);
     let first = list(&app, &channel).await;
-    list(&app, &channel).await;
+    // The same list again keeps its generation. One that changed replaces it.
+    assert_eq!(list(&app, &channel).await, first);
+    let mut moved = channel.clone();
+    moved.url = format!("{}?moved", channel.url);
+    list(&app, &moved).await;
     assert_eq!(load(&app, channel, first, 0).await, Err(STALE.to_string()));
 }
 

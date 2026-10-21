@@ -18,8 +18,9 @@ import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
 import { useAirPlay } from "@/hooks/useAirPlay";
+import { useCast } from "@/hooks/useCast";
 import {
-	convertWarning,
+	airplayConvertWarning,
 	airplayBlockedMessage,
 	airplayFailureMessage,
 	airplaySeekMessage,
@@ -28,6 +29,13 @@ import {
 } from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { AirPlayPanel } from "@/components/player/AirPlayPanel";
+import { CastButton } from "@/components/player/CastButton";
+import { CastPanel } from "@/components/player/CastPanel";
+import { castControlMessage, showsCastButton } from "@/lib/cast";
+import { convertWarning } from "@/lib/device-picker";
+import { Dialog } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import type { PlaybackDestination } from "@/lib/destination";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
@@ -99,10 +107,45 @@ import { useSkipSegments } from "@/hooks/useSkipSegments";
 import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
 import { getPlatform, isMobilePlatform } from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
 
-/** How long a note about AirPlay stays up. */
-const AIRPLAY_NOTICE_MS = 6000;
+/** How long a note about AirPlay or Cast stays up. */
+const NOTICE_MS = 6000;
+
+/** A note on the player, and whether it's about a cast or about AirPlay. */
+interface PlayerNotice {
+	text: string;
+	cast: boolean;
+}
+
+/**
+ * What the player says when a key's control failed on `tv`, or `null`. A
+ * cast says why in its own words while it's connected, and says for itself
+ * when it's going. AirPlay says why a seek failed.
+ */
+const keyFailure = (
+	tv: PlaybackDestination,
+	error: unknown,
+	seeking: boolean
+): PlayerNotice | null => {
+	if (tv.kind === "cast")
+		return tv.getState().connection === "connected"
+			? { text: castControlMessage(tv.name, error), cast: true }
+			: null;
+	return seeking ? { text: airplaySeekMessage(error), cast: false } : null;
+};
+
+/**
+ * The player's note once a cast was asked for: why it didn't go, or, when
+ * it went, no note about an earlier cast, which would only mislead next to
+ * one that plays. A note about something else stays.
+ */
+const afterCast =
+	(why: string | null) =>
+	(notice: PlayerNotice | null): PlayerNotice | null => {
+		if (why) return { text: why, cast: true };
+		return notice?.cast ? null : notice;
+	};
 /** How often (ms) watch progress is persisted while playing. */
 const PROGRESS_SAVE_INTERVAL = 5000;
 const MAX_VOLUME = 150;
@@ -449,14 +492,80 @@ export const PlayerView = () => {
 		recordPlayEnd(ch.id, Math.floor((Date.now() - startedAt) / 1000)).catch(() => {});
 	}, [activeChannelRef]);
 
+	// Why AirPlay or Cast stopped or didn't start, or a control failed.
+	const [notice, setNotice] = useState<PlayerNotice | null>(null);
+	useEffect(() => {
+		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+		return () => clearTimeout(timer);
+	}, [notice]);
+	const castNotice = (text: string) => setNotice({ text, cast: true });
+	const airplayNotice = (text: string) => setNotice({ text, cast: false });
+	// Google Cast from a computer.
+	const cast = useCast(platform === "macos" || platform === "linux", castNotice);
+	const castRef = useLatestRef(cast);
+	/** Asks before a cast switches to a route this computer converts. */
+	const [castConfirm, setCastConfirm] = useState<{
+		name: string;
+		keep: "on" | "onScreen";
+		answer: (ok: boolean) => void;
+	} | null>(null);
+	// The question waiting for an answer, so a newer one, or leaving the
+	// page, answers it with no and the cast it holds up ends.
+	// A question already answered takes no second answer, so the last one
+	// asked stays here.
+	const castQuestion = useRef<((ok: boolean) => void) | null>(null);
+	const confirmCast = useCallback(
+		(name: string, keep: "on" | "onScreen") =>
+			new Promise<boolean>((answer) => {
+				castQuestion.current?.(false);
+				castQuestion.current = answer;
+				setCastConfirm({ name, keep, answer });
+			}),
+		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
+		[]
+	);
+	// Stryker disable next-line ArrayDeclaration: The cleanup reads the ref when it runs, so any deps that never change run it only on unmount.
+	useEffect(() => () => castQuestion.current?.(false), []);
+
 	/**
 	 * Actually start playing `ch` (optionally from `startPos`), replacing
-	 * whatever is playing. Resolves once mpv has opened the stream, or at once
+	 * whatever is playing. While a Cast receiver plays, `ch` goes there
+	 * instead, by its own route for that receiver, after the confirm step
+	 * when this computer starts converting for it. Resolves once mpv has opened the stream, or at once
 	 * if another item replaced this one first, and rejects if mpv couldn't
 	 * open it. The player shows that error itself, so callers can ignore it.
 	 */
 	const commitPlayback = useCallback(
 		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
+			const casting = castRef.current.current();
+			if (casting) {
+				// The Cast destination drops a live channel's start, and a live
+				// channel has no resume point to keep one in.
+				return castRef.current
+					.send(casting.id, ch, {
+						startAt: startPos,
+						confirm: casting.converted()
+							? undefined
+							: (keep) => confirmCast(casting.name, keep),
+						// Nothing plays here, so this only moves the player to the
+						// new item once it's going to the receiver.
+						stopLocal: async () => {
+							recordEnd();
+							playStartTimeRef.current = Date.now();
+							recordPlayStart(
+								ch.id,
+								ch.name,
+								ch.logoUrl ?? null,
+								ch.contentType
+							).catch(() => {});
+							progressRef.current = progressFor(ch, startPos);
+							setActiveChannelName(ch.name);
+							setActiveChannel(ch);
+							apply?.();
+						},
+					})
+					.then((why) => setNotice(afterCast(why)));
+			}
 			recordEnd();
 			playStartTimeRef.current = Date.now();
 			recordPlayStart(ch.id, ch.name, ch.logoUrl ?? null, ch.contentType).catch(() => {});
@@ -487,7 +596,8 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
-		[mpv, rememberLoadedUrl, recordEnd]
+		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, and castRef and confirmCast are a ref and a function that never changes.
+		[mpv, rememberLoadedUrl, recordEnd, castRef, confirmCast]
 	);
 
 	/**
@@ -506,28 +616,25 @@ export const PlayerView = () => {
 	// The player's controls go through the active destination, which is
 	// always this device for now. It starts an item the way the player does.
 	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
-	// AirPlay video on iOS, with its own panel until the device picker
+	// AirPlay video on iOS and macOS, with its own panel until the device picker
 	// takes over.
 	const mac = platform === "macos";
 	const airplay = useAirPlay(platform === "ios" || mac, mac);
-	const tvRef = useLatestRef(airplay.destination);
-	// Why AirPlay stopped or didn't start, once the AirPlay button can't say.
-	const [airplayNotice, setAirplayNotice] = useState<string | null>(null);
-	useEffect(() => {
-		const timer = setTimeout(() => setAirplayNotice(null), AIRPLAY_NOTICE_MS);
-		return () => clearTimeout(timer);
-	}, [airplayNotice]);
+	// The receiver the player's controls drive instead of mpv, while one plays.
+	const tv: PlaybackDestination | null = airplay.destination ?? cast.destination;
+	const tvRef = useLatestRef(tv);
 	// The receiver's position goes into the same resume point as local
-	// playback's, since mpv is stopped while AirPlay plays.
+	// playback's, since mpv is stopped while AirPlay or Cast plays.
+	const tvState = airplay.state ?? cast.state;
 	useEffect(() => {
 		const p = progressRef.current;
 		// flushProgress skips an item with no resume point, such as live.
-		if (!airplay.state) return;
-		const next = airplayProgress(p, airplay.state, Date.now(), PROGRESS_SAVE_INTERVAL);
+		if (!tvState) return;
+		const next = airplayProgress(p, tvState, Date.now(), PROGRESS_SAVE_INTERVAL);
 		if (!next) return;
 		Object.assign(p, next.progress);
 		if (next.save) flushProgress();
-	}, [airplay.state, flushProgress]);
+	}, [tvState, flushProgress]);
 	// Where the item was when it went to AirPlay. On a Mac, closing the
 	// picker without a TV, or with this Mac, sends it nowhere, and it plays
 	// here again from there, as if AirPlay never started.
@@ -538,7 +645,7 @@ export const PlayerView = () => {
 		if (!activeChannel) return;
 		await playback
 			.load({ kind: "local", channel: activeChannel }, { startAt: airplayFrom.current })
-			.catch(() => setAirplayNotice("Couldn't play it on this device."));
+			.catch(() => airplayNotice("Couldn't play it on this device."));
 	});
 	useEffect(() => {
 		if (airplay.notPicked) void playHereAgain.current();
@@ -1163,9 +1270,10 @@ export const PlayerView = () => {
 			// A confirm opened from the controls renders in a portal, and it keeps
 			// its keys while it's open.
 			if (!isInside(containerRef.current, e.target)) return;
-			// The resume prompt handles its own keys. Its dialog takes Escape
-			// first, even when focus is on the player behind it.
-			if (pendingResume) return;
+			// The resume prompt and the cast question handle their own keys.
+			// Their dialogs take Escape first, even when focus is on the
+			// player behind them.
+			if (pendingResume || castConfirm) return;
 			if (isTypingTarget(e.target)) return;
 			// Space or Enter on a button reached with Tab presses that button.
 			if ((e.key === " " || e.key === "Enter") && isKeyboardFocusedControl(e.target)) return;
@@ -1198,16 +1306,20 @@ export const PlayerView = () => {
 			e.preventDefault();
 			if (e.repeat && !repeatsWhenHeld(action)) return;
 
-			// While the TV plays, the keys drive it, and nothing starts here.
+			// While the TV plays, the keys drive it, and nothing starts here. A
+			// Cast receiver also takes the next or previous episode, which
+			// goes there.
 			const tv = tvRef.current;
-			if (tv) {
-				const key = airplayKey(action, tv.getState(), tv.capabilities);
-				if (key.kind === "play") void tv.play();
-				if (key.kind === "pause") void tv.pause();
-				if (key.kind === "seek")
-					tv.seek(key.to).catch((error: unknown) =>
-						setAirplayNotice(airplaySeekMessage(error))
-					);
+			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
+			if (tv && !(tv.kind === "cast" && episode)) {
+				const key = airplayKey(action, tv.getState(), tv.capabilities, performance.now());
+				const failed = (seeking: boolean) => (error: unknown) => {
+					const failure = keyFailure(tv, error, seeking);
+					if (failure) setNotice(failure);
+				};
+				if (key.kind === "play") void tv.play().catch(failed(false));
+				if (key.kind === "pause") void tv.pause().catch(failed(false));
+				if (key.kind === "seek") void tv.seek(key.to).catch(failed(true));
 				if (key.kind !== "pass") return;
 			}
 
@@ -1294,6 +1406,7 @@ export const PlayerView = () => {
 			playback,
 			tvRef,
 			pendingResume,
+			castConfirm,
 			showShortcuts,
 			isFullscreen,
 			showInfoDrawer,
@@ -1381,41 +1494,98 @@ export const PlayerView = () => {
 			},
 		});
 		if (result.sent || result.why === "cancelled") return null;
-		if (result.why === "blocked") return airplayBlockedMessage(result.decision);
-		console.warn("[VideoPlayer] AirPlay failed:", result.error);
-		const message = airplayFailureMessage(result.error);
-		// Once local playback has stopped, the AirPlay button is gone with
-		// the panel it gave way to, so the player says it.
-		if (result.stopped) {
-			setAirplayNotice(`${message} Nothing is playing.`);
+		if (result.why === "blocked") {
+			airplayNotice(airplayBlockedMessage(result.decision));
 			return null;
 		}
-		return message;
+		console.warn("[VideoPlayer] AirPlay failed:", result.error);
+		const message = airplayFailureMessage(result.error);
+		airplayNotice(result.stopped ? `${message} Nothing is playing.` : message);
+		return null;
 	};
-	const tv = airplay.destination;
+	/** Casts `channel` to `receiverId`, from where it plays here for a movie
+	 *  or episode, and says why when it can't. */
+	const sendToCast = (receiverId: string, channel: Channel): Promise<void> =>
+		cast
+			.send(receiverId, channel, {
+				startAt: mpv.state.duration > 0 ? mpv.state.position : undefined,
+				stopLocal: async () => {
+					flushProgress();
+					await playback.stop();
+				},
+			})
+			.then((why) => setNotice(afterCast(why)));
 	const castSlot =
 		airplay.available && activeChannel && !tv ? (
 			<AirPlayButton
 				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
-				warning={convertWarning(mac)}
+				warning={airplayConvertWarning(mac)}
+			/>
+		) : showsCastButton(cast) && activeChannel && !tv ? (
+			<CastButton
+				cast={cast}
+				channel={activeChannel}
+				onSend={(id) => sendToCast(id, activeChannel)}
 			/>
 		) : undefined;
 
-	const airplayPanel = tv ? (
+	const castTv = cast.destination;
+	/** Says why a control on the receiver failed, unless the cast is going,
+	 *  which says so itself. */
+	const castControlFailed = (error: unknown) => {
+		if (!castTv || castTv.getState().connection !== "connected") return;
+		castNotice(castControlMessage(castTv.name, error));
+	};
+	const castPanel =
+		castTv && cast.state ? (
+			<CastPanel
+				name={castTv.name}
+				state={cast.state}
+				capabilities={castTv.capabilities}
+				onPlay={() => void castTv.play().catch(castControlFailed)}
+				onPause={() => void castTv.pause().catch(castControlFailed)}
+				onSeek={(position) => void castTv.seek(position).catch(castControlFailed)}
+				onVolume={(volume) => void castTv.setVolume(volume).catch(castControlFailed)}
+				onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
+				onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
+				onPlayHere={async (position) => {
+					flushProgress();
+					// The receiver lets go of the stream before mpv opens it, since
+					// many accounts allow one connection at a time.
+					await cast.stop().catch(() => {});
+					// Stryker disable next-line ConditionalExpression: The panel only shows after a cast, which needs a channel, and nothing clears the channel while it shows.
+					if (!activeChannel) return;
+					await playback
+						.load(
+							{ kind: "local", channel: activeChannel },
+							{ startAt: position > 0 ? position : undefined }
+						)
+						.catch(() => castNotice("Couldn't play it on this device."));
+				}}
+				onStop={async () => {
+					flushProgress();
+					await cast.stop().catch(() => {});
+					handleStop();
+				}}
+			/>
+		) : null;
+
+	const airplayTv = airplay.destination;
+	const airplayPanel = airplayTv ? (
 		<AirPlayPanel
-			name={tv.name}
+			name={airplayTv.name}
 			// The hook's state is set exactly when its destination is.
-			state={airplay.state ?? tv.getState()}
-			capabilities={tv.capabilities}
-			onPlay={() => void tv.play()}
-			onPause={() => void tv.pause()}
+			state={airplay.state ?? airplayTv.getState()}
+			capabilities={airplayTv.capabilities}
+			onPlay={() => void airplayTv.play()}
+			onPause={() => void airplayTv.pause()}
 			onSeek={(position) =>
-				tv
+				airplayTv
 					.seek(position)
-					.catch((error: unknown) => setAirplayNotice(airplaySeekMessage(error)))
+					.catch((error: unknown) => airplayNotice(airplaySeekMessage(error)))
 			}
-			onSubtitle={(id) => void tv.selectSubtitle(id)}
-			onAudio={(id) => void tv.selectAudio(id)}
+			onSubtitle={(id) => void airplayTv.selectSubtitle(id)}
+			onAudio={(id) => void airplayTv.selectAudio(id)}
 			onPlayHere={async (position, anchor) => {
 				flushProgress();
 				// AirPlay lets go of the stream before mpv opens it, since many
@@ -1428,7 +1598,7 @@ export const PlayerView = () => {
 						{ kind: "local", channel: activeChannel },
 						{ startAt: position > 0 ? position : undefined }
 					)
-					.catch(() => setAirplayNotice("Couldn't play it on this device."));
+					.catch(() => airplayNotice("Couldn't play it on this device."));
 			}}
 			onStop={async () => {
 				flushProgress();
@@ -1559,16 +1729,65 @@ export const PlayerView = () => {
 			)}
 
 			{airplayPanel}
-			{airplayNotice && (
+			{castPanel}
+			{castConfirm && (
+				<Dialog
+					onClose={() => {
+						castConfirm.answer(false);
+						setCastConfirm(null);
+					}}
+					labelledBy="cast-confirm-title"
+					// Above the Cast panel and the notes, inside the player.
+					overlayClassName="z-50"
+					className="bg-card border border-border rounded-lg p-4 w-[360px] max-w-[calc(100vw-2rem)] shadow-xl"
+				>
+					<h2 id="cast-confirm-title" className="text-sm font-semibold mb-3">
+						Play on <bdi>{castConfirm.name}</bdi>?
+					</h2>
+					<p className="text-xs text-muted-foreground mb-4">
+						{convertWarning(castConfirm.name, castConfirm.keep)}
+					</p>
+					<div className="flex justify-end gap-2">
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => {
+								castConfirm.answer(false);
+								setCastConfirm(null);
+							}}
+						>
+							Cancel
+						</Button>
+						<Button
+							size="sm"
+							onClick={() => {
+								castConfirm.answer(true);
+								setCastConfirm(null);
+							}}
+						>
+							Confirm
+						</Button>
+					</div>
+				</Dialog>
+			)}
+			{notice && (
 				<p
 					role="alert"
-					className="absolute top-4 left-1/2 z-40 -translate-x-1/2 rounded bg-black/90 px-4 py-2 text-sm text-white"
+					className="absolute top-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded bg-black/90 px-4 py-2 text-sm text-white"
 				>
-					{airplayNotice}
+					<span>{notice.text}</span>
+					<button
+						type="button"
+						aria-label="Dismiss"
+						className="text-white/70 hover:text-white"
+						onClick={() => setNotice(null)}
+					>
+						<X className="h-4 w-4" aria-hidden />
+					</button>
 				</p>
 			)}
 
-			{!mpv.fallbackActive && !airplay.destination && (
+			{!mpv.fallbackActive && !tv && (
 				<Controls
 					state={{
 						isPlaying: mpv.state.isPlaying,

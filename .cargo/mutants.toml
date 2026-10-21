@@ -42,6 +42,9 @@ exclude_re = [
     # Test helpers in a file module such as cast/tests.rs, which the pattern
     # above doesn't match.
     'src-tauri/src/cast/tests\.rs:',
+    # The fake Cast receiver and the cast tests' own helpers, in file modules
+    # that only build on macOS and Linux.
+    'src-tauri/src/cast/(fake_receiver|link_tests|playback_tests|tls_tests)\.rs:',
     # The app's entry point builds the whole Tauri app and opens its window.
     'src-tauri/src/lib\.rs:.*\b(run|show_main_window)\b',
     # Logging sets the process's one tracing subscriber and panic hook. The
@@ -75,6 +78,10 @@ exclude_re = [
     # Asks macOS whether it refuses local network access. On Linux, where
     # the mutation runs build, it's always false.
     'src-tauri/src/cast/mod\.rs:.*\blocal_network_denied\b',
+    # Asks this machine which interface holds its default route, so the
+    # answer depends on the machine. The tests check the parts it's built from.
+    'src-tauri/src/vpn\.rs:.*\bvpn_active\b',
+    'src-tauri/src/cast/mod\.rs:.*\bget_vpn_active\b',
     # These bind remote control's real port and advertise this machine on the
     # network. The tests start the target on loopback with start_on instead.
     'src-tauri/src/remote/service\.rs:.*\b(start|advertise_on_network)\b',

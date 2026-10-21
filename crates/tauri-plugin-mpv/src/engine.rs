@@ -23,11 +23,34 @@ pub struct MediaInfo {
     /// `mov,mp4,m4a,3gp,3g2,mj2`.
     pub file_format: Option<String>,
     pub video_codec: Option<String>,
+    /// The codec of the audio track a receiver would play: the one marked
+    /// default, or else the first. mpv may be playing another, as when the
+    /// user picked it, and a receiver that's sent the stream picks its own.
     pub audio_codec: Option<String>,
     /// The latest frame was interlaced.
     pub interlaced: bool,
     /// The video is HDR: PQ, as HDR10 uses, or HLG.
     pub hdr: bool,
+}
+
+/// One of the item's tracks, as mpv's `track-list` lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ListedTrack {
+    /// `video`, `audio` or `sub`.
+    pub kind: String,
+    pub codec: Option<String>,
+    pub default: bool,
+}
+
+/// The codec of the audio track a receiver plays from `tracks`: the one
+/// marked default, or else the first, as the probe decides.
+pub(crate) fn receiver_audio(tracks: &[ListedTrack]) -> Option<String> {
+    let audio: Vec<&ListedTrack> = tracks.iter().filter(|t| t.kind == "audio").collect();
+    audio
+        .iter()
+        .find(|t| t.default)
+        .or(audio.first())
+        .and_then(|t| t.codec.clone())
 }
 
 /// Whether mpv's `video-params/gamma` is an HDR transfer: PQ, which HDR10
@@ -497,10 +520,20 @@ impl MpvEngine {
                 .ok()
                 .filter(|v| !v.is_empty())
         };
+        let count = mpv.get_property::<i64>("track-list/count").unwrap_or(0);
+        let tracks: Vec<ListedTrack> = (0..count)
+            .map(|i| ListedTrack {
+                kind: text(&format!("track-list/{i}/type")).unwrap_or_default(),
+                codec: text(&format!("track-list/{i}/codec")),
+                default: mpv
+                    .get_property::<bool>(&format!("track-list/{i}/default"))
+                    .unwrap_or(false),
+            })
+            .collect();
         MediaInfo {
             file_format: text("file-format"),
             video_codec: text("current-tracks/video/codec"),
-            audio_codec: text("current-tracks/audio/codec"),
+            audio_codec: receiver_audio(&tracks),
             interlaced: mpv
                 .get_property::<bool>("video-frame-info/interlaced")
                 .unwrap_or(false),
@@ -661,7 +694,10 @@ mod playback_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{can_skip, libmpv_in_maps, open_status, subtitle_uri, PlayerState};
+    use super::{
+        can_skip, libmpv_in_maps, open_status, receiver_audio, subtitle_uri, ListedTrack,
+        PlayerState,
+    };
     use libmpv2::mpv_error;
 
     #[test]
@@ -673,6 +709,42 @@ mod tests {
         let logged = format!("{state:?}");
         assert!(logged.contains("http://host.test:8080"), "{logged}");
         assert!(!logged.contains("USER") && !logged.contains("SECRET"), "{logged}");
+    }
+
+    fn track(kind: &str, codec: &str, default: bool) -> ListedTrack {
+        ListedTrack {
+            kind: kind.into(),
+            codec: Some(codec.into()),
+            default,
+        }
+    }
+
+    #[test]
+    fn a_receiver_plays_the_default_audio_track_or_else_the_first() {
+        // MPEG-TS marks no default, so AC-3 first is what a receiver plays,
+        // though AAC comes second.
+        let ts = [
+            track("video", "h264", false),
+            track("audio", "ac3", false),
+            track("audio", "aac", false),
+        ];
+        assert_eq!(receiver_audio(&ts).as_deref(), Some("ac3"));
+        let marked = [
+            track("audio", "ac3", false),
+            track("sub", "subrip", true),
+            track("audio", "aac", true),
+        ];
+        assert_eq!(receiver_audio(&marked).as_deref(), Some("aac"));
+        assert_eq!(receiver_audio(&[track("video", "h264", true)]), None);
+        let unknown = ListedTrack {
+            kind: "audio".into(),
+            codec: None,
+            default: false,
+        };
+        assert_eq!(
+            receiver_audio(&[unknown, track("audio", "aac", false)]),
+            None
+        );
     }
 
     #[test]

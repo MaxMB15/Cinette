@@ -644,9 +644,10 @@ fn only_the_app_reports_load_and_playback_failures() {
 fn media_commands_go_to_the_app_with_the_media_session() {
     let now = Instant::now();
     let mut session = with_media(now);
-    let checks: [(Result<Sent, CommandError>, Value); 4] = [
+    let checks: [(Result<Sent, CommandError>, Value); 5] = [
         (session.play(), json!({ "type": "PLAY" })),
         (session.pause(), json!({ "type": "PAUSE" })),
+        (session.stop_media(), json!({ "type": "STOP" })),
         (
             session.seek(90.5),
             json!({ "type": "SEEK", "currentTime": 90.5 }),

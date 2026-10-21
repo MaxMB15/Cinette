@@ -73,6 +73,14 @@ export interface PlaybackCapabilities {
 	catalog: boolean;
 }
 
+/** Where a destination is now: the last position it reported, moved on by
+ *  the time since while it plays. */
+export const positionNow = (state: PlaybackState, now: number): number => {
+	if (state.status !== "playing") return state.position;
+	const moved = state.position + Math.max(0, now - state.positionAt) / 1000;
+	return state.duration > 0 ? Math.min(moved, state.duration) : moved;
+};
+
 /** A method a destination doesn't support rejects with this. */
 export class UnsupportedError extends Error {
 	readonly code = "unsupported";

@@ -416,14 +416,22 @@ async fn a_load_names_its_url_by_the_generation_it_was_listed_in() {
         streams.url("p-live-7", first.generation, first.sources[1]),
         Ok(ts.clone())
     );
-    // A newer list makes the older one stale.
-    let second = formats(&app, live, Some(playing_ts())).await.unwrap();
+    // Listing it again, as for a second receiver, keeps its generation.
+    let again = formats(&app, live.clone(), Some(playing_ts()))
+        .await
+        .unwrap();
+    assert_eq!(again.generation, first.generation);
+    // A list that changed makes the older one stale.
+    let moved_ts = format!("{panel}/live/{ACCOUNT}/8.ts");
+    let mut moved = live;
+    moved.url = moved_ts.clone();
+    let second = formats(&app, moved, Some(playing_ts())).await.unwrap();
     assert!(second.generation > first.generation);
     assert_eq!(
         streams.url("p-live-7", first.generation, 1),
         Err(STALE.to_string())
     );
-    assert_eq!(streams.url("p-live-7", second.generation, 1), Ok(ts));
+    assert_eq!(streams.url("p-live-7", second.generation, 1), Ok(moved_ts));
     assert_eq!(
         streams.url("p-live-7", second.generation, 2),
         Err(STALE.to_string())
