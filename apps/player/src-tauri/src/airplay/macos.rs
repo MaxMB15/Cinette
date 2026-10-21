@@ -42,9 +42,9 @@ impl Running for MacConversion {
 
 static CONVERSIONS: OnceLock<Arc<Conversions<MacConversion>>> = OnceLock::new();
 
-pub fn end_conversion() {
+pub async fn end_conversion() {
     if let Some(conversions) = CONVERSIONS.get() {
-        conversions.stop();
+        conversions.stop().await;
     }
 }
 

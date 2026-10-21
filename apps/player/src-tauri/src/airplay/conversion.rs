@@ -180,10 +180,18 @@ impl<R: Running> Conversions<R> {
         });
     }
 
-    /// Stops the conversion, and any load still starting one.
-    pub fn stop(&self) {
+    /// Stops the conversion, and any load still starting one, and waits
+    /// up to [`CLOSE_LIMIT`] for them to close their source, so whatever
+    /// plays next isn't a second connection to the provider.
+    pub async fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.stop_current();
+        let closed = async {
+            // A load that's starting drops what it started once it ends.
+            let _turn = self.turn.lock().await;
+            self.wait_closed().await;
+        };
+        let _ = tokio::time::timeout(CLOSE_LIMIT, closed).await;
     }
 
     /// Passes the receiver's state on: only `playing` runs the pacer.
