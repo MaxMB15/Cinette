@@ -253,6 +253,30 @@ describe("useCast", () => {
 		expect(tauri.holdCastReceivers).toHaveBeenLastCalledWith(["cast:tv"]);
 	});
 
+	it("leaves a cast that's opening alone when the next item can't go", async () => {
+		const { result } = await render();
+		await act(async () => {
+			await result.current.send("cast:tv", film, { stopLocal });
+		});
+		expect(result.current.state?.status).toBe("opening");
+		tauri.getConverterSupport.mockResolvedValue({ convert: false, hardwareEncoder: false });
+		tauri.getStreamFormats.mockResolvedValue({
+			formats: [{ ...mp4, container: "other" }],
+			sources: [0],
+			duration: null,
+			generation: 6,
+		});
+		let why: string | null = null;
+		await act(async () => {
+			why = await result.current.send("cast:tv", makeMovie({ id: "mv2", name: "B" }), {
+				stopLocal,
+			});
+		});
+		expect(why).toBe("Can't play this format (other)");
+		expect(result.current.state?.status).toBe("opening");
+		expect(tauri.castRelease).not.toHaveBeenCalled();
+	});
+
 	it("says nothing of a loss that comes just after a stop", async () => {
 		const { result } = await render();
 		await act(async () => {

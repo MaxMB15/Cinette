@@ -213,11 +213,14 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		[destinationFor, receiversRef]
 	);
 
-	const release = useCallback(() => {
-		++checking.current;
-		setHeld([]);
+	const release = useCallback(
+		() => {
+			++checking.current;
+			setHeld([]);
+		},
 		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
-	}, []);
+		[]
+	);
 
 	const state = useSyncExternalStore(
 		destination?.subscribe ?? noState,
@@ -305,13 +308,16 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		[destinationFor, receiversRef]
 	);
 
-	const stop = useCallback(async () => {
-		const left = active.current;
-		active.current = null;
-		setDestination(null);
-		if (left) await left.stop();
+	const stop = useCallback(
+		async () => {
+			const left = active.current;
+			active.current = null;
+			setDestination(null);
+			if (left) await left.stop();
+		},
 		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
-	}, []);
+		[]
+	);
 
 	return {
 		receivers,

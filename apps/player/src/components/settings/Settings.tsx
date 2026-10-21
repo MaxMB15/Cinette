@@ -527,6 +527,7 @@ export const Settings = ({ updateState }: SettingsProps) => {
 									</p>
 								</div>
 								<Button
+									// Stryker disable next-line StringLiteral: The button gives an empty variant its default one, which "default" names.
 									variant={streamThrough ? "default" : "secondary"}
 									size="sm"
 									className="shrink-0"
