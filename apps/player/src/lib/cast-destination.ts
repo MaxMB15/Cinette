@@ -112,11 +112,11 @@ export const applyUpdate = (
 				loading: false,
 				error: { code: update.refused ? "refused" : "loadFailed" },
 			};
+		// A command it turned down leaves the state as it was. A stopped
+		// conversion does too, since the destination starts it again and
+		// says so itself.
 		case "conversionStopped":
-			// The destination starts the stream again, and says so itself.
-			return snapshot;
 		case "rejected":
-			// A command it turned down leaves the state as it was.
 			return snapshot;
 		case "closed":
 			return {

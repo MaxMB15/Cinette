@@ -923,6 +923,45 @@ describe("createCastDestination", () => {
 			expect(pending()).toEqual([0]);
 		});
 
+		it("waits once when the stream stops again before a try starts", async () => {
+			const { fake, cast, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			// The second stop replaces the first one's try.
+			expect(pending()).toEqual([1_000]);
+			await next();
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+		});
+
+		it("waits on real timers unless told otherwise", async () => {
+			vi.useFakeTimers();
+			try {
+				const fake = backend(liveConverted);
+				const cast = createCastDestination(receiver, fake);
+				await cast.load(item);
+				fake.castLoad.mockRejectedValueOnce("unreachable");
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				await vi.advanceTimersByTimeAsync(0);
+				expect(fake.castLoad).toHaveBeenCalledTimes(2);
+				// The next try waits a second.
+				await vi.advanceTimersByTimeAsync(999);
+				expect(fake.castLoad).toHaveBeenCalledTimes(2);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(fake.castLoad).toHaveBeenCalledTimes(3);
+				// It stops again a second later, so the next try waits two, and
+				// a stop meanwhile cancels it.
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				await vi.advanceTimersByTimeAsync(1_999);
+				expect(fake.castLoad).toHaveBeenCalledTimes(3);
+				await cast.stop();
+				await vi.advanceTimersByTimeAsync(10_000);
+				expect(fake.castLoad).toHaveBeenCalledTimes(3);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("says at once when the provider turns the login away", async () => {
 			const { fake, cast, pending, next } = setUp(liveConverted);
 			await cast.load(item);
