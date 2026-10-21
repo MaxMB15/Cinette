@@ -61,9 +61,9 @@ exclude_re = [
     'replace (omdb_api_key|saved_key|non_empty_key) -> .* with (Ok\()?Some\(',
     'replace trimmed_key -> .* with Some\("xyzzy"\)',
     'delete ! in non_empty_key',
-    # Only iOS has a Wi-Fi interface list to read. The choice made from it
-    # stays in.
-    'src-tauri/src/wifi\.rs:.*\binterfaces\b',
+    # Only iOS and macOS read the interface list and the default route. The
+    # choice made from them stays in.
+    'src-tauri/src/wifi\.rs:.*\b(interfaces|default_route_address)\b',
     # Only differs on iOS, which the mutation runs don't build.
     'src-tauri/src/commands\.rs:.*\bensure_downloads_supported\b',
     # Starts caffeinate or systemd-inhibit, which would change the machine's
@@ -86,13 +86,15 @@ exclude_re = [
 gitignore = true
 
 # Mutation runs build on Linux, which never compiles the plugin's macOS and
-# iOS renderers or the Android code. Their mutants would pass every
-# test without being built.
+# iOS renderers, AirPlay on macOS and iOS, or the Android code. Their mutants
+# would pass every test without being built.
 exclude_globs = [
     "crates/tauri-plugin-mpv/src/macos.rs",
     "crates/tauri-plugin-mpv/src/ios.rs",
     "crates/tauri-plugin-mpv/src/airplay/ios.rs",
     "apps/player/src-tauri/src/airplay/ios.rs",
+    "crates/tauri-plugin-mpv/src/airplay/macos.rs",
+    "apps/player/src-tauri/src/airplay/macos.rs",
     # AirPlay's stand-in for other platforms. Every command checks ensure()
     # first, which fails, so nothing else in it ever runs.
     "crates/tauri-plugin-mpv/src/airplay/unavailable.rs",
