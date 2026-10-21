@@ -125,6 +125,46 @@ fn keeps_the_newest_segment_whatever_its_size() {
 }
 
 #[test]
+fn a_segment_longer_than_the_target_is_listed_as_the_target() {
+    let mut playlist = MediaPlaylist::new(by_count(4), 10);
+    playlist.push(12.0, 1);
+    playlist.push_after(10.0, 1, true);
+    let text = playlist.text();
+    assert_eq!(text.matches("#EXTINF:10.000,").count(), 2, "{text}");
+}
+
+#[test]
+fn marks_a_discontinuity_and_counts_those_that_left() {
+    let mut playlist = MediaPlaylist::new(by_count(2), 4);
+    playlist.push(2.0, 1);
+    assert_eq!(playlist.push_after(2.0, 1, true), (1, vec![]));
+    let text = playlist.text();
+    assert!(
+        text.contains("seg0.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2.000,\nseg1.ts\n"),
+        "{text}"
+    );
+    assert!(!text.contains("DISCONTINUITY-SEQUENCE"), "{text}");
+    // seg0 leaving takes no discontinuity with it.
+    playlist.push(2.0, 1);
+    assert!(!playlist.text().contains("DISCONTINUITY-SEQUENCE"));
+    // seg1 leaving does.
+    playlist.push_after(2.0, 1, true);
+    let text = playlist.text();
+    assert!(text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:1\n"), "{text}");
+    assert_eq!(text.matches("#EXT-X-DISCONTINUITY\n").count(), 1, "{text}");
+    playlist.push(2.0, 1);
+    playlist.push(2.0, 1);
+    let text = playlist.text();
+    assert!(text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:2\n"), "{text}");
+    assert!(!text.contains("#EXT-X-DISCONTINUITY\n"), "{text}");
+    // It comes right after the media sequence.
+    assert!(
+        text.contains("#EXT-X-MEDIA-SEQUENCE:4\n#EXT-X-DISCONTINUITY-SEQUENCE:2\n#EXTINF"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_broken_duration_counts_as_zero() {
     let mut playlist = MediaPlaylist::new(by_count(4), 1);
     playlist.push(f64::NAN, 1);

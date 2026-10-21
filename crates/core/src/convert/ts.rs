@@ -9,8 +9,14 @@
 //! - A segment starts at a video random access point, which ffmpeg marks
 //!   on every keyframe, at least the shortest length after the last one.
 //!   A stream without video is cut at an audio packet.
-//! - A group of pictures that runs past the longest length, or a segment
-//!   past [`CUT_BYTES`], is cut at the next video packet anyway.
+//! - A segment that runs past the longest length, or past [`CUT_BYTES`],
+//!   is cut at the next audio or video packet anyway, so a picture that
+//!   stalls, or a stream with one picture and then only sound, still
+//!   makes segments.
+//! - A jump in the clock of more than [`JUMP`], forward or back, ends the
+//!   segment where it was and marks the next as a discontinuity, so no
+//!   segment runs as long as the gap. With a cut by the longest length,
+//!   no segment runs past it by more than [`JUMP`].
 //! - Each segment starts with the PAT and the PMT, so it can be read on
 //!   its own. Their continuity counters are renumbered, so the copies
 //!   don't read as repeated packets.
@@ -31,13 +37,19 @@ const PAT_PID: u16 = 0;
 /// Timestamps count in 90 kHz ticks and wrap at 33 bits.
 const CLOCK: f64 = 90_000.0;
 const WRAP: i64 = 1 << 33;
-/// A segment cut later than this, at the next video packet, needs no
-/// keyframe. The C converter on iOS cuts at the same 4 × its shortest.
+/// A segment cut later than this, at the next audio or video packet,
+/// needs no keyframe. The C converter on iOS cuts at the same 4 × its
+/// shortest.
 const MAX_FACTOR: f64 = 4.0;
-/// A segment that holds this much is cut at the next video packet, as the
-/// C converter does.
-/// That's 32 MiB.
+/// A segment that holds this much is cut at the next audio or video
+/// packet, as the C converter does. That's 32 MiB.
 pub const CUT_BYTES: usize = 33_554_432;
+/// The most the clock may move between two packets, either way, in
+/// seconds, before it counts as a jump. Packets come many times a second,
+/// and a B-frame is shown a few frames before the frame it follows. With
+/// segments of 2 s at least, 8 s plus this stays within the playlists'
+/// target of 10 s.
+pub const JUMP: f64 = 2.0;
 
 /// The PMT's stream types for H.264, and for the other video codecs, which
 /// are only cut by, not named.
@@ -57,6 +69,8 @@ pub struct Segment {
     pub bytes: Vec<u8>,
     /// Seconds.
     pub duration: f64,
+    /// The clock jumped before it, so the playlist marks a discontinuity.
+    pub discontinuity: bool,
 }
 
 #[derive(Debug)]
@@ -68,6 +82,9 @@ pub struct TsSegmenter {
     pmt_pid: Option<u16>,
     /// The PID to cut by: the video, or the first audio stream without it.
     cut_pid: Option<u16>,
+    /// Every audio and video PID, which a segment that's too long is cut
+    /// at, and whose clock is watched for jumps.
+    media: Vec<u16>,
     video: bool,
     h264: bool,
     /// The last PAT and PMT, which start every segment.
@@ -79,10 +96,13 @@ pub struct TsSegmenter {
     current: Vec<u8>,
     /// The current segment's start, in ticks without wraps.
     start: Option<i64>,
-    /// The latest timestamp of the PID cut by, without wraps.
+    /// The latest timestamp of the audio and video, without wraps.
     latest: Option<i64>,
-    /// The ticks between its last two packets, for the last segment's end.
+    /// The ticks the clock last moved forward, for a segment's end when
+    /// nothing comes after it.
     step: i64,
+    /// The clock jumped since the last segment was cut.
+    jumped: bool,
     /// Ticks added for the wraps seen so far.
     wraps: i64,
     codec: Option<String>,
@@ -102,6 +122,7 @@ impl TsSegmenter {
             partial: Vec::new(),
             pmt_pid: None,
             cut_pid: None,
+            media: Vec::new(),
             video: false,
             h264: false,
             pat: Vec::new(),
@@ -112,6 +133,7 @@ impl TsSegmenter {
             start: None,
             latest: None,
             step: 0,
+            jumped: false,
             wraps: 0,
             codec: None,
             searched: 0,
@@ -162,6 +184,7 @@ impl TsSegmenter {
         Some(Segment {
             bytes: std::mem::take(&mut self.current),
             duration,
+            discontinuity: self.jumped,
         })
     }
 
@@ -187,6 +210,9 @@ impl TsSegmenter {
         }
         if Some(pid) == self.pmt_pid {
             self.pmt_counter = renumber(&mut packet, self.pmt_counter);
+            // ffmpeg writes the whole PMT in one packet. One that runs on
+            // into another is read from its first packet, and a stream it
+            // names only after that isn't cut by.
             if unit_start {
                 self.pmt.clear();
                 if let Some(streams) = payload(&packet).and_then(read_pmt) {
@@ -198,15 +224,16 @@ impl TsSegmenter {
             return Ok(());
         }
         if unit_start
-            && Some(pid) == self.cut_pid
+            && self.media.contains(&pid)
             && let Some(pts) = payload(&packet).and_then(pes_pts)
         {
             let pts = self.unwrap(pts);
-            let random_access = random_access(&packet);
+            let by = Some(pid) == self.cut_pid;
+            let random_access = by && random_access(&packet);
             if random_access && self.h264 && self.codec.is_none() {
                 self.find_codec(&packet);
             }
-            self.cut_before(pts, random_access, segments);
+            self.cut_before(pts, by, random_access, segments);
         }
         self.current.extend_from_slice(&packet);
         Ok(())
@@ -219,29 +246,47 @@ impl TsSegmenter {
         self.video = video.is_some();
         self.h264 = video.is_some_and(|(kind, _)| *kind == H264);
         self.cut_pid = video.or(audio).map(|(_, pid)| *pid);
+        self.media = streams
+            .iter()
+            .filter(|(kind, _)| VIDEO_TYPES.contains(kind) || AUDIO_TYPES.contains(kind))
+            .map(|(_, pid)| *pid)
+            .collect();
     }
 
-    /// Ends the current segment before a packet at `pts`, when it's long
-    /// enough and the packet is a random access point, or when it's far too
-    /// long. The new segment starts with the PAT and the PMT.
-    fn cut_before(&mut self, pts: i64, random_access: bool, segments: &mut Vec<Segment>) {
-        let Some(start) = self.start else {
+    /// Ends the current segment before an audio or video packet at `pts`:
+    /// when it's long enough and the packet is a random access point of the
+    /// PID cut `by`, when it's far too long or too big, or when the clock
+    /// jumped. The new segment starts with the PAT and the PMT.
+    fn cut_before(&mut self, pts: i64, by: bool, random_access: bool, segments: &mut Vec<Segment>) {
+        let (Some(start), Some(latest)) = (self.start, self.latest) else {
             self.start = Some(pts);
             self.latest = Some(pts);
             return;
         };
-        if let Some(latest) = self.latest
-            && pts > latest
-        {
-            self.step = pts - latest;
-        }
-        self.latest = Some(self.latest.map_or(pts, |l| l.max(pts)));
-        let length = (pts - start) as f64 / CLOCK;
-        let due = (random_access || !self.video) && length + 0.001 >= self.shortest;
-        let overdue = length >= self.shortest * MAX_FACTOR || self.current.len() >= CUT_BYTES;
-        if !(due || overdue) || length <= 0.0 {
+        let moved = pts - latest;
+        if moved.unsigned_abs() as f64 > JUMP * CLOCK {
+            // What was before the jump ends where its last packet did.
+            let duration = (latest - start + self.step).max(0) as f64 / CLOCK;
+            self.cut(duration, pts, segments);
+            self.jumped = true;
+            self.latest = Some(pts);
             return;
         }
+        if moved > 0 {
+            self.step = moved;
+            self.latest = Some(pts);
+        }
+        let length = (pts - start) as f64 / CLOCK;
+        let due = by && (random_access || !self.video) && length + 0.001 >= self.shortest;
+        let overdue = length >= self.shortest * MAX_FACTOR;
+        if self.current.len() >= CUT_BYTES || (length > 0.0 && (due || overdue)) {
+            self.cut(length.max(0.0), pts, segments);
+        }
+    }
+
+    /// Ends the current segment, `duration` seconds long, and starts the
+    /// next at `pts` with copies of the PAT and the PMT.
+    fn cut(&mut self, duration: f64, pts: i64, segments: &mut Vec<Segment>) {
         let mut next = Vec::with_capacity(self.current.capacity());
         for packet in self.pat.clone() {
             self.pat_counter = self.copy_psi(&mut next, packet, self.pat_counter);
@@ -252,7 +297,8 @@ impl TsSegmenter {
         let bytes = std::mem::replace(&mut self.current, next);
         segments.push(Segment {
             bytes,
-            duration: length,
+            duration,
+            discontinuity: std::mem::take(&mut self.jumped),
         });
         self.start = Some(pts);
     }
@@ -264,16 +310,23 @@ impl TsSegmenter {
         next
     }
 
-    /// Takes timestamps past a wrap of the 33-bit clock as later ones.
+    /// Places a timestamp of the 33-bit clock nearest the latest one: in
+    /// the wraps so far, the one before, or the next, which then counts as
+    /// a wrap. A B-frame from just before a wrap, shown after a frame from
+    /// just after it, lands before that frame, not a whole wrap ahead.
     fn unwrap(&mut self, pts: i64) -> i64 {
-        let mut pts = pts + self.wraps;
-        if let Some(latest) = self.latest
-            && pts < latest - WRAP / 2
-        {
+        let here = pts + self.wraps;
+        let Some(latest) = self.latest else {
+            return here;
+        };
+        let nearest = [here, here + WRAP, here - WRAP]
+            .into_iter()
+            .min_by_key(|candidate| (candidate - latest).unsigned_abs())
+            .unwrap_or(here);
+        if nearest > here {
             self.wraps += WRAP;
-            pts += WRAP;
         }
-        pts
+        nearest
     }
 
     fn find_codec(&mut self, packet: &[u8; PACKET]) {

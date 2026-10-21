@@ -419,6 +419,7 @@ fn segment(bytes: usize, duration: f64) -> Segment {
     Segment {
         bytes: vec![0x47; bytes],
         duration,
+        discontinuity: false,
     }
 }
 
@@ -444,6 +445,22 @@ fn the_master_is_written_once_with_the_codecs_of_the_first_segment() {
     assert!(file(&out, "seg1.ts").is_some());
     let media = file(&out, hls::MEDIA).unwrap();
     assert_eq!(media.matches("#EXTINF").count(), 2, "{media}");
+}
+
+#[test]
+fn a_segment_after_a_jump_is_listed_after_a_discontinuity() {
+    let (mut out, _) = publisher();
+    assert!(out.publish(segment(10, 2.0), None));
+    let after = Segment {
+        discontinuity: true,
+        ..segment(10, 2.0)
+    };
+    assert!(out.publish(after, None));
+    let media = file(&out, hls::MEDIA).unwrap();
+    assert!(
+        media.contains("seg0.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2.000,\nseg1.ts"),
+        "{media}"
+    );
 }
 
 #[test]

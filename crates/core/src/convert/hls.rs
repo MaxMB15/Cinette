@@ -45,8 +45,10 @@ pub const READY_SECONDS: f64 = 6.0;
 /// run longer when the source's keyframes are further apart.
 pub const SEGMENT: f64 = 2.0;
 /// The playlists' target duration. Both converters cut a segment at 4×
-/// [`SEGMENT`] without a keyframe, and the C one closes timestamp gaps
-/// over 2 s, so none runs longer.
+/// [`SEGMENT`] without a keyframe. The C one closes timestamp gaps over
+/// 2 s, and the TS segmenter cuts at a jump of more than 2 s and marks a
+/// discontinuity, so none runs longer. A playlist caps each segment's
+/// listed length at it all the same.
 pub const TARGET: u32 = 10;
 /// What stays on the server: the segments around the playback position.
 /// The pacer keeps the converter 20 s ahead, so 50 s leaves 30 s behind
@@ -71,14 +73,25 @@ pub fn bandwidth(bytes: usize, duration: f64) -> u64 {
     ((bits * 1.2) as u64).max(MIN_BANDWIDTH)
 }
 
+/// One listed segment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Listed {
+    duration: f64,
+    bytes: usize,
+    /// A discontinuity comes before it.
+    discontinuity: bool,
+}
+
 /// The segments a receiver can fetch, and the playlist that lists them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaPlaylist {
     window: Window,
-    /// The listed segments' durations and sizes, oldest first.
-    segments: VecDeque<(f64, usize)>,
+    /// The listed segments, oldest first.
+    segments: VecDeque<Listed>,
     /// The first listed segment's sequence number.
     first: u64,
+    /// The discontinuities that left the window with their segments.
+    discontinuities: u64,
     /// The target duration. RFC 8216 says it must not change, so it's set
     /// once, and the converter keeps every segment within it.
     target: u32,
@@ -96,6 +109,7 @@ impl MediaPlaylist {
             window,
             segments: VecDeque::new(),
             first: 0,
+            discontinuities: 0,
             target: target.max(1),
             from_start: false,
             ended: false,
@@ -113,16 +127,34 @@ impl MediaPlaylist {
     /// Adds the next segment, `duration` seconds long and `bytes` big.
     /// Returns its sequence number and the ones that left the window.
     pub fn push(&mut self, duration: f64, bytes: usize) -> (u64, Vec<u64>) {
+        self.push_after(duration, bytes, false)
+    }
+
+    /// The same, for a segment after a `discontinuity` when there is one.
+    /// A length past the target is listed as the target, which RFC 8216
+    /// asks of every segment.
+    pub fn push_after(
+        &mut self,
+        duration: f64,
+        bytes: usize,
+        discontinuity: bool,
+    ) -> (u64, Vec<u64>) {
         let sequence = self.first + self.segments.len() as u64;
         let duration = if duration.is_finite() {
-            duration.max(0.0)
+            duration.clamp(0.0, f64::from(self.target))
         } else {
             0.0
         };
-        self.segments.push_back((duration, bytes));
+        self.segments.push_back(Listed {
+            duration,
+            bytes,
+            discontinuity,
+        });
         let mut dropped = Vec::new();
         while self.segments.len() > 1 && self.over() {
-            self.segments.pop_front();
+            if let Some(left) = self.segments.pop_front() {
+                self.discontinuities += u64::from(left.discontinuity);
+            }
             dropped.push(self.first);
             self.first += 1;
         }
@@ -133,12 +165,12 @@ impl MediaPlaylist {
     fn over(&self) -> bool {
         self.segments.len() > self.window.segments
             || self.seconds() > self.window.seconds
-            || self.segments.iter().map(|s| s.1).sum::<usize>() > self.window.bytes
+            || self.segments.iter().map(|s| s.bytes).sum::<usize>() > self.window.bytes
     }
 
     /// The listed segments' length in seconds.
     fn seconds(&self) -> f64 {
-        self.segments.iter().map(|s| s.0).sum()
+        self.segments.iter().map(|s| s.duration).sum()
     }
 
     /// The stream reached its end, so the playlist says no more come.
@@ -167,11 +199,22 @@ impl MediaPlaylist {
         let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:3\n");
         let _ = writeln!(out, "#EXT-X-TARGETDURATION:{}", self.target);
         let _ = writeln!(out, "#EXT-X-MEDIA-SEQUENCE:{}", self.first);
+        // RFC 8216 asks for it once a discontinuity has left the window.
+        if self.discontinuities > 0 {
+            let _ = writeln!(
+                out,
+                "#EXT-X-DISCONTINUITY-SEQUENCE:{}",
+                self.discontinuities
+            );
+        }
         if self.from_start {
             out.push_str("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n");
         }
-        for (i, (duration, _)) in self.segments.iter().enumerate() {
-            let _ = writeln!(out, "#EXTINF:{duration:.3},");
+        for (i, segment) in self.segments.iter().enumerate() {
+            if segment.discontinuity {
+                out.push_str("#EXT-X-DISCONTINUITY\n");
+            }
+            let _ = writeln!(out, "#EXTINF:{:.3},", segment.duration);
             let _ = writeln!(out, "{}", segment_name(self.first + i as u64));
         }
         if self.ended {

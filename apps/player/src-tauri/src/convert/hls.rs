@@ -380,7 +380,11 @@ mod desktop {
                     hls::master(declared, &codecs).into_bytes(),
                 );
             }
-            let (sequence, dropped) = self.playlist.push(segment.duration, segment.bytes.len());
+            let (sequence, dropped) = self.playlist.push_after(
+                segment.duration,
+                segment.bytes.len(),
+                segment.discontinuity,
+            );
             self.files.put(
                 &hls::segment_name(sequence),
                 hls::SEGMENT_TYPE,

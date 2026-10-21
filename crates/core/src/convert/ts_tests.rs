@@ -376,28 +376,191 @@ fn a_clock_that_wraps_keeps_counting_up() {
     assert_eq!(last.unwrap().duration, 0.5);
 }
 
-#[test]
-fn a_clock_that_wraps_twice_keeps_counting_up() {
-    // Each jump forward is less than half the clock, so each counts as later.
-    let jump = 3_000_000_000;
-    let mut stream = video_stream();
-    for pts in [WRAP - 2 * SECOND, 0, jump, 2 * jump, 0] {
-        stream.push(pes(VIDEO_PID, pts, true, &[]));
-    }
-    let (segments, _) = cut(&stream, 2.0);
-    let durations: Vec<f64> = segments.iter().map(|s| s.duration).collect();
-    let seconds = |ticks: i64| ticks as f64 / CLOCK;
-    assert_eq!(
-        durations,
-        [2.0, seconds(jump), seconds(jump), seconds(WRAP - 2 * jump)]
-    );
+/// A segmenter whose clock is at `latest`, after `wraps` ticks of wraps.
+fn clock_at(latest: i64, wraps: i64) -> TsSegmenter {
+    let mut segmenter = TsSegmenter::new(2.0);
+    segmenter.latest = Some(latest);
+    segmenter.wraps = wraps;
+    segmenter
 }
 
 #[test]
-fn a_clock_half_its_range_back_is_earlier_not_wrapped() {
+fn places_a_timestamp_nearest_the_clock() {
+    // The first is taken as it is.
+    assert_eq!(TsSegmenter::new(2.0).unwrap(5), 5);
+    // Just after a wrap: one more wrap.
+    let mut segmenter = clock_at(WRAP - SECOND, 0);
+    assert_eq!(segmenter.unwrap(SECOND), WRAP + SECOND);
+    assert_eq!(segmenter.wraps, WRAP);
+    // A B-frame from just before the wrap, after that frame, lands before
+    // it, and the wraps don't go back.
+    segmenter.latest = Some(WRAP + SECOND);
+    assert_eq!(segmenter.unwrap(WRAP - SECOND / 2), WRAP - SECOND / 2);
+    assert_eq!(segmenter.wraps, WRAP);
+    // The frames after it are in the same wrap.
+    assert_eq!(segmenter.unwrap(2 * SECOND), WRAP + 2 * SECOND);
+    assert_eq!(segmenter.wraps, WRAP);
+    // A second wrap counts too.
+    let mut segmenter = clock_at(2 * WRAP - SECOND, WRAP);
+    assert_eq!(segmenter.unwrap(SECOND), 2 * WRAP + SECOND);
+    assert_eq!(segmenter.wraps, 2 * WRAP);
+    // Half the clock away either way is no wrap.
+    let mut segmenter = clock_at(WRAP / 2, 0);
+    assert_eq!(segmenter.unwrap(0), 0);
+    assert_eq!(segmenter.wraps, 0);
+}
+
+/// Video frames every 0.5 s from `from`, a keyframe every `gop`, each
+/// with an audio packet, and no tables.
+fn frames_at(from: i64, count: i64, gop: i64) -> Vec<[u8; PACKET]> {
+    let mut stream = Vec::new();
+    for n in 0..count {
+        let pts = from + n * SECOND / 2;
+        stream.push(pes(VIDEO_PID, pts, n % gop == 0, &[]));
+        stream.push(pes(AUDIO_PID, pts, false, &[]));
+    }
+    stream
+}
+
+fn durations(segments: &[Segment]) -> Vec<f64> {
+    segments.iter().map(|s| s.duration).collect()
+}
+
+fn discontinuities(segments: &[Segment]) -> Vec<bool> {
+    segments.iter().map(|s| s.discontinuity).collect()
+}
+
+#[test]
+fn a_b_frame_across_the_wrap_keeps_the_segments_short() {
     let mut stream = video_stream();
-    stream.push(pes(VIDEO_PID, WRAP / 2, true, &[]));
+    // In decode order: a keyframe before the wrap, a frame after it, a
+    // B-frame shown between them, then a keyframe 2 s after the first.
+    for (pts, key) in [
+        (WRAP - SECOND, true),
+        (SECOND / 2, false),
+        (WRAP - SECOND / 4, false),
+        (SECOND, true),
+        (3 * SECOND / 2, false),
+        (2 * SECOND, false),
+    ] {
+        stream.push(pes(VIDEO_PID, pts, key, &[]));
+    }
+    let (segments, last) = cut(&stream, 2.0);
+    assert_eq!(durations(&segments), [2.0]);
+    let last = last.unwrap();
+    assert_eq!(last.duration, 1.5);
+    assert!(!last.discontinuity);
+}
+
+#[test]
+fn a_picture_that_stalls_is_cut_at_the_sound() {
+    // Video to 3 s, then only audio, then video again at 12 s.
+    let mut stream = video_stream();
+    stream.extend(frames_at(0, 7, 2));
+    for n in 7..24 {
+        stream.push(pes(AUDIO_PID, n * SECOND / 2, false, &[]));
+    }
+    stream.push(pes(VIDEO_PID, 12 * SECOND, true, &[]));
+    let (segments, _) = cut(&stream, 2.0);
+    // At the keyframe at 2 s, at the sound 8 s later, and at the keyframe.
+    assert_eq!(durations(&segments), [2.0, 8.0, 2.0]);
+    assert_eq!(discontinuities(&segments), [false; 3]);
+}
+
+#[test]
+fn one_picture_then_only_sound_still_makes_segments() {
+    let mut stream = video_stream();
     stream.push(pes(VIDEO_PID, 0, true, &[]));
+    for n in 0..=40 {
+        stream.push(pes(AUDIO_PID, n * SECOND / 2, false, &[]));
+    }
+    let (segments, last) = cut(&stream, 2.0);
+    assert_eq!(durations(&segments), [8.0, 8.0]);
+    assert_eq!(last.unwrap().duration, 4.5);
+}
+
+#[test]
+fn a_jump_forward_ends_the_segment_and_marks_the_next() {
+    let mut stream = video_stream();
+    stream.extend(frames_at(0, 7, 2));
+    stream.extend(frames_at(30 * SECOND, 7, 2));
+    let (segments, last) = cut(&stream, 2.0);
+    // The segment before the jump ends half a second after its last frame.
+    assert_eq!(durations(&segments), [2.0, 1.5, 2.0]);
+    assert_eq!(discontinuities(&segments), [false, false, true]);
+    assert!(!last.unwrap().discontinuity);
+}
+
+#[test]
+fn a_jump_back_ends_the_segment_and_marks_the_next() {
+    let mut stream = video_stream();
+    stream.extend(frames_at(30 * SECOND, 7, 2));
+    stream.extend(frames_at(0, 7, 2));
+    let (segments, _) = cut(&stream, 2.0);
+    assert_eq!(durations(&segments), [2.0, 1.5, 2.0]);
+    assert_eq!(discontinuities(&segments), [false, false, true]);
+}
+
+#[test]
+fn a_jump_just_before_the_end_marks_the_last_segment() {
+    let mut stream = video_stream();
+    stream.extend(frames_at(0, 2, 1));
+    stream.extend(frames_at(60 * SECOND, 2, 1));
+    let (segments, last) = cut(&stream, 2.0);
+    assert_eq!(discontinuities(&segments), [false]);
+    assert!(last.unwrap().discontinuity);
+}
+
+#[test]
+fn a_step_of_the_jump_or_less_is_no_jump() {
+    let jump = (JUMP * CLOCK) as i64;
+    let mut stream = video_stream();
+    for pts in [0, jump, 2 * jump, jump] {
+        stream.push(pes(VIDEO_PID, pts, false, &[]));
+    }
+    let (segments, last) = cut(&stream, 20.0);
+    assert!(segments.is_empty());
+    assert!(!last.unwrap().discontinuity);
+    // One tick more is.
+    let mut stream = video_stream();
+    for pts in [0, jump + 1] {
+        stream.push(pes(VIDEO_PID, pts, false, &[]));
+    }
+    let (segments, last) = cut(&stream, 20.0);
+    assert_eq!(discontinuities(&segments), [false]);
+    assert!(last.unwrap().discontinuity);
+}
+
+#[test]
+fn a_full_segment_is_cut_even_at_an_earlier_frame() {
+    let mut stream = video_stream();
+    stream.push(pes(VIDEO_PID, 10 * SECOND, true, &[]));
+    let fill = CUT_BYTES / PACKET + 1;
+    stream.extend(std::iter::repeat_n(more(VIDEO_PID), fill));
+    // A B-frame shown before the keyframe.
+    stream.push(pes(VIDEO_PID, 10 * SECOND - SECOND / 2, false, &[]));
+    let (segments, _) = cut(&stream, 2.0);
+    assert_eq!(durations(&segments), [0.0]);
+    assert!(segments[0].bytes.len() >= CUT_BYTES);
+    // Far back, it's cut as a jump.
+    let mut stream = video_stream();
+    stream.push(pes(VIDEO_PID, 10 * SECOND, true, &[]));
+    stream.extend(std::iter::repeat_n(more(VIDEO_PID), fill));
+    stream.push(pes(VIDEO_PID, 0, false, &[]));
+    let (segments, last) = cut(&stream, 2.0);
+    assert_eq!(segments.len(), 1);
+    assert!(segments[0].bytes.len() >= CUT_BYTES);
+    assert!(last.unwrap().discontinuity);
+}
+
+#[test]
+fn only_audio_and_video_packets_cut() {
+    // A private stream with timestamps, such as subtitles, is neither.
+    let mut stream = vec![pat(0), pmt(0, &[(H264, VIDEO_PID), (0x06, AUDIO_PID)])];
+    stream.push(pes(VIDEO_PID, 0, true, &[]));
+    for n in 1..=40 {
+        stream.push(pes(AUDIO_PID, n * SECOND / 2, false, &[]));
+    }
     let (segments, _) = cut(&stream, 2.0);
     assert!(segments.is_empty());
 }
