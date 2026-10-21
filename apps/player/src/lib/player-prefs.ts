@@ -185,3 +185,29 @@ export const readSkipSegmentModes: () => SkipSegmentModes = skipSegmentModes.rea
 /** Save the mode for one group. Unknown modes are ignored. */
 export const writeSkipSegmentMode: (group: keyof SkipSegmentModes, mode: SkipSegmentMode) => void =
 	skipSegmentModes.write;
+
+const STREAM_THROUGH_KEY = "mvp_cast_stream_through";
+
+/** Window event fired after "Stream through this computer" changes. */
+export const STREAM_THROUGH_EVENT = "mvp-cast-stream-through";
+
+/**
+ * Whether casting always goes through this computer, even when the
+ * receiver could fetch the stream itself, so the stream uses this
+ * computer's connection and the receiver never gets the provider's link.
+ * Off unless turned on in Settings.
+ */
+export const readStreamThrough = (): boolean => {
+	try {
+		return localStorage.getItem(STREAM_THROUGH_KEY) === "on";
+	} catch {
+		return false;
+	}
+};
+
+export const writeStreamThrough = (on: boolean): void => {
+	try {
+		localStorage.setItem(STREAM_THROUGH_KEY, on ? "on" : "off");
+		window.dispatchEvent(new Event(STREAM_THROUGH_EVENT));
+	} catch {}
+};

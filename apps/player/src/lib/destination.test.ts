@@ -6,9 +6,11 @@ import {
 	localPlaybackState,
 	localCapabilities,
 	orderDestinations,
+	positionNow,
 	UnsupportedError,
 	type LocalPlayerReport,
 	type DestinationSummary,
+	type PlaybackState,
 } from "./destination";
 import type { Channel, PolledMpvState } from "./types";
 
@@ -197,5 +199,38 @@ describe("UnsupportedError", () => {
 		expect(e.code).toBe("unsupported");
 		expect(e.name).toBe("UnsupportedError");
 		expect(e.message).toBe("Audio tracks isn't supported here");
+	});
+});
+
+describe("positionNow", () => {
+	const state = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
+		status: "playing",
+		item: null,
+		position: 600,
+		positionAt: 1000,
+		duration: 5400,
+		volume: 40,
+		subtitles: [],
+		subtitleId: null,
+		audio: [],
+		audioId: null,
+		connection: "connected",
+		error: null,
+		...patch,
+	});
+
+	it("moves on with the time since the receiver said, while it plays", () => {
+		expect(positionNow(state(), 3000)).toBe(602);
+		// Never back, for a reading from this device's future.
+		expect(positionNow(state(), 500)).toBe(600);
+		// Not past the end.
+		expect(positionNow(state({ position: 5399 }), 4000)).toBe(5400);
+		// Live has no end to stop at.
+		expect(positionNow(state({ duration: 0 }), 3000)).toBe(602);
+	});
+
+	it("stays where it was while it doesn't play", () => {
+		for (const status of ["paused", "buffering", "opening", "idle"] as const)
+			expect(positionNow(state({ status }), 3000)).toBe(600);
 	});
 });
