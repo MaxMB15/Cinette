@@ -60,9 +60,9 @@ pub struct RemoteService {
     /// The providers the webview asked to send, by link, until the other
     /// device allows it.
     sending: Sending,
-    /// Goes up with every cancel, so a send that was cancelled while it
-    /// waited for the cache doesn't ask after all.
-    cancels: std::sync::atomic::AtomicU64,
+    /// How many cancels each link has had, so a send that was cancelled
+    /// while it waited for the cache doesn't ask after all.
+    cancels: Mutex<std::collections::HashMap<u64, u64>>,
 }
 
 struct Saved {
@@ -221,14 +221,13 @@ impl RemoteService {
         link: u64,
         ids: Vec<String>,
     ) -> Result<(), String> {
-        use std::sync::atomic::Ordering;
         let handle = self.link(link).ok_or("Not connected to that device.")?;
-        let ticket = self.cancels.load(Ordering::SeqCst);
+        let ticket = self.cancel_count(link);
         // This can wait on the cache, for a refresh or a guide save.
         let names = super::providers::names_for(cache, &ids)?;
         {
             let mut slot = lock(&self.sending);
-            if self.cancels.load(Ordering::SeqCst) != ticket {
+            if self.cancel_count(link) != ticket {
                 return Err(CANCELLED.into());
             }
             if slot.as_ref().is_some_and(|(l, _)| *l == link) {
@@ -241,7 +240,7 @@ impl RemoteService {
             lock(&self.sending).take_if(|(l, _)| *l == link);
         }
         // Cancelled while the request went out: it's withdrawn.
-        if asked.is_ok() && self.cancels.load(Ordering::SeqCst) != ticket {
+        if asked.is_ok() && self.cancel_count(link) != ticket {
             handle.cancel_transfer();
             return Err(CANCELLED.into());
         }
@@ -256,12 +255,16 @@ impl RemoteService {
 
     /// Stops the transfer on link `link`, if one is going on.
     pub fn cancel_transfer(&self, link: u64) {
-        self.cancels
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *lock(&self.cancels).entry(link).or_default() += 1;
         if let Some(handle) = self.link(link) {
             handle.cancel_transfer();
         }
         lock(&self.sending).take_if(|(l, _)| *l == link);
+    }
+
+    /// How many cancels link `link` has had.
+    fn cancel_count(&self, link: u64) -> u64 {
+        lock(&self.cancels).get(&link).copied().unwrap_or(0)
     }
 
     /// Makes and saves a new key, so a new device id. Every session ends.
@@ -1078,7 +1081,7 @@ fn start_on<R: Runtime>(
         left_through: Mutex::new(0),
         prompt,
         sending,
-        cancels: std::sync::atomic::AtomicU64::new(0),
+        cancels: Mutex::default(),
     });
     Ok(())
 }
