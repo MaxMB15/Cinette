@@ -14,7 +14,7 @@ import {
 import { castEndedMessage, castFailureMessage, castStatus, newerList } from "@/lib/cast";
 import type { PlaybackState } from "@/lib/destination";
 import { blockerText, type DestinationStatus } from "@/lib/device-picker";
-import type { RouteDecision } from "@/lib/route";
+import type { PlayRoute, RouteDecision } from "@/lib/route";
 import {
 	CAST_RECEIVERS_EVENT,
 	CAST_UPDATE_EVENT,
@@ -46,6 +46,7 @@ const backend: CastBackend = {
 
 // Stryker disable next-line ArrowFunction: React skips an unsubscribe that isn't a function, and this one does nothing.
 const noState = () => () => {};
+// Stryker disable next-line ArrowFunction: The state is only read while there's a destination, which has its own snapshot.
 const getNull = () => null;
 const NO_RECEIVERS: CastReceiver[] = [];
 
@@ -138,6 +139,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			}
 			return found;
 		},
+		// Stryker disable next-line ArrayDeclaration: throughRef is a ref, so the function is the same with any deps.
 		[throughRef]
 	);
 
@@ -207,12 +209,14 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					});
 			}
 		},
+		// Stryker disable next-line ArrayDeclaration: destinationFor never changes and receiversRef is a ref, so the function is the same with any deps.
 		[destinationFor, receiversRef]
 	);
 
 	const release = useCallback(() => {
 		++checking.current;
 		setHeld([]);
+		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
 	}, []);
 
 	const state = useSyncExternalStore(
@@ -227,10 +231,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			if (next.connection !== "lost" || active.current !== destination) return;
 			active.current = null;
 			setDestination(null);
-			reportRef.current(
-				castEndedMessage(destination.name, destination.closedReason()) ??
-					`Lost the connection to ${destination.name}.`
-			);
+			reportRef.current(castEndedMessage(destination.name, destination.closedReason()));
 		});
 	}, [destination, reportRef]);
 
@@ -245,28 +246,42 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					(decision) => ({ decision }),
 					(error: unknown) => ({ error })
 				);
-			const shown = decisions.current.get(routeKey(receiverId, channel));
-			let routed: Routed = shown ? { decision: shown } : await look();
-			// While this receiver plays, the provider may refuse a second
-			// connection, as many accounts allow one. It lets go of the
-			// stream, keeping the cast, and looks again.
-			const switching = active.current === target;
-			if ("error" in routed && switching) {
-				await target.release().catch(() => {});
-				for (const ms of RELEASE_RETRY_MS) {
-					await wait(ms);
-					routed = await look();
-					if (!("error" in routed)) break;
+			let released = false;
+			/** The route to load by, or why there's none. */
+			const prepare = async (): Promise<{ route: PlayRoute } | { why: string | null }> => {
+				const shown = decisions.current.get(routeKey(receiverId, channel));
+				let routed: Routed = shown ? { decision: shown } : await look();
+				// While this receiver plays, the provider may refuse a second
+				// connection, as many accounts allow one. It lets go of the
+				// stream, keeping the cast, and looks again.
+				if ("error" in routed && active.current === target) {
+					released = true;
+					await target.release().catch(() => {});
+					for (const ms of RELEASE_RETRY_MS) {
+						await wait(ms);
+						routed = await look();
+						if (!("error" in routed)) break;
+					}
+					if ("error" in routed) {
+						const why = castFailureMessage(receiver.name, routed.error);
+						return { why: `${why} Nothing is playing.` };
+					}
 				}
-				if ("error" in routed)
-					return `${castFailureMessage(receiver.name, routed.error)} Nothing is playing.`;
+				if ("error" in routed) return { why: blockerText("unreachable") };
+				const { decision } = routed;
+				if (!decision.ok) return { why: blockerText(decision.reason, decision.detail) };
+				const { route } = decision;
+				if (route.via === "converted" && opts.confirm && !(await opts.confirm(route.keep)))
+					return { why: null };
+				return { route };
+			};
+			const ready = await prepare();
+			if ("why" in ready) {
+				// A cast that let go of its stream has stopped.
+				if (released) target.settle();
+				return ready.why;
 			}
-			if ("error" in routed) return blockerText("unreachable");
-			const { decision } = routed;
-			if (!decision.ok) return blockerText(decision.reason, decision.detail);
-			const { route } = decision;
-			if (route.via === "converted" && opts.confirm && !(await opts.confirm(route.keep)))
-				return null;
+			const { route } = ready;
 			await opts.stopLocal();
 			const old = active.current;
 			if (old && old !== target) void old.stop().catch(() => {});
@@ -286,6 +301,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 				}
 			);
 		},
+		// Stryker disable next-line ArrayDeclaration: destinationFor never changes and receiversRef is a ref, so the function is the same with any deps.
 		[destinationFor, receiversRef]
 	);
 
@@ -294,6 +310,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		active.current = null;
 		setDestination(null);
 		if (left) await left.stop();
+		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
 	}, []);
 
 	return {
@@ -304,6 +321,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		check,
 		release,
 		destination,
+		// Stryker disable next-line ArrayDeclaration: It only reads a ref, so it's the same function with any deps.
 		current: useCallback(() => active.current, []),
 		state: destination ? state : null,
 		send,

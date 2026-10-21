@@ -208,8 +208,11 @@ export interface CastDestination extends PlaybackDestination {
 	/** Whether this computer converts what the receiver plays now. */
 	converted(): boolean;
 	/** Has the receiver and this computer let go of the provider's stream,
-	 *  and keeps the cast, for an account that allows one connection. */
+	 *  and keeps the cast, for an account that allows one connection. It
+	 *  shows as opening, since the next item is on its way. */
 	release(): Promise<void>;
+	/** The next item didn't come after a release, so it shows as stopped. */
+	settle(): void;
 }
 
 /** The backend's form of `route` for `formats`. */
@@ -381,6 +384,7 @@ export const createCastDestination = (
 		play: async () => {
 			const since = pausedAt;
 			pausedAt = null;
+			// Stryker disable next-line OptionalChaining: A converted stream always has an item, which the load that converts it sets.
 			const file = snapshot.converted && snapshot.item?.contentType !== "live";
 			if (loaded === null || !file || since === null || now() - since < PAUSE_LIMIT_MS)
 				return control({ action: "play" });
@@ -421,7 +425,9 @@ export const createCastDestination = (
 		release: async () => {
 			loaded = null;
 			pausedAt = null;
+			publish({ ...snapshot, loading: true, media: null, error: null });
 			await backend.castRelease(receiver.id);
 		},
+		settle: () => publish({ ...snapshot, loading: false }),
 	};
 };

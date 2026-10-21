@@ -106,8 +106,39 @@ describe("useCast", () => {
 	it("lists nothing and asks for nothing when it's off", async () => {
 		const { result } = await render(false);
 		expect(result.current.receivers).toEqual([]);
+		expect(result.current).toMatchObject({ localNetworkDenied: false, vpnActive: false });
 		expect(tauri.getCastReceivers).not.toHaveBeenCalled();
+		expect(tauri.holdCastReceivers).not.toHaveBeenCalled();
 		expect(events.count("cast://receivers")).toBe(0);
+	});
+
+	it("starts looking once it's turned on, and holds nothing until asked", async () => {
+		tauri.getCastReceivers.mockReturnValueOnce(new Promise(() => {}));
+		const hook = renderHook(({ on }) => useCast(on, report), { initialProps: { on: false } });
+		hook.rerender({ on: true });
+		await flush();
+		expect(tauri.getCastReceivers).toHaveBeenCalledTimes(1);
+		// Nothing is known before the first list comes.
+		expect(hook.result.current).toMatchObject({
+			receivers: [],
+			localNetworkDenied: false,
+			vpnActive: false,
+		});
+		expect(tauri.holdCastReceivers).toHaveBeenCalledWith([]);
+	});
+
+	it("drops answers that come after it was turned off", async () => {
+		let list: (l: Bridge.CastReceiverList) => void = () => {};
+		let vpn: (on: boolean) => void = () => {};
+		tauri.getCastReceivers.mockReturnValueOnce(new Promise((r) => (list = r)));
+		tauri.getVpnActive.mockReturnValueOnce(new Promise((r) => (vpn = r)));
+		const hook = renderHook(({ on }) => useCast(on, report), { initialProps: { on: true } });
+		hook.rerender({ on: false });
+		list(receivers(1, [tv]));
+		vpn(true);
+		await flush();
+		expect(hook.result.current.receivers).toEqual([]);
+		expect(hook.result.current.vpnActive).toBe(false);
 	});
 
 	it("keeps the newest list of receivers", async () => {
@@ -169,6 +200,95 @@ describe("useCast", () => {
 		act(() => result.current.release());
 		await flush();
 		expect(tauri.holdCastReceivers).toHaveBeenLastCalledWith([]);
+	});
+
+	it("clears the last item's routes as soon as another is checked", async () => {
+		const { result } = await render();
+		act(() => result.current.check(film));
+		await flush();
+		expect(result.current.statuses.size).toBe(1);
+		tauri.getStreamFormats.mockReturnValueOnce(new Promise(() => {}));
+		act(() => result.current.check(makeMovie({ id: "mv2", name: "Another" })));
+		expect(result.current.statuses.size).toBe(0);
+	});
+
+	it("drops a route from a check that a release and a new check came after", async () => {
+		const answers: ((f: StreamFormats) => void)[] = [];
+		tauri.getStreamFormats.mockImplementation(() => new Promise((r) => answers.push(r)));
+		const { result } = await render();
+		const other = makeMovie({ id: "mv2", name: "Another" });
+		act(() => result.current.check(film));
+		act(() => result.current.release());
+		act(() => result.current.check(other));
+		// The first check's answer comes last, for the film.
+		answers[0]({
+			formats: [{ ...mp4, container: "other" }],
+			sources: [0],
+			duration: null,
+			generation: 1,
+		});
+		await flush();
+		expect(result.current.statuses.size).toBe(0);
+		answers[1]({ formats: [mp4], sources: [0], duration: null, generation: 2 });
+		await flush();
+		expect(result.current.statuses.get("cast:tv")).toEqual({ via: "direct" });
+	});
+
+	it("casts by the route the picker showed, without working it out again", async () => {
+		const { result } = await render();
+		act(() => result.current.check(film));
+		await flush();
+		expect(tauri.getConverterSupport).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			await result.current.send("cast:tv", film, { stopLocal });
+		});
+		expect(tauri.getConverterSupport).toHaveBeenCalledTimes(1);
+	});
+
+	it("holds the receiver it casts to, with no picker open", async () => {
+		const { result } = await render();
+		await act(async () => {
+			await result.current.send("cast:tv", film, { stopLocal });
+		});
+		expect(tauri.holdCastReceivers).toHaveBeenLastCalledWith(["cast:tv"]);
+	});
+
+	it("says nothing of a loss that comes just after a stop", async () => {
+		const { result } = await render();
+		await act(async () => {
+			await result.current.send("cast:tv", film, { stopLocal });
+		});
+		await act(async () => {
+			const stopping = result.current.stop();
+			events.emit("cast://update", {
+				receiverId: "cast:tv",
+				update: { kind: "closed", reason: "timeout" },
+			});
+			await stopping;
+		});
+		expect(report).not.toHaveBeenCalled();
+	});
+
+	it("leaves a newer cast alone when an older one fails to load", async () => {
+		tauri.getCastReceivers.mockResolvedValue(receivers(1, [tv, den]));
+		let fail: (e: unknown) => void = () => {};
+		tauri.castLoad.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+		const { result } = await render();
+		let first: Promise<string | null> = Promise.resolve(null);
+		act(() => {
+			first = result.current.send("cast:tv", film, { stopLocal });
+		});
+		await flush();
+		await act(async () => {
+			await result.current.send("cast:den", film, { stopLocal });
+		});
+		fail("unreachable");
+		let why: string | null = null;
+		await act(async () => {
+			why = await first;
+		});
+		expect(why).toBe("Couldn't reach Hotel TV. Nothing is playing.");
+		expect(result.current.destination?.id).toBe("cast:den");
 	});
 
 	it("drops routes worked out for an item checked before the last", async () => {
@@ -378,8 +498,21 @@ describe("useCast", () => {
 				const sent = result.current
 					.send("cast:tv", other, { stopLocal })
 					.then((w) => (why = w));
+				// It waits for each look.
+				await flush();
+				expect(tries).toBe(1);
 				await act(async () => {
-					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS[1]);
+					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS[0]);
+				});
+				expect(tries).toBe(2);
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS[1] - 1);
+				});
+				expect(tries).toBe(2);
+				// While it waits, the receiver shows the next item on its way.
+				expect(result.current.state?.status).toBe("opening");
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(1);
 				});
 				expect(tries).toBe(3);
 				await act(() => sent);
@@ -412,6 +545,25 @@ describe("useCast", () => {
 			} finally {
 				vi.useRealTimers();
 			}
+		});
+
+		it("shows the cast stopped when the user says no after it let go", async () => {
+			const { result } = await casting();
+			oneConnection();
+			tauri.getStreamFormats.mockImplementation(async () => {
+				if (tauri.castRelease.mock.calls.length === 0) throw "refused";
+				return { formats: [ac3], sources: [0], duration: 5400, generation: 6 };
+			});
+			let why: string | null = "";
+			await act(async () => {
+				why = await result.current.send("cast:tv", other, {
+					stopLocal,
+					confirm: async () => false,
+				});
+			});
+			expect(why).toBeNull();
+			expect(result.current.state).toMatchObject({ status: "idle" });
+			expect(result.current.destination?.id).toBe("cast:tv");
 		});
 
 		it("doesn't let go of anything for a first cast that can't be routed", async () => {

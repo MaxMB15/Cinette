@@ -239,6 +239,25 @@ describe("DevicesButton", () => {
 		vi.useRealTimers();
 	});
 
+	it("gives no VPN hint before it knows, or when there's no VPN", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		control.state = { ...control.state, devices: [] };
+		vi.mocked(getVpnActive).mockReturnValueOnce(new Promise(() => {}));
+		const first = render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		await act(async () => {});
+		act(() => vi.advanceTimersByTime(LOOKING_MS));
+		expect(screen.getByRole("status").textContent).toBe(NONE_FOUND);
+		first.unmount();
+		vi.mocked(getVpnActive).mockResolvedValueOnce(false);
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		await act(async () => {});
+		act(() => vi.advanceTimersByTime(LOOKING_MS));
+		expect(screen.getByRole("status").textContent).toBe(NONE_FOUND);
+		vi.useRealTimers();
+	});
+
 	it("looks for a moment before it says no other device was found", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		control.state = { ...control.state, devices: [] };

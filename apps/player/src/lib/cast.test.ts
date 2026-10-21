@@ -113,9 +113,9 @@ describe("castFailureMessage", () => {
 });
 
 describe("castEndedMessage", () => {
-	it("says nothing for a stop, and why for anything else", () => {
-		expect(castEndedMessage("TV", null)).toBeNull();
-		expect(castEndedMessage("TV", "stopped")).toBeNull();
+	it("says why a cast was lost", () => {
+		expect(castEndedMessage("TV", null)).toBe("Lost the connection to TV.");
+		expect(castEndedMessage("TV", "stopped")).toBe("Lost the connection to TV.");
 		expect(castEndedMessage("TV", "appStopped")).toBe("Playback was stopped on TV.");
 		expect(castEndedMessage("TV", "launchFailed")).toBe("TV couldn't start the Cast player.");
 		for (const reason of ["timeout", "protocol", "connectionLost"] as const)
@@ -138,6 +138,18 @@ describe("castPickerNotice and showsCastButton", () => {
 		);
 		expect(castPickerNotice(lookout({ vpnActive: true }))).toBeNull();
 		expect(castPickerNotice(lookout({ vpnActive: true, receivers: [] }))).toBe(VPN_HINT);
+		expect(CAST_NETWORK_DENIED).toBe(
+			"Cinette can't look for Cast devices. Allow it under Local Network in System Settings, Privacy & Security."
+		);
+		// One receiver that can't be reached is enough.
+		expect(
+			castPickerNotice(
+				lookout({
+					vpnActive: true,
+					receivers: [receiver("cast:a", "TV"), receiver("cast:b", "Den", false)],
+				})
+			)
+		).toBe(VPN_HINT);
 		expect(
 			castPickerNotice(
 				lookout({ vpnActive: true, receivers: [receiver("cast:a", "TV", false)] })

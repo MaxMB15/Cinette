@@ -442,12 +442,15 @@ describe("Settings playback", () => {
 		await renderSettings();
 		const toggle = screen.getByRole("button", { name: "Stream through this computer" });
 		expect(toggle).toHaveAttribute("aria-pressed", "false");
+		// Off looks like a button that's off, on like one that's on.
+		expect(toggle).toHaveClass("bg-secondary");
 		expect(
 			screen.getByText(/uses this computer's\s+connection and its VPN/)
 		).toBeInTheDocument();
 		fireEvent.click(toggle);
 		expect(toggle).toHaveAttribute("aria-pressed", "true");
 		expect(toggle).toHaveTextContent("On");
+		expect(toggle).toHaveClass("bg-primary");
 		expect(localStorage.getItem("mvp_cast_stream_through")).toBe("on");
 		fireEvent.click(toggle);
 		expect(toggle).toHaveTextContent("Off");

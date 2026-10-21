@@ -4072,6 +4072,11 @@ describe("Google Cast", () => {
 	it("is only on for macOS and Linux", async () => {
 		await openItem(lanternKeeper());
 		expect(fakeCast.enabled[fakeCast.enabled.length - 1]).toBe(true);
+		env.os = "linux";
+		fakeCast.enabled = [];
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(fakeCast.enabled[fakeCast.enabled.length - 1]).toBe(true);
+		env.os = "macos";
 		setUpTouchScreen();
 		fakeCast.enabled = [];
 		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
@@ -4286,6 +4291,67 @@ describe("Google Cast", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
+	it("shows no panel for a receiver whose state hasn't come yet", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeCast.set({ destination: tv() as unknown as CastDestination, state: null }));
+		expect(screen.queryByRole("region", { name: "Google Cast" })).toBeNull();
+	});
+
+	it("saves where the receiver was before it plays here", async () => {
+		await openItem(lanternKeeper());
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState({ position: 700 }),
+			})
+		);
+		await flush();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeCast.set({ state: castState({ position: 701 }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		const stop = vi.mocked(fakeCast.get().stop);
+		stop.mockReturnValueOnce(new Promise(() => {}));
+		fireEvent.click(screen.getByRole("button", { name: /^Play here from 11:4/ }));
+		await flush();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
+	});
+
+	it("saves where the receiver was when it stops", async () => {
+		await openItem(lanternKeeper());
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState({ position: 700 }),
+			})
+		);
+		await flush();
+		vi.mocked(tauri.savePlaybackPosition).mockClear();
+		act(() => fakeCast.set({ state: castState({ position: 701 }) }));
+		await flush();
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		fakeCast.get().stop = vi.fn(() => new Promise<void>(() => {}));
+		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+		await flush();
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
+	});
+
+	it("plays live here again from now, and says so when it can't", async () => {
+		await openItem(makeNewsChannel());
+		fakeMpv.actions.load.mockClear();
+		act(() =>
+			fakeCast.set({
+				destination: tv() as unknown as CastDestination,
+				state: castState({ duration: 0, status: "paused" }),
+			})
+		);
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		fireEvent.click(screen.getByRole("button", { name: "Play here" }));
+		await flush();
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(NEWS_URL, undefined);
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
+	});
+
 	describe("changing what plays while it casts", () => {
 		const casting = (converted = false) => {
 			const destination = { ...tv(), converted: vi.fn(() => converted) };
@@ -4399,6 +4465,108 @@ describe("Google Cast", () => {
 			fireEvent.click(screen.getByRole("button", { name: /Resume/ }));
 			await flush();
 			expect(vi.mocked(fakeCast.get().send).mock.calls[0][2].startAt).toBe(1200);
+		});
+
+		it("records the item's play, from what it's going to", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			vi.mocked(tauri.recordPlayEnd).mockClear();
+			vi.mocked(tauri.recordPlayStart).mockClear();
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			const send = vi.mocked(fakeCast.get().send);
+			expect(tauri.recordPlayEnd).not.toHaveBeenCalled();
+			await act(() => send.mock.calls[0][2].stopLocal());
+			expect(tauri.recordPlayEnd).toHaveBeenCalledWith(ep1.id, expect.any(Number));
+			expect(tauri.recordPlayStart).toHaveBeenCalledWith(
+				ep2.id,
+				ep2.name,
+				null,
+				ep2.contentType
+			);
+		});
+
+		it("sends what another device asks for to the receiver", async () => {
+			await openItem(lanternKeeper());
+			casting();
+			const send = vi.mocked(fakeCast.get().send);
+			let loaded: Promise<void> = Promise.resolve();
+			act(() => {
+				loaded = destination().load({ kind: "local", channel: harborLights() });
+			});
+			await flush();
+			expect(send).toHaveBeenCalledWith(
+				"cast:tv",
+				expect.objectContaining({ id: harborLights().id }),
+				expect.anything()
+			);
+			// With nothing to do once it's under way, it moves the player on.
+			await act(() => send.mock.calls[0][2].stopLocal());
+			await act(() => loaded);
+			expect(screen.getByText(harborLights().name)).toBeInTheDocument();
+		});
+
+		it("keeps a note up while the next item goes to the receiver", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			act(() => fakeCast.report("Lost the connection to Hotel TV."));
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			expect(screen.getByRole("alert").textContent).toBe("Lost the connection to Hotel TV.");
+		});
+
+		it("takes the episode keys to the receiver, and the rest as the TV's controls", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			fakeMpv.actions.load.mockClear();
+			const tvNow = casting();
+			await press("n");
+			expect(vi.mocked(fakeCast.get().send)).toHaveBeenCalledWith(
+				"cast:tv",
+				expect.objectContaining({ id: ep2.id }),
+				expect.anything()
+			);
+			await press(" ");
+			expect(tvNow.pause).toHaveBeenCalled();
+			expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
+			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+		});
+
+		it("leaves the episode keys alone while AirPlay plays", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			fakeMpv.actions.load.mockClear();
+			const airplayTv = { ...tv(), id: "airplay:tv", kind: "airplay" as const };
+			act(() =>
+				fakeAirPlay.set({
+					destination: airplayTv as unknown as AirPlay["destination"],
+					state: castState(),
+				})
+			);
+			await press("n");
+			await press("p");
+			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+			expect(vi.mocked(fakeCast.get().send)).not.toHaveBeenCalled();
+		});
+
+		it("closes the question at once on Cancel or Escape, as a no", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2] });
+			casting();
+			const answers: boolean[] = [];
+			vi.mocked(fakeCast.get().send).mockImplementation(async (_, __, opts) => {
+				answers.push(await opts.confirm!("on"));
+				return null;
+			});
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+			expect(screen.queryByRole("dialog")).toBeNull();
+			await flush();
+			expect(answers).toEqual([false]);
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+			expect(screen.queryByRole("dialog")).toBeNull();
+			await flush();
+			expect(answers).toEqual([false, false]);
 		});
 	});
 });

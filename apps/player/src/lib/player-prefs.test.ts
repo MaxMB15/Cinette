@@ -108,6 +108,7 @@ describe("player-prefs", () => {
 				expect(readStreamThrough()).toBe(false);
 				expect(localStorage.getItem("mvp_cast_stream_through")).toBe("off");
 				expect(listener).toHaveBeenCalledTimes(2);
+				expect(STREAM_THROUGH_EVENT).toBe("mvp-cast-stream-through");
 			} finally {
 				window.removeEventListener(STREAM_THROUGH_EVENT, listener);
 			}

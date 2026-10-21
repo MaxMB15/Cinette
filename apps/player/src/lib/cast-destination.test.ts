@@ -659,4 +659,46 @@ describe("createCastDestination", () => {
 		await cast.seek(30);
 		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "seek", to: 30 });
 	});
+
+	it("says whether it converts, and after a stop, Play just plays", async () => {
+		let clock = 0;
+		const film: StreamFormats = {
+			formats: [{ ...ts, audio: "ac3" }],
+			sources: [4],
+			duration: 5400,
+			generation: 7,
+		};
+		const fake = backend(film);
+		const cast = createCastDestination(receiver, fake, { now: () => clock });
+		expect(cast.converted()).toBe(false);
+		await cast.load({ kind: "local", channel: movie });
+		expect(cast.converted()).toBe(true);
+		await cast.pause();
+		await cast.stop();
+		clock += PAUSE_LIMIT_MS * 2;
+		await cast.play();
+		expect(fake.castLoad).toHaveBeenCalledTimes(1);
+		expect(fake.castControl).toHaveBeenLastCalledWith("cast:tv", { action: "play" });
+		const direct = createCastDestination(receiver, backend());
+		await direct.load(item);
+		expect(direct.converted()).toBe(false);
+	});
+
+	it("shows as opening while it lets go, and as stopped if nothing comes", async () => {
+		const fake = backend();
+		const cast = createCastDestination(receiver, fake);
+		await cast.load(item);
+		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "media", media: media() });
+		let letGo: () => void = () => {};
+		fake.castRelease.mockReturnValueOnce(new Promise<void>((r) => (letGo = r)));
+		const releasing = cast.release();
+		expect(cast.getState().status).toBe("opening");
+		letGo();
+		await releasing;
+		expect(cast.getState().status).toBe("opening");
+		cast.settle();
+		expect(cast.getState()).toMatchObject({ status: "idle", connection: "connected" });
+		expect(cast.getState().item).not.toBeNull();
+	});
 });

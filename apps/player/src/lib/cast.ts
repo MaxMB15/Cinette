@@ -62,16 +62,12 @@ export const castFailureMessage = (name: string, error: unknown): string => {
 	}
 };
 
-/** What to say when a cast ended without the user stopping it, or `null`
- *  when there's nothing to say. */
+/** What to say when a cast to `name` was lost, from why it closed. */
 export const castEndedMessage = (
 	name: string,
 	reason: Extract<CastUpdate, { kind: "closed" }>["reason"] | null
-): string | null => {
+): string => {
 	switch (reason) {
-		case null:
-		case "stopped":
-			return null;
 		case "appStopped":
 			return `Playback was stopped on ${name}.`;
 		case "launchFailed":

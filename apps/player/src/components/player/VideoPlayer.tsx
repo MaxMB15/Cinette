@@ -32,7 +32,7 @@ import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { CastButton } from "@/components/player/CastButton";
 import { CastPanel } from "@/components/player/CastPanel";
 import { castControlMessage, showsCastButton } from "@/lib/cast";
-import { keepWarning } from "@/lib/device-picker";
+import { convertWarning } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { PlaybackDestination } from "@/lib/destination";
@@ -474,20 +474,20 @@ export const PlayerView = () => {
 	} | null>(null);
 	// The question waiting for an answer, so a newer one, or leaving the
 	// page, answers it with no and the cast it holds up ends.
+	// A question already answered takes no second answer, so the last one
+	// asked stays here.
 	const castQuestion = useRef<((ok: boolean) => void) | null>(null);
 	const confirmCast = useCallback(
 		(name: string, keep: "on" | "onScreen") =>
-			new Promise<boolean>((resolve) => {
+			new Promise<boolean>((answer) => {
 				castQuestion.current?.(false);
-				const answer = (ok: boolean) => {
-					if (castQuestion.current === answer) castQuestion.current = null;
-					resolve(ok);
-				};
 				castQuestion.current = answer;
 				setCastConfirm({ name, keep, answer });
 			}),
+		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
 		[]
 	);
+	// Stryker disable next-line ArrayDeclaration: The cleanup reads the ref when it runs, so any deps that never change run it only on unmount.
 	useEffect(() => () => castQuestion.current?.(false), []);
 
 	/**
@@ -502,10 +502,10 @@ export const PlayerView = () => {
 		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
 			const casting = castRef.current.current();
 			if (casting) {
-				const startAt = ch.contentType === "live" ? undefined : startPos;
+				// A live channel's start is dropped where the cast is sent.
 				return castRef.current
 					.send(casting.id, ch, {
-						startAt,
+						startAt: startPos,
 						confirm: casting.converted()
 							? undefined
 							: (keep) => confirmCast(casting.name, keep),
@@ -520,7 +520,7 @@ export const PlayerView = () => {
 								ch.logoUrl ?? null,
 								ch.contentType
 							).catch(() => {});
-							progressRef.current = progressFor(ch, startAt);
+							progressRef.current = progressFor(ch, startPos);
 							setActiveChannelName(ch.name);
 							setActiveChannel(ch);
 							apply?.();
@@ -560,6 +560,7 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
+		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, and castRef and confirmCast are a ref and a function that never changes.
 		[mpv, rememberLoadedUrl, recordEnd, castRef, confirmCast]
 	);
 
@@ -1496,6 +1497,7 @@ export const PlayerView = () => {
 					// The receiver lets go of the stream before mpv opens it, since
 					// many accounts allow one connection at a time.
 					await cast.stop().catch(() => {});
+					// Stryker disable next-line ConditionalExpression: The panel only shows after a cast, which needs a channel, and nothing clears the channel while it shows.
 					if (!activeChannel) return;
 					await playback
 						.load(
@@ -1686,12 +1688,7 @@ export const PlayerView = () => {
 						Play on <bdi>{castConfirm.name}</bdi>?
 					</h2>
 					<p className="text-xs text-muted-foreground mb-4">
-						{keepWarning({
-							id: "cast",
-							kind: "cast",
-							name: castConfirm.name,
-							status: { via: "converted", keep: castConfirm.keep },
-						})}
+						{convertWarning(castConfirm.name, castConfirm.keep)}
 					</p>
 					<div className="flex justify-end gap-2">
 						<Button
