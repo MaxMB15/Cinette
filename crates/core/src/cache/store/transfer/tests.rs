@@ -1148,3 +1148,40 @@ fn the_index_keeps_stored_episode_numbers_over_the_name() {
         "m3u-a-ch-1"
     );
 }
+
+#[test]
+fn only_shows_lists_and_numbered_episodes_reach_the_index() {
+    let tv = device("xt-tv");
+    // A list saved under a movie's id isn't a show's.
+    tv.save_series_episodes(
+        "xt-tv-movie-8",
+        &[Channel {
+            series_title: Some("Odd".into()),
+            season: Some(1),
+            episode: Some(1),
+            ..channel("xt-tv-xt-ep-8-s1-0", "Odd S01E01", "series")
+        }],
+    )
+    .unwrap();
+    // An entry without an episode number is no episode to match.
+    tv.save_series_episodes(
+        "xt-tv-series-42",
+        &[Channel {
+            series_title: Some("Lost".into()),
+            season: Some(1),
+            episode: None,
+            ..channel("xt-tv-xt-ep-42-s1-9", "Lost Special", "series")
+        }],
+    )
+    .unwrap();
+    let index = tv.transfer_index(&Salt::generate()).unwrap();
+    let odd = ItemRef {
+        series: Some("Odd".into()),
+        season: Some(1),
+        episode: Some(1),
+        ..ItemRef::named(ItemKind::Episode, "Odd S01E01")
+    };
+    assert!(index.find(&odd).is_err());
+    let special = ItemRef::named(ItemKind::Series, "Lost Special");
+    assert!(index.find(&special).is_err());
+}
