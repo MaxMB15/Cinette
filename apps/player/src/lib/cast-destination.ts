@@ -341,8 +341,9 @@ export const createCastDestination = (
 			sources: formats.sources.filter((_, i) => keep[i]),
 		});
 	};
-	/** Counts loads and stops, so only the newest load's answer shows. */
-	let sends = 0;
+	/** The newest load's token. A stop or a release puts in another, so
+	 *  only the newest load's answer shows. */
+	let newest: object = {};
 	const send = async (
 		channel: Channel,
 		route: CastRoute,
@@ -350,7 +351,8 @@ export const createCastDestination = (
 		startAt?: number
 	) => {
 		const converted = route.via === "converted";
-		const sent = ++sends;
+		const sent = {};
+		newest = sent;
 		publish({
 			...snapshot,
 			// A closed cast connects again for this load.
@@ -368,7 +370,7 @@ export const createCastDestination = (
 		await backend.castLoad(receiver.id, channel, route, startAt).catch((e: unknown) => {
 			// The backend stopped what played before it asked for this, so
 			// nothing plays now. A newer load or a stop says for itself.
-			if (sent === sends)
+			if (sent === newest)
 				publish({
 					...snapshot,
 					loading: false,
@@ -391,7 +393,7 @@ export const createCastDestination = (
 		route: async (item) => decide(channelOf(item)),
 		load: async (item, opts) => {
 			// A stop or a newer load while this one works out its route wins.
-			const asked = sends;
+			const asked = newest;
 			const channel = channelOf(item);
 			let route = opts?.route;
 			if (route === undefined) {
@@ -404,7 +406,7 @@ export const createCastDestination = (
 			// A live channel plays from now, whatever start it was given, so
 			// the receiver's clock and the backend get none.
 			const startAt = channel.contentType === "live" ? undefined : opts?.startAt;
-			if (asked !== sends) throw SUPERSEDED;
+			if (asked !== newest) throw SUPERSEDED;
 			try {
 				await send(channel, castRoute, formats, startAt);
 			} catch (e) {
@@ -443,7 +445,7 @@ export const createCastDestination = (
 		},
 		stop: async () => {
 			loaded = null;
-			++sends;
+			newest = {};
 			await backend.castStop(receiver.id);
 		},
 		getState: () => state,
@@ -459,7 +461,7 @@ export const createCastDestination = (
 		release: async () => {
 			loaded = null;
 			pausedAt = null;
-			++sends;
+			newest = {};
 			publish({ ...snapshot, loading: true, media: null, error: null });
 			await backend.castRelease(receiver.id);
 		},

@@ -4663,7 +4663,7 @@ describe("Google Cast", () => {
 			expect(screen.queryByRole("alert")).toBeNull();
 		});
 
-		it("says nothing when AirPlay's play from the keys fails", async () => {
+		it("says nothing when AirPlay's play or pause from the keys fails", async () => {
 			await openItem(lanternKeeper());
 			const airplayTv = { ...tv(), id: "airplay:tv", kind: "airplay" as const };
 			airplayTv.pause.mockRejectedValueOnce("x");
@@ -4676,6 +4676,22 @@ describe("Google Cast", () => {
 			await press(" ");
 			expect(airplayTv.pause).toHaveBeenCalled();
 			expect(screen.queryByRole("alert")).toBeNull();
+			airplayTv.play.mockRejectedValueOnce("x");
+			airplayTv.getState.mockReturnValue(castState({ status: "paused" }));
+			act(() => fakeAirPlay.set({ state: castState({ status: "paused" }) }));
+			await press(" ");
+			expect(airplayTv.play).toHaveBeenCalled();
+			expect(screen.queryByRole("alert")).toBeNull();
+		});
+
+		it("keeps a note up when a key's control fails with nothing to say", async () => {
+			await openItem(lanternKeeper());
+			const tvNow = casting();
+			act(() => fakeCast.report("Lost the connection to Den."));
+			tvNow.getState.mockReturnValue(castState({ connection: "reconnecting" }));
+			tvNow.pause.mockRejectedValueOnce("notConnected");
+			await press(" ");
+			expect(screen.getByRole("alert").textContent).toBe("Lost the connection to Den.");
 		});
 
 		it("closes the question at once on Cancel or Escape, as a no", async () => {

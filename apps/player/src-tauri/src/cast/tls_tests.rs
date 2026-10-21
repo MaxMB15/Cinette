@@ -39,29 +39,14 @@ async fn echo_server() -> (u16, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn accepts_a_self_signed_receiver_and_pins_its_certificate() {
+async fn accepts_a_self_signed_receiver() {
     let (port, cert) = echo_server().await;
-    let (mut stream, presented) = connect(LOOPBACK, port, None).await.unwrap();
+    let (mut stream, presented) = connect(LOOPBACK, port).await.unwrap();
     assert_eq!(presented, cert);
     stream.write_all(b"hello").await.unwrap();
     let mut reply = [0u8; 5];
     stream.read_exact(&mut reply).await.unwrap();
     assert_eq!(&reply, b"hello");
-
-    // The same certificate again is fine.
-    let (_, again) = connect(LOOPBACK, port, Some(&cert)).await.unwrap();
-    assert_eq!(again, cert);
-}
-
-#[tokio::test]
-async fn refuses_another_certificate_than_the_pinned_one() {
-    let (port, _) = echo_server().await;
-    let (other, _) = echo_server().await;
-    let (_, other_cert) = connect(LOOPBACK, other, None).await.unwrap();
-    assert_eq!(
-        connect(LOOPBACK, port, Some(&other_cert)).await.err(),
-        Some(TlsError::NotPinned)
-    );
 }
 
 #[tokio::test]
@@ -71,7 +56,7 @@ async fn says_whether_nothing_answered_or_the_handshake_failed() {
     let port = closed.local_addr().unwrap().port();
     drop(closed);
     assert_eq!(
-        connect(LOOPBACK, port, None).await.err(),
+        connect(LOOPBACK, port).await.err(),
         Some(TlsError::Unreachable)
     );
 
@@ -84,7 +69,7 @@ async fn says_whether_nothing_answered_or_the_handshake_failed() {
         }
     });
     assert_eq!(
-        connect(LOOPBACK, port, None).await.err(),
+        connect(LOOPBACK, port).await.err(),
         Some(TlsError::Handshake)
     );
 }
@@ -102,7 +87,7 @@ async fn gives_up_on_a_receiver_that_never_answers_the_handshake() {
         }
     });
     assert_eq!(
-        connect(LOOPBACK, port, None).await.err(),
+        connect(LOOPBACK, port).await.err(),
         Some(TlsError::Unreachable)
     );
 }

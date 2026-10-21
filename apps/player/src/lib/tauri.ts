@@ -695,7 +695,7 @@ export const CAST_UPDATE_EVENT = "cast://update";
 
 /**
  * Play `channel` on a Cast receiver, connecting first when needed. Rejects
- * with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
+ * with `notFound`, `unreachable`, `refused`, `noConverter`,
  * `noEncoder`, `unsupported`, `noRoute`, `converterFailed` or `stale`, or,
  * for a direct HLS route, `notPlaylist` or `cors`.
  */

@@ -154,9 +154,6 @@ struct KnownPlan {
 pub struct CastPlayback {
     active: Mutex<Option<Active>>,
     generation: Mutex<u64>,
-    /// The certificate of the receiver cast to now. Receivers change theirs
-    /// from time to time, so a new cast accepts what the receiver presents.
-    pins: Mutex<HashMap<String, Vec<u8>>>,
     turns: Mutex<HashMap<String, Turn>>,
     /// Held while a load connects, so two loads don't both open a session.
     connecting: tokio::sync::Mutex<()>,
@@ -242,13 +239,11 @@ where
             emit(&app, &id, update)
         })
         .await;
-        // Over: the converter stops with it, and the next cast takes the
-        // receiver's certificate afresh.
+        // Over: the converter stops with it.
         let state = app.state::<CastPlayback>();
         let mut active = lock(&state.active);
         if active.as_ref().is_some_and(|a| a.generation == generation) {
             *active = None;
-            lock(&state.pins).remove(&id);
         }
     });
 }
@@ -277,20 +272,14 @@ async fn ensure_connected<R: Runtime>(
         .get(receiver_id)
         .map(|r| (r.addr, r.port))
         .ok_or("notFound")?;
-    let pin = lock(&state.pins).get(receiver_id).cloned();
-    match tls::connect(addr, port, pin.as_deref()).await {
-        Ok((stream, presented)) => {
-            lock(&state.pins).insert(receiver_id.to_string(), presented);
+    match tls::connect(addr, port).await {
+        Ok((stream, _)) => {
             begin(app, receiver_id, stream);
             Ok(true)
         }
-        Err(e) => {
+        Err(_) => {
             super::mark_unreachable(app, receiver_id);
-            Err(match e {
-                tls::TlsError::NotPinned => "notPinned",
-                _ => "unreachable",
-            }
-            .into())
+            Err("unreachable".into())
         }
     }
 }
@@ -424,7 +413,7 @@ async fn start_conversion<R: Runtime>(
 /// a stop for the same receiver makes this one give up wherever it is, with
 /// [`SUPERSEDED`], dropping what it started.
 ///
-/// Rejects with `notFound`, `unreachable`, `notPinned`, `refused`,
+/// Rejects with `notFound`, `unreachable`, `refused`,
 /// `noConverter`, `noEncoder`, `unsupported`, `noRoute`, `converterFailed`,
 /// `stale` or `superseded`, or, for a direct HLS route, `notPlaylist` or
 /// `cors`, after which the frontend routes the item again without that
@@ -655,12 +644,10 @@ pub fn stop(state: &CastPlayback, receiver_id: &str) {
     end_session(state, receiver_id);
 }
 
-/// Ends the session to `receiver_id`, if it has one, and forgets its
-/// certificate.
+/// Ends the session to `receiver_id`, if it has one.
 fn end_session(state: &CastPlayback, receiver_id: &str) {
     let ended = lock(&state.active).take_if(|a| a.receiver_id == receiver_id);
     if let Some(ended) = ended {
         let _ = ended.commands.send(Command::Stop);
     }
-    lock(&state.pins).remove(receiver_id);
 }

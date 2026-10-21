@@ -361,9 +361,13 @@ fn an_unreachable_receiver_is_marked_as_such() {
     update(&app.handle(), |registry| {
         registry.apply(found("tv", "tv", "TV"))
     });
-    mark_unreachable(&app.handle(), "cast:tv");
     let handle = app.handle();
     let state = handle.state::<CastReceivers>();
+    state.set_unreachable_for(Duration::from_secs(60));
+    mark_unreachable(&handle, "cast:tv");
+    assert!(!state.registry().get("cast:tv").unwrap().available);
+    // The mark lasts its time, whatever ends others meanwhile.
+    update(&handle, |registry| registry.expire(Instant::now()));
     assert!(!state.registry().get("cast:tv").unwrap().available);
 }
 

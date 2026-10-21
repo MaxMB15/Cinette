@@ -95,9 +95,6 @@ describe("castFailureMessage", () => {
 	it("says why each kind of failure happened", () => {
 		expect(castFailureMessage("TV", "unreachable")).toBe("Couldn't reach TV.");
 		expect(castFailureMessage("TV", "notFound")).toBe("Couldn't reach TV.");
-		expect(castFailureMessage("TV", "notPinned")).toBe(
-			"TV answered with a different identity, so Cinette didn't cast to it."
-		);
 		expect(castFailureMessage("TV", "refused")).toBe(
 			"The provider refused the stream. The login may have expired."
 		);
@@ -171,7 +168,6 @@ describe("castControlMessage", () => {
 		for (const code of [
 			"unreachable",
 			"notFound",
-			"notPinned",
 			"refused",
 			"noConverter",
 			"noEncoder",

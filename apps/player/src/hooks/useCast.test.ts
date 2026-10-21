@@ -372,6 +372,128 @@ describe("useCast", () => {
 			expect(tauri.castLoad).not.toHaveBeenCalled();
 		});
 
+		it("asks nothing when the cast stops while the next item is looked up", async () => {
+			const { result } = await casting();
+			let answer: () => void = () => {};
+			tauri.getStreamFormats.mockReturnValueOnce(
+				new Promise(
+					(r) =>
+						(answer = () =>
+							r({ formats: [ac3], sources: [0], duration: 5400, generation: 9 }))
+				)
+			);
+			const confirm = vi.fn(async () => true);
+			let sent: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				sent = result.current.send("cast:tv", other, { stopLocal, confirm });
+			});
+			await act(() => result.current.stop());
+			answer();
+			await act(async () => {
+				await sent;
+			});
+			expect(confirm).not.toHaveBeenCalled();
+		});
+
+		it("plays nothing when the cast stops while it asks", async () => {
+			const { result } = await casting();
+			tauri.getStreamFormats.mockResolvedValue({
+				formats: [ac3],
+				sources: [0],
+				duration: 5400,
+				generation: 9,
+			});
+			let yes: (ok: boolean) => void = () => {};
+			const confirm = vi.fn(() => new Promise<boolean>((r) => (yes = r)));
+			let sent: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				sent = result.current.send("cast:tv", other, { stopLocal, confirm });
+			});
+			await flush();
+			expect(confirm).toHaveBeenCalled();
+			stopLocal.mockClear();
+			await act(() => result.current.stop());
+			yes(true);
+			let why: string | null = "";
+			await act(async () => {
+				why = await sent;
+			});
+			expect(why).toBeNull();
+			expect(stopLocal).not.toHaveBeenCalled();
+			expect(tauri.castLoad).not.toHaveBeenCalled();
+		});
+
+		it("plays nothing when the cast stops while this device stops", async () => {
+			const { result } = await casting();
+			let stopped: () => void = () => {};
+			const slowStop = vi.fn(() => new Promise<void>((r) => (stopped = r)));
+			let sent: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				sent = result.current.send("cast:tv", other, { stopLocal: slowStop });
+			});
+			await flush();
+			expect(slowStop).toHaveBeenCalled();
+			await act(() => result.current.stop());
+			stopped();
+			await act(async () => {
+				await sent;
+			});
+			expect(tauri.castLoad).not.toHaveBeenCalled();
+			expect(result.current.destination).toBeNull();
+		});
+
+		it("looks no further once the cast stops while it waits to look again", async () => {
+			vi.useFakeTimers();
+			try {
+				const { result } = await casting();
+				tauri.getStreamFormats.mockRejectedValue("refused");
+				let sent: Promise<string | null> = Promise.resolve("");
+				act(() => {
+					sent = result.current.send("cast:tv", other, { stopLocal });
+				});
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS[0]);
+				});
+				const looks = tauri.getStreamFormats.mock.calls.length;
+				await act(() => result.current.stop());
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(RELEASE_RETRY_MS[1] + RELEASE_RETRY_MS[2]);
+				});
+				let why: string | null = "";
+				await act(async () => {
+					why = await sent;
+				});
+				expect(why).toBeNull();
+				expect(tauri.getStreamFormats).toHaveBeenCalledTimes(looks);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("keeps an older send quiet across a stop and a newer send", async () => {
+			const { result } = await casting();
+			const answer = heldLookup();
+			let first: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				first = result.current.send("cast:tv", other, { stopLocal });
+			});
+			await act(() => result.current.stop());
+			// A newer one, still looking.
+			tauri.getStreamFormats.mockReturnValueOnce(new Promise(() => {}));
+			act(() => {
+				void result.current.send("cast:tv", makeMovie({ id: "mv3", name: "C" }), {
+					stopLocal,
+				});
+			});
+			answer();
+			let why: string | null = "";
+			await act(async () => {
+				why = await first;
+			});
+			expect(why).toBeNull();
+			expect(tauri.castLoad).not.toHaveBeenCalled();
+		});
+
 		it("plays only the newest of two quick switches", async () => {
 			const { result } = await casting();
 			const answer = heldLookup();

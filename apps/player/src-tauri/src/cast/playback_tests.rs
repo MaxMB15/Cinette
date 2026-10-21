@@ -764,3 +764,105 @@ async fn a_receiver_that_couldnt_be_reached_can_be_tried_again_later() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_load_keeps_the_session_an_older_one_opened() {
+    let app = TestApp::new();
+    let first = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    let second = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &first);
+    add_channel(&app, &second);
+    let (addr, mut got) =
+        fake_receiver::start_with(vec![fake_receiver::acceptor().0], Duration::from_secs(1)).await;
+    add_receiver(&app, "tv", addr);
+    let older = load_in_background(&app, &first, direct("mp4"), None);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    load(&app, "cast:tv", &second, direct("mp4"), None).unwrap();
+    assert_eq!(older.join().unwrap(), Err(json!("superseded")));
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["media"]["contentId"], "http://192.0.2.1/2.mp4");
+    // On the one connection the older load opened.
+    assert_eq!(loaded.connection, 0);
+    control(&app, "cast:tv", json!({ "action": "play" })).unwrap();
+}
+
+/// Whether an ffmpeg runs that starts `url` at `seconds`.
+fn ffmpeg_starts_at(url: &str, seconds: &str) -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-f", &format!("ss {seconds} -i {url}")])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
+    let app = TestApp::new();
+    if !crate::convert::support::support(&app.handle())
+        .await
+        .convert
+    {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, connections) = counting_source(wav16(), Duration::ZERO, false);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    let handle = app.handle();
+    let streams = handle.state::<crate::streams::StreamsState>();
+    // Two URLs for it, both on the same server.
+    let generation = streams.remember(&movie.id, vec![source.clone(), format!("{source}?2")]);
+    let cast = |source: usize, video: &str, audio: &str, start: Option<f64>| {
+        let route = json!({ "via": "converted", "generation": generation, "source": source,
+                            "container": "mkv", "video": video, "audio": audio });
+        app.invoke(
+            "cast_load",
+            json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": start }),
+        )
+        .unwrap();
+    };
+    let opened = |count: usize| assert_eq!(connections.load(Ordering::SeqCst), count);
+    cast(0, "copy", "aac", None);
+    next_of(&mut got, "LOAD").await;
+    // The probe and the converter.
+    opened(2);
+    // The same again, from 2 s: only the converter, which starts there.
+    cast(0, "copy", "aac", Some(2.0));
+    next_of(&mut got, "LOAD").await;
+    opened(3);
+    assert!(ffmpeg_starts_at(&source, "2.000"));
+    // Each other choice probes again.
+    cast(0, "copy", "copy", None);
+    next_of(&mut got, "LOAD").await;
+    opened(5);
+    cast(0, "none", "copy", None);
+    next_of(&mut got, "LOAD").await;
+    opened(7);
+    cast(1, "none", "copy", None);
+    next_of(&mut got, "LOAD").await;
+    opened(9);
+    // Another item on the same URLs too.
+    let other = channel("m-2", &source, "movie");
+    add_channel(&app, &other);
+    let generation = streams.remember(&other.id, vec![source.clone(), format!("{source}?2")]);
+    let route = json!({ "via": "converted", "generation": generation, "source": 1,
+                        "container": "mkv", "video": "none", "audio": "copy" });
+    app.invoke(
+        "cast_load",
+        json!({ "receiverId": "cast:tv", "channel": other, "route": route, "startAt": null }),
+    )
+    .unwrap();
+    next_of(&mut got, "LOAD").await;
+    opened(11);
+    // And the same item in a newer list of its URLs.
+    let newer = streams.remember(&movie.id, vec![source.clone(), format!("{source}?3")]);
+    let route = json!({ "via": "converted", "generation": newer, "source": 0,
+                        "container": "mkv", "video": "none", "audio": "copy" });
+    app.invoke(
+        "cast_load",
+        json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": null }),
+    )
+    .unwrap();
+    next_of(&mut got, "LOAD").await;
+    opened(13);
+}

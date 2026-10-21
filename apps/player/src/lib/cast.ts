@@ -47,8 +47,6 @@ export const castFailureMessage = (name: string, error: unknown): string => {
 		case "unreachable":
 		case "notFound":
 			return `Couldn't reach ${name}.`;
-		case "notPinned":
-			return `${name} answered with a different identity, so Cinette didn't cast to it.`;
 		case "refused":
 			return "The provider refused the stream. The login may have expired.";
 		case "noConverter":
@@ -117,7 +115,6 @@ export const castControlMessage = (name: string, error: unknown): string =>
 const LOAD_FAILURES = [
 	"unreachable",
 	"notFound",
-	"notPinned",
 	"refused",
 	"noConverter",
 	"noEncoder",

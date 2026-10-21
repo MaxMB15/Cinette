@@ -4,12 +4,11 @@
 //! The TLS connection to a Cast receiver's port 8009.
 //!
 //! Receivers present a certificate their maker signed, with no host name a
-//! sender could check, so a new cast accepts any certificate, as every
-//! open-source sender does. Receivers change theirs from time to time, after
-//! a few days or a restart, so its bytes are pinned only while that cast
-//! lasts: a connection made for it must present the same one. The
-//! handshake's own signatures are still checked, so the receiver must hold
-//! the certificate's key.
+//! sender could check, so any certificate is accepted, as every open-source
+//! sender does. Nothing is pinned: receivers change theirs after a few days
+//! or a restart, and a cast makes one connection, which ends the cast when
+//! it drops. The handshake's own signatures are still checked, so the
+//! receiver must hold the certificate's key.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -32,10 +31,6 @@ pub enum TlsError {
     Unreachable,
     #[error("the receiver's TLS handshake failed")]
     Handshake,
-    /// Something at the receiver's address presented another certificate
-    /// than it did before.
-    #[error("the receiver presented a different certificate")]
-    NotPinned,
 }
 
 /// Accepts any certificate, and checks the handshake's signatures with it.
@@ -98,14 +93,9 @@ fn connector() -> TlsConnector {
     TlsConnector::from(Arc::new(config))
 }
 
-/// Connects to the receiver at `addr`. With `pin`, the receiver must
-/// present that certificate. Returns the stream and the certificate it
-/// presented, to pin for the next time.
-pub async fn connect(
-    addr: IpAddr,
-    port: u16,
-    pin: Option<&[u8]>,
-) -> Result<(TlsStream<TcpStream>, Vec<u8>), TlsError> {
+/// Connects to the receiver at `addr`. Returns the stream and the
+/// certificate the receiver presented.
+pub async fn connect(addr: IpAddr, port: u16) -> Result<(TlsStream<TcpStream>, Vec<u8>), TlsError> {
     let handshake = async {
         let tcp = TcpStream::connect(SocketAddr::new(addr, port))
             .await
@@ -126,8 +116,5 @@ pub async fn connect(
         .and_then(|certs| certs.first())
         .map(|cert| cert.to_vec())
         .ok_or(TlsError::Handshake)?;
-    if pin.is_some_and(|pin| pin != presented.as_slice()) {
-        return Err(TlsError::NotPinned);
-    }
     Ok((stream, presented))
 }
