@@ -343,7 +343,10 @@ async fn casting_to_another_receiver_ends_the_first_cast() {
     load(&app, "cast:b", &movie, direct("mp4"), None).unwrap();
     let connection = next_of(&mut second_got, "LOAD").await.connection;
     next_of(&mut first_got, "STOP").await;
-    // A second load to the same receiver keeps its connection.
+    // Once the first cast's session has wound down, which leaves the
+    // second as it is, a second load to the same receiver keeps its
+    // connection.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     load(&app, "cast:b", &movie, direct("mp4"), Some(5.0)).unwrap();
     let again = next_of(&mut second_got, "LOAD").await;
     assert_eq!(again.body["currentTime"], 5.0);
@@ -513,14 +516,17 @@ async fn starts_the_stream_again_on_the_new_address_after_a_move() {
     restart(&app, &movie, converted()).unwrap();
     let loaded = next_of(&mut got, "LOAD").await;
     assert_eq!(loaded.connection, 1);
+    assert!(!gets(&mut got, "STOP", Duration::from_millis(500)).await);
     while let Ok(event) = events.try_recv() {
         assert_ne!(event["update"]["kind"], "closed");
     }
-    let mut stops = 0;
-    while let Ok(message) = got.try_recv() {
-        stops += usize::from(message.kind() == "STOP");
-    }
-    assert_eq!(stops, 0);
+}
+
+#[test]
+fn knows_which_addresses_are_this_computers() {
+    assert!(super::playback::is_ours(LOOPBACK));
+    // A documentation address no computer has.
+    assert!(!super::playback::is_ours("192.0.2.7".parse().unwrap()));
 }
 
 #[tokio::test(flavor = "multi_thread")]

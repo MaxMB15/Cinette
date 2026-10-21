@@ -186,7 +186,7 @@ impl Default for AddressCheck {
 
 /// Whether `ip` is still one of this computer's addresses, which it is
 /// when a socket can listen on it.
-fn is_ours(ip: IpAddr) -> bool {
+pub(super) fn is_ours(ip: IpAddr) -> bool {
     std::net::UdpSocket::bind((ip, 0)).is_ok()
 }
 
