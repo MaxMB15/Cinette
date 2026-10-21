@@ -130,6 +130,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
 /// Keeps the device's conversions in `cell`, runs their pacer on the
 /// receiver's state, and has a conversion that ends on its own show as
 /// the item's error.
+// mutants: skip FnValue: It only builds for iOS and macOS, and mutation runs build on Linux.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn install_conversions<R: Runtime, C: conversion::Running>(
     app: &AppHandle<R>,

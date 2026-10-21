@@ -94,6 +94,15 @@ fn beside(master: &str, name: &str) -> String {
 }
 
 /// Waits for the conversion to end, and says how.
+/// The seconds of segments a media playlist lists.
+fn made(media: &str) -> f64 {
+    media
+        .lines()
+        .filter_map(|l| l.strip_prefix("#EXTINF:"))
+        .map(|d| d.trim_end_matches(',').parse::<f64>().unwrap())
+        .sum()
+}
+
 async fn ended(conversion: &mut FfmpegHls) -> Ended {
     tokio::time::timeout(LIMIT, conversion.ended.wait_for(Option::is_some))
         .await
@@ -213,17 +222,32 @@ async fn a_movie_that_isnt_played_holds_ffmpeg_back() {
     )
     .await
     .unwrap();
-    // Plenty of time to remux all 60 s if nothing held ffmpeg back.
-    tokio::time::sleep(Duration::from_secs(4)).await;
-    let media = text(&beside(&conversion.url, hls::MEDIA)).await;
-    let made: f64 = media
-        .lines()
-        .filter_map(|l| l.strip_prefix("#EXTINF:"))
-        .map(|d| d.trim_end_matches(',').parse::<f64>().unwrap())
-        .sum();
-    assert!(made <= LEAD + 4.0, "{media}");
+    let media_url = beside(&conversion.url, hls::MEDIA);
+    // ffmpeg makes the lead, then stops there.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while made(&text(&media_url).await) < LEAD {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the lead never got made"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let media = text(&media_url).await;
+    let held = made(&media);
+    assert!(held <= LEAD + 4.0, "{media}");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(made(&text(&media_url).await), held, "{media}");
     assert!(!media.contains("#EXT-X-ENDLIST"), "{media}");
     assert!(conversion.ended.borrow().is_none());
+
+    // Playing lets it go on.
+    conversion.set_playing(true);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while made(&text(&media_url).await) <= held {
+        assert!(tokio::time::Instant::now() < deadline, "nothing more made");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
     let pid = conversion.pid.unwrap();
     conversion.stop().await;
     assert!(!process_runs(pid));
@@ -517,7 +541,14 @@ async fn a_live_channel_never_pauses() {
         .await
         .expect("no wait within the lead");
     // Past the lead, it waits for the clock, not for a play.
-    let waiting = pace.after(2.0);
+    let waiting = pace.after(3.0);
+    tokio::pin!(waiting);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), &mut waiting)
+            .await
+            .is_err(),
+        "past its lead it waits for the clock"
+    );
     tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .expect("the clock runs");
