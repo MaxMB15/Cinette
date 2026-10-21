@@ -152,6 +152,9 @@ export interface AirPlay {
 	 * sound on the receiver.
 	 */
 	returnHere: (anchor: DOMRect) => Promise<void>;
+	/** No receiver took the video, on a Mac, so the player plays it here
+	 *  again from where it was. */
+	notPicked: boolean;
 }
 
 /**
@@ -305,5 +308,7 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 		send,
 		stop,
 		returnHere,
+		// The destination's state changes with it, which renders this again.
+		notPicked: destination?.notPicked === true,
 	};
 };

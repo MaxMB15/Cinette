@@ -196,6 +196,27 @@ describe("airplayPlaybackState", () => {
 	});
 });
 
+describe("a pick that found no receiver", () => {
+	it("is still opening, with no error to show", () => {
+		const native: AirPlayNativeState = {
+			...playing,
+			status: "error",
+			error: { code: "openFailed", notPicked: true },
+		};
+		const state = airplayPlaybackState(native, null, 0);
+		expect(state.status).toBe("opening");
+		expect(state.error).toBeNull();
+		// Any other error shows.
+		const failed = airplayPlaybackState(
+			{ ...native, error: { code: "openFailed", notPicked: false } },
+			null,
+			0
+		);
+		expect(failed.status).toBe("error");
+		expect(failed.error?.message).toBe("Couldn't start the stream on the TV.");
+	});
+});
+
 describe("airplayErrorMessage", () => {
 	it("says why, most specific first", () => {
 		expect(airplayErrorMessage({ code: "refused", unsupported: true })).toMatch(
@@ -209,12 +230,6 @@ describe("airplayErrorMessage", () => {
 		);
 		expect(airplayErrorMessage({ code: "failed", unsupported: false })).toBe(
 			"The stream stopped on the TV."
-		);
-		expect(airplayErrorMessage({ code: "openFailed", notPicked: true })).toBe(
-			"No TV took the video. Pick a TV in the AirPlay menu, not this Mac."
-		);
-		expect(airplayErrorMessage({ code: "openFailed", notPicked: false })).toBe(
-			"Couldn't start the stream on the TV."
 		);
 	});
 });
@@ -493,6 +508,26 @@ describe("createAirPlayDestination", () => {
 		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
 	});
 
+	it("ends the conversion when no TV took it, or it failed", async () => {
+		for (const error of [
+			{ code: "openFailed" as const, notPicked: true },
+			{ code: "failed" as const },
+			{ code: "refused" as const },
+		]) {
+			const { bridge, emit, d } = await convertedMovie();
+			emit({ ...playing, status: "opening" });
+			expect(bridge.endConversion).not.toHaveBeenCalled();
+			emit({ ...playing, status: "error", error });
+			expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+			// Nothing converts again for a seek.
+			await d.seek(10);
+			expect(bridge.loadConverted).not.toHaveBeenCalled();
+			// Once only.
+			emit({ ...playing, status: "error", error });
+			expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		}
+	});
+
 	it("doesn't mind an end of the conversion that fails", async () => {
 		const { bridge, emit } = await convertedMovie();
 		bridge.endConversion.mockRejectedValueOnce(new Error("gone"));
@@ -585,6 +620,34 @@ describe("createAirPlayDestination", () => {
 		emit({ ...playing, status: "paused" });
 		expect(listener).toHaveBeenCalledTimes(1);
 		expect(d.getState().status).toBe("paused");
+	});
+
+	it("says when no receiver took the video", async () => {
+		const { emit, bridge } = fakeBridge();
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		await settle();
+		expect(d.notPicked).toBe(false);
+		emit({ ...playing, status: "error", error: { code: "openFailed" } });
+		expect(d.notPicked).toBe(false);
+		emit({ ...playing, status: "error", error: { code: "openFailed", notPicked: true } });
+		expect(d.notPicked).toBe(true);
+		expect(d.getState()).toMatchObject({ status: "opening", error: null });
+	});
+
+	it("neither plays nor pauses while the TV is lost", async () => {
+		const { emit, bridge } = fakeBridge();
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		await settle();
+		emit({ ...playing, connection: "lost" });
+		await d.play();
+		await d.pause();
+		expect(bridge.play).not.toHaveBeenCalled();
+		expect(bridge.pause).not.toHaveBeenCalled();
+		emit({ ...playing, connection: "reconnecting" });
+		await d.play();
+		await d.pause();
+		expect(bridge.play).toHaveBeenCalledTimes(1);
+		expect(bridge.pause).toHaveBeenCalledTimes(1);
 	});
 
 	it("passes the controls through", async () => {
@@ -725,6 +788,20 @@ describe("airplayKey", () => {
 		expect(airplayKey({ type: "togglePlay" }, state, { ...caps, pause: false })).toEqual({
 			kind: "ignore",
 		});
+	});
+
+	it("neither plays nor pauses while the TV is lost", () => {
+		for (const status of ["playing", "paused"] as const)
+			expect(
+				airplayKey({ type: "togglePlay" }, at({ status, connection: "lost" }), caps)
+			).toEqual({ kind: "ignore" });
+		expect(
+			airplayKey(
+				{ type: "togglePlay" },
+				at({ status: "paused", connection: "reconnecting" }),
+				caps
+			)
+		).toEqual({ kind: "play" });
 	});
 
 	it("seeks within the item, when the TV can", () => {

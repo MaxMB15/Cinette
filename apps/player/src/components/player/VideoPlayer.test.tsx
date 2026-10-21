@@ -226,6 +226,7 @@ const fakeAirPlay = vi.hoisted(() => {
 		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
 		stop: vi.fn<AirPlay["stop"]>(async () => {}),
 		returnHere: vi.fn<AirPlay["returnHere"]>(async () => {}),
+		notPicked: false,
 	});
 	let current = initial();
 	const listeners = new Set<() => void>();
@@ -3600,6 +3601,7 @@ describe("AirPlay", () => {
 		kind: "airplay" as const,
 		name: "Living Room TV",
 		catalog: { kind: "local" as const },
+		notPicked: false,
 		capabilities: {
 			seek: true,
 			pause: true,
@@ -3818,6 +3820,39 @@ describe("AirPlay", () => {
 		await act(async () => letGo());
 		await flush();
 		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 606);
+	});
+
+	it("plays here again from where it was when no TV took the video", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 600, 5400) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const send = vi.mocked(fakeAirPlay.get().send);
+		await act(() => send.mock.calls[0][1].stopLocal());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState({ status: "opening" }) }));
+		await flush();
+		fakeMpv.actions.load.mockClear();
+		const stop = vi.mocked(fakeAirPlay.get().stop);
+		expect(stop).not.toHaveBeenCalled();
+		act(() => fakeAirPlay.set({ notPicked: true }));
+		await flush();
+		expect(stop).toHaveBeenCalledTimes(1);
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 600);
+		// AirPlay let go first.
+		expect(stop.mock.invocationCallOrder[0]).toBeLessThan(
+			fakeMpv.actions.load.mock.invocationCallOrder[0]
+		);
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("says so when it can't play here again after no TV took the video", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		act(() => fakeAirPlay.set({ notPicked: true }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 	});
 
 	it("says so when it can't play here again", async () => {

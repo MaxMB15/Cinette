@@ -528,6 +528,21 @@ export const PlayerView = () => {
 		Object.assign(p, next.progress);
 		if (next.save) flushProgress();
 	}, [airplay.state, flushProgress]);
+	// Where the item was when it went to AirPlay. On a Mac, closing the
+	// picker without a TV, or with this Mac, sends it nowhere, and it plays
+	// here again from there, as if AirPlay never started.
+	const airplayFrom = useRef<number | undefined>(undefined);
+	const playHereAgain = useLatestRef(async () => {
+		await airplay.stop();
+		// Stryker disable next-line ConditionalExpression: A send needs a channel, and nothing clears it while AirPlay plays.
+		if (!activeChannel) return;
+		await playback
+			.load({ kind: "local", channel: activeChannel }, { startAt: airplayFrom.current })
+			.catch(() => setAirplayNotice("Couldn't play it on this device."));
+	});
+	useEffect(() => {
+		if (airplay.notPicked) void playHereAgain.current();
+	}, [airplay.notPicked, playHereAgain]);
 	// Other Cinette devices control this player and see what it plays.
 	usePublishRemoteState(playback, activeChannel);
 
@@ -1355,6 +1370,7 @@ export const PlayerView = () => {
 		confirm: () => Promise<boolean>
 	): Promise<string | null> => {
 		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
+		airplayFrom.current = startAt;
 		const result = await airplay.send(channel, {
 			anchor,
 			startAt,
