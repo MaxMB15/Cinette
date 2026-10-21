@@ -18,11 +18,14 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 
-/// A message the fake got: its namespace and its JSON body.
+/// A message the fake got: its namespace and its JSON body, who sent it,
+/// and which connection it came on, counting from 0.
 #[derive(Debug, Clone)]
 pub struct Got {
     pub namespace: String,
     pub body: Value,
+    pub source: String,
+    pub connection: usize,
 }
 
 impl Got {
@@ -56,24 +59,27 @@ pub async fn start() -> (SocketAddr, Vec<u8>, mpsc::UnboundedReceiver<Got>) {
     let addr = listener.local_addr().unwrap();
     let (got, messages) = mpsc::unbounded_channel();
     tokio::spawn(async move {
+        let mut connection = 0;
         while let Ok((tcp, _)) = listener.accept().await {
             let acceptor = acceptor.clone();
             let got = got.clone();
             tokio::spawn(async move {
                 if let Ok(stream) = acceptor.accept(tcp).await {
-                    answer(stream, got).await;
+                    answer(stream, got, connection).await;
                 }
             });
+            connection += 1;
         }
     });
     (addr, cert, messages)
 }
 
-/// Answers one connection like the Default Media Receiver: nothing running
+/// Answers `connection` like the Default Media Receiver: nothing running
 /// at first, then the app after a launch, then the media after a load.
 pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     got: mpsc::UnboundedSender<Got>,
+    connection: usize,
 ) {
     let mut reader = FrameReader::default();
     let mut buf = [0u8; 4096];
@@ -95,6 +101,8 @@ pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
             let _ = got.send(Got {
                 namespace: message.namespace.clone(),
                 body: body.clone(),
+                source: message.source.clone(),
+                connection,
             });
             let id = body["requestId"].as_u64().unwrap_or(0);
             let reply = |source: &str, namespace: &str, body: Value| {

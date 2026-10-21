@@ -34,13 +34,15 @@ fn add_receiver(app: &TestApp, id: &str, addr: SocketAddr) {
 }
 
 fn channel(id: &str, url: &str, content_type: &str) -> Channel {
-    Channel {
-        id: id.into(),
+    let mut channel = Channel {
         name: "Evening News".into(),
         url: url.into(),
         content_type: content_type.into(),
         ..Channel::default()
-    }
+    };
+    // On a line of its own, which mutation testing leaves alone.
+    channel.id = id.into();
+    channel
 }
 
 /// A live channel's `.m3u8` that redirects to a playlist on another host,
@@ -128,6 +130,10 @@ async fn plays_an_item_directly_and_controls_it() {
     assert_eq!(media["metadata"]["title"], "Evening News");
     assert_eq!(loaded.body["currentTime"], 30.0);
     assert_eq!(loaded.namespace, mvp_core::cast::message::NS_MEDIA);
+    // The connection has a sender id of its own.
+    let sender = loaded.source.strip_prefix("sender-").unwrap();
+    assert_eq!(sender.len(), 8);
+    assert!(sender.chars().all(|c| c.is_ascii_hexdigit()), "{sender}");
 
     // Controls work once the receiver says what it plays.
     let mut seen = Vec::new();
@@ -337,14 +343,13 @@ async fn casting_to_another_receiver_ends_the_first_cast() {
     load(&app, "cast:a", &movie, direct("mp4"), None).unwrap();
     next_of(&mut first_got, "LOAD").await;
     load(&app, "cast:b", &movie, direct("mp4"), None).unwrap();
-    next_of(&mut second_got, "LOAD").await;
+    let connection = next_of(&mut second_got, "LOAD").await.connection;
     next_of(&mut first_got, "STOP").await;
     // A second load to the same receiver keeps its connection.
     load(&app, "cast:b", &movie, direct("mp4"), Some(5.0)).unwrap();
-    assert_eq!(
-        next_of(&mut second_got, "LOAD").await.body["currentTime"],
-        5.0
-    );
+    let again = next_of(&mut second_got, "LOAD").await;
+    assert_eq!(again.body["currentTime"], 5.0);
+    assert_eq!(again.connection, connection);
     assert_eq!(
         control(&app, "cast:a", json!({ "action": "play" })),
         Err(json!("notConnected"))
@@ -419,6 +424,42 @@ async fn a_converted_route_serves_the_receiver_from_this_computer() {
         // The pinned sidecar has no AAC encoder until build 3.
         assert_eq!(result, Err(json!("noConverter")));
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn says_when_the_converter_stops_with_an_error_while_it_casts() {
+    let app = TestApp::new();
+    if !crate::convert::support::support(&app.handle())
+        .await
+        .convert
+    {
+        return;
+    }
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    let source_url = format!("{source}/movie/broken.wav");
+    let movie = channel("m-1", &source_url, "movie");
+    add_channel(&app, &movie);
+    let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "aac" });
+    load(&app, "cast:tv", &movie, route, None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // ffmpeg ends with an error, as when the provider cuts it off.
+    std::process::Command::new("pkill")
+        .args(["-9", "-f", &source_url])
+        .status()
+        .unwrap();
+    let failed = loop {
+        let event = events
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the failure within 10 s");
+        if event["update"]["kind"] == "conversionFailed" {
+            break event;
+        }
+    };
+    assert_eq!(failed["receiverId"], "cast:tv");
+    assert_eq!(failed["update"]["refused"], false);
 }
 
 #[tokio::test(flavor = "multi_thread")]
