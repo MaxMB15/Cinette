@@ -249,6 +249,7 @@ describe("providersAddedText", () => {
 
 describe("countsText", () => {
 	it("lists what's picked, with counts when known", () => {
+		expect(countsText({ history: false, favorites: false, pins: true })).toBe("pinned groups");
 		expect(countsText(ALL)).toBe("watch history, saved places, favorites and pinned groups");
 		expect(countsText(ALL, { history: 12, positions: 3, favorites: 5, pins: 2 })).toBe(
 			"watch history (12), saved places (3), favorites (5) and pinned groups (2)"

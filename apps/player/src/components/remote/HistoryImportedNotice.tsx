@@ -38,7 +38,7 @@ export const HistoryImportedNotice = () => {
 		setImported(null);
 		// It may have been watched here since the import.
 		const key = playbackKey(channel);
-		const saved = key ? await getPlaybackPosition(key).catch(() => null) : null;
+		const saved = key ? await getPlaybackPosition(key).catch(() => undefined) : null;
 		const startAt = saved && !saved.finished ? saved.positionSeconds : undefined;
 		await applyRemoteCommand(
 			{ action: "load", itemId: channel.id, startAt },

@@ -456,6 +456,7 @@ export const PlayerView = () => {
 		() => () => {
 			void flushProgress();
 		},
+		// Stryker disable next-line ArrayDeclaration: flushProgress never changes, so the cleanup runs only on unmount either way.
 		[flushProgress]
 	);
 
@@ -651,8 +652,10 @@ export const PlayerView = () => {
 		() =>
 			setProgressSaver(async () => {
 				await flushProgress();
+				// Stryker disable next-line OptionalChaining: with no channel, the throw is caught by saveProgressNow, which gives the same null.
 				return activeChannelRef.current?.id ?? null;
 			}),
+		// Stryker disable next-line ArrayDeclaration: flushProgress and the ref never change, so it registers once either way.
 		[flushProgress, activeChannelRef]
 	);
 

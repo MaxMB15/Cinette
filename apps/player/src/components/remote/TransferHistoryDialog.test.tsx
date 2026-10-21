@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import type { Link } from "@/lib/remote-control";
 import { createCinetteDestination } from "@/lib/cinette-destination";
 import type { RemoteTransferNotice, TransferReport } from "@/lib/tauri";
@@ -410,5 +411,91 @@ describe("TransferHistoryDialog", () => {
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		expect(onClose).toHaveBeenCalledTimes(2);
 		expect(remoteCancelTransfer).not.toHaveBeenCalled();
+	});
+
+	it("still asks under StrictMode, which mounts it twice", async () => {
+		render(
+			<StrictMode>
+				<TransferHistoryDialog link={link()} onClose={onClose} />
+			</StrictMode>
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+	});
+
+	it("can send any one kind alone", () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		const send = () => screen.getByRole("button", { name: "Send" });
+		fireEvent.click(screen.getByRole("checkbox", { name: "Watch history and saved places" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Favorites" }));
+		expect(send()).toBeEnabled();
+		fireEvent.click(screen.getByRole("checkbox", { name: "Favorites" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Pinned groups" }));
+		expect(send()).toBeEnabled();
+		expect(send()).toHaveClass("bg-primary");
+		expect(screen.getByRole("button", { name: "Cancel" })).toHaveClass("hover:bg-accent");
+	});
+
+	it("goes back to sending, with its counts", async () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("radio", { name: "Import from Living Room" }));
+		fireEvent.click(screen.getByRole("radio", { name: "Send to Living Room" }));
+		expect(screen.getByRole("radio", { name: "Send to Living Room" })).toBeChecked();
+		await waitFor(() =>
+			expect(status()).toHaveTextContent("This device has watch history (12)")
+		);
+		expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+	});
+
+	it("reads the code out one digit at a time", async () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		expect(screen.getByText("Code 1 2 3 4 5 6")).toBeInTheDocument();
+	});
+
+	it("lists each unmatched item once, with no line for the rest when there's none", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		const heat = { name: "Heat", kind: "movie" as const, reason: "missing" as const };
+		notify({
+			step: "progress",
+			transfer: "t",
+			progress: {
+				state: "done",
+				data: report({ unmatched: [heat, heat], unmatchedTotal: 2 }),
+			},
+		});
+		const unmatched = screen.getByRole("list", { name: "Couldn't match" });
+		expect(within(unmatched).getAllByRole("listitem")).toHaveLength(2);
+		expect(error, "keys are unique").not.toHaveBeenCalled();
+		error.mockRestore();
+	});
+
+	it("keeps newer counts when an older read fails late", async () => {
+		let fail: (e: unknown) => void = () => {};
+		vi.mocked(remoteHistoryCounts).mockImplementationOnce(
+			() => new Promise((_, reject) => (fail = reject))
+		);
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("checkbox", { name: "Favorites" }));
+		await waitFor(() => expect(status()).toHaveTextContent("(12)"));
+		await act(async () => fail("down"));
+		expect(status()).toHaveTextContent("(12)");
+	});
+
+	it("runs a timer only while it counts down", async () => {
+		vi.useFakeTimers();
+		const { unmount } = render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		expect(vi.getTimerCount()).toBe(0);
+		await act(async () => {
+			fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		});
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(vi.getTimerCount()).toBe(1);
+		unmount();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });

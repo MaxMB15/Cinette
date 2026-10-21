@@ -23,6 +23,7 @@ export const setProgressSaver = (next: Saver): (() => void) => {
 /** Saves the open player's position. Resolves with the channel it has open,
  *  or null with no player or when saving fails. */
 export const saveProgressNow = async (): Promise<string | null> => {
+	// Stryker disable next-line ConditionalExpression: calling a missing saver throws, and the catch gives the same null.
 	if (!saver) return null;
 	try {
 		return await saver();

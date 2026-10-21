@@ -942,6 +942,13 @@ describe("opening something to watch", () => {
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
 
+	it("keeps a place exactly at the shortest one worth resuming", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, 30, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 30, 3600);
+		expect(tauri.deletePlaybackPosition).not.toHaveBeenCalled();
+	});
+
 	it("saves its place for a history transfer and says what it has open", async () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });

@@ -39,6 +39,20 @@ const PARTS: { key: keyof TransferWhat; label: string }[] = [
 	{ key: "pins", label: "Pinned groups" },
 ];
 
+/** What the dialog says while the history moves or is written. */
+const progressText = (state: HistoryState, sending: boolean): string => {
+	switch (state.step) {
+		case "saving":
+			return "Saving…";
+		case "moving":
+			if (!sending) return "Receiving…";
+			return state.total === null ? "Sending…" : `Sending… ${state.done} of ${state.total}`;
+		default:
+			// "starting" is an import's step.
+			return "Receiving…";
+	}
+};
+
 /**
  * "Transfer history and favorites": sends this device's history to the one
  * it controls, or imports that device's. The other device always asks its
@@ -81,12 +95,16 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 	// Set once the dialog is closed, so an ask still being set up then
 	// doesn't go out after all.
 	const closed = useRef(false);
-	useEffect(() => {
-		closed.current = false;
-		return () => {
-			closed.current = true;
-		};
-	}, []);
+	useEffect(
+		() => {
+			closed.current = false;
+			return () => {
+				closed.current = true;
+			};
+		},
+		// Stryker disable next-line ArrayDeclaration: any deps that never change run it only on mount and unmount.
+		[]
+	);
 
 	const finished = state.step === "choosing" || state.step === "done" || state.step === "failed";
 	const cancel = () => void remoteCancelTransfer(link.id).catch(() => {});
@@ -236,13 +254,7 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 			{(state.step === "starting" || state.step === "moving" || state.step === "saving") && (
 				<>
 					<p className="text-sm mb-3" role="status">
-						{state.step === "saving"
-							? "Saving…"
-							: !sending
-								? "Receiving…"
-								: state.step === "moving" && state.total !== null
-									? `Sending… ${state.done} of ${state.total}`
-									: "Sending…"}
+						{progressText(state, sending)}
 					</p>
 					<div className="flex justify-end">
 						<button type="button" className={PLAIN} onClick={close}>
