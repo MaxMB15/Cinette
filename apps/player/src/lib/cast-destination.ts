@@ -19,7 +19,7 @@ import type {
 	PlaybackState,
 	PlaybackStatus,
 } from "@/lib/destination";
-import { UnsupportedError } from "@/lib/destination";
+import { positionNow, UnsupportedError } from "@/lib/destination";
 import { chooseRoute, type PlayRoute, type RouteDecision } from "@/lib/route";
 import {
 	castProfile,
@@ -112,6 +112,9 @@ export const applyUpdate = (
 				loading: false,
 				error: { code: update.refused ? "refused" : "loadFailed" },
 			};
+		case "conversionStopped":
+			// The destination starts the stream again, and says so itself.
+			return snapshot;
 		case "rejected":
 			// A command it turned down leaves the state as it was.
 			return snapshot;
@@ -205,6 +208,9 @@ export interface CastOptions {
 	 *  fetch itself, so the stream goes through this device's connection. */
 	streamThrough?: () => boolean;
 	now?: () => number;
+	/** Runs `run` after `ms`, and returns what cancels it. Tests pass their
+	 *  own. */
+	schedule?: (run: () => void, ms: number) => () => void;
 }
 
 /** A destination for a Cast receiver, and the way to feed it. */
@@ -271,6 +277,21 @@ const FORMAT_FAILED = ["notPlaylist", "cors"];
  */
 export const PAUSE_LIMIT_MS = 10_000;
 
+/**
+ * How long a converted stream waits before each try to start it again,
+ * after the backend said it has to: at once, then longer each time. After
+ * the last try the cast says the stream stopped.
+ */
+export const RESTART_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000];
+
+/** How long after a try to start the stream again the next stop counts as
+ *  a first one again. */
+export const STEADY_MS = 60_000;
+
+/** What `castLoad` rejects with when the provider refused the login, which
+ *  trying again won't change. */
+const REFUSED = "refused";
+
 /** What `castLoad` rejects with when a newer load or a stop for the same
  *  receiver came while it ran. */
 export const SUPERSEDED = "superseded";
@@ -287,6 +308,12 @@ export const createCastDestination = (
 	options: CastOptions = {}
 ): CastDestination => {
 	const now = options.now ?? (() => performance.now());
+	const schedule =
+		options.schedule ??
+		((run: () => void, ms: number) => {
+			const timer = setTimeout(run, ms);
+			return () => clearTimeout(timer);
+		});
 	let snapshot = idleSnapshot;
 	let state = castPlaybackState(snapshot);
 	// The same object until the state changes, which every capabilities
@@ -344,15 +371,31 @@ export const createCastDestination = (
 	/** The newest load's token. A stop or a release puts in another, so
 	 *  only the newest load's answer shows. */
 	let newest: object = {};
+	/** The tries to start the stream again since it last ran steadily, and
+	 *  when the last one was asked for. */
+	let tries = 0;
+	let triedAt = 0;
+	/** Cancels the try waiting to start the stream again, if one is. */
+	let cancelRestart = () => {};
+	/** Forgets the tries, for a load, a stop or a release the user asked
+	 *  for. */
+	const resetRestarts = () => {
+		cancelRestart();
+		tries = 0;
+	};
+	/** `quiet` for a try to start the stream again, which says nothing when
+	 *  it fails, since the next try or giving up does. */
 	const send = async (
 		channel: Channel,
 		route: CastRoute,
 		formats: StreamFormats,
-		startAt?: number
+		startAt?: number,
+		quiet = false
 	) => {
 		const converted = route.via === "converted";
 		const sent = {};
 		newest = sent;
+		if (!quiet) resetRestarts();
 		publish({
 			...snapshot,
 			// A closed cast connects again for this load.
@@ -370,7 +413,7 @@ export const createCastDestination = (
 		await backend.castLoad(receiver.id, channel, route, startAt).catch((e: unknown) => {
 			// The backend stopped what played before it asked for this, so
 			// nothing plays now. A newer load or a stop says for itself.
-			if (sent === newest)
+			if (sent === newest && !quiet)
 				publish({
 					...snapshot,
 					loading: false,
@@ -381,6 +424,38 @@ export const createCastDestination = (
 		});
 	};
 	const control = (action: CastAction) => backend.castControl(receiver.id, action);
+	/** Says the stream stopped, after the tries to start it again ran out. */
+	const giveUp = (code: "refused" | "loadFailed") =>
+		publish({ ...snapshot, loading: false, media: null, error: { code } });
+	/**
+	 * Starts the converted stream again after the backend said it has to: a
+	 * film from where it was, a live channel from now. It waits longer
+	 * before each try that follows another within {@link STEADY_MS}, and
+	 * says the stream stopped only once the tries run out, or at once when
+	 * the provider refuses the login.
+	 */
+	const restart = () => {
+		cancelRestart();
+		if (loaded === null) return;
+		if (now() - triedAt >= STEADY_MS) tries = 0;
+		triedAt = now();
+		if (tries >= RESTART_DELAYS_MS.length) return giveUp("loadFailed");
+		const delay = RESTART_DELAYS_MS[tries];
+		tries += 1;
+		const { channel, route, formats } = loaded;
+		const startAt = channel.contentType === "live" ? undefined : positionNow(state, now());
+		publish({ ...snapshot, loading: true, error: null });
+		// A load, a stop or a release the user asks for meanwhile cancels it.
+		cancelRestart = schedule(() => {
+			const attempt = send(channel, route, formats, startAt, true);
+			const mine = newest;
+			attempt.catch((e: unknown) => {
+				if (mine !== newest) return;
+				if (String(e) === REFUSED) giveUp("refused");
+				else restart();
+			});
+		}, delay);
+	};
 
 	return {
 		id: receiver.id,
@@ -446,6 +521,7 @@ export const createCastDestination = (
 		stop: async () => {
 			loaded = null;
 			newest = {};
+			resetRestarts();
 			await backend.castStop(receiver.id);
 		},
 		getState: () => state,
@@ -455,13 +531,17 @@ export const createCastDestination = (
 				listeners.delete(listener);
 			};
 		},
-		receive: (update) => publish(applyUpdate(snapshot, update, now())),
+		receive: (update) => {
+			publish(applyUpdate(snapshot, update, now()));
+			if (update.kind === "conversionStopped") restart();
+		},
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,
 		release: async () => {
 			loaded = null;
 			pausedAt = null;
 			newest = {};
+			resetRestarts();
 			publish({ ...snapshot, loading: true, media: null, error: null });
 			await backend.castRelease(receiver.id);
 		},

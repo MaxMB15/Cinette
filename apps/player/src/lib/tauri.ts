@@ -679,6 +679,10 @@ export type CastUpdate =
 	| { kind: "playbackError"; code: number | null }
 	| { kind: "rejected"; reason: string | null }
 	| { kind: "conversionFailed"; refused: boolean }
+	/** The converted stream has to start again: `dropped` when a live
+	 *  channel's connection ended, `moved` when this computer's address on
+	 *  the way to the receiver changed. */
+	| { kind: "conversionStopped"; why: "dropped" | "moved" }
 	| {
 			kind: "closed";
 			reason:
