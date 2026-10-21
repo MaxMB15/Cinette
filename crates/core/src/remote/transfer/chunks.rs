@@ -40,6 +40,10 @@ pub struct Chunk {
     /// What the source played last, in the first chunk only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current: Option<ItemRef>,
+    /// How many items and pins the source left out for being over the
+    /// limits, in the first chunk only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Item>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -69,16 +73,20 @@ fn pin_fits(pin: &Pin) -> bool {
     pin.group.len() <= MAX_NAME_BYTES && pin.content_type.len() <= MAX_ID_BYTES
 }
 
-/// The export in chunks, and how many items and pins were left out for
-/// being over the limits. There's always at least one chunk, the last one.
-pub fn split(export: &Export) -> (Vec<Chunk>, u32) {
-    let mut dropped = 0u32;
+/// The export in chunks, stamped with the source's clock `now`, and how
+/// many items and pins were left out for being over the limits. The first
+/// chunk says how many too. There's always at least one chunk, the last one.
+pub fn split(export: &Export, now: i64) -> (Vec<Chunk>, u32) {
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let dropped = count(export.items.iter().filter(|i| !item_fits(i)).count())
+        .saturating_add(count(export.pins.iter().filter(|p| !pin_fits(p)).count()));
     let mut chunks = Vec::new();
     let mut chunk = Chunk {
         seq: 0,
         last: false,
-        sent_at: Some(export.sent_at),
+        sent_at: Some(now),
         current: export.current.clone().filter(ref_fits),
+        dropped: (dropped > 0).then_some(dropped),
         items: Vec::new(),
         pins: Vec::new(),
     };
@@ -92,6 +100,7 @@ pub fn split(export: &Export) -> (Vec<Chunk>, u32) {
                 last: false,
                 sent_at: None,
                 current: None,
+                dropped: None,
                 items: Vec::new(),
                 pins: Vec::new(),
             },
@@ -101,7 +110,6 @@ pub fn split(export: &Export) -> (Vec<Chunk>, u32) {
     };
     for item in &export.items {
         if !item_fits(item) {
-            dropped = dropped.saturating_add(1);
             continue;
         }
         let len = json_len(item) + 1;
@@ -116,7 +124,6 @@ pub fn split(export: &Export) -> (Vec<Chunk>, u32) {
     }
     for pin in &export.pins {
         if !pin_fits(pin) {
-            dropped = dropped.saturating_add(1);
             continue;
         }
         // The first pin after items also opens the list of pins.
@@ -151,6 +158,17 @@ fn json_len<T: Serialize>(value: &T) -> usize {
         .len()
 }
 
+/// Whether an export is within what a receiver takes, checked before it's
+/// sent so it doesn't fail halfway.
+pub fn within_limits(export: &Export) -> bool {
+    if export.items.len() > MAX_ITEMS || export.pins.len() > MAX_PINS {
+        return false;
+    }
+    let bytes: usize = export.items.iter().map(|i| json_len(i) + 1).sum::<usize>()
+        + export.pins.iter().map(|p| json_len(p) + 1).sum::<usize>();
+    bytes <= MAX_TOTAL_BYTES
+}
+
 /// Why the receiver gave up on a transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AssembleError {
@@ -160,6 +178,9 @@ pub enum AssembleError {
     /// More than a transfer takes.
     #[error("transfer too large")]
     TooLarge,
+    /// The first chunk has no clock to compare times by.
+    #[error("first chunk without the source's clock")]
+    NoClock,
 }
 
 /// Collects chunks until the last one.
@@ -178,11 +199,19 @@ impl Assembler {
         Self::default()
     }
 
-    /// Adds a chunk that arrived as `bytes` bytes of JSON. Returns the whole
-    /// export with the last chunk.
-    pub fn push(&mut self, chunk: Chunk, bytes: usize) -> Result<Option<Export>, AssembleError> {
+    /// Adds a chunk that arrived as `bytes` bytes of JSON when this device's
+    /// clock read `now`. Returns the whole export with the last chunk.
+    pub fn push(
+        &mut self,
+        chunk: Chunk,
+        bytes: usize,
+        now: i64,
+    ) -> Result<Option<Export>, AssembleError> {
         if self.done || chunk.seq != self.next {
             return Err(AssembleError::OutOfOrder);
+        }
+        if chunk.seq == 0 && chunk.sent_at.is_none() {
+            return Err(AssembleError::NoClock);
         }
         self.bytes = self.bytes.saturating_add(bytes);
         let items = self.export.items.len() + chunk.items.len();
@@ -190,9 +219,11 @@ impl Assembler {
         if self.bytes > MAX_TOTAL_BYTES || items > MAX_ITEMS || pins > MAX_PINS {
             return Err(AssembleError::TooLarge);
         }
-        if chunk.seq == 0 {
-            self.export.sent_at = chunk.sent_at.unwrap_or(0);
+        if let Some(sent_at) = chunk.sent_at.filter(|_| chunk.seq == 0) {
+            self.export.sent_at = sent_at;
+            self.export.received_at = now;
             self.export.current = chunk.current.filter(ref_fits);
+            self.dropped = self.dropped.saturating_add(chunk.dropped.unwrap_or(0));
         }
         for item in chunk.items {
             if item_fits(&item) {
@@ -211,6 +242,7 @@ impl Assembler {
         self.next += 1;
         if chunk.last {
             self.done = true;
+            self.export.dropped = self.dropped;
             return Ok(Some(std::mem::take(&mut self.export)));
         }
         Ok(None)

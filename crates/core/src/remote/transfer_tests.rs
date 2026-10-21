@@ -5,11 +5,12 @@
 //! memory: the consent spec 5 asks for, denial, expiry, interruption, and a
 //! grant that can't be used twice.
 
+use super::channel::FrameReader;
 use super::consent::{Answer, CONSENT_TIMEOUT};
 use super::controller::{AskError, Event};
-use super::message::{ErrorCode, Message, RequestKind};
+use super::message::{ErrorCode, Message};
 use super::settings::{ControlMode, RemoteSettings};
-use super::target::Action;
+use super::target::{Action, RATE};
 use super::tests::Net;
 use super::transfer::flow::{
     ControllerEvent, Direction, Progress, ProviderKind, ProviderName, ProviderOutcome,
@@ -50,6 +51,16 @@ fn export(items: usize) -> Export {
         pins: vec![],
         current: Some(ItemRef::named(ItemKind::Live, "Channel 0")),
         sent_at: 99,
+        ..Export::default()
+    }
+}
+
+/// An export's content, without the clocks the transfer stamps on it.
+fn same_content(export: Export) -> Export {
+    Export {
+        sent_at: 0,
+        received_at: 0,
+        ..export
     }
 }
 
@@ -85,7 +96,7 @@ fn ask(net: &mut Net, client: usize, direction: Direction) {
     });
     let bytes = net.clients[client]
         .controller
-        .ask_history(direction, What::ALL, counts)
+        .ask_history(direction, What::ALL, counts, net.now)
         .unwrap();
     net.send(client, bytes);
 }
@@ -194,12 +205,16 @@ fn a_controls_dialog_has_nothing_asked() {
 #[test]
 fn sending_history_goes_in_chunks_and_is_written_once_at_the_end() {
     let (mut net, phone) = connected();
-    ask(&mut net, phone, Direction::Send);
-    net.answer(Answer::Allow);
-    let (transfer, salt) = export_needed(&net, phone).expect("the phone is asked to export");
     // Big enough for more chunks than the rate limit allows messages in a
     // second, all sent at the same moment.
     let sent = export(12_000);
+    let bytes = net.clients[phone]
+        .controller
+        .ask_history(Direction::Send, What::ALL, Some(sent.counts()), net.now)
+        .unwrap();
+    net.send(phone, bytes);
+    net.answer(Answer::Allow);
+    let (transfer, salt) = export_needed(&net, phone).expect("the phone is asked to export");
     let out = net.clients[phone]
         .controller
         .send_export(&transfer, Ok(sent.clone()), net.now);
@@ -209,7 +224,7 @@ fn sending_history_goes_in_chunks_and_is_written_once_at_the_end() {
     assert_eq!(found.len(), 1);
     let (conn, got_transfer, got_salt, got) = found.into_iter().next().unwrap();
     assert_eq!((got_transfer.as_str(), got_salt), (transfer.as_str(), salt));
-    assert_eq!(got, sent);
+    assert_eq!(same_content(got), same_content(sent));
     let chunks = target_progress(&net)
         .iter()
         .filter(|p| matches!(p, Progress::Receiving { .. }))
@@ -280,7 +295,10 @@ fn importing_history_shows_a_preview_and_waits_for_start() {
             _ => None,
         })
         .expect("the history arrives");
-    assert_eq!(ready, (transfer.clone(), salt, sent));
+    assert_eq!(
+        (ready.0, ready.1, same_content(ready.2)),
+        (transfer.clone(), salt, same_content(sent))
+    );
 
     let out = net.clients[phone]
         .controller
@@ -480,7 +498,7 @@ fn a_target_that_doesnt_offer_transfers_refuses_them() {
     assert_eq!(
         net.clients[phone]
             .controller
-            .ask_history(Direction::Send, What::ALL, None),
+            .ask_history(Direction::Send, What::ALL, None, net.now),
         Err(AskError::Unsupported)
     );
     // Asked anyway, the target refuses without a dialog.
@@ -506,7 +524,7 @@ fn only_one_transfer_at_a_time() {
     assert_eq!(
         net.clients[phone]
             .controller
-            .ask_history(Direction::Import, What::ALL, None),
+            .ask_history(Direction::Import, What::ALL, None, net.now),
         Err(AskError::Busy)
     );
     let request = super::transfer::flow::Asked::History {
@@ -548,7 +566,7 @@ fn a_controller_without_a_session_cant_ask() {
     assert_eq!(
         net.clients[phone]
             .controller
-            .ask_history(Direction::Send, What::ALL, None),
+            .ask_history(Direction::Send, What::ALL, None, net.now),
         Err(AskError::NotConnected)
     );
 }
@@ -607,24 +625,6 @@ fn a_controller_revoked_while_asking_takes_its_dialog_down() {
     assert_eq!(net.prompt(), None);
 }
 
-#[test]
-fn transfer_steps_without_a_grant_are_refused() {
-    let (mut net, phone) = connected();
-    let bytes = net.clients[phone]
-        .controller
-        .seal_raw(&Message::TransferStart {
-            transfer: "made-up".into(),
-        })
-        .unwrap();
-    net.send(phone, bytes);
-    assert!(take(&mut net, |a| match a {
-        Action::ExportHistory { .. } => Some(()),
-        _ => None,
-    })
-    .is_empty());
-    assert!(net.clients[phone].connected());
-}
-
 fn providers() -> Vec<ProviderSettings> {
     vec![ProviderSettings {
         name: "Home".into(),
@@ -641,7 +641,10 @@ fn ask_providers(net: &mut Net, phone: usize) {
         name: "Home".into(),
         kind: ProviderKind::Xtream,
     }];
-    let bytes = net.clients[phone].controller.ask_providers(names).unwrap();
+    let bytes = net.clients[phone]
+        .controller
+        .ask_providers(names, net.now)
+        .unwrap();
     net.send(phone, bytes);
 }
 
@@ -812,24 +815,30 @@ fn the_target_offers_what_it_was_told_to() {
     assert_eq!(
         net.clients[phone]
             .controller
-            .ask_history(Direction::Send, What::ALL, None),
+            .ask_history(Direction::Send, What::ALL, None, net.now),
         Err(AskError::Unsupported)
     );
     assert!(net.clients[phone]
         .controller
-        .ask_providers(vec![ProviderName {
-            name: "Home".into(),
-            kind: ProviderKind::M3u,
-        }])
+        .ask_providers(
+            vec![ProviderName {
+                name: "Home".into(),
+                kind: ProviderKind::M3u,
+            }],
+            net.now
+        )
         .is_ok());
     net.target.offer(true, false);
     let laptop = net.connect("Laptop");
     assert!(net.clients[laptop]
         .controller
-        .ask_providers(vec![ProviderName {
-            name: "Home".into(),
-            kind: ProviderKind::M3u,
-        }])
+        .ask_providers(
+            vec![ProviderName {
+                name: "Home".into(),
+                kind: ProviderKind::M3u,
+            }],
+            net.now
+        )
         .is_err());
 }
 
@@ -845,14 +854,270 @@ fn a_transfer_request_over_the_rate_limit_is_refused() {
     assert_eq!(refused(&net, phone), Some(ErrorCode::RateLimited));
 }
 
+// From the review of #343.
+
+/// What the target does with one message from `client`, sent past the
+/// controller. The actions are carried out after, so the link stays in step.
+fn target_takes(net: &mut Net, client: usize, message: &Message) -> usize {
+    let bytes = net.clients[client].controller.seal_raw(message).unwrap();
+    let mut reader = FrameReader::new();
+    reader.push(&bytes);
+    let frame = reader.next_frame().unwrap().unwrap();
+    let conn = net.clients[client].conn;
+    let actions = net.target.receive(conn, &frame, net.now);
+    let replies = actions
+        .iter()
+        .filter(|a| matches!(a, Action::Send { .. }))
+        .count();
+    net.handle(actions);
+    net.pump();
+    replies
+}
+
+fn made_up_id(n: usize) -> String {
+    format!("{n:032x}")
+}
+
 #[test]
-fn a_request_kind_reads_from_what_is_asked() {
-    use super::transfer::flow::Asked;
-    let history = Asked::History {
-        direction: Direction::Send,
-        what: What::ALL,
-        counts: None,
-    };
-    assert_eq!(history.kind(), RequestKind::History);
-    assert_eq!(Asked::Providers(vec![]).kind(), RequestKind::Providers);
+fn steps_of_no_transfer_here_get_an_error_each() {
+    let (mut net, phone) = connected();
+    let id = made_up_id(1);
+    let answered = [
+        Message::TransferStart {
+            transfer: id.clone(),
+        },
+        Message::TransferAck {
+            transfer: id.clone(),
+            seq: 0,
+        },
+        Message::TransferDone {
+            transfer: id.clone(),
+            report: Report::default(),
+        },
+        Message::TransferChunk {
+            transfer: id.clone(),
+            chunk: super::transfer::chunks::Chunk {
+                seq: 0,
+                last: true,
+                sent_at: Some(1),
+                current: None,
+                dropped: None,
+                items: vec![],
+                pins: vec![],
+            },
+        },
+        Message::ProvidersSend {
+            grant: id.clone(),
+            part: 0,
+            last: true,
+            providers: providers(),
+        },
+    ];
+    for message in answered {
+        assert_eq!(target_takes(&mut net, phone, &message), 1, "{message:?}");
+    }
+    for quiet in [
+        Message::TransferCancel {
+            transfer: id.clone(),
+        },
+        Message::TransferError {
+            transfer: id,
+            code: ErrorCode::Failed,
+        },
+    ] {
+        assert_eq!(target_takes(&mut net, phone, &quiet), 0, "{quiet:?}");
+    }
+    assert!(take(&mut net, |a| match a {
+        Action::ExportHistory { .. } | Action::ImportHistory { .. } => Some(()),
+        _ => None,
+    })
+    .is_empty());
+    assert!(net.clients[phone].connected());
+}
+
+#[test]
+fn an_id_this_side_never_makes_gets_no_answer() {
+    let (mut net, phone) = connected();
+    for id in ["x".repeat(60_000), "made-up".into(), "zz".repeat(16)] {
+        let ack = Message::TransferAck {
+            transfer: id,
+            seq: 0,
+        };
+        assert_eq!(target_takes(&mut net, phone, &ack), 0);
+    }
+}
+
+#[test]
+fn steps_of_no_transfer_count_against_the_rate_limit() {
+    let (mut net, phone) = connected();
+    for n in 0..25 {
+        let ack = Message::TransferAck {
+            transfer: made_up_id(n),
+            seq: 0,
+        };
+        target_takes(&mut net, phone, &ack);
+    }
+    let id = net.command(phone, super::message::Command::Stop);
+    assert!(net.clients[phone].events.contains(&Event::Reply {
+        request: id,
+        result: Err(ErrorCode::RateLimited),
+    }));
+}
+
+#[test]
+fn a_flood_of_made_up_steps_gets_only_as_many_answers_as_the_limit() {
+    let (mut net, phone) = connected();
+    let answered: usize = (0..200)
+        .map(|n| {
+            let ack = Message::TransferAck {
+                transfer: made_up_id(n),
+                seq: 0,
+            };
+            target_takes(&mut net, phone, &ack)
+        })
+        .sum();
+    assert!(answered <= RATE as usize, "{answered}");
+}
+
+#[test]
+fn a_cancel_that_crosses_the_grant_leaves_nothing_behind() {
+    let (mut net, phone) = connected();
+    ask(&mut net, phone, Direction::Send);
+    // The phone cancels; its Cancel is on the way when the user allows.
+    let out = net.clients[phone].controller.cancel_transfer();
+    net.queue(phone, out.send);
+    net.answer(Answer::Allow);
+    net.pump();
+    // The grant met no request on the phone, which said so.
+    assert!(!net.clients[phone]
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::Error(_))));
+    assert_eq!(export_needed(&net, phone), None);
+    // The target let go of the grant, so asking again isn't refused as busy.
+    net.clients[phone].events.clear();
+    ask(&mut net, phone, Direction::Send);
+    assert!(net.prompt().is_some());
+    assert_eq!(refused(&net, phone), None);
+}
+
+#[test]
+fn a_new_control_request_ends_a_transfer_request_without_a_ghost_session() {
+    let mut net = Net::new(RemoteSettings::default());
+    net.target.offer(true, true);
+    let phone = net.connect("Phone");
+    net.answer(Answer::Allow);
+    assert!(net.clients[phone].connected());
+    ask(&mut net, phone, Direction::Send);
+    // The same device opens a second connection and asks for control.
+    let key = net.clients[phone].key.clone();
+    let again = net.connect_with(key, "Phone", None);
+    assert_eq!(refused(&net, phone), Some(ErrorCode::Cancelled));
+    assert!(
+        net.clients[phone].connected(),
+        "the session's connection stays"
+    );
+    net.answer(Answer::Deny);
+    assert!(!net.clients[again].connected());
+    let sessions = net.last_sessions().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].connected);
+    assert_eq!(net.target.sessions().len(), 1);
+}
+
+#[test]
+fn a_transfer_lost_with_its_connection_says_so_on_the_target() {
+    let (mut net, phone) = connected();
+    let transfer = granted_send(&mut net, phone);
+    let mut out = net.clients[phone]
+        .controller
+        .send_export(&transfer, Ok(export(12_000)), net.now);
+    net.queue(phone, std::mem::take(&mut out.send));
+    net.deliver(phone);
+    net.drop_link(phone);
+    assert_eq!(
+        target_progress(&net).last(),
+        Some(&Progress::Failed(ErrorCode::Cancelled))
+    );
+}
+
+#[test]
+fn a_transfer_lost_with_its_session_says_so_on_the_controller() {
+    let (mut net, phone) = connected();
+    granted_send(&mut net, phone);
+    let session = net.target.sessions()[0].session_id.clone();
+    let actions = net.target.disconnect(&session);
+    net.handle(actions);
+    assert_eq!(
+        last_progress(&net, phone),
+        Some(Progress::Failed(ErrorCode::Cancelled))
+    );
+    assert_eq!(
+        target_progress(&net).last(),
+        Some(&Progress::Failed(ErrorCode::Cancelled))
+    );
+}
+
+#[test]
+fn a_broken_frame_while_asking_takes_the_dialog_down() {
+    let (mut net, phone) = connected();
+    ask(&mut net, phone, Direction::Send);
+    assert!(net.prompt().is_some());
+    let conn = net.clients[phone].conn;
+    let actions = net.target.receive(conn, b"not sealed", net.now);
+    net.handle(actions);
+    assert_eq!(net.prompt(), None);
+}
+
+#[test]
+fn a_target_that_only_takes_history_refuses_providers() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    net.target.offer(true, false);
+    let phone = net.connect("Phone");
+    let request = super::transfer::flow::Asked::Providers(vec![ProviderName {
+        name: "Home".into(),
+        kind: ProviderKind::M3u,
+    }])
+    .request(41);
+    let bytes = net.clients[phone].controller.seal_raw(&request).unwrap();
+    net.send(phone, bytes);
+    assert!(net.clients[phone].events.contains(&Event::Reply {
+        request: 41,
+        result: Err(ErrorCode::Unsupported),
+    }));
+}
+
+#[test]
+fn a_request_right_after_another_devices_denial_is_busy() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    net.target.offer(true, true);
+    let phone = net.connect("Phone");
+    let laptop = net.connect("Laptop");
+    ask(&mut net, phone, Direction::Send);
+    net.answer(Answer::Deny);
+    ask(&mut net, laptop, Direction::Send);
+    assert_eq!(refused(&net, laptop), Some(ErrorCode::Busy));
+}
+
+#[test]
+fn a_target_never_sends_providers() {
+    // A providers transfer from start to end: everything the target sends
+    // back is a grant, a progress step or the results, never settings.
+    let (mut net, phone) = connected();
+    ask_providers(&mut net, phone);
+    net.answer(Answer::Allow);
+    let grant = provider_grant(&net, phone).unwrap();
+    let out = net.clients[phone]
+        .controller
+        .send_providers(&grant, providers(), net.now);
+    net.send_all(phone, out.send);
+    let (conn, grant, _) = saves(&mut net).remove(0);
+    let actions = net.target.providers_saved(conn, &grant, vec![]);
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, Action::SaveProviders { .. })));
+    net.handle(actions);
+    assert!(!transfer_events(&net, phone)
+        .iter()
+        .any(|e| matches!(e, ControllerEvent::ProvidersGranted { grant: g } if *g != grant)));
 }

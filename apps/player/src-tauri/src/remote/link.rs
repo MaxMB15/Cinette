@@ -623,7 +623,7 @@ async fn connection(
                     }
                 },
                 Some(Input::AskProviders(names, reply)) => {
-                    let asked = controller.ask_providers(names).map(|bytes| {
+                    let asked = controller.ask_providers(names, (config.clock)()).map(|bytes| {
                         let _ = writer.send(bytes);
                         last_sent = (config.clock)();
                     });
