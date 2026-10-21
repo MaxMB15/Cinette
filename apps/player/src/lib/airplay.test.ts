@@ -485,6 +485,44 @@ describe("createAirPlayDestination", () => {
 		expect(bridge.loadConverted).toHaveBeenLastCalledWith(expect.anything(), 9, 2, 300);
 	});
 
+	it("stops only once a conversion the TV's state ended has hung up", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		let hungUp: () => void = () => {};
+		bridge.endConversion.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (hungUp = resolve))
+		);
+		emit({ ...playing, connection: "lost" });
+		let stopped = false;
+		const stopping = d.stop().then(() => (stopped = true));
+		await settle();
+		expect(bridge.stop).not.toHaveBeenCalled();
+		expect(stopped).toBe(false);
+		hungUp();
+		await stopping;
+		expect(bridge.stop).toHaveBeenCalledTimes(1);
+		// It wasn't asked to end twice.
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("loads the next item only once a conversion that ended has hung up", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		let hungUp: () => void = () => {};
+		bridge.endConversion.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (hungUp = resolve))
+		);
+		emit({ ...playing, status: "error", error: { code: "failed" } });
+		const next = channel();
+		const decision = await d.route({ kind: "local", channel: next });
+		if (!decision.ok) throw new Error("no route");
+		const loading = d.load({ kind: "local", channel: next }, { route: decision.route });
+		await settle();
+		expect(bridge.load).not.toHaveBeenCalled();
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+		hungUp();
+		await loading;
+		expect(bridge.load.mock.calls.length + bridge.loadConverted.mock.calls.length).toBe(1);
+	});
+
 	it("ends the conversion when the TV is gone", async () => {
 		const { bridge, emit, d } = await convertedMovie();
 		emit({ ...playing, connection: "reconnecting" });

@@ -360,6 +360,9 @@ export const createAirPlayDestination = (
 		for (const listener of listeners) listener(state);
 	};
 
+	/** The end of a conversion the TV's state ended, so whatever plays next
+	 *  waits for it to hang up on the provider. */
+	let ending: Promise<void> = Promise.resolve();
 	let unlisten: (() => void) | null = null;
 	let disposed = false;
 	void bridge
@@ -369,7 +372,7 @@ export const createAirPlayDestination = (
 			// will fetch what this device converts.
 			if (converted && (next.connection === "lost" || next.error)) {
 				converted = null;
-				void bridge.endConversion().catch(() => {});
+				ending = bridge.endConversion().catch(() => {});
 			}
 			publish();
 		})
@@ -448,6 +451,7 @@ export const createAirPlayDestination = (
 			// after it's set, and subscribers read both together.
 			publish();
 			const from = live ? undefined : startAt;
+			await ending;
 			if (converted) await bridge.loadConverted(channel, generation, source, from);
 			else await bridge.load(channel, generation, source, from);
 		},
@@ -471,6 +475,7 @@ export const createAirPlayDestination = (
 			const wasConverted = converted !== null;
 			converted = null;
 			if (wasConverted) await bridge.endConversion();
+			else await ending;
 			await bridge.stop();
 			native = IDLE_NATIVE_STATE;
 			item = null;
