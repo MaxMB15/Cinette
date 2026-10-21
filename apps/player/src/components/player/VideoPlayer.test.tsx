@@ -4138,6 +4138,81 @@ describe("Google Cast", () => {
 		expect(send.mock.calls[0][2].startAt).toBeUndefined();
 	});
 
+	it("puts away a note about an earlier cast once one starts", async () => {
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV")],
+			statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+		});
+		await openItem(lanternKeeper());
+		const castTo = async () => {
+			fireEvent.click(castButton()!);
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+			await flush();
+		};
+		act(() => fakeCast.report("Lost the connection to Hotel TV."));
+		await castTo();
+		expect(screen.queryByRole("alert")).toBeNull();
+		// Nor a note that one didn't start.
+		vi.mocked(fakeCast.get().send).mockResolvedValueOnce("Couldn't reach Hotel TV.");
+		await castTo();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Hotel TV.");
+		await castTo();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("keeps a note about AirPlay up when a cast starts", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
+			sent: false,
+			why: "blocked",
+			decision: { ok: false, reason: "container", detail: "mkv" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "AirPlay" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
+		act(() => {
+			fakeAirPlay.set({ available: false });
+			fakeCast.set({
+				receivers: [receiver("cast:tv", "Hotel TV")],
+				statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+			});
+		});
+		fireEvent.click(castButton()!);
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(vi.mocked(fakeCast.get().send)).toHaveBeenCalled();
+		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
+	});
+
+	it("keeps a note about AirPlay's seek from the keys up when a cast starts", async () => {
+		await openItem(lanternKeeper());
+		const airplayTv = { ...tv(), id: "airplay:tv", kind: "airplay" as const };
+		airplayTv.seek.mockRejectedValueOnce("");
+		act(() =>
+			fakeAirPlay.set({
+				destination: airplayTv as unknown as AirPlay["destination"],
+				state: castState(),
+			})
+		);
+		await press("ArrowRight");
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't move the stream on the TV.");
+		act(() => {
+			fakeAirPlay.set({ destination: null, state: null });
+			fakeCast.set({
+				receivers: [receiver("cast:tv", "Hotel TV")],
+				statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+			});
+		});
+		fireEvent.click(castButton()!);
+		await flush();
+		fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't move the stream on the TV.");
+	});
+
 	it("says why a cast didn't start", async () => {
 		fakeCast.set({
 			receivers: [receiver("cast:tv", "Hotel TV")],
@@ -4506,13 +4581,16 @@ describe("Google Cast", () => {
 			expect(screen.getByText(harborLights().name)).toBeInTheDocument();
 		});
 
-		it("keeps a note up while the next item goes to the receiver", async () => {
+		it("puts away a note about the cast once the next item goes to the receiver", async () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });
-			casting();
-			act(() => fakeCast.report("Lost the connection to Hotel TV."));
+			const tvNow = casting();
+			// A seek from the keys that failed, while the TV played.
+			tvNow.seek.mockRejectedValueOnce("refused");
+			await press("ArrowRight");
+			expect(screen.getByRole("alert").textContent).toMatch(/^The provider refused/);
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
-			expect(screen.getByRole("alert").textContent).toBe("Lost the connection to Hotel TV.");
+			expect(screen.queryByRole("alert")).toBeNull();
 		});
 
 		it("takes the episode keys to the receiver, and the rest as the TV's controls", async () => {

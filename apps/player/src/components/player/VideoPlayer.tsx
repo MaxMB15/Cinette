@@ -111,6 +111,24 @@ import { ChevronLeft, X } from "lucide-react";
 
 /** How long a note about AirPlay or Cast stays up. */
 const NOTICE_MS = 6000;
+
+/** A note on the player, and whether it's about a cast or about AirPlay. */
+interface PlayerNotice {
+	text: string;
+	cast: boolean;
+}
+
+/**
+ * The player's note once a cast was asked for: why it didn't go, or, when
+ * it went, no note about an earlier cast, which would only mislead next to
+ * one that plays. A note about something else stays.
+ */
+const afterCast =
+	(why: string | null) =>
+	(notice: PlayerNotice | null): PlayerNotice | null => {
+		if (why) return { text: why, cast: true };
+		return notice?.cast ? null : notice;
+	};
 /** How often (ms) watch progress is persisted while playing. */
 const PROGRESS_SAVE_INTERVAL = 5000;
 const MAX_VOLUME = 150;
@@ -458,13 +476,15 @@ export const PlayerView = () => {
 	}, [activeChannelRef]);
 
 	// Why AirPlay or Cast stopped or didn't start, or a control failed.
-	const [notice, setNotice] = useState<string | null>(null);
+	const [notice, setNotice] = useState<PlayerNotice | null>(null);
 	useEffect(() => {
 		const timer = setTimeout(() => setNotice(null), NOTICE_MS);
 		return () => clearTimeout(timer);
 	}, [notice]);
+	const castNotice = (text: string) => setNotice({ text, cast: true });
+	const airplayNotice = (text: string) => setNotice({ text, cast: false });
 	// Google Cast from a computer.
-	const cast = useCast(platform === "macos" || platform === "linux", setNotice);
+	const cast = useCast(platform === "macos" || platform === "linux", castNotice);
 	const castRef = useLatestRef(cast);
 	/** Asks before a cast switches to a route this computer converts. */
 	const [castConfirm, setCastConfirm] = useState<{
@@ -527,9 +547,7 @@ export const PlayerView = () => {
 							apply?.();
 						},
 					})
-					.then((why) => {
-						if (why) setNotice(why);
-					});
+					.then((why) => setNotice(afterCast(why)));
 			}
 			recordEnd();
 			playStartTimeRef.current = Date.now();
@@ -1264,7 +1282,9 @@ export const PlayerView = () => {
 				if (key.kind === "play") void tv.play();
 				if (key.kind === "pause") void tv.pause();
 				if (key.kind === "seek")
-					tv.seek(key.to).catch((error: unknown) => setNotice(airplaySeekMessage(error)));
+					tv.seek(key.to).catch((error: unknown) =>
+						setNotice({ text: airplaySeekMessage(error), cast: tv.kind === "cast" })
+					);
 				if (key.kind !== "pass") return;
 			}
 
@@ -1438,12 +1458,12 @@ export const PlayerView = () => {
 		});
 		if (result.sent || result.why === "cancelled") return null;
 		if (result.why === "blocked") {
-			setNotice(airplayBlockedMessage(result.decision));
+			airplayNotice(airplayBlockedMessage(result.decision));
 			return null;
 		}
 		console.warn("[VideoPlayer] AirPlay failed:", result.error);
 		const message = airplayFailureMessage(result.error);
-		setNotice(result.stopped ? `${message} Nothing is playing.` : message);
+		airplayNotice(result.stopped ? `${message} Nothing is playing.` : message);
 		return null;
 	};
 	/** Casts `channel` to `receiverId`, from where it plays here for a movie
@@ -1457,9 +1477,7 @@ export const PlayerView = () => {
 					await playback.stop();
 				},
 			})
-			.then((why) => {
-				if (why) setNotice(why);
-			});
+			.then((why) => setNotice(afterCast(why)));
 	const castSlot =
 		airplay.available && activeChannel && !tv ? (
 			<AirPlayButton
@@ -1479,7 +1497,7 @@ export const PlayerView = () => {
 	 *  which says so itself. */
 	const castControlFailed = (error: unknown) => {
 		if (!castTv || castTv.getState().connection !== "connected") return;
-		setNotice(castControlMessage(castTv.name, error));
+		castNotice(castControlMessage(castTv.name, error));
 	};
 	const castPanel =
 		castTv && cast.state ? (
@@ -1505,7 +1523,7 @@ export const PlayerView = () => {
 							{ kind: "local", channel: activeChannel },
 							{ startAt: position > 0 ? position : undefined }
 						)
-						.catch(() => setNotice("Couldn't play it on this device."));
+						.catch(() => castNotice("Couldn't play it on this device."));
 				}}
 				onStop={async () => {
 					flushProgress();
@@ -1527,7 +1545,7 @@ export const PlayerView = () => {
 			onSeek={(position) =>
 				airplayTv
 					.seek(position)
-					.catch((error: unknown) => setNotice(airplaySeekMessage(error)))
+					.catch((error: unknown) => airplayNotice(airplaySeekMessage(error)))
 			}
 			onSubtitle={(id) => void airplayTv.selectSubtitle(id)}
 			onAudio={(id) => void airplayTv.selectAudio(id)}
@@ -1543,7 +1561,7 @@ export const PlayerView = () => {
 						{ kind: "local", channel: activeChannel },
 						{ startAt: position > 0 ? position : undefined }
 					)
-					.catch(() => setNotice("Couldn't play it on this device."));
+					.catch(() => airplayNotice("Couldn't play it on this device."));
 			}}
 			onStop={async () => {
 				flushProgress();
@@ -1719,7 +1737,7 @@ export const PlayerView = () => {
 					role="alert"
 					className="absolute top-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded bg-black/90 px-4 py-2 text-sm text-white"
 				>
-					<span>{notice}</span>
+					<span>{notice.text}</span>
 					<button
 						type="button"
 						aria-label="Dismiss"
