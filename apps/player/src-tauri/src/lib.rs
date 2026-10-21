@@ -24,7 +24,7 @@ mod logging;
 mod progress;
 mod remote;
 mod streams;
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 mod wifi;
 #[cfg(test)]
 mod android_project_tests;

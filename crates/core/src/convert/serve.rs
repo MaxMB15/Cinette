@@ -57,6 +57,14 @@ pub fn ok_head(content_type: &str, length: Option<usize>) -> String {
     )
 }
 
+/// A `404 Not Found` head, for a name under the token that isn't there,
+/// such as a segment the window dropped. A receiver that asks for one
+/// after a stall moves on to the next.
+pub fn not_found_head() -> &'static str {
+    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
+     Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+}
+
 /// A random path segment no one can guess: 32 bytes as hex.
 pub fn token() -> String {
     let mut bytes = [0u8; 32];

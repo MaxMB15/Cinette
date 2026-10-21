@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! This device's Wi-Fi address, for a server whose receiver's address isn't
-//! known, as with AirPlay on iOS. iOS names the Wi-Fi interface `en0`.
+//! This device's address on the local network, for a server whose
+//! receiver's address isn't known, as with AirPlay. iOS names the Wi-Fi
+//! interface `en0`. A Mac can be on Wi-Fi or Ethernet, and its default
+//! route can go through a VPN, so it takes a private address on Wi-Fi,
+//! Ethernet or a bridge, and the default route's only when none fits.
 
 use std::net::Ipv4Addr;
 
@@ -23,18 +26,49 @@ pub struct Interface {
 /// The peers to serve on the Wi-Fi network: `en0`'s subnet, when it has an
 /// address that isn't a link-local one and a netmask no wider than
 /// [`MIN_PREFIX`] allows.
+#[cfg_attr(not(any(target_os = "ios", test)), allow(dead_code))]
 pub fn wifi_peers(interfaces: &[Interface]) -> Option<Peers> {
-    interfaces
+    subnet_peers(interfaces.iter().filter(|i| i.name == "en0"))
+}
+
+/// The peers to serve on the network of `local`, this device's address on
+/// its default route, under the same rules as [`wifi_peers`].
+fn peers_at(local: Ipv4Addr, interfaces: &[Interface]) -> Option<Peers> {
+    subnet_peers(interfaces.iter().filter(|i| i.address == local))
+}
+
+/// The peers to serve on a Mac's local network, under the same rules as
+/// [`wifi_peers`]. A VPN can be the default route, with a utun interface
+/// whose subnet is only itself, or a public address the receiver can't
+/// reach. So the subnet comes from a private address on Wi-Fi or
+/// Ethernet (`en*`) or a bridge (`bridge*`), the default route's own when
+/// it's one of them, and from `default`, the default route's address,
+/// only when none fits. The server is IPv4 only, so IPv6 addresses don't
+/// count.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub fn lan_peers(default: Option<Ipv4Addr>, interfaces: &[Interface]) -> Option<Peers> {
+    let local: Vec<&Interface> = interfaces
         .iter()
-        .filter(|i| i.name == "en0")
-        .filter(|i| !i.address.is_link_local() && !i.address.is_loopback())
-        .find_map(|i| {
-            let prefix = prefix(i.netmask)?;
-            (prefix >= MIN_PREFIX).then_some(Peers::Subnet {
-                local: i.address,
-                prefix,
-            })
+        .filter(|i| i.name.starts_with("en") || i.name.starts_with("bridge"))
+        .filter(|i| i.address.is_private())
+        .collect();
+    let on_default = local.iter().copied().filter(|i| Some(i.address) == default);
+    subnet_peers(on_default)
+        .or_else(|| subnet_peers(local.iter().copied()))
+        .or_else(|| default.and_then(|d| peers_at(d, interfaces)))
+}
+
+fn subnet_peers<'a>(mut interfaces: impl Iterator<Item = &'a Interface>) -> Option<Peers> {
+    interfaces.find_map(|i| {
+        if i.address.is_link_local() || i.address.is_loopback() {
+            return None;
+        }
+        let prefix = prefix(i.netmask)?;
+        (prefix >= MIN_PREFIX).then_some(Peers::Subnet {
+            local: i.address,
+            prefix,
         })
+    })
 }
 
 /// The prefix length of a netmask, or `None` when its bits don't run in
@@ -80,4 +114,35 @@ pub fn interfaces() -> Vec<Interface> {
     }
     unsafe { libc::freeifaddrs(list) };
     found
+}
+
+/// This computer's IPv4 interface addresses.
+#[cfg(target_os = "macos")]
+pub fn interfaces() -> Vec<Interface> {
+    let Ok(found) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    found
+        .into_iter()
+        .filter_map(|i| match i.addr {
+            if_addrs::IfAddr::V4(a) => Some(Interface {
+                name: i.name,
+                address: a.ip,
+                netmask: a.netmask,
+            }),
+            if_addrs::IfAddr::V6(_) => None,
+        })
+        .collect()
+}
+
+/// This computer's address on its default route. Nothing is sent: the
+/// address is from the documentation range, and only the route to it is
+/// looked up.
+#[cfg(target_os = "macos")]
+pub fn default_route_address() -> Option<Ipv4Addr> {
+    let probe = std::net::IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+    match crate::lan_server::route_to(probe).ok()? {
+        std::net::IpAddr::V4(local) => Some(local),
+        std::net::IpAddr::V6(_) => None,
+    }
 }

@@ -39,7 +39,7 @@ const all: PlaybackCapabilities = {
 	catalog: false,
 };
 
-const show = (s: PlaybackState, capabilities: PlaybackCapabilities = all) => {
+const show = (s: PlaybackState, capabilities: PlaybackCapabilities = all, picksHere?: boolean) => {
 	const props = {
 		onPlay: vi.fn(),
 		onPause: vi.fn(),
@@ -49,7 +49,15 @@ const show = (s: PlaybackState, capabilities: PlaybackCapabilities = all) => {
 		onPlayHere: vi.fn(),
 		onStop: vi.fn(),
 	};
-	render(<AirPlayPanel name="Living Room TV" state={s} capabilities={capabilities} {...props} />);
+	render(
+		<AirPlayPanel
+			name="Living Room TV"
+			state={s}
+			capabilities={capabilities}
+			picksHere={picksHere}
+			{...props}
+		/>
+	);
 	return props;
 };
 
@@ -188,6 +196,12 @@ describe("AirPlayPanel", () => {
 				"Play here opens the AirPlay list. Choose this iPhone so the sound comes back too."
 			)
 		).toBeTruthy();
+	});
+
+	it("says nothing about the sound on a Mac, whose sound never moves", () => {
+		show(state(), all, false);
+		expect(screen.queryByText(/Choose this iPhone/)).toBeNull();
+		expect(screen.getByRole("button", { name: /Play here/ })).toBeTruthy();
 	});
 
 	it("stops", () => {

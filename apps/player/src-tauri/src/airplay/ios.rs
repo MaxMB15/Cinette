@@ -7,8 +7,8 @@
 use std::sync::{Arc, OnceLock};
 
 use mvp_core::models::channel::Channel;
-use tauri::{AppHandle, Listener, Runtime};
-use tauri_plugin_mpv::airplay::{Converted, EVENT_STATE};
+use tauri::{AppHandle, Runtime};
+use tauri_plugin_mpv::airplay::Converted;
 use tokio::sync::watch;
 
 use super::conversion::{Conversions, Running};
@@ -28,9 +28,9 @@ impl Running for HlsConversion {
 
 static CONVERSIONS: OnceLock<Arc<Conversions<HlsConversion>>> = OnceLock::new();
 
-pub fn end_conversion() {
+pub async fn end_conversion() {
     if let Some(conversions) = CONVERSIONS.get() {
-        conversions.stop();
+        conversions.stop().await;
     }
 }
 
@@ -76,19 +76,5 @@ pub async fn load_converted<R: Runtime>(
 /// Runs the converter's pacer on the receiver's state, and has a
 /// conversion that ends on its own show as the item's error.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
-    let failing = app.clone();
-    let conversions = Conversions::new(move |code| {
-        tauri_plugin_mpv::airplay::fail_converted(&failing, code);
-    });
-    if CONVERSIONS.set(conversions.clone()).is_err() {
-        return;
-    }
-    app.listen_any(EVENT_STATE, move |event| {
-        let status = serde_json::from_str::<serde_json::Value>(event.payload())
-            .ok()
-            .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_string));
-        if let Some(status) = status {
-            conversions.set_status(&status);
-        }
-    });
+    super::install_conversions(app, &CONVERSIONS);
 }

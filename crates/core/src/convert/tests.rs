@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use super::mkv::{MkvError, MkvSplitter, Piece};
-use super::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
+use super::serve::{head_end, not_found_head, ok_head, read_request, token, Request, MAX_HEAD};
 use super::{
-    args, matroska_copies, pick_audio, unsupported, AacEncoder, AudioPlan, Encoders,
-    HardwareEncoder, NoEncoder, Plan, VideoPlan, CAST_AUDIO,
+    args, matroska_copies, output_args, pick_audio, unsupported, AacEncoder, AudioPlan,
+    Encoders, HardwareEncoder, NoEncoder, Output, Plan, VideoPlan, CAST_AUDIO,
 };
 use crate::streams::format::Container;
 use crate::streams::probe::AudioTrack;
@@ -56,6 +56,32 @@ fn a_remux_copies_both_tracks_into_live_matroska() {
              -map 0:a:0 -sn -dn -c:v copy -c:a copy -f matroska -live 1 -flush_packets 1 pipe:1"
         )
     );
+}
+
+#[test]
+fn hls_output_writes_mpeg_ts_with_the_same_input_and_codecs() {
+    let p = plan(VideoPlan::Copy, AudioPlan::Aac { downmix: false });
+    let ts = joined(&output_args(URL, &p, MAC, Output::MpegTs).unwrap());
+    assert_eq!(
+        ts,
+        format!(
+            "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 \
+             -rw_timeout 15000000 {FILE_INPUT} -i http://srv/live/u/p/1.ts -map 0:v:0 \
+             -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ar 48000 -ac 2 \
+             -f mpegts -flush_packets 1 pipe:1"
+        )
+    );
+    // Matroska is the same up to its own format.
+    let mkv = joined(&output_args(URL, &p, MAC, Output::Matroska).unwrap());
+    assert_eq!(mkv, joined(&args(URL, &p, MAC).unwrap()));
+    assert_eq!(
+        mkv.replace("-f matroska -live 1", "-f mpegts"),
+        ts,
+        "only the format differs"
+    );
+    // A transcode without an encoder fails for either.
+    let transcode = plan(VideoPlan::Transcode { deinterlace: false }, AudioPlan::Copy);
+    assert_eq!(output_args(URL, &transcode, LINUX, Output::MpegTs), Err(NoEncoder));
 }
 
 #[test]
@@ -702,6 +728,15 @@ fn answers_with_no_length_for_a_live_stream() {
     );
     assert!(
         ok_head("text/vtt", Some(12)).contains("Content-Type: text/vtt\r\nContent-Length: 12\r\n")
+    );
+}
+
+#[test]
+fn answers_a_missing_name_with_an_empty_404() {
+    assert_eq!(
+        not_found_head(),
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
+         Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
     );
 }
 
