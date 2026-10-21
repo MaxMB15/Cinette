@@ -837,6 +837,7 @@ export type RemoteErrorCode =
 	| "expired"
 	| "busy"
 	| "cancelled"
+	| "too_large"
 	| "unknown";
 
 /** How far a transfer has got. */
@@ -854,6 +855,7 @@ export type RemoteTransferNotice = { deviceId: string; link: number } & (
 	| { step: "refused"; code: RemoteErrorCode }
 	| { step: "progress"; transfer: string; progress: TransferProgress }
 	| { step: "preview"; transfer: string; counts: TransferCounts }
+	| { step: "granted"; transfer: string }
 );
 
 /** How one kind of row fared in a history transfer. */
@@ -867,7 +869,7 @@ export interface TransferTally {
 export interface TransferUnmatched {
 	name: string;
 	kind: "live" | "movie" | "series" | "episode" | "pinnedGroup";
-	reason: "missing" | "ambiguous";
+	reason: "missing" | "ambiguous" | "invalid";
 }
 
 /** What a history transfer did on the device that wrote it. */

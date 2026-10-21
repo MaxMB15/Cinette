@@ -69,9 +69,9 @@ pub struct RemoteService {
     history: SendingHistory,
     /// See [`ProgressWaiter`].
     progress: ProgressWaiter,
-    /// Goes up with every cancel, so a send that was cancelled while it
-    /// waited for the cache doesn't ask after all.
-    cancels: std::sync::atomic::AtomicU64,
+    /// How many cancels each link has had, so a send that was cancelled
+    /// while it waited for the cache doesn't ask after all.
+    cancels: Mutex<std::collections::HashMap<u64, u64>>,
 }
 
 /// A history "send" waiting for the other device's Allow: the link, and the
@@ -268,14 +268,13 @@ impl RemoteService {
         link: u64,
         ids: Vec<String>,
     ) -> Result<(), String> {
-        use std::sync::atomic::Ordering;
         let handle = self.link(link).ok_or("Not connected to that device.")?;
-        let ticket = self.cancels.load(Ordering::SeqCst);
+        let ticket = self.cancel_count(link);
         // This can wait on the cache, for a refresh or a guide save.
         let names = super::providers::names_for(cache, &ids)?;
         {
             let mut slot = lock(&self.sending);
-            if self.cancels.load(Ordering::SeqCst) != ticket {
+            if self.cancel_count(link) != ticket {
                 return Err(CANCELLED.into());
             }
             if slot.as_ref().is_some_and(|(l, _)| *l == link) {
@@ -288,7 +287,7 @@ impl RemoteService {
             lock(&self.sending).take_if(|(l, _)| *l == link);
         }
         // Cancelled while the request went out: it's withdrawn.
-        if asked.is_ok() && self.cancels.load(Ordering::SeqCst) != ticket {
+        if asked.is_ok() && self.cancel_count(link) != ticket {
             handle.cancel_transfer();
             return Err(CANCELLED.into());
         }
@@ -304,9 +303,9 @@ impl RemoteService {
     /// Asks the device link `link` controls for a history transfer. For
     /// "send", `playing` is the channel this device's player has open,
     /// whose position the webview saved first.
-    pub async fn ask_history(
+    pub async fn ask_history<R: Runtime>(
         &self,
-        cache: &Mutex<mvp_core::cache::store::CacheStore>,
+        app: AppHandle<R>,
         link: u64,
         direction: Direction,
         what: What,
@@ -316,24 +315,41 @@ impl RemoteService {
         if what.is_empty() {
             return Err("Pick something to copy.".into());
         }
+        let ticket = self.cancel_count(link);
         let counts = match direction {
             Direction::Send => Some(
-                super::history::counts(cache, what)
+                history_counts(app, what)
+                    .await
                     .map_err(|_| "Couldn't read this device's history.")?,
             ),
             Direction::Import => None,
         };
-        *lock(&self.history) = Some((link, playing));
-        handle
-            .ask_history(direction, what, counts)
-            .await
-            .map_err(|e| match e {
-                AskError::Unsupported => {
-                    "That device's Cinette can't copy history. Update it first.".to_string()
-                }
-                AskError::Busy => "Another transfer with that device is going on.".to_string(),
-                AskError::NotConnected => "Not connected to that device.".to_string(),
-            })
+        {
+            let mut slot = lock(&self.history);
+            if self.cancel_count(link) != ticket {
+                return Err(CANCELLED.into());
+            }
+            if slot.as_ref().is_some_and(|(l, _)| *l == link) {
+                return Err(BUSY.into());
+            }
+            *slot = Some((link, playing));
+        }
+        let asked = handle.ask_history(direction, what, counts).await;
+        if asked.is_err() {
+            lock(&self.history).take_if(|(l, _)| *l == link);
+        }
+        // Cancelled while the request went out: it's withdrawn.
+        if asked.is_ok() && self.cancel_count(link) != ticket {
+            handle.cancel_transfer();
+            return Err(CANCELLED.into());
+        }
+        asked.map_err(|e| match e {
+            AskError::Unsupported => {
+                "That device's Cinette can't copy history. Update it first.".to_string()
+            }
+            AskError::Busy => BUSY.to_string(),
+            AskError::NotConnected => "Not connected to that device.".to_string(),
+        })
     }
 
     /// "Import": the user confirmed the preview.
@@ -352,13 +368,17 @@ impl RemoteService {
 
     /// Stops the transfer on link `link`, if one is going on.
     pub fn cancel_transfer(&self, link: u64) {
-        self.cancels
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *lock(&self.cancels).entry(link).or_default() += 1;
         if let Some(handle) = self.link(link) {
             handle.cancel_transfer();
         }
         lock(&self.sending).take_if(|(l, _)| *l == link);
         lock(&self.history).take_if(|(l, _)| *l == link);
+    }
+
+    /// How many cancels link `link` has had.
+    fn cancel_count(&self, link: u64) -> u64 {
+        lock(&self.cancels).get(&link).copied().unwrap_or(0)
     }
 
     /// Makes and saves a new key, so a new device id. Every session ends.
@@ -777,6 +797,14 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 }
 
+/// How many of each this device would send, read on a blocking thread.
+pub async fn history_counts<R: Runtime>(
+    app: AppHandle<R>,
+    what: What,
+) -> Result<Counts, ErrorCode> {
+    run_blocking(app, move |state| super::history::counts(&state.cache, what)).await
+}
+
 /// Runs cache work on a blocking thread. A thread that panics fails it.
 async fn run_blocking<R: Runtime, T: Send + 'static>(
     app: AppHandle<R>,
@@ -898,6 +926,8 @@ pub enum TransferStep {
     /// "Import" was allowed: what the other device has, until the user
     /// starts it.
     Preview { transfer: String, counts: Counts },
+    /// "Send" was allowed, and this device is reading its history out.
+    Granted { transfer: String },
 }
 
 impl<R: Runtime> TauriLinkHost<R> {
@@ -1007,7 +1037,16 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
                 transfer,
                 salt,
                 what,
-            } => return self.export_granted(link, transfer.clone(), *salt, *what),
+            } => {
+                self.notify(
+                    link,
+                    device,
+                    TransferStep::Granted {
+                        transfer: transfer.clone(),
+                    },
+                );
+                return self.export_granted(link, transfer.clone(), *salt, *what);
+            }
             TransferUpdate::ImportReady {
                 transfer,
                 salt,
@@ -1306,7 +1345,7 @@ fn start_on<R: Runtime>(
         sending,
         history,
         progress,
-        cancels: std::sync::atomic::AtomicU64::new(0),
+        cancels: Mutex::default(),
     });
     Ok(())
 }

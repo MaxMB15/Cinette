@@ -79,6 +79,8 @@ export const refusalText = (name: string, code: RemoteErrorCode): string => {
 			return "It was cancelled.";
 		case "unsupported":
 			return `${name} can't take this. It may need a newer Cinette.`;
+		case "too_large":
+			return `That's more than one transfer can carry. Nothing was changed on ${name}.`;
 		default:
 			return `It didn't work. Nothing was changed on ${name}.`;
 	}
@@ -122,8 +124,9 @@ export const nextSendState = (
 			return { step: "waiting", expiresAt: now + notice.expiresInMs };
 		case "refused":
 			return { step: "failed", message: refusalText(device, notice.code) };
-		// A history transfer's step, which a send never gets.
+		// History transfer steps, which a send never gets.
 		case "preview":
+		case "granted":
 			return state;
 		case "progress": {
 			const progress = notice.progress;
@@ -161,9 +164,13 @@ export const countsText = (what: TransferWhat, counts?: TransferCounts): string 
 	return listOf(list);
 };
 
-/** Shown before a history transfer, on the device that asks. */
-export const HISTORY_PRIVACY =
-	"Watch history, playback positions, favorites and pinned groups are copied between your devices over the encrypted connection. Provider logins, API keys and passwords aren't part of it. Copied history becomes part of that device's own history. Cinette has no accounts, so it stays on that device and doesn't sync anywhere else. Nothing is deleted on the device it comes from.";
+/** Shown before a history transfer, on the device that asks. It names the
+ *  device the history goes to. */
+export const historyPrivacy = (direction: "send" | "import", device: string): string => {
+	const to = direction === "send" ? device : "this device";
+	const from = direction === "send" ? "this device" : device;
+	return `Watch history, playback positions, favorites and pinned groups are copied between your devices over the encrypted connection. Provider logins, API keys and passwords aren't part of it. Copied history becomes part of ${to}'s own history. Cinette has no accounts, so it stays on ${to} and doesn't sync anywhere else. Nothing is deleted on ${from}.`;
+};
 
 /** One line of a history transfer's result, or null when nothing happened. */
 const tallyLine = (label: string, t: TransferTally): string | null => {
@@ -194,7 +201,13 @@ export const unmatchedLines = (
 ): { items: string[]; more: string | null } => {
 	const items = report.unmatched
 		.slice(0, UNMATCHED_SHOWN)
-		.map((u) => (u.reason === "ambiguous" ? `${u.name} (more than one match)` : u.name));
+		.map((u) =>
+			u.reason === "ambiguous"
+				? `${u.name} (more than one match)`
+				: u.reason === "invalid"
+					? `${u.name} (its details didn't make sense)`
+					: u.name
+		);
 	const rest = report.unmatchedTotal - items.length;
 	return { items, more: rest > 0 ? `and ${rest} more` : null };
 };
@@ -227,6 +240,9 @@ export const nextHistoryState = (
 			return { step: "failed", message: refusalText(device, notice.code) };
 		case "preview":
 			return { step: "preview", transfer: notice.transfer, counts: notice.counts };
+		// Allowed: the export is being made, which can take a moment.
+		case "granted":
+			return { step: "moving", done: 0, total: null };
 		case "progress": {
 			const p = notice.progress;
 			switch (p.state) {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Dialog } from "@/components/ui/dialog";
 import { useTauriEvent } from "@/hooks/useRemoteTarget";
@@ -10,7 +10,7 @@ import type { Link } from "@/lib/remote-control";
 import { formatCode, secondsLeft } from "@/lib/remote-devices";
 import {
 	countsText,
-	HISTORY_PRIVACY,
+	historyPrivacy,
 	nextHistoryState,
 	reportLines,
 	unmatchedLines,
@@ -78,10 +78,22 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 		return () => clearInterval(timer);
 	}, [waiting]);
 
+	// Set once the dialog is closed, so an ask still being set up then
+	// doesn't go out after all.
+	const closed = useRef(false);
+	useEffect(() => {
+		closed.current = false;
+		return () => {
+			closed.current = true;
+		};
+	}, []);
+
 	const finished = state.step === "choosing" || state.step === "done" || state.step === "failed";
+	const cancel = () => void remoteCancelTransfer(link.id).catch(() => {});
 	const close = () => {
+		closed.current = true;
 		// Closing while it runs stops it; nothing is written on either device.
-		if (!finished) void remoteCancelTransfer(link.id).catch(() => {});
+		if (!finished) cancel();
 		onClose();
 	};
 	const nothing = !what.history && !what.favorites && !what.pins;
@@ -90,7 +102,12 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 		// The other device gets where this one's player is now.
 		const playing = sending ? saveProgressNow() : Promise.resolve(null);
 		playing
-			.then((open) => remoteAskHistory(link.id, direction, what, open))
+			.then(async (open) => {
+				if (closed.current) return;
+				await remoteAskHistory(link.id, direction, what, open);
+				// Closed while it was asked: the request is withdrawn.
+				if (closed.current) cancel();
+			})
 			.catch((e: unknown) => setState({ step: "failed", message: String(e) }));
 	};
 	const start = (transfer: string) => {
@@ -154,7 +171,9 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 								? `This device has ${countsText(what, counts ?? undefined)}.`
 								: `${link.name} shows what it has once you allow it there.`}
 					</p>
-					<p className="text-xs text-muted-foreground mb-4">{HISTORY_PRIVACY}</p>
+					<p className="text-xs text-muted-foreground mb-4">
+						{historyPrivacy(direction, link.name)}
+					</p>
 					<div className="flex justify-end gap-2">
 						<button type="button" className={PLAIN} onClick={close}>
 							Cancel
@@ -219,9 +238,11 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 					<p className="text-sm mb-3" role="status">
 						{state.step === "saving"
 							? "Saving…"
-							: state.step === "moving" && state.total !== null
-								? `Sending… ${state.done} of ${state.total}`
-								: "Receiving…"}
+							: !sending
+								? "Receiving…"
+								: state.step === "moving" && state.total !== null
+									? `Sending… ${state.done} of ${state.total}`
+									: "Sending…"}
 					</p>
 					<div className="flex justify-end">
 						<button type="button" className={PLAIN} onClick={close}>
@@ -236,9 +257,16 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 					<p className="text-sm mb-4" role="alert">
 						{state.message}
 					</p>
-					<div className="flex justify-end">
+					<div className="flex justify-end gap-2">
 						<button type="button" className={PLAIN} onClick={onClose}>
 							Close
+						</button>
+						<button
+							type="button"
+							className={PRIMARY}
+							onClick={() => setState({ step: "choosing" })}
+						>
+							Try again
 						</button>
 					</div>
 				</>

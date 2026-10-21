@@ -7,15 +7,19 @@ import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useTauriEvent } from "@/hooks/useRemoteTarget";
+import { formatTime } from "@/lib/format";
+import { playbackKey } from "@/lib/playback";
 import { channelsQuery, historyKey } from "@/lib/queries";
 import { applyRemoteCommand, getMountedPlayer, waitForMountedPlayer } from "@/lib/remote-target";
-import { mpvStop, type RemoteHistoryImported } from "@/lib/tauri";
+import { getPlaybackPosition, mpvStop, type RemoteHistoryImported } from "@/lib/tauri";
+import type { Channel } from "@/lib/types";
 
 /**
  * Says history from another device was added here, and loads the history,
  * favorites and pinned groups again, so they show without a restart. When
  * the other device's last item matched one here, it offers to continue it
- * at the saved place. Nothing plays until that's chosen.
+ * at the saved place. Nothing plays until that's chosen, and then it starts
+ * from the place saved here by then.
  */
 export const HistoryImportedNotice = () => {
 	const queryClient = useQueryClient();
@@ -29,15 +33,15 @@ export const HistoryImportedNotice = () => {
 	});
 	if (!imported) return null;
 	const channel = imported.channel;
-	const resume = () => {
-		if (!channel) return;
+	const at = imported.report.resume?.position;
+	const resume = async (channel: Channel) => {
 		setImported(null);
-		void applyRemoteCommand(
-			{
-				action: "load",
-				itemId: channel.id,
-				startAt: imported.report.resume?.position,
-			},
+		// It may have been watched here since the import.
+		const key = playbackKey(channel);
+		const saved = key ? await getPlaybackPosition(key).catch(() => null) : null;
+		const startAt = saved && !saved.finished ? saved.positionSeconds : undefined;
+		await applyRemoteCommand(
+			{ action: "load", itemId: channel.id, startAt },
 			{
 				player: getMountedPlayer(),
 				findChannel: () => channel,
@@ -59,9 +63,10 @@ export const HistoryImportedNotice = () => {
 				<button
 					type="button"
 					className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
-					onClick={resume}
+					onClick={() => void resume(channel)}
 				>
 					Continue watching <bdi>{channel.name}</bdi>
+					{at ? ` at ${formatTime(at)}` : ""}
 				</button>
 			)}
 			<button

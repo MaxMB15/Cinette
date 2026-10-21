@@ -587,10 +587,8 @@ pub async fn remote_ask_history<R: Runtime>(
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use tauri::Manager;
-        let state = app.state::<crate::commands::AppState>();
         imp::service(&app)?
-            .ask_history(&state.cache, link, direction, what, playing)
+            .ask_history(app.clone(), link, direction, what, playing)
             .await
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -608,9 +606,8 @@ pub async fn remote_history_counts<R: Runtime>(
 ) -> Result<mvp_core::remote::transfer::Counts, String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        use tauri::Manager;
-        let state = app.state::<crate::commands::AppState>();
-        super::history::counts(&state.cache, what)
+        super::service::history_counts(app, what)
+            .await
             .map_err(|_| "Couldn't read this device's history.".to_string())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

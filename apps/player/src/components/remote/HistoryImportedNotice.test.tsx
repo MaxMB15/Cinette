@@ -14,7 +14,10 @@ vi.mock("@/hooks/useRemoteTarget", () => ({
 }));
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("react-router", () => ({ useNavigate: () => navigate }));
-vi.mock("@/lib/tauri", () => ({ mpvStop: vi.fn(() => Promise.resolve()) }));
+vi.mock("@/lib/tauri", () => ({
+	mpvStop: vi.fn(() => Promise.resolve()),
+	getPlaybackPosition: vi.fn(),
+}));
 const target = vi.hoisted(() => ({ load: vi.fn(() => Promise.resolve()) }));
 vi.mock("@/lib/remote-target", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/remote-target")>()),
@@ -22,6 +25,7 @@ vi.mock("@/lib/remote-target", async (importOriginal) => ({
 	waitForMountedPlayer: () => Promise.resolve({ load: target.load }),
 }));
 
+import { getPlaybackPosition } from "@/lib/tauri";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
 import { HistoryImportedNotice } from "./HistoryImportedNotice";
 
@@ -54,9 +58,18 @@ const imported = (extra: Partial<RemoteHistoryImported> = {}): RemoteHistoryImpo
 const show = (event: RemoteHistoryImported) =>
 	act(() => events.get("remote://history-imported")!(event));
 
+const saved = (positionSeconds: number, finished = false) => ({
+	contentKey: "movie:heat",
+	positionSeconds,
+	durationSeconds: 7000,
+	updatedAt: 1,
+	finished,
+});
+
 beforeEach(() => {
 	navigate.mockClear();
 	target.load.mockClear();
+	vi.mocked(getPlaybackPosition).mockReset().mockResolvedValue(saved(1234));
 });
 
 describe("HistoryImportedNotice", () => {
@@ -78,15 +91,64 @@ describe("HistoryImportedNotice", () => {
 	it("continues the other device's item here at its place", async () => {
 		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
 		show(imported());
-		fireEvent.click(screen.getByRole("button", { name: "Continue watching Heat" }));
+		fireEvent.click(screen.getByRole("button", { name: "Continue watching Heat at 20:34" }));
 		await waitFor(() =>
 			expect(target.load).toHaveBeenCalledWith(
 				{ kind: "local", channel: heat },
 				{ startAt: 1234 }
 			)
 		);
+		expect(getPlaybackPosition).toHaveBeenCalledWith("movie:heat");
 		expect(navigate).toHaveBeenCalledWith("/player");
 		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("starts from the place saved here when it's pressed", async () => {
+		vi.mocked(getPlaybackPosition).mockResolvedValue(saved(2000));
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(imported());
+		fireEvent.click(screen.getByRole("button", { name: /Continue watching Heat/ }));
+		await waitFor(() =>
+			expect(target.load).toHaveBeenCalledWith(
+				{ kind: "local", channel: heat },
+				{ startAt: 2000 }
+			)
+		);
+	});
+
+	it("starts from the beginning when it was finished here or has no place", async () => {
+		vi.mocked(getPlaybackPosition).mockResolvedValue(saved(6990, true));
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(imported());
+		fireEvent.click(screen.getByRole("button", { name: /Continue watching Heat/ }));
+		await waitFor(() => expect(target.load).toHaveBeenCalledTimes(1));
+		expect(target.load).toHaveBeenCalledWith(
+			{ kind: "local", channel: heat },
+			{ startAt: undefined }
+		);
+		target.load.mockClear();
+		vi.mocked(getPlaybackPosition).mockRejectedValue(new Error("no cache"));
+		show(imported());
+		fireEvent.click(screen.getByRole("button", { name: /Continue watching Heat/ }));
+		await waitFor(() => expect(target.load).toHaveBeenCalledTimes(1));
+		expect(target.load).toHaveBeenCalledWith(
+			{ kind: "local", channel: heat },
+			{ startAt: undefined }
+		);
+	});
+
+	it("leaves the time out when there's no place, and reads nothing for live", async () => {
+		const live = { ...heat, id: "xt-live-1", name: "News", contentType: "live" } as Channel;
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(
+			imported({
+				channel: live,
+				report: { ...imported().report, resume: undefined },
+			})
+		);
+		fireEvent.click(screen.getByRole("button", { name: "Continue watching News" }));
+		await waitFor(() => expect(target.load).toHaveBeenCalledTimes(1));
+		expect(getPlaybackPosition).not.toHaveBeenCalled();
 	});
 
 	it("offers nothing to continue without a match, and names an unnamed device", () => {

@@ -49,6 +49,7 @@ import { deferred } from "@/test/deferred";
 import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
 import { getMountedPlayer } from "@/lib/remote-target";
+import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
 
 type Mpv = ReturnType<typeof useMpv>;
@@ -939,6 +940,14 @@ describe("opening something to watch", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 		await flush();
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
+	});
+
+	it("saves its place for a history transfer and says what it has open", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		tauri.savePlaybackPosition.mockClear();
+		await expect(saveProgressNow()).resolves.toBe("mv1");
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 900, 3600);
 	});
 
 	it("opening another movie from inside the player saves the first and records its end", async () => {

@@ -1462,7 +1462,7 @@ async fn sending_providers_needs_a_link_and_a_provider() {
         .unwrap();
 }
 
-/// One Xtream account with one movie, on a device whose provider id is
+/// One Xtream account with two movies, on a device whose provider id is
 /// `prefix`, so two devices share the account but not the ids.
 fn add_panel(running: &Running, prefix: &str) {
     let state = running.app.state();
@@ -1483,14 +1483,24 @@ fn add_panel(running: &Running, prefix: &str) {
     cache
         .save_channels(
             prefix,
-            &[Channel {
-                id: format!("{prefix}-movie-8"),
-                name: "Heat".into(),
-                url: "http://panel.example:8080/movie/8.mkv".into(),
-                group_title: "Films".into(),
-                content_type: "movie".into(),
-                ..Channel::default()
-            }],
+            &[
+                Channel {
+                    id: format!("{prefix}-movie-8"),
+                    name: "Heat".into(),
+                    url: "http://panel.example:8080/movie/8.mkv".into(),
+                    group_title: "Films".into(),
+                    content_type: "movie".into(),
+                    ..Channel::default()
+                },
+                Channel {
+                    id: format!("{prefix}-movie-9"),
+                    name: "Ronin".into(),
+                    url: "http://panel.example:8080/movie/9.mkv".into(),
+                    group_title: "Films".into(),
+                    content_type: "movie".into(),
+                    ..Channel::default()
+                },
+            ],
         )
         .unwrap();
 }
@@ -1525,6 +1535,18 @@ fn watch(running: &Running, channel_id: &str, position: f64) {
         .unwrap();
 }
 
+/// Watches Ronin after Heat, so the item watched last isn't the one the
+/// player has open.
+async fn watch_ronin_later(running: &Running, prefix: &str) {
+    // History keeps whole seconds.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let state = running.app.state();
+    let cache = state.cache.lock().unwrap();
+    cache
+        .record_play_start(&format!("{prefix}-movie-9"), "Ronin", None, "movie")
+        .unwrap();
+}
+
 fn position_of(running: &Running) -> Option<f64> {
     running
         .app
@@ -1553,6 +1575,7 @@ async fn invoke_async(
 async fn history_sent_to_another_instance_resumes_there() {
     let (mut mac, mut tv) = history_pair().await;
     watch(&mac, "xt-mac-movie-8", 1234.0);
+    watch_ronin_later(&mac, "xt-mac").await;
     invoke_async(
         &mac,
         "remote_ask_history",
@@ -1565,15 +1588,22 @@ async fn history_sent_to_another_instance_resumes_there() {
     let consent = tv.event("remote://consent").await;
     assert_eq!(consent["asked"]["kind"], json!("history"));
     assert_eq!(consent["asked"]["direction"], json!("send"));
-    assert_eq!(consent["asked"]["counts"]["history"], json!(1));
+    assert_eq!(consent["asked"]["counts"]["history"], json!(2));
+    // A cancel for another link leaves this one alone.
+    mac.invoke("remote_cancel_transfer", json!({ "link": 2 }))
+        .unwrap();
     tv.invoke(
         "remote_answer_consent",
         json!({ "request": consent["request"], "allow": true }),
     )
     .unwrap();
+    // The Mac says it's sending as soon as it's allowed.
+    let granted = transfer_step(&mut mac, "granted").await;
+    assert!(granted["transfer"].is_string());
 
     let imported = tv.event("remote://history-imported").await;
-    assert_eq!(imported["report"]["history"]["added"], json!(1));
+    assert_eq!(imported["report"]["history"]["added"], json!(2));
+    // The one playing, not the one watched last.
     assert_eq!(imported["channel"]["id"], json!("xt-tv-movie-8"));
     assert_eq!(imported["report"]["resume"]["position"], json!(1234.0));
     assert_eq!(position_of(&tv), Some(1234.0));
@@ -1590,6 +1620,7 @@ async fn history_sent_to_another_instance_resumes_there() {
 async fn history_imported_from_another_instance_waits_for_the_preview() {
     let (mut mac, mut tv) = history_pair().await;
     watch(&tv, "xt-tv-movie-8", 2000.0);
+    watch_ronin_later(&tv, "xt-tv").await;
     invoke_async(
         &mac,
         "remote_ask_history",
@@ -1613,7 +1644,7 @@ async fn history_imported_from_another_instance_waits_for_the_preview() {
     )
     .unwrap();
     let preview = transfer_step(&mut mac, "preview").await;
-    assert_eq!(preview["counts"]["history"], json!(1));
+    assert_eq!(preview["counts"]["history"], json!(2));
     assert_eq!(
         position_of(&mac),
         None,
@@ -1625,6 +1656,7 @@ async fn history_imported_from_another_instance_waits_for_the_preview() {
     )
     .unwrap();
     let imported = mac.event("remote://history-imported").await;
+    // The one the TV's player said it has open, not the one watched last.
     assert_eq!(imported["channel"]["id"], json!("xt-mac-movie-8"));
     assert_eq!(position_of(&mac), Some(2000.0));
     loop {
@@ -1822,4 +1854,75 @@ async fn after_a_denial_the_same_providers_can_be_sent_again() {
         again,
         Err(json!("Another transfer with that device is going on."))
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_history_send_cancelled_while_it_counts_never_asks() {
+    let (mac, mut tv) = history_pair().await;
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = mac.app.handle();
+    let holding = std::thread::spawn(move || {
+        let state = holder.state::<AppState>();
+        let _held = state.cache.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    let ask = invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "send",
+                "what": { "history": true, "favorites": true, "pins": true } }),
+    );
+    let cancel = async {
+        // The ask is counting, waiting on the cache, when the user cancels.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        mac.invoke("remote_cancel_transfer", json!({ "link": 1 }))
+            .unwrap();
+        release_tx.send(()).unwrap();
+    };
+    let (asked, ()) = tokio::join!(ask, cancel);
+    holding.join().unwrap();
+    assert_eq!(asked, Err(json!("Cancelled.")));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!tv.has_had("remote://consent"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_history_ask_while_one_waits_is_busy() {
+    let (mac, mut tv) = history_pair().await;
+    let what = json!({ "history": true, "favorites": true, "pins": true });
+    invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "send", "what": what, "playing": "xt-mac-movie-8" }),
+    )
+    .await
+    .unwrap();
+    tv.event("remote://consent").await;
+    assert_eq!(
+        invoke_async(
+            &mac,
+            "remote_ask_history",
+            json!({ "link": 1, "direction": "import", "what": what }),
+        )
+        .await,
+        Err(json!("Another transfer with that device is going on."))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_history_counts_are_what_a_send_would_carry() {
+    let (mac, _tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    let counts = invoke_async(
+        &mac,
+        "remote_history_counts",
+        json!({ "what": { "history": true, "favorites": false, "pins": false } }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(counts["history"], json!(1));
+    assert_eq!(counts["positions"], json!(1));
 }

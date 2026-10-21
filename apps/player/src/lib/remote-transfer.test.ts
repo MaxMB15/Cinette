@@ -6,6 +6,7 @@ import {
 	consentBody,
 	consentTitle,
 	countsText,
+	historyPrivacy,
 	nextHistoryState,
 	reportLines,
 	unmatchedLines,
@@ -120,6 +121,9 @@ describe("refusalText", () => {
 			"TV can't take this. It may need a newer Cinette."
 		);
 		expect(refusalText("TV", "failed")).toBe("It didn't work. Nothing was changed on TV.");
+		expect(refusalText("TV", "too_large")).toBe(
+			"That's more than one transfer can carry. Nothing was changed on TV."
+		);
 	});
 });
 
@@ -209,6 +213,9 @@ describe("nextSendState", () => {
 		expect(
 			nextSendState(state, notice({ step: "preview", transfer: "t", counts }), "TV", 0)
 		).toBe(state);
+		expect(nextSendState(state, notice({ step: "granted", transfer: "t" }), "TV", 0)).toBe(
+			state
+		);
 	});
 
 	it("ignores notices before asking and after the end", () => {
@@ -282,6 +289,19 @@ describe("reportLines", () => {
 	});
 });
 
+describe("historyPrivacy", () => {
+	it("names the device the history goes to", () => {
+		const send = historyPrivacy("send", "TV");
+		expect(send).toContain("becomes part of TV's own history");
+		expect(send).toContain("it stays on TV and");
+		expect(send).toContain("Nothing is deleted on this device.");
+		const take = historyPrivacy("import", "TV");
+		expect(take).toContain("becomes part of this device's own history");
+		expect(take).toContain("it stays on this device and");
+		expect(take).toContain("Nothing is deleted on TV.");
+	});
+});
+
 describe("unmatchedLines", () => {
 	it("lists the first ones and counts the rest", () => {
 		const unmatched = Array.from({ length: UNMATCHED_SHOWN + 2 }, (_, i) => ({
@@ -305,6 +325,16 @@ describe("unmatchedLines", () => {
 		);
 		expect(lines).toEqual({ items: ["A"], more: null });
 	});
+
+	it("says which ones made no sense", () => {
+		const lines = unmatchedLines(
+			report({
+				unmatched: [{ name: "A", kind: "movie", reason: "invalid" }],
+				unmatchedTotal: 1,
+			})
+		);
+		expect(lines.items).toEqual(["A (its details didn't make sense)"]);
+	});
 });
 
 describe("nextHistoryState", () => {
@@ -320,6 +350,14 @@ describe("nextHistoryState", () => {
 		expect(
 			nextHistoryState(running, notice({ step: "preview", transfer: "t", counts }), "TV", 0)
 		).toEqual({ step: "preview", transfer: "t", counts });
+		expect(
+			nextHistoryState(
+				{ step: "waiting", expiresAt: 9 },
+				notice({ step: "granted", transfer: "t" }),
+				"TV",
+				0
+			)
+		).toEqual({ step: "moving", done: 0, total: null });
 		expect(
 			nextHistoryState(
 				running,

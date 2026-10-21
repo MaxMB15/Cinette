@@ -300,4 +300,115 @@ describe("TransferHistoryDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(remoteCancelTransfer).toHaveBeenCalledTimes(1);
 	});
+
+	it("names this device as the one that keeps an import", () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		expect(screen.getByRole("dialog")).toHaveTextContent("it stays on Living Room");
+		fireEvent.click(screen.getByRole("radio", { name: "Import from Living Room" }));
+		expect(screen.getByRole("dialog")).toHaveTextContent("it stays on this device");
+		expect(screen.getByRole("dialog")).toHaveTextContent("Nothing is deleted on Living Room.");
+	});
+
+	it("counts only for a send, and keeps the newest count", async () => {
+		let first: (c: unknown) => void = () => {};
+		vi.mocked(remoteHistoryCounts).mockImplementationOnce(
+			() => new Promise((resolve) => (first = resolve as (c: unknown) => void))
+		);
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("checkbox", { name: "Favorites" }));
+		await waitFor(() =>
+			expect(status()).toHaveTextContent(
+				"This device has watch history (12), saved places (3)"
+			)
+		);
+		await act(async () => first({ history: 99, positions: 99, favorites: 99, pins: 99 }));
+		expect(status()).not.toHaveTextContent("99");
+		fireEvent.click(screen.getByRole("radio", { name: "Import from Living Room" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Favorites" }));
+		expect(remoteHistoryCounts).toHaveBeenCalledTimes(2);
+	});
+
+	it("forgets the counts once they can't be read", async () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		await waitFor(() => expect(status()).toHaveTextContent("(12)"));
+		vi.mocked(remoteHistoryCounts).mockRejectedValueOnce("down");
+		fireEvent.click(screen.getByRole("checkbox", { name: "Favorites" }));
+		await waitFor(() =>
+			expect(status()).toHaveTextContent("This device has watch history, saved places")
+		);
+	});
+
+	it("doesn't ask once it's closed while the player saves its place", async () => {
+		let saved: (playing: string | null) => void = () => {};
+		vi.mocked(saveProgressNow).mockImplementationOnce(
+			() => new Promise((resolve) => (saved = resolve))
+		);
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await act(async () => saved("ch-7"));
+		expect(remoteAskHistory).not.toHaveBeenCalled();
+	});
+
+	it("doesn't ask once it's gone while the player saves its place", async () => {
+		let saved: (playing: string | null) => void = () => {};
+		vi.mocked(saveProgressNow).mockImplementationOnce(
+			() => new Promise((resolve) => (saved = resolve))
+		);
+		const { unmount } = render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		unmount();
+		await act(async () => saved("ch-7"));
+		expect(remoteAskHistory).not.toHaveBeenCalled();
+	});
+
+	it("withdraws an ask that was closed while it went out", async () => {
+		let asked: () => void = () => {};
+		vi.mocked(remoteAskHistory).mockImplementationOnce(
+			() => new Promise<void>((resolve) => (asked = resolve))
+		);
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(remoteCancelTransfer).toHaveBeenCalledTimes(1);
+		await act(async () => asked());
+		expect(remoteCancelTransfer).toHaveBeenCalledTimes(2);
+	});
+
+	it("shows no countdown until the other device asks, nor after it allows", async () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		expect(screen.queryByText(/Expires in/)).toBeNull();
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(screen.getByText(/Expires in/)).toBeInTheDocument();
+		notify({ step: "granted", transfer: "t" });
+		expect(screen.queryByText(/Expires in/)).toBeNull();
+		expect(status()).toHaveTextContent("Sending…");
+		expect(status()).not.toHaveTextContent("of");
+	});
+
+	it("doesn't cancel when closed after it finished or failed, and can try again", async () => {
+		const first = render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		notify({ step: "progress", transfer: "t", progress: { state: "done", data: report() } });
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		expect(onClose).toHaveBeenCalledTimes(1);
+		first.unmount();
+
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalledTimes(2));
+		notify({ step: "refused", code: "busy" });
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalledTimes(3));
+		notify({ step: "refused", code: "busy" });
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		expect(onClose).toHaveBeenCalledTimes(2);
+		expect(remoteCancelTransfer).not.toHaveBeenCalled();
+	});
 });
