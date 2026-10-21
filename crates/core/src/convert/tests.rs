@@ -67,7 +67,7 @@ fn hls_output_writes_mpeg_ts_with_the_same_input_and_codecs() {
         format!(
             "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 \
              -rw_timeout 15000000 {FILE_INPUT} -i http://srv/live/u/p/1.ts -map 0:v:0 \
-             -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ac 2 \
+             -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ar 48000 -ac 2 \
              -f mpegts -flush_packets 1 pipe:1"
         )
     );
