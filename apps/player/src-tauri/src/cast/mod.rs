@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! Google Cast from this computer. For now, the receivers on the local
-//! network: one `_googlecast._tcp` browse runs from the first time the
-//! frontend asks for them until the app quits, and changes are sent to the
-//! frontend as `cast://receivers`, at most one list every [`ANNOUNCE_GAP`].
+//! Google Cast from this computer.
+//!
+//! - The receivers on the local network: one `_googlecast._tcp` browse runs
+//!   from the first time the frontend asks for them until the app quits,
+//!   and changes are sent to the frontend as `cast://receivers`, at most one
+//!   list every [`ANNOUNCE_GAP`].
+//! - Casting to one of them ([`playback`]), over TLS ([`tls`]) through the
+//!   session loop ([`link`]). macOS and Linux only for now.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,11 +17,25 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod link;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod playback;
 pub mod receivers;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod tls;
 
 // The tests use discovery's events, which only desktop builds have.
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod fake_receiver;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod link_tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod playback_tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tls_tests;
 
 use receivers::{ReceiverList, Registry};
 
@@ -51,6 +69,10 @@ pub struct CastReceivers {
     browse: Mutex<Option<Browse>>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     browsing: Mutex<bool>,
+    /// How long a receiver that couldn't be reached shows so:
+    /// [`receivers::UNREACHABLE_FOR`], or less in tests.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    unreachable_for: Mutex<std::time::Duration>,
 }
 
 impl CastReceivers {
@@ -73,7 +95,18 @@ impl CastReceivers {
             browse: Mutex::new(None),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             browsing: Mutex::new(false),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            unreachable_for: Mutex::new(receivers::UNREACHABLE_FOR),
         }
+    }
+
+    /// Shows a receiver that couldn't be reached so for `time`.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pub(crate) fn set_unreachable_for(&self, time: std::time::Duration) {
+        *self
+            .unreachable_for
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = time;
     }
 
     /// Browses with `browse` from now on.
@@ -148,13 +181,18 @@ fn announce<R: Runtime>(app: &AppHandle<R>) {
 /// A connection to `id` failed. It shows as unavailable for
 /// [`receivers::UNREACHABLE_FOR`], after which it can be tried again.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-// The Cast destination uses it from step 6.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn mark_unreachable<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    update(app, |registry| registry.unreachable(id, Instant::now()));
+    let time = *app
+        .state::<CastReceivers>()
+        .unreachable_for
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    update(app, |registry| {
+        registry.unreachable(id, Instant::now() + time)
+    });
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(receivers::UNREACHABLE_FOR).await;
+        tokio::time::sleep(time).await;
         update(&app, |registry| registry.expire(Instant::now()));
     });
 }
@@ -225,4 +263,88 @@ pub async fn get_cast_receivers<R: Runtime>(app: AppHandle<R>) -> ReceiverList {
 #[tauri::command]
 pub fn hold_cast_receivers<R: Runtime>(app: AppHandle<R>, ids: Vec<String>) {
     update(&app, |registry| registry.hold(ids));
+}
+
+/// Plays `channel` on the receiver `receiverId`, the way `route` says: the
+/// route the frontend's `chooseRoute` gave, with the place of its URL.
+#[tauri::command]
+pub async fn cast_load<R: Runtime>(
+    app: AppHandle<R>,
+    receiver_id: String,
+    channel: mvp_core::models::channel::Channel,
+    route: serde_json::Value,
+    start_at: Option<f64>,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let route = serde_json::from_value(route).map_err(|e| e.to_string())?;
+        playback::load(&app, &receiver_id, &channel, route, start_at).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, receiver_id, channel, route, start_at);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// Play, pause, seek or set the volume on the receiver being cast to.
+#[tauri::command]
+pub fn cast_control<R: Runtime>(
+    app: AppHandle<R>,
+    receiver_id: String,
+    action: serde_json::Value,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let action = serde_json::from_value(action).map_err(|e| e.to_string())?;
+        playback::control(&app.state::<playback::CastPlayback>(), &receiver_id, action)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, receiver_id, action);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// Ends the cast to `receiverId`. The receiver goes back to what it showed.
+#[tauri::command]
+pub fn cast_stop<R: Runtime>(app: AppHandle<R>, receiver_id: String) {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    playback::stop(&app.state::<playback::CastPlayback>(), &receiver_id);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (app, receiver_id);
+}
+
+/// Has the cast let go of the provider's stream and keeps it, for a switch
+/// to another item on an account that allows one connection. Resolves once
+/// the converter, if any, has stopped.
+#[tauri::command]
+pub async fn cast_release<R: Runtime>(
+    app: AppHandle<R>,
+    receiver_id: String,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        playback::release(&app.state::<playback::CastPlayback>(), &receiver_id).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, receiver_id);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// What the commands say where casting isn't built yet.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const UNSUPPORTED: &str = "unsupported";
+
+/// Whether a VPN looks to hold the default route, for the pickers' hint
+/// when no receiver is found or one can't be reached. Phones and tablets
+/// say false until they check.
+#[tauri::command]
+pub fn get_vpn_active() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    return crate::vpn::vpn_active();
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    false
 }

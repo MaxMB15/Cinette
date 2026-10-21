@@ -11,6 +11,7 @@
  */
 
 import {
+	positionNow,
 	UnsupportedError,
 	type PlaybackCapabilities,
 	type PlaybackDestination,
@@ -240,7 +241,8 @@ export type AirPlayKey =
 export const airplayKey = (
 	action: PlayerAction,
 	state: PlaybackState,
-	capabilities: PlaybackCapabilities
+	capabilities: PlaybackCapabilities,
+	now = state.positionAt
 ): AirPlayKey => {
 	const seekTo = (to: number): AirPlayKey =>
 		capabilities.seek
@@ -251,7 +253,8 @@ export const airplayKey = (
 			if (state.status !== "playing" && state.status !== "buffering") return { kind: "play" };
 			return capabilities.pause ? { kind: "pause" } : { kind: "ignore" };
 		case "seekBy":
-			return seekTo(state.position + action.seconds);
+			// From where it is now, not where it last said.
+			return seekTo(positionNow(state, now) + action.seconds);
 		case "seekToPercent":
 			return seekTo((state.duration * action.percent) / 100);
 		case "toggleFullscreen":

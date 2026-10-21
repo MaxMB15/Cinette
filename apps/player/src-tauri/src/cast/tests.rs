@@ -272,9 +272,10 @@ fn a_receiver_that_couldnt_be_reached_is_unavailable_for_a_while() {
     let now = Instant::now();
     let mut registry = Registry::default();
     registry.apply(found("tv", "tv", "TV"));
-    assert!(registry.unreachable("cast:tv", now));
-    assert!(!registry.unreachable("cast:tv", now));
-    assert!(!registry.unreachable("cast:none", now));
+    let until = now + UNREACHABLE_FOR;
+    assert!(registry.unreachable("cast:tv", until));
+    assert!(!registry.unreachable("cast:tv", until));
+    assert!(!registry.unreachable("cast:none", until));
     assert_eq!(names(&registry), [("TV".into(), false)]);
     assert!(!registry.get("cast:tv").unwrap().available);
     // Letting go of it keeps it, since discovery still lists it.
@@ -284,7 +285,7 @@ fn a_receiver_that_couldnt_be_reached_is_unavailable_for_a_while() {
     assert!(registry.expire(now + UNREACHABLE_FOR));
     assert_eq!(names(&registry), [("TV".into(), true)]);
     // Or when discovery reports it again.
-    registry.unreachable("cast:tv", now);
+    registry.unreachable("cast:tv", until);
     let txt = Txt::new([("id", "tv"), ("fn", "TV"), ("md", "Chromecast")]);
     assert!(registry.apply(record("tv", TV, txt)));
     assert_eq!(names(&registry), [("TV".into(), true)]);
@@ -360,9 +361,13 @@ fn an_unreachable_receiver_is_marked_as_such() {
     update(&app.handle(), |registry| {
         registry.apply(found("tv", "tv", "TV"))
     });
-    mark_unreachable(&app.handle(), "cast:tv");
     let handle = app.handle();
     let state = handle.state::<CastReceivers>();
+    state.set_unreachable_for(Duration::from_secs(60));
+    mark_unreachable(&handle, "cast:tv");
+    assert!(!state.registry().get("cast:tv").unwrap().available);
+    // The mark lasts its time, whatever ends others meanwhile.
+    update(&handle, |registry| registry.expire(Instant::now()));
     assert!(!state.registry().get("cast:tv").unwrap().available);
 }
 
