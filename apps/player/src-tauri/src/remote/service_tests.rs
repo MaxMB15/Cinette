@@ -1890,8 +1890,10 @@ async fn a_history_send_cancelled_while_it_counts_never_asks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_second_history_ask_while_one_waits_is_busy() {
+async fn a_second_history_ask_while_one_waits_is_busy_and_leaves_the_first() {
     let (mac, mut tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    watch_ronin_later(&mac, "xt-mac").await;
     let what = json!({ "history": true, "favorites": true, "pins": true });
     invoke_async(
         &mac,
@@ -1900,7 +1902,7 @@ async fn a_second_history_ask_while_one_waits_is_busy() {
     )
     .await
     .unwrap();
-    tv.event("remote://consent").await;
+    let consent = tv.event("remote://consent").await;
     assert_eq!(
         invoke_async(
             &mac,
@@ -1910,6 +1912,65 @@ async fn a_second_history_ask_while_one_waits_is_busy() {
         .await,
         Err(json!("Another transfer with that device is going on."))
     );
+    // The first still carries the channel the player had open.
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    let imported = tv.event("remote://history-imported").await;
+    assert_eq!(imported["channel"]["id"], json!("xt-tv-movie-8"));
+}
+
+/// Asks for a history transfer of everything, as the webview does.
+async fn ask_all(mac: &Running, direction: &str) -> Result<Value, Value> {
+    invoke_async(
+        mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": direction,
+                "what": { "history": true, "favorites": true, "pins": true } }),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_history_ask_refused_as_busy_doesnt_hold_up_the_next() {
+    let (mut mac, mut tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    ask_all(&mac, "send").await.unwrap();
+    let consent = tv.event("remote://consent").await;
+    // The TV's cache is busy, so it's still writing when the Mac asks again.
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = tv.app.handle();
+    let holding = std::thread::spawn(move || {
+        let state = holder.state::<AppState>();
+        let _held = state.cache.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    transfer_step(&mut mac, "granted").await;
+    assert_eq!(
+        ask_all(&mac, "import").await,
+        Err(json!("Another transfer with that device is going on."))
+    );
+    release_tx.send(()).unwrap();
+    holding.join().unwrap();
+    loop {
+        let event = transfer_step(&mut mac, "progress").await;
+        if event["progress"]["state"] == json!("done") {
+            break;
+        }
+    }
+    // The refused ask left nothing behind, so the next one asks again.
+    ask_all(&mac, "send").await.unwrap();
+    tv.event("remote://consent").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
