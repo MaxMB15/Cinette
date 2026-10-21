@@ -34,10 +34,14 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 	const [now, setNow] = useState(() => performance.now());
 	useTauriEvent<RemoteTransferNotice>("remote://transfer", (notice) => {
 		if (notice.link !== link.id) return;
-		setState((current) => nextSendState(current, notice, link.name, performance.now()));
+		const at = performance.now();
+		// The countdown starts from now, not from when it last ticked.
+		setNow(at);
+		setState((current) => nextSendState(current, notice, link.name, at));
 	});
 	const waiting = state.step === "waiting";
 	useEffect(() => {
+		// Stryker disable next-line ConditionalExpression: an interval while not waiting only sets the same time again, which shows nothing.
 		if (!waiting) return;
 		const timer = setInterval(() => setNow(performance.now()), 250);
 		return () => clearInterval(timer);
@@ -167,8 +171,8 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 			{state.step === "done" && (
 				<>
 					<ul className="mb-4 space-y-1 text-sm" aria-label="Results">
-						{state.results.map((r) => (
-							<li key={r.name} className="flex justify-between gap-3">
+						{state.results.map((r, i) => (
+							<li key={`${i}-${r.name}`} className="flex justify-between gap-3">
 								<bdi className="truncate">{r.name}</bdi>
 								<span
 									className={cn(

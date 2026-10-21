@@ -323,7 +323,9 @@ export const RemoteBar = () => {
 	const { link, ended, leave } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
 	const [leaveFailed, setLeaveFailed] = useState(false);
-	const [sending, setSending] = useState(false);
+	// The link the dialog was opened for, so it doesn't come back by
+	// itself on the next link.
+	const [sendingFor, setSendingFor] = useState<number | null>(null);
 	// Leaving clears the link here before the backend answers, so this
 	// shows whatever the bar shows by then.
 	const failed = leaveFailed && (
@@ -347,12 +349,14 @@ export const RemoteBar = () => {
 					<button
 						type="button"
 						className={`${BUTTON} ml-auto shrink-0 hover:bg-accent`}
-						onClick={() => setSending(true)}
+						onClick={() => setSendingFor(link.id)}
 					>
 						Send providers
 					</button>
 				)}
-				{sending && <SendProvidersDialog link={link} onClose={() => setSending(false)} />}
+				{sendingFor === link.id && (
+					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
+				)}
 				<button
 					type="button"
 					className={cn(

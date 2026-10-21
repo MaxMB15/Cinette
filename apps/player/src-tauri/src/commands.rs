@@ -86,10 +86,12 @@ pub(crate) async fn add_m3u_url(
         tracing::error!("[IPTV] failed to save provider: {e}");
         e.to_string()
     })?;
-    cache.save_channels(&provider_id, &channels).map_err(|e| {
+    if let Err(e) = cache.save_channels(&provider_id, &channels) {
         tracing::error!("[IPTV] failed to save channels: {e}");
-        e.to_string()
-    })?;
+        // A provider without its channels would look added.
+        let _ = cache.remove_provider(&provider_id);
+        return Err(e.to_string());
+    }
     tracing::info!("[IPTV] saved provider={} with {} channels", provider_id, channels.len());
 
     Ok(channels)
@@ -195,7 +197,11 @@ pub(crate) async fn add_xtream(
 
     let cache = cache.lock().map_err(|e| e.to_string())?;
     cache.upsert_provider(&provider).map_err(|e| e.to_string())?;
-    cache.save_channels(&provider_id, &channels).map_err(|e| e.to_string())?;
+    if let Err(e) = cache.save_channels(&provider_id, &channels) {
+        // A provider without its channels would look added.
+        let _ = cache.remove_provider(&provider_id);
+        return Err(e.to_string());
+    }
     tracing::info!("[IPTV] saved Xtream provider={} with {} channels", provider_id, channels.len());
 
     Ok(channels)

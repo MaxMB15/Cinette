@@ -133,7 +133,7 @@ fn settings_carry_the_login() {
             url: "http://panel.example:8080".into(),
             username: Some("viewer".into()),
             password: Some("made-up-password".into()),
-            epg_url: Some("http://panel.example/xmltv.php".into()),
+            epg_url: None,
         }]
     );
     assert!(settings_for(&cache, &ids(&["xt-9"])).is_err());
@@ -427,4 +427,126 @@ async fn nothing_about_a_sent_provider_reaches_the_log() {
     for secret in ["secret-panel", "secret-user", "made-up-password"] {
         assert!(!text.contains(secret), "{secret} in {text}");
     }
+}
+
+#[test]
+fn too_many_providers_or_a_name_the_other_device_cant_show_is_refused_first() {
+    let many: Vec<Provider> = (0..33)
+        .map(|i| {
+            provider(
+                &format!("m3u-{i}"),
+                &format!("P{i}"),
+                ProviderType::M3u,
+                "http://l.example/a.m3u",
+                None,
+            )
+        })
+        .collect();
+    let cache = cache(&many);
+    let all: Vec<String> = (0..33).map(|i| format!("m3u-{i}")).collect();
+    assert_eq!(
+        names_for(&cache, &all).unwrap_err(),
+        "Pick at most 32 providers at a time."
+    );
+    assert_eq!(names_for(&cache, &all[..32]).unwrap().len(), 32);
+
+    for (name, why) in [
+        ("x".repeat(129), "too long"),
+        ("a\nb".to_string(), "a line break"),
+        ("\u{202e}Home".to_string(), "a direction override"),
+        ("  ".to_string(), "blank"),
+    ] {
+        let cache = cache_with(provider(
+            "m3u-1",
+            &name,
+            ProviderType::M3u,
+            "http://l.example/a.m3u",
+            None,
+        ));
+        let err = names_for(&cache, &ids(&["m3u-1"])).unwrap_err();
+        assert!(err.starts_with("Rename"), "{why}: {err}");
+    }
+    let fine = cache_with(provider(
+        "m3u-1",
+        &"x".repeat(128),
+        ProviderType::M3u,
+        "http://l.example/a.m3u",
+        None,
+    ));
+    assert!(names_for(&fine, &ids(&["m3u-1"])).is_ok());
+}
+
+fn cache_with(p: Provider) -> Mutex<CacheStore> {
+    cache(&[p])
+}
+
+#[test]
+fn a_provider_whose_address_or_login_is_too_long_is_refused_first() {
+    let long = "x".repeat(MAX_PROVIDER_FIELD + 1);
+    let mut url = home();
+    url.url = format!("http://panel.example/{long}");
+    let mut user = home();
+    user.username = Some(long.clone());
+    let mut password = home();
+    password.password = Some(long);
+    for p in [url, user, password] {
+        let err = names_for(&cache_with(p), &ids(&["xt-1"])).unwrap_err();
+        assert!(err.contains("too long"), "{err}");
+    }
+}
+
+#[test]
+fn the_guide_address_isnt_sent() {
+    let cache = cache(&[home()]);
+    assert_eq!(
+        settings_for(&cache, &ids(&["xt-1"])).unwrap()[0].epg_url,
+        None
+    );
+}
+
+#[tokio::test]
+async fn an_account_here_twice_is_still_here() {
+    let twin = Provider {
+        id: "xt-2".into(),
+        ..home()
+    };
+    let cache = cache(&[home(), twin]);
+    let results = save(
+        &cache,
+        &Fake::new(false),
+        "Mac",
+        vec![sent(
+            "Home",
+            ProviderKind::Xtream,
+            "http://panel.example:8080",
+            Some("viewer"),
+        )],
+    )
+    .await;
+    assert_eq!(results[0].outcome, ProviderOutcome::Exists);
+}
+
+#[tokio::test]
+async fn a_playlist_file_here_isnt_taken_for_a_sent_account() {
+    let file = provider(
+        "m3u-f",
+        "Mine",
+        ProviderType::M3u,
+        "file:///home/me/a.m3u",
+        None,
+    );
+    let cache = cache(&[file]);
+    let results = save(
+        &cache,
+        &Fake::new(false),
+        "Mac",
+        vec![sent(
+            "Lists",
+            ProviderKind::M3u,
+            "http://l.example/a.m3u",
+            None,
+        )],
+    )
+    .await;
+    assert_eq!(results[0].outcome, ProviderOutcome::Added);
 }

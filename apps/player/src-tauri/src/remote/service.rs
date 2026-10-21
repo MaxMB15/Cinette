@@ -60,6 +60,9 @@ pub struct RemoteService {
     /// The providers the webview asked to send, by link, until the other
     /// device allows it.
     sending: Sending,
+    /// Goes up with every cancel, so a send that was cancelled while it
+    /// waited for the cache doesn't ask after all.
+    cancels: std::sync::atomic::AtomicU64,
 }
 
 struct Saved {
@@ -218,20 +221,43 @@ impl RemoteService {
         link: u64,
         ids: Vec<String>,
     ) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
         let handle = self.link(link).ok_or("Not connected to that device.")?;
+        let ticket = self.cancels.load(Ordering::SeqCst);
+        // This can wait on the cache, for a refresh or a guide save.
         let names = super::providers::names_for(cache, &ids)?;
-        *lock(&self.sending) = Some((link, ids));
-        handle.ask_providers(names).await.map_err(|e| match e {
+        {
+            let mut slot = lock(&self.sending);
+            if self.cancels.load(Ordering::SeqCst) != ticket {
+                return Err(CANCELLED.into());
+            }
+            if slot.as_ref().is_some_and(|(l, _)| *l == link) {
+                return Err(BUSY.into());
+            }
+            *slot = Some((link, ids));
+        }
+        let asked = handle.ask_providers(names).await;
+        if asked.is_err() {
+            lock(&self.sending).take_if(|(l, _)| *l == link);
+        }
+        // Cancelled while the request went out: it's withdrawn.
+        if asked.is_ok() && self.cancels.load(Ordering::SeqCst) != ticket {
+            handle.cancel_transfer();
+            return Err(CANCELLED.into());
+        }
+        asked.map_err(|e| match e {
             AskError::Unsupported => {
                 "That device's Cinette can't take providers. Update it first.".to_string()
             }
-            AskError::Busy => "Another transfer with that device is going on.".to_string(),
+            AskError::Busy => BUSY.to_string(),
             AskError::NotConnected => "Not connected to that device.".to_string(),
         })
     }
 
     /// Stops the transfer on link `link`, if one is going on.
     pub fn cancel_transfer(&self, link: u64) {
+        self.cancels
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(handle) = self.link(link) {
             handle.cancel_transfer();
         }
@@ -264,6 +290,11 @@ impl RemoteService {
 /// The providers the webview asked to send, as the link and the provider
 /// ids, until the other device allows it.
 type Sending = Arc<Mutex<Option<(u64, Vec<String>)>>>;
+
+/// What a send or ask cancelled on its way says.
+const CANCELLED: &str = "Cancelled.";
+/// What a second send while one waits says.
+const BUSY: &str = "Another transfer with that device is going on.";
 
 /// What `remote://consent` carries.
 #[derive(Debug, Clone, Serialize)]
@@ -1047,6 +1078,7 @@ fn start_on<R: Runtime>(
         left_through: Mutex::new(0),
         prompt,
         sending,
+        cancels: std::sync::atomic::AtomicU64::new(0),
     });
     Ok(())
 }

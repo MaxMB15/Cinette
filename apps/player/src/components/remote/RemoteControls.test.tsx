@@ -411,6 +411,22 @@ describe("RemoteBar", () => {
 		expect(screen.getByRole("button", { name: "Send providers" })).toBeInTheDocument();
 	});
 
+	it("doesn't bring the dialog back by itself on the next link", () => {
+		control.state = {
+			...control.state,
+			link: link({ phase: "connected" }, "123456", ["providers"]),
+		};
+		const { rerender } = render(<RemoteBar />);
+		fireEvent.click(screen.getByRole("button", { name: "Send providers" }));
+		expect(screen.getByRole("button", { name: "Close sending" })).toBeInTheDocument();
+		control.state = {
+			...control.state,
+			link: { ...link({ phase: "connected" }, "123456", ["providers"]), id: 4 },
+		};
+		rerender(<RemoteBar />);
+		expect(screen.queryByRole("button", { name: "Close sending" })).toBeNull();
+	});
+
 	it("doesn't offer it to a device that doesn't take them, or while reconnecting", () => {
 		control.state = { ...control.state, link: link({ phase: "connected" }) };
 		const { unmount } = render(<RemoteBar />);
