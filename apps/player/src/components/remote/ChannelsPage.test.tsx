@@ -11,9 +11,7 @@ vi.mock("@/components/channels/ChannelList", () => ({
 	ChannelList: () => <p>This device's channels</p>,
 }));
 const platform = vi.hoisted(() => ({ controller: true }));
-vi.mock("@/lib/platform", () => ({
-	remoteRoles: () => ({ target: true, controller: platform.controller }),
-}));
+vi.mock("@/lib/platform", () => ({ controlsOthers: () => platform.controller }));
 vi.mock("@/components/remote/RemoteCatalog", () => ({
 	RemoteCatalog: ({ link }: { link: Link }) => <p>{link.name}'s catalog</p>,
 }));

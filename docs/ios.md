@@ -21,6 +21,13 @@ How the iOS pieces fit together is in [architecture.md](architecture.md#ios).
 - An iPhone always gets the phone layout. An iPad picks the phone, tablet or desktop
   layout by window width, so Split View and rotation switch between them.
 - Audio keeps playing on the lock screen, which shows the channel name and logo.
+- Remote control runs the macOS code: Bonjour through `dns_sd.h`, which iOS allows
+  for the service types in `NSBonjourServices` (`_cinette._tcp` and `_googlecast._tcp`),
+  and the same TCP listener. The device key is in the Keychain, on this device only,
+  so a restored backup doesn't copy the device id. Other devices only find the app
+  while it's in the foreground: going to the background withdraws the record and
+  closes the listener, and coming back opens both again. Sessions already open carry
+  on while iOS keeps the app running, as it does while audio plays.
 
 ## Building
 

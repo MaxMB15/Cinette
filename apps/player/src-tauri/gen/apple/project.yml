@@ -69,6 +69,11 @@ targets:
         # iOS asks before the app reaches the local network, such as a
         # provider on a home server or a TV, and shows this text.
         NSLocalNetworkUsageDescription: Cinette uses your local network to reach IPTV servers, to find TVs and other devices running Cinette, and to send video to them.
+        # The DNS-SD services the app browses and advertises. iOS only lets
+        # it use the ones listed: other Cinette devices, and Cast receivers.
+        NSBonjourServices:
+          - _cinette._tcp
+          - _googlecast._tcp
         # The app is always dark, so the launch screen, the keyboard and system
         # sheets use dark colors too.
         UIUserInterfaceStyle: Dark

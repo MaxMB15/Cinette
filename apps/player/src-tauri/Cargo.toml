@@ -78,6 +78,12 @@ oslog = { version = "0.2", default-features = false }
 hls-remux = { path = "../../../crates/hls-remux" }
 # getifaddrs, for this device's Wi-Fi address.
 libc = "0.2"
+# Remote control, as on macOS: the interfaces' subnets for the local-peer
+# check and the dual-stack listener. The device key is kept in the Keychain.
+# The same versions as mdns-sd's, tokio's and native-tls's.
+if-addrs = "0.15"
+socket2 = "0.6"
+security-framework = "3"
 
 # The HLS converter's tests build its C against the system's FFmpeg. The
 # Linux app itself never links it.

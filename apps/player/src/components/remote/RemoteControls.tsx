@@ -13,6 +13,7 @@ import { VPN_HINT } from "@/lib/cast";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
 import type { CinetteDestination } from "@/lib/cinette-destination";
 import { endedText, formatCode } from "@/lib/remote-devices";
+import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 const BUTTON = cn(
@@ -93,7 +94,9 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 				onOpen={checkNetwork}
 				notice={
 					denied
-						? LOCAL_NETWORK_DENIED
+						? getPlatform() === "ios"
+							? LOCAL_NETWORK_DENIED_IOS
+							: LOCAL_NETWORK_DENIED
 						: devices.length > 0
 							? null
 							: looked
@@ -114,6 +117,10 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 /** What the picker says while macOS keeps Cinette off the local network. */
 export const LOCAL_NETWORK_DENIED =
 	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
+
+/** What the picker says while iOS keeps Cinette off the local network. */
+export const LOCAL_NETWORK_DENIED_IOS =
+	"Cinette can't look for other devices. Allow it in Settings, Privacy & Security, Local Network.";
 
 /** How long the picker looks before it says it found no device. */
 export const LOOKING_MS = 3000;

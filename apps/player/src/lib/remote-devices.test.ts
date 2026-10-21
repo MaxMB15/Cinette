@@ -17,10 +17,11 @@ import {
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
 describe("discoveryLimit", () => {
-	it("says Android phones and TVs are only found while Cinette is open", () => {
+	it("says phones, tablets and TVs are only found while Cinette is open", () => {
 		const note = "Other devices can only find this one while Cinette is open on screen.";
 		expect(discoveryLimit("android")).toBe(note);
 		expect(discoveryLimit("tv")).toBe(note);
+		expect(discoveryLimit("ios")).toBe(note);
 	});
 
 	it("says nothing on a computer, which only has to be running", () => {

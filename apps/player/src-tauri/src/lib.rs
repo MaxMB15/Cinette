@@ -28,6 +28,8 @@ mod streams;
 mod wifi;
 #[cfg(test)]
 mod android_project_tests;
+#[cfg(test)]
+mod ios_project_tests;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vpn;
 #[cfg(test)]
@@ -402,6 +404,17 @@ pub fn run() {
             // DNS-SD needs it over Wi-Fi. The app starts in the foreground.
             #[cfg(target_os = "android")]
             crate::android_device::hold_multicast(true);
+            // A phone or tablet can only be found while the app is in the
+            // foreground. Tauri's own Suspended comes when iOS only makes the
+            // app inactive, as for Control Center, with no Resumed after, so
+            // the mpv plugin's background notifications are used instead.
+            #[cfg(target_os = "ios")]
+            {
+                let handle = app.handle().clone();
+                tauri_plugin_mpv::watch_background(move |background| {
+                    crate::remote::set_foreground(&handle, !background)
+                });
+            }
 
             #[cfg(desktop)]
             {

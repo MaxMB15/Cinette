@@ -91,7 +91,7 @@ enum Input {
     CatalogDone(Epoch, ConnId, u64, CatalogPage),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     Background,
     Foreground(TcpListener),
     Shutdown(oneshot::Sender<()>),
@@ -152,7 +152,7 @@ impl TargetHandle {
     /// the background. Open connections and sessions carry on for as long as
     /// the system lets the app run.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub fn background(&self) {
         self.send(Input::Background);
     }
@@ -160,7 +160,7 @@ impl TargetHandle {
     /// Listens on `listener` and advertises again, for an app back in the
     /// foreground.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub fn foreground(&self, listener: TcpListener) -> std::io::Result<()> {
         self.port.store(listener.local_addr()?.port(), Ordering::Relaxed);
         self.send(Input::Foreground(listener));

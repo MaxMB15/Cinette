@@ -49,12 +49,12 @@ pub struct RemoteService {
     left_through: Mutex<u64>,
     /// Whether the app is in the foreground, as the system last said.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     wants_foreground: AtomicBool,
     /// Whether the target listens and advertises, as it was last told. Held
     /// while the target is told, so changes reach it one at a time.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     in_foreground: tokio::sync::Mutex<bool>,
 }
 
@@ -208,7 +208,7 @@ impl RemoteService {
     /// Notes that the app went to the background or came back. Call
     /// [`Self::follow_foreground`] next.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub fn set_foreground(&self, foreground: bool) {
         self.wants_foreground.store(foreground, Ordering::SeqCst);
     }
@@ -218,7 +218,7 @@ impl RemoteService {
     /// the foreground it listens again and advertises. Open sessions carry
     /// on either way. However the calls overlap, the last word wins.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub async fn follow_foreground(&self) {
         let mut in_foreground = self.in_foreground.lock().await;
         let wanted = self.wants_foreground.load(Ordering::SeqCst);
@@ -893,7 +893,7 @@ fn start_on<R: Runtime>(
 /// On a phone, tablet or TV, the device can only be found while the app is
 /// in the foreground.
 // Only the mobile apps go to the background.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[cfg_attr(not(mobile), allow(dead_code))]
 pub fn set_foreground<R: Runtime>(app: &AppHandle<R>, foreground: bool) {
     #[cfg(target_os = "android")]
     crate::android_device::hold_multicast(foreground);

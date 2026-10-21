@@ -33,6 +33,11 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_cinette._tcp</string>
+		<string>_googlecast._tcp</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Cinette uses your local network to reach IPTV servers, to find TVs and other devices running Cinette, and to send video to them.</string>
 	<key>UIBackgroundModes</key>

@@ -3,7 +3,7 @@
 
 //! Time that keeps counting while the computer sleeps.
 //!
-//! `std::time::Instant` stops during sleep on macOS, Linux and Android. The
+//! `std::time::Instant` stops during sleep on macOS, iOS, Linux and Android. The
 //! remote core measures the 30 s a dropped session may resume in with
 //! `Instant`s, so after an hour asleep a session would look seconds old and
 //! come back without asking. [`now`] gives an `Instant` that moves on by the time
@@ -16,11 +16,11 @@ use std::time::{Duration, Instant};
 fn awake_and_asleep() -> Duration {
     // Linux's and Android's CLOCK_MONOTONIC stops in suspend and
     // CLOCK_BOOTTIME doesn't.
-    // macOS's CLOCK_MONOTONIC counts sleep (CLOCK_UPTIME_RAW is the one that
-    // stops, and Instant uses it).
+    // Darwin's CLOCK_MONOTONIC counts sleep, and on iOS the time the app was
+    // suspended (CLOCK_UPTIME_RAW is the one that stops, and Instant uses it).
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
     let mut ts = libc::timespec {
         tv_sec: 0,

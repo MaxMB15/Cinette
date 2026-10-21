@@ -22,6 +22,11 @@ vi.mock("@/hooks/useRemoteControl", () => ({
 
 const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
+const os = vi.hoisted(() => ({ platform: "macos" }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	getPlatform: () => os.platform,
+}));
 vi.mock("@/lib/tauri", () => ({
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
 	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
@@ -36,6 +41,7 @@ import {
 	DevicesButton,
 	LEAVE_FAILED,
 	LOCAL_NETWORK_DENIED,
+	LOCAL_NETWORK_DENIED_IOS,
 	LOOKING,
 	LOOKING_MS,
 	NONE_FOUND,
@@ -128,6 +134,16 @@ describe("DevicesButton", () => {
 		open();
 		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+	});
+
+	it("says where iOS allows the local network", async () => {
+		os.platform = "ios";
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED_IOS);
+		expect(LOCAL_NETWORK_DENIED_IOS).toMatch(/in Settings, Privacy & Security, Local Network/);
+		os.platform = "macos";
 	});
 
 	it("says nothing about the network until it knows, or when it can't tell", async () => {

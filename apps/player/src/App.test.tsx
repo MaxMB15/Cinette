@@ -163,15 +163,13 @@ describe("App", () => {
 		delete window.__CINETTE_TV__;
 	});
 
-	it("shows neither dialog on iOS, where remote control doesn't run yet", async () => {
+	it("listens for both on iOS", async () => {
 		vi.mocked(osPlatform).mockReturnValue("ios");
 		renderApp();
 		await waitFor(() =>
-			expect(listen).toHaveBeenCalledWith("remote://command", expect.any(Function))
+			expect(listen).toHaveBeenCalledWith("remote://consent", expect.any(Function))
 		);
-		expect(listen).not.toHaveBeenCalledWith("remote://consent", expect.any(Function));
-		expect(listen).not.toHaveBeenCalledWith("remote://controller", expect.any(Function));
-		expect(screen.queryByText("Connect dialog")).toBeNull();
+		expect(screen.getByText("Connect dialog")).toBeInTheDocument();
 	});
 
 	it("takes commands from other Cinette devices", async () => {

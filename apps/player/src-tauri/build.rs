@@ -16,7 +16,7 @@ fn main() {
     // `remote`: where remote control between Cinette devices runs.
     println!("cargo::rustc-check-cfg=cfg(remote)");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if matches!(os.as_str(), "macos" | "linux" | "android") {
+    if matches!(os.as_str(), "macos" | "linux" | "android" | "ios") {
         println!("cargo:rustc-cfg=remote");
     }
 

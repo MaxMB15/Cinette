@@ -4,7 +4,7 @@
 //! The `remote_*` commands the webview calls for remote control.
 //!
 //! They're registered on every platform, so the frontend's calls are the
-//! same everywhere. Where remote control doesn't run yet (iOS) they fail
+//! same everywhere. Where remote control doesn't run (Windows) they fail
 //! with [`UNAVAILABLE`].
 
 // Only the error path builds where remote control doesn't run, so the
@@ -435,8 +435,8 @@ pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json:
     }
 }
 
-/// Whether macOS refuses this app the local network, so no device can be
-/// found. Always false elsewhere.
+/// Whether macOS or iOS refuses this app the local network, so no device can
+/// be found. Always false elsewhere.
 // mutants: skip FnValue: mutation runs build on Linux, where nothing refuses local network access, so false is what the code returns there too.
 #[command]
 pub async fn remote_local_network_denied() -> bool {

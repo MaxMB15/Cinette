@@ -7,7 +7,7 @@ import {
 	getPlatform,
 	isMobilePlatform,
 	layoutModeFor,
-	remoteRoles,
+	controlsOthers,
 	type Viewport,
 } from "./platform";
 
@@ -110,23 +110,21 @@ describe("isMobilePlatform", () => {
 	});
 });
 
-describe("remoteRoles", () => {
-	it("lets computers, Android phones and tablets control and be controlled", () => {
-		for (const p of ["macos", "linux", "windows", "android"] as const) {
-			expect(remoteRoles(p)).toEqual({ target: true, controller: true });
+describe("controlsOthers", () => {
+	it("lets computers, phones and tablets control other devices", () => {
+		for (const p of ["macos", "linux", "windows", "android", "ios"] as const) {
+			expect(controlsOthers(p)).toBe(true);
 		}
 	});
 
-	it("lets a TV only be controlled", () => {
-		expect(remoteRoles("tv")).toEqual({ target: true, controller: false });
-	});
-
-	it("leaves iOS out until it runs there", () => {
-		expect(remoteRoles("ios")).toEqual({ target: false, controller: false });
+	it("doesn't let a TV", () => {
+		expect(controlsOthers("tv")).toBe(false);
 	});
 
 	it("asks the platform when given none", () => {
-		vi.mocked(osPlatform).mockReturnValue("ios");
-		expect(remoteRoles()).toEqual({ target: false, controller: false });
+		vi.mocked(osPlatform).mockReturnValue("android");
+		window.__CINETTE_TV__ = true;
+		expect(controlsOthers()).toBe(false);
+		delete window.__CINETTE_TV__;
 	});
 });
