@@ -81,10 +81,11 @@ pub enum Ended {
     ///
     /// [`LIVE_BYTES`]: crate::lan_server::LIVE_BYTES
     Finished,
-    /// A live channel's connection ended. It has no end of its own, so
-    /// it can be started again.
+    /// A live channel's connection ended, timed out or broke. It has no
+    /// end of its own, so it can be started again.
     Dropped,
-    /// ffmpeg stopped with an error.
+    /// ffmpeg stopped with an error that starting again wouldn't fix, or
+    /// a file's connection failed.
     Failed(ConvertError),
 }
 
@@ -343,14 +344,22 @@ async fn read_output(
     }
     let end = match broken {
         Some(e) => Ended::Failed(e),
-        None if status.is_ok_and(|s| s.success()) => {
-            if live {
-                Ended::Dropped
-            } else {
-                Ended::Finished
-            }
-        }
-        None => Ended::Failed(errors.reason().await),
+        None if status.is_ok_and(|s| s.success()) => ending(live, None),
+        None => ending(live, Some(errors.reason().await)),
     };
     let _ = ended.send(Some(end));
+}
+
+/// How a conversion that ffmpeg ended by itself ended, from whether the
+/// source is `live` and why ffmpeg failed, if it did. A live channel whose
+/// connection ended, closed, timed out or broke can start again. A refused
+/// login or a track ffmpeg can't convert stays failed, since starting again
+/// would do the same.
+fn ending(live: bool, error: Option<ConvertError>) -> Ended {
+    match error {
+        None if live => Ended::Dropped,
+        None => Ended::Finished,
+        Some(ConvertError::Unreachable) if live => Ended::Dropped,
+        Some(e) => Ended::Failed(e),
+    }
 }

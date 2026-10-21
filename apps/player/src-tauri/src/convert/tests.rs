@@ -873,3 +873,27 @@ fn a_hung_encoder_test_counts_as_no_encoder_this_time() {
     assert_eq!(encoder_works(Ok(None)), (false, Finished(true)));
     assert_eq!(encoder_works(Err(Unfinished)), (false, Finished(false)));
 }
+
+#[test]
+fn a_live_channel_that_ended_or_lost_its_connection_can_start_again() {
+    assert_eq!(ending(true, None), Ended::Dropped);
+    assert_eq!(
+        ending(true, Some(ConvertError::Unreachable)),
+        Ended::Dropped
+    );
+    assert_eq!(ending(false, None), Ended::Finished);
+    // A file that broke off would start again at the wrong place.
+    assert_eq!(
+        ending(false, Some(ConvertError::Unreachable)),
+        Ended::Failed(ConvertError::Unreachable)
+    );
+    // Starting again would fail the same way.
+    assert_eq!(
+        ending(true, Some(ConvertError::Refused(403))),
+        Ended::Failed(ConvertError::Refused(403))
+    );
+    assert_eq!(
+        ending(true, Some(ConvertError::Unsupported)),
+        Ended::Failed(ConvertError::Unsupported)
+    );
+}
