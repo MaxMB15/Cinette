@@ -4,6 +4,8 @@
 use super::*;
 use crate::test_support::TestApp;
 use serde_json::json;
+// Only the command tests use it, and they don't build for iOS.
+#[cfg(not(target_os = "ios"))]
 use tauri::async_runtime::block_on;
 
 fn report(status: &str) -> Report {
