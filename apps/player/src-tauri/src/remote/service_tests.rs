@@ -1261,6 +1261,8 @@ async fn the_background_hides_the_device_and_the_foreground_brings_it_back() {
     service.set_foreground(false);
     service.follow_foreground().await;
     until_refused(running.port).await;
+    // Not listening anywhere else either.
+    until_refused(service.handle.port()).await;
 
     service.set_foreground(true);
     service.follow_foreground().await;
