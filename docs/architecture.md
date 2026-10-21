@@ -65,7 +65,7 @@ Rust with no Tauri or UI dependencies, so mobile apps can reuse it.
 | `cast/` | Google Cast's CASTV2 protocol with no I/O: the length-prefixed frames, the CastMessage protobuf, and a session that connects to a receiver, launches the Default Media Receiver and loads, controls and follows the media. The app supplies the TLS connection |
 | `models/` | `Channel`, `Playlist` and related types |
 | `streams/` | The URLs an item can be fetched from, and what each holds: the probe's parser, the HLS segment and CORS check, for Cast and AirPlay |
-| `convert/` | Converting a stream for a receiver that can't play it: ffmpeg's arguments, splitting live Matroska at the clusters that start with a keyframe, and the server's HTTP |
+| `convert/` | Converting a stream for a receiver that can't play it: ffmpeg's arguments, splitting live Matroska at the clusters that start with a keyframe, cutting MPEG-TS into HLS segments (`ts.rs`) and the playlists for them (`hls.rs`), and the server's HTTP |
 
 ### `apps/player/src-tauri`
 
@@ -78,7 +78,10 @@ it from this computer's address on the local network, only to that receiver and 
 a random path. ffmpeg reads a file at its playing speed after a 10-second burst, and
 `lan_server.rs` keeps up to 32 MB of the stream in one buffer that every request reads
 from. A full buffer holds ffmpeg back, and a receiver that stops reading for 15 seconds
-is dropped and counted.
+is dropped and counted. For AirPlay from a Mac, `convert/hls.rs` has ffmpeg write
+MPEG-TS instead, cuts it into HLS segments in memory and serves them to the Mac's subnet,
+with the same window and pacer as the iPhone's converter in `hls_out.rs`. While the
+pacer waits, nothing reads ffmpeg's output, which holds it back.
 
 Recordings of live channels share the downloads table, with the kind `recording`.
 Besides `completed` and `failed`, they have three states of their own, `scheduled`,

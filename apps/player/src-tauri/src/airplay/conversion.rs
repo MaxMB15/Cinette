@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! The order of converted AirPlay loads, apart from the platform, so it can
-//! be tested anywhere. iOS runs it with `hls_out`'s conversions.
+//! be tested anywhere. iOS runs it with `hls_out`'s conversions, and macOS
+//! with the bundled ffmpeg's.
 //!
 //! - One load runs at a time. A load or a stop that comes later makes an
 //!   older load give up, so quick seeks collapse into the last one.
@@ -20,7 +21,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use crate::hls_out::{Ended, HlsError};
+use crate::convert::hls::{Ended, HlsError};
 
 #[cfg(test)]
 #[path = "conversion_tests.rs"]
@@ -179,10 +180,18 @@ impl<R: Running> Conversions<R> {
         });
     }
 
-    /// Stops the conversion, and any load still starting one.
-    pub fn stop(&self) {
+    /// Stops the conversion, and any load still starting one, and waits
+    /// up to [`CLOSE_LIMIT`] for them to close their source, so whatever
+    /// plays next isn't a second connection to the provider.
+    pub async fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.stop_current();
+        let closed = async {
+            // A load that's starting drops what it started once it ends.
+            let _turn = self.turn.lock().await;
+            self.wait_closed().await;
+        };
+        let _ = tokio::time::timeout(CLOSE_LIMIT, closed).await;
     }
 
     /// Passes the receiver's state on: only `playing` runs the pacer.

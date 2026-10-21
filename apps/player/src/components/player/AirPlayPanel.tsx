@@ -22,6 +22,9 @@ interface AirPlayPanelProps {
 	onPlayHere: (position: number, anchor: DOMRect) => void;
 	/** Ends AirPlay and leaves the player. */
 	onStop: () => void;
+	/** Play here opens the system picker, as on an iPhone, so the panel
+	 *  says to pick this device. A Mac's sound never moves. */
+	picksHere?: boolean;
 }
 
 const statusLine = (state: PlaybackState): string | null => {
@@ -49,6 +52,7 @@ export const AirPlayPanel = ({
 	onAudio,
 	onPlayHere,
 	onStop,
+	picksHere = true,
 }: AirPlayPanelProps) => {
 	const over = state.connection === "lost" || state.error !== null || state.status === "ended";
 	const playing = state.status === "playing" || state.status === "buffering";
@@ -149,9 +153,12 @@ export const AirPlayPanel = ({
 					Stop
 				</Button>
 			</div>
-			<p className="text-xs text-white/50">
-				Play here opens the AirPlay list. Choose this iPhone so the sound comes back too.
-			</p>
+			{picksHere && (
+				<p className="text-xs text-white/50">
+					Play here opens the AirPlay list. Choose this iPhone so the sound comes back
+					too.
+				</p>
+			)}
 		</div>
 	);
 };

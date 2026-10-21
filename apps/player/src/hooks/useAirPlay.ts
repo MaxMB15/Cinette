@@ -152,13 +152,18 @@ export interface AirPlay {
 	 * sound on the receiver.
 	 */
 	returnHere: (anchor: DOMRect) => Promise<void>;
+	/** No receiver took the video, on a Mac, so the player plays it here
+	 *  again from where it was. */
+	notPicked: boolean;
 }
 
 /**
- * AirPlay for the player page, on iOS. Off elsewhere, where every field
- * stays empty. Leaving the page stops AirPlay.
+ * AirPlay for the player page, on iOS and macOS. Off elsewhere, where every
+ * field stays empty. Leaving the page stops AirPlay. On a `mac`, the route
+ * belongs to AVPlayer, not to the whole Mac, so stopping AirPlay is all it
+ * takes to play here again.
  */
-export const useAirPlay = (enabled: boolean): AirPlay => {
+export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 	const [available, setAvailable] = useState(false);
 	const [route, setRoute] = useState<AirPlayRoute | null>(null);
 	const [destination, setDestination] = useState<AirPlayDestination | null>(null);
@@ -290,8 +295,9 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 	};
 
 	const returnHere = async (anchor: DOMRect) => {
-		// Only an AirPlay route has the sound somewhere else.
-		if (route) await chooseHere(anchor).catch(() => {});
+		// Only an AirPlay route has the sound somewhere else, and a Mac's
+		// own sound never left.
+		if (route && !mac) await chooseHere(anchor).catch(() => {});
 		await stop();
 	};
 
@@ -302,5 +308,7 @@ export const useAirPlay = (enabled: boolean): AirPlay => {
 		send,
 		stop,
 		returnHere,
+		// The destination's state changes with it, which renders this again.
+		notPicked: destination?.notPicked === true,
 	};
 };

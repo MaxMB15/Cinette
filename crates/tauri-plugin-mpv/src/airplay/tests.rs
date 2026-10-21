@@ -4,6 +4,8 @@
 use super::*;
 use crate::test_support::TestApp;
 use serde_json::json;
+// Only the command tests use it, and they don't build for iOS.
+#[cfg(not(target_os = "ios"))]
 use tauri::async_runtime::block_on;
 
 fn report(status: &str) -> Report {
@@ -132,7 +134,8 @@ fn a_failure_before_the_item_is_ready_is_open_failed() {
         state.error,
         Some(PlaybackError {
             code: "openFailed",
-            unsupported: false
+            unsupported: false,
+            not_picked: false,
         })
     );
 }
@@ -419,6 +422,7 @@ fn route_ids_carry_the_uid() {
 }
 
 #[test]
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 fn every_command_fails_where_there_is_no_airplay() {
     let app = TestApp::new();
     let unavailable = Err(UNAVAILABLE.to_string());
@@ -451,6 +455,46 @@ fn every_command_fails_where_there_is_no_airplay() {
     );
     assert_eq!(
         block_on(airplay_get_state(app.handle().state())),
+        Ok(AirPlayState::idle())
+    );
+}
+
+/// On a Mac, the commands hand their work to the main thread and return.
+/// A test's main thread never runs that work, so what shows is what they
+/// do here: a load starts tracking the item, and a stop ends it.
+#[test]
+#[cfg(target_os = "macos")]
+fn on_a_mac_the_commands_queue_their_work_and_track_the_item() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    assert_eq!(block_on(airplay_set_detection(true)), Ok(()));
+    assert_eq!(block_on(airplay_choose(0.0, 0.0, 10.0, 10.0)), Ok(()));
+    // Nothing was picked.
+    assert_eq!(block_on(airplay_get_route()), Ok(None));
+    assert_eq!(
+        load(
+            &handle,
+            "http://127.0.0.1:1/x.m3u8",
+            "Channel",
+            Some(5.0),
+            false,
+            None
+        ),
+        Ok(())
+    );
+    assert!(handle
+        .state::<AirPlay>()
+        .report(&report("playing"), Instant::now())
+        .is_some());
+    assert_eq!(block_on(airplay_play()), Ok(()));
+    assert_eq!(block_on(airplay_pause()), Ok(()));
+    assert_eq!(block_on(airplay_seek(10.0)), Ok(()));
+    // There's no track choice on a Mac yet, and choosing does nothing.
+    assert_eq!(block_on(airplay_select_subtitle(Some(0))), Ok(()));
+    assert_eq!(block_on(airplay_select_audio(0)), Ok(()));
+    assert_eq!(block_on(airplay_stop(handle.clone())), Ok(()));
+    assert_eq!(
+        block_on(airplay_get_state(handle.state())),
         Ok(AirPlayState::idle())
     );
 }
@@ -519,6 +563,7 @@ fn a_failed_conversion_ends_the_item_where_it_was() {
         Some(PlaybackError {
             code: "refused",
             unsupported: false,
+            not_picked: false,
         })
     );
     // Everything else stays as AVPlayer last had it.
@@ -541,6 +586,7 @@ fn a_failure_with_nothing_tracked_starts_from_idle() {
             error: Some(PlaybackError {
                 code: "failed",
                 unsupported: false,
+                not_picked: false,
             }),
             ..AirPlayState::idle()
         }
@@ -557,4 +603,161 @@ fn emits_a_failed_conversion() {
     let state = events.wait_for(EVENT_STATE);
     assert_eq!(state["status"], json!("error"));
     assert_eq!(state["error"], json!({ "code": "failed" }));
+}
+
+#[test]
+fn a_receiver_that_never_took_the_video_ends_the_item_as_not_picked() {
+    let airplay = AirPlay::default();
+    let now = Instant::now();
+    let load = airplay.begin(Tracker::new(false));
+    let opening = airplay.report(&report("opening"), now).unwrap();
+    let state = airplay.not_picked(load).unwrap();
+    assert_eq!(state.status, Status::Error);
+    assert_eq!(
+        state.error,
+        Some(PlaybackError {
+            code: "openFailed",
+            unsupported: false,
+            not_picked: true,
+        })
+    );
+    assert_eq!(state.position, opening.position);
+    // Nothing tracked now, so a late report changes nothing.
+    assert_eq!(airplay.report(&report("playing"), now), None);
+    assert_eq!(airplay.state(), state);
+    assert_eq!(airplay.not_picked(load), None);
+}
+
+#[test]
+fn no_pick_for_an_earlier_load_leaves_the_new_one_playing() {
+    let airplay = AirPlay::default();
+    let now = Instant::now();
+    let first = airplay.begin(Tracker::new(false));
+    let second = airplay.begin(Tracker::new(false));
+    assert_ne!(first, second);
+    assert_eq!(airplay.not_picked(first), None);
+    let playing = airplay.report(&report("playing"), now).unwrap();
+    assert_eq!(playing.status, Status::Playing);
+    assert_eq!(airplay.not_picked(second).unwrap().status, Status::Error);
+}
+
+#[test]
+fn drops_a_report_about_an_earlier_load() {
+    let airplay = AirPlay::default();
+    let now = Instant::now();
+    let first = airplay.begin(Tracker::new(false));
+    let second = airplay.begin(Tracker::new(false));
+    // The old item had played on, and the new one is still opening.
+    assert_eq!(
+        airplay.report_from(Some(first), &report("playing"), now),
+        None
+    );
+    assert_eq!(airplay.state(), AirPlayState::idle());
+    let state = airplay.report_from(Some(second), &report("playing"), now);
+    assert_eq!(state.unwrap().status, Status::Playing);
+    // A report without a load, as Swift's are, is about the item tracked.
+    assert_eq!(
+        airplay.report(&report("paused"), now).unwrap().status,
+        Status::Paused
+    );
+}
+
+#[test]
+fn emits_a_report_about_the_load_tracked_only() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE]);
+    let app_handle = app.handle();
+    let first = app_handle.state::<AirPlay>().begin(Tracker::new(false));
+    let second = app_handle.state::<AirPlay>().begin(Tracker::new(false));
+    handle_from(&app_handle, first, &report("paused"), Instant::now());
+    handle_from(&app_handle, second, &report("playing"), Instant::now());
+    let state = events.wait_for(EVENT_STATE);
+    assert_eq!(state["status"], json!("playing"));
+    assert_eq!(events.payloads(EVENT_STATE).len(), 1);
+}
+
+#[test]
+fn a_mac_shows_opening_at_the_start_until_the_video_is_on_a_receiver() {
+    let now = Instant::now();
+    let converted = Converted {
+        offset: 600.0,
+        duration: Some(5400.0),
+    };
+    let mut tracker = Tracker::converted(false, converted).awaiting_receiver();
+    let here = Report {
+        position: 4.0,
+        duration: Some(30.0),
+        external: false,
+        ..report("playing")
+    };
+    let state = tracker.update(&here, now);
+    assert_eq!(state.status, Status::Opening);
+    // Where it started, so no resume point moves on while it plays here.
+    assert_eq!(state.position, 600.0);
+    assert_eq!(state.duration, 5400.0);
+    let there = Report {
+        external: true,
+        ..here.clone()
+    };
+    let state = tracker.update(&there, now);
+    assert_eq!(state.status, Status::Playing);
+    assert_eq!(state.position, 604.0);
+    // A failure shows while it waits too.
+    let mut tracker = Tracker::new(false).awaiting_receiver();
+    let failed = Report {
+        external: false,
+        ..failed("AVFoundationErrorDomain", -11800, None)
+    };
+    let failed = tracker.update(&failed, now);
+    assert_eq!(failed.status, Status::Error);
+    // Elsewhere the receiver's position counts from the start.
+    let mut tracker = Tracker::new(false);
+    let state = tracker.update(&here, now);
+    assert_eq!((state.status, state.position), (Status::Playing, 4.0));
+}
+
+#[test]
+fn a_mac_that_waits_for_a_receiver_isnt_ready_yet() {
+    // Waiting that long while opening is lost, but never reconnecting,
+    // since the item never got ready as far as the tracker knows.
+    let now = Instant::now();
+    let here = Report {
+        external: false,
+        ..report("playing")
+    };
+    let mut tracker = Tracker::new(false).awaiting_receiver();
+    tracker.update(&here, now);
+    let later = tracker.update(&here, now + secs(15));
+    assert_eq!(later.connection, Connection::Connected);
+}
+
+#[test]
+fn emits_a_pick_that_found_no_receiver() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE, EVENT_ROUTE]);
+    let handle = app.handle();
+    let load = handle.state::<AirPlay>().begin(Tracker::new(false));
+    // Nothing about an earlier load.
+    assert!(!not_picked(&handle, load - 1));
+    assert!(not_picked(&handle, load));
+    // The route went with the pick.
+    assert_eq!(events.wait_for(EVENT_ROUTE), json!(null));
+    let state = events.wait_for(EVENT_STATE);
+    assert_eq!(events.payloads(EVENT_STATE).len(), 1);
+    assert_eq!(state["status"], json!("error"));
+    assert_eq!(
+        state["error"],
+        json!({ "code": "openFailed", "notPicked": true })
+    );
+}
+
+#[test]
+fn emits_the_state_of_a_report_given_as_it_is() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_STATE]);
+    let app_handle = app.handle();
+    app_handle.state::<AirPlay>().begin(Tracker::new(false));
+    handle(&app_handle, &report("playing"), Instant::now());
+    let state = events.wait_for(EVENT_STATE);
+    assert_eq!(state["status"], json!("playing"));
 }

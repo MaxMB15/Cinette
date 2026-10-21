@@ -19,6 +19,7 @@ pub fn load(
     _start: f64,
     _live: bool,
     _converted: bool,
+    _load: u64,
 ) -> Result<(), String> {
     Err(UNAVAILABLE.into())
 }

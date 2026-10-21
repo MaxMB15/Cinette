@@ -114,14 +114,16 @@ async fn serves_subtitles_and_heads_and_nothing_else() {
         SUBTITLES.len().to_string()
     );
 
-    // Another path, a guessed token or another method gets no answer at all.
+    // A guessed token or another method gets no answer at all, and a name
+    // under the token that isn't there is a 404.
     let wrong = conversion.url.replace("/cast/", "/cast/0");
     assert!(client.get(&wrong).send().await.is_err());
-    assert!(client
+    let other = client
         .get(format!("{}other.vtt", conversion.server.base))
         .send()
         .await
-        .is_err());
+        .unwrap();
+    assert_eq!(other.status(), 404);
     assert!(client.post(&conversion.url).send().await.is_err());
 }
 
