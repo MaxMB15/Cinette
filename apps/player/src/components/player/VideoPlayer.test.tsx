@@ -228,11 +228,13 @@ const fakeAirPlay = vi.hoisted(() => {
 		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
 		stop: vi.fn<AirPlay["stop"]>(async () => {}),
 		returnHere: vi.fn<AirPlay["returnHere"]>(async () => {}),
+		notPicked: false,
 	});
 	let current = initial();
 	const listeners = new Set<() => void>();
 	return {
 		enabled: [] as boolean[],
+		macs: [] as boolean[],
 		get: () => current,
 		subscribe: (listener: () => void) => {
 			listeners.add(listener);
@@ -253,8 +255,9 @@ const fakeAirPlay = vi.hoisted(() => {
 vi.mock("@/hooks/useAirPlay", async () => {
 	const { useSyncExternalStore } = await import("react");
 	return {
-		useAirPlay: (enabled: boolean) => {
+		useAirPlay: (enabled: boolean, mac = false) => {
 			fakeAirPlay.enabled.push(enabled);
+			fakeAirPlay.macs.push(mac);
 			return useSyncExternalStore(fakeAirPlay.subscribe, fakeAirPlay.get);
 		},
 	};
@@ -743,6 +746,7 @@ beforeEach(() => {
 	fakeAirPlay.reset();
 	fakeCast.reset();
 	fakeAirPlay.enabled = [];
+	fakeAirPlay.macs = [];
 	env.channels = [];
 	env.downloads = [];
 	env.layoutMode = "desktop";
@@ -3653,6 +3657,7 @@ describe("AirPlay", () => {
 		kind: "airplay" as const,
 		name: "Living Room TV",
 		catalog: { kind: "local" as const },
+		notPicked: false,
 		capabilities: {
 			seek: true,
 			pause: true,
@@ -3679,13 +3684,19 @@ describe("AirPlay", () => {
 
 	const airplayButton = () => screen.queryByRole("button", { name: "AirPlay" });
 
-	it("is only on for iOS", async () => {
+	it("is only on for iOS and macOS, and knows which", async () => {
+		const last = (list: boolean[]) => list[list.length - 1];
 		await openItem(lanternKeeper());
-		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
+		expect(last(fakeAirPlay.enabled)).toBe(true);
+		expect(last(fakeAirPlay.macs)).toBe(true);
 		setUpTouchScreen();
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(last(fakeAirPlay.enabled)).toBe(true);
+		expect(last(fakeAirPlay.macs)).toBe(false);
+		env.os = "linux";
 		fakeAirPlay.enabled = [];
 		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
-		expect(fakeAirPlay.enabled[fakeAirPlay.enabled.length - 1]).toBe(true);
+		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
 	});
 
 	it("shows its button only while a receiver is in reach", async () => {
@@ -3726,10 +3737,33 @@ describe("AirPlay", () => {
 		fireEvent.click(airplayButton()!);
 		await flush();
 		const dialog = screen.getByRole("dialog", { name: "Convert on this device?" });
-		expect(dialog.textContent).toContain("This iPhone converts the stream");
+		expect(dialog.textContent).toContain("This Mac converts the stream");
 		fireEvent.click(within(dialog).getByRole("button", { name: "Send to TV" }));
 		await flush();
 		expect(answered).toBe(true);
+	});
+
+	it("says an iPhone converts on iOS", async () => {
+		setUpTouchScreen();
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		vi.mocked(fakeAirPlay.get().send).mockImplementationOnce(async (_, opts) => {
+			await opts.confirm();
+			return { sent: true };
+		});
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const dialog = screen.getByRole("dialog", { name: "Convert on this device?" });
+		expect(dialog.textContent).toContain("This iPhone converts the stream");
+	});
+
+	it("says to pick this device to play here only where the sound moved", async () => {
+		await openItem(lanternKeeper());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		expect(screen.queryByText(/Choose this iPhone/)).toBeNull();
+		setUpTouchScreen();
+		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
+		expect(screen.getByText(/Choose this iPhone/)).toBeInTheDocument();
 	});
 
 	it("sends live from now", async () => {
@@ -3842,6 +3876,39 @@ describe("AirPlay", () => {
 		await act(async () => letGo());
 		await flush();
 		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 606);
+	});
+
+	it("plays here again from where it was when no TV took the video", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 600, 5400) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const send = vi.mocked(fakeAirPlay.get().send);
+		await act(() => send.mock.calls[0][1].stopLocal());
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState({ status: "opening" }) }));
+		await flush();
+		fakeMpv.actions.load.mockClear();
+		const stop = vi.mocked(fakeAirPlay.get().stop);
+		expect(stop).not.toHaveBeenCalled();
+		act(() => fakeAirPlay.set({ notPicked: true }));
+		await flush();
+		expect(stop).toHaveBeenCalledTimes(1);
+		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 600);
+		// AirPlay let go first.
+		expect(stop.mock.invocationCallOrder[0]).toBeLessThan(
+			fakeMpv.actions.load.mock.invocationCallOrder[0]
+		);
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("says so when it can't play here again after no TV took the video", async () => {
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		act(() => fakeAirPlay.set({ notPicked: true }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 	});
 
 	it("says so when it can't play here again", async () => {

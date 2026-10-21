@@ -22,6 +22,8 @@ libc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
+    "NSButton",
+    "NSControl",
     "NSGraphics",
     "NSOpenGL",
     "NSOpenGLView",
@@ -29,12 +31,38 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSView",
     "NSWindow",
     "objc2-core-foundation",
+    "objc2-quartz-core",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSArray",
     "NSEnumerator",
+    "NSError",
     "NSGeometry",
+    "NSString",
+    "NSURL",
+] }
+# AirPlay through AVPlayer and the route picker. See airplay/macos.rs.
+objc2-av-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVPlayerLayer",
+    "AVRouteDetector",
+    "objc2-core-media",
+    "objc2-quartz-core",
+] }
+objc2-av-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "AVRoutePickerView",
+    "objc2-app-kit",
+    "objc2-av-foundation",
+] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMTime"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "std",
+    "CALayer",
+    "objc2-core-foundation",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
