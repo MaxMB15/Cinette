@@ -11,10 +11,12 @@ use super::{Report, ReportError};
 mod tests;
 
 /// `CMTimeFlags`' bits, as Core Media defines them.
-pub const VALID: u32 = 1 << 0;
-pub const POSITIVE_INFINITY: u32 = 1 << 2;
-pub const NEGATIVE_INFINITY: u32 = 1 << 3;
-pub const INDEFINITE: u32 = 1 << 4;
+pub const VALID: u32 = 0x01;
+pub const POSITIVE_INFINITY: u32 = 0x04;
+pub const NEGATIVE_INFINITY: u32 = 0x08;
+pub const INDEFINITE: u32 = 0x10;
+/// The bits that make a time not a number: the last three.
+const NOT_A_NUMBER: u32 = 0x1C;
 
 /// Seconds, or 0 for a time AVPlayer doesn't know, which it gives as NaN.
 pub fn finite(seconds: f64) -> f64 {
@@ -28,7 +30,7 @@ pub fn finite(seconds: f64) -> f64 {
 /// `CMTIME_IS_NUMERIC`, from a time's flags: valid, and neither indefinite
 /// nor infinite.
 pub fn is_numeric(flags: u32) -> bool {
-    flags & VALID != 0 && flags & (INDEFINITE | POSITIVE_INFINITY | NEGATIVE_INFINITY) == 0
+    flags & VALID != 0 && flags & NOT_A_NUMBER == 0
 }
 
 /// The HTTP status in an error log event's `errorStatusCode`, when it's

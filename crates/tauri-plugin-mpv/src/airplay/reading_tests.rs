@@ -20,6 +20,7 @@ fn only_a_valid_finite_time_is_numeric() {
     // Rounded is still a number.
     assert!(is_numeric(VALID | 1 << 1));
     assert!(!is_numeric(0));
+    assert_eq!(NOT_A_NUMBER, INDEFINITE + POSITIVE_INFINITY + NEGATIVE_INFINITY);
     for other in [INDEFINITE, POSITIVE_INFINITY, NEGATIVE_INFINITY] {
         assert!(!is_numeric(VALID | other), "{other}");
         assert!(!is_numeric(other), "{other}");
