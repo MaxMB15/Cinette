@@ -29,6 +29,9 @@ vi.mock("@/components/remote/RemoteControls", () => ({
 	ControllersBar: () => <p>Controllers bar</p>,
 	ProvidersAddedNotice: () => <p>Providers added</p>,
 }));
+vi.mock("@/components/remote/HistoryImportedNotice", () => ({
+	HistoryImportedNotice: () => <p>History imported</p>,
+}));
 
 import { AppLayout } from "./AppLayout";
 import { FullscreenContext } from "@/lib/fullscreen-context";
@@ -184,6 +187,7 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
+			expect(screen.getByText("History imported")).toBeInTheDocument();
 			expect(screen.getByText("page")).toBeInTheDocument();
 		});
 
@@ -194,6 +198,7 @@ describe("AppLayout", () => {
 			expect(screen.queryByText("Remote bar")).toBeNull();
 			expect(screen.queryByText("Controllers bar")).toBeNull();
 			expect(screen.queryByText("Providers added")).toBeNull();
+			expect(screen.queryByText("History imported")).toBeNull();
 		});
 	});
 });

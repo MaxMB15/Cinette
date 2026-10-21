@@ -5,6 +5,12 @@ import { describe, expect, it } from "vitest";
 import {
 	consentBody,
 	consentTitle,
+	countsText,
+	nextHistoryState,
+	reportLines,
+	unmatchedLines,
+	UNMATCHED_SHOWN,
+	type HistoryState,
 	isLocalFile,
 	listOf,
 	nextSendState,
@@ -13,7 +19,7 @@ import {
 	refusalText,
 	type SendState,
 } from "./remote-transfer";
-import type { RemoteAsked, RemoteTransferNotice } from "./tauri";
+import type { RemoteAsked, RemoteTransferNotice, TransferReport } from "./tauri";
 
 const ALL = { history: true, favorites: true, pins: true };
 
@@ -197,6 +203,14 @@ describe("nextSendState", () => {
 		).toEqual({ step: "failed", message: "No one answered on TV in time." });
 	});
 
+	it("ignores a history transfer's preview", () => {
+		const state: SendState = { step: "asking" };
+		const counts = { history: 1, positions: 0, favorites: 0, pins: 0 };
+		expect(
+			nextSendState(state, notice({ step: "preview", transfer: "t", counts }), "TV", 0)
+		).toBe(state);
+	});
+
 	it("ignores notices before asking and after the end", () => {
 		const pending = notice({ step: "pending", expiresInMs: 1 });
 		for (const state of [
@@ -223,5 +237,138 @@ describe("providersAddedText", () => {
 		expect(providersAddedText({ from: "Mac", names: ["Home", "Sports"] })).toBe(
 			"Added 2 providers from Mac: “Home” and “Sports”."
 		);
+	});
+});
+
+describe("countsText", () => {
+	it("lists what's picked, with counts when known", () => {
+		expect(countsText(ALL)).toBe("watch history, saved places, favorites and pinned groups");
+		expect(countsText(ALL, { history: 12, positions: 3, favorites: 5, pins: 2 })).toBe(
+			"watch history (12), saved places (3), favorites (5) and pinned groups (2)"
+		);
+		expect(countsText({ history: false, favorites: true, pins: false })).toBe("favorites");
+	});
+});
+
+const tally = (added = 0, updated = 0, unchanged = 0) => ({ added, updated, unchanged });
+const report = (extra: Partial<TransferReport> = {}): TransferReport => ({
+	history: tally(),
+	positions: tally(),
+	favorites: tally(),
+	pins: tally(),
+	unmatched: [],
+	unmatchedTotal: 0,
+	...extra,
+});
+
+describe("reportLines", () => {
+	it("says what each kind did and leaves out kinds with nothing", () => {
+		expect(
+			reportLines(
+				report({ history: tally(3, 1, 2), favorites: tally(0, 0, 4), pins: tally(1) })
+			)
+		).toEqual([
+			"Watch history: 3 added, 1 updated, 2 already there",
+			"Favorites: 4 already there",
+			"Pinned groups: 1 added",
+		]);
+		expect(reportLines(report({ positions: tally(0, 2) }))).toEqual([
+			"Saved places: 2 updated",
+		]);
+	});
+
+	it("says when there was nothing", () => {
+		expect(reportLines(report())).toEqual(["Nothing to copy."]);
+	});
+});
+
+describe("unmatchedLines", () => {
+	it("lists the first ones and counts the rest", () => {
+		const unmatched = Array.from({ length: UNMATCHED_SHOWN + 2 }, (_, i) => ({
+			name: `Item ${i}`,
+			kind: "movie" as const,
+			reason: (i === 0 ? "ambiguous" : "missing") as "ambiguous" | "missing",
+		}));
+		const lines = unmatchedLines(report({ unmatched, unmatchedTotal: 250 }));
+		expect(lines.items).toHaveLength(UNMATCHED_SHOWN);
+		expect(lines.items[0]).toBe("Item 0 (more than one match)");
+		expect(lines.items[1]).toBe("Item 1");
+		expect(lines.more).toBe(`and ${250 - UNMATCHED_SHOWN} more`);
+	});
+
+	it("has no more line when all are listed", () => {
+		const lines = unmatchedLines(
+			report({
+				unmatched: [{ name: "A", kind: "live", reason: "missing" }],
+				unmatchedTotal: 1,
+			})
+		);
+		expect(lines).toEqual({ items: ["A"], more: null });
+	});
+});
+
+describe("nextHistoryState", () => {
+	const notice = (rest: object) => ({ deviceId: "d", link: 1, ...rest }) as RemoteTransferNotice;
+	const progress = (p: object) => notice({ step: "progress", transfer: "t", progress: p });
+	const running: HistoryState = { step: "asking" };
+
+	it("waits, previews and moves along", () => {
+		expect(
+			nextHistoryState(running, notice({ step: "pending", expiresInMs: 30000 }), "TV", 5)
+		).toEqual({ step: "waiting", expiresAt: 30005 });
+		const counts = { history: 1, positions: 0, favorites: 0, pins: 0 };
+		expect(
+			nextHistoryState(running, notice({ step: "preview", transfer: "t", counts }), "TV", 0)
+		).toEqual({ step: "preview", transfer: "t", counts });
+		expect(
+			nextHistoryState(
+				running,
+				progress({ state: "sending", data: { done: 2, total: 5 } }),
+				"TV",
+				0
+			)
+		).toEqual({ step: "moving", done: 2, total: 5 });
+		expect(
+			nextHistoryState(
+				running,
+				progress({ state: "receiving", data: { received: 3 } }),
+				"TV",
+				0
+			)
+		).toEqual({ step: "moving", done: 3, total: null });
+		expect(nextHistoryState(running, progress({ state: "saving" }), "TV", 0)).toEqual({
+			step: "saving",
+		});
+		const done = report({ history: tally(1) });
+		expect(nextHistoryState(running, progress({ state: "done", data: done }), "TV", 0)).toEqual(
+			{
+				step: "done",
+				report: done,
+			}
+		);
+	});
+
+	it("fails with a sentence", () => {
+		expect(
+			nextHistoryState(running, notice({ step: "refused", code: "denied" }), "TV", 0)
+		).toEqual({ step: "failed", message: "TV said no." });
+		expect(
+			nextHistoryState(running, progress({ state: "failed", data: "expired" }), "TV", 0)
+		).toEqual({ step: "failed", message: "No one answered on TV in time." });
+	});
+
+	it("ignores what isn't about history, and anything before asking or after the end", () => {
+		expect(
+			nextHistoryState(running, progress({ state: "providersDone", data: [] }), "TV", 0)
+		).toBe(running);
+		for (const state of [
+			{ step: "choosing" },
+			{ step: "done", report: report() },
+			{ step: "failed", message: "x" },
+		] as HistoryState[]) {
+			expect(
+				nextHistoryState(state, notice({ step: "pending", expiresInMs: 1 }), "TV", 0)
+			).toBe(state);
+		}
 	});
 });

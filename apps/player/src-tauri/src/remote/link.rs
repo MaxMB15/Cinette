@@ -18,7 +18,11 @@ use mvp_core::remote::controller::{AskError, Controller, Event, PING_INTERVAL};
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
 use mvp_core::remote::message::{CloseReason, Command, ErrorCode, Feature, Hello, VersionedState};
 use mvp_core::remote::target::IDLE_TIMEOUT;
-use mvp_core::remote::transfer::flow::{ControllerEvent, ProviderName, ProviderSettings};
+use mvp_core::remote::transfer::flow::{
+    ControllerEvent, Direction, ProviderName, ProviderSettings,
+};
+use mvp_core::remote::transfer::merge::Report;
+use mvp_core::remote::transfer::{Counts, Export, What};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -165,6 +169,15 @@ enum Input {
     AskProviders(Vec<ProviderName>, oneshot::Sender<Result<(), AskError>>),
     SendProviders(String, Vec<ProviderSettings>),
     CancelTransfer,
+    AskHistory(
+        Direction,
+        What,
+        Option<Counts>,
+        oneshot::Sender<Result<(), AskError>>,
+    ),
+    SendExport(String, Box<Result<Export, ErrorCode>>),
+    StartImport(String),
+    Imported(String, Box<Result<Report, ErrorCode>>),
     Leave(oneshot::Sender<()>),
 }
 
@@ -223,6 +236,38 @@ impl LinkHandle {
     /// Stops the transfer asked for or running. Nothing is written.
     pub fn cancel_transfer(&self) {
         let _ = self.inbox.send(Input::CancelTransfer);
+    }
+
+    /// Asks the target for a history transfer. Resolves once the request
+    /// went out; the answer comes through [`LinkHost::transfer`].
+    pub async fn ask_history(
+        &self,
+        direction: Direction,
+        what: What,
+        counts: Option<Counts>,
+    ) -> Result<(), AskError> {
+        let (tx, rx) = oneshot::channel();
+        self.inbox
+            .send(Input::AskHistory(direction, what, counts, tx))
+            .map_err(|_| AskError::NotConnected)?;
+        rx.await.unwrap_or(Err(AskError::NotConnected))
+    }
+
+    /// "Send": this device's export, after the target allowed it.
+    pub fn send_export(&self, transfer: String, export: Result<Export, ErrorCode>) {
+        let _ = self
+            .inbox
+            .send(Input::SendExport(transfer, Box::new(export)));
+    }
+
+    /// "Import": the user confirmed the preview.
+    pub fn start_import(&self, transfer: String) {
+        let _ = self.inbox.send(Input::StartImport(transfer));
+    }
+
+    /// "Import": what writing it here did.
+    pub fn imported(&self, transfer: String, result: Result<Report, ErrorCode>) {
+        let _ = self.inbox.send(Input::Imported(transfer, Box::new(result)));
     }
 
     /// Stops asking, or ends the session. The target keeps playing.
@@ -631,27 +676,30 @@ async fn connection(
                 }
                 Some(Input::SendProviders(grant, providers)) => {
                     let out = controller.send_providers(&grant, providers, (config.clock)());
-                    for bytes in out.send {
+                    pass_on(out, &writer, &mut last_sent, config, host, link, device);
+                }
+                Some(Input::AskHistory(direction, what, counts, reply)) => {
+                    let asked = controller.ask_history(direction, what, counts).map(|bytes| {
                         let _ = writer.send(bytes);
                         last_sent = (config.clock)();
-                    }
-                    for event in out.events {
-                        if let Event::Transfer(event) = event {
-                            host.transfer(link, device, &event);
-                        }
-                    }
+                    });
+                    let _ = reply.send(asked);
+                }
+                Some(Input::SendExport(transfer, export)) => {
+                    let out = controller.send_export(&transfer, *export, (config.clock)());
+                    pass_on(out, &writer, &mut last_sent, config, host, link, device);
+                }
+                Some(Input::StartImport(transfer)) => {
+                    let out = controller.start_import(&transfer, (config.clock)());
+                    pass_on(out, &writer, &mut last_sent, config, host, link, device);
+                }
+                Some(Input::Imported(transfer, result)) => {
+                    let out = controller.imported(&transfer, *result);
+                    pass_on(out, &writer, &mut last_sent, config, host, link, device);
                 }
                 Some(Input::CancelTransfer) => {
                     let out = controller.cancel_transfer();
-                    for bytes in out.send {
-                        let _ = writer.send(bytes);
-                        last_sent = (config.clock)();
-                    }
-                    for event in out.events {
-                        if let Event::Transfer(event) = event {
-                            host.transfer(link, device, &event);
-                        }
-                    }
+                    pass_on(out, &writer, &mut last_sent, config, host, link, device);
                 }
                 Some(Input::Catalog(query, reply)) => match controller.catalog(query) {
                     Ok((id, bytes)) => {
@@ -714,6 +762,27 @@ async fn connection(
         {
             let _ = writer.send(bytes);
             last_sent = now;
+        }
+    }
+}
+
+/// Sends what a transfer step produced, and tells the host its events.
+fn pass_on(
+    out: mvp_core::remote::controller::Output,
+    writer: &Writer,
+    last_sent: &mut Instant,
+    config: &LinkConfig,
+    host: &Arc<dyn LinkHost>,
+    link: u64,
+    device: &DeviceId,
+) {
+    for bytes in out.send {
+        let _ = writer.send(bytes);
+        *last_sent = (config.clock)();
+    }
+    for event in out.events {
+        if let Event::Transfer(event) = event {
+            host.transfer(link, device, &event);
         }
     }
 }

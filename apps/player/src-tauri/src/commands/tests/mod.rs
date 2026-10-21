@@ -200,6 +200,8 @@ fn sample(argument: &str) -> Value {
         "keep" | "allow" => json!(true),
         "request" | "token" => json!(1),
         "outcome" => json!("ok"),
+        "direction" => json!("send"),
+        "what" => json!({ "history": true }),
         "command" => json!({ "action": "stop" }),
         "catalogQuery" => json!({ "kind": "groups", "contentType": "live", "limit": 100 }),
         "settings" => json!({ "discoverable": true, "remoteControl": "ask", "deviceName": null }),

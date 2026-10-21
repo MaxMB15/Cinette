@@ -32,7 +32,9 @@ struct Running {
     found: mpsc::UnboundedSender<discovery::Event>,
 }
 
-const EVENTS: [&str; 10] = [
+const EVENTS: [&str; 12] = [
+    "remote://save-progress",
+    "remote://history-imported",
     "remote://consent",
     "remote://consent-hidden",
     "remote://sessions",
@@ -946,6 +948,7 @@ async fn only_the_current_link_reaches_the_webview() {
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
         throttle: Arc::new(Mutex::new(Throttle::default())),
         sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
     };
     let state = VersionedState {
         epoch: "e".into(),
@@ -1054,6 +1057,7 @@ async fn a_flood_of_states_reaches_the_webview_as_a_few_with_the_newest_last() {
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
         throttle: Arc::new(Mutex::new(Throttle::default())),
         sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
     };
     let state = |version| VersionedState {
         epoch: "e".into(),
@@ -1086,6 +1090,7 @@ async fn a_held_state_from_a_link_that_went_is_dropped() {
         link: slot.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),
         sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
     };
     let state = |version| VersionedState {
         epoch: "e".into(),
@@ -1162,6 +1167,7 @@ async fn logos_another_device_sends_reach_the_webview_only_from_public_hosts() {
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
         throttle: Arc::new(Mutex::new(Throttle::default())),
         sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
     };
     let with_logo = |logo: &str| VersionedState {
         epoch: "e".into(),
@@ -1453,5 +1459,229 @@ async fn sending_providers_needs_a_link_and_a_provider() {
         Err(json!("Pick a provider to send."))
     );
     mac.invoke("remote_cancel_transfer", json!({ "link": 1 }))
+        .unwrap();
+}
+
+/// One Xtream account with one movie, on a device whose provider id is
+/// `prefix`, so two devices share the account but not the ids.
+fn add_panel(running: &Running, prefix: &str) {
+    let state = running.app.state();
+    let cache = state.cache.lock().unwrap();
+    cache
+        .upsert_provider(&Provider {
+            id: prefix.into(),
+            name: "Panel".into(),
+            provider_type: ProviderType::Xtream,
+            url: "http://panel.example:8080".into(),
+            username: Some("viewer".into()),
+            password: Some(test_server::password()),
+            last_updated: None,
+            channel_count: 1,
+            epg_url: None,
+        })
+        .unwrap();
+    cache
+        .save_channels(
+            prefix,
+            &[Channel {
+                id: format!("{prefix}-movie-8"),
+                name: "Heat".into(),
+                url: "http://panel.example:8080/movie/8.mkv".into(),
+                group_title: "Films".into(),
+                content_type: "movie".into(),
+                ..Channel::default()
+            }],
+        )
+        .unwrap();
+}
+
+/// The Mac controlling the TV, both with the same account.
+async fn history_pair() -> (Running, Running) {
+    let (mut mac, mut tv) = pair("always").await;
+    add_panel(&mac, "xt-mac");
+    add_panel(&tv, "xt-tv");
+    mac.event("remote://devices").await;
+    let tv_id = tv.device_id().to_string();
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
+        .unwrap();
+    let verifying = phase(&mut mac, "verifying").await;
+    assert!(verifying["features"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("history")));
+    phase(&mut mac, "connected").await;
+    let _ = &mut tv;
+    (mac, tv)
+}
+
+fn watch(running: &Running, channel_id: &str, position: f64) {
+    let state = running.app.state();
+    let cache = state.cache.lock().unwrap();
+    cache
+        .record_play_start(channel_id, "Heat", None, "movie")
+        .unwrap();
+    cache
+        .save_playback_position("movie:heat", position, 6000.0)
+        .unwrap();
+}
+
+fn position_of(running: &Running) -> Option<f64> {
+    running
+        .app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_playback_position("movie:heat")
+        .unwrap()
+        .map(|p| p.position_seconds)
+}
+
+/// Runs a command on a blocking thread, as the webview's calls run.
+async fn invoke_async(
+    running: &Running,
+    command: &'static str,
+    args: Value,
+) -> Result<Value, Value> {
+    let handle = running.app.handle();
+    tokio::task::spawn_blocking(move || crate::test_support::invoke_on(&handle, command, args))
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_sent_to_another_instance_resumes_there() {
+    let (mut mac, mut tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "send",
+                "what": { "history": true, "favorites": true, "pins": true },
+                "playing": "xt-mac-movie-8" }),
+    )
+    .await
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    assert_eq!(consent["asked"]["kind"], json!("history"));
+    assert_eq!(consent["asked"]["direction"], json!("send"));
+    assert_eq!(consent["asked"]["counts"]["history"], json!(1));
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+
+    let imported = tv.event("remote://history-imported").await;
+    assert_eq!(imported["report"]["history"]["added"], json!(1));
+    assert_eq!(imported["channel"]["id"], json!("xt-tv-movie-8"));
+    assert_eq!(imported["report"]["resume"]["position"], json!(1234.0));
+    assert_eq!(position_of(&tv), Some(1234.0));
+    loop {
+        let event = transfer_step(&mut mac, "progress").await;
+        if event["progress"]["state"] == json!("done") {
+            assert_eq!(event["progress"]["data"]["positions"]["added"], json!(1));
+            break;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn history_imported_from_another_instance_waits_for_the_preview() {
+    let (mut mac, mut tv) = history_pair().await;
+    watch(&tv, "xt-tv-movie-8", 2000.0);
+    invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "import",
+                "what": { "history": true, "favorites": false, "pins": false } }),
+    )
+    .await
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    assert_eq!(consent["asked"]["direction"], json!("import"));
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    // The TV's player saves where it is before the export.
+    tv.event("remote://save-progress").await;
+    tv.invoke(
+        "remote_progress_saved",
+        json!({ "playing": "xt-tv-movie-8" }),
+    )
+    .unwrap();
+    let preview = transfer_step(&mut mac, "preview").await;
+    assert_eq!(preview["counts"]["history"], json!(1));
+    assert_eq!(
+        position_of(&mac),
+        None,
+        "nothing is written before the start"
+    );
+    mac.invoke(
+        "remote_start_import",
+        json!({ "link": 1, "transfer": preview["transfer"] }),
+    )
+    .unwrap();
+    let imported = mac.event("remote://history-imported").await;
+    assert_eq!(imported["channel"]["id"], json!("xt-mac-movie-8"));
+    assert_eq!(position_of(&mac), Some(2000.0));
+    loop {
+        let event = tv.event("remote://transfer-target").await;
+        if event["progress"]["state"] == json!("done") {
+            assert_eq!(event["kind"], json!("history"));
+            break;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_history_transfer_writes_nothing() {
+    let (mut mac, mut tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "send",
+                "what": { "history": true, "favorites": true, "pins": true } }),
+    )
+    .await
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": false }),
+    )
+    .unwrap();
+    let refused = transfer_step(&mut mac, "refused").await;
+    assert_eq!(refused["code"], json!("denied"));
+    assert_eq!(position_of(&tv), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asking_for_history_needs_a_link_and_something_to_copy() {
+    let (mac, _tv) = history_pair().await;
+    assert_eq!(
+        mac.invoke(
+            "remote_ask_history",
+            json!({ "link": 1, "direction": "send",
+                    "what": { "history": false, "favorites": false, "pins": false } })
+        ),
+        Err(json!("Pick something to copy."))
+    );
+    assert_eq!(
+        mac.invoke(
+            "remote_ask_history",
+            json!({ "link": 9, "direction": "import", "what": { "history": true } })
+        ),
+        Err(json!("Not connected to that device."))
+    );
+    assert_eq!(
+        mac.invoke("remote_start_import", json!({ "link": 9, "transfer": "t" })),
+        Err(json!("Not connected to that device."))
+    );
+    // A save no export waits for goes nowhere.
+    mac.invoke("remote_progress_saved", json!({ "playing": null }))
         .unwrap();
 }

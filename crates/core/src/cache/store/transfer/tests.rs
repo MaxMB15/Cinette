@@ -1148,3 +1148,31 @@ fn the_index_keeps_stored_episode_numbers_over_the_name() {
         "m3u-a-ch-1"
     );
 }
+
+#[test]
+fn a_channel_or_a_saved_episode_is_found_by_id() {
+    let tv = device("xt-tv");
+    let episode = Channel {
+        series_title: Some("Lost".into()),
+        season: Some(1),
+        episode: Some(1),
+        ..channel("xt-tv-xt-ep-42-s1-0", "Lost S01E01", "series")
+    };
+    tv.save_series_episodes("xt-tv-series-42", std::slice::from_ref(&episode))
+        .unwrap();
+    tv.conn
+        .execute(
+            "INSERT INTO series_episode_cache VALUES ('broken', 'not json', 0)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        tv.find_channel("xt-tv-movie-8").unwrap().unwrap().name,
+        "Heat"
+    );
+    assert_eq!(
+        tv.find_channel("xt-tv-xt-ep-42-s1-0").unwrap(),
+        Some(episode)
+    );
+    assert_eq!(tv.find_channel("xt-tv-xt-ep-42-s1-9").unwrap(), None);
+}

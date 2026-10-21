@@ -11,6 +11,10 @@ import type {
 	ProviderResult,
 	RemoteAsked,
 	RemoteProvidersAdded,
+	TransferCounts,
+	TransferReport,
+	TransferTally,
+	TransferWhat,
 	RemoteErrorCode,
 	RemoteTransferNotice,
 } from "@/lib/tauri";
@@ -118,6 +122,9 @@ export const nextSendState = (
 			return { step: "waiting", expiresAt: now + notice.expiresInMs };
 		case "refused":
 			return { step: "failed", message: refusalText(device, notice.code) };
+		// A history transfer's step, which a send never gets.
+		case "preview":
+			return state;
 		case "progress": {
 			const progress = notice.progress;
 			if (progress.state === "providersDone") return { step: "done", results: progress.data };
@@ -138,4 +145,104 @@ export const providersAddedText = ({ from, names }: RemoteProvidersAdded): strin
 	return names.length === 1
 		? `Added ${quoted[0]} from ${from}.`
 		: `Added ${names.length} providers from ${from}: ${listOf(quoted)}.`;
+};
+
+/** What a history transfer would copy, with how many of each when known. */
+export const countsText = (what: TransferWhat, counts?: TransferCounts): string => {
+	const counted = (label: string, n: number | undefined) =>
+		n === undefined ? label : `${label} (${n})`;
+	const list: string[] = [];
+	if (what.history) {
+		list.push(counted("watch history", counts?.history));
+		list.push(counted("saved places", counts?.positions));
+	}
+	if (what.favorites) list.push(counted("favorites", counts?.favorites));
+	if (what.pins) list.push(counted("pinned groups", counts?.pins));
+	return listOf(list);
+};
+
+/** Shown before a history transfer, on the device that asks. */
+export const HISTORY_PRIVACY =
+	"Watch history, playback positions, favorites and pinned groups are copied between your devices over the encrypted connection. Provider logins, API keys and passwords aren't part of it. Copied history becomes part of that device's own history. Cinette has no accounts, so it stays on that device and doesn't sync anywhere else. Nothing is deleted on the device it comes from.";
+
+/** One line of a history transfer's result, or null when nothing happened. */
+const tallyLine = (label: string, t: TransferTally): string | null => {
+	const parts: string[] = [];
+	if (t.added) parts.push(`${t.added} added`);
+	if (t.updated) parts.push(`${t.updated} updated`);
+	if (t.unchanged) parts.push(`${t.unchanged} already there`);
+	return parts.length ? `${label}: ${parts.join(", ")}` : null;
+};
+
+/** What a history transfer did, a line for each kind it changed or checked. */
+export const reportLines = (report: TransferReport): string[] => {
+	const lines = [
+		tallyLine("Watch history", report.history),
+		tallyLine("Saved places", report.positions),
+		tallyLine("Favorites", report.favorites),
+		tallyLine("Pinned groups", report.pins),
+	].filter((line): line is string => line !== null);
+	return lines.length ? lines : ["Nothing to copy."];
+};
+
+/** How many unmatched items the result lists. */
+export const UNMATCHED_SHOWN = 20;
+
+/** The unmatched items to list, and a line for the rest, if any. */
+export const unmatchedLines = (
+	report: TransferReport
+): { items: string[]; more: string | null } => {
+	const items = report.unmatched
+		.slice(0, UNMATCHED_SHOWN)
+		.map((u) => (u.reason === "ambiguous" ? `${u.name} (more than one match)` : u.name));
+	const rest = report.unmatchedTotal - items.length;
+	return { items, more: rest > 0 ? `and ${rest} more` : null };
+};
+
+/** Where a history transfer stands on the device that asked. */
+export type HistoryState =
+	| { step: "choosing" }
+	| { step: "asking" }
+	| { step: "waiting"; expiresAt: number }
+	| { step: "preview"; transfer: string; counts: TransferCounts }
+	| { step: "starting" }
+	| { step: "moving"; done: number; total: number | null }
+	| { step: "saving" }
+	| { step: "done"; report: TransferReport }
+	| { step: "failed"; message: string };
+
+/** The transfer after a `remote://transfer` notice for its link. `now` is
+ *  `performance.now()`. */
+export const nextHistoryState = (
+	state: HistoryState,
+	notice: RemoteTransferNotice,
+	device: string,
+	now: number
+): HistoryState => {
+	if (state.step === "choosing" || state.step === "done" || state.step === "failed") return state;
+	switch (notice.step) {
+		case "pending":
+			return { step: "waiting", expiresAt: now + notice.expiresInMs };
+		case "refused":
+			return { step: "failed", message: refusalText(device, notice.code) };
+		case "preview":
+			return { step: "preview", transfer: notice.transfer, counts: notice.counts };
+		case "progress": {
+			const p = notice.progress;
+			switch (p.state) {
+				case "sending":
+					return { step: "moving", done: p.data.done, total: p.data.total };
+				case "receiving":
+					return { step: "moving", done: p.data.received, total: null };
+				case "saving":
+					return { step: "saving" };
+				case "done":
+					return { step: "done", report: p.data as TransferReport };
+				case "failed":
+					return { step: "failed", message: refusalText(device, p.data) };
+				default:
+					return state;
+			}
+		}
+	}
 };

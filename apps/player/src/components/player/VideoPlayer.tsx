@@ -29,6 +29,7 @@ import {
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { AirPlayPanel } from "@/components/player/AirPlayPanel";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
+import { setProgressSaver } from "@/lib/player-progress";
 import { useLatestRef } from "@/hooks/useLatestRef";
 import { useChanged } from "@/hooks/useChanged";
 import { useMediaDetails } from "@/hooks/useMediaDetails";
@@ -46,6 +47,7 @@ import {
 	mpvSetSubDelay,
 	mpvGetState,
 	getPlaybackPosition,
+	markPositionFinished,
 	savePlaybackPosition,
 	deletePlaybackPosition,
 	handOffProgress,
@@ -372,19 +374,22 @@ export const PlayerView = () => {
 
 	// --- Watch progress (resume support) ---
 
-	// Persist the tracked position for the current item. Finished items are
-	// forgotten, as are items rewound to the very start (e.g. "Start over"),
-	// so they don't keep offering a stale resume point.
+	// Persist the tracked position for the current item. A finished item is
+	// kept as finished, so it counts as watched and isn't offered to resume.
+	// One rewound to the very start (e.g. "Start over") is forgotten, so it
+	// doesn't keep offering a stale resume point.
 	const flushProgress = useCallback(() => {
 		const p = progressRef.current;
 		if (!p.key || !p.dirty || p.duration <= 0) return;
 		p.dirty = false;
 		p.lastSaved = Date.now();
-		if (isFinished(p.position, p.duration) || p.position < MIN_RESUME_SECONDS) {
-			deletePlaybackPosition(p.key).catch(() => {});
-		} else {
-			savePlaybackPosition(p.key, p.position, p.duration).catch(() => {});
+		if (isFinished(p.position, p.duration)) {
+			return markPositionFinished(p.key, p.duration).catch(() => {});
 		}
+		if (p.position < MIN_RESUME_SECONDS) {
+			return deletePlaybackPosition(p.key).catch(() => {});
+		}
+		return savePlaybackPosition(p.key, p.position, p.duration).catch(() => {});
 	}, []);
 
 	useEffect(() => {
@@ -404,7 +409,12 @@ export const PlayerView = () => {
 		if (isPaused || Date.now() - p.lastSaved >= PROGRESS_SAVE_INTERVAL) flushProgress();
 	}, [mpv.state, flushProgress]);
 
-	useEffect(() => () => flushProgress(), [flushProgress]);
+	useEffect(
+		() => () => {
+			void flushProgress();
+		},
+		[flushProgress]
+	);
 
 	// This page can't save progress while it's hidden, because iOS stops its
 	// timers once the app is in the background though audio keeps playing, or
@@ -529,6 +539,15 @@ export const PlayerView = () => {
 	}, [airplay.state, flushProgress]);
 	// Other Cinette devices control this player and see what it plays.
 	usePublishRemoteState(playback, activeChannel);
+	// A history transfer saves where this player is before it reads the history.
+	useEffect(
+		() =>
+			setProgressSaver(async () => {
+				await flushProgress();
+				return activeChannelRef.current?.id ?? null;
+			}),
+		[flushProgress, activeChannelRef]
+	);
 
 	/**
 	 * Entry point for every "play this item" action. Movies and episodes with
