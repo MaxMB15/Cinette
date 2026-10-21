@@ -433,6 +433,7 @@ fn a_pat_that_carries_on_into_a_second_packet_is_copied_whole() {
 fn a_packet_with_only_an_adaptation_field_has_no_payload() {
     let mut packet = header(VIDEO_PID, true, 0, true);
     packet[3] = 0x20;
+    packet[4] = 1;
     assert_eq!(payload(&packet), None);
 }
 

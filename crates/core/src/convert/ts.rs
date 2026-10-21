@@ -292,7 +292,7 @@ fn pid(packet: &[u8; PACKET]) -> u16 {
 /// Sets a packet's continuity counter to `counter`, and returns the next.
 /// Only a packet with a payload counts, and PAT and PMT packets have one.
 fn renumber(packet: &mut [u8; PACKET], counter: u8) -> u8 {
-    packet[3] = (packet[3] & 0xF0) | (counter & 0x0F);
+    packet[3] = (packet[3] & 0xF0) + (counter & 0x0F);
     (counter + 1) & 0x0F
 }
 
