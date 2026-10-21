@@ -523,7 +523,8 @@ async fn keeps_serving_a_file_once_the_converter_has_finished_it() {
         assert!(start.elapsed() < std::time::Duration::from_secs(20));
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
-    // The receiver can still ask for what it hasn't got.
+    // The receiver can still ask for what it hasn't got, and gets all of
+    // it, from the header to the end.
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         mvp_core::http::test_server::client().get(&url).send(),
@@ -532,6 +533,24 @@ async fn keeps_serving_a_file_once_the_converter_has_finished_it() {
     .unwrap()
     .unwrap();
     assert_eq!(response.status(), 200);
+    let body = tokio::time::timeout(std::time::Duration::from_secs(10), response.bytes())
+        .await
+        .expect("the whole stream within 10 s")
+        .unwrap();
+    assert!(
+        body.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]),
+        "a Matroska header"
+    );
+    // Eight seconds of sound, in more than the header.
+    assert!(body.len() > 4096, "{} bytes", body.len());
+    // The cast still has it, and can ask for it again.
+    control(&app, "cast:tv", json!({ "action": "play" })).unwrap();
+    let again = mvp_core::http::test_server::client()
+        .get(&url)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 200);
     // Nothing told the frontend to start it again.
     while let Ok(event) = events.try_recv() {
         assert_ne!(event["update"]["kind"], "conversionStopped");
@@ -1166,4 +1185,29 @@ fn ffmpeg_pids(url: &str) -> Vec<String> {
         .lines()
         .map(str::to_string)
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_channel_that_dropped_starts_again_without_a_probe() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    // A channel whose connection closes after eight seconds of sound.
+    let (source, connections) = counting_source(wav16(), Duration::ZERO, false);
+    let live = channel("l-1", &source, "live");
+    add_channel(&app, &live);
+    load(&app, "cast:tv", &live, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // The probe and the converter.
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    let dropped = next_update(&events, "conversionStopped");
+    assert_eq!(dropped["update"]["why"], "dropped");
+    // Its tracks are the same as a moment ago, so only the converter asks.
+    load(&app, "cast:tv", &live, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(connections.load(Ordering::SeqCst), 3);
 }
