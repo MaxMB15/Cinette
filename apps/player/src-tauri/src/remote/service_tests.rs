@@ -1605,3 +1605,113 @@ async fn after_a_denial_the_same_providers_can_be_sent_again() {
         Err(json!("Another transfer with that device is going on."))
     );
 }
+
+/// Asks the TV to take the Mac's provider, as the webview does.
+async fn send_home(mac: &Running) -> Result<Value, Value> {
+    invoke_async(
+        mac,
+        "remote_send_providers",
+        json!({ "link": 1, "providerIds": ["m3u-home"] }),
+    )
+    .await
+}
+
+fn tv_providers(tv: &Running) -> usize {
+    tv.app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_providers()
+        .unwrap()
+        .len()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_send_while_one_waits_is_busy_and_leaves_the_first() {
+    let (mut mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    send_home(&mac).await.unwrap();
+    let consent = tv.event("remote://consent").await;
+    assert_eq!(
+        send_home(&mac).await,
+        Err(json!("Another transfer with that device is going on."))
+    );
+    // The first one still goes once it's allowed.
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    loop {
+        let done = transfer_step(&mut mac, "progress").await;
+        if done["progress"]["state"] == json!("providersDone") {
+            break;
+        }
+    }
+    assert_eq!(tv_providers(&tv), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_on_another_link_leaves_a_send_alone() {
+    let (mut mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    send_home(&mac).await.unwrap();
+    let consent = tv.event("remote://consent").await;
+    mac.invoke("remote_cancel_transfer", json!({ "link": 2 }))
+        .unwrap();
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    loop {
+        let done = transfer_step(&mut mac, "progress").await;
+        if done["progress"]["state"] == json!("providersDone") {
+            break;
+        }
+    }
+    assert_eq!(tv_providers(&tv), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_refused_as_busy_doesnt_hold_up_the_next() {
+    let (mut mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    send_home(&mac).await.unwrap();
+    let consent = tv.event("remote://consent").await;
+    // The TV's cache is busy, so it's still saving when the Mac asks again.
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = tv.app.handle();
+    let holding = std::thread::spawn(move || {
+        let state = holder.state::<AppState>();
+        let _held = state.cache.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    loop {
+        let step = transfer_step(&mut mac, "progress").await;
+        if step["progress"]["state"] == json!("saving") {
+            break;
+        }
+    }
+    assert_eq!(
+        send_home(&mac).await,
+        Err(json!("Another transfer with that device is going on."))
+    );
+    release_tx.send(()).unwrap();
+    holding.join().unwrap();
+    loop {
+        let done = transfer_step(&mut mac, "progress").await;
+        if done["progress"]["state"] == json!("providersDone") {
+            break;
+        }
+    }
+    // The refused send left nothing behind, so the next one asks again.
+    send_home(&mac).await.unwrap();
+    tv.event("remote://consent").await;
+}

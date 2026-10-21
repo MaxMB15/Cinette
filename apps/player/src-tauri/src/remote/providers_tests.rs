@@ -422,10 +422,23 @@ async fn nothing_about_a_sent_provider_reaches_the_log() {
         .await;
     }
     let text = logged.text();
-    assert!(text.contains("didn't load"), "{text}");
-    assert!(text.contains("added a provider"), "{text}");
-    for secret in ["secret-panel", "secret-user", "made-up-password"] {
-        assert!(!text.contains(secret), "{secret} in {text}");
+    assert!(
+        text.contains("didn't load"),
+        "the failed load wasn't logged"
+    );
+    assert!(
+        text.contains("added a provider"),
+        "the added provider wasn't logged"
+    );
+    for (field, secret) in [
+        ("address", "secret-panel"),
+        ("username", "secret-user"),
+        ("password", "made-up-password"),
+    ] {
+        assert!(
+            !text.contains(secret),
+            "the provider's {field} reached the log"
+        );
     }
 }
 
@@ -492,6 +505,21 @@ fn a_provider_whose_address_or_login_is_too_long_is_refused_first() {
     for p in [url, user, password] {
         let err = names_for(&cache_with(p), &ids(&["xt-1"])).unwrap_err();
         assert!(err.contains("too long"), "{err}");
+    }
+}
+
+#[test]
+fn an_address_and_login_exactly_at_the_limit_go() {
+    let base = "http://panel.example/";
+    let mut url = home();
+    url.url = format!("{base}{}", "x".repeat(MAX_PROVIDER_FIELD - base.len()));
+    assert_eq!(url.url.len(), MAX_PROVIDER_FIELD);
+    let mut user = home();
+    user.username = Some("x".repeat(MAX_PROVIDER_FIELD));
+    let mut password = home();
+    password.password = Some("x".repeat(MAX_PROVIDER_FIELD));
+    for p in [url, user, password] {
+        assert!(names_for(&cache_with(p), &ids(&["xt-1"])).is_ok());
     }
 }
 
