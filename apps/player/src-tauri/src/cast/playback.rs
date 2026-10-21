@@ -121,6 +121,10 @@ struct Active {
     commands: mpsc::UnboundedSender<Command>,
     /// The converter serving the receiver, for a converted route.
     conversion: Option<Conversion>,
+    /// The plan the converter follows, which a seek or a resume of the
+    /// same item reuses. It lasts only as long as this cast, since a
+    /// channel's tracks can change between casts.
+    plan: Option<KnownPlan>,
 }
 
 /// What a load rejects with when a newer load or a stop for the same
@@ -157,7 +161,6 @@ pub struct CastPlayback {
     turns: Mutex<HashMap<String, Turn>>,
     /// Held while a load connects, so two loads don't both open a session.
     connecting: tokio::sync::Mutex<()>,
-    plans: Mutex<HashMap<String, KnownPlan>>,
 }
 
 impl CastPlayback {
@@ -228,6 +231,7 @@ where
         generation,
         commands,
         conversion: None,
+        plan: None,
     });
     if let Some(old) = old {
         let _ = old.commands.send(Command::Stop);
@@ -409,7 +413,9 @@ async fn start_conversion<R: Runtime>(
 /// seconds for an item with a length. Connects first when needed.
 ///
 /// The receiver's conversion, if any, stops before this asks the provider
-/// for anything, since many accounts allow one connection. A newer load or
+/// for anything, since many accounts allow one connection. The receiver
+/// stops that media first. A seek or a resume of the same item reuses the
+/// plan its cast made, unless that plan failed. A newer load or
 /// a stop for the same receiver makes this one give up wherever it is, with
 /// [`SUPERSEDED`], dropping what it started.
 ///
@@ -436,8 +442,12 @@ pub async fn load<R: Runtime>(
     let old = lock(&state.active)
         .as_mut()
         .filter(|a| a.receiver_id == receiver_id)
-        .and_then(|a| a.conversion.take());
-    if let Some(old) = old {
+        .and_then(|a| Some((a.conversion.take()?, a.commands.clone())));
+    if let Some((old, commands)) = old {
+        // The receiver ends the old media as cancelled before its stream
+        // goes away, rather than fetch from a stream that's gone and give
+        // up with an error while the new one starts.
+        let _ = commands.send(Command::StopMedia);
         old.stop().await;
     }
     state.still_turn(receiver_id, ticket)?;
@@ -458,6 +468,7 @@ pub async fn load<R: Runtime>(
         active_track_ids: Vec::new(),
     };
     let mut conversion = None;
+    let mut plan_used = None;
     match route {
         CastRoute::Direct { container, .. } => {
             if matches!(container, Container::HlsTs | Container::HlsFmp4) {
@@ -488,16 +499,20 @@ pub async fn load<R: Runtime>(
                     && known.video == video
                     && known.audio == audio
             };
-            let known = lock(&state.plans)
-                .get(receiver_id)
-                .filter(|known| made_for(known))
-                .cloned();
+            let known = lock(&state.active)
+                .as_ref()
+                .filter(|a| a.receiver_id == receiver_id)
+                .and_then(|a| a.plan.clone())
+                .filter(made_for);
             // A seek or a resume of the same item keeps its plan, with the
             // new start, rather than asking the provider again.
-            let plan = match known {
-                Some(known) => Plan {
-                    start_at: start_at.filter(|_| known.has_length),
-                    ..known.plan
+            let known = match known {
+                Some(known) => KnownPlan {
+                    plan: Plan {
+                        start_at: start_at.filter(|_| known.has_length),
+                        ..known.plan
+                    },
+                    ..known
                 },
                 None => {
                     let input = ConversionInput {
@@ -510,7 +525,7 @@ pub async fn load<R: Runtime>(
                     };
                     let (plan, has_length) = conversion_plan(app, &input).await?;
                     state.still_turn(receiver_id, ticket)?;
-                    let known = KnownPlan {
+                    KnownPlan {
                         channel_id: channel.id.clone(),
                         generation,
                         source,
@@ -518,12 +533,18 @@ pub async fn load<R: Runtime>(
                         audio,
                         plan,
                         has_length,
-                    };
-                    lock(&state.plans).insert(receiver_id.to_string(), known);
-                    plan
+                    }
                 }
             };
-            let started = start_conversion(app, url, &plan, receiver).await?;
+            let started = match start_conversion(app, url, &known.plan, receiver).await {
+                Ok(started) => started,
+                Err(e) => {
+                    // The next load probes again rather than repeat a plan
+                    // that just failed.
+                    forget_plan(&state, receiver_id);
+                    return Err(e);
+                }
+            };
             if let Err(e) = state.still_turn(receiver_id, ticket) {
                 started.stop().await;
                 return Err(e);
@@ -535,6 +556,7 @@ pub async fn load<R: Runtime>(
             request.stream_type = StreamType::Live;
             request.start_at = None;
             conversion = Some(started);
+            plan_used = Some(known);
         }
     }
     let connecting = state.connecting.lock().await;
@@ -566,7 +588,18 @@ pub async fn load<R: Runtime>(
         );
     }
     active.conversion = conversion;
+    active.plan = plan_used;
     Ok(())
+}
+
+/// Drops the plan of the cast on `receiver_id`, if it has one.
+fn forget_plan(state: &CastPlayback, receiver_id: &str) {
+    if let Some(active) = lock(&state.active)
+        .as_mut()
+        .filter(|a| a.receiver_id == receiver_id)
+    {
+        active.plan = None;
+    }
 }
 
 /// Tells the frontend when the converter for cast `generation` stops with
@@ -588,9 +621,17 @@ fn watch_conversion<R: Runtime>(
             return;
         };
         let state = app.state::<CastPlayback>();
-        let current = lock(&state.active)
-            .as_ref()
-            .is_some_and(|a| a.generation == generation);
+        let current = match lock(&state.active)
+            .as_mut()
+            .filter(|a| a.generation == generation)
+        {
+            Some(active) => {
+                // A retry probes again rather than repeat a plan that failed.
+                active.plan = None;
+                true
+            }
+            None => false,
+        };
         if current {
             let refused = matches!(e, ConvertError::Refused(_));
             emit(&app, &id, CastUpdate::ConversionFailed { refused });

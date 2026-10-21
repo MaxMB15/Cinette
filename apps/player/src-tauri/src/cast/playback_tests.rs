@@ -564,6 +564,17 @@ fn counting_source(
     hold: Duration,
     one_at_a_time: bool,
 ) -> (String, Arc<AtomicUsize>) {
+    refusing_source(body, hold, one_at_a_time, Vec::new())
+}
+
+/// A [`counting_source`] that also refuses the connections numbered in
+/// `refused`, counting from 0.
+fn refusing_source(
+    body: String,
+    hold: Duration,
+    one_at_a_time: bool,
+    refused: Vec<usize>,
+) -> (String, Arc<AtomicUsize>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -572,12 +583,13 @@ fn counting_source(
     let counted = connections.clone();
     std::thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
-            counted.fetch_add(1, Ordering::SeqCst);
+            let number = counted.fetch_add(1, Ordering::SeqCst);
+            let refuse = refused.contains(&number);
             let (body, open) = (body.clone(), open.clone());
             std::thread::spawn(move || {
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request);
-                if one_at_a_time && open.load(Ordering::SeqCst) > 0 {
+                if refuse || one_at_a_time && open.load(Ordering::SeqCst) > 0 {
                     let _ =
                         stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
                     return;
@@ -865,4 +877,178 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
     .unwrap();
     next_of(&mut got, "LOAD").await;
     opened(13);
+}
+
+/// Whether a converter can run here, for the tests that need one.
+async fn converts(app: &TestApp) -> bool {
+    crate::convert::support::support(&app.handle())
+        .await
+        .convert
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_seek_through_the_converter_stops_the_old_media_first() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, _) = counting_source(wav16(), Duration::ZERO, false);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    let events = updates(&app);
+    load(&app, "cast:tv", &movie, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // The receiver says what plays, so there's media to stop.
+    loop {
+        let event = events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the media within 10 s");
+        if event["update"]["kind"] == "media" && !event["update"]["media"].is_null() {
+            break;
+        }
+    }
+    let old = ffmpeg_pids(&source);
+    assert!(!old.is_empty());
+    load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
+    // The receiver lets go of the old media before anything else, so it
+    // ends as cancelled rather than with an error from a stream that went
+    // away.
+    let mut next = Vec::new();
+    while next.len() < 2 {
+        let message = tokio::time::timeout(Duration::from_secs(10), got.recv())
+            .await
+            .expect("the receiver's messages within 10 s")
+            .expect("the receiver's messages");
+        if message.namespace == mvp_core::cast::message::NS_MEDIA && message.kind() != "GET_STATUS"
+        {
+            next.push(message);
+        }
+    }
+    assert_eq!(next[0].kind(), "STOP");
+    assert_eq!(next[0].body["mediaSessionId"], 1);
+    assert_eq!(next[1].kind(), "LOAD");
+    // The old converter is gone, and the new one starts at 2 s.
+    assert!(ffmpeg_pids(&source).iter().all(|pid| !old.contains(pid)));
+    assert!(ffmpeg_starts_at(&source, "2.000"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_switch_from_a_direct_item_has_no_media_to_stop() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let first = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    let second = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &first);
+    add_channel(&app, &second);
+    load(&app, "cast:tv", &first, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    load(&app, "cast:tv", &second, direct("mp4"), None).unwrap();
+    // The receiver swaps one for the other itself.
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(10), got.recv())
+            .await
+            .expect("the receiver's messages within 10 s")
+            .expect("the receiver's messages");
+        assert_ne!(message.kind(), "STOP");
+        if message.kind() == "LOAD" {
+            assert_eq!(message.body["media"]["contentId"], "http://192.0.2.1/2.mp4");
+            break;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_cast_of_the_same_item_probes_it_again() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, connections) = counting_source(wav16(), Duration::ZERO, false);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    load(&app, "cast:tv", &movie, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // The probe and the converter.
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    app.invoke("cast_stop", json!({ "receiverId": "cast:tv" }))
+        .unwrap();
+    // The channel's tracks may have changed since, so the next cast looks
+    // at them again.
+    load(&app, "cast:tv", &movie, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(connections.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_converter_that_couldnt_start_probes_again_next_time() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    // The provider turns away the seek's converter once.
+    let (source, connections) = refusing_source(wav16(), Duration::ZERO, false, vec![2]);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    load(&app, "cast:tv", &movie, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(
+        load(&app, "cast:tv", &movie, converted(), Some(2.0)),
+        Err(json!("refused"))
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 3);
+    // The plan that just failed isn't tried again as it was.
+    load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(connections.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_converter_that_failed_while_it_cast_probes_again_next_time() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, connections) = counting_source(wav16(), Duration::ZERO, false);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    load(&app, "cast:tv", &movie, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    std::process::Command::new("pkill")
+        .args(["-9", "-f", &source])
+        .status()
+        .unwrap();
+    loop {
+        let event = events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the failure within 10 s");
+        if event["update"]["kind"] == "conversionFailed" {
+            break;
+        }
+    }
+    load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(connections.load(Ordering::SeqCst), 4);
+}
+
+/// The ids of the ffmpeg processes that read `url`.
+fn ffmpeg_pids(url: &str) -> Vec<String> {
+    let out = std::process::Command::new("pgrep")
+        .args(["-f", url])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
 }
