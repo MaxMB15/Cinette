@@ -19,7 +19,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ### Fixed
 
-- A subtitle file you picked while a stream was still opening, or while it reconnected, could fail to show, even though the player kept it as picked. The player now adds it as soon as the stream has opened.
+- A subtitle file you picked while a stream was still opening, or while it reconnected, could fail to show, even though the player kept it as picked. The player now adds it as soon as the stream has opened (#340).
 
 ## [0.8.0] - 2026-10-17
 
