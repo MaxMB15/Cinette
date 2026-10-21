@@ -38,6 +38,8 @@ mod unavailable;
 use unavailable as backend;
 #[cfg(any(target_os = "macos", test))]
 mod pick;
+#[cfg(any(target_os = "macos", test))]
+mod reading;
 #[cfg(test)]
 mod tests;
 

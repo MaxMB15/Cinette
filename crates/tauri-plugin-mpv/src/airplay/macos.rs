@@ -24,6 +24,7 @@
 //! that change nothing.
 
 use super::pick::Pick;
+use super::reading::{failed_report, finite, http_status, is_numeric};
 use super::{
     handle_from, Report, ReportError, Route, EVENT_AVAILABLE, EVENT_PICKER_CLOSED, EVENT_ROUTE,
 };
@@ -465,7 +466,7 @@ impl Host {
         let load = item.load;
         let position = finite(unsafe { player.currentTime().seconds() });
         let duration = unsafe { current.duration() };
-        let duration = (!item.live && is_numeric(duration))
+        let duration = (!item.live && is_numeric(duration.flags.0))
             .then(|| unsafe { duration.seconds() })
             .filter(|d| d.is_finite());
         let control = unsafe { player.timeControlStatus() };
@@ -488,7 +489,7 @@ impl Host {
         let error = error.map(|e| ReportError {
             domain: e.domain().to_string(),
             code: e.code() as i64,
-            http_status: http_status(&current),
+            http_status: error_status(&current),
         });
         send(Callback::Report(
             load,
@@ -508,53 +509,12 @@ impl Host {
     }
 }
 
-fn finite(seconds: f64) -> f64 {
-    if seconds.is_finite() {
-        seconds
-    } else {
-        0.0
-    }
-}
-
-/// `CMTIME_IS_NUMERIC`: valid, and neither indefinite nor infinite.
-fn is_numeric(time: CMTime) -> bool {
-    use objc2_core_media::CMTimeFlags;
-    let flags = time.flags;
-    flags.contains(CMTimeFlags::Valid)
-        && !flags.intersects(
-            CMTimeFlags::Indefinite | CMTimeFlags::PositiveInfinity | CMTimeFlags::NegativeInfinity,
-        )
-}
-
 /// The HTTP status of the last failed request, from the error log. Only the
 /// number is read: the log's comment can hold the URL.
-fn http_status(item: &AVPlayerItem) -> Option<u16> {
+fn error_status(item: &AVPlayerItem) -> Option<u16> {
     let log = unsafe { item.errorLog() }?;
     let event = unsafe { log.events() }.lastObject()?;
-    let status = unsafe { event.errorStatusCode() };
-    u16::try_from(status)
-        .ok()
-        .filter(|s| (400..=599).contains(s))
-}
-
-/// A load whose address couldn't be read, as a load that failed before it
-/// started.
-fn failed_report() -> Report {
-    Report {
-        status: "failed".into(),
-        position: 0.0,
-        duration: None,
-        external: false,
-        error: Some(ReportError {
-            domain: "Cinette".into(),
-            code: -1,
-            http_status: None,
-        }),
-        subtitles: Vec::new(),
-        subtitle: None,
-        audio: Vec::new(),
-        audio_track: None,
-    }
+    http_status(unsafe { event.errorStatusCode() })
 }
 
 pub fn load(
