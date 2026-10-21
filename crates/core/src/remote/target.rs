@@ -45,6 +45,10 @@ use super::message::{
 };
 use super::sessions::{Session, Sessions};
 use super::settings::{ControlMode, Decision, RemoteSettings};
+use super::transfer::flow::{Asked, Progress, ProviderResult, ProviderSettings, Step, TargetFlow};
+use super::transfer::merge::Report;
+use super::transfer::refs::Salt;
+use super::transfer::{Export, What};
 use super::ConnId;
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
@@ -107,6 +111,41 @@ pub enum Action {
     },
     /// Advertise this record, replacing any earlier one, or stop advertising.
     Advertise(Option<DiscoveryRecord>),
+    /// A controller is importing this device's history: save the playback
+    /// position, export the history under `salt` with only `what`, and call
+    /// [`Target::exported`].
+    ExportHistory {
+        conn: ConnId,
+        transfer: String,
+        salt: Salt,
+        what: What,
+    },
+    /// A controller sent its history: match it against this device's
+    /// catalog under `salt`, write it in one transaction, and call
+    /// [`Target::imported`].
+    ImportHistory {
+        conn: ConnId,
+        transfer: String,
+        salt: Salt,
+        export: Box<Export>,
+    },
+    /// A controller sent providers the user allowed: save them as this
+    /// device's own, and call [`Target::providers_saved`]. They hold logins:
+    /// never log them, and drop them once saved.
+    SaveProviders {
+        conn: ConnId,
+        grant: String,
+        providers: Vec<ProviderSettings>,
+    },
+    /// How a transfer with a controller is going, for the UI.
+    TransferProgress {
+        conn: ConnId,
+        device_id: DeviceId,
+        name: String,
+        transfer: String,
+        kind: RequestKind,
+        progress: Progress,
+    },
 }
 
 /// What the consent dialog shows.
@@ -119,6 +158,8 @@ pub struct ConsentPrompt {
     /// The 6 digits the controller shows too.
     pub code: String,
     pub expires_at: Instant,
+    /// What a controller in a session asks for. `None` asks for control.
+    pub asked: Option<Asked>,
 }
 
 /// One controller in the target's list.
@@ -167,6 +208,8 @@ struct Conn {
     /// The catalog requests waiting for an answer that are searches, whose
     /// pages have no cursor to go on from.
     searches: HashSet<u64>,
+    /// The transfer this controller asked for, while it's asked or running.
+    flow: Option<TargetFlow>,
 }
 
 /// Still in the handshake.
@@ -198,6 +241,8 @@ pub struct Target {
     /// Connections that made room for a newer one, and when. The next tick
     /// closes them.
     evicted: Vec<(ConnId, Instant)>,
+    /// What this device's hello offers.
+    features: Vec<Feature>,
 }
 
 impl Target {
@@ -217,6 +262,20 @@ impl Target {
             sessions: Sessions::new(),
             nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
             evicted: Vec::new(),
+            features: vec![Feature::Control, Feature::Catalog],
+        }
+    }
+
+    /// Offers history transfers or receiving providers too, once the
+    /// platform layer carries out their actions. Control and the catalog
+    /// are always offered. Connections from now on see the change.
+    pub fn offer(&mut self, history: bool, providers: bool) {
+        self.features = vec![Feature::Control, Feature::Catalog];
+        if history {
+            self.features.push(Feature::History);
+        }
+        if providers {
+            self.features.push(Feature::Providers);
         }
     }
 
@@ -255,7 +314,7 @@ impl Target {
             name: self.settings.name(self.device_type),
             device_type: self.device_type,
             versions: vec![PROTOCOL_VERSION],
-            features: vec![Feature::Control, Feature::Catalog],
+            features: self.features.clone(),
         }
     }
 
@@ -296,6 +355,7 @@ impl Target {
                 last_heard: now,
                 messages: TokenBucket::new(RATE, RATE),
                 searches: HashSet::new(),
+                flow: None,
             },
         );
         Some(conn)
@@ -312,6 +372,9 @@ impl Target {
                     self.sync_prompt(&mut actions);
                 }
                 Stage::InSession(_) => {
+                    if self.consent.withdraw(conn).is_some() {
+                        self.sync_prompt(&mut actions);
+                    }
                     self.sessions.detach(conn, now);
                     actions.push(self.sessions_changed());
                 }
@@ -392,6 +455,7 @@ impl Target {
                     Message::Request {
                         kind: RequestKind::Control,
                         resume,
+                        ..
                     } => self.request_control(conn, auth, resume, now, &mut actions),
                     Message::Request { .. } => {
                         reply_error(&mut auth, conn, &message, &mut actions);
@@ -450,8 +514,12 @@ impl Target {
                 }
             }
             Stage::InSession(mut auth) => {
-                let allowed = self.conn_token(conn, now);
-                let message = match open(&mut auth, conn, frame, &mut actions) {
+                let opened = open(&mut auth, conn, frame, &mut actions);
+                // A running transfer's chunks only go as fast as the other
+                // side acknowledges them, so they don't count.
+                let allowed = matches!(&opened, Opened::Message(m) if is_transfer_step(m))
+                    || self.conn_token(conn, now);
+                let message = match opened {
                     Opened::Broken => {
                         // A broken frame ends the connection, not the
                         // session, which the same controller can resume.
@@ -532,8 +600,39 @@ impl Target {
                         actions.push(self.sessions_changed());
                         self.close(conn, None, &mut actions);
                     }
+                    Message::Request {
+                        kind: RequestKind::History | RequestKind::Providers,
+                        id,
+                        ..
+                    } if !allowed => {
+                        if let Some(id) = id {
+                            error(
+                                &mut auth,
+                                conn,
+                                Some(id),
+                                ErrorCode::RateLimited,
+                                &mut actions,
+                            );
+                        }
+                        self.set_stage(conn, Stage::InSession(auth));
+                    }
                     // Over the limit, nothing else gets an answer.
                     _ if !allowed => self.set_stage(conn, Stage::InSession(auth)),
+                    request @ Message::Request {
+                        kind: RequestKind::History | RequestKind::Providers,
+                        ..
+                    } => {
+                        self.set_stage(conn, Stage::InSession(auth));
+                        self.request_transfer(conn, &request, now, &mut actions);
+                    }
+                    Message::Cancel => {
+                        self.set_stage(conn, Stage::InSession(auth));
+                        self.cancel_asking(conn, &mut actions);
+                    }
+                    step if is_transfer_step(&step) => {
+                        self.set_stage(conn, Stage::InSession(auth));
+                        self.transfer_step(conn, step, frame.len(), now, &mut actions);
+                    }
                     Message::Ping => {
                         send(&mut auth, conn, &Message::Pong, &mut actions);
                         self.set_stage(conn, Stage::InSession(auth));
@@ -612,7 +711,15 @@ impl Target {
                     }
                     Ok((request, replaced)) => {
                         let expires_in = super::consent::CONSENT_TIMEOUT.as_secs() as u32;
-                        send(&mut auth, conn, &Message::Pending { expires_in }, actions);
+                        send(
+                            &mut auth,
+                            conn,
+                            &Message::Pending {
+                                expires_in,
+                                re: None,
+                            },
+                            actions,
+                        );
                         self.set_stage(conn, Stage::Waiting(auth, request));
                         for resolved in replaced {
                             self.close(
@@ -674,6 +781,23 @@ impl Target {
 
     fn resolve(&mut self, resolved: Resolved, now: Instant, actions: &mut Vec<Action>) {
         let conn = resolved.request.conn;
+        if resolved.request.kind != RequestKind::Control {
+            let Some(flow) = self.conns.get_mut(&conn).and_then(|c| c.flow.take()) else {
+                return;
+            };
+            let mut steps = Vec::new();
+            match resolved.outcome {
+                Outcome::Granted => {
+                    let next = flow.granted(now, &mut steps);
+                    if let Some(c) = self.conns.get_mut(&conn) {
+                        c.flow = next;
+                    }
+                }
+                Outcome::Refused(reason) => flow.refused(refusal(reason), &mut steps),
+            }
+            self.run_steps(conn, steps, actions);
+            return;
+        }
         match resolved.outcome {
             Outcome::Granted => {
                 let Some(c) = self.conns.get_mut(&conn) else {
@@ -704,6 +828,12 @@ impl Target {
                 device_type: r.peer.device_type,
                 code: r.code.to_string(),
                 expires_at: r.expires_at,
+                asked: self
+                    .conns
+                    .get(&r.conn)
+                    .and_then(|c| c.flow.as_ref())
+                    .and_then(TargetFlow::asked)
+                    .cloned(),
             }));
         }
         self.shown = front;
@@ -749,7 +879,13 @@ impl Target {
             }
         }
         if !self.settings.discoverable && was_discoverable {
-            for resolved in self.consent.refuse_all(CloseReason::NotDiscoverable) {
+            // Open sessions go on, and so do the transfers they asked for.
+            for resolved in self
+                .consent
+                .refuse_where(CloseReason::NotDiscoverable, |r| {
+                    r.kind == RequestKind::Control
+                })
+            {
                 self.close(
                     resolved.request.conn,
                     Some(CloseReason::NotDiscoverable),
@@ -918,6 +1054,26 @@ impl Target {
             self.resolve(resolved, now, &mut actions);
         }
         self.sync_prompt(&mut actions);
+        let due: Vec<ConnId> = self
+            .conns
+            .iter()
+            .filter(|(_, c)| {
+                c.flow
+                    .as_ref()
+                    .and_then(TargetFlow::deadline)
+                    .is_some_and(|d| now >= d)
+            })
+            .map(|(&conn, _)| conn)
+            .collect();
+        for conn in due {
+            let mut steps = Vec::new();
+            if let Some(c) = self.conns.get_mut(&conn)
+                && let Some(flow) = c.flow.take()
+            {
+                c.flow = flow.tick(now, &mut steps);
+            }
+            self.run_steps(conn, steps, &mut actions);
+        }
         if !self.sessions.expire(now).is_empty() {
             sessions_changed = true;
         }
@@ -934,7 +1090,12 @@ impl Target {
             Stage::InSession(_) => Some(c.last_heard + IDLE_TIMEOUT),
             _ => None,
         });
+        let flows = self
+            .conns
+            .values()
+            .filter_map(|c| c.flow.as_ref().and_then(TargetFlow::deadline));
         conns
+            .chain(flows)
             .chain(self.evicted.iter().map(|&(_, at)| at))
             .chain(self.consent.next_deadline())
             .chain(self.sessions.next_deadline())
@@ -966,6 +1127,9 @@ impl Target {
         let Some(mut c) = self.conns.remove(&conn) else {
             return;
         };
+        if c.flow.is_some() && self.consent.withdraw(conn).is_some() {
+            self.sync_prompt(actions);
+        }
         if let Some(reason) = reason
             && let Stage::Ready(auth) | Stage::Waiting(auth, _) | Stage::InSession(auth) =
                 &mut c.stage
@@ -977,9 +1141,293 @@ impl Target {
 
     /// Closes without a word, for a connection that broke the protocol.
     fn drop_conn(&mut self, conn: ConnId, actions: &mut Vec<Action>) {
-        self.conns.remove(&conn);
+        if self.conns.remove(&conn).is_some_and(|c| c.flow.is_some())
+            && self.consent.withdraw(conn).is_some()
+        {
+            self.sync_prompt(actions);
+        }
         actions.push(Action::Close { conn });
     }
+
+    /// A controller in a session asks for history or providers. Always
+    /// allow doesn't cover it: the user always gets the dialog.
+    fn request_transfer(
+        &mut self,
+        conn: ConnId,
+        request: &Message,
+        now: Instant,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(c) = self.conns.get(&conn) else {
+            return;
+        };
+        let Stage::InSession(auth) = &c.stage else {
+            return;
+        };
+        let re = match request {
+            Message::Request { id, .. } => *id,
+            _ => None,
+        };
+        let refuse = |code| (re, code);
+        let checked = match Asked::from_request(request) {
+            None => Err(refuse(ErrorCode::Invalid)),
+            Some((id, asked)) => {
+                let feature = match asked.kind() {
+                    RequestKind::Providers => Feature::Providers,
+                    _ => Feature::History,
+                };
+                if !self.features.contains(&feature) || !auth.peer.features.contains(&feature) {
+                    Err((Some(id), ErrorCode::Unsupported))
+                } else if c.flow.is_some() {
+                    Err((Some(id), ErrorCode::Busy))
+                } else {
+                    Ok((id, asked))
+                }
+            }
+        };
+        let (id, asked) = match checked {
+            Ok(ok) => ok,
+            Err((re, code)) => {
+                self.reply(conn, &Message::Error { re, code }, actions);
+                return;
+            }
+        };
+        let (peer, code) = (auth.peer.clone(), auth.code);
+        match self.consent.submit(now, conn, peer, code, asked.kind()) {
+            Err(reason) => {
+                let code = refusal(reason);
+                self.reply(conn, &Message::Error { re: Some(id), code }, actions);
+            }
+            Ok((_, replaced)) => {
+                let expires_in = super::consent::CONSENT_TIMEOUT.as_secs() as u32;
+                self.reply(
+                    conn,
+                    &Message::Pending {
+                        expires_in,
+                        re: Some(id),
+                    },
+                    actions,
+                );
+                if let Some(c) = self.conns.get_mut(&conn) {
+                    c.flow = Some(TargetFlow::Asking { id, asked });
+                }
+                for resolved in replaced {
+                    self.resolve(
+                        Resolved {
+                            outcome: Outcome::Refused(CloseReason::Cancelled),
+                            ..resolved
+                        },
+                        now,
+                        actions,
+                    );
+                }
+                self.sync_prompt(actions);
+            }
+        }
+    }
+
+    /// The controller stopped asking for a transfer.
+    fn cancel_asking(&mut self, conn: ConnId, actions: &mut Vec<Action>) {
+        let asking = self
+            .conns
+            .get(&conn)
+            .and_then(|c| c.flow.as_ref())
+            .is_some_and(|f| f.asked().is_some());
+        if !asking {
+            self.reply(
+                conn,
+                &Message::Error {
+                    re: None,
+                    code: ErrorCode::Unsupported,
+                },
+                actions,
+            );
+            return;
+        }
+        if let Some(c) = self.conns.get_mut(&conn) {
+            c.flow = None;
+        }
+        self.consent.withdraw(conn);
+        self.sync_prompt(actions);
+    }
+
+    /// A chunk, acknowledgement or other step of a running transfer.
+    fn transfer_step(
+        &mut self,
+        conn: ConnId,
+        message: Message,
+        bytes: usize,
+        now: Instant,
+        actions: &mut Vec<Action>,
+    ) {
+        let mut steps = Vec::new();
+        let Some(c) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        match c.flow.take() {
+            Some(flow) => match flow.receive(message, bytes, now, &mut steps) {
+                Ok(next) => c.flow = next,
+                Err(back) => c.flow = Some(back.0),
+            },
+            None => {
+                let about = match &message {
+                    Message::TransferChunk { transfer, .. }
+                    | Message::TransferStart { transfer }
+                    | Message::TransferAck { transfer, .. }
+                    | Message::TransferDone { transfer, .. } => Some(transfer.clone()),
+                    Message::ProvidersSend { grant, .. } => Some(grant.clone()),
+                    _ => None,
+                };
+                if let Some(transfer) = about {
+                    steps.push(Step::Send(Box::new(Message::TransferError {
+                        transfer,
+                        code: ErrorCode::Invalid,
+                    })));
+                }
+            }
+        }
+        self.run_steps(conn, steps, actions);
+    }
+
+    /// The export a controller asked for is ready, or couldn't be made.
+    pub fn exported(
+        &mut self,
+        conn: ConnId,
+        transfer: &str,
+        export: Result<Export, ErrorCode>,
+        now: Instant,
+    ) -> Vec<Action> {
+        self.with_flow(conn, |flow, steps| {
+            flow.exported(transfer, export, now, steps)
+        })
+    }
+
+    /// The history a controller sent was written, or wasn't.
+    pub fn imported(
+        &mut self,
+        conn: ConnId,
+        transfer: &str,
+        result: Result<Report, ErrorCode>,
+    ) -> Vec<Action> {
+        self.with_flow(conn, |flow, steps| flow.imported(transfer, result, steps))
+    }
+
+    /// The providers a controller sent were saved.
+    pub fn providers_saved(
+        &mut self,
+        conn: ConnId,
+        grant: &str,
+        results: Vec<ProviderResult>,
+    ) -> Vec<Action> {
+        self.with_flow(conn, |flow, steps| {
+            flow.providers_saved(grant, results, steps)
+        })
+    }
+
+    fn with_flow(
+        &mut self,
+        conn: ConnId,
+        f: impl FnOnce(TargetFlow, &mut Vec<Step>) -> Option<TargetFlow>,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let mut steps = Vec::new();
+        if let Some(c) = self.conns.get_mut(&conn)
+            && let Some(flow) = c.flow.take()
+        {
+            c.flow = f(flow, &mut steps);
+        }
+        self.run_steps(conn, steps, &mut actions);
+        actions
+    }
+
+    /// Sends a message on a connection in a session.
+    fn reply(&mut self, conn: ConnId, message: &Message, actions: &mut Vec<Action>) {
+        if let Some(Conn {
+            stage: Stage::InSession(auth),
+            ..
+        }) = self.conns.get_mut(&conn)
+        {
+            send(auth, conn, message, actions);
+        }
+    }
+
+    /// Carries out what a transfer needs.
+    fn run_steps(&mut self, conn: ConnId, steps: Vec<Step>, actions: &mut Vec<Action>) {
+        for step in steps {
+            match step {
+                Step::Send(message) => self.reply(conn, &message, actions),
+                Step::Export {
+                    transfer,
+                    salt,
+                    what,
+                } => actions.push(Action::ExportHistory {
+                    conn,
+                    transfer,
+                    salt,
+                    what,
+                }),
+                Step::Import {
+                    transfer,
+                    salt,
+                    export,
+                } => actions.push(Action::ImportHistory {
+                    conn,
+                    transfer,
+                    salt,
+                    export,
+                }),
+                Step::SaveProviders { grant, providers } => actions.push(Action::SaveProviders {
+                    conn,
+                    grant,
+                    providers,
+                }),
+                Step::Progress {
+                    transfer,
+                    kind,
+                    progress,
+                } => {
+                    if let Some(Conn {
+                        stage: Stage::InSession(auth),
+                        ..
+                    }) = self.conns.get(&conn)
+                    {
+                        actions.push(Action::TransferProgress {
+                            conn,
+                            device_id: auth.peer.id.clone(),
+                            name: auth.peer.name.clone(),
+                            transfer,
+                            kind,
+                            progress,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What the controller hears when its transfer request isn't granted.
+fn refusal(reason: CloseReason) -> ErrorCode {
+    match reason {
+        CloseReason::Denied => ErrorCode::Denied,
+        CloseReason::Expired => ErrorCode::Expired,
+        CloseReason::Busy => ErrorCode::Busy,
+        _ => ErrorCode::Cancelled,
+    }
+}
+
+/// A message that moves a transfer along once it's granted.
+fn is_transfer_step(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::TransferStart { .. }
+            | Message::TransferChunk { .. }
+            | Message::TransferAck { .. }
+            | Message::TransferDone { .. }
+            | Message::TransferError { .. }
+            | Message::TransferCancel { .. }
+            | Message::ProvidersSend { .. }
+    )
 }
 
 fn session_info(session: &Session) -> SessionInfo {

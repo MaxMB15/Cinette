@@ -34,6 +34,9 @@ blake2 = { version = "0.10", default-features = false }
 curve25519-dalek = { version = "4.1", default-features = false }
 # The converter's unguessable paths.
 getrandom = "0.3"
+# Clears the logins of providers sent to another device from memory once
+# they're saved. Already in the build through the Noise crates.
+zeroize = "1"
 
 # reqwest 0.13 switched its default TLS to rustls with aws-lc. Desktop and iOS
 # keep 0.12's default, the system's TLS: Security.framework on Apple platforms

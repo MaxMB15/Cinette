@@ -493,7 +493,7 @@ async fn connection(
                     }
                 };
                 last_heard = (config.clock)();
-                let output = controller.receive(&frame);
+                let output = controller.receive(&frame, last_heard);
                 for bytes in output.send {
                     let _ = writer.send(bytes);
                     last_sent = (config.clock)();
@@ -543,6 +543,8 @@ async fn connection(
                             // The other device can send these as often as it likes.
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
+                        // This device doesn't ask for transfers yet.
+                        Event::Transfer(_) => {}
                         Event::Closed(reason) if !verified => {
                             // Another device is at this address, which it
                             // may have taken over, or claims the target's id

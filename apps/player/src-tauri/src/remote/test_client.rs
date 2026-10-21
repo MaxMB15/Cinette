@@ -84,7 +84,7 @@ impl Client {
             }
             self.reader.push(&buf[..n]);
             while let Some(frame) = self.reader.next_frame().unwrap() {
-                let output = self.controller.receive(&frame);
+                let output = self.controller.receive(&frame, std::time::Instant::now());
                 for bytes in output.send {
                     self.write(&bytes).await;
                 }

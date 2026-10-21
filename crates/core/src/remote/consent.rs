@@ -231,6 +231,22 @@ impl ConsentQueue {
             .collect()
     }
 
+    /// Refuses the requests `which` picks, and keeps the rest.
+    pub fn refuse_where(
+        &mut self,
+        reason: CloseReason,
+        which: impl Fn(&ConsentRequest) -> bool,
+    ) -> Vec<Resolved> {
+        let (gone, kept): (Vec<_>, Vec<_>) = self.waiting.drain(..).partition(|r| which(r));
+        self.waiting = kept.into();
+        gone.into_iter()
+            .map(|request| Resolved {
+                request,
+                outcome: Outcome::Refused(reason),
+            })
+            .collect()
+    }
+
     /// When the next request runs out.
     pub fn next_deadline(&self) -> Option<Instant> {
         self.waiting.iter().map(|r| r.expires_at).min()

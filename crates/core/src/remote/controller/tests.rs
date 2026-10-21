@@ -89,11 +89,11 @@ fn nothing_can_be_sent_before_control_is_granted() {
 fn junk_during_the_handshake_closes() {
     let mut c = controller();
     assert!(!c.is_closed());
-    let out = c.receive(b"junk");
+    let out = c.receive(b"junk", Instant::now());
     assert_eq!(out.events, [Event::Closed(CloseReason::Protocol)]);
     assert!(c.is_closed());
     // Anything after that is ignored.
-    assert_eq!(c.receive(b"more"), Output::default());
+    assert_eq!(c.receive(b"more", Instant::now()), Output::default());
 }
 
 #[test]

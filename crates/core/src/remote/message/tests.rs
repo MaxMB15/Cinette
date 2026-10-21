@@ -21,8 +21,13 @@ fn messages_read_back() {
         Message::Request {
             kind: RequestKind::Control,
             resume: Some("ab".into()),
+            id: None,
+            direction: None,
+            what: None,
+            counts: None,
+            providers: None,
         },
-        Message::Pending { expires_in: 30 },
+        Message::Pending { expires_in: 30, re: None },
         Message::Closed {
             reason: CloseReason::NotDiscoverable,
         },
@@ -100,7 +105,7 @@ fn unknown_fields_are_ignored() {
         json!({"v": 1, "type": "pending", "expiresIn": 10, "later": true}),
     ))
     .unwrap();
-    assert_eq!(message, Message::Pending { expires_in: 10 });
+    assert_eq!(message, Message::Pending { expires_in: 10, re: None });
 }
 
 #[test]
@@ -151,8 +156,13 @@ fn known_types_match_the_message_enum() {
         Message::Request {
             kind: RequestKind::Control,
             resume: None,
+            id: None,
+            direction: None,
+            what: None,
+            counts: None,
+            providers: None,
         },
-        Message::Pending { expires_in: 0 },
+        Message::Pending { expires_in: 0, re: None },
         Message::Cancel,
         Message::Accepted {
             session_id: String::new(),
@@ -194,6 +204,51 @@ fn known_types_match_the_message_enum() {
         },
         Message::Ping,
         Message::Pong,
+        Message::Granted {
+            re: 0,
+            transfer: String::new(),
+            salt: None,
+            counts: None,
+        },
+        Message::TransferStart {
+            transfer: String::new(),
+        },
+        Message::TransferChunk {
+            transfer: String::new(),
+            chunk: Chunk {
+                seq: 0,
+                last: true,
+                sent_at: None,
+                current: None,
+                items: vec![],
+                pins: vec![],
+            },
+        },
+        Message::TransferAck {
+            transfer: String::new(),
+            seq: 0,
+        },
+        Message::TransferDone {
+            transfer: String::new(),
+            report: Report::default(),
+        },
+        Message::TransferError {
+            transfer: String::new(),
+            code: ErrorCode::Invalid,
+        },
+        Message::TransferCancel {
+            transfer: String::new(),
+        },
+        Message::ProvidersSend {
+            grant: String::new(),
+            part: 0,
+            last: true,
+            providers: vec![],
+        },
+        Message::ProvidersAdded {
+            grant: String::new(),
+            results: vec![],
+        },
     ];
     let types: Vec<String> = samples
         .iter()

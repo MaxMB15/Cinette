@@ -19,9 +19,15 @@ use super::consent::CONSENT_TIMEOUT;
 use super::handshake::{ControllerHandshake, Next, Peer, VerificationCode};
 use super::identity::{DeviceId, DeviceKey};
 use super::message::{
-    self, CloseReason, Command, DecodeError, ErrorCode, Hello, Message, RequestKind, VersionedState,
+    self, CloseReason, Command, DecodeError, ErrorCode, Feature, Hello, Message, VersionedState,
 };
 use super::target::HANDSHAKE_TIMEOUT;
+use super::transfer::flow::{
+    Asked, ControllerEvent, ControllerFlow, ControllerOut, Direction, ProviderName,
+    ProviderSettings,
+};
+use super::transfer::merge::Report;
+use super::transfer::{Counts, Export, What};
 use std::time::{Duration, Instant};
 
 /// How often a controller pings a quiet connection.
@@ -60,6 +66,8 @@ pub enum Event {
     },
     /// An error not tied to a request.
     Error(ErrorCode),
+    /// Something about the transfer this controller asked for.
+    Transfer(ControllerEvent),
     /// The connection ended. Close the socket. [`CloseReason::Timeout`]
     /// means the controller gave up on the target itself.
     Closed(CloseReason),
@@ -91,6 +99,19 @@ enum Stage {
 #[error("not connected")]
 pub struct NotConnected;
 
+/// Why a transfer can't be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AskError {
+    #[error("not connected")]
+    NotConnected,
+    /// The target's Cinette doesn't offer it.
+    #[error("the other device doesn't offer this")]
+    Unsupported,
+    /// Another transfer is asked for or running.
+    #[error("another transfer is going on")]
+    Busy,
+}
+
 pub struct Controller {
     stage: Stage,
     /// When [`Controller::connect`] ran.
@@ -99,6 +120,8 @@ pub struct Controller {
     next_request: u64,
     /// The epoch and version of the newest state applied.
     latest: Option<(String, u64)>,
+    /// The transfer asked for or running.
+    flow: Option<ControllerFlow>,
 }
 
 impl Controller {
@@ -121,6 +144,7 @@ impl Controller {
                 resume,
                 next_request: 0,
                 latest: None,
+                flow: None,
             },
             first,
         ))
@@ -147,8 +171,8 @@ impl Controller {
         matches!(self.stage, Stage::Closed)
     }
 
-    /// One frame's contents from the connection.
-    pub fn receive(&mut self, frame: &[u8]) -> Output {
+    /// One frame's contents from the connection, arrived at `now`.
+    pub fn receive(&mut self, frame: &[u8], now: Instant) -> Output {
         let mut out = Output::default();
         match std::mem::replace(&mut self.stage, Stage::Closed) {
             Stage::Handshake(handshake) => match handshake.read(frame) {
@@ -159,10 +183,7 @@ impl Controller {
                 Ok((send, Next::Done(established))) => {
                     out.send.extend(send);
                     let mut channel = established.channel;
-                    let request = Message::Request {
-                        kind: RequestKind::Control,
-                        resume: self.resume.clone(),
-                    };
+                    let request = Message::control_request(self.resume.clone());
                     match channel.seal(&request) {
                         Ok(bytes) => out.send.push(bytes),
                         Err(_) => return closed(out, CloseReason::Protocol),
@@ -188,7 +209,7 @@ impl Controller {
                     Err(()) => return closed(out, CloseReason::Protocol),
                 };
                 match message {
-                    Message::Pending { expires_in } => {
+                    Message::Pending { expires_in, .. } => {
                         let most = CONSENT_TIMEOUT.as_secs() as u32;
                         out.events.push(Event::Pending {
                             expires_in: expires_in.min(most),
@@ -225,6 +246,27 @@ impl Controller {
                     Ok(None) => None,
                     Err(()) => return closed(out, CloseReason::Protocol),
                 };
+                let message = match (message, self.flow.take()) {
+                    (Some(message), Some(flow)) => {
+                        let mut flow_out = ControllerOut::default();
+                        match flow.receive(message, frame.len(), now, &mut flow_out) {
+                            Ok(next) => {
+                                self.flow = next;
+                                seal_flow(&mut channel, flow_out, &mut out);
+                                None
+                            }
+                            Err(back) => {
+                                let (flow, message) = *back;
+                                self.flow = Some(flow);
+                                Some(message)
+                            }
+                        }
+                    }
+                    (message, flow) => {
+                        self.flow = flow;
+                        message
+                    }
+                };
                 match message {
                     None => {}
                     Some(Message::State(state)) => {
@@ -255,6 +297,13 @@ impl Controller {
         if self.next_deadline().is_none_or(|deadline| now < deadline) {
             return Output::default();
         }
+        if let Stage::InSession { channel, .. } = &mut self.stage {
+            let mut flow_out = ControllerOut::default();
+            self.flow = self.flow.take().and_then(|f| f.tick(now, &mut flow_out));
+            let mut out = Output::default();
+            seal_flow(channel, flow_out, &mut out);
+            return out;
+        }
         let out = Output {
             send: self.leave().into_iter().collect(),
             events: Vec::new(),
@@ -269,7 +318,8 @@ impl Controller {
         match self.stage {
             Stage::Handshake(_) => Some(self.opened + HANDSHAKE_TIMEOUT),
             Stage::Requesting { .. } => Some(self.opened + GIVE_UP_AFTER),
-            Stage::InSession { .. } | Stage::Closed => None,
+            Stage::InSession { .. } => self.flow.as_ref().and_then(ControllerFlow::deadline),
+            Stage::Closed => None,
         }
     }
 
@@ -321,6 +371,103 @@ impl Controller {
         self.request(|id| Message::Catalog { id, query })
     }
 
+    /// Asks for a transfer of history. With [`Direction::Send`], `counts`
+    /// are this device's own, for the target's dialog. The answer comes as
+    /// [`Event::Transfer`].
+    pub fn ask_history(
+        &mut self,
+        direction: Direction,
+        what: What,
+        counts: Option<Counts>,
+    ) -> Result<Vec<u8>, AskError> {
+        self.ask(
+            Feature::History,
+            Asked::History {
+                direction,
+                what,
+                counts: counts.filter(|_| direction == Direction::Send),
+            },
+        )
+    }
+
+    /// Asks to send the named providers. Once allowed,
+    /// [`ControllerEvent::ProvidersGranted`] asks for their settings.
+    pub fn ask_providers(&mut self, providers: Vec<ProviderName>) -> Result<Vec<u8>, AskError> {
+        self.ask(Feature::Providers, Asked::Providers(providers))
+    }
+
+    fn ask(&mut self, feature: Feature, asked: Asked) -> Result<Vec<u8>, AskError> {
+        let Stage::InSession { peer, .. } = &self.stage else {
+            return Err(AskError::NotConnected);
+        };
+        if !peer.features.contains(&feature) {
+            return Err(AskError::Unsupported);
+        }
+        if self.flow.is_some() {
+            return Err(AskError::Busy);
+        }
+        let (id, bytes) = self
+            .request(|id| asked.request(id))
+            .map_err(|_| AskError::NotConnected)?;
+        self.flow = Some(ControllerFlow::Asking { id, asked });
+        Ok(bytes)
+    }
+
+    /// Runs one step of the transfer and seals what it sends.
+    fn transfer(
+        &mut self,
+        f: impl FnOnce(ControllerFlow, &mut ControllerOut) -> Option<ControllerFlow>,
+    ) -> Output {
+        let mut out = Output::default();
+        let Stage::InSession { channel, .. } = &mut self.stage else {
+            return out;
+        };
+        let mut flow_out = ControllerOut::default();
+        if let Some(flow) = self.flow.take() {
+            self.flow = f(flow, &mut flow_out);
+        }
+        seal_flow(channel, flow_out, &mut out);
+        out
+    }
+
+    /// "Send": this device's export, after [`ControllerEvent::ExportNeeded`].
+    pub fn send_export(
+        &mut self,
+        transfer: &str,
+        export: Result<Export, ErrorCode>,
+        now: Instant,
+    ) -> Output {
+        self.transfer(|flow, out| flow.send_export(transfer, export, now, out))
+    }
+
+    /// "Import": the user confirmed the preview.
+    pub fn start_import(&mut self, transfer: &str, now: Instant) -> Output {
+        self.transfer(|flow, out| flow.start_import(transfer, now, out))
+    }
+
+    /// "Import": what writing it here did.
+    pub fn imported(&mut self, transfer: &str, result: Result<Report, ErrorCode>) -> Output {
+        self.transfer(|flow, out| flow.imported(transfer, result, out))
+    }
+
+    /// Providers: their settings, after [`ControllerEvent::ProvidersGranted`].
+    pub fn send_providers(
+        &mut self,
+        grant: &str,
+        providers: Vec<ProviderSettings>,
+        now: Instant,
+    ) -> Output {
+        self.transfer(|flow, out| flow.send_providers(grant, providers, now, out))
+    }
+
+    /// Stops the transfer asked for or running. Nothing is written.
+    pub fn cancel_transfer(&mut self) -> Output {
+        self.transfer(|flow, out| {
+            flow.cancel(out);
+            None
+        })
+    }
+
     /// A ping, to send when nothing else went out for [`PING_INTERVAL`].
     pub fn ping(&mut self) -> Option<Vec<u8>> {
         match &mut self.stage {
@@ -350,6 +497,17 @@ impl Controller {
         self.stage = Stage::Closed;
         bytes
     }
+}
+
+/// Seals what a transfer step sends, and passes its events on.
+fn seal_flow(channel: &mut Channel, flow_out: ControllerOut, out: &mut Output) {
+    for message in flow_out.send {
+        if let Ok(bytes) = channel.seal(&message) {
+            out.send.push(bytes);
+        }
+    }
+    out.events
+        .extend(flow_out.events.into_iter().map(Event::Transfer));
 }
 
 fn closed(mut out: Output, reason: CloseReason) -> Output {

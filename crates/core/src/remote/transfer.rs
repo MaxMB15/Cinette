@@ -16,6 +16,7 @@
 //! or channel id.
 
 pub mod chunks;
+pub mod flow;
 pub mod matching;
 pub mod merge;
 pub mod refs;
