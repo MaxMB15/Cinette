@@ -101,9 +101,13 @@ fn audio_the_receiver_cant_play_becomes_stereo_aac_at_256k() {
         "{linux}"
     );
     assert!(!linux.contains("-downmix"), "{linux}");
+    // Only Apple's encoder needs the audio at 48 kHz.
+    assert!(!linux.contains("-ar "), "{linux}");
     let mac = joined(&args(URL, &p, MAC).unwrap());
     assert!(
-        mac.contains("-c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ac 2 -f matroska"),
+        mac.contains(
+            "-c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ar 48000 -ac 2 -f matroska"
+        ),
         "{mac}"
     );
 }
@@ -307,9 +311,10 @@ fn converts_5_1_to_5_1_aac_at_448k() {
         "{linux}"
     );
     assert!(!linux.contains("-downmix"), "{linux}");
+    assert!(!linux.contains("-ar "), "{linux}");
     let mac = joined(&args(URL, &surround, MAC).unwrap());
     assert!(
-        mac.contains("-c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 448k -f matroska"),
+        mac.contains("-c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 448k -ar 48000 -f matroska"),
         "{mac}"
     );
 }

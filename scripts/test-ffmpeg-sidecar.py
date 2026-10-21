@@ -64,9 +64,9 @@ CONVERT_LIVE_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconne
 CONVERT_SEEK_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -ss 2.000 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a copy -f matroska -live 1 -flush_packets 1 pipe:1"
 # On macOS, with Apple's AAC encoder, and a full transcode on VideoToolbox
 # that deinterlaces and scales anything above 1080p down.
-CONVERT_MAC_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
-CONVERT_MAC_SURROUND_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 448k -f matroska -live 1 -flush_packets 1 pipe:1"
-CONVERT_MAC_TRANSCODE_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -vf bwdif=mode=send_field,scale=-2:'min(ih,1080)',format=yuv420p -c:v h264_videotoolbox -b:v 10M -maxrate 12M -bufsize 20M -force_key_frames expr:gte(t,n_forced*2) -c:a aac_at -aac_at_mode cvbr -b:a 256k -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT_MAC_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 256k -ar 48000 -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT_MAC_SURROUND_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -c:v copy -c:a aac_at -aac_at_mode cvbr -b:a 448k -ar 48000 -f matroska -live 1 -flush_packets 1 pipe:1"
+CONVERT_MAC_TRANSCODE_ARGS = "-hide_banner -nostdin -loglevel error -reconnect 1 -reconnect_delay_max 5 -rw_timeout 15000000 -protocol_whitelist http,https,tcp,tls,crypto -readrate 1 -readrate_initial_burst 10 -i http://URL -map 0:v:0 -map 0:a:0 -sn -dn -vf bwdif=mode=send_field,scale=-2:'min(ih,1080)',format=yuv420p -c:v h264_videotoolbox -b:v 10M -maxrate 12M -bufsize 20M -force_key_frames expr:gte(t,n_forced*2) -c:a aac_at -aac_at_mode cvbr -b:a 256k -ar 48000 -ac 2 -f matroska -live 1 -flush_packets 1 pipe:1"
 CONVERT = {
     "aac": CONVERT_ARGS,
     "downmix": CONVERT_DOWNMIX_ARGS,
@@ -161,6 +161,10 @@ def make_media(ffmpeg: str, folder: Path) -> None:
     # The tone in all six channels, laid out as AC-3 decodes 5.1.
     six = "pan=5.1(side)|" + "|".join(f"c{i}=c0" for i in range(6))
     run(*av, *h264, "-af", six, "-c:a", "ac3", www / "ac3-51.mkv")
+    # Sample rates Apple's AAC encoder won't open at: 32 kHz stereo, as some
+    # radio channels send, and 96 kHz 5.1, as some films have.
+    run(*av, *h264, "-c:a", "mp2", "-ar", "32000", "-ac", "2", www / "mp2-32k.ts")
+    run(*av, *h264, "-af", six, "-c:a", "flac", "-ar", "96000", www / "flac-96k-51.mkv")
     # ffmpeg's own DTS encoder is marked experimental.
     run(*av, *h264, "-c:a", "dca", "-strict", "-2", www / "dts.mkv")
     run(*av, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8",
@@ -427,6 +431,10 @@ def cases() -> list[Case]:
              ["aac", "mpeg2video"], convert="mac", length=None),
         Case("Converting AC-3 5.1 with Apple's AAC", "/media/ac3-51.mkv", "mkv", av,
              convert="mac-surround", length=None),
+        Case("Converting 32 kHz MP2 with Apple's AAC", "/media/mp2-32k.ts", "mkv", av,
+             convert="mac", length=None),
+        Case("Converting 96 kHz FLAC 5.1 with Apple's AAC", "/media/flac-96k-51.mkv", "mkv",
+             av, convert="mac-surround", length=None),
         Case("Transcoding MPEG-2 on VideoToolbox", "/media/mpeg2.ts", "mkv", av,
              convert="mac-transcode", length=None),
         Case("HLS", "/media/hls/index.m3u8", "mkv", av),
@@ -619,6 +627,8 @@ def check(ffmpeg: str, reader: str, case: Case, urls: dict[str, str], out: Path)
         return f"the file holds {codecs}, not {sorted(case.codecs)}:\n{listing}"
     if case.convert.endswith("surround") and not re.search(r"Audio: aac.*, 5\.1,", listing):
         return f"the AAC isn't standard 5.1:\n{listing}"
+    if case.convert.startswith("mac") and not re.search(r"Audio: aac.*, 48000 Hz,", listing):
+        return f"Apple's AAC isn't at 48 kHz:\n{listing}"
     if case.length is not None and (seconds is None or abs(seconds - case.length) > 0.5):
         return f"the file runs {seconds} seconds, not {case.length}"
     return ""
