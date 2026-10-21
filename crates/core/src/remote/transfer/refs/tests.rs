@@ -124,6 +124,8 @@ fn an_m3u_login_before_the_host_counts_by_its_username() {
 #[test]
 fn a_file_or_nothing_has_no_account() {
     assert_eq!(m3u("file:///home/me/list.m3u"), None);
+    // A file on a share names a host, and still isn't an account.
+    assert_eq!(m3u("file://nas/share/list.m3u"), None);
     assert_eq!(m3u("   "), None);
     assert_eq!(m3u("not a url"), None);
     assert_eq!(xtream("not a url", "alice"), None);

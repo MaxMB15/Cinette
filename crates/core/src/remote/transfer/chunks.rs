@@ -161,12 +161,23 @@ fn json_len<T: Serialize>(value: &T) -> usize {
 /// Whether an export is within what a receiver takes, checked before it's
 /// sent so it doesn't fail halfway.
 pub fn within_limits(export: &Export) -> bool {
-    if export.items.len() > MAX_ITEMS || export.pins.len() > MAX_PINS {
-        return false;
-    }
-    let bytes: usize = export.items.iter().map(|i| json_len(i) + 1).sum::<usize>()
-        + export.pins.iter().map(|p| json_len(p) + 1).sum::<usize>();
-    bytes <= MAX_TOTAL_BYTES
+    fits(export.items.len(), export.pins.len(), || {
+        export_bytes(export)
+    })
+}
+
+/// Whether that many items and pins, of `bytes` in all, fit what a
+/// receiver takes. The size is only worked out once the counts fit.
+fn fits(items: usize, pins: usize, bytes: impl FnOnce() -> usize) -> bool {
+    items <= MAX_ITEMS && pins <= MAX_PINS && bytes() <= MAX_TOTAL_BYTES
+}
+
+/// What an export's items and pins come to as the receiver counts them:
+/// each one's JSON and the comma after it.
+fn export_bytes(export: &Export) -> usize {
+    let items: usize = export.items.iter().map(|i| json_len(i) + 1).sum();
+    let pins: usize = export.pins.iter().map(|p| json_len(p) + 1).sum();
+    items + pins
 }
 
 /// Why the receiver gave up on a transfer.

@@ -440,3 +440,32 @@ fn items_fill_a_chunk_right_up_to_the_limit() {
     assert!(fullest + 2 >= CHUNK_BYTES, "{fullest}");
     assert!(fullest <= CHUNK_BYTES);
 }
+
+#[test]
+fn the_limits_before_sending_take_each_one_exactly() {
+    let small = || 0;
+    assert!(fits(MAX_ITEMS, MAX_PINS, || MAX_TOTAL_BYTES));
+    assert!(!fits(MAX_ITEMS + 1, 0, small));
+    assert!(!fits(0, MAX_PINS + 1, small));
+    assert!(!fits(0, 0, || MAX_TOTAL_BYTES + 1));
+    // The size isn't worked out when the counts are already over.
+    assert!(!fits(MAX_ITEMS + 1, 0, || unreachable!()));
+}
+
+#[test]
+fn an_exports_size_counts_each_item_and_pin_with_its_comma() {
+    let sent = export(2, 3);
+    let expected = sent
+        .items
+        .iter()
+        .map(|i| serde_json::to_vec(i).unwrap().len() + 1)
+        .sum::<usize>()
+        + sent
+            .pins
+            .iter()
+            .map(|p| serde_json::to_vec(p).unwrap().len() + 1)
+            .sum::<usize>();
+    assert_eq!(export_bytes(&sent), expected);
+    assert!(within_limits(&sent));
+    assert!(!within_limits(&export(MAX_ITEMS + 1, 0)));
+}
