@@ -172,8 +172,13 @@ pub struct Export {
     pub pins: Vec<Pin>,
     /// What the source is playing, or watched last.
     pub current: Option<ItemRef>,
-    /// The source's clock when it exported, in Unix seconds.
+    /// The source's clock when the first chunk was made, in Unix seconds.
     pub sent_at: i64,
+    /// The destination's clock when the first chunk arrived. Only the
+    /// receiver sets it.
+    pub received_at: i64,
+    /// Items and pins left out for being over the limits, on either side.
+    pub dropped: u32,
 }
 
 impl Export {

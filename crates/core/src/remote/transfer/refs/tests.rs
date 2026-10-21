@@ -85,22 +85,47 @@ fn the_parts_cant_run_into_each_other() {
 }
 
 #[test]
-fn an_m3u_url_is_its_account() {
+fn an_m3u_url_is_its_account_without_the_password() {
     let tag = m3u("http://lists.example/get.php?username=a&password=b").unwrap();
     assert_eq!(
-        m3u(" http://lists.example/get.php?username=a&password=b "),
+        m3u(" HTTP://Lists.example:80/get.php?password=c&username=a&type=m3u "),
+        Some(tag.clone()),
+        "the password and other values don't count"
+    );
+    assert_ne!(
+        m3u("http://lists.example/get.php?username=z&password=b"),
         Some(tag.clone())
     );
     assert_ne!(
-        m3u("http://lists.example/get.php?username=a&password=c"),
+        m3u("http://lists.example/other.php?username=a&password=b"),
+        Some(tag.clone())
+    );
+    assert_ne!(
+        m3u("http://other.example/get.php?username=a&password=b"),
         Some(tag)
     );
+}
+
+#[test]
+fn an_m3u_login_before_the_host_counts_by_its_username() {
+    let tag = m3u("http://a:secret@lists.example/list.m3u").unwrap();
+    assert_eq!(
+        m3u("http://a:other@lists.example/list.m3u"),
+        Some(tag.clone())
+    );
+    assert_ne!(
+        m3u("http://b:secret@lists.example/list.m3u"),
+        Some(tag.clone())
+    );
+    // A username in the query names the account even with one before the host.
+    assert_eq!(m3u("http://x@lists.example/list.m3u?USERNAME=a"), Some(tag));
 }
 
 #[test]
 fn a_file_or_nothing_has_no_account() {
     assert_eq!(m3u("file:///home/me/list.m3u"), None);
     assert_eq!(m3u("   "), None);
+    assert_eq!(m3u("not a url"), None);
     assert_eq!(xtream("not a url", "alice"), None);
     assert_eq!(xtream("mailto:someone", "alice"), None);
 }
@@ -213,10 +238,20 @@ fn other_ids_have_no_panel_id() {
 }
 
 #[test]
-fn an_episode_names_its_show() {
-    assert_eq!(
-        series_of_episode("xt-ep-42-s1-3").as_deref(),
-        Some("series-42")
-    );
-    assert_eq!(series_of_episode("live-42"), None);
+fn an_episode_id_reads_strictly() {
+    assert_eq!(parse_episode_id("xt-ep-42-s1-3"), Some((42, 1, 3)));
+    for junk in [
+        "xt-ep-42-not-an-episode",
+        "xt-ep-42-s1",
+        "xt-ep-42-s1-3-4",
+        "xt-ep-x-s1-3",
+        "xt-ep-42-1-3",
+        "xt-ep-42-sx-3",
+        "xt-ep-42-s1-x",
+        "xt-ep-+4-s1-3",
+        "live-42",
+        "xt-ep-99999999999999999999-s1-3",
+    ] {
+        assert_eq!(parse_episode_id(junk), None, "{junk}");
+    }
 }

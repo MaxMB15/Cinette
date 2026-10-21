@@ -275,7 +275,9 @@ fn an_empty_imdb_id_on_the_destination_isnt_indexed() {
 }
 
 #[test]
-fn two_movies_with_one_title_are_ambiguous() {
+fn two_movies_with_one_title_place_only_the_position() {
+    // One film listed twice: no single channel for a row, but both resume
+    // under the same key.
     let index = Index::new(
         &[provider("m3u-a", None, false)],
         vec![
@@ -284,9 +286,137 @@ fn two_movies_with_one_title_are_ambiguous() {
         ],
     );
     assert_eq!(
-        found_id(&index, &reference(ItemKind::Movie, "Heat")),
+        index.find(&reference(ItemKind::Movie, "Heat")),
+        Ok(Found {
+            channel: None,
+            key: Some("movie:heat".into()),
+            why: Miss::Ambiguous,
+        })
+    );
+}
+
+#[test]
+fn items_with_different_keys_stay_ambiguous() {
+    let index = Index::new(
+        &[provider("m3u-a", None, false)],
+        vec![
+            live("m3u-a-ch-1", "m3u-a", "BBC One", Some("bbc1.uk")),
+            live("m3u-a-ch-2", "m3u-a", "BBC One HD", Some("bbc1.uk")),
+        ],
+    );
+    // Live channels have no key, so nothing is placed.
+    let r = ItemRef {
+        tvg_id: Some("bbc1.uk".into()),
+        ..reference(ItemKind::Live, "BBC 1")
+    };
+    assert_eq!(index.find(&r), Err(Miss::Ambiguous));
+    let shows = Index::new(
+        &[provider("m3u-a", None, false)],
+        vec![
+            channel("m3u-a-ch-1", "m3u-a", "Lost", "series"),
+            channel("m3u-a-ch-2", "m3u-a", "LOST", "series"),
+        ],
+    );
+    assert_eq!(
+        shows.find(&reference(ItemKind::Series, "Lost")),
         Err(Miss::Ambiguous)
     );
+}
+
+#[test]
+fn a_title_with_another_imdb_id_isnt_the_same_film() {
+    let index = Index::new(
+        &[provider("m3u-a", None, false)],
+        vec![
+            DestChannel {
+                imdb: Some("tt2".into()),
+                ..channel("m3u-a-ch-1", "m3u-a", "The Office", "series")
+            },
+            DestChannel {
+                imdb: Some("tt3".into()),
+                ..channel("m3u-a-ch-2", "m3u-a", "Heat", "movie")
+            },
+            channel("m3u-a-ch-3", "m3u-a", "Heat", "movie"),
+        ],
+    );
+    let office = ItemRef {
+        imdb: Some("tt1".into()),
+        ..reference(ItemKind::Series, "The Office")
+    };
+    assert_eq!(index.find(&office), Err(Miss::Missing));
+    // A copy with no IMDb id may still be it; one with another id isn't.
+    let heat = ItemRef {
+        imdb: Some("tt1".into()),
+        ..reference(ItemKind::Movie, "Heat")
+    };
+    assert_eq!(found_id(&index, &heat), Ok(Some("m3u-a-ch-3".into())));
+}
+
+#[test]
+fn an_imdb_id_doesnt_narrow_live_channels() {
+    let index = Index::new(
+        &[provider("m3u-a", None, false)],
+        vec![DestChannel {
+            imdb: Some("tt2".into()),
+            ..live("m3u-a-ch-1", "m3u-a", "CNN", Some("cnn.us"))
+        }],
+    );
+    let r = ItemRef {
+        tvg_id: Some("cnn.us".into()),
+        imdb: Some("tt1".into()),
+        ..reference(ItemKind::Live, "CNN")
+    };
+    assert_eq!(found_id(&index, &r), Ok(Some("m3u-a-ch-1".into())));
+}
+
+#[test]
+fn a_downloaded_episode_isnt_counted_twice() {
+    let index = Index::new(
+        &[provider("xt-a", Some(1), true)],
+        vec![
+            DestChannel {
+                provider_id: DOWNLOADS_PROVIDER.into(),
+                ..episode("xt-a-xt-ep-42-s1-0", "xt-a", "Lost", 1, 1)
+            },
+            DestChannel {
+                show: Some("xt-a-series-42".into()),
+                ..episode("xt-a-xt-ep-42-s1-0", "xt-a", "Lost", 1, 1)
+            },
+            DestChannel {
+                provider_id: DOWNLOADS_PROVIDER.into(),
+                ..episode("xt-a-xt-ep-42-s1-1", "xt-a", "Lost", 1, 2)
+            },
+            DestChannel {
+                provider_id: DOWNLOADS_PROVIDER.into(),
+                ..episode("xt-a-xt-ep-42-s1-1", "xt-a", "Lost", 1, 2)
+            },
+        ],
+    );
+    let found = index.find(&episode_ref("Lost", 1, 1)).unwrap();
+    assert_eq!(found.channel.unwrap().provider_id, "xt-a");
+    assert!(index
+        .find(&episode_ref("Lost", 1, 2))
+        .unwrap()
+        .channel
+        .is_some());
+}
+
+#[test]
+fn a_show_whose_saved_list_lacks_the_episode_has_no_place_for_it() {
+    let index = Index::new(
+        &[provider("xt-a", Some(1), true)],
+        vec![
+            channel("xt-a-series-42", "xt-a", "Lost", "series"),
+            DestChannel {
+                show: Some("xt-a-series-42".into()),
+                ..episode("xt-a-xt-ep-42-s1-0", "xt-a", "Lost", 1, 1)
+            },
+        ],
+    );
+    assert_eq!(index.find(&episode_ref("Lost", 1, 5)), Err(Miss::Missing));
+    // In the same account, the id made from the show isn't trusted either.
+    let r = from(1, "xt-ep-42-s1-4", episode_ref("Lost", 1, 5));
+    assert_eq!(index.find(&r), Err(Miss::Missing));
 }
 
 #[test]
@@ -408,24 +538,37 @@ fn an_episode_of_a_show_in_the_same_account_is_found_without_its_list() {
         Some(DestChannel {
             id: "xt-a-xt-ep-42-s1-3".into(),
             provider_id: "xt-a".into(),
-            name: "Lost S01E04 Pilot".into(),
+            // Named from this device's show, never from the other's text.
+            name: "Lost (2004) S01E04".into(),
             content_type: "series".into(),
             group: "Drama".into(),
             logo: Some("http://img.example/lost.png".into()),
             tvg_id: None,
-            series_title: Some("Lost (2004)".into()),
+            // The panel's own name for the show, as the player keys it.
+            series_title: Some("Lost".into()),
             season: Some(1),
             episode: Some(4),
             imdb: None,
+            show: Some("xt-a-series-42".into()),
         })
     );
-    assert_eq!(found.key.as_deref(), Some("series:lost (2004):s1e4"));
+    assert_eq!(found.key.as_deref(), Some("series:lost:s1e4"));
     let no_numbers = ItemRef {
         season: None,
         episode: None,
-        ..r
+        ..r.clone()
     };
-    assert_eq!(index.find(&no_numbers).unwrap().key, None);
+    assert_eq!(index.find(&no_numbers), Err(Miss::Missing));
+    let other_season = ItemRef {
+        season: Some(2),
+        ..r.clone()
+    };
+    assert_eq!(index.find(&other_season), Err(Miss::Missing));
+    let no_show_title = ItemRef { series: None, ..r };
+    assert_eq!(
+        index.find(&no_show_title).unwrap().key.as_deref(),
+        Some("series:lost (2004):s1e4")
+    );
 }
 
 #[test]
@@ -477,7 +620,7 @@ fn an_episode_of_two_shows_with_one_title_is_ambiguous() {
 }
 
 #[test]
-fn an_episode_listed_twice_is_ambiguous_unless_one_has_the_account() {
+fn an_episode_listed_twice_places_only_its_position_unless_one_has_the_account() {
     let index = Index::new(
         &[
             provider("m3u-a", Some(1), false),
@@ -488,10 +631,9 @@ fn an_episode_listed_twice_is_ambiguous_unless_one_has_the_account() {
             episode("m3u-b-ch-1", "m3u-b", "Lost", 1, 1),
         ],
     );
-    assert_eq!(
-        found_id(&index, &episode_ref("Lost", 1, 1)),
-        Err(Miss::Ambiguous)
-    );
+    let found = index.find(&episode_ref("Lost", 1, 1)).unwrap();
+    assert_eq!(found.channel, None);
+    assert_eq!(found.key.as_deref(), Some("series:lost:s1e1"));
     let r = ItemRef {
         account: Some(tag(2)),
         ..episode_ref("Lost", 1, 1)
