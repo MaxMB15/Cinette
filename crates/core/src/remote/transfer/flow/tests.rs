@@ -281,6 +281,7 @@ fn chunk(transfer: &str, seq: u32, last: bool) -> Message {
             last,
             sent_at: Some(5),
             current: None,
+            dropped: None,
             items: vec![],
             pins: vec![],
         },

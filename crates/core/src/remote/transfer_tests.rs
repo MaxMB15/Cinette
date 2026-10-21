@@ -50,6 +50,16 @@ fn export(items: usize) -> Export {
         pins: vec![],
         current: Some(ItemRef::named(ItemKind::Live, "Channel 0")),
         sent_at: 99,
+        ..Export::default()
+    }
+}
+
+/// An export's content, without the clocks the transfer stamps on it.
+fn same_content(export: Export) -> Export {
+    Export {
+        sent_at: 0,
+        received_at: 0,
+        ..export
     }
 }
 
@@ -209,7 +219,7 @@ fn sending_history_goes_in_chunks_and_is_written_once_at_the_end() {
     assert_eq!(found.len(), 1);
     let (conn, got_transfer, got_salt, got) = found.into_iter().next().unwrap();
     assert_eq!((got_transfer.as_str(), got_salt), (transfer.as_str(), salt));
-    assert_eq!(got, sent);
+    assert_eq!(same_content(got), same_content(sent));
     let chunks = target_progress(&net)
         .iter()
         .filter(|p| matches!(p, Progress::Receiving { .. }))
@@ -280,7 +290,10 @@ fn importing_history_shows_a_preview_and_waits_for_start() {
             _ => None,
         })
         .expect("the history arrives");
-    assert_eq!(ready, (transfer.clone(), salt, sent));
+    assert_eq!(
+        (ready.0, ready.1, same_content(ready.2)),
+        (transfer.clone(), salt, same_content(sent))
+    );
 
     let out = net.clients[phone]
         .controller

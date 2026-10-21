@@ -304,9 +304,19 @@ pub struct Sender {
     deadline: Instant,
 }
 
+/// This device's clock, in Unix seconds, for the times in a transfer. The
+/// rest of the protocol only needs `Instant`s.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 impl Sender {
+    /// Splits the export now, so the first chunk carries this device's
+    /// clock as it goes out.
     fn new(transfer: String, export: &Export, now: Instant) -> Self {
-        let (chunks, _) = chunks::split(export);
+        let (chunks, _) = chunks::split(export, unix_now());
         Self {
             transfer,
             total: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
@@ -381,7 +391,7 @@ impl Receiver {
             transfer: self.transfer.clone(),
             seq,
         };
-        match self.assembler.push(chunk, bytes) {
+        match self.assembler.push(chunk, bytes, unix_now()) {
             Ok(None) => {
                 self.received += 1;
                 self.deadline = now + STEP_TIMEOUT;
@@ -423,8 +433,13 @@ pub enum TargetFlow {
         transfer: String,
         salt: Salt,
     },
-    /// Exported, until the controller says to start.
-    Ready { sender: Box<Sender> },
+    /// Exported, until the controller says to start. It's split into
+    /// chunks only then, so its clock is the time it goes.
+    Ready {
+        transfer: String,
+        export: Box<Export>,
+        deadline: Instant,
+    },
     /// Sending history to the controller.
     Sending(Box<Sender>),
     /// All sent, waiting for the controller's result.
@@ -530,10 +545,10 @@ impl TargetFlow {
                         salt: Some(salt.to_hex()),
                         counts: Some(export.counts()),
                     }));
-                    let mut sender = Sender::new(t, &export, now);
-                    sender.deadline = now + GRANT_TIMEOUT;
                     Some(TargetFlow::Ready {
-                        sender: Box::new(sender),
+                        transfer: t,
+                        export: Box::new(export),
+                        deadline: now + GRANT_TIMEOUT,
                     })
                 }
                 Err(code) => {
@@ -675,8 +690,8 @@ impl TargetFlow {
                     Received::Broken => fail(steps, ErrorCode::Invalid),
                 }
             }
-            (TargetFlow::Ready { mut sender }, Message::TransferStart { .. }) => {
-                sender.deadline = now + STEP_TIMEOUT;
+            (TargetFlow::Ready { export, .. }, Message::TransferStart { .. }) => {
+                let mut sender = Box::new(Sender::new(id.clone(), &export, now));
                 sender.fill(steps);
                 steps.push(progress(
                     &id,
@@ -767,8 +782,9 @@ impl TargetFlow {
         match self {
             TargetFlow::Asking { .. } => None,
             TargetFlow::Receiving(r) => Some(&r.transfer),
-            TargetFlow::Ready { sender } | TargetFlow::Sending(sender) => Some(&sender.transfer),
-            TargetFlow::Importing { transfer }
+            TargetFlow::Sending(sender) => Some(&sender.transfer),
+            TargetFlow::Ready { transfer, .. }
+            | TargetFlow::Importing { transfer }
             | TargetFlow::Exporting { transfer, .. }
             | TargetFlow::Finishing { transfer, .. } => Some(transfer),
             TargetFlow::Providers { grant, .. } | TargetFlow::Saving { grant } => Some(grant),
@@ -788,10 +804,10 @@ impl TargetFlow {
     pub fn deadline(&self) -> Option<Instant> {
         match self {
             TargetFlow::Receiving(r) => Some(r.deadline),
-            TargetFlow::Ready { sender } | TargetFlow::Sending(sender) => Some(sender.deadline),
-            TargetFlow::Finishing { deadline, .. } | TargetFlow::Providers { deadline, .. } => {
-                Some(*deadline)
-            }
+            TargetFlow::Sending(sender) => Some(sender.deadline),
+            TargetFlow::Ready { deadline, .. }
+            | TargetFlow::Finishing { deadline, .. }
+            | TargetFlow::Providers { deadline, .. } => Some(*deadline),
             _ => None,
         }
     }
