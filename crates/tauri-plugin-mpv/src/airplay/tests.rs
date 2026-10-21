@@ -420,6 +420,7 @@ fn route_ids_carry_the_uid() {
 }
 
 #[test]
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
 fn every_command_fails_where_there_is_no_airplay() {
     let app = TestApp::new();
     let unavailable = Err(UNAVAILABLE.to_string());
@@ -452,6 +453,46 @@ fn every_command_fails_where_there_is_no_airplay() {
     );
     assert_eq!(
         block_on(airplay_get_state(app.handle().state())),
+        Ok(AirPlayState::idle())
+    );
+}
+
+/// On a Mac, the commands hand their work to the main thread and return.
+/// A test's main thread never runs that work, so what shows is what they
+/// do here: a load starts tracking the item, and a stop ends it.
+#[test]
+#[cfg(target_os = "macos")]
+fn on_a_mac_the_commands_queue_their_work_and_track_the_item() {
+    let app = TestApp::new();
+    let handle = app.handle();
+    assert_eq!(block_on(airplay_set_detection(true)), Ok(()));
+    assert_eq!(block_on(airplay_choose(0.0, 0.0, 10.0, 10.0)), Ok(()));
+    // Nothing was picked.
+    assert_eq!(block_on(airplay_get_route()), Ok(None));
+    assert_eq!(
+        load(
+            &handle,
+            "http://127.0.0.1:1/x.m3u8",
+            "Channel",
+            Some(5.0),
+            false,
+            None
+        ),
+        Ok(())
+    );
+    assert!(handle
+        .state::<AirPlay>()
+        .report(&report("playing"), Instant::now())
+        .is_some());
+    assert_eq!(block_on(airplay_play()), Ok(()));
+    assert_eq!(block_on(airplay_pause()), Ok(()));
+    assert_eq!(block_on(airplay_seek(10.0)), Ok(()));
+    // There's no track choice on a Mac yet, and choosing does nothing.
+    assert_eq!(block_on(airplay_select_subtitle(Some(0))), Ok(()));
+    assert_eq!(block_on(airplay_select_audio(0)), Ok(()));
+    assert_eq!(block_on(airplay_stop(handle.clone())), Ok(()));
+    assert_eq!(
+        block_on(airplay_get_state(handle.state())),
         Ok(AirPlayState::idle())
     );
 }

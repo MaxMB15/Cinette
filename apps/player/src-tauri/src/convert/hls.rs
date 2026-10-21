@@ -13,13 +13,9 @@
 //! - The source URL carries the provider's login. It stays with ffmpeg.
 //! - Dropping the [`FfmpegHls`] stops ffmpeg and the server.
 
-use mvp_core::convert::hls;
-use mvp_core::convert::{pick_audio, AudioPlan, Encoders, Plan, VideoPlan};
-use mvp_core::streams::format::VideoCodec;
-use mvp_core::streams::probe::Probed;
-
-use super::support::Support;
 use crate::streams::REFUSED;
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+pub use planning::plan;
 
 /// Why a conversion to HLS didn't start, or stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -71,53 +67,66 @@ impl From<super::ConvertError> for HlsError {
     }
 }
 
-/// How ffmpeg converts a probed source for a receiver that plays H.264 and
-/// the `playable` audio, starting `start_at` seconds into a movie or an
-/// episode. The H.264 is copied, unless it's interlaced. Other video, and
-/// interlaced H.264, are encoded again on the hardware encoder, or refused
-/// without one. HDR is refused, since nothing maps it to SDR. The audio is
-/// [`pick_audio`]'s, as on iOS. Returns the plan and the `CODECS` name of
-/// the audio it makes.
-///
-/// [`pick_audio`]: mvp_core::convert::pick_audio
-pub fn plan(
-    probed: &Probed,
-    start_at: f64,
-    live: bool,
-    playable: &[&str],
-    support: &Support,
-) -> Result<(Plan, Encoders, Option<&'static str>), HlsError> {
-    let encoders = support.encoders.ok_or(HlsError::Failed)?;
-    if probed.hdr {
-        return Err(HlsError::VideoCodec);
+// Only a Mac plans for ffmpeg. iOS's `hls_out` plans for the FFmpeg
+// libraries from what they read, and never transcodes video.
+#[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
+mod planning {
+    use mvp_core::convert::hls;
+    use mvp_core::convert::{pick_audio, AudioPlan, Encoders, Plan, VideoPlan};
+    use mvp_core::streams::format::VideoCodec;
+    use mvp_core::streams::probe::Probed;
+
+    use super::super::support::Support;
+    use super::HlsError;
+
+    /// How ffmpeg converts a probed source for a receiver that plays H.264 and
+    /// the `playable` audio, starting `start_at` seconds into a movie or an
+    /// episode. The H.264 is copied, unless it's interlaced. Other video, and
+    /// interlaced H.264, are encoded again on the hardware encoder, or refused
+    /// without one. HDR is refused, since nothing maps it to SDR. The audio is
+    /// [`pick_audio`]'s, as on iOS. Returns the plan and the `CODECS` name of
+    /// the audio it makes.
+    ///
+    /// [`pick_audio`]: mvp_core::convert::pick_audio
+    pub fn plan(
+        probed: &Probed,
+        start_at: f64,
+        live: bool,
+        playable: &[&str],
+        support: &Support,
+    ) -> Result<(Plan, Encoders, Option<&'static str>), HlsError> {
+        let encoders = support.encoders.ok_or(HlsError::Failed)?;
+        if probed.hdr {
+            return Err(HlsError::VideoCodec);
+        }
+        let video = match probed.video {
+            None => VideoPlan::None,
+            Some(VideoCodec::H264) if !probed.interlaced => VideoPlan::Copy,
+            Some(_) if encoders.video.is_some() => VideoPlan::Transcode {
+                deinterlace: probed.interlaced,
+            },
+            Some(_) => return Err(HlsError::VideoCodec),
+        };
+        let decodable: Vec<&str> = support.decoders.iter().map(String::as_str).collect();
+        let tracks = &probed.audio_tracks;
+        let (track, audio) = pick_audio(tracks, None, playable, &decodable, false);
+        let codec = match audio {
+            AudioPlan::None => None,
+            AudioPlan::Copy => hls::audio_codec(&tracks[track].codec),
+            AudioPlan::Aac { .. } | AudioPlan::Surround => hls::audio_codec("aac"),
+        };
+        if video == VideoPlan::None && audio == AudioPlan::None {
+            return Err(HlsError::Unreachable);
+        }
+        let plan = Plan {
+            video,
+            audio,
+            live,
+            start_at: (!live && start_at > 0.0).then_some(start_at),
+            audio_track: track,
+        };
+        Ok((plan, encoders, codec))
     }
-    let video = match probed.video {
-        None => VideoPlan::None,
-        Some(VideoCodec::H264) if !probed.interlaced => VideoPlan::Copy,
-        Some(_) if encoders.video.is_some() => VideoPlan::Transcode {
-            deinterlace: probed.interlaced,
-        },
-        Some(_) => return Err(HlsError::VideoCodec),
-    };
-    let decodable: Vec<&str> = support.decoders.iter().map(String::as_str).collect();
-    let tracks = &probed.audio_tracks;
-    let (track, audio) = pick_audio(tracks, None, playable, &decodable, false);
-    let codec = match audio {
-        AudioPlan::None => None,
-        AudioPlan::Copy => hls::audio_codec(&tracks[track].codec),
-        AudioPlan::Aac { .. } | AudioPlan::Surround => hls::audio_codec("aac"),
-    };
-    if video == VideoPlan::None && audio == AudioPlan::None {
-        return Err(HlsError::Unreachable);
-    }
-    let plan = Plan {
-        video,
-        audio,
-        live,
-        start_at: (!live && start_at > 0.0).then_some(start_at),
-        audio_track: track,
-    };
-    Ok((plan, encoders, codec))
 }
 
 // AirPlay from a Mac starts them. Linux's Cast converter doesn't use HLS.

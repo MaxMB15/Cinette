@@ -31,6 +31,8 @@ use crate::lan_server::{LanServer, LiveFeed, LIVE_BYTES};
 #[cfg(desktop)]
 use crate::keep_awake;
 
+// HLS for AirPlay, which iOS and macOS send. The Linux tests run it too.
+#[cfg(any(target_os = "ios", target_os = "macos", all(test, target_os = "linux")))]
 pub mod hls;
 pub mod support;
 
