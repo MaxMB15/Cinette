@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use mvp_core::cast::message::{LoadRequest, StreamType};
-use mvp_core::cast::session::Session;
+use mvp_core::cast::session::{Session, PING_INTERVAL, SILENCE_LIMIT};
 use mvp_core::convert::{matroska_copies, pick_audio, AudioPlan, Plan, VideoPlan, CAST_AUDIO};
 use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::{provider_host, shareable_logo};
@@ -199,6 +199,35 @@ pub(super) fn is_ours(ip: IpAddr) -> bool {
 /// of change doesn't end a stream that would have gone on.
 const MOVED_CHECKS: u32 = 2;
 
+/// How long a session whose connection went with this computer's old
+/// address tries to connect to its receiver again, as while Wi-Fi comes
+/// back, before it says the cast was lost.
+const RECONNECT_FOR: Duration = Duration::from_secs(30);
+
+/// How often it tries.
+const RECONNECT_EVERY: Duration = Duration::from_secs(1);
+
+/// How long a session waits on a silent receiver, and how it connects again
+/// after this computer's address changed. Tests give their own.
+#[derive(Clone, Copy)]
+struct Timing {
+    ping: Duration,
+    silence: Duration,
+    reconnect_for: Duration,
+    reconnect_every: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            ping: PING_INTERVAL,
+            silence: SILENCE_LIMIT,
+            reconnect_for: RECONNECT_FOR,
+            reconnect_every: RECONNECT_EVERY,
+        }
+    }
+}
+
 /// The app's casts, managed by Tauri.
 #[derive(Default)]
 pub struct CastPlayback {
@@ -213,6 +242,7 @@ pub struct CastPlayback {
     /// the provider.
     loading: tokio::sync::Mutex<()>,
     addresses: Mutex<AddressCheck>,
+    timing: Mutex<Timing>,
 }
 
 impl CastPlayback {
@@ -226,6 +256,18 @@ impl CastPlayback {
         every: Duration,
     ) {
         *lock(&self.addresses) = AddressCheck { route, ours, every };
+    }
+
+    /// Has sessions ping each second and end after `silence` from the
+    /// receiver, and try to connect again for `reconnect_for`, every 100 ms.
+    #[cfg(test)]
+    pub(crate) fn set_timing(&self, silence: Duration, reconnect_for: Duration) {
+        *lock(&self.timing) = Timing {
+            ping: Duration::from_secs(1),
+            silence,
+            reconnect_for,
+            reconnect_every: Duration::from_millis(100),
+        };
     }
 
     /// Starts a load's or a stop's turn on `receiver_id`, and returns its
@@ -324,31 +366,63 @@ where
     };
     let (commands, receiver) = mpsc::unbounded_channel();
     let (session, first) = Session::start(sender_id(), std::time::Instant::now());
+    let timing = *lock(&state.timing);
+    let session = session.with_heartbeat(timing.ping, timing.silence);
     let driver = {
         let app = app.clone();
         let id = receiver_id.to_string();
         tauri::async_runtime::spawn(async move {
+            let state = app.state::<CastPlayback>();
+            let ours = lock(&state.addresses).ours;
+            let mut lost = None;
             drive(stream, session, first, receiver, |update| {
-                emit(&app, &id, update)
+                let dropped = matches!(
+                    update,
+                    CastUpdate::Closed {
+                        reason: "timeout" | "connectionLost"
+                    }
+                );
+                if dropped && local.is_some_and(|ip| !ours(ip)) {
+                    // The connection went with this computer's old address,
+                    // as after a sleep on another network. It's taken up
+                    // again below, and the frontend hears of it only if
+                    // that fails.
+                    lost = Some(update);
+                } else if !replaced(&state, &id, generation) {
+                    emit(&app, &id, update);
+                }
             })
             .await;
+            if let Some(closed) = lost {
+                if reconnect(&app, &id, generation).await {
+                    return;
+                }
+                emit(&app, &id, closed);
+            }
             // Over: the converter stops with it.
-            let state = app.state::<CastPlayback>();
             let mut active = lock(&state.active);
             if active.as_ref().is_some_and(|a| a.generation == generation) {
                 *active = None;
             }
         })
     };
-    let old = lock(&state.active).replace(Active {
+    let mut active = lock(&state.active);
+    let mut old = active.take();
+    // A new connection to the same receiver goes on with its cast.
+    let (conversion, plan) = match old.as_mut() {
+        Some(old) if old.receiver_id == receiver_id => (old.conversion.take(), old.plan.take()),
+        _ => (None, None),
+    };
+    *active = Some(Active {
         receiver_id: receiver_id.to_string(),
         generation,
         commands,
         driver,
         local,
-        conversion: None,
-        plan: None,
+        conversion,
+        plan,
     });
+    drop(active);
     match old {
         // The same receiver on a new connection, as after this computer's
         // address changed. The old one goes without a word, so the receiver
@@ -359,6 +433,62 @@ where
         }
         None => {}
     }
+}
+
+/// Whether a newer session for `receiver_id` replaced session
+/// `generation`, so what the older one says no longer counts.
+fn replaced(state: &CastPlayback, receiver_id: &str, generation: u64) -> bool {
+    lock(&state.active)
+        .as_ref()
+        .is_some_and(|a| a.receiver_id == receiver_id && a.generation > generation)
+}
+
+/// Connects to `receiver_id` again after session `generation` lost its
+/// connection with this computer's old address, trying for a while, as
+/// while Wi-Fi comes back. Says whether the cast goes on: on the new
+/// connection, on one a load opened meanwhile, or not at all because it
+/// ended or went to another receiver meanwhile, which says so itself.
+async fn reconnect<R: Runtime>(app: &AppHandle<R>, receiver_id: &str, generation: u64) -> bool {
+    let state = app.state::<CastPlayback>();
+    let timing = *lock(&state.timing);
+    let until = tokio::time::Instant::now() + timing.reconnect_for;
+    loop {
+        let newest = lock(&state.active)
+            .as_ref()
+            .is_some_and(|a| a.generation == generation);
+        if !newest {
+            return true;
+        }
+        if let Ok((stream, local)) = connect(app, receiver_id).await {
+            begin(app, receiver_id, stream, local);
+            return true;
+        }
+        if tokio::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(timing.reconnect_every).await;
+    }
+}
+
+/// A TLS connection to a receiver.
+type Connection = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
+
+/// A connection to `receiver_id`, and this computer's address on it.
+async fn connect<R: Runtime>(
+    app: &AppHandle<R>,
+    receiver_id: &str,
+) -> Result<(Connection, Option<IpAddr>), String> {
+    let (addr, port) = app
+        .state::<CastReceivers>()
+        .registry()
+        .get(receiver_id)
+        .map(|r| (r.addr, r.port))
+        .ok_or("notFound")?;
+    let (stream, _) = tls::connect(addr, port)
+        .await
+        .map_err(|_| "unreachable".to_string())?;
+    let local = stream.get_ref().0.local_addr().ok().map(|a| a.ip());
+    Ok((stream, local))
 }
 
 /// The active cast's command sender, if `receiver_id` has it.
@@ -384,22 +514,16 @@ async fn ensure_connected<R: Runtime>(
     if open {
         return Ok(false);
     }
-    let (addr, port) = app
-        .state::<CastReceivers>()
-        .registry()
-        .get(receiver_id)
-        .map(|r| (r.addr, r.port))
-        .ok_or("notFound")?;
-    match tls::connect(addr, port).await {
-        Ok((stream, _)) => {
-            let local = stream.get_ref().0.local_addr().ok().map(|a| a.ip());
+    match connect(app, receiver_id).await {
+        Ok((stream, local)) => {
             begin(app, receiver_id, stream, local);
             Ok(true)
         }
-        Err(_) => {
+        Err(e) if e == "unreachable" => {
             super::mark_unreachable(app, receiver_id);
-            Err("unreachable".into())
+            Err(e)
         }
+        Err(e) => Err(e),
     }
 }
 
@@ -736,7 +860,7 @@ pub async fn load<R: Runtime>(
             .send(Command::Load(Box::new(request)))
             .map_err(|_| "unreachable")?;
         if let Some((started, receiver)) = conversion.take() {
-            watch_conversion(app, receiver_id, receiver, active.generation, &started);
+            watch_conversion(app, receiver_id, receiver, &started);
             active.conversion = Some(started);
         }
         active.plan = plan_used;
@@ -763,21 +887,23 @@ fn forget_plan(state: &CastPlayback, receiver_id: &str) {
     }
 }
 
-/// Tells the frontend when the converter for cast `generation` stops with
-/// an error, or when its stream has to start again: a live channel whose
-/// connection ended, or an address the receiver can no longer reach, as
-/// after a sleep on another network. The receiver would otherwise wait on a
+/// Tells the frontend when `conversion`, while the cast still has it, stops
+/// with an error, or when its stream has to start again: a live channel
+/// whose connection ended, or an address the receiver can no longer reach,
+/// as after a sleep on another network. The receiver would otherwise wait on a
 /// stream that never comes. A file that finished keeps being served, since
 /// the receiver may not have all of it yet.
 fn watch_conversion<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
     receiver: IpAddr,
-    generation: u64,
     conversion: &Conversion,
 ) {
     let app = app.clone();
     let id = receiver_id.to_string();
+    // Its stream's address, which no other conversion has. A new connection
+    // to the receiver keeps the conversion.
+    let url = conversion.url.clone();
     let served = conversion.server.local;
     let mut ended = conversion.ended.clone();
     let check = *lock(&app.state::<CastPlayback>().addresses);
@@ -821,7 +947,7 @@ fn watch_conversion<R: Runtime>(
         let state = app.state::<CastPlayback>();
         let current = match lock(&state.active)
             .as_mut()
-            .filter(|a| a.generation == generation)
+            .filter(|a| a.conversion.as_ref().is_some_and(|c| c.url == url))
         {
             Some(active) => {
                 // A retry probes again rather than repeat a plan that failed.

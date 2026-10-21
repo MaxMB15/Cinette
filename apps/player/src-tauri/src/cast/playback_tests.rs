@@ -338,11 +338,22 @@ async fn casting_to_another_receiver_ends_the_first_cast() {
     let (second, _, mut second_got) = fake_receiver::start().await;
     add_receiver(&app, "a", first);
     add_receiver(&app, "b", second);
+    let events = updates(&app);
     load(&app, "cast:a", &movie, direct("mp4"), None).unwrap();
     next_of(&mut first_got, "LOAD").await;
     load(&app, "cast:b", &movie, direct("mp4"), None).unwrap();
     let connection = next_of(&mut second_got, "LOAD").await.connection;
     next_of(&mut first_got, "STOP").await;
+    // The first cast still says it ended, though another one replaced it.
+    let ended = loop {
+        let event = events
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first cast's end within 10 s");
+        if event["update"]["kind"] == "closed" {
+            break event;
+        }
+    };
+    assert_eq!(ended["receiverId"], "cast:a");
     // Once the first cast's session has wound down, which leaves the
     // second as it is, a second load to the same receiver keeps its
     // connection.
@@ -1596,4 +1607,124 @@ async fn a_newer_load_doesnt_wait_out_a_playlist_that_never_answers() {
     assert_eq!(first.join().unwrap(), Err(json!("superseded")));
     let loaded = next_of(&mut got, "LOAD").await;
     assert_eq!(loaded.body["media"]["contentId"], "http://192.0.2.1/2.mp4");
+}
+
+/// A fake receiver whose first connection a test can quiet, cast to with a
+/// direct item, on an app whose sessions ping each second and end after
+/// 2.5 s of silence, and connect again for `reconnect_for`. Returns the
+/// updates from the start.
+async fn quiet_cast(
+    app: &TestApp,
+    reconnect_for: Duration,
+    ours: fn(std::net::IpAddr) -> bool,
+) -> (
+    mpsc::Receiver<Value>,
+    tokio::sync::mpsc::UnboundedReceiver<fake_receiver::Got>,
+    fake_receiver::FirstConnection,
+) {
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .set_timing(Duration::from_millis(2500), reconnect_for);
+    check_addresses(app, |_| Ok(LOOPBACK), ours);
+    let events = updates(app);
+    let (addr, mut got, first) = fake_receiver::start_controlled(Duration::ZERO).await;
+    add_receiver(app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(app, &movie);
+    load(app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    (events, got, first)
+}
+
+/// Whether a `closed` update comes within `within`, and its reason.
+fn closed_within(events: &mpsc::Receiver<Value>, within: Duration) -> Option<Value> {
+    let until = std::time::Instant::now() + within;
+    while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+        let Ok(event) = events.recv_timeout(left) else {
+            break;
+        };
+        if event["update"]["kind"] == "closed" {
+            return Some(event["update"]["reason"].clone());
+        }
+    }
+    None
+}
+
+static GONE_AFTER_A_MOVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_went_with_the_old_address_connects_again() {
+    let app = TestApp::new();
+    let ours = |ip| !(GONE_AFTER_A_MOVE.load(Ordering::SeqCst) && ip == LOOPBACK);
+    let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), ours).await;
+    // This computer's address changes, and the old connection's route goes
+    // with it: the receiver hears nothing more on it.
+    GONE_AFTER_A_MOVE.store(true, Ordering::SeqCst);
+    first.go_quiet();
+    // After the silence limit, the session connects again by itself.
+    let again = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(message) = got.recv().await {
+            if message.connection == 1 {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(again, Ok(true));
+    GONE_AFTER_A_MOVE.store(false, Ordering::SeqCst);
+    // Well past the silence limit, the cast goes on, on the new connection.
+    assert_eq!(closed_within(&events, Duration::from_secs(4)), None);
+    // The fake answers a new connection with no media, so the volume, which
+    // needs none, shows where controls go.
+    control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
+    assert_eq!(next_of(&mut got, "SET_VOLUME").await.connection, 1);
+}
+
+static GONE_FOR_GOOD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_cant_connect_again_after_a_move_says_the_cast_was_lost() {
+    let app = TestApp::new();
+    let ours = |ip| !(GONE_FOR_GOOD.load(Ordering::SeqCst) && ip == LOOPBACK);
+    let (events, _got, first) = quiet_cast(&app, Duration::from_secs(1), ours).await;
+    GONE_FOR_GOOD.store(true, Ordering::SeqCst);
+    first.go_quiet();
+    // The receiver can't be reached on the new network either.
+    let gone = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    add_receiver(&app, "tv", gone);
+    assert_eq!(
+        closed_within(&events, Duration::from_secs(10)),
+        Some(json!("timeout"))
+    );
+    assert_eq!(
+        control(&app, "cast:tv", json!({ "action": "play" })),
+        Err(json!("notConnected"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_receiver_that_goes_quiet_on_the_same_address_is_lost() {
+    let app = TestApp::new();
+    let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), |_| true).await;
+    first.go_quiet();
+    assert_eq!(
+        closed_within(&events, Duration::from_secs(10)),
+        Some(json!("timeout"))
+    );
+    // It didn't connect again.
+    let opened = tokio::time::timeout(Duration::from_millis(500), async {
+        while let Some(message) = got.recv().await {
+            if message.connection > 0 {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(!opened);
 }

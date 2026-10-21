@@ -6,12 +6,12 @@
 //! each message it gets.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use mvp_core::cast::frame::{CastMessage, FrameReader, Payload};
-use mvp_core::cast::message::{NS_MEDIA, NS_RECEIVER};
+use mvp_core::cast::message::{NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig;
 use serde_json::{json, Value};
@@ -75,6 +75,7 @@ pub async fn start_with(
 /// What a test does to a fake receiver's first connection.
 #[derive(Clone, Default)]
 pub struct FirstConnection {
+    quiet: Arc<AtomicBool>,
     hung_up: Arc<Notify>,
     accepted: Arc<AtomicUsize>,
 }
@@ -84,6 +85,12 @@ impl FirstConnection {
     /// handshakes.
     pub fn accepted(&self) -> usize {
         self.accepted.load(Ordering::SeqCst)
+    }
+
+    /// It answers nothing from now on and keeps its socket open, as a
+    /// connection whose route went away does.
+    pub fn go_quiet(&self) {
+        self.quiet.store(true, Ordering::SeqCst);
     }
 
     /// It closes, as when the receiver ends the connection.
@@ -138,7 +145,7 @@ pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
     answer_unless(stream, got, connection, None).await;
 }
 
-/// [`answer`], hanging up when `control` says.
+/// [`answer`], going quiet or hanging up when `control` says.
 async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     got: mpsc::UnboundedSender<Got>,
@@ -158,6 +165,9 @@ async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
+        if control.quiet.load(Ordering::SeqCst) {
+            continue;
+        }
         reader.push(&buf[..n]);
         while let Some(message) = reader.next_message() {
             let Ok(message) = message else {
@@ -203,6 +213,11 @@ async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
             };
             let kind = body["type"].as_str().unwrap_or_default();
             let answer = match (message.namespace.as_str(), kind) {
+                (NS_HEARTBEAT, "PING") => Some(reply(
+                    &message.destination,
+                    NS_HEARTBEAT,
+                    json!({ "type": "PONG" }),
+                )),
                 (NS_RECEIVER, "GET_STATUS") => Some(receiver_status(launched)),
                 (NS_RECEIVER, "LAUNCH") => {
                     launched = true;
