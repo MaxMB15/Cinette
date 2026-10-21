@@ -82,7 +82,7 @@ pub async fn airplay_load_converted<R: Runtime>(
 #[command]
 pub async fn airplay_end_conversion() -> Result<(), String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
-    converter::end_conversion();
+    converter::end_conversion().await;
     Ok(())
 }
 
