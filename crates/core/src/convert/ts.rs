@@ -36,7 +36,8 @@ const WRAP: i64 = 1 << 33;
 const MAX_FACTOR: f64 = 4.0;
 /// A segment that holds this much is cut at the next video packet, as the
 /// C converter does.
-pub const CUT_BYTES: usize = 32 * 1024 * 1024;
+/// That's 32 MiB.
+pub const CUT_BYTES: usize = 33_554_432;
 
 /// The PMT's stream types for H.264, and for the other video codecs, which
 /// are only cut by, not named.
@@ -157,9 +158,6 @@ impl TsSegmenter {
     pub fn finish(mut self) -> Option<Segment> {
         let start = self.start?;
         let latest = self.latest.unwrap_or(start);
-        if !has_media(&self.current, self.pat.len() + self.pmt.len()) {
-            return None;
-        }
         let duration = ((latest - start + self.step).max(0)) as f64 / CLOCK;
         Some(Segment {
             bytes: std::mem::take(&mut self.current),
@@ -288,7 +286,7 @@ impl TsSegmenter {
 }
 
 fn pid(packet: &[u8; PACKET]) -> u16 {
-    (u16::from(packet[1] & 0x1F) << 8) | u16::from(packet[2])
+    u16::from_be_bytes([packet[1] & 0x1F, packet[2]])
 }
 
 /// Sets a packet's continuity counter to `counter`, and returns the next.
@@ -322,7 +320,7 @@ fn random_access(packet: &[u8; PACKET]) -> bool {
 fn section(payload: &[u8]) -> Option<&[u8]> {
     let pointer = usize::from(*payload.first()?);
     let table = payload.get(1 + pointer..)?;
-    let length = (usize::from(table.get(1)? & 0x0F) << 8) | usize::from(*table.get(2)?);
+    let length = usize::from(u16::from_be_bytes([table.get(1)? & 0x0F, *table.get(2)?]));
     // The CRC's 4 bytes end the section.
     table.get(..3 + length.checked_sub(4)?)
 }
@@ -336,19 +334,19 @@ fn read_pat(payload: &[u8]) -> Option<u16> {
         .0
         .iter()
         .find(|entry| entry[0] != 0 || entry[1] != 0)
-        .map(|entry| (u16::from(entry[2] & 0x1F) << 8) | u16::from(entry[3]))
+        .map(|entry| u16::from_be_bytes([entry[2] & 0x1F, entry[3]]))
 }
 
 /// The PMT's streams, as their stream types and PIDs.
 fn read_pmt(payload: &[u8]) -> Option<Vec<(u8, u16)>> {
     let table = section(payload)?;
-    let info = (usize::from(table.get(10)? & 0x0F) << 8) | usize::from(*table.get(11)?);
+    let info = usize::from(u16::from_be_bytes([table.get(10)? & 0x0F, *table.get(11)?]));
     let mut rest = table.get(12 + info..)?;
     let mut streams = Vec::new();
     while rest.len() >= 5 {
         let kind = rest[0];
-        let pid = (u16::from(rest[1] & 0x1F) << 8) | u16::from(rest[2]);
-        let es_info = (usize::from(rest[3] & 0x0F) << 8) | usize::from(rest[4]);
+        let pid = u16::from_be_bytes([rest[1] & 0x1F, rest[2]]);
+        let es_info = usize::from(u16::from_be_bytes([rest[3] & 0x0F, rest[4]]));
         streams.push((kind, pid));
         rest = rest.get(5 + es_info..).unwrap_or(&[]);
     }
@@ -361,11 +359,12 @@ fn pes_pts(payload: &[u8]) -> Option<i64> {
         return None;
     }
     let b = payload.get(9..14)?;
+    // The parts' bits don't overlap, so adding them joins them.
     let pts = (i64::from(b[0] & 0x0E) << 29)
-        | (i64::from(b[1]) << 22)
-        | (i64::from(b[2] & 0xFE) << 14)
-        | (i64::from(b[3]) << 7)
-        | (i64::from(b[4]) >> 1);
+        + (i64::from(b[1]) << 22)
+        + (i64::from(b[2] & 0xFE) << 14)
+        + (i64::from(b[3]) << 7)
+        + (i64::from(b[4]) >> 1);
     Some(pts)
 }
 
@@ -373,10 +372,4 @@ fn pes_pts(payload: &[u8]) -> Option<i64> {
 fn pes_data(payload: &[u8]) -> Option<&[u8]> {
     let header = usize::from(*payload.get(8)?);
     payload.get(9 + header..)
-}
-
-/// Whether `bytes` holds more than the PAT and PMT copies a segment
-/// starts with, which are `psi` packets.
-fn has_media(bytes: &[u8], psi: usize) -> bool {
-    bytes.len() > psi * PACKET
 }

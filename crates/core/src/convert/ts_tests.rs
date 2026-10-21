@@ -293,9 +293,9 @@ fn nothing_but_the_tables_makes_no_segment() {
 }
 
 #[test]
-fn a_last_segment_of_only_tables_after_a_cut_is_left_out() {
+fn the_last_segment_holds_the_tables_and_the_frame_that_cut() {
     let mut stream = frames(4, 1);
-    // A keyframe at 2 s cuts, and nothing follows it but a PAT.
+    // A keyframe at 2 s cuts, and nothing follows it.
     stream.push(pes(VIDEO_PID, 2 * SECOND, true, &[]));
     let mut segmenter = TsSegmenter::new(2.0);
     let segments = segmenter.push(&bytes(&stream)).unwrap();
@@ -374,6 +374,84 @@ fn a_clock_that_wraps_keeps_counting_up() {
     let durations: Vec<f64> = segments.iter().map(|s| s.duration).collect();
     assert_eq!(durations, [2.0, 2.0]);
     assert_eq!(last.unwrap().duration, 0.5);
+}
+
+#[test]
+fn a_clock_that_wraps_twice_keeps_counting_up() {
+    // Each jump forward is less than half the clock, so each counts as later.
+    let jump = 3_000_000_000;
+    let mut stream = video_stream();
+    for pts in [WRAP - 2 * SECOND, 0, jump, 2 * jump, 0] {
+        stream.push(pes(VIDEO_PID, pts, true, &[]));
+    }
+    let (segments, _) = cut(&stream, 2.0);
+    let durations: Vec<f64> = segments.iter().map(|s| s.duration).collect();
+    let seconds = |ticks: i64| ticks as f64 / CLOCK;
+    assert_eq!(
+        durations,
+        [2.0, seconds(jump), seconds(jump), seconds(WRAP - 2 * jump)]
+    );
+}
+
+#[test]
+fn a_clock_half_its_range_back_is_earlier_not_wrapped() {
+    let mut stream = video_stream();
+    stream.push(pes(VIDEO_PID, WRAP / 2, true, &[]));
+    stream.push(pes(VIDEO_PID, 0, true, &[]));
+    let (segments, _) = cut(&stream, 2.0);
+    assert!(segments.is_empty());
+}
+
+#[test]
+fn the_last_segment_ends_one_frame_after_its_last_timestamp() {
+    // The last two frames share a timestamp, so the frame length is the
+    // one before them.
+    let mut stream = video_stream();
+    for pts in [0, SECOND / 2, SECOND, SECOND] {
+        stream.push(pes(VIDEO_PID, pts, pts == 0, &[]));
+    }
+    let (segments, last) = cut(&stream, 2.0);
+    assert!(segments.is_empty());
+    assert_eq!(last.unwrap().duration, 1.5);
+}
+
+#[test]
+fn a_pat_that_carries_on_into_a_second_packet_is_copied_whole() {
+    let mut stream = frames(8, 1);
+    stream.insert(1, header(PAT_PID, false, 1, false));
+    let (segments, last) = cut(&stream, 2.0);
+    assert!(!segments.is_empty());
+    let pids: Vec<u16> = packets(&last.unwrap().bytes)
+        .iter()
+        .take(3)
+        .map(pid)
+        .collect();
+    assert_eq!(pids, [PAT_PID, PAT_PID, PMT_PID]);
+}
+
+#[test]
+fn a_packet_with_only_an_adaptation_field_has_no_payload() {
+    let mut packet = header(VIDEO_PID, true, 0, true);
+    packet[3] = 0x20;
+    assert_eq!(payload(&packet), None);
+}
+
+#[test]
+fn an_adaptation_field_without_the_flag_isnt_a_random_access_point() {
+    let mut packet = pes(VIDEO_PID, 0, true, &[]);
+    assert!(random_access(&packet));
+    packet[5] = 0x00;
+    assert!(!random_access(&packet));
+    packet[4] = 0;
+    packet[5] = 0x40;
+    assert!(!random_access(&packet));
+}
+
+#[test]
+fn reads_the_data_after_the_pes_header() {
+    let packet = pes(VIDEO_PID, 0, false, &[1, 2, 3]);
+    let data = payload(&packet).and_then(pes_data).unwrap();
+    assert_eq!(&data[..3], [1, 2, 3]);
 }
 
 #[test]
