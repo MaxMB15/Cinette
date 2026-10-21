@@ -115,7 +115,7 @@ async fn a_stop_drops_the_conversion_and_says_nothing() {
         .load(true, async { Ok(running) }, |_| Ok(()))
         .await
         .unwrap();
-    conversions.stop();
+    conversions.stop().await;
     assert!(handle.dropped());
     assert!(!conversions.has_current());
     settle().await;
@@ -147,9 +147,16 @@ async fn a_stop_while_it_starts_drops_what_it_started() {
         })
     };
     settle().await;
-    conversions.stop();
+    // The stop waits for the load, which gives up once it has started.
+    let stopping = {
+        let conversions = conversions.clone();
+        tokio::spawn(async move { conversions.stop().await })
+    };
+    settle().await;
+    assert!(!stopping.is_finished(), "the stop didn't wait for the load");
     go.send(()).unwrap();
     assert_eq!(loading.await.unwrap(), Err(SUPERSEDED.to_string()));
+    stopping.await.unwrap();
     assert!(handle.dropped());
     assert!(!conversions.has_current());
     settle().await;
@@ -202,9 +209,50 @@ async fn a_failed_start_that_a_stop_overtook_is_superseded() {
         })
     };
     settle().await;
-    conversions.stop();
+    let stopping = {
+        let conversions = conversions.clone();
+        tokio::spawn(async move { conversions.stop().await })
+    };
     go.send(()).unwrap();
     assert_eq!(loading.await.unwrap(), Err(SUPERSEDED.to_string()));
+    stopping.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_waits_for_the_source_to_close() {
+    let (conversions, _) = conversions();
+    // This one takes a while to close after it's dropped.
+    let (running, handle) = fake(false);
+    conversions
+        .load(false, async { Ok(running) }, |_| Ok(()))
+        .await
+        .unwrap();
+    let stopping = {
+        let conversions = conversions.clone();
+        tokio::spawn(async move { conversions.stop().await })
+    };
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(handle.dropped());
+    assert!(
+        !stopping.is_finished(),
+        "it stopped before the source closed"
+    );
+    handle.end.send(Some(Err(HlsError::Failed))).unwrap();
+    stopping.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_source_that_never_closes_holds_a_stop_only_so_long() {
+    let (conversions, _) = conversions();
+    let (running, _handle) = fake(false);
+    conversions
+        .load(false, async { Ok(running) }, |_| Ok(()))
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    conversions.stop().await;
+    assert!(started.elapsed() >= CLOSE_LIMIT);
+    assert!(started.elapsed() < CLOSE_LIMIT + Duration::from_secs(1));
 }
 
 #[tokio::test]
