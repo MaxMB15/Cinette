@@ -124,7 +124,16 @@ extern "C" fn on_report(json: *const c_char) {
     }
 }
 
-pub fn load(url: &str, title: &str, start: f64, live: bool, converted: bool) -> Result<(), String> {
+/// Swift's reports don't carry `_load` yet, so a report about the old item
+/// that Swift read just before a quick reload still reaches the new one.
+pub fn load(
+    url: &str,
+    title: &str,
+    start: f64,
+    live: bool,
+    converted: bool,
+    _load: u64,
+) -> Result<(), String> {
     let url = CString::new(url).map_err(|_| "The stream address isn't valid".to_string())?;
     // A title with a NUL in it just goes without one.
     let title = CString::new(title).unwrap_or_default();

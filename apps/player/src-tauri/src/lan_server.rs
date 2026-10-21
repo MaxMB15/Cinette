@@ -24,7 +24,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use mvp_core::convert::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
+use mvp_core::convert::serve::{
+    head_end, not_found_head, ok_head, read_request, token, Request, MAX_HEAD,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
@@ -379,7 +381,7 @@ impl Files {
         self.write().remove(name);
     }
 
-    fn get(&self, name: &str) -> Option<File> {
+    pub(crate) fn get(&self, name: &str) -> Option<File> {
         self.0
             .read()
             .unwrap_or_else(|p| p.into_inner())
@@ -659,16 +661,20 @@ async fn answer(
     if let Some(feed) = feed {
         return send_live(socket, &request, &feed).await;
     }
-    if let Some(file) = files.get(name) {
-        write(
-            &mut socket,
-            ok_head(file.content_type, Some(file.body.len())).as_bytes(),
-            WRITE_LIMIT,
-        )
-        .await?;
-        if !request.head_only {
-            write(&mut socket, &file.body, WRITE_LIMIT).await?;
-        }
+    // A path outside the token got nothing above. One under it that isn't
+    // there, such as a segment the window dropped, is a 404, so the
+    // receiver moves on.
+    let Some(file) = files.get(name) else {
+        return write(&mut socket, not_found_head().as_bytes(), WRITE_LIMIT).await;
+    };
+    write(
+        &mut socket,
+        ok_head(file.content_type, Some(file.body.len())).as_bytes(),
+        WRITE_LIMIT,
+    )
+    .await?;
+    if !request.head_only {
+        write(&mut socket, &file.body, WRITE_LIMIT).await?;
     }
     Ok(())
 }

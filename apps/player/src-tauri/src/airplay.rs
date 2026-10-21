@@ -11,17 +11,23 @@ use tauri::{command, AppHandle, Runtime, State};
 
 use crate::streams::StreamsState;
 
-#[cfg(any(target_os = "ios", all(test, target_os = "linux")))]
+#[cfg(any(target_os = "ios", target_os = "macos", all(test, target_os = "linux")))]
 mod conversion;
 #[cfg(target_os = "ios")]
 mod ios;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "ios")]
+use ios as converter;
+#[cfg(target_os = "macos")]
+use macos as converter;
 #[cfg(test)]
 mod tests;
 
 /// The audio AirPlay receivers play as it is, by FFmpeg's names, so the
 /// converter copies a track in one of them. It matches the frontend's
 /// `airplayTvProfile`.
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 pub const AIRPLAY_AUDIO: [&str; 2] = ["aac", "mp3"];
 
 /// Plays `channel` over AirPlay from the URL at `source` in the list that
@@ -38,7 +44,7 @@ pub async fn airplay_load<R: Runtime>(
     start_at: Option<f64>,
 ) -> Result<(), String> {
     let url = streams.url(&channel.id, generation, source)?;
-    // mutants: skip BinaryOperator: Only iOS reads live, and the plugin fails first elsewhere.
+    // mutants: skip BinaryOperator: Only iOS and macOS read live, and the plugin fails first elsewhere.
     let live = channel.content_type == "live";
     tracing::info!("[AirPlay] load source={source} live={live}");
     tauri_plugin_mpv::airplay::load(&app, &url, &channel.name, start_at, live, None)
@@ -46,7 +52,7 @@ pub async fn airplay_load<R: Runtime>(
 
 /// Converts `channel` from the URL at `source` in the list named
 /// `generation`, as `airplay_load` finds it, on this device, serves it
-/// on the Wi-Fi network, and plays that over AirPlay from `start_at`.
+/// on the local network, and plays that over AirPlay from `start_at`.
 /// Resolves once the receiver can start, or rejects with why not: the
 /// stream's `"refused"`, as `get_stream_formats` does, or a message.
 #[command]
@@ -59,11 +65,11 @@ pub async fn airplay_load_converted<R: Runtime>(
     start_at: Option<f64>,
 ) -> Result<(), String> {
     let url = streams.url(&channel.id, generation, source)?;
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
-        ios::load_converted(&app, &url, &channel, start_at).await
+        converter::load_converted(&app, &url, &channel, start_at).await
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
     {
         let _ = (app, url, start_at);
         Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string())
@@ -72,11 +78,11 @@ pub async fn airplay_load_converted<R: Runtime>(
 
 /// Stops this device's conversion, if one runs. AirPlay itself stops with
 /// the plugin's `airplay_stop`.
-// mutants: skip FnValue: Only iOS converts, so elsewhere there's nothing to stop.
+// mutants: skip FnValue: Only iOS and macOS convert, so elsewhere there's nothing to stop.
 #[command]
 pub async fn airplay_end_conversion() -> Result<(), String> {
-    #[cfg(target_os = "ios")]
-    ios::end_conversion();
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    converter::end_conversion().await;
     Ok(())
 }
 
@@ -89,19 +95,61 @@ pub struct ConverterSupport {
 }
 
 /// What this device can convert for AirPlay: a remux and AAC audio on
-/// iOS, and nothing elsewhere yet. No video transcode yet.
+/// iOS, with no video transcode yet, and what the bundled ffmpeg can on a
+/// Mac. Nothing elsewhere.
 #[command]
-pub async fn airplay_converter_support() -> Result<ConverterSupport, String> {
-    Ok(ConverterSupport {
-        convert: cfg!(target_os = "ios"),
-        hardware_encoder: false,
-    })
+pub async fn airplay_converter_support<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<ConverterSupport, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let support = crate::convert::support::support(&app).await;
+        Ok(ConverterSupport {
+            convert: support.convert,
+            hardware_encoder: support.hardware_encoder,
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(ConverterSupport {
+            convert: cfg!(target_os = "ios"),
+            hardware_encoder: false,
+        })
+    }
 }
 
 /// Called once from setup.
-// mutants: skip FnValue: Only iOS paces a conversion by the receiver's state.
+// mutants: skip FnValue: Only iOS and macOS pace a conversion by the receiver's state.
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
-    #[cfg(target_os = "ios")]
-    ios::install(app);
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    converter::install(app);
     let _ = app;
+}
+
+/// Keeps the device's conversions in `cell`, runs their pacer on the
+/// receiver's state, and has a conversion that ends on its own show as
+/// the item's error.
+// mutants: skip FnValue: It only builds for iOS and macOS, and mutation runs build on Linux.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn install_conversions<R: Runtime, C: conversion::Running>(
+    app: &AppHandle<R>,
+    cell: &std::sync::OnceLock<std::sync::Arc<conversion::Conversions<C>>>,
+) {
+    use tauri::Listener;
+    let failing = app.clone();
+    let conversions = conversion::Conversions::new(move |code| {
+        tauri_plugin_mpv::airplay::fail_converted(&failing, code);
+    });
+    if cell.set(conversions.clone()).is_err() {
+        return;
+    }
+    app.listen_any(tauri_plugin_mpv::airplay::EVENT_STATE, move |event| {
+        let status = serde_json::from_str::<serde_json::Value>(event.payload())
+            .ok()
+            .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_string));
+        if let Some(status) = status {
+            conversions.set_status(&status);
+        }
+    });
 }

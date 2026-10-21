@@ -201,8 +201,25 @@ describe("useAirPlay", () => {
 		act(() => events.emit("airplay://state", native));
 		expect(result.current.state).toMatchObject({ status: "playing", position: 601 });
 		expect(result.current.state?.positionAt).toEqual(expect.any(Number));
+		expect(result.current.notPicked).toBe(false);
 		// The picker's own listeners are gone.
 		expect(events.count("airplay://picker-closed")).toBe(0);
+		// On a Mac, no receiver took it, which the player hears.
+		const none = { ...native, status: "error" as const };
+		act(() =>
+			events.emit("airplay://state", {
+				...none,
+				error: { code: "openFailed", notPicked: true },
+			})
+		);
+		expect(result.current.notPicked).toBe(true);
+		expect(result.current.state).toMatchObject({ status: "opening", error: null });
+	});
+
+	it("says nothing was picked only while AirPlay plays", async () => {
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		expect(result.current.notPicked).toBe(false);
 	});
 
 	it("skips the picker when the audio route is already AirPlay", async () => {
@@ -585,6 +602,19 @@ describe("useAirPlay's switching", () => {
 		tauri.airplayChoose.mockRejectedValue(new Error("no picker"));
 		await act(() => result.current.returnHere(anchor));
 		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+	});
+
+	it("only stops AirPlay to come back on a Mac, whose sound never left", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true, true));
+		await flush();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		await act(() => result.current.returnHere(anchor));
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+		expect(result.current.destination).toBeNull();
 	});
 
 	it("doesn't open the picker to come back when the sound is already here", async () => {

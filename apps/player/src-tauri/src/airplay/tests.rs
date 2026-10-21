@@ -84,10 +84,18 @@ async fn hands_the_listed_url_to_the_plugin() {
     let channel = add_m3u_channel(&app);
     let generation = list(&app, &channel).await;
     // The URL was found, and the plugin says AirPlay isn't on this computer.
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(
         load(&app, channel, generation, 0).await,
         Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string())
     );
+    // A Mac has AirPlay, and the plugin starts tracking the item.
+    #[cfg(target_os = "macos")]
+    {
+        app.handle()
+            .manage(tauri_plugin_mpv::airplay::AirPlay::default());
+        assert_eq!(load(&app, channel, generation, 0).await, Ok(()));
+    }
 }
 
 #[tokio::test]
@@ -115,7 +123,7 @@ async fn refuses_a_replaced_list() {
 }
 
 #[tokio::test]
-async fn converting_is_only_on_ios() {
+async fn converting_is_only_on_ios_and_macos() {
     let app = TestApp::new();
     let channel = add_m3u_channel(&app);
     let generation = list(&app, &channel).await;
@@ -129,10 +137,13 @@ async fn converting_is_only_on_ios() {
         None,
     )
     .await;
-    assert_eq!(
-        converted,
-        Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string())
-    );
+    #[cfg(not(target_os = "macos"))]
+    let unconverted = Err(tauri_plugin_mpv::airplay::UNAVAILABLE.to_string());
+    // A Mac converts once setup has made its conversions, which this test
+    // only does at its end.
+    #[cfg(target_os = "macos")]
+    let unconverted = Err(crate::convert::hls::HlsError::Failed.for_player());
+    assert_eq!(converted, unconverted);
     // The format is checked first, as for a direct load.
     let gone = airplay_load_converted(
         handle.clone(),
@@ -145,12 +156,23 @@ async fn converting_is_only_on_ios() {
     .await;
     assert_eq!(gone, Err(STALE.to_string()));
     assert_eq!(airplay_end_conversion().await, Ok(()));
+    #[cfg(not(target_os = "macos"))]
+    let support = ConverterSupport {
+        convert: false,
+        hardware_encoder: false,
+    };
+    // A Mac's is what the bundled ffmpeg can do.
+    #[cfg(target_os = "macos")]
+    let support = {
+        let support = crate::convert::support::support(&handle).await;
+        ConverterSupport {
+            convert: support.convert,
+            hardware_encoder: support.hardware_encoder,
+        }
+    };
     assert_eq!(
-        airplay_converter_support().await,
-        Ok(ConverterSupport {
-            convert: false,
-            hardware_encoder: false
-        })
+        airplay_converter_support(handle.clone()).await,
+        Ok(support)
     );
     install(&handle);
 }

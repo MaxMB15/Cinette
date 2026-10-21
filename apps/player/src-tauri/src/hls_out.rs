@@ -21,13 +21,15 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use hls_remux::{Audio, Canceller, RemuxError, Sink, Source, Video};
-use mvp_core::convert::hls::{self, MediaPlaylist, Pacer, Window};
+use mvp_core::convert::hls::{
+    self, bandwidth, MediaPlaylist, Pacer, AVC_FALLBACK, SEGMENT, TARGET, WINDOW,
+};
 use mvp_core::convert::{pick_audio, AudioPlan};
 use mvp_core::streams::probe::AudioTrack;
 use tokio::sync::{oneshot, watch};
 
+pub use crate::convert::hls::{Ended, HlsError};
 use crate::lan_server::{Files, LanServer, Peers};
-use crate::streams::REFUSED;
 
 // They write their media with `hls_remux::test_media`, which only the
 // Linux tests have.
@@ -35,66 +37,12 @@ use crate::streams::REFUSED;
 #[cfg(target_os = "linux")]
 mod tests;
 
-/// How long each segment is at least. Segments end at keyframes, so they
-/// run longer when the source's keyframes are further apart.
-const SEGMENT: f64 = 2.0;
-/// The playlists' target duration. The converter cuts a segment at 4×
-/// [`SEGMENT`] without a keyframe, and closes timestamp gaps over 2 s, so
-/// none runs longer.
-const TARGET: u32 = 10;
-/// What stays on the server: the segments around the playback position.
-/// The pacer keeps the converter 20 s ahead, so 50 s leaves 30 s behind
-/// the receiver, and the bytes keep a high bitrate out of the memory.
-const WINDOW: Window = Window {
-    segments: 15,
-    seconds: 50.0,
-    bytes: 200 * 1024 * 1024,
-};
 /// The most one segment may hold before the conversion fails. The C cuts
 /// at 32 MB, so only a broken stream gets here.
 const MAX_SEGMENT_BYTES: usize = 48 * 1024 * 1024;
 /// How long the converter gets to open the source and make the first
 /// segments. A cancel stops it, even while it opens.
 const START_LIMIT: Duration = Duration::from_secs(30);
-/// The `CODECS` name for H.264 whose profile can't be read, such as MPEG-TS
-/// that carries its SPS in the stream: High profile, level 4.0. A master
-/// playlist naming only the audio would tell the receiver there's no video.
-const AVC_FALLBACK: &str = "avc1.640028";
-/// The least bandwidth the master playlist declares.
-const MIN_BANDWIDTH: u64 = 500_000;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum HlsError {
-    #[error("the provider refused the stream")]
-    Refused,
-    #[error("couldn't reach the stream")]
-    Unreachable,
-    /// The video isn't H.264, and this device can't transcode it.
-    #[error("the receiver can't play this video, and this device can't convert it")]
-    VideoCodec,
-    #[error("this device isn't on a network the receiver can reach")]
-    NoNetwork,
-    #[error("the converter failed")]
-    Failed,
-}
-
-impl HlsError {
-    /// What the player shows when a conversion doesn't start. A refused
-    /// login is [`REFUSED`], which the player words itself, as it does for
-    /// `get_stream_formats`.
-    pub fn for_player(self) -> String {
-        match self {
-            HlsError::Refused => REFUSED,
-            HlsError::Unreachable => "Couldn't reach the stream to convert it.",
-            HlsError::VideoCodec => {
-                "The TV can't play this video, and this device can't convert it."
-            }
-            HlsError::NoNetwork => "Connect to Wi-Fi to send this to the TV.",
-            HlsError::Failed => "Couldn't convert the stream on this device.",
-        }
-        .to_string()
-    }
-}
 
 impl From<RemuxError> for HlsError {
     fn from(e: RemuxError) -> Self {
@@ -141,9 +89,6 @@ impl Control {
         self.pacer.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
-
-/// How a conversion ended.
-pub type Ended = Result<(), HlsError>;
 
 /// A running conversion. Dropping it stops the converter and the server.
 pub struct HlsConversion {
@@ -472,14 +417,6 @@ impl Sink for HlsSink {
         }
         self.control.pace(duration)
     }
-}
-
-/// The bandwidth the master playlist declares, from the first segment's
-/// size and length: a fifth more than it took, and at least
-/// [`MIN_BANDWIDTH`].
-fn bandwidth(bytes: usize, duration: f64) -> u64 {
-    let bits = bytes as f64 * 8.0 / duration.max(0.1);
-    ((bits * 1.2) as u64).max(MIN_BANDWIDTH)
 }
 
 impl Control {
