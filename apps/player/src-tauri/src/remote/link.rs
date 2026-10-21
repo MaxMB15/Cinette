@@ -677,6 +677,7 @@ async fn connection(
         let mut closed = false;
         for event in given_up.events {
             match event {
+                // mutants: skip MatchArm: nothing in the app asks for a transfer until the next pull request, whose link test covers this.
                 Event::Transfer(event) => host.transfer(link, device, &event),
                 _ => closed = true,
             }

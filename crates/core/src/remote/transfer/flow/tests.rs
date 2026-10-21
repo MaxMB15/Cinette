@@ -179,6 +179,32 @@ fn many_providers_are_split_to_fit_a_frame() {
     assert_eq!(provider_parts(vec![]), vec![Vec::<ProviderSettings>::new()]);
 }
 
+/// Provider settings whose JSON is `len` bytes, padded in the URL.
+fn settings_of_len(name: &str, len: usize) -> ProviderSettings {
+    let mut p = settings(name);
+    let base = serde_json::to_vec(&p).unwrap().len();
+    p.url.push_str(&"a".repeat(len - base));
+    assert_eq!(serde_json::to_vec(&p).unwrap().len(), len);
+    p
+}
+
+#[test]
+fn providers_that_fill_a_part_exactly_stay_in_one() {
+    // Each takes its JSON and a comma.
+    let first = 20_000;
+    let exact = chunks::CHUNK_BYTES - (first + 1) - 1;
+    let parts = provider_parts(vec![
+        settings_of_len("A", first),
+        settings_of_len("B", exact),
+    ]);
+    assert_eq!(parts.len(), 1);
+    let parts = provider_parts(vec![
+        settings_of_len("A", first),
+        settings_of_len("B", exact + 1),
+    ]);
+    assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1]);
+}
+
 fn export(items: usize) -> Export {
     Export {
         items: (0..items)
@@ -606,6 +632,16 @@ fn an_import_sends_once_started_and_finishes_with_the_result() {
     assert_eq!(flow.deadline(), Some(later + STEP_TIMEOUT));
     let chunks = sent(&steps).len();
     assert_eq!(chunks, WINDOW);
+    // The first chunk carries this device's clock as it goes.
+    let Message::TransferChunk { chunk, .. } = sent(&steps)[0] else {
+        panic!("not a chunk");
+    };
+    let clock = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let sent_at = chunk.sent_at.expect("the first chunk has a clock");
+    assert!((clock - sent_at).abs() <= 5, "{sent_at} vs {clock}");
     let TargetFlow::Sending(sender) = &flow else {
         panic!("not sending");
     };
@@ -619,7 +655,7 @@ fn an_import_sends_once_started_and_finishes_with_the_result() {
             transfer: id.clone(),
             seq,
         };
-        flow = flow_of(flow, ack, &mut steps).unwrap();
+        flow = flow.receive(ack, 10, later, &mut steps).unwrap().unwrap();
         assert_eq!(
             progress_of(&steps),
             [&Progress::Sending {
@@ -629,6 +665,8 @@ fn an_import_sends_once_started_and_finishes_with_the_result() {
         );
     }
     assert!(matches!(flow, TargetFlow::Finishing { .. }));
+    // The controller has all the time it needs to write.
+    assert_eq!(flow.deadline(), Some(later + WRITE_TIMEOUT));
     steps.clear();
     let done = Message::TransferDone {
         transfer: id,
@@ -952,12 +990,14 @@ fn a_refusal_ends_the_controllers_request() {
 #[test]
 fn a_granted_send_asks_for_the_export() {
     let salt = Salt([3; 16]);
+    let now = Instant::now();
     let (next, out) = step(
         controller_asking(send_history()),
         granted(Some(salt), None),
-        Instant::now(),
+        now,
     );
     assert!(matches!(next, Some(ControllerFlow::Exporting { .. })));
+    assert_eq!(next.unwrap().deadline(), Some(now + GRANT_TIMEOUT));
     assert_eq!(
         out.events,
         [ControllerEvent::ExportNeeded {
@@ -1301,6 +1341,7 @@ fn granted_providers_go_in_parts_and_their_results_come_back() {
         out.events,
         [ControllerEvent::ProvidersGranted { grant: "t".into() }]
     );
+    assert_eq!(flow.as_ref().unwrap().deadline(), Some(now + GRANT_TIMEOUT));
     let mut out = ControllerOut::default();
     let flow = flow
         .unwrap()
