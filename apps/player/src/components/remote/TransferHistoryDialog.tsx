@@ -93,8 +93,8 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 	}, [waiting]);
 
 	// Set once the dialog is closed, so an ask still being set up then
-	// doesn't go out after all.
-	const closed = useRef(false);
+	// doesn't go out after all. The effect sets it on mount.
+	const closed = useRef<boolean | undefined>(undefined);
 	useEffect(
 		() => {
 			closed.current = false;
