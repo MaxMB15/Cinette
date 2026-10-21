@@ -397,11 +397,18 @@ pub fn run() {
             crate::downloads::manager::restore_settings(app.handle());
 
             // Listens for other Cinette devices and advertises this one.
+            // The key goes in `app_dir` (on Android, the `root` domain that
+            // res/xml/backup_rules.xml and data_extraction_rules.xml leave
+            // its file out of), so moving it needs those rules to follow.
             #[cfg(remote)]
-            crate::remote::start(app.handle(), app_dir.clone());
+            let remote_started = crate::remote::start(app.handle(), app_dir.clone());
             // DNS-SD needs it over Wi-Fi. The app starts in the foreground.
             #[cfg(target_os = "android")]
-            crate::android_device::hold_multicast(true);
+            if remote_started {
+                crate::android_device::hold_multicast(true);
+            }
+            #[cfg(all(remote, not(target_os = "android")))]
+            let _ = remote_started;
 
             #[cfg(desktop)]
             {
@@ -465,8 +472,12 @@ pub fn run() {
             #[cfg(target_os = "android")]
             if let tauri::RunEvent::WindowEvent { event, .. } = &event {
                 match event {
-                    tauri::WindowEvent::Suspended => crate::remote::set_foreground(app, false),
-                    tauri::WindowEvent::Resumed => crate::remote::set_foreground(app, true),
+                    tauri::WindowEvent::Suspended => {
+                        crate::remote::set_foreground(app, crate::remote::Lifecycle::Background)
+                    }
+                    tauri::WindowEvent::Resumed => {
+                        crate::remote::set_foreground(app, crate::remote::Lifecycle::Foreground)
+                    }
                     _ => {}
                 }
             }

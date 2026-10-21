@@ -14,7 +14,9 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// The key's file name in the app data folder.
+/// The key's file name in the app data folder. Android's backup rules
+/// (res/xml/backup_rules.xml and data_extraction_rules.xml) leave out this
+/// name at the top of the app's data folder, so they change with it.
 pub const KEY_FILE: &str = "remote-device.key";
 
 fn key_path(dir: &Path) -> PathBuf {

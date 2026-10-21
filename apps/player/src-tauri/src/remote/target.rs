@@ -91,8 +91,8 @@ enum Input {
     CatalogDone(Epoch, ConnId, u64, CatalogPage),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-    Background,
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    Background(oneshot::Sender<()>),
     Foreground(TcpListener),
     Shutdown(oneshot::Sender<()>),
 }
@@ -150,17 +150,20 @@ impl TargetHandle {
 
     /// Stops advertising and closes the listener, for an app that went to
     /// the background. Open connections and sessions carry on for as long as
-    /// the system lets the app run.
+    /// the system lets the app run. Returns once the listener is closed, so
+    /// its port is free to bind again.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-    pub fn background(&self) {
-        self.send(Input::Background);
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub async fn background(&self) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Input::Background(tx));
+        let _ = rx.await;
     }
 
     /// Listens on `listener` and advertises again, for an app back in the
     /// foreground.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub fn foreground(&self, listener: TcpListener) -> std::io::Result<()> {
         self.port.store(listener.local_addr()?.port(), Ordering::Relaxed);
         self.send(Input::Foreground(listener));
@@ -484,9 +487,18 @@ impl Task {
                 let _ = reply.send(self.target.sessions());
                 Vec::new()
             }
-            Input::Background => {
-                self.stop_accepting();
+            Input::Background(done) => {
+                let accept = self.accept.take();
                 self.host.advertise(None);
+                // The listener closes when its task has stopped, which an
+                // abort only asks for.
+                tokio::spawn(async move {
+                    if let Some(accept) = accept {
+                        accept.abort();
+                        let _ = accept.await;
+                    }
+                    let _ = done.send(());
+                });
                 Vec::new()
             }
             Input::Foreground(listener) => {

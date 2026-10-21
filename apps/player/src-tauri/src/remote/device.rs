@@ -9,6 +9,46 @@ use mvp_core::remote::message::DeviceType;
 #[cfg(any(target_os = "android", test))]
 const TABLET_MIN_DP: i32 = 600;
 
+/// The system features that make an Android device a TV. Android TV and
+/// Google TV have the first, Fire TV has the last, and older TVs only the
+/// second.
+#[cfg(any(target_os = "android", test))]
+pub(crate) const TV_FEATURES: [&str; 3] = [
+    "android.software.leanback",
+    "android.hardware.type.television",
+    FIRE_TV_FEATURE,
+];
+#[cfg(any(target_os = "android", test))]
+const FIRE_TV_FEATURE: &str = "amazon.hardware.fire_tv";
+
+/// What Android says about the device.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct AndroidFacts {
+    pub tv: bool,
+    pub fire_tv: bool,
+    pub smallest_width_dp: i32,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl AndroidFacts {
+    /// The facts from which of [`TV_FEATURES`] the device `has`, and its
+    /// smallest screen width.
+    pub(crate) fn new(has: impl Fn(&str) -> bool, smallest_width_dp: i32) -> Self {
+        Self {
+            tv: TV_FEATURES.iter().any(|f| has(f)),
+            fire_tv: has(FIRE_TV_FEATURE),
+            smallest_width_dp,
+        }
+    }
+
+    /// The device's type: a Fire TV, another TV, or else a tablet or a
+    /// phone by its smallest screen width.
+    pub(crate) fn device_type(self) -> DeviceType {
+        android_type(self.fire_tv, self.tv, self.smallest_width_dp)
+    }
+}
+
 /// This device's type.
 pub fn device_type() -> DeviceType {
     #[cfg(target_os = "macos")]
@@ -19,10 +59,9 @@ pub fn device_type() -> DeviceType {
     return crate::android_device::device_type();
 }
 
-/// An Android device's type: a Fire TV, another TV, or else a tablet or a
-/// phone by its smallest screen width.
+/// See [`AndroidFacts::device_type`].
 #[cfg(any(target_os = "android", test))]
-pub(crate) fn android_type(fire_tv: bool, tv: bool, smallest_width_dp: i32) -> DeviceType {
+fn android_type(fire_tv: bool, tv: bool, smallest_width_dp: i32) -> DeviceType {
     if fire_tv {
         DeviceType::FireTv
     } else if tv {
@@ -48,6 +87,43 @@ mod tests {
     fn other_tvs_are_android_tvs_whatever_their_width() {
         assert_eq!(android_type(false, true, 540), DeviceType::AndroidTv);
         assert_eq!(android_type(false, true, 960), DeviceType::AndroidTv);
+    }
+
+    #[test]
+    fn the_fire_tv_feature_alone_makes_a_fire_tv_and_a_tv() {
+        let facts = AndroidFacts::new(|f| f == "amazon.hardware.fire_tv", 540);
+        assert!(facts.tv && facts.fire_tv);
+        assert_eq!(facts.device_type(), DeviceType::FireTv);
+    }
+
+    #[test]
+    fn leanback_or_television_makes_only_a_tv() {
+        for feature in [
+            "android.software.leanback",
+            "android.hardware.type.television",
+        ] {
+            let facts = AndroidFacts::new(|f| f == feature, 540);
+            assert_eq!(
+                facts,
+                AndroidFacts {
+                    tv: true,
+                    fire_tv: false,
+                    smallest_width_dp: 540
+                }
+            );
+            assert_eq!(facts.device_type(), DeviceType::AndroidTv);
+        }
+    }
+
+    #[test]
+    fn no_tv_feature_leaves_a_phone_or_tablet_by_width() {
+        let facts = AndroidFacts::new(|_| false, 600);
+        assert!(!facts.tv && !facts.fire_tv);
+        assert_eq!(facts.device_type(), DeviceType::AndroidTablet);
+        assert_eq!(
+            AndroidFacts::new(|f| f == "android.hardware.touchscreen", 411).device_type(),
+            DeviceType::AndroidPhone
+        );
     }
 
     #[test]

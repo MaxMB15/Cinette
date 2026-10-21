@@ -49,12 +49,12 @@ pub struct RemoteService {
     left_through: Mutex<u64>,
     /// Whether the app is in the foreground, as the system last said.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     wants_foreground: AtomicBool,
     /// Whether the target listens and advertises, as it was last told. Held
     /// while the target is told, so changes reach it one at a time.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     in_foreground: tokio::sync::Mutex<bool>,
 }
 
@@ -208,7 +208,7 @@ impl RemoteService {
     /// Notes that the app went to the background or came back. Call
     /// [`Self::follow_foreground`] next.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub fn set_foreground(&self, foreground: bool) {
         self.wants_foreground.store(foreground, Ordering::SeqCst);
     }
@@ -218,8 +218,22 @@ impl RemoteService {
     /// the foreground it listens again and advertises. Open sessions carry
     /// on either way. However the calls overlap, the last word wins.
     // Only the mobile apps go to the background.
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(not(mobile), allow(dead_code))]
     pub async fn follow_foreground(&self) {
+        self.follow_foreground_with(target::bind_default, &BIND_RETRIES)
+            .await;
+    }
+
+    /// [`Self::follow_foreground`], listening on what `bind` gives. When it
+    /// fails, it tries again after each of `retries` for as long as the app
+    /// stays in the foreground.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    async fn follow_foreground_with<F, Fut>(&self, bind: F, retries: &[Duration])
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = std::io::Result<tokio::net::TcpListener>>,
+    {
         let mut in_foreground = self.in_foreground.lock().await;
         let wanted = self.wants_foreground.load(Ordering::SeqCst);
         if wanted == *in_foreground {
@@ -227,23 +241,34 @@ impl RemoteService {
         }
         if !wanted {
             tracing::info!("[remote] in the background; not taking new connections");
-            self.handle.background();
+            self.handle.background().await;
             *in_foreground = false;
             return;
         }
-        let listening = match target::bind_default().await {
-            Ok(listener) => self.handle.foreground(listener),
-            Err(e) => Err(e),
-        };
-        match listening {
-            Ok(()) => {
-                tracing::info!(
-                    "[remote] in the foreground; listening on port {}",
-                    self.handle.port()
-                );
-                *in_foreground = true;
+        let mut waits = retries.iter();
+        loop {
+            let listening = match bind().await {
+                Ok(listener) => self.handle.foreground(listener),
+                Err(e) => Err(e),
+            };
+            match listening {
+                Ok(()) => {
+                    tracing::info!(
+                        "[remote] in the foreground; listening on port {}",
+                        self.handle.port()
+                    );
+                    *in_foreground = true;
+                    return;
+                }
+                Err(e) => tracing::warn!("[remote] couldn't listen again: {e}"),
             }
-            Err(e) => tracing::warn!("[remote] couldn't listen again: {e}"),
+            let Some(wait) = waits.next() else {
+                return;
+            };
+            tokio::time::sleep(*wait).await;
+            if !self.wants_foreground.load(Ordering::SeqCst) {
+                return;
+            }
         }
     }
 
@@ -342,6 +367,17 @@ const FETCH_BURST: u32 = 4;
 /// How often a controller may load one more series from the provider, so
 /// browsing can't make the provider turn this device's account away.
 const FETCH_EVERY: Duration = Duration::from_secs(1);
+/// The waits before each new try at listening when the app comes back to
+/// the foreground and the port can't be bound, such as when the app is out
+/// of file descriptors for a moment.
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+const BIND_RETRIES: [Duration; 4] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
 /// The shortest time between two consent requests that ask for attention.
 const RAISE_EVERY: Duration = Duration::from_secs(120);
 
@@ -807,8 +843,8 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
 
 /// Starts the target on every address and advertises it, and manages a
 /// [`RemoteService`]. A failure is logged and the app carries on without
-/// remote control.
-pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
+/// remote control. Says whether it started.
+pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
     let started = tauri::async_runtime::block_on(async {
         let listener = target::bind_default().await.map_err(|e| e.to_string())?;
         start_on(
@@ -820,9 +856,10 @@ pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
             target::Limits::STANDARD,
         )
     });
-    if let Err(e) = started {
+    if let Err(e) = &started {
         tracing::error!("[remote] remote control didn't start: {e}");
     }
+    started.is_ok()
 }
 
 /// [`start`] on `listener`, advertising through `advertiser`, with `limits`. Call it inside
@@ -889,17 +926,60 @@ fn start_on<R: Runtime>(
     Ok(())
 }
 
+/// Where the app is, as the system says. Each platform maps its own events
+/// to these, so the mapping reads the same in each and can't swap a bare
+/// true and false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+pub enum Lifecycle {
+    /// On screen: Android's onResume, iOS's willEnterForeground.
+    Foreground,
+    /// Off screen or covered: Android's onPause, iOS's didEnterBackground.
+    Background,
+}
+
+impl Lifecycle {
+    /// From whether the app is in the background, as iOS's notifications say.
+    // Only iOS reports it this way.
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub fn from_background(background: bool) -> Self {
+        if background {
+            Self::Background
+        } else {
+            Self::Foreground
+        }
+    }
+}
+
 /// Tells remote control that the app went to the background or came back.
 /// On a phone, tablet or TV, the device can only be found while the app is
 /// in the foreground.
 // Only the mobile apps go to the background.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-pub fn set_foreground<R: Runtime>(app: &AppHandle<R>, foreground: bool) {
-    #[cfg(target_os = "android")]
-    crate::android_device::hold_multicast(foreground);
+#[cfg_attr(not(mobile), allow(dead_code))]
+pub fn set_foreground<R: Runtime>(app: &AppHandle<R>, state: Lifecycle) {
+    set_foreground_with(app, state, |hold| {
+        #[cfg(target_os = "android")]
+        crate::android_device::hold_multicast(hold);
+        #[cfg(not(target_os = "android"))]
+        let _ = hold;
+    });
+}
+
+/// [`set_foreground`], calling `multicast` to hold the Wi-Fi multicast lock
+/// or let it go, but only when remote control runs.
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+fn set_foreground_with<R: Runtime>(
+    app: &AppHandle<R>,
+    state: Lifecycle,
+    multicast: impl FnOnce(bool),
+) {
     let Some(service) = app.try_state::<RemoteService>() else {
         return;
     };
+    let foreground = state == Lifecycle::Foreground;
+    multicast(foreground);
     service.set_foreground(foreground);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

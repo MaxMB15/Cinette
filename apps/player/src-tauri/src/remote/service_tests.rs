@@ -1296,13 +1296,122 @@ async fn only_the_last_word_on_the_foreground_counts() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_app_going_to_the_background_reaches_the_service() {
     let running = Running::start(|_| {}).await;
-    set_foreground(&running.app.handle(), false);
+    set_foreground(&running.app.handle(), Lifecycle::Background);
     until_refused(running.port).await;
 }
 
 #[test]
 fn going_to_the_background_without_remote_control_does_nothing() {
     let app = TestApp::new();
-    set_foreground(&app.handle(), false);
+    set_foreground(&app.handle(), Lifecycle::Background);
     assert!(app.handle().try_state::<RemoteService>().is_none());
+}
+
+/// A listener on loopback, or the error `fail` gives while it gives one.
+async fn bind_unless(fail: &Mutex<u32>) -> std::io::Result<tokio::net::TcpListener> {
+    let failing = {
+        let mut left = lock(fail);
+        let failing = *left > 0;
+        *left = left.saturating_sub(1);
+        failing
+    };
+    if failing {
+        return Err(std::io::Error::other("out of file descriptors"));
+    }
+    tokio::net::TcpListener::bind("127.0.0.1:0").await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_listen_on_coming_back_is_tried_again() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    service.set_foreground(false);
+    service.follow_foreground().await;
+    until_refused(running.port).await;
+
+    let fails = Mutex::new(1);
+    service.set_foreground(true);
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[Duration::from_millis(10)])
+        .await;
+    let port = service.handle.port();
+    assert_ne!(port, running.port);
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("listening after the second try");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn it_stops_trying_once_the_tries_run_out_and_tries_again_next_time() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    service.set_foreground(false);
+    service.follow_foreground().await;
+
+    let fails = Mutex::new(3);
+    service.set_foreground(true);
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[Duration::from_millis(10)])
+        .await;
+    assert_eq!(*lock(&fails), 1, "one try and one retry");
+    // Still hidden, so the next change in the foreground tries again.
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[])
+        .await;
+    assert_eq!(*lock(&fails), 0);
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[])
+        .await;
+    tokio::net::TcpStream::connect(("127.0.0.1", service.handle.port()))
+        .await
+        .expect("listening");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn it_stops_trying_when_the_app_goes_back_to_the_background() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    service.set_foreground(false);
+    service.follow_foreground().await;
+
+    let fails = Mutex::new(1);
+    service.set_foreground(true);
+    let retries = [Duration::from_millis(300)];
+    let trying = service.follow_foreground_with(|| bind_unless(&fails), &retries);
+    let leaving = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        service.set_foreground(false);
+    };
+    tokio::join!(trying, leaving);
+    assert_eq!(*lock(&fails), 0, "the first try failed");
+    until_refused(service.handle.port()).await;
+}
+
+#[test]
+fn the_multicast_lock_follows_the_foreground_only_while_remote_control_runs() {
+    let app = TestApp::new();
+    let mut called = Vec::new();
+    set_foreground_with(&app.handle(), Lifecycle::Foreground, |hold| called.push(hold));
+    assert!(called.is_empty(), "no remote control, no lock");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_multicast_lock_is_held_in_the_foreground_and_let_go_in_the_background() {
+    let running = Running::start(|_| {}).await;
+    let mut called = Vec::new();
+    let handle = running.app.handle();
+    set_foreground_with(&handle, Lifecycle::Background, |hold| called.push(hold));
+    assert!(!handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
+    set_foreground_with(&handle, Lifecycle::Foreground, |hold| called.push(hold));
+    assert!(handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
+    assert_eq!(called, [false, true]);
+}
+
+#[test]
+fn ios_says_background_or_not() {
+    assert_eq!(Lifecycle::from_background(true), Lifecycle::Background);
+    assert_eq!(Lifecycle::from_background(false), Lifecycle::Foreground);
 }
