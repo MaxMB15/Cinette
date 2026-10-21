@@ -8,7 +8,8 @@ import { Dialog } from "@/components/ui/dialog";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useRemoteSessions } from "@/hooks/useRemoteTarget";
-import { remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import { VPN_HINT } from "@/lib/cast";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
 import type { CinetteDestination } from "@/lib/cinette-destination";
 import { endedText, formatCode } from "@/lib/remote-devices";
@@ -28,6 +29,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 	const [open, setOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [denied, setDenied] = useState(false);
+	const [vpn, setVpn] = useState(false);
 	// Discovery gets a moment before the picker says it found nothing.
 	const [looked, setLooked] = useState(false);
 	useEffect(() => {
@@ -40,6 +42,10 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 		remoteLocalNetworkDenied()
 			.then((refused) => setDenied(refused === true))
 			.catch(() => setDenied(false));
+		// Many VPN apps block devices on the local network.
+		getVpnActive()
+			.then((on) => setVpn(on === true))
+			.catch(() => setVpn(false));
 	};
 	// Closed, it looks again from the start the next time it opens.
 	const close = () => {
@@ -91,7 +97,9 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 						: devices.length > 0
 							? null
 							: looked
-								? NONE_FOUND
+								? vpn
+									? `${NONE_FOUND} ${VPN_HINT}`
+									: NONE_FOUND
 								: LOOKING
 				}
 			/>

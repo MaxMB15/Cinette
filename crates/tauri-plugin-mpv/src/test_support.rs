@@ -10,8 +10,10 @@
 
 use crate::mpv::MpvState;
 use crate::renderer::PlatformRenderer;
+use libmpv2::events::{mpv_event_id, Event};
 use libmpv2::Mpv;
 use std::collections::VecDeque;
+use std::ffi::CStr;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
@@ -109,6 +111,44 @@ fn new_mpv(options: &[(&str, &str)]) -> Mpv {
         Ok(())
     })
     .expect("create a headless mpv")
+}
+
+/// Stops each load at one of mpv's hooks, such as `on_preloaded`, until the
+/// test lets it go on. mpv runs other clients' commands while it waits, so
+/// a test can act at an exact point in the load. mpv goes on by itself once
+/// this drops.
+pub(crate) struct Hook(Mpv);
+
+impl Hook {
+    /// Stops the loads of the player `mpv` from now on at hook `name`.
+    pub(crate) fn new(mpv: &Mpv, name: &CStr) -> Self {
+        let client = mpv.create_client(None).expect("a client for the hook");
+        // SAFETY: the handle lives as long as `client`, and mpv copies `name`
+        // before the call returns.
+        let error = unsafe { libmpv2_sys::mpv_hook_add(client.ctx.as_ptr(), 0, name.as_ptr(), 0) };
+        assert_eq!(error, 0, "mpv_hook_add");
+        Self(client)
+    }
+
+    /// Waits until a load reaches the hook, and returns the id `resume`
+    /// takes.
+    pub(crate) fn wait(&self) -> u64 {
+        wait_for("mpv to reach the hook", || match self.0.wait_event(0.0) {
+            Some(Ok(Event::Deprecated(event))) if event.event_id == mpv_event_id::Hook => {
+                // SAFETY: a hook event's data is an `mpv_event_hook`, which
+                // stays valid until this client's next `mpv_wait_event`.
+                Some(unsafe { (*event.data.cast::<libmpv2_sys::mpv_event_hook>()).id })
+            }
+            _ => None,
+        })
+    }
+
+    /// Lets the load that `wait` returned `id` for go on.
+    pub(crate) fn resume(&self, id: u64) {
+        // SAFETY: the handle lives as long as `self`.
+        let error = unsafe { libmpv2_sys::mpv_hook_continue(self.0.ctx.as_ptr(), id) };
+        assert_eq!(error, 0, "mpv_hook_continue");
+    }
 }
 
 /// Bytes per second of the WAV audio, which is 8 kHz mono 16-bit.

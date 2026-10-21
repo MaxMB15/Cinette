@@ -67,6 +67,8 @@ impl TestApp {
         app.manage(crate::streams::StreamsState::default());
         app.manage(MpvState::new());
         app.manage(crate::cast::CastReceivers::idle());
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        app.manage(crate::cast::playback::CastPlayback::default());
         Self { app, dir }
     }
 

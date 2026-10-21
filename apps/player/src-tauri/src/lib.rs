@@ -28,6 +28,8 @@ mod streams;
 mod wifi;
 #[cfg(test)]
 mod android_project_tests;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vpn;
 #[cfg(test)]
 mod capabilities_tests;
 #[cfg(test)]
@@ -259,6 +261,11 @@ register_commands![
     commands::stop_recording,
     cast::get_cast_receivers,
     cast::hold_cast_receivers,
+    cast::cast_load,
+    cast::cast_control,
+    cast::cast_stop,
+    cast::cast_release,
+    cast::get_vpn_active,
 ];
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -385,6 +392,8 @@ pub fn run() {
             app.manage(crate::cast::CastReceivers::on_network());
             app.manage(crate::streams::StreamsState::default());
             crate::airplay::install(app.handle());
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            app.manage(crate::cast::playback::CastPlayback::default());
             crate::downloads::manager::restore_settings(app.handle());
 
             // Listens for other Cinette devices and advertises this one.

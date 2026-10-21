@@ -558,3 +558,18 @@ fn a_channel_of_a_provider_without_an_account_still_matches_by_its_keys() {
     };
     assert_eq!(found_id(&index, &r), Ok(Some("m3u-file-ch-1".into())));
 }
+
+#[test]
+fn a_series_entry_without_an_episode_number_is_a_show() {
+    let index = Index::new(
+        &[provider("m3u-a", None, false)],
+        vec![DestChannel {
+            season: Some(1),
+            ..channel("m3u-a-ch-1", "m3u-a", "Lost", "series")
+        }],
+    );
+    assert_eq!(
+        found_id(&index, &reference(ItemKind::Series, "Lost")),
+        Ok(Some("m3u-a-ch-1".into()))
+    );
+}

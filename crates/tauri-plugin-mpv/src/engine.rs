@@ -23,11 +23,34 @@ pub struct MediaInfo {
     /// `mov,mp4,m4a,3gp,3g2,mj2`.
     pub file_format: Option<String>,
     pub video_codec: Option<String>,
+    /// The codec of the audio track a receiver would play: the one marked
+    /// default, or else the first. mpv may be playing another, as when the
+    /// user picked it, and a receiver that's sent the stream picks its own.
     pub audio_codec: Option<String>,
     /// The latest frame was interlaced.
     pub interlaced: bool,
     /// The video is HDR: PQ, as HDR10 uses, or HLG.
     pub hdr: bool,
+}
+
+/// One of the item's tracks, as mpv's `track-list` lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ListedTrack {
+    /// `video`, `audio` or `sub`.
+    pub kind: String,
+    pub codec: Option<String>,
+    pub default: bool,
+}
+
+/// The codec of the audio track a receiver plays from `tracks`: the one
+/// marked default, or else the first, as the probe decides.
+pub(crate) fn receiver_audio(tracks: &[ListedTrack]) -> Option<String> {
+    let audio: Vec<&ListedTrack> = tracks.iter().filter(|t| t.kind == "audio").collect();
+    audio
+        .iter()
+        .find(|t| t.default)
+        .or(audio.first())
+        .and_then(|t| t.codec.clone())
 }
 
 /// Whether mpv's `video-params/gamma` is an HDR transfer: PQ, which HDR10
@@ -95,6 +118,10 @@ pub struct MpvEngine {
     current_url: Option<String>,
     audio_logged_playing: bool,
     playback_started: bool,
+    /// The subtitle file `sub_add` put on `sub-files` while mpv had no file
+    /// open. mpv reads the list early on as it opens a file, and can open
+    /// the file without one that came later. `get_state` adds that one.
+    sub_on_open: Option<String>,
 }
 
 impl MpvEngine {
@@ -104,6 +131,7 @@ impl MpvEngine {
             current_url: None,
             audio_logged_playing: false,
             playback_started: false,
+            sub_on_open: None,
         }
     }
 
@@ -322,6 +350,7 @@ impl MpvEngine {
         self.current_url = None;
         self.audio_logged_playing = false;
         self.playback_started = false;
+        self.sub_on_open = None;
     }
 
     pub fn play(&self) -> Result<(), String> {
@@ -382,15 +411,13 @@ impl MpvEngine {
     /// it's false, since the frontend draws the new subtitles. While mpv
     /// opens a file, or has none, the file only goes on the list of subtitles
     /// mpv adds as it opens one. mpv doesn't read the file until then, so one
-    /// it can't read doesn't fail the add.
-    pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
+    /// it can't read doesn't fail the add. mpv may have read the list
+    /// already, so `get_state` makes sure the file is there once mpv has
+    /// opened the stream.
+    pub fn sub_add(&mut self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
         let uri = subtitle_uri(path);
-        // "no" when no track is in use, which isn't a number.
-        let in_use = mpv
-            .get_property::<String>("sid")
-            .ok()
-            .and_then(|id| id.parse::<i64>().ok());
+        let in_use = sub_in_use(mpv);
         let set_visible = || {
             if let Err(e) = mpv.set_property("sub-visibility", visible) {
                 tracing::warn!("[MPV] sub-visibility={} failed: {}", visible, e);
@@ -419,12 +446,16 @@ impl MpvEngine {
             Ok(())
         };
         if !file_open(mpv) {
-            return add_on_open();
+            add_on_open()?;
+            self.sub_on_open = Some(uri);
+            return Ok(());
         }
         if let Err(e) = mpv.command("sub-add", &[&uri, "select"]) {
             // Another load can start between the check and the add.
             if !file_open(mpv) {
-                return add_on_open();
+                add_on_open()?;
+                self.sub_on_open = Some(uri);
+                return Ok(());
             }
             tracing::warn!("[MPV] sub-add failed: {}", e);
             return Err(e.to_string());
@@ -440,17 +471,51 @@ impl MpvEngine {
             set_visible();
         }
         let _ = set_sub_files(mpv, Some(&uri));
+        // This file takes the place of one picked while mpv opened the file.
+        self.sub_on_open = None;
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }
 
+    /// Once the file that plays is open, adds the subtitle file `sub_add`
+    /// put on `sub-files` while mpv opened it, since mpv may have read the
+    /// list before the file went on it. With `cached`, mpv only selects the
+    /// track when it did add the file from the list, so the file is never
+    /// there twice. As in `sub_add`, the track that was in use goes.
+    /// `sub_add` has set `sub-visibility` already.
+    fn add_missed_subtitle(&mut self) {
+        let (Some(mpv), Some(uri)) = (&self.mpv, &self.sub_on_open) else {
+            return;
+        };
+        if !file_open(mpv) {
+            return;
+        }
+        let in_use = sub_in_use(mpv);
+        tracing::info!("[MPV] sub-add once open: {}", origin_for_log(uri));
+        match mpv.command("sub-add", &[uri.as_str(), "cached"]) {
+            Ok(()) => {
+                if let Some(id) = in_use
+                    && sub_in_use(mpv) != Some(id)
+                    && let Err(e) = mpv.command("sub-remove", &[&id.to_string()])
+                {
+                    tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+                }
+            }
+            Err(e) => tracing::warn!("[MPV] sub-add once open failed: {}", e),
+        }
+        // Tried once. A load that starts now reads `sub-files` itself.
+        self.sub_on_open = None;
+    }
+
     /// Remove an external subtitle track. Pass -1 to remove the current track (no-arg form).
-    /// mpv also stops adding the file when it reloads the stream.
-    pub fn sub_remove(&self, id: i64) -> Result<(), String> {
+    /// mpv also stops adding the file when it reloads the stream, and the
+    /// engine no longer adds a file `sub_add` left for when the stream opens.
+    pub fn sub_remove(&mut self, id: i64) -> Result<(), String> {
         let mpv = self
             .mpv
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?;
+        self.sub_on_open = None;
         let _ = set_sub_files(mpv, None);
         if id == -1 {
             mpv.command("sub-remove", &[]).map_err(|e| e.to_string())
@@ -497,10 +562,20 @@ impl MpvEngine {
                 .ok()
                 .filter(|v| !v.is_empty())
         };
+        let count = mpv.get_property::<i64>("track-list/count").unwrap_or(0);
+        let tracks: Vec<ListedTrack> = (0..count)
+            .map(|i| ListedTrack {
+                kind: text(&format!("track-list/{i}/type")).unwrap_or_default(),
+                codec: text(&format!("track-list/{i}/codec")),
+                default: mpv
+                    .get_property::<bool>(&format!("track-list/{i}/default"))
+                    .unwrap_or(false),
+            })
+            .collect();
         MediaInfo {
             file_format: text("file-format"),
             video_codec: text("current-tracks/video/codec"),
-            audio_codec: text("current-tracks/audio/codec"),
+            audio_codec: receiver_audio(&tracks),
             interlaced: mpv
                 .get_property::<bool>("video-frame-info/interlaced")
                 .unwrap_or(false),
@@ -539,6 +614,9 @@ impl MpvEngine {
             }
             state.playback_started = self.playback_started;
         }
+        // After the open check, so the poll that first reports playback has
+        // started has the subtitle too.
+        self.add_missed_subtitle();
         if !self.audio_logged_playing && state.position > 0.0 {
             self.audio_logged_playing = true;
             self.log_audio_state("playing");
@@ -567,6 +645,14 @@ fn subtitle_uri(path: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+/// The id of the subtitle track in use. mpv reads "no" when none is, which
+/// isn't a number.
+fn sub_in_use(mpv: &Mpv) -> Option<i64> {
+    mpv.get_property::<String>("sid")
+        .ok()
+        .and_then(|id| id.parse::<i64>().ok())
 }
 
 /// Whether mpv has a file open. `playback-abort` is true from a `loadfile`
@@ -661,7 +747,10 @@ mod playback_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{can_skip, libmpv_in_maps, open_status, subtitle_uri, PlayerState};
+    use super::{
+        can_skip, libmpv_in_maps, open_status, receiver_audio, subtitle_uri, ListedTrack,
+        PlayerState,
+    };
     use libmpv2::mpv_error;
 
     #[test]
@@ -673,6 +762,42 @@ mod tests {
         let logged = format!("{state:?}");
         assert!(logged.contains("http://host.test:8080"), "{logged}");
         assert!(!logged.contains("USER") && !logged.contains("SECRET"), "{logged}");
+    }
+
+    fn track(kind: &str, codec: &str, default: bool) -> ListedTrack {
+        ListedTrack {
+            kind: kind.into(),
+            codec: Some(codec.into()),
+            default,
+        }
+    }
+
+    #[test]
+    fn a_receiver_plays_the_default_audio_track_or_else_the_first() {
+        // MPEG-TS marks no default, so AC-3 first is what a receiver plays,
+        // though AAC comes second.
+        let ts = [
+            track("video", "h264", false),
+            track("audio", "ac3", false),
+            track("audio", "aac", false),
+        ];
+        assert_eq!(receiver_audio(&ts).as_deref(), Some("ac3"));
+        let marked = [
+            track("audio", "ac3", false),
+            track("sub", "subrip", true),
+            track("audio", "aac", true),
+        ];
+        assert_eq!(receiver_audio(&marked).as_deref(), Some("aac"));
+        assert_eq!(receiver_audio(&[track("video", "h264", true)]), None);
+        let unknown = ListedTrack {
+            kind: "audio".into(),
+            codec: None,
+            default: false,
+        };
+        assert_eq!(
+            receiver_audio(&[unknown, track("audio", "aac", false)]),
+            None
+        );
     }
 
     #[test]
