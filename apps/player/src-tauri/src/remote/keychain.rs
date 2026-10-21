@@ -15,6 +15,7 @@ use security_framework::passwords::{
     generic_password, set_generic_password_options, PasswordOptions,
 };
 use std::io;
+use std::path::Path;
 
 const SERVICE: &str = "app.cinette.remote";
 const ACCOUNT: &str = "device-key";
@@ -26,8 +27,9 @@ fn options() -> PasswordOptions {
 }
 
 /// The saved key, or a new one saved in its place when there's none or the
-/// item is broken. A new key means a new device id.
-pub fn load_or_create() -> io::Result<DeviceKey> {
+/// item is broken. A new key means a new device id. `dir` is where the other
+/// platforms keep their key file.
+pub fn load_or_create(dir: &Path) -> io::Result<DeviceKey> {
     match generic_password(options()) {
         Ok(bytes) => match <[u8; KEY_LEN]>::try_from(bytes.as_slice()) {
             Ok(private) => return Ok(DeviceKey::from_private(private)),
@@ -40,14 +42,14 @@ pub fn load_or_create() -> io::Result<DeviceKey> {
         Err(e) => return Err(io::Error::other(e)),
     }
     let key = DeviceKey::generate();
-    save(&key)?;
+    save(dir, &key)?;
     tracing::info!("[remote] new device id {}", key.device_id());
     Ok(key)
 }
 
 /// Saves `key` in place of any earlier one, readable after the device's
 /// first unlock and on this device only.
-pub fn save(key: &DeviceKey) -> io::Result<()> {
+pub fn save(_dir: &Path, key: &DeviceKey) -> io::Result<()> {
     let access = SecAccessControl::create_with_protection(
         Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
         0,

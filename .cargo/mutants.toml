@@ -86,6 +86,9 @@ exclude_re = [
     # network. The tests start the target on loopback with start_on instead.
     'src-tauri/src/remote/service\.rs:.*\b(start|advertise_on_network)\b',
     'src-tauri/src/remote/target\.rs:.*\bbind_default\b',
+    # Reads the iPhone's or iPad's model, which only iOS builds. The choice
+    # made from it stays in.
+    'src-tauri/src/remote/device\.rs:.*\bmodel_identifier\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
@@ -108,8 +111,10 @@ exclude_globs = [
     "apps/player/src-tauri/src/android_device.rs",
     "apps/player/src-tauri/src/android_tls.rs",
     "crates/tauri-plugin-mpv/src/android.rs",
-    # Bonjour discovery, likewise macOS only.
+    # Bonjour discovery, likewise macOS and iOS only.
     "apps/player/src-tauri/src/discovery/macos.rs",
+    # The device key in the iOS Keychain.
+    "apps/player/src-tauri/src/remote/keychain.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
     # Writes the tests' media. Only tests use it.

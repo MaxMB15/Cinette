@@ -9,17 +9,14 @@
 //! the cache with every provider's login in it, so the key gets the same
 //! protection rather than a store of its own.
 
-use mvp_core::remote::identity::DeviceKey;
 #[cfg(not(target_os = "ios"))]
-use mvp_core::remote::identity::KEY_LEN;
+use mvp_core::remote::identity::{DeviceKey, KEY_LEN};
 #[cfg(not(target_os = "ios"))]
 use std::fs;
-use std::io;
 #[cfg(not(target_os = "ios"))]
-use std::io::Write;
-use std::path::Path;
+use std::io::{self, Write};
 #[cfg(not(target_os = "ios"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The key's file name in the app data folder.
 #[cfg_attr(target_os = "ios", allow(dead_code))]
@@ -30,18 +27,8 @@ fn key_path(dir: &Path) -> PathBuf {
     dir.join(KEY_FILE)
 }
 
-/// The saved key, or a new one saved in its place when there's none or the
-/// file is broken. A new key means a new device id.
 #[cfg(target_os = "ios")]
-pub fn load_or_create(_dir: &Path) -> io::Result<DeviceKey> {
-    super::keychain::load_or_create()
-}
-
-/// Saves `key` in place of any earlier one.
-#[cfg(target_os = "ios")]
-pub fn save(_dir: &Path, key: &DeviceKey) -> io::Result<()> {
-    super::keychain::save(key)
-}
+pub use super::keychain::{load_or_create, save};
 
 /// The saved key, or a new one saved in its place when there's none or the
 /// file is broken. A new key means a new device id.
