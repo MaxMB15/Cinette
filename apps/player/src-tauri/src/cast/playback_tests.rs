@@ -413,7 +413,9 @@ async fn a_converted_route_serves_the_receiver_from_this_computer() {
     let app = TestApp::new();
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    // Longer than the converter's 10 s burst, so ffmpeg keeps to the film's
+    // pace and still runs when the receiver gets the stream.
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16_lasting(24))]);
     let movie = channel("m-1", &format!("{source}/movie/1.wav"), "movie");
     add_channel(&app, &movie);
     let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "aac" });
@@ -434,7 +436,7 @@ async fn a_converted_route_serves_the_receiver_from_this_computer() {
         // Letting go of the stream stops the converter, and so its
         // connection to the source, before it answers.
         let source_url = movie.url.clone();
-        assert!(ffmpeg_runs_for(&source_url));
+        wait_until("ffmpeg", || ffmpeg_runs_for(&source_url)).await;
         app.invoke("cast_release", json!({ "receiverId": "cast:tv" }))
             .unwrap();
         assert!(!ffmpeg_runs_for(&source_url));
