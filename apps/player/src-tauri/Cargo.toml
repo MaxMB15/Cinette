@@ -44,6 +44,8 @@ mvp-core = { path = "../../../crates/core", features = ["test-util"] }
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 # A paused clock, for the AirPlay conversions' timeouts.
 tokio = { workspace = true, features = ["test-util"] }
+# Self-signed certificates for the fake Cast receivers in tests.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "crypto"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The D-Bus library tauri-plugin-single-instance uses. Its address parser
@@ -51,19 +53,27 @@ tokio = { workspace = true, features = ["test-util"] }
 zbus = "5"
 # DNS-SD for Cinette devices and Cast receivers, without needing Avahi.
 mdns-sd = { version = "0.21", default-features = false }
-# The interfaces' subnets, so remote control only takes local peers. The
-# same version as mdns-sd's.
+# The interfaces' subnets, so remote control only takes local peers, and
+# the one that holds the default route, to tell when a VPN does. The same
+# version as mdns-sd's.
 if-addrs = "0.15"
 # The remote-control listener's dual-stack socket. The same version as tokio's.
 socket2 = "0.6"
+# TLS to Cast receivers. The same rustls and ring that reqwest already
+# builds for Tauri.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # poll and the socket types for Bonjour's dns_sd.h.
 libc = "0.2"
-# The interfaces' subnets, so remote control only takes local peers.
+# The interfaces' subnets, so remote control only takes local peers, and
+# the one that holds the default route, to tell when a VPN does.
 if-addrs = "0.15"
 # The remote-control listener's dual-stack socket. The same version as tokio's.
 socket2 = "0.6"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 oslog = { version = "0.2", default-features = false }

@@ -140,6 +140,11 @@ pub enum AacEncoder {
     Ffmpeg,
     /// Apple's, from AudioToolbox, on macOS. It's rated above ffmpeg's and
     /// ran faster in a test on a Mac.
+    ///
+    /// It won't open at every sample rate. In a test on macOS 26 it refused
+    /// 64, 88.2 and 96 kHz, and at 32 kHz and below it refused 256 kbps for
+    /// stereo and 448 kbps for 5.1. So its audio goes to 48 kHz first, which
+    /// every receiver plays. ffmpeg's own takes all of these as they are.
     AudioToolbox,
 }
 
@@ -149,7 +154,16 @@ impl AacEncoder {
     fn args(self) -> &'static [&'static str] {
         match self {
             AacEncoder::Ffmpeg => &["-c:a", "aac", "-b:a", "256k"],
-            AacEncoder::AudioToolbox => &["-c:a", "aac_at", "-aac_at_mode", "cvbr", "-b:a", "256k"],
+            AacEncoder::AudioToolbox => &[
+                "-c:a",
+                "aac_at",
+                "-aac_at_mode",
+                "cvbr",
+                "-b:a",
+                "256k",
+                "-ar",
+                "48000",
+            ],
         }
     }
 
@@ -167,7 +181,16 @@ impl AacEncoder {
                 "-b:a",
                 "448k",
             ],
-            AacEncoder::AudioToolbox => &["-c:a", "aac_at", "-aac_at_mode", "cvbr", "-b:a", "448k"],
+            AacEncoder::AudioToolbox => &[
+                "-c:a",
+                "aac_at",
+                "-aac_at_mode",
+                "cvbr",
+                "-b:a",
+                "448k",
+                "-ar",
+                "48000",
+            ],
         }
     }
 }

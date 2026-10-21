@@ -52,12 +52,15 @@ import {
 	readHwdecEnabled,
 	readSkipIntervals,
 	readSkipSegmentModes,
+	readStreamThrough,
 	SKIP_INTERVALS_EVENT,
 	SKIP_SEGMENT_MODES_EVENT,
+	STREAM_THROUGH_EVENT,
 	writeDefaultVolume,
 	writeHwdecEnabled,
 	writeSkipInterval,
 	writeSkipSegmentMode,
+	writeStreamThrough,
 	type SkipSegmentMode,
 } from "@/lib/player-prefs";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
@@ -166,6 +169,9 @@ export const Settings = ({ updateState }: SettingsProps) => {
 
 	const skipIntervals = usePlayerPref(readSkipIntervals, SKIP_INTERVALS_EVENT);
 	const segmentModes = usePlayerPref(readSkipSegmentModes, SKIP_SEGMENT_MODES_EVENT);
+	const streamThrough = usePlayerPref(readStreamThrough, STREAM_THROUGH_EVENT);
+	// Casting runs on macOS and Linux.
+	const castsHere = platform === "macos" || platform === "linux";
 
 	const geminiKey = useApiKey(GEMINI_KEY);
 	const omdbKey = useApiKey(OMDB_KEY);
@@ -500,6 +506,41 @@ export const Settings = ({ updateState }: SettingsProps) => {
 						</p>
 					</CardContent>
 				</Card>
+
+				{castsHere && (
+					<Card>
+						<CardHeader>
+							<CardTitle className="text-base">Google Cast</CardTitle>
+						</CardHeader>
+						<CardContent>
+							<div className="flex items-center justify-between gap-4">
+								<div>
+									<p className="text-sm font-medium">
+										Stream through this computer
+									</p>
+									<p className="text-xs text-muted-foreground">
+										Send what you cast through this computer, even when the TV
+										could fetch it itself. The stream then uses this computer's
+										connection and its VPN, and your provider sees this
+										computer, not the TV. This computer has to stay on while you
+										cast, and uses a little more power and network.
+									</p>
+								</div>
+								<Button
+									// Stryker disable next-line StringLiteral: The button gives an empty variant its default one, which "default" names.
+									variant={streamThrough ? "default" : "secondary"}
+									size="sm"
+									className="shrink-0"
+									aria-label="Stream through this computer"
+									aria-pressed={streamThrough}
+									onClick={() => writeStreamThrough(!streamThrough)}
+								>
+									{streamThrough ? "On" : "Off"}
+								</Button>
+							</div>
+						</CardContent>
+					</Card>
+				)}
 
 				{/* AI section */}
 				<Card>

@@ -571,9 +571,7 @@ impl Task {
                         if self
                             .last_load
                             // mutants: skip BinaryOperator: < and <= differ only at one instant of a clock that never stops
-                            .is_some_and(|at| {
-                                now.saturating_duration_since(at) < self.limits.load_gap
-                            })
+                            .is_some_and(|at| now.saturating_duration_since(at) < self.limits.load_gap)
                         {
                             let actions = self.target.finish_command(
                                 conn,
