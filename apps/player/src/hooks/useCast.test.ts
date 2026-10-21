@@ -558,6 +558,8 @@ describe("useCast", () => {
 		act(() => events.emit("cast://receivers", receivers(2, [tv, den])));
 		await flush();
 		expect(result.current.statuses.get("cast:den")).toEqual({ via: "direct" });
+		// Only the new one was asked about.
+		expect(tauri.getConverterSupport).toHaveBeenCalledTimes(2);
 		// Once it's closed, a new one waits for the next time it opens.
 		act(() => result.current.release());
 		const third = { ...tv, id: "cast:third", name: "Third" };

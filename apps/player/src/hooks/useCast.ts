@@ -128,6 +128,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 	const active = useRef<CastDestination | null>(null);
 	/** The newest send's token. A newer send, a stop or leaving the page
 	 *  puts in another, so a send overtaken gives up quietly wherever it is. */
+	// Stryker disable next-line ObjectLiteral: Each send puts in its own token before one is compared, so the first one is never read.
 	const turn = useRef({ token: {} as object });
 	const checking = useRef(0);
 	/** What the open picker checks, and the receivers it asked about. */
@@ -282,8 +283,11 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					(error: unknown) => ({ error })
 				);
 			let released = false;
-			/** The route to load by, or why there's none. */
-			const prepare = async (): Promise<{ route: PlayRoute } | { why: string | null }> => {
+			/** The route to load by, why there's none, or `null` once something
+			 *  overtook this send. */
+			const prepare = async (): Promise<
+				{ route: PlayRoute } | { why: string | null } | null
+			> => {
 				const shown = decisions.current.get(routeKey(receiverId, channel));
 				let routed: Routed = shown ? { decision: shown } : await look();
 				// While this receiver plays, the provider may refuse a second
@@ -294,7 +298,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					await target.release().catch(() => {});
 					for (const ms of RELEASE_RETRY_MS) {
 						await wait(ms);
-						if (!newest()) return { why: null };
+						if (!newest()) return null;
 						routed = await look();
 						if (!("error" in routed)) break;
 					}
@@ -305,7 +309,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 				}
 				if ("error" in routed) return { why: blockerText("unreachable") };
 				// Nothing is asked of a send that something overtook.
-				if (!newest()) return { why: null };
+				if (!newest()) return null;
 				const { decision } = routed;
 				if (!decision.ok) return { why: blockerText(decision.reason, decision.detail) };
 				const { route } = decision;
@@ -315,7 +319,8 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			};
 			const ready = await prepare();
 			// A newer send or a stop took over, and says for itself.
-			if (!newest()) return null;
+			// Stryker disable next-line ConditionalExpression: prepare gives null only once something overtook this send, when newest() is false too.
+			if (ready === null || !newest()) return null;
 			if ("why" in ready) {
 				// A cast that let go of its stream has stopped.
 				if (released) target.settle();
