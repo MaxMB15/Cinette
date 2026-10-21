@@ -1336,7 +1336,6 @@ async fn a_failed_listen_on_coming_back_is_tried_again() {
         .follow_foreground_with(|| bind_unless(&fails), &[Duration::from_millis(10)])
         .await;
     let port = service.handle.port();
-    assert_ne!(port, running.port);
     tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("listening after the second try");

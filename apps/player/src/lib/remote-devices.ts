@@ -24,7 +24,7 @@ const TYPE_NAMES = new Map([
  */
 export const discoveryLimit = (platform: Platform = getPlatform()): string | null =>
 	isMobilePlatform(platform)
-		? "Other devices can only find this one while Cinette is in the foreground."
+		? "Other devices can only find this one while you're using Cinette."
 		: null;
 
 /** What shows while macOS keeps Cinette off the local network. */

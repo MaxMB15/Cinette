@@ -999,14 +999,18 @@ fn start_on<R: Runtime>(
 // Only the mobile apps go to the background.
 #[cfg_attr(not(mobile), allow(dead_code))]
 pub enum Lifecycle {
-    /// On screen: Android's onResume, iOS's willEnterForeground.
+    /// Android's onResume, iOS's willEnterForeground.
     Foreground,
-    /// Off screen or covered: Android's onPause, iOS's didEnterBackground.
+    /// Android's onPause, which also comes while a system panel or a share
+    /// sheet covers part of the app, and iOS's didEnterBackground.
     Background,
 }
 
 impl Lifecycle {
-    /// From whether the app is in the background, as iOS's notifications say.
+    /// From whether the app is in the background, as the mpv plugin passes
+    /// on iOS's didEnterBackground (`true`) and willEnterForeground
+    /// (`false`). Not Tauri's own Suspended, which iOS sends on
+    /// applicationWillResignActive.
     // Only iOS reports it this way.
     #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
     pub fn from_background(background: bool) -> Self {

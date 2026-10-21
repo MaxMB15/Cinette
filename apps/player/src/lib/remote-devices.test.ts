@@ -28,8 +28,8 @@ describe("localNetworkDenied", () => {
 });
 
 describe("discoveryLimit", () => {
-	it("says phones, tablets and TVs are only found while Cinette is in the foreground", () => {
-		const note = "Other devices can only find this one while Cinette is in the foreground.";
+	it("says phones, tablets and TVs are only found while you're using Cinette", () => {
+		const note = "Other devices can only find this one while you're using Cinette.";
 		expect(discoveryLimit("android")).toBe(note);
 		expect(discoveryLimit("tv")).toBe(note);
 		expect(discoveryLimit("ios")).toBe(note);

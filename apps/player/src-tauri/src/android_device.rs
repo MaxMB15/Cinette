@@ -99,8 +99,9 @@ pub fn device_type() -> DeviceType {
     facts().device_type()
 }
 
-/// The multicast lock while it's held.
-static MULTICAST: Mutex<Held<Global<JObject<'static>>>> = Mutex::new(Held::new());
+/// The multicast lock while it's held. Held as `None` on a device with no
+/// Wi-Fi, which has nothing to lock.
+static MULTICAST: Mutex<Held<Option<Global<JObject<'static>>>>> = Mutex::new(Held::new());
 
 /// Takes or lets go of a Wi-Fi multicast lock. Without one, many Wi-Fi
 /// drivers drop the multicast packets DNS-SD runs on, so the device can't
@@ -115,7 +116,7 @@ pub fn hold_multicast(hold: bool) {
 
 /// A new multicast lock, taken. Without Wi-Fi, as on a TV with only
 /// Ethernet, which doesn't filter multicast, there's none to take.
-fn acquire_multicast() -> jni::errors::Result<Global<JObject<'static>>> {
+fn acquire_multicast() -> jni::errors::Result<Option<Global<JObject<'static>>>> {
     with_context(|env, context| {
         let service = env.new_string("wifi")?;
         let wifi = env
@@ -127,7 +128,7 @@ fn acquire_multicast() -> jni::errors::Result<Global<JObject<'static>>> {
             )?
             .l()?;
         if wifi.is_null() {
-            return Err(jni::errors::Error::NullPtr("no Wi-Fi on this device"));
+            return Ok(None);
         }
         let tag = env.new_string("cinette-discovery")?;
         let lock = env
@@ -145,11 +146,14 @@ fn acquire_multicast() -> jni::errors::Result<Global<JObject<'static>>> {
             &[JValue::Bool(false)],
         )?;
         env.call_method(&lock, jni_str!("acquire"), jni_sig!(() -> void), &[])?;
-        env.new_global_ref(&lock)
+        env.new_global_ref(&lock).map(Some)
     })
 }
 
-fn release_multicast(lock: Global<JObject<'static>>) -> jni::errors::Result<()> {
+fn release_multicast(lock: Option<Global<JObject<'static>>>) -> jni::errors::Result<()> {
+    let Some(lock) = lock else {
+        return Ok(());
+    };
     with_context(|env, _| {
         env.call_method(
             lock.as_obj(),
