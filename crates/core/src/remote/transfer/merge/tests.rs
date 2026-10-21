@@ -2,8 +2,12 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use super::*;
+use crate::remote::transfer::matching::DestChannel;
 use crate::remote::transfer::matching::DestProvider;
 use crate::remote::transfer::{Item, ItemRef, Pin};
+
+/// The destination's clock, later than every time in these tests.
+const LATER: i64 = 1_000_000;
 
 fn watched(first: i64, last: i64, plays: i64, seconds: i64) -> Watched {
     Watched {
@@ -28,9 +32,14 @@ fn clocks_within_a_minute_are_the_same() {
     assert_eq!(clock_offset(1000, 1000), 0);
     assert_eq!(clock_offset(1000, 1060), 0);
     assert_eq!(clock_offset(1060, 1000), 0);
-    assert_eq!(clock_offset(1000, 1061), 61);
-    assert_eq!(clock_offset(1061, 1000), -61);
-    assert_eq!(clock_offset(i64::MIN, i64::MAX), i64::MAX);
+    // Past a minute, whole minutes: the time on the way isn't drift.
+    assert_eq!(clock_offset(1000, 1061), 60);
+    assert_eq!(clock_offset(1061, 1000), -60);
+    assert_eq!(clock_offset(1000, 1089), 60);
+    assert_eq!(clock_offset(1000, 1091), 120);
+    assert_eq!(clock_offset(1000, 1600), 600);
+    assert_eq!(clock_offset(1000, 1601), 600);
+    assert!(clock_offset(i64::MIN, i64::MAX) > i64::MAX / 2);
 }
 
 #[test]
@@ -159,7 +168,7 @@ fn a_plan_places_history_positions_and_favorites() {
         favorite: true,
         ..item("Heat")
     };
-    let plan = plan(&export(vec![heat]), &index(), 0);
+    let plan = plan(&export(vec![heat]), &index(), LATER);
     let row = &plan.history["xt-a-movie-1"];
     assert_eq!(row.channel.name, "Heat");
     assert_eq!(row.watched, watched(1, 2, 1, 60));
@@ -176,12 +185,19 @@ fn a_plan_shifts_the_sources_times() {
         position: Some(at(600.0, 200)),
         ..item("Heat")
     };
-    let plan = plan(&export(vec![heat]), &index(), -50);
+    // The source's clock is two minutes ahead.
+    let export = Export {
+        sent_at: 1120,
+        received_at: 1000,
+        ..export(vec![heat])
+    };
+    let plan = plan(&export, &index(), LATER);
     assert_eq!(
         plan.history["xt-a-movie-1"].watched,
-        watched(50, 150, 1, 60)
+        watched(0, 80, 1, 60),
+        "and no time goes below 0"
     );
-    assert_eq!(plan.positions["movie:heat"].updated_at, 150);
+    assert_eq!(plan.positions["movie:heat"].updated_at, 80);
 }
 
 #[test]
@@ -201,7 +217,7 @@ fn items_that_find_the_same_thing_are_folded_together() {
         watched: Some(watched(30, 30, 1, 10)),
         ..item("heat")
     };
-    let plan = plan(&export(vec![one, two, three]), &index(), 0);
+    let plan = plan(&export(vec![one, two, three]), &index(), LATER);
     assert_eq!(plan.history.len(), 1);
     assert_eq!(plan.history["xt-a-movie-1"].watched, watched(5, 30, 4, 60));
     assert_eq!(plan.positions["movie:heat"], at(100.0, 20));
@@ -220,7 +236,7 @@ fn unmatched_items_are_listed_with_why() {
             ..item("Twin")
         },
     ];
-    let plan = plan(&export(items), &index(), 0);
+    let plan = plan(&export(items), &index(), LATER);
     assert_eq!(
         plan.unmatched,
         vec![
@@ -248,7 +264,7 @@ fn only_so_many_unmatched_items_are_listed() {
             ..item(&format!("Missing {i}"))
         })
         .collect();
-    let plan = plan(&export(items), &index(), 0);
+    let plan = plan(&export(items), &index(), LATER);
     assert_eq!(plan.unmatched.len(), MAX_UNMATCHED_LISTED);
     assert_eq!(plan.unmatched_total as usize, MAX_UNMATCHED_LISTED + 5);
 }
@@ -268,16 +284,164 @@ fn lost_episode(watched_row: bool, position: bool) -> Item {
 }
 
 #[test]
-fn an_episode_with_only_its_show_found_keeps_its_position() {
-    let plan = plan(&export(vec![lost_episode(true, true)]), &index(), 0);
+fn an_episode_with_only_its_show_found_keeps_its_position_and_reports_its_row() {
+    let plan = plan(&export(vec![lost_episode(true, true)]), &index(), LATER);
     assert_eq!(plan.positions["series:lost:s1e2"], at(700.0, 2));
     assert!(plan.history.is_empty());
-    assert!(plan.unmatched.is_empty());
+    assert_eq!(
+        plan.unmatched,
+        vec![Unmatched {
+            name: "Lost S01E02".into(),
+            kind: UnmatchedKind::Episode,
+            reason: Miss::Missing,
+        }]
+    );
+}
+
+#[test]
+fn a_film_listed_twice_gets_its_position_and_its_row_is_reported() {
+    let twin = Item {
+        watched: Some(watched(1, 2, 1, 60)),
+        position: Some(at(500.0, 2)),
+        ..item("Twin")
+    };
+    let plan = plan(&export(vec![twin]), &index(), LATER);
+    assert_eq!(plan.positions["movie:twin"], at(500.0, 2));
+    assert!(plan.history.is_empty());
+    assert_eq!(plan.unmatched[0].reason, Miss::Ambiguous);
+    assert_eq!(plan.unmatched_total, 1);
+}
+
+#[test]
+fn numbers_that_make_no_sense_are_left_out_and_reported() {
+    let bad_watched = [
+        watched(1, 2, -1, 60),
+        watched(1, 2, MAX_PLAYS + 1, 60),
+        watched(1, 2, i64::MAX, 60),
+        watched(1, 2, 1, -5),
+        watched(1, 2, 1, MAX_WATCHED_SECONDS + 1),
+        watched(5, 2, 1, 60),
+        watched(-1, 2, 1, 60),
+    ];
+    for w in bad_watched {
+        let heat = Item {
+            watched: Some(w),
+            ..item("Heat")
+        };
+        let plan = plan(&export(vec![heat]), &index(), LATER);
+        assert!(plan.history.is_empty(), "{w:?}");
+        assert_eq!(plan.unmatched[0].reason, Miss::Invalid, "{w:?}");
+    }
+    let bad_positions = [
+        Position {
+            position: -500.0,
+            ..at(0.0, 2)
+        },
+        Position {
+            duration: -1.0,
+            ..at(10.0, 2)
+        },
+        Position {
+            duration: 0.0,
+            ..at(0.0, 2)
+        },
+        Position {
+            duration: 1e308,
+            ..at(10.0, 2)
+        },
+        Position {
+            position: 4000.0,
+            ..at(0.0, 2)
+        },
+        Position {
+            updated_at: -1,
+            ..at(10.0, 2)
+        },
+    ];
+    for p in bad_positions {
+        let heat = Item {
+            position: Some(p),
+            ..item("Heat")
+        };
+        let plan = plan(&export(vec![heat]), &index(), LATER);
+        assert!(plan.positions.is_empty(), "{p:?}");
+        assert_eq!(plan.unmatched_total, 1, "{p:?}");
+    }
+    // At the edges, they're fine.
+    let edge = Item {
+        watched: Some(watched(0, 0, MAX_PLAYS, MAX_WATCHED_SECONDS)),
+        position: Some(Position {
+            position: MAX_DURATION,
+            duration: MAX_DURATION,
+            updated_at: 0,
+            finished: true,
+        }),
+        ..item("Heat")
+    };
+    let plan = plan(&export(vec![edge]), &index(), LATER);
+    assert_eq!(plan.history.len(), 1);
+    assert_eq!(plan.positions.len(), 1);
+    assert_eq!(plan.unmatched_total, 0);
+}
+
+#[test]
+fn no_time_lands_after_the_destinations_now() {
+    let future = Item {
+        watched: Some(watched(1, LATER * 10, 1, 60)),
+        position: Some(at(10.0, LATER * 10)),
+        ..item("Heat")
+    };
+    let plan = plan(&export(vec![future]), &index(), LATER);
+    assert_eq!(plan.history["xt-a-movie-1"].watched.last_watched_at, LATER);
+    assert_eq!(plan.positions["movie:heat"].updated_at, LATER);
+}
+
+#[test]
+fn what_either_side_left_out_counts_as_not_transferred() {
+    let export = Export {
+        dropped: 3,
+        ..export(vec![])
+    };
+    assert_eq!(plan(&export, &index(), LATER).unmatched_total, 3);
+}
+
+#[test]
+fn a_favorite_on_an_episode_without_a_channel_row_is_reported() {
+    let index = Index::new(
+        &[DestProvider {
+            id: "xt-a".into(),
+            account: Some(tag(1)),
+            xtream: true,
+        }],
+        vec![DestChannel {
+            content_type: "series".into(),
+            series_title: Some("Lost".into()),
+            season: Some(1),
+            episode: Some(1),
+            show: Some("xt-a-series-9".into()),
+            ..movie("xt-a-xt-ep-9-s1-0", "Lost S01E01")
+        }],
+    );
+    let fav = Item {
+        reference: ItemRef {
+            series: Some("Lost".into()),
+            season: Some(1),
+            episode: Some(1),
+            ..ItemRef::named(ItemKind::Episode, "Lost S01E01")
+        },
+        watched: Some(watched(1, 2, 1, 60)),
+        position: None,
+        favorite: true,
+    };
+    let plan = plan(&export(vec![fav]), &index, LATER);
+    assert!(plan.favorites.is_empty());
+    assert_eq!(plan.history.len(), 1, "its history still goes");
+    assert_eq!(plan.unmatched_total, 1);
 }
 
 #[test]
 fn an_episode_with_only_its_show_found_and_no_position_is_unmatched() {
-    let plan = plan(&export(vec![lost_episode(true, false)]), &index(), 0);
+    let plan = plan(&export(vec![lost_episode(true, false)]), &index(), LATER);
     assert!(plan.positions.is_empty() && plan.history.is_empty());
     assert_eq!(
         plan.unmatched,
@@ -291,7 +455,7 @@ fn an_episode_with_only_its_show_found_and_no_position_is_unmatched() {
 
 #[test]
 fn a_position_alone_needs_no_channel() {
-    let plan = plan(&export(vec![lost_episode(false, true)]), &index(), 0);
+    let plan = plan(&export(vec![lost_episode(false, true)]), &index(), LATER);
     assert_eq!(plan.positions.len(), 1);
     assert!(plan.unmatched.is_empty());
 }
@@ -341,7 +505,7 @@ fn pins_go_to_the_providers_with_the_account_and_group() {
         ],
         ..Export::default()
     };
-    let plan = plan(&export, &index, 0);
+    let plan = plan(&export, &index, LATER);
     let row = |p: &str, g: &str| PinRow {
         provider_id: p.into(),
         content_type: "movie".into(),
@@ -379,7 +543,7 @@ fn the_sources_last_item_is_offered_to_resume() {
         ..Export::default()
     };
     assert_eq!(
-        plan(&export, &index(), 0).resume,
+        plan(&export, &index(), LATER).resume,
         Some(Resume {
             channel_id: "xt-a-movie-2".into(),
             name: "Alien".into(),
@@ -399,7 +563,7 @@ fn nothing_is_offered_to_resume_without_a_single_channel() {
             current: Some(current),
             ..Export::default()
         };
-        assert_eq!(plan(&export, &index(), 0).resume, None);
+        assert_eq!(plan(&export, &index(), LATER).resume, None);
     }
 }
 
@@ -440,5 +604,40 @@ fn unmatched_kinds_follow_item_kinds() {
     assert_eq!(
         UnmatchedKind::from(ItemKind::Episode),
         UnmatchedKind::Episode
+    );
+}
+
+#[test]
+fn the_same_place_saved_at_another_time_is_unchanged() {
+    let old = at(600.0, 100);
+    assert_eq!(merge_position(Some(old), at(600.0, 200)), None);
+    let finished = Position {
+        finished: true,
+        ..at(600.0, 200)
+    };
+    assert_eq!(merge_position(Some(old), finished), Some(finished));
+    let longer = Position {
+        duration: 4000.0,
+        ..at(600.0, 200)
+    };
+    assert_eq!(merge_position(Some(old), longer), Some(longer));
+}
+
+#[test]
+fn the_same_plays_a_little_apart_are_unchanged() {
+    let old = watched(10, 1000, 2, 300);
+    assert_eq!(merge_watched(Some(old), watched(10, 1060, 2, 300)), None);
+    assert_eq!(merge_watched(Some(old), watched(10, 940, 2, 300)), None);
+    assert_eq!(
+        merge_watched(Some(old), watched(10, 1061, 2, 300)),
+        Some(watched(10, 1061, 2, 300))
+    );
+    assert_eq!(
+        merge_watched(Some(old), watched(10, 1001, 3, 300)),
+        Some(watched(10, 1001, 3, 300))
+    );
+    assert_eq!(
+        merge_watched(Some(old), watched(10, 1001, 2, 301)),
+        Some(watched(10, 1001, 2, 301))
     );
 }

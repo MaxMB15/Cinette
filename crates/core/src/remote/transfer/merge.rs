@@ -23,15 +23,44 @@ pub const CLOCK_SLACK: i64 = 60;
 /// The most unmatched items a result lists. The rest are only counted.
 pub const MAX_UNMATCHED_LISTED: usize = 200;
 
+/// The most plays one history entry takes.
+pub const MAX_PLAYS: i64 = 1_000_000;
+/// The most watched seconds one history entry takes: a hundred years.
+pub const MAX_WATCHED_SECONDS: i64 = 100 * 365 * 24 * 3600;
+/// The longest a movie or episode can be, in seconds: a week.
+pub const MAX_DURATION: f64 = 7.0 * 24.0 * 3600.0;
+
 /// How far the source's clock is behind the destination's, in seconds, to
-/// add to the source's times. 0 when the two are within [`CLOCK_SLACK`].
-pub fn clock_offset(sent_at: i64, now: i64) -> i64 {
-    let offset = now.saturating_sub(sent_at);
+/// add to the source's times: the destination's clock when the first chunk
+/// arrived, `received_at`, less the source's when it was made, `sent_at`.
+/// Rounded to whole minutes, since the time on the way counts too, and 0
+/// when the two are within [`CLOCK_SLACK`].
+pub fn clock_offset(sent_at: i64, received_at: i64) -> i64 {
+    let offset = received_at.saturating_sub(sent_at);
     if offset.abs() > CLOCK_SLACK {
-        offset
+        ((offset as f64 / 60.0).round() as i64).saturating_mul(60)
     } else {
         0
     }
+}
+
+/// A history entry that makes sense: counts that aren't negative or huge,
+/// and a first watch no later than the last.
+fn watched_ok(w: &Watched) -> bool {
+    (0..=MAX_PLAYS).contains(&w.play_count)
+        && (0..=MAX_WATCHED_SECONDS).contains(&w.watched_seconds)
+        && 0 <= w.first_watched_at
+        && w.first_watched_at <= w.last_watched_at
+}
+
+/// A position that makes sense: within a duration that's positive and
+/// not absurd.
+fn position_ok(p: &Position) -> bool {
+    p.duration > 0.0
+        && p.duration <= MAX_DURATION
+        && p.position >= 0.0
+        && p.position <= p.duration
+        && p.updated_at >= 0
 }
 
 /// The history entry after the merge, or `None` when the destination's
@@ -40,6 +69,13 @@ pub fn merge_watched(old: Option<Watched>, new: Watched) -> Option<Watched> {
     let Some(old) = old else {
         return Some(new);
     };
+    // The same plays, seen through clocks a little apart, are the same entry.
+    if old.play_count == new.play_count
+        && old.watched_seconds == new.watched_seconds
+        && (old.last_watched_at - new.last_watched_at).abs() <= CLOCK_SLACK
+    {
+        return None;
+    }
     let merged = Watched {
         first_watched_at: old.first_watched_at.min(new.first_watched_at),
         last_watched_at: old.last_watched_at.max(new.last_watched_at),
@@ -50,10 +86,18 @@ pub fn merge_watched(old: Option<Watched>, new: Watched) -> Option<Watched> {
 }
 
 /// The position after the merge, or `None` when the destination's stays.
-/// A tie keeps the destination's.
+/// A tie keeps the destination's, and so does the same place saved at
+/// another time.
 pub fn merge_position(old: Option<Position>, new: Position) -> Option<Position> {
     match old {
         Some(old) if old.updated_at >= new.updated_at => None,
+        Some(old)
+            if old.position == new.position
+                && old.duration == new.duration
+                && old.finished == new.finished =>
+        {
+            None
+        }
         _ => Some(new),
     }
 }
@@ -153,29 +197,29 @@ impl Plan {
 /// Matches every item and pin, shifts the source's times by `offset` (see
 /// [`clock_offset`]), and folds items that found the same destination item
 /// together by the merge rules.
-pub fn plan(export: &Export, index: &Index, offset: i64) -> Plan {
+pub fn plan(export: &Export, index: &Index, now: i64) -> Plan {
     let mut plan = Plan::default();
-    let shift = |t: i64| t.saturating_add(offset);
+    let offset = clock_offset(export.sent_at, export.received_at);
+    // A time from the future, from a wrong clock or a broken row, would win
+    // every merge after it, so none goes past now.
+    let shift = |t: i64| t.saturating_add(offset).clamp(0, now.max(0));
     for item in &export.items {
-        let found = match index.find(&item.reference) {
+        let r = &item.reference;
+        let found = match index.find(r) {
             Ok(found) => found,
             Err(reason) => {
-                plan.miss(&item.reference.name, item.reference.kind.into(), reason);
+                plan.miss(&r.name, r.kind.into(), reason);
                 continue;
             }
         };
-        // Needs a channel: a history entry and a favorite. A match with only
-        // a show's key still places the position.
-        let wants_row = item.watched.is_some() || item.favorite;
-        if wants_row && found.channel.is_none() && item.position.is_none() {
-            plan.miss(
-                &item.reference.name,
-                item.reference.kind.into(),
-                Miss::Missing,
-            );
-            continue;
+        let watched = item.watched.filter(watched_ok);
+        let position = item.position.filter(position_ok);
+        if (item.watched.is_some() && watched.is_none())
+            || (item.position.is_some() && position.is_none())
+        {
+            plan.miss(&r.name, r.kind.into(), Miss::Invalid);
         }
-        if let (Some(position), Some(key)) = (item.position, found.key.as_ref()) {
+        if let (Some(position), Some(key)) = (position, found.key.as_ref()) {
             let position = Position {
                 updated_at: shift(position.updated_at),
                 ..position
@@ -185,10 +229,20 @@ pub fn plan(export: &Export, index: &Index, offset: i64) -> Plan {
                 plan.positions.insert(key.clone(), newer);
             }
         }
+        // A history entry and a favorite need a channel of their own. An
+        // episode from a saved list has no row in `channels`, so it can't
+        // be a favorite there.
+        let favorite = item.favorite;
+        let row_channel = found.channel.as_ref();
+        let lost = (watched.is_some() && row_channel.is_none())
+            || (favorite && row_channel.is_none_or(|c| c.show.is_some()));
+        if lost {
+            plan.miss(&r.name, r.kind.into(), found.why);
+        }
         let Some(channel) = found.channel else {
             continue;
         };
-        if let Some(watched) = item.watched {
+        if let Some(watched) = watched {
             let watched = Watched {
                 first_watched_at: shift(watched.first_watched_at),
                 last_watched_at: shift(watched.last_watched_at),
@@ -211,10 +265,12 @@ pub fn plan(export: &Export, index: &Index, offset: i64) -> Plan {
                 }
             }
         }
-        if item.favorite {
+        if favorite && channel.show.is_none() {
             plan.favorites.insert(channel.id.clone());
         }
     }
+    // Items the source or this device left out for being too large.
+    plan.unmatched_total = plan.unmatched_total.saturating_add(export.dropped);
     for pin in &export.pins {
         match pin_row(index, &pin.account, &pin.content_type, &pin.group) {
             Ok(rows) => {
