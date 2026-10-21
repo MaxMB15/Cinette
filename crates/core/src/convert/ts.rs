@@ -13,10 +13,14 @@
 //!   is cut at the next audio or video packet anyway, so a picture that
 //!   stalls, or a stream with one picture and then only sound, still
 //!   makes segments.
-//! - A jump in the clock of more than [`JUMP`], forward or back, ends the
-//!   segment where it was and marks the next as a discontinuity, so no
-//!   segment runs as long as the gap. With a cut by the longest length,
-//!   no segment runs past it by more than [`JUMP`].
+//! - Each audio and video PID keeps its own clock, since some channels
+//!   carry them seconds apart. A segment's length on each is how far that
+//!   clock moved in it.
+//! - A jump of more than [`JUMP`], forward or back, on one PID's clock ends
+//!   the segment where it was and marks the next as a discontinuity, so no
+//!   segment runs as long as the gap. The other PIDs' jumps that follow
+//!   are part of the same one. With a cut by the longest length, no
+//!   segment runs past it by more than [`JUMP`].
 //! - Each segment starts with the PAT and the PMT, so it can be read on
 //!   its own. Their continuity counters are renumbered, so the copies
 //!   don't read as repeated packets.
@@ -94,17 +98,10 @@ pub struct TsSegmenter {
     pat_counter: u8,
     pmt_counter: u8,
     current: Vec<u8>,
-    /// The current segment's start, in ticks without wraps.
-    start: Option<i64>,
-    /// The latest timestamp of the audio and video, without wraps.
-    latest: Option<i64>,
-    /// The ticks the clock last moved forward, for a segment's end when
-    /// nothing comes after it.
-    step: i64,
-    /// The clock jumped since the last segment was cut.
+    /// The clock of each audio and video PID seen so far.
+    clocks: Vec<Clock>,
+    /// A clock jumped since the last segment was cut.
     jumped: bool,
-    /// Ticks added for the wraps seen so far.
-    wraps: i64,
     codec: Option<String>,
     /// How many keyframes were searched for an SPS, so a stream without
     /// one isn't searched forever.
@@ -130,11 +127,8 @@ impl TsSegmenter {
             pat_counter: 0,
             pmt_counter: 0,
             current: Vec::new(),
-            start: None,
-            latest: None,
-            step: 0,
+            clocks: Vec::new(),
             jumped: false,
-            wraps: 0,
             codec: None,
             searched: 0,
         }
@@ -178,9 +172,10 @@ impl TsSegmenter {
 
     /// The stream ended. Returns what's left as the last segment.
     pub fn finish(mut self) -> Option<Segment> {
-        let start = self.start?;
-        let latest = self.latest.unwrap_or(start);
-        let duration = ((latest - start + self.step).max(0)) as f64 / CLOCK;
+        if self.clocks.is_empty() {
+            return None;
+        }
+        let duration = self.elapsed();
         Some(Segment {
             bytes: std::mem::take(&mut self.current),
             duration,
@@ -227,13 +222,12 @@ impl TsSegmenter {
             && self.media.contains(&pid)
             && let Some(pts) = payload(&packet).and_then(pes_pts)
         {
-            let pts = self.unwrap(pts);
             let by = Some(pid) == self.cut_pid;
             let random_access = by && random_access(&packet);
             if random_access && self.h264 && self.codec.is_none() {
                 self.find_codec(&packet);
             }
-            self.cut_before(pts, by, random_access, segments);
+            self.cut_before(pid, pts, random_access, segments);
         }
         self.current.extend_from_slice(&packet);
         Ok(())
@@ -253,40 +247,63 @@ impl TsSegmenter {
             .collect();
     }
 
-    /// Ends the current segment before an audio or video packet at `pts`:
-    /// when it's long enough and the packet is a random access point of the
-    /// PID cut `by`, when it's far too long or too big, or when the clock
-    /// jumped. The new segment starts with the PAT and the PMT.
-    fn cut_before(&mut self, pts: i64, by: bool, random_access: bool, segments: &mut Vec<Segment>) {
-        let (Some(start), Some(latest)) = (self.start, self.latest) else {
-            self.start = Some(pts);
-            self.latest = Some(pts);
+    /// Ends the current segment before a packet of `pid` at `pts`, read
+    /// off the packet: when it's long enough and the packet is a random
+    /// access point of the PID cut by, when it's far too long or too big,
+    /// or when `pid`'s clock jumped. A segment too big but with no length
+    /// yet waits for the clock to move, as a B-frame shown earlier holds
+    /// it still. The new segment starts with the PAT and the PMT.
+    fn cut_before(&mut self, pid: u16, pts: i64, random_access: bool, segments: &mut Vec<Segment>) {
+        let Some(i) = self.clocks.iter().position(|c| c.pid == pid) else {
+            self.clocks.push(Clock::new(pid, pts));
             return;
         };
-        let moved = pts - latest;
+        let clock = &mut self.clocks[i];
+        let pts = clock.unwrap(pts);
+        let moved = pts - clock.latest;
+        let after_jump = std::mem::take(&mut clock.after_jump);
         if moved.unsigned_abs() as f64 > JUMP * CLOCK {
-            // What was before the jump ends where its last packet did.
-            let duration = (latest - start + self.step).max(0) as f64 / CLOCK;
-            self.cut(duration, pts, segments);
-            self.jumped = true;
-            self.latest = Some(pts);
+            // A jump that follows another PID's is the same one.
+            if !after_jump {
+                // What was before the jump ends where its last packet did.
+                let duration = self.elapsed();
+                self.cut(duration, segments);
+                self.jumped = true;
+                for (n, other) in self.clocks.iter_mut().enumerate() {
+                    other.after_jump = n != i;
+                }
+            }
+            let clock = &mut self.clocks[i];
+            clock.latest = pts;
+            clock.start = pts;
             return;
         }
         if moved > 0 {
-            self.step = moved;
-            self.latest = Some(pts);
+            clock.step = moved;
+            clock.latest = pts;
         }
-        let length = (pts - start) as f64 / CLOCK;
+        let length = (pts - clock.start) as f64 / CLOCK;
+        let by = Some(pid) == self.cut_pid;
         let due = by && (random_access || !self.video) && length + 0.001 >= self.shortest;
         let overdue = length >= self.shortest * MAX_FACTOR;
-        if self.current.len() >= CUT_BYTES || (length > 0.0 && (due || overdue)) {
-            self.cut(length.max(0.0), pts, segments);
+        let full = self.current.len() >= CUT_BYTES;
+        if length > 0.0 && (due || overdue || full) {
+            self.cut(length, segments);
+            self.clocks[i].start = pts;
         }
     }
 
+    /// How long the current segment has run, as far as the clock that
+    /// moved furthest in it, to the end of its last packet.
+    fn elapsed(&self) -> f64 {
+        let ticks = self.clocks.iter().map(Clock::elapsed).max().unwrap_or(0);
+        ticks.max(0) as f64 / CLOCK
+    }
+
     /// Ends the current segment, `duration` seconds long, and starts the
-    /// next at `pts` with copies of the PAT and the PMT.
-    fn cut(&mut self, duration: f64, pts: i64, segments: &mut Vec<Segment>) {
+    /// next with copies of the PAT and the PMT. Each clock's part of it
+    /// starts where its next packet is due.
+    fn cut(&mut self, duration: f64, segments: &mut Vec<Segment>) {
         let mut next = Vec::with_capacity(self.current.capacity());
         for packet in self.pat.clone() {
             self.pat_counter = self.copy_psi(&mut next, packet, self.pat_counter);
@@ -300,7 +317,9 @@ impl TsSegmenter {
             duration,
             discontinuity: std::mem::take(&mut self.jumped),
         });
-        self.start = Some(pts);
+        for clock in &mut self.clocks {
+            clock.start = clock.latest + clock.step;
+        }
     }
 
     /// Writes a copy of a PAT or PMT packet with the next counter.
@@ -310,18 +329,53 @@ impl TsSegmenter {
         next
     }
 
+    fn find_codec(&mut self, packet: &[u8; PACKET]) {
+        if self.searched >= SPS_SEARCHES {
+            return;
+        }
+        self.searched += 1;
+        self.codec = payload(packet).and_then(pes_data).and_then(hls::avc_codec);
+    }
+}
+
+/// One audio or video PID's clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Clock {
+    pid: u16,
+    /// Ticks added for its wraps so far.
+    wraps: i64,
+    /// Its latest timestamp, without wraps.
+    latest: i64,
+    /// The ticks it last moved forward, for the end of its last packet.
+    step: i64,
+    /// Where the current segment started on it.
+    start: i64,
+    /// Another PID's jump cut the segment, and this one hasn't been seen
+    /// since, so a jump of its own is part of that one.
+    after_jump: bool,
+}
+
+impl Clock {
+    fn new(pid: u16, pts: i64) -> Self {
+        Self {
+            pid,
+            wraps: 0,
+            latest: pts,
+            step: 0,
+            start: pts,
+            after_jump: false,
+        }
+    }
+
     /// Places a timestamp of the 33-bit clock nearest the latest one: in
     /// the wraps so far, the one before, or the next, which then counts as
     /// a wrap. A B-frame from just before a wrap, shown after a frame from
     /// just after it, lands before that frame, not a whole wrap ahead.
     fn unwrap(&mut self, pts: i64) -> i64 {
         let here = pts + self.wraps;
-        let Some(latest) = self.latest else {
-            return here;
-        };
         let nearest = [here, here + WRAP, here - WRAP]
             .into_iter()
-            .min_by_key(|candidate| (candidate - latest).unsigned_abs())
+            .min_by_key(|candidate| (candidate - self.latest).unsigned_abs())
             .unwrap_or(here);
         if nearest > here {
             self.wraps += WRAP;
@@ -329,12 +383,10 @@ impl TsSegmenter {
         nearest
     }
 
-    fn find_codec(&mut self, packet: &[u8; PACKET]) {
-        if self.searched >= SPS_SEARCHES {
-            return;
-        }
-        self.searched += 1;
-        self.codec = payload(packet).and_then(pes_data).and_then(hls::avc_codec);
+    /// How far it moved in the current segment, to the end of its last
+    /// packet.
+    fn elapsed(&self) -> i64 {
+        self.latest - self.start + self.step
     }
 }
 
