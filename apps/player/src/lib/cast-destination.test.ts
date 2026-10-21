@@ -1038,12 +1038,18 @@ describe("createCastDestination", () => {
 			clock.now += 1;
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
 			expect(pending()).toEqual([0]);
-			// Buffering isn't playing.
+			// Playing for less than a minute isn't steady.
+			await next();
+			cast.receive({ kind: "media", media: media({ live: true }) });
+			clock.now += STEADY_MS - 1;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([1_000]);
+			// Nor is buffering, however long.
 			await next();
 			cast.receive({ kind: "media", media: media({ player: "buffering", live: true }) });
 			clock.now += STEADY_MS;
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
-			expect(pending()).toEqual([1_000]);
+			expect(pending()).toEqual([2_000]);
 		});
 
 		it("says at once when the provider turns the login away", async () => {

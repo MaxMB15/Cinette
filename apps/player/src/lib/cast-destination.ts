@@ -538,8 +538,7 @@ export const createCastDestination = (
 			if (update.kind === "conversionStopped") restart();
 			// A cast that ended takes the tries to start it again with it.
 			if (update.kind === "closed") resetRestarts();
-			if (update.kind === "media" && update.media?.player === "playing")
-				playingSince ??= now();
+			if (snapshot.media?.player === "playing") playingSince ??= now();
 		},
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,
