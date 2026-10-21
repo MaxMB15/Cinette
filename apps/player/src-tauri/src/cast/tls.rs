@@ -4,11 +4,12 @@
 //! The TLS connection to a Cast receiver's port 8009.
 //!
 //! Receivers present a certificate their maker signed, with no host name a
-//! sender could check, so any certificate is accepted on the first
-//! connection, as every open-source sender does. Its bytes are then pinned:
-//! a later connection to the same receiver in this run must present the
-//! same one. The handshake's own signatures are still checked, so the
-//! receiver must hold the certificate's key.
+//! sender could check, so a new cast accepts any certificate, as every
+//! open-source sender does. Receivers change theirs from time to time, after
+//! a few days or a restart, so its bytes are pinned only while that cast
+//! lasts: a connection made for it must present the same one. The
+//! handshake's own signatures are still checked, so the receiver must hold
+//! the certificate's key.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

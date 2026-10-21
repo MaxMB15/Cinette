@@ -7,6 +7,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use mvp_core::cast::frame::{CastMessage, FrameReader, Payload};
 use mvp_core::cast::message::{NS_MEDIA, NS_RECEIVER};
@@ -55,15 +56,27 @@ pub fn acceptor() -> (TlsAcceptor, Vec<u8>) {
 /// and what it gets, from every connection.
 pub async fn start() -> (SocketAddr, Vec<u8>, mpsc::UnboundedReceiver<Got>) {
     let (acceptor, cert) = acceptor();
+    let (addr, messages) = start_with(vec![acceptor], Duration::ZERO).await;
+    (addr, cert, messages)
+}
+
+/// Starts a fake receiver that waits `delay` before each handshake, and
+/// presents the certificates of `acceptors` in turn, one per connection,
+/// as a receiver that changed its certificate does.
+pub async fn start_with(
+    acceptors: Vec<TlsAcceptor>,
+    delay: Duration,
+) -> (SocketAddr, mpsc::UnboundedReceiver<Got>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (got, messages) = mpsc::unbounded_channel();
     tokio::spawn(async move {
         let mut connection = 0;
         while let Ok((tcp, _)) = listener.accept().await {
-            let acceptor = acceptor.clone();
+            let acceptor = acceptors[connection % acceptors.len()].clone();
             let got = got.clone();
             tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
                 if let Ok(stream) = acceptor.accept(tcp).await {
                     answer(stream, got, connection).await;
                 }
@@ -71,7 +84,7 @@ pub async fn start() -> (SocketAddr, Vec<u8>, mpsc::UnboundedReceiver<Got>) {
             connection += 1;
         }
     });
-    (addr, cert, messages)
+    (addr, messages)
 }
 
 /// Answers `connection` like the Default Media Receiver: nothing running

@@ -69,6 +69,10 @@ pub struct CastReceivers {
     browse: Mutex<Option<Browse>>,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     browsing: Mutex<bool>,
+    /// How long a receiver that couldn't be reached shows so:
+    /// [`receivers::UNREACHABLE_FOR`], or less in tests.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    unreachable_for: Mutex<std::time::Duration>,
 }
 
 impl CastReceivers {
@@ -91,7 +95,18 @@ impl CastReceivers {
             browse: Mutex::new(None),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             browsing: Mutex::new(false),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            unreachable_for: Mutex::new(receivers::UNREACHABLE_FOR),
         }
+    }
+
+    /// Shows a receiver that couldn't be reached so for `time`.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pub(crate) fn set_unreachable_for(&self, time: std::time::Duration) {
+        *self
+            .unreachable_for
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = time;
     }
 
     /// Browses with `browse` from now on.
@@ -166,13 +181,18 @@ fn announce<R: Runtime>(app: &AppHandle<R>) {
 /// A connection to `id` failed. It shows as unavailable for
 /// [`receivers::UNREACHABLE_FOR`], after which it can be tried again.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-// The Cast destination uses it from step 6.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn mark_unreachable<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    update(app, |registry| registry.unreachable(id, Instant::now()));
+    let time = *app
+        .state::<CastReceivers>()
+        .unreachable_for
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    update(app, |registry| {
+        registry.unreachable(id, Instant::now() + time)
+    });
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(receivers::UNREACHABLE_FOR).await;
+        tokio::time::sleep(time).await;
         update(&app, |registry| registry.expire(Instant::now()));
     });
 }

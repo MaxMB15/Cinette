@@ -77,14 +77,20 @@ pub struct StreamFormats {
 }
 
 impl StreamsState {
-    /// Keeps `urls` as `channel_id`'s list, and returns its generation.
+    /// Keeps `urls` as `channel_id`'s list, and returns its generation. The
+    /// same list as before keeps its generation, so the formats worked out
+    /// from it for one receiver, or for an earlier load, stay good.
     pub(crate) fn remember(&self, channel_id: &str, urls: Vec<String>) -> u64 {
+        let mut kept = lock(&self.urls);
+        if let Some((generation, _)) = kept.get(channel_id).filter(|(_, old)| *old == urls) {
+            return *generation;
+        }
         let generation = {
             let mut next = lock(&self.generation);
             *next += 1;
             *next
         };
-        lock(&self.urls).insert(channel_id.to_string(), (generation, urls));
+        kept.insert(channel_id.to_string(), (generation, urls));
         generation
     }
 

@@ -123,13 +123,75 @@ struct Active {
     conversion: Option<Conversion>,
 }
 
+/// What a load rejects with when a newer load or a stop for the same
+/// receiver came while it ran.
+pub const SUPERSEDED: &str = "superseded";
+
+/// A receiver's newest load or stop. An older load gives up.
+#[derive(Default, Clone, Copy)]
+struct Turn {
+    ticket: u64,
+    /// The newest was a stop, so a session an older load opened ends too.
+    stopped: bool,
+}
+
+/// The plan of a receiver's last conversion and what it was made for, so a
+/// seek or a resume of the same item doesn't probe the provider again.
+#[derive(Clone)]
+struct KnownPlan {
+    channel_id: String,
+    generation: u64,
+    source: usize,
+    video: VideoChoice,
+    audio: AudioChoice,
+    plan: Plan,
+    /// The source has a length, so a start position applies.
+    has_length: bool,
+}
+
 /// The app's casts, managed by Tauri.
 #[derive(Default)]
 pub struct CastPlayback {
     active: Mutex<Option<Active>>,
     generation: Mutex<u64>,
-    /// Each receiver's certificate, from its first connection in this run.
+    /// The certificate of the receiver cast to now. Receivers change theirs
+    /// from time to time, so a new cast accepts what the receiver presents.
     pins: Mutex<HashMap<String, Vec<u8>>>,
+    turns: Mutex<HashMap<String, Turn>>,
+    /// Held while a load connects, so two loads don't both open a session.
+    connecting: tokio::sync::Mutex<()>,
+    plans: Mutex<HashMap<String, KnownPlan>>,
+}
+
+impl CastPlayback {
+    /// Starts a load's or a stop's turn on `receiver_id`, and returns its
+    /// ticket.
+    fn take_turn(&self, receiver_id: &str, stopped: bool) -> u64 {
+        let mut turns = lock(&self.turns);
+        let turn = turns.entry(receiver_id.to_string()).or_default();
+        turn.ticket += 1;
+        turn.stopped = stopped;
+        turn.ticket
+    }
+
+    /// Rejects with [`SUPERSEDED`] once `ticket` isn't the newest turn.
+    fn still_turn(&self, receiver_id: &str, ticket: u64) -> Result<(), String> {
+        if lock(&self.turns)
+            .get(receiver_id)
+            .is_some_and(|t| t.ticket == ticket)
+        {
+            Ok(())
+        } else {
+            Err(SUPERSEDED.into())
+        }
+    }
+
+    /// Whether the newest turn is a stop.
+    fn stopped(&self, receiver_id: &str) -> bool {
+        lock(&self.turns)
+            .get(receiver_id)
+            .is_some_and(|t| t.stopped)
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -180,11 +242,13 @@ where
             emit(&app, &id, update)
         })
         .await;
-        // Over: the converter stops with it.
+        // Over: the converter stops with it, and the next cast takes the
+        // receiver's certificate afresh.
         let state = app.state::<CastPlayback>();
         let mut active = lock(&state.active);
         if active.as_ref().is_some_and(|a| a.generation == generation) {
             *active = None;
+            lock(&state.pins).remove(&id);
         }
     });
 }
@@ -197,11 +261,15 @@ fn commands_for(state: &CastPlayback, receiver_id: &str) -> Option<mpsc::Unbound
         .map(|a| a.commands.clone())
 }
 
-/// Connects to `receiver_id` unless it's the active cast already.
-async fn ensure_connected<R: Runtime>(app: &AppHandle<R>, receiver_id: &str) -> Result<(), String> {
+/// Connects to `receiver_id` unless it's the active cast already. Says
+/// whether it opened a new session.
+async fn ensure_connected<R: Runtime>(
+    app: &AppHandle<R>,
+    receiver_id: &str,
+) -> Result<bool, String> {
     let state = app.state::<CastPlayback>();
     if commands_for(&state, receiver_id).is_some_and(|c| !c.is_closed()) {
-        return Ok(());
+        return Ok(false);
     }
     let (addr, port) = app
         .state::<CastReceivers>()
@@ -214,12 +282,10 @@ async fn ensure_connected<R: Runtime>(app: &AppHandle<R>, receiver_id: &str) -> 
         Ok((stream, presented)) => {
             lock(&state.pins).insert(receiver_id.to_string(), presented);
             begin(app, receiver_id, stream);
-            Ok(())
+            Ok(true)
         }
         Err(e) => {
-            super::update(app, |registry| {
-                registry.unreachable(receiver_id, std::time::Instant::now())
-            });
+            super::mark_unreachable(app, receiver_id);
             Err(match e {
                 tls::TlsError::NotPinned => "notPinned",
                 _ => "unreachable",
@@ -291,8 +357,9 @@ struct ConversionInput<'a> {
 async fn conversion_plan<R: Runtime>(
     app: &AppHandle<R>,
     input: &ConversionInput<'_>,
-    decoders: &[String],
-) -> Result<Plan, String> {
+) -> Result<(Plan, bool), String> {
+    let support = crate::convert::support::support(app).await;
+    let decoders = support.decoders;
     let probed = crate::streams::probe(app, input.url)
         .await
         .map_err(|e| match e {
@@ -317,25 +384,27 @@ async fn conversion_plan<R: Runtime>(
             deinterlace: probed.interlaced,
         },
     };
-    Ok(Plan {
+    let has_length = probed.duration.is_some();
+    let plan = Plan {
         video,
         audio,
         live: input.live,
-        start_at: input.start_at.filter(|_| probed.duration.is_some()),
+        start_at: input.start_at.filter(|_| has_length),
         audio_track,
-    })
+    };
+    Ok((plan, has_length))
 }
 
-/// Starts the converter for `url` and serves it to `receiver`.
+/// Starts the converter for `url` by `plan`, and serves it to `receiver`.
 async fn start_conversion<R: Runtime>(
     app: &AppHandle<R>,
-    input: &ConversionInput<'_>,
+    url: &str,
+    plan: &Plan,
     receiver: IpAddr,
 ) -> Result<Conversion, String> {
     let support = crate::convert::support::support(app).await;
     let encoders = support.encoders.ok_or("noConverter")?;
-    let plan = conversion_plan(app, input, &support.decoders).await?;
-    crate::convert::start(app, input.url, &plan, encoders, receiver)
+    crate::convert::start(app, url, plan, encoders, receiver)
         .await
         .map_err(|e| match e {
             ConvertError::Refused(_) => REFUSED.to_string(),
@@ -348,11 +417,18 @@ async fn start_conversion<R: Runtime>(
 }
 
 /// Plays `channel` on `receiver_id` the way `route` says, from `start_at`
-/// seconds for an item with a length. Connects first when needed. Rejects
-/// with `notFound`, `unreachable`, `notPinned`, `refused`, `noConverter`,
-/// `noEncoder`, `unsupported`, `noRoute`, `converterFailed` or `stale`,
-/// or, for a direct HLS route, `notPlaylist` or `cors`, after which the
-/// frontend routes the item again without that format.
+/// seconds for an item with a length. Connects first when needed.
+///
+/// The receiver's conversion, if any, stops before this asks the provider
+/// for anything, since many accounts allow one connection. A newer load or
+/// a stop for the same receiver makes this one give up wherever it is, with
+/// [`SUPERSEDED`], dropping what it started.
+///
+/// Rejects with `notFound`, `unreachable`, `notPinned`, `refused`,
+/// `noConverter`, `noEncoder`, `unsupported`, `noRoute`, `converterFailed`,
+/// `stale` or `superseded`, or, for a direct HLS route, `notPlaylist` or
+/// `cors`, after which the frontend routes the item again without that
+/// format.
 pub async fn load<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
@@ -360,12 +436,22 @@ pub async fn load<R: Runtime>(
     route: CastRoute,
     start_at: Option<f64>,
 ) -> Result<(), String> {
+    let state = app.state::<CastPlayback>();
+    let ticket = state.take_turn(receiver_id, false);
     // The URL the route was worked out for, which a newer list of the
     // item's URLs makes stale.
     let (generation, source) = route.source();
     let url = &app
         .state::<StreamsState>()
         .url(&channel.id, generation, source)?;
+    let old = lock(&state.active)
+        .as_mut()
+        .filter(|a| a.receiver_id == receiver_id)
+        .and_then(|a| a.conversion.take());
+    if let Some(old) = old {
+        old.stop().await;
+    }
+    state.still_turn(receiver_id, ticket)?;
     let live = channel.content_type == "live";
     let mut request = LoadRequest {
         url: String::new(),
@@ -387,6 +473,7 @@ pub async fn load<R: Runtime>(
         CastRoute::Direct { container, .. } => {
             if matches!(container, Container::HlsTs | Container::HlsFmp4) {
                 check_playlist(url).await?;
+                state.still_turn(receiver_id, ticket)?;
             }
             let (content_type, ts) = content_type(container);
             request.url = url.clone();
@@ -405,15 +492,53 @@ pub async fn load<R: Runtime>(
                 .get(receiver_id)
                 .map(|r| r.addr)
                 .ok_or("notFound")?;
-            let input = ConversionInput {
-                url,
-                container,
-                video,
-                audio,
-                live,
-                start_at,
+            let made_for = |known: &KnownPlan| {
+                known.channel_id == channel.id
+                    && known.generation == generation
+                    && known.source == source
+                    && known.video == video
+                    && known.audio == audio
             };
-            let started = start_conversion(app, &input, receiver).await?;
+            let known = lock(&state.plans)
+                .get(receiver_id)
+                .filter(|known| made_for(known))
+                .cloned();
+            // A seek or a resume of the same item keeps its plan, with the
+            // new start, rather than asking the provider again.
+            let plan = match known {
+                Some(known) => Plan {
+                    start_at: start_at.filter(|_| known.has_length),
+                    ..known.plan
+                },
+                None => {
+                    let input = ConversionInput {
+                        url,
+                        container,
+                        video,
+                        audio,
+                        live,
+                        start_at,
+                    };
+                    let (plan, has_length) = conversion_plan(app, &input).await?;
+                    state.still_turn(receiver_id, ticket)?;
+                    let known = KnownPlan {
+                        channel_id: channel.id.clone(),
+                        generation,
+                        source,
+                        video,
+                        audio,
+                        plan,
+                        has_length,
+                    };
+                    lock(&state.plans).insert(receiver_id.to_string(), known);
+                    plan
+                }
+            };
+            let started = start_conversion(app, url, &plan, receiver).await?;
+            if let Err(e) = state.still_turn(receiver_id, ticket) {
+                started.stop().await;
+                return Err(e);
+            }
             // The converted stream starts where the plan does, and has no
             // length the receiver can seek in.
             request.url = started.url.clone();
@@ -423,15 +548,22 @@ pub async fn load<R: Runtime>(
             conversion = Some(started);
         }
     }
-    ensure_connected(app, receiver_id).await?;
-    let state = app.state::<CastPlayback>();
+    let connecting = state.connecting.lock().await;
+    state.still_turn(receiver_id, ticket)?;
+    let opened = ensure_connected(app, receiver_id).await?;
+    drop(connecting);
+    if let Err(e) = state.still_turn(receiver_id, ticket) {
+        // A stop that came while this connected ends the session it opened.
+        if opened && state.stopped(receiver_id) {
+            end_session(&state, receiver_id);
+        }
+        return Err(e);
+    }
     let mut active = lock(&state.active);
     let active = active
         .as_mut()
         .filter(|a| a.receiver_id == receiver_id)
         .ok_or("unreachable")?;
-    // Any earlier conversion stops here, after the receiver was told of the
-    // new stream.
     active
         .commands
         .send(Command::Load(Box::new(request)))
@@ -494,9 +626,11 @@ pub fn control(state: &CastPlayback, receiver_id: &str, action: CastAction) -> R
 /// Has the cast on `receiver_id` let go of the provider's stream, and keeps
 /// it: the receiver stops its media, and the converter stops and waits for
 /// ffmpeg to exit. A switch to another item does this before it asks the
-/// provider for the new one, for accounts that allow one connection.
-/// Rejects with `notConnected` when nothing is cast there.
+/// provider for the new one, for accounts that allow one connection. A
+/// load still under way gives up. Rejects with `notConnected` when nothing
+/// is cast there.
 pub async fn release(state: &CastPlayback, receiver_id: &str) -> Result<(), String> {
+    state.take_turn(receiver_id, false);
     let (commands, conversion) = {
         let mut active = lock(&state.active);
         let active = active
@@ -514,10 +648,19 @@ pub async fn release(state: &CastPlayback, receiver_id: &str) -> Result<(), Stri
 }
 
 /// Ends the cast on `receiver_id`: the receiver goes back to what it
-/// showed, and the converter stops.
+/// showed, and the converter stops. A load still under way gives up, and
+/// nothing it started plays.
 pub fn stop(state: &CastPlayback, receiver_id: &str) {
-    let mut active = lock(&state.active);
-    if let Some(ended) = active.take_if(|a| a.receiver_id == receiver_id) {
+    state.take_turn(receiver_id, true);
+    end_session(state, receiver_id);
+}
+
+/// Ends the session to `receiver_id`, if it has one, and forgets its
+/// certificate.
+fn end_session(state: &CastPlayback, receiver_id: &str) {
+    let ended = lock(&state.active).take_if(|a| a.receiver_id == receiver_id);
+    if let Some(ended) = ended {
         let _ = ended.commands.send(Command::Stop);
     }
+    lock(&state.pins).remove(receiver_id);
 }
