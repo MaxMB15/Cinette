@@ -41,6 +41,8 @@ fn locked_version_reads_the_line_after_the_name() {
 /// Restored onto another device, the remote-control key would give it this
 /// device's id, so both of Android's backup rule files leave it out, and
 /// the manifest names both.
+// The key's file name lives with remote control, which iOS doesn't build yet.
+#[cfg(remote)]
 #[test]
 fn backups_leave_out_the_remote_control_key() {
     let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
