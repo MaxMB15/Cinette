@@ -146,7 +146,9 @@ const ITEMS_KEY: &str = ",\"items\":[]";
 const PINS_KEY: &str = ",\"pins\":[]";
 
 fn json_len<T: Serialize>(value: &T) -> usize {
-    serde_json::to_vec(value).map_or(usize::MAX / 2, |v| v.len())
+    serde_json::to_vec(value)
+        .expect("transfer items always serialize")
+        .len()
 }
 
 /// Why the receiver gave up on a transfer.

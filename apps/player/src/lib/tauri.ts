@@ -3,6 +3,7 @@
 
 import { invoke } from "./invoke";
 import type { AirPlayRoute } from "@/lib/airplay";
+import type { Container } from "@/lib/route";
 import type { CatalogItem } from "@/lib/cinette-destination";
 import type { CommandOutcome, RemoteCommand, RemotePlayerState } from "@/lib/remote-target";
 import type { ConverterSupport, PlayingInfo, StreamFormats } from "@/lib/route-profiles";
@@ -634,6 +635,98 @@ export const getCastReceivers = (): Promise<CastReceiverList> => invoke("get_cas
  */
 export const holdCastReceivers = (ids: string[]): Promise<void> =>
 	invoke("hold_cast_receivers", { ids });
+
+/** How a Cast receiver gets an item: the URL list it was worked out from
+ *  (`StreamFormats.generation`), its URL's place in that list (from
+ *  `StreamFormats.sources`), and the route `chooseRoute` gave. */
+export type CastRoute =
+	| { via: "direct"; generation: number; source: number; container: Container }
+	| {
+			via: "converted";
+			generation: number;
+			source: number;
+			/** How the source comes, which decides whether its AAC can be
+			 *  copied into the converter's Matroska. */
+			container: Container;
+			video: "copy" | "transcode" | "none";
+			audio: "copy" | "aac" | "none";
+	  };
+
+/** A control for the receiver being cast to. */
+export type CastAction =
+	| { action: "play" }
+	| { action: "pause" }
+	| { action: "seek"; to: number }
+	| { action: "volume"; level: number };
+
+/** What a Cast receiver reports, as `cast://update` carries it. */
+export type CastUpdate =
+	| { kind: "ready" }
+	| { kind: "volume"; level: number; muted: boolean; fixed: boolean }
+	| {
+			kind: "media";
+			media: {
+				player: "idle" | "buffering" | "playing" | "paused";
+				idleReason: "finished" | "cancelled" | "interrupted" | "error" | null;
+				position: number;
+				duration: number | null;
+				live: boolean;
+				canPause: boolean;
+				canSeek: boolean;
+			} | null;
+	  }
+	| { kind: "loadFailed"; code: number | null }
+	| { kind: "playbackError"; code: number | null }
+	| { kind: "rejected"; reason: string | null }
+	| { kind: "conversionFailed"; refused: boolean }
+	| {
+			kind: "closed";
+			reason:
+				| "stopped"
+				| "appStopped"
+				| "launchFailed"
+				| "timeout"
+				| "protocol"
+				| "connectionLost";
+	  };
+
+/** The event that carries each receiver's `CastUpdate`. */
+export const CAST_UPDATE_EVENT = "cast://update";
+
+/**
+ * Play `channel` on a Cast receiver, connecting first when needed. Rejects
+ * with `notFound`, `unreachable`, `refused`, `noConverter`,
+ * `noEncoder`, `unsupported`, `noRoute`, `converterFailed` or `stale`, or,
+ * for a direct HLS route, `notPlaylist` or `cors`.
+ */
+export const castLoad = (
+	receiverId: string,
+	channel: Channel,
+	route: CastRoute,
+	startAt?: number
+): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt });
+
+/** Rejects with `notConnected` when nothing is cast to that receiver. */
+export const castControl = (receiverId: string, action: CastAction): Promise<void> =>
+	invoke("cast_control", { receiverId, action });
+
+/**
+ * Have the cast let go of the provider's stream and keep it: the receiver
+ * stops its media, and this computer's converter stops. Resolves once it
+ * has. Rejects with `notConnected` when nothing is cast to that receiver.
+ */
+export const castRelease = (receiverId: string): Promise<void> =>
+	invoke("cast_release", { receiverId });
+
+/** End the cast. The receiver goes back to what it showed. */
+export const castStop = (receiverId: string): Promise<void> => invoke("cast_stop", { receiverId });
+
+/**
+ * Whether a VPN looks to hold this device's default route. The pickers
+ * show a hint with it when no receiver is found or one can't be reached,
+ * since many VPN apps block local devices unless "allow LAN" is on.
+ */
+export const getVpnActive = (): Promise<boolean> => invoke("get_vpn_active");
 
 /** Who may control this device from another Cinette device. */
 export type RemoteControlMode = "always" | "ask" | "never";

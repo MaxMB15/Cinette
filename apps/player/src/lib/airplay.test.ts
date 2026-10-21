@@ -706,6 +706,19 @@ describe("airplayKey", () => {
 		});
 	});
 
+	it("skips from where the TV is now, not where it last said", () => {
+		const said = at({ status: "playing", position: 100, positionAt: 1000, duration: 600 });
+		// Four seconds later, a 10 s skip goes to 114.
+		expect(airplayKey({ type: "seekBy", seconds: 10 }, said, caps, 5000)).toEqual({
+			kind: "seek",
+			to: 114,
+		});
+		// Paused, it's where it said.
+		expect(
+			airplayKey({ type: "seekBy", seconds: 10 }, { ...said, status: "paused" }, caps, 5000)
+		).toEqual({ kind: "seek", to: 110 });
+	});
+
 	it("seeks within the item, when the TV can", () => {
 		expect(airplayKey({ type: "seekBy", seconds: 10 }, state, caps)).toEqual({
 			kind: "seek",

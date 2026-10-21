@@ -698,6 +698,37 @@ describe("backend commands", () => {
 		["stopRecording", () => tauri.stopRecording("r1"), "stop_recording", { id: "r1" }],
 		["getCastReceivers", () => tauri.getCastReceivers(), "get_cast_receivers"],
 		[
+			"castLoad",
+			() =>
+				tauri.castLoad(
+					"cast:tv",
+					episode,
+					{ via: "direct", generation: 3, source: 1, container: "hls-ts" },
+					30
+				),
+			"cast_load",
+			{
+				receiverId: "cast:tv",
+				channel: episode,
+				route: { via: "direct", generation: 3, source: 1, container: "hls-ts" },
+				startAt: 30,
+			},
+		],
+		[
+			"castControl",
+			() => tauri.castControl("cast:tv", { action: "seek", to: 12 }),
+			"cast_control",
+			{ receiverId: "cast:tv", action: { action: "seek", to: 12 } },
+		],
+		["castStop", () => tauri.castStop("cast:tv"), "cast_stop", { receiverId: "cast:tv" }],
+		[
+			"castRelease",
+			() => tauri.castRelease("cast:tv"),
+			"cast_release",
+			{ receiverId: "cast:tv" },
+		],
+		["getVpnActive", () => tauri.getVpnActive(), "get_vpn_active"],
+		[
 			"holdCastReceivers",
 			() => tauri.holdCastReceivers(["cast:tv"]),
 			"hold_cast_receivers",
@@ -806,6 +837,10 @@ describe("backend commands", () => {
 
 	it("listens for receivers on the event cast/mod.rs emits", () => {
 		expect(tauri.CAST_RECEIVERS_EVENT).toBe("cast://receivers");
+	});
+
+	it("listens for cast updates on the event cast/playback.rs emits", () => {
+		expect(tauri.CAST_UPDATE_EVENT).toBe("cast://update");
 	});
 
 	/**

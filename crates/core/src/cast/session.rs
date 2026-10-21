@@ -316,6 +316,12 @@ impl Session {
         self.media_command(json!({ "type": "PAUSE" }))
     }
 
+    /// Stops the media and keeps the app open, so the receiver lets go of
+    /// the stream while the cast goes on.
+    pub fn stop_media(&mut self) -> Result<(u64, Vec<u8>), CommandError> {
+        self.media_command(json!({ "type": "STOP" }))
+    }
+
     /// To an absolute position, in seconds.
     pub fn seek(&mut self, seconds: f64) -> Result<(u64, Vec<u8>), CommandError> {
         self.media_command(json!({ "type": "SEEK", "currentTime": seconds }))
