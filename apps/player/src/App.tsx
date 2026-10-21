@@ -22,7 +22,7 @@ import { useLockScreenSkip } from "./hooks/useLockScreenSkip";
 import { useRemoteTarget } from "./hooks/useRemoteTarget";
 import { FullscreenProvider } from "./lib/fullscreen-context";
 import { DownloadsProvider } from "@/hooks/useDownloads";
-import { isMobilePlatform } from "@/lib/platform";
+import { isMobilePlatform, remoteRoles } from "@/lib/platform";
 import { createQueryClient } from "@/lib/query-client";
 
 export default function App() {
@@ -71,6 +71,8 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 		},
 	});
 
+	const roles = remoteRoles();
+
 	useLockScreenSkip();
 	// Other Cinette devices' commands for this one.
 	useRemoteTarget();
@@ -92,9 +94,8 @@ const AppRoutes = ({ updateState }: AppRoutesProps) => {
 			</Routes>
 
 			<UpdateBanner state={updateState} hidden={!splash.dismissed} />
-			{/* Remote control runs on the desktop only. */}
-			{!isMobilePlatform() && <ConsentDialog />}
-			{!isMobilePlatform() && <ConnectStatusDialog />}
+			{roles.target && <ConsentDialog />}
+			{roles.controller && <ConnectStatusDialog />}
 			{donation.shouldShow && !updateState.update && (
 				<DonationPopup onDismiss={donation.dismiss} />
 			)}

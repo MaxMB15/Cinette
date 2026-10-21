@@ -4,7 +4,7 @@
 import { ChannelList } from "@/components/channels/ChannelList";
 import { RemoteCatalog } from "@/components/remote/RemoteCatalog";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
-import { isMobilePlatform } from "@/lib/platform";
+import { remoteRoles } from "@/lib/platform";
 
 /**
  * The channels page: this device's channels, or, while another device is
@@ -12,8 +12,7 @@ import { isMobilePlatform } from "@/lib/platform";
  * its own.
  */
 export const ChannelsPage = () =>
-	// Remote control runs on the desktop only.
-	isMobilePlatform() ? <ChannelList /> : <ChannelsOrRemote />;
+	remoteRoles().controller ? <ChannelsOrRemote /> : <ChannelList />;
 
 const ChannelsOrRemote = () => {
 	const { link } = useRemoteControl();

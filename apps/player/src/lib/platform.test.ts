@@ -3,7 +3,13 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
-import { getPlatform, isMobilePlatform, layoutModeFor, type Viewport } from "./platform";
+import {
+	getPlatform,
+	isMobilePlatform,
+	layoutModeFor,
+	remoteRoles,
+	type Viewport,
+} from "./platform";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
@@ -101,5 +107,26 @@ describe("isMobilePlatform", () => {
 		expect(isMobilePlatform("tv")).toBe(true);
 		expect(isMobilePlatform("macos")).toBe(false);
 		expect(isMobilePlatform("linux")).toBe(false);
+	});
+});
+
+describe("remoteRoles", () => {
+	it("lets computers, Android phones and tablets control and be controlled", () => {
+		for (const p of ["macos", "linux", "windows", "android"] as const) {
+			expect(remoteRoles(p)).toEqual({ target: true, controller: true });
+		}
+	});
+
+	it("lets a TV only be controlled", () => {
+		expect(remoteRoles("tv")).toEqual({ target: true, controller: false });
+	});
+
+	it("leaves iOS out until it runs there", () => {
+		expect(remoteRoles("ios")).toEqual({ target: false, controller: false });
+	});
+
+	it("asks the platform when given none", () => {
+		vi.mocked(osPlatform).mockReturnValue("ios");
+		expect(remoteRoles()).toEqual({ target: false, controller: false });
 	});
 });

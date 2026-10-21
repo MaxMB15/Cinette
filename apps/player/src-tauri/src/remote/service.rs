@@ -4,6 +4,7 @@
 //! Starts the target when the app starts, and connects it to Tauri: events
 //! for the webview, the cache for catalog answers, and DNS-SD.
 
+use super::device::device_type;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
 use super::target::{self, CatalogPage, TargetHandle, TargetHost};
@@ -23,17 +24,12 @@ use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::mpsc;
-
-/// This device's type, as other devices see it.
-#[cfg(target_os = "macos")]
-pub const DEVICE_TYPE: DeviceType = DeviceType::Mac;
-#[cfg(target_os = "linux")]
-pub const DEVICE_TYPE: DeviceType = DeviceType::LinuxPc;
 
 /// Remote control as Tauri managed state: the running target, the devices
 /// discovery found, and the device this one controls, if any.
@@ -51,6 +47,15 @@ pub struct RemoteService {
     /// The highest link number the webview has left. A connect numbered
     /// at or below it was overtaken by that leave on the way here.
     left_through: Mutex<u64>,
+    /// Whether the app is in the foreground, as the system last said.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    wants_foreground: AtomicBool,
+    /// Whether the target listens and advertises, as it was last told. Held
+    /// while the target is told, so changes reach it one at a time.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    in_foreground: tokio::sync::Mutex<bool>,
 }
 
 struct Saved {
@@ -115,12 +120,12 @@ impl RemoteService {
         }
         let (key, name) = {
             let saved = lock(&self.state);
-            (saved.key.clone(), saved.settings.name(DEVICE_TYPE))
+            (saved.key.clone(), saved.settings.name(device_type()))
         };
         let hello = Hello {
             id: key.device_id(),
             name,
-            device_type: DEVICE_TYPE,
+            device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
             features: vec![Feature::Control, Feature::Catalog],
         };
@@ -198,6 +203,48 @@ impl RemoteService {
         state.settings = settings.clone();
         self.handle.update_settings(settings.clone());
         save_settings(app, &settings)
+    }
+
+    /// Notes that the app went to the background or came back. Call
+    /// [`Self::follow_foreground`] next.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn set_foreground(&self, foreground: bool) {
+        self.wants_foreground.store(foreground, Ordering::SeqCst);
+    }
+
+    /// Brings the target in line with the last [`Self::set_foreground`]:
+    /// in the background it stops advertising and listening, and back in
+    /// the foreground it listens again and advertises. Open sessions carry
+    /// on either way. However the calls overlap, the last word wins.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub async fn follow_foreground(&self) {
+        let mut in_foreground = self.in_foreground.lock().await;
+        let wanted = self.wants_foreground.load(Ordering::SeqCst);
+        if wanted == *in_foreground {
+            return;
+        }
+        if !wanted {
+            tracing::info!("[remote] in the background; not taking new connections");
+            self.handle.background();
+            *in_foreground = false;
+            return;
+        }
+        let listening = match target::bind_default().await {
+            Ok(listener) => self.handle.foreground(listener),
+            Err(e) => Err(e),
+        };
+        match listening {
+            Ok(()) => {
+                tracing::info!(
+                    "[remote] in the foreground; listening on port {}",
+                    self.handle.port()
+                );
+                *in_foreground = true;
+            }
+            Err(e) => tracing::warn!("[remote] couldn't listen again: {e}"),
+        }
     }
 
     /// Makes and saves a new key, so a new device id. Every session ends.
@@ -509,7 +556,11 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
 // mutants: skip FnValue: it only acts on a real window, which the mock runtime doesn't have.
 /// Brings a minimized or hidden main window back without focusing it, and
 /// asks for attention: the Dock icon bounces, or the taskbar entry flashes.
+/// On a phone or TV the app is on screen whenever a request can come in.
 fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(mobile)]
+    let _ = app;
+    #[cfg(desktop)]
     if let Some(window) = app.get_webview_window("main") {
         if window.is_minimized().unwrap_or(false) {
             let _ = window.unminimize();
@@ -802,7 +853,7 @@ fn start_on<R: Runtime>(
     let handle = target::start_with(
         listener,
         key.clone(),
-        DEVICE_TYPE,
+        device_type(),
         settings.clone(),
         host,
         limits,
@@ -832,8 +883,30 @@ fn start_on<R: Runtime>(
         link,
         left_through: Mutex::new(0),
         prompt,
+        wants_foreground: AtomicBool::new(true),
+        in_foreground: tokio::sync::Mutex::new(true),
     });
     Ok(())
+}
+
+/// Tells remote control that the app went to the background or came back.
+/// On a phone, tablet or TV, the device can only be found while the app is
+/// in the foreground.
+// Only the mobile apps go to the background.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn set_foreground<R: Runtime>(app: &AppHandle<R>, foreground: bool) {
+    #[cfg(target_os = "android")]
+    crate::android_device::hold_multicast(foreground);
+    let Some(service) = app.try_state::<RemoteService>() else {
+        return;
+    };
+    service.set_foreground(foreground);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(service) = app.try_state::<RemoteService>() {
+            service.follow_foreground().await;
+        }
+    });
 }
 
 /// Closes every connection with `shutdown` and withdraws the record.

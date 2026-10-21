@@ -142,7 +142,28 @@ describe("App", () => {
 		expect(screen.getByText("Connect dialog")).toBeInTheDocument();
 	});
 
-	it("shows the consent and connect dialogs only on the desktop", async () => {
+	it("listens for both on an Android phone or tablet, which can be either side", async () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		renderApp();
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://consent", expect.any(Function))
+		);
+		expect(screen.getByText("Connect dialog")).toBeInTheDocument();
+	});
+
+	it("asks for consent on a TV, which is only controlled, but makes no links", async () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		window.__CINETTE_TV__ = true;
+		renderApp();
+		await waitFor(() =>
+			expect(listen).toHaveBeenCalledWith("remote://consent", expect.any(Function))
+		);
+		expect(listen).not.toHaveBeenCalledWith("remote://controller", expect.any(Function));
+		expect(screen.queryByText("Connect dialog")).toBeNull();
+		delete window.__CINETTE_TV__;
+	});
+
+	it("shows neither dialog on iOS, where remote control doesn't run yet", async () => {
 		vi.mocked(osPlatform).mockReturnValue("ios");
 		renderApp();
 		await waitFor(() =>

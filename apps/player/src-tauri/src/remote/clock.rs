@@ -3,10 +3,10 @@
 
 //! Time that keeps counting while the computer sleeps.
 //!
-//! `std::time::Instant` stops during sleep on macOS and Linux. The remote
-//! core measures the 30 s a dropped session may resume in with `Instant`s,
-//! so after an hour asleep a session would look seconds old and come back
-//! without asking. [`now`] gives an `Instant` that moves on by the time
+//! `std::time::Instant` stops during sleep on macOS, Linux and Android. The
+//! remote core measures the 30 s a dropped session may resume in with
+//! `Instant`s, so after an hour asleep a session would look seconds old and
+//! come back without asking. [`now`] gives an `Instant` that moves on by the time
 //! slept, so those deadlines pass as they should.
 
 use std::sync::OnceLock;
@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 
 /// The time on a clock that counts sleep, since some fixed point.
 fn awake_and_asleep() -> Duration {
-    // Linux's CLOCK_MONOTONIC stops in suspend and CLOCK_BOOTTIME doesn't.
+    // Linux's and Android's CLOCK_MONOTONIC stops in suspend and
+    // CLOCK_BOOTTIME doesn't.
     // macOS's CLOCK_MONOTONIC counts sleep (CLOCK_UPTIME_RAW is the one that
     // stops, and Instant uses it).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     const CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
     #[cfg(target_os = "macos")]
     const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;

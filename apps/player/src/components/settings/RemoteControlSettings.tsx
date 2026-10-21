@@ -9,7 +9,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { useRemoteSessions } from "@/hooks/useRemoteTarget";
 import { shortId } from "@/lib/device-picker";
-import { deviceTypeName, fitName } from "@/lib/remote-devices";
+import { deviceTypeName, discoveryLimit, fitName } from "@/lib/remote-devices";
 import {
 	remoteDisconnect,
 	remoteGetSettings,
@@ -190,6 +190,7 @@ export const RemoteControlSettings = () => {
 							Lets other Cinette devices on this network find this one. Turning this
 							off stops new connections. Devices already connected stay connected
 							until you disconnect them.
+							{discoveryLimit() && ` ${discoveryLimit()}`}
 						</p>
 					</div>
 					<Button

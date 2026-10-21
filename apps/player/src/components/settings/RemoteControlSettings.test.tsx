@@ -13,6 +13,12 @@ vi.mock("@/lib/tauri", () => ({
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
 }));
 
+const limit = vi.hoisted(() => ({ text: null as string | null }));
+vi.mock("@/lib/remote-devices", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/remote-devices")>()),
+	discoveryLimit: () => limit.text,
+}));
+
 const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
 
@@ -47,6 +53,7 @@ const shown = async (settings: RemoteSettings = defaults) => {
 beforeEach(() => {
 	vi.clearAllMocks();
 	sessions.list = [];
+	limit.text = null;
 	vi.mocked(remoteSetSettings).mockImplementation(async (s) => ({
 		...defaults,
 		...s,
@@ -122,6 +129,19 @@ describe("RemoteControlSettings", () => {
 		expect(screen.getByLabelText("Device name")).toHaveValue("");
 		expect(screen.getByText(/Devices already connected stay connected/)).toBeInTheDocument();
 		expect(screen.getByText("No device is controlling this one.")).toBeInTheDocument();
+	});
+
+	it("says when other devices can find this one, where that depends on the app being open", async () => {
+		limit.text = "Only while open.";
+		await shown();
+		expect(
+			screen.getByText(/until you disconnect them\. Only while open\.$/)
+		).toBeInTheDocument();
+	});
+
+	it("adds nothing about it on a computer", async () => {
+		await shown();
+		expect(screen.getByText(/until you disconnect them\.$/)).toBeInTheDocument();
 	});
 
 	it("turns discovery off and on", async () => {

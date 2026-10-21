@@ -37,3 +37,34 @@ fn locked_version_reads_the_line_after_the_name() {
     let lock = "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\n\n[[package]]\nname = \"b\"\nversion = \"4.5.6\"\n";
     assert_eq!(locked_version(lock, "b"), "4.5.6");
 }
+
+/// Restored onto another device, the remote-control key would give it this
+/// device's id, so both of Android's backup rule files leave it out, and
+/// the manifest names both.
+#[test]
+fn backups_leave_out_the_remote_control_key() {
+    let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(r#"android:fullBackupContent="@xml/backup_rules""#));
+    assert!(manifest.contains(r#"android:dataExtractionRules="@xml/data_extraction_rules""#));
+    let key = crate::remote::identity::KEY_FILE;
+    let rules = [
+        (include_str!("../gen/android/app/src/main/res/xml/backup_rules.xml"), 1),
+        // Cloud backups and device transfers each.
+        (include_str!("../gen/android/app/src/main/res/xml/data_extraction_rules.xml"), 2),
+    ];
+    for (xml, sections) in rules {
+        for name in [key.to_owned(), format!("{key}.tmp")] {
+            let rule = format!(r#"<exclude domain="root" path="{name}" />"#);
+            assert_eq!(xml.matches(&rule).count(), sections, "{rule}");
+        }
+    }
+}
+
+/// DNS-SD over Wi-Fi needs the multicast lock, which needs this permission.
+#[test]
+fn the_manifest_asks_for_the_multicast_lock() {
+    let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(
+        r#"<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />"#
+    ));
+}

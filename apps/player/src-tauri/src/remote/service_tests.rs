@@ -153,7 +153,7 @@ async fn starts_with_the_defaults_and_a_saved_key() {
     assert_eq!(view["discoverable"], json!(true));
     assert_eq!(view["remoteControl"], json!("ask"));
     assert_eq!(view["deviceName"], Value::Null);
-    assert_eq!(view["defaultName"], json!(default_name(DEVICE_TYPE)));
+    assert_eq!(view["defaultName"], json!(default_name(device_type())));
     let key = std::fs::read(running.app.app_dir().join(identity::KEY_FILE)).unwrap();
     let key = DeviceKey::from_private(key.try_into().unwrap());
     assert_eq!(view["deviceId"], json!(key.device_id().to_string()));
@@ -166,7 +166,7 @@ async fn starts_with_the_defaults_and_a_saved_key() {
     }
     let record = running.last_advertised().expect("advertised");
     assert_eq!(record.port, running.port);
-    assert_eq!(record.instance, default_name(DEVICE_TYPE));
+    assert_eq!(record.instance, default_name(device_type()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -691,7 +691,7 @@ async fn one_instance_controls_another() {
     let tv_id = tv.device_id().to_string();
     assert_eq!(
         devices,
-        json!([{ "deviceId": tv_id, "name": "TV", "deviceType": DEVICE_TYPE.as_str(),
+        json!([{ "deviceId": tv_id, "name": "TV", "deviceType": device_type().as_str(),
                  "controlAllowed": true, "available": true }])
     );
     assert_eq!(mac.invoke("remote_devices", json!({})).unwrap(), devices);
@@ -705,7 +705,7 @@ async fn one_instance_controls_another() {
         consent["code"], verifying["code"],
         "both screens show one code"
     );
-    assert_eq!(consent["name"], json!(default_name(DEVICE_TYPE)));
+    assert_eq!(consent["name"], json!(default_name(device_type())));
     phase(&mut mac, "pending").await;
     tv.invoke(
         "remote_answer_consent",
@@ -1231,4 +1231,76 @@ async fn a_catalog_page_keeps_only_logos_this_device_may_load() {
         .map(|i| i.get("logo").cloned().unwrap_or(Value::Null))
         .collect();
     assert_eq!(logos, [Value::Null, json!("https://logos.example/b.png")]);
+}
+
+/// Waits until nothing listens on `port` any more.
+async fn until_refused(port: u16) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_ok()
+    {
+        assert!(tokio::time::Instant::now() < deadline, "still listening");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_background_hides_the_device_and_the_foreground_brings_it_back() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    // The record from the start, which the target sends when it runs.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while running.last_advertised().is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "never advertised");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let before = lock(&running.advertised).len();
+
+    service.set_foreground(false);
+    service.follow_foreground().await;
+    until_refused(running.port).await;
+
+    service.set_foreground(true);
+    service.follow_foreground().await;
+    let port = service.handle.port();
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("listening again");
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while lock(&running.advertised).len() == before {
+        assert!(tokio::time::Instant::now() < deadline, "not advertised again");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(running.last_advertised().unwrap().port, port);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_last_word_on_the_foreground_counts() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    // Away and back before either was carried out: nothing changes.
+    service.set_foreground(false);
+    service.set_foreground(true);
+    service.follow_foreground().await;
+    service.follow_foreground().await;
+    assert_eq!(service.handle.port(), running.port);
+    let mut phone = running.phone().await;
+    phone.pending().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_going_to_the_background_reaches_the_service() {
+    let running = Running::start(|_| {}).await;
+    set_foreground(&running.app.handle(), false);
+    until_refused(running.port).await;
+}
+
+#[test]
+fn going_to_the_background_without_remote_control_does_nothing() {
+    let app = TestApp::new();
+    set_foreground(&app.handle(), false);
+    assert!(app.handle().try_state::<RemoteService>().is_none());
 }

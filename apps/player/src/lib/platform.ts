@@ -33,6 +33,18 @@ export const getPlatform = (): Platform => {
 export const isMobilePlatform = (p: Platform = getPlatform()): boolean =>
 	p === "ios" || p === "android" || p === "tv";
 
+/**
+ * What remote control lets this device do: be controlled by other Cinette
+ * devices, and control them. A TV is only controlled. iOS doesn't run
+ * remote control yet.
+ */
+export const remoteRoles = (
+	p: Platform = getPlatform()
+): { target: boolean; controller: boolean } => ({
+	target: p !== "ios",
+	controller: p !== "ios" && p !== "tv",
+});
+
 /** The narrowest iPad, an iPad mini in portrait. Below this a tablet gets the phone layout. */
 export const TABLET_MIN_WIDTH = 744;
 /** An 11-inch iPad in landscape and up get the desktop layout. */

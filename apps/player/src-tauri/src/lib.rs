@@ -10,7 +10,7 @@ mod cast;
 mod commands;
 mod convert;
 /// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 pub mod discovery;
 mod downloads;
 #[cfg(any(target_os = "ios", all(test, target_os = "linux")))]
@@ -397,8 +397,11 @@ pub fn run() {
             crate::downloads::manager::restore_settings(app.handle());
 
             // Listens for other Cinette devices and advertises this one.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(remote)]
             crate::remote::start(app.handle(), app_dir.clone());
+            // DNS-SD needs it over Wi-Fi. The app starts in the foreground.
+            #[cfg(target_os = "android")]
+            crate::android_device::hold_multicast(true);
 
             #[cfg(desktop)]
             {
@@ -457,10 +460,20 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
+            // A phone, tablet or TV can only be found while the app is in
+            // the foreground.
+            #[cfg(target_os = "android")]
+            if let tauri::RunEvent::WindowEvent { event, .. } = &event {
+                match event {
+                    tauri::WindowEvent::Suspended => crate::remote::set_foreground(app, false),
+                    tauri::WindowEvent::Resumed => crate::remote::set_foreground(app, true),
+                    _ => {}
+                }
+            }
             if let tauri::RunEvent::Exit = event {
                 crate::downloads::manager::stop_all_for_exit(app);
                 crate::downloads::recordings::stop_all_for_exit(app);
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                #[cfg(remote)]
                 crate::remote::stop_for_exit(app);
             }
         });
