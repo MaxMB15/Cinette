@@ -153,7 +153,8 @@ pub fn parse_key(key: &str) -> Option<KeyRef> {
     let rest = key.strip_prefix("series:")?;
     let (series, numbers) = rest.rsplit_once(':')?;
     let (season, episode) = numbers.strip_prefix('s')?.split_once('e')?;
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    // Digits only: parse alone would take a leading "+", and it refuses "".
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
     if series.is_empty() || !digits(season) || !digits(episode) {
         return None;
     }

@@ -181,6 +181,8 @@ fn other_keys_dont_read() {
         "series:show:s3e",
         "series:show:se1",
         "series:show:sxe1",
+        "series:show:s+1e1",
+        "series:show:s1e+1",
         "series:show:s1ex",
         "series::s1e1",
         "series:show:s99999999999e1",
