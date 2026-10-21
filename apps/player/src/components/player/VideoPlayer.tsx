@@ -502,7 +502,8 @@ export const PlayerView = () => {
 		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
 			const casting = castRef.current.current();
 			if (casting) {
-				// A live channel's start is dropped where the cast is sent.
+				// The Cast destination drops a live channel's start, and a live
+				// channel has no resume point to keep one in.
 				return castRef.current
 					.send(casting.id, ch, {
 						startAt: startPos,

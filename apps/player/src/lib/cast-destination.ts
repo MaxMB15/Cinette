@@ -367,8 +367,11 @@ export const createCastDestination = (
 			}
 			const formats = await formatsFor(channel);
 			const castRoute = castRouteOf(route, formats);
+			// A live channel plays from now, whatever start it was given, so
+			// the receiver's clock and the backend get none.
+			const startAt = channel.contentType === "live" ? undefined : opts?.startAt;
 			try {
-				await send(channel, castRoute, formats, opts?.startAt);
+				await send(channel, castRoute, formats, startAt);
 			} catch (e) {
 				if (FORMAT_FAILED.includes(String(e))) forget(channel, formats, castRoute.source);
 				// The backend has a newer list of the item's URLs, so ask again.

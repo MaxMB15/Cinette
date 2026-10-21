@@ -386,11 +386,12 @@ describe("createCastDestination", () => {
 		const seen: string[] = [];
 		const unsubscribe = cast.subscribe((s) => seen.push(s.status));
 		await cast.load(item, { route: { via: "direct", format: 1 }, startAt: 20 });
+		// Live, so the start goes.
 		expect(fake.castLoad).toHaveBeenLastCalledWith(
 			"cast:tv",
 			channel,
 			{ via: "direct", generation: 7, source: 1, container: "ts" },
-			20
+			undefined
 		);
 		expect(cast.getState()).toMatchObject({
 			status: "opening",
@@ -700,5 +701,23 @@ describe("createCastDestination", () => {
 		cast.settle();
 		expect(cast.getState()).toMatchObject({ status: "idle", connection: "connected" });
 		expect(cast.getState().item).not.toBeNull();
+	});
+
+	it("plays a live channel from now, whatever start it's given", async () => {
+		const fake = backend({ ...xtream, formats: [{ ...ts, audio: "ac3" }], sources: [1] });
+		const cast = createCastDestination(receiver, fake);
+		await cast.load(item, { startAt: 1800 });
+		expect(cast.converted()).toBe(true);
+		expect(fake.castLoad).toHaveBeenLastCalledWith(
+			"cast:tv",
+			channel,
+			expect.objectContaining({ via: "converted" }),
+			undefined
+		);
+		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
+		expect(cast.getState().position).toBe(5);
+		// A movie keeps its start.
+		await cast.load({ kind: "local", channel: movie }, { startAt: 1800 });
+		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, expect.anything(), 1800);
 	});
 });
