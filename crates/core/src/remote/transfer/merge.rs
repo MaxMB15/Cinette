@@ -26,9 +26,9 @@ pub const MAX_UNMATCHED_LISTED: usize = 200;
 /// The most plays one history entry takes.
 pub const MAX_PLAYS: i64 = 1_000_000;
 /// The most watched seconds one history entry takes: a hundred years.
-pub const MAX_WATCHED_SECONDS: i64 = 100 * 365 * 24 * 3600;
+pub const MAX_WATCHED_SECONDS: i64 = 3_153_600_000;
 /// The longest a movie or episode can be, in seconds: a week.
-pub const MAX_DURATION: f64 = 7.0 * 24.0 * 3600.0;
+pub const MAX_DURATION: f64 = 604_800.0;
 
 /// How far the source's clock is behind the destination's, in seconds, to
 /// add to the source's times: the destination's clock when the first chunk
