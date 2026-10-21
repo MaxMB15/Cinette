@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use mvp_core::cast::message::{LoadRequest, StreamType};
 use mvp_core::cast::session::Session;
@@ -33,6 +34,7 @@ use super::tls;
 use super::CastReceivers;
 use crate::commands::AppState;
 use crate::convert::{Conversion, ConvertError, Ended};
+use crate::lan_server::{route_to, NoRoute};
 use crate::streams::{StreamsState, REFUSED};
 
 /// The event that carries each [`CastUpdate`], with its receiver's id.
@@ -153,6 +155,27 @@ struct KnownPlan {
     has_length: bool,
 }
 
+/// How often a converted cast checks that the receiver can still reach
+/// this computer's address.
+const ADDRESS_CHECK: Duration = Duration::from_secs(5);
+
+/// How a converted cast checks this computer's address on the route to its
+/// receiver. Tests give it their own.
+#[derive(Clone, Copy)]
+struct AddressCheck {
+    route: fn(IpAddr) -> Result<IpAddr, NoRoute>,
+    every: Duration,
+}
+
+impl Default for AddressCheck {
+    fn default() -> Self {
+        Self {
+            route: route_to,
+            every: ADDRESS_CHECK,
+        }
+    }
+}
+
 /// The app's casts, managed by Tauri.
 #[derive(Default)]
 pub struct CastPlayback {
@@ -161,9 +184,21 @@ pub struct CastPlayback {
     turns: Mutex<HashMap<String, Turn>>,
     /// Held while a load connects, so two loads don't both open a session.
     connecting: tokio::sync::Mutex<()>,
+    addresses: Mutex<AddressCheck>,
 }
 
 impl CastPlayback {
+    /// Has converted casts find this computer's address with `route`, each
+    /// `every`.
+    #[cfg(test)]
+    pub(crate) fn check_addresses_with(
+        &self,
+        route: fn(IpAddr) -> Result<IpAddr, NoRoute>,
+        every: Duration,
+    ) {
+        *lock(&self.addresses) = AddressCheck { route, every };
+    }
+
     /// Starts a load's or a stop's turn on `receiver_id`, and returns its
     /// ticket.
     fn take_turn(&self, receiver_id: &str, stopped: bool) -> u64 {
@@ -555,7 +590,7 @@ pub async fn load<R: Runtime>(
             request.content_type = "video/x-matroska".into();
             request.stream_type = StreamType::Live;
             request.start_at = None;
-            conversion = Some(started);
+            conversion = Some((started, receiver));
             plan_used = Some(known);
         }
     }
@@ -579,15 +614,10 @@ pub async fn load<R: Runtime>(
         .commands
         .send(Command::Load(Box::new(request)))
         .map_err(|_| "unreachable")?;
-    if let Some(conversion) = &conversion {
-        watch_conversion(
-            app,
-            receiver_id,
-            active.generation,
-            conversion.ended.clone(),
-        );
+    if let Some((conversion, receiver)) = &conversion {
+        watch_conversion(app, receiver_id, *receiver, active.generation, conversion);
     }
-    active.conversion = conversion;
+    active.conversion = conversion.map(|(conversion, _)| conversion);
     active.plan = plan_used;
     Ok(())
 }
@@ -603,22 +633,46 @@ fn forget_plan(state: &CastPlayback, receiver_id: &str) {
 }
 
 /// Tells the frontend when the converter for cast `generation` stops with
-/// an error, such as a live stream that dropped. The receiver would
-/// otherwise wait on a stream that never comes.
+/// an error, or when its stream has to start again: a live channel whose
+/// connection ended, or an address the receiver can no longer reach, as
+/// after a sleep on another network. The receiver would otherwise wait on a
+/// stream that never comes. A file that finished keeps being served, since
+/// the receiver may not have all of it yet.
 fn watch_conversion<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
+    receiver: IpAddr,
     generation: u64,
-    mut ended: tokio::sync::watch::Receiver<Option<Ended>>,
+    conversion: &Conversion,
 ) {
     let app = app.clone();
     let id = receiver_id.to_string();
+    let served = conversion.server.local;
+    let mut ended = conversion.ended.clone();
+    let check = *lock(&app.state::<CastPlayback>().addresses);
     tauri::async_runtime::spawn(async move {
-        let Ok(end) = ended.wait_for(Option::is_some).await.map(|e| e.clone()) else {
-            return;
-        };
-        let Some(Ended::Failed(e)) = end else {
-            return;
+        let mut ticks = tokio::time::interval(check.every);
+        let update = loop {
+            tokio::select! {
+                end = ended.wait_for(Option::is_some) => {
+                    // The conversion went, replaced or stopped.
+                    let Ok(end) = end.map(|e| e.clone()) else {
+                        return;
+                    };
+                    break match end {
+                        Some(Ended::Failed(e)) => CastUpdate::ConversionFailed {
+                            refused: matches!(e, ConvertError::Refused(_)),
+                        },
+                        Some(Ended::Dropped) => CastUpdate::ConversionStopped { why: "dropped" },
+                        _ => return,
+                    };
+                }
+                _ = ticks.tick() => {
+                    if (check.route)(receiver) != Ok(served) {
+                        break CastUpdate::ConversionStopped { why: "moved" };
+                    }
+                }
+            }
         };
         let state = app.state::<CastPlayback>();
         let current = match lock(&state.active)
@@ -627,14 +681,16 @@ fn watch_conversion<R: Runtime>(
         {
             Some(active) => {
                 // A retry probes again rather than repeat a plan that failed.
-                active.plan = None;
+                // A stream that only has to start again keeps it.
+                if matches!(update, CastUpdate::ConversionFailed { .. }) {
+                    active.plan = None;
+                }
                 true
             }
             None => false,
         };
         if current {
-            let refused = matches!(e, ConvertError::Refused(_));
-            emit(&app, &id, CastUpdate::ConversionFailed { refused });
+            emit(&app, &id, update);
         }
     });
 }

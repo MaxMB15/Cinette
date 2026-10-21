@@ -396,6 +396,8 @@ impl Files {
 pub struct LanServer {
     /// `http://<address>:<port>/cast/<token>/`, which names go after.
     pub base: String,
+    /// This device's address that it listens on.
+    pub local: IpAddr,
     pub files: Files,
     live: Arc<RwLock<Option<NamedPipe>>>,
     task: JoinHandle<()>,
@@ -450,6 +452,7 @@ impl LanServer {
         ));
         Ok(Self {
             base: format!("http://{host}:{port}{prefix}"),
+            local,
             files,
             live,
             task,

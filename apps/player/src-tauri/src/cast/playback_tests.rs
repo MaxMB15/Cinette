@@ -424,6 +424,121 @@ async fn a_converted_route_serves_the_receiver_from_this_computer() {
     }
 }
 
+/// Waits up to 10 s for the next `cast://update` of `kind`.
+fn next_update(events: &mpsc::Receiver<Value>, kind: &str) -> Value {
+    loop {
+        let event = events
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("a {kind} within 10 s"));
+        if event["update"]["kind"] == kind {
+            return event;
+        }
+    }
+}
+
+/// Converts `channel` for the fake receiver `addr`, and returns the URL the
+/// receiver was given.
+async fn cast_converted(
+    app: &TestApp,
+    addr: SocketAddr,
+    got: &mut tokio::sync::mpsc::UnboundedReceiver<fake_receiver::Got>,
+    channel: &Channel,
+) -> String {
+    add_receiver(app, "tv", addr);
+    add_channel(app, channel);
+    let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "aac" });
+    load(app, "cast:tv", channel, route, None).unwrap();
+    let loaded = next_of(got, "LOAD").await;
+    loaded.body["media"]["contentId"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asks_for_the_stream_again_once_the_receiver_cant_reach_this_computer() {
+    let app = TestApp::new();
+    if !crate::convert::support::support(&app.handle())
+        .await
+        .convert
+    {
+        return;
+    }
+    // After a sleep on another network, the route to the receiver goes from
+    // another address.
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .check_addresses_with(
+            |_| Ok("192.0.2.7".parse().unwrap()),
+            std::time::Duration::from_millis(50),
+        );
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    let movie = channel("m-1", &format!("{source}/movie/1.wav"), "movie");
+    cast_converted(&app, addr, &mut got, &movie).await;
+    let moved = next_update(&events, "conversionStopped");
+    assert_eq!(moved["receiverId"], "cast:tv");
+    assert_eq!(moved["update"]["why"], "moved");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asks_for_a_live_channel_again_once_its_connection_ends() {
+    let app = TestApp::new();
+    if !crate::convert::support::support(&app.handle())
+        .await
+        .convert
+    {
+        return;
+    }
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    // A channel whose connection closes after eight seconds of sound.
+    let (source, _) = serve_routes(vec![route("/live/", "200 OK", wav16())]);
+    let live = channel("l-1", &format!("{source}/live/7.wav"), "live");
+    cast_converted(&app, addr, &mut got, &live).await;
+    let dropped = next_update(&events, "conversionStopped");
+    assert_eq!(dropped["update"]["why"], "dropped");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keeps_serving_a_file_once_the_converter_has_finished_it() {
+    let app = TestApp::new();
+    if !crate::convert::support::support(&app.handle())
+        .await
+        .convert
+    {
+        return;
+    }
+    let events = updates(&app);
+    let (addr, _, mut got) = fake_receiver::start().await;
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    let source_url = format!("{source}/movie/done.wav");
+    let movie = channel("m-1", &source_url, "movie");
+    let url = cast_converted(&app, addr, &mut got, &movie).await;
+    // The file is read at its playing speed after a burst, so ffmpeg
+    // finishes within its eight seconds.
+    let start = std::time::Instant::now();
+    while ffmpeg_runs_for(&source_url) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    // The receiver can still ask for what it hasn't got.
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        mvp_core::http::test_server::client().get(&url).send(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    // Nothing told the frontend to start it again.
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event["update"]["kind"], "conversionStopped");
+        assert_ne!(event["update"]["kind"], "conversionFailed");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn says_when_the_converter_stops_with_an_error_while_it_casts() {
     let app = TestApp::new();

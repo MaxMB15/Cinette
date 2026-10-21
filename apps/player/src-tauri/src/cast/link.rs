@@ -107,6 +107,10 @@ pub enum CastUpdate {
     /// The converter serving the receiver stopped with an error. `refused`
     /// when the provider answered 401 or 403.
     ConversionFailed { refused: bool },
+    /// The converted stream has to start again: `dropped` when a live
+    /// channel's connection ended, `moved` when this computer's address on
+    /// the way to the receiver changed, as after a sleep on another network.
+    ConversionStopped { why: &'static str },
     /// The cast is over. `reason` is `stopped`, `appStopped`, `launchFailed`,
     /// `timeout`, `protocol` or `connectionLost`.
     Closed { reason: &'static str },
