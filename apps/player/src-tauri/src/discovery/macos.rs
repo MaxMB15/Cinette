@@ -659,8 +659,8 @@ fn note(broken: &mut bool, err: DNSServiceErrorType, kind: &str) -> Failure {
             if access().refused(Instant::now()) {
                 tracing::warn!(
                     "[discovery] the system refused local network access, so Bonjour can't browse or \
-                     advertise until it's allowed in System Settings > Privacy & Security > \
-                     Local Network"
+                     advertise until it's allowed under Privacy & Security > Local Network, in \
+                     System Settings or Settings"
                 );
             }
         }

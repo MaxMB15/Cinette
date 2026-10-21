@@ -435,6 +435,29 @@ pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json:
     }
 }
 
+/// Starts remote control if it isn't running yet: on iOS when the user first
+/// opens Devices or the Remote control settings, and anywhere after a start
+/// that failed. The webview calls it before either of those loads.
+#[command]
+pub async fn remote_open<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        crate::remote::open(&app, dir).await?;
+        // The multicast lock goes with remote control running, and the
+        // launch didn't take it if this is what started it.
+        #[cfg(target_os = "android")]
+        crate::android_device::hold_multicast(true);
+        Ok(())
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
 /// Whether macOS or iOS refuses this app the local network, so no device can
 /// be found. Always false elsewhere.
 // mutants: skip FnValue: mutation runs build on Linux, where nothing refuses local network access, so false is what the code returns there too.

@@ -815,7 +815,14 @@ export interface RemoteDevice {
 
 export const remoteDevices = (): Promise<RemoteDevice[]> => invoke("remote_devices");
 
-/** Whether macOS refuses Cinette the local network, so no device can be found. */
+/**
+ * Starts remote control if it isn't running yet. On iOS it waits for this,
+ * the first time Devices or the Remote control settings open, so the local
+ * network prompt comes when the user can tell what it's for.
+ */
+export const remoteOpen = (): Promise<void> => invoke("remote_open");
+
+/** Whether macOS or iOS refuses Cinette the local network, so no device can be found. */
 export const remoteLocalNetworkDenied = (): Promise<boolean> =>
 	invoke("remote_local_network_denied");
 

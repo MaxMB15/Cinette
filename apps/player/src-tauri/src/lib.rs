@@ -158,6 +158,7 @@ macro_rules! register_commands {
 }
 
 register_commands![
+    remote_commands::remote_open,
     remote_commands::remote_get_settings,
     remote_commands::remote_set_settings,
     remote_commands::remote_reset_identity,
@@ -403,7 +404,7 @@ pub fn run() {
             // res/xml/backup_rules.xml and data_extraction_rules.xml leave
             // its file out of), so moving it needs those rules to follow.
             #[cfg(remote)]
-            let remote_started = crate::remote::start(app.handle(), app_dir.clone());
+            let remote_started = crate::remote::start_at_launch(app.handle(), app_dir.clone());
             // DNS-SD needs it over Wi-Fi. The app starts in the foreground.
             #[cfg(target_os = "android")]
             if remote_started {
@@ -413,15 +414,16 @@ pub fn run() {
             // foreground. Tauri's own Suspended comes when iOS only makes the
             // app inactive, as for Control Center, with no Resumed after, so
             // the mpv plugin's background notifications are used instead.
+            // Remote control may start later, when the user first opens it.
             #[cfg(target_os = "ios")]
-            if remote_started {
+            {
                 let handle = app.handle().clone();
                 tauri_plugin_mpv::watch_background(move |background| {
                     let state = crate::remote::Lifecycle::from_background(background);
                     crate::remote::set_foreground(&handle, state)
                 });
             }
-            #[cfg(all(remote, not(mobile)))]
+            #[cfg(all(remote, not(target_os = "android")))]
             let _ = remote_started;
 
             #[cfg(desktop)]

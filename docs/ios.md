@@ -29,6 +29,12 @@ How the iOS pieces fit together is in [architecture.md](architecture.md#ios).
   while it's in the foreground: going to the background withdraws the record and
   closes the listener, and coming back opens both again. Sessions already open carry
   on while iOS keeps the app running, as it does while audio plays.
+- Remote control starts the first time the user opens Devices or Settings, not at
+  launch, because starting it is what makes iOS ask about the local network. After
+  that it starts with the app (`remoteOpened` in `settings.json`).
+- The iOS app on an Apple Silicon Mac most likely reads its model as `arm64` and calls
+  itself an iPhone to other devices. Whether the app is offered on Mac at all is set in
+  App Store Connect.
 
 ## Building
 

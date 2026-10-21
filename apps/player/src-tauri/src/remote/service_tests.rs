@@ -1415,3 +1415,51 @@ fn ios_says_background_or_not() {
     assert_eq!(Lifecycle::from_background(true), Lifecycle::Background);
     assert_eq!(Lifecycle::from_background(false), Lifecycle::Foreground);
 }
+
+#[test]
+fn only_ios_waits_and_only_until_the_user_has_opened_it() {
+    assert!(waits_for_user(true, false));
+    assert!(!waits_for_user(true, true));
+    assert!(!waits_for_user(false, false));
+    assert!(!waits_for_user(false, true));
+}
+
+/// Starts the service on loopback with nothing advertised, as a test's
+/// stand-in for starting it on the network.
+async fn start_on_loopback(app: &TestApp) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (_found, found_rx) = mpsc::unbounded_channel();
+    start_on(
+        &app.handle(),
+        app.app_dir(),
+        listener,
+        Box::new(|_: &Registration| None),
+        found_rx,
+        target::Limits::STANDARD,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_starts_remote_control_once_and_remembers_it() {
+    let app = TestApp::new();
+    assert!(!opened_before(&app.handle()));
+    open_with(&app.handle(), start_on_loopback(&app)).await.unwrap();
+    assert!(app.handle().try_state::<RemoteService>().is_some());
+    assert!(opened_before(&app.handle()), "starts with the app from now on");
+    let text = std::fs::read_to_string(app.app_dir().join(SETTINGS_STORE_FILE)).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()[OPENED_KEY], json!(true));
+    // Already running: nothing starts again.
+    open_with(&app.handle(), async { panic!("started twice") })
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_fails_says_why_and_can_be_tried_again() {
+    let app = TestApp::new();
+    let failed = open_with(&app.handle(), async { Err("no port".to_owned()) }).await;
+    assert_eq!(failed, Err("no port".to_owned()));
+    assert!(app.handle().try_state::<RemoteService>().is_none());
+    open_with(&app.handle(), start_on_loopback(&app)).await.unwrap();
+    assert!(app.handle().try_state::<RemoteService>().is_some());
+}

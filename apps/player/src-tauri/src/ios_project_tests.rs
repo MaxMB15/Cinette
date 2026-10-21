@@ -23,3 +23,17 @@ fn bonjour_services_list_what_the_app_looks_for() {
         "Info.plist should list {service}"
     );
 }
+
+/// iOS shows this when it asks about the local network, which it does when
+/// remote control first starts. App Review reads it, so it says what the app
+/// does there now: reach IPTV servers, and find and be found by other
+/// Cinette devices. Cast and AirPlay don't need it on iOS yet.
+#[test]
+fn the_local_network_text_says_what_the_app_does() {
+    let text = "Cinette uses your local network to reach IPTV servers on it, and to find other \
+                devices running Cinette and let them find this one, so one can control the other.";
+    assert!(PROJECT.contains(&format!("        NSLocalNetworkUsageDescription: {text}\n")));
+    assert!(INFO_PLIST.contains(&format!(
+        "\t<key>NSLocalNetworkUsageDescription</key>\n\t<string>{text}</string>\n"
+    )));
+}

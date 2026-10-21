@@ -6,6 +6,9 @@ import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import {
 	deviceTypeName,
 	discoveryLimit,
+	LOCAL_NETWORK_DENIED,
+	LOCAL_NETWORK_DENIED_IOS,
+	localNetworkDenied,
 	endedText,
 	fitName,
 	formatCode,
@@ -15,6 +18,14 @@ import {
 } from "./remote-devices";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
+
+describe("localNetworkDenied", () => {
+	it("names iOS's Settings on iOS and System Settings elsewhere", () => {
+		expect(localNetworkDenied("ios")).toBe(LOCAL_NETWORK_DENIED_IOS);
+		expect(localNetworkDenied("macos")).toBe(LOCAL_NETWORK_DENIED);
+		expect(LOCAL_NETWORK_DENIED_IOS).not.toBe(LOCAL_NETWORK_DENIED);
+	});
+});
 
 describe("discoveryLimit", () => {
 	it("says phones, tablets and TVs are only found while Cinette is in the foreground", () => {

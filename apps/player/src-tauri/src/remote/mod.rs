@@ -30,7 +30,7 @@ pub mod held;
 pub mod devices;
 #[cfg(remote)]
 pub mod identity;
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", test))]
 mod keychain;
 #[cfg(remote)]
 mod local;
@@ -47,7 +47,7 @@ mod test_client;
 #[cfg(mobile)]
 pub use service::{set_foreground, Lifecycle};
 #[cfg(remote)]
-pub use service::{start, stop_for_exit, RemoteService};
+pub use service::{open, start_at_launch, stop_for_exit, RemoteService};
 
 /// Where remote-control settings are kept, beside the app's other settings.
 #[cfg(remote)]

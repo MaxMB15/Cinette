@@ -195,6 +195,20 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 		});
 
+		it("leaves both bars off a phone's player, which keeps the whole screen", () => {
+			platform.layoutMode = "mobile";
+			const { unmount } = render(tree("/player"));
+			expect(screen.queryByText("Remote bar")).toBeNull();
+			expect(screen.queryByText("Controllers bar")).toBeNull();
+			expect(screen.getByText("page")).toBeInTheDocument();
+			unmount();
+			// The sidebar layout keeps them on the player.
+			platform.layoutMode = "desktop";
+			render(tree("/player"));
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+		});
+
 		it("shows a device that's only controlled who controls it, and nothing to control others with", () => {
 			platform.controller = false;
 			render(tree("/"));

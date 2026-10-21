@@ -27,6 +27,18 @@ export const discoveryLimit = (platform: Platform = getPlatform()): string | nul
 		? "Other devices can only find this one while Cinette is in the foreground."
 		: null;
 
+/** What shows while macOS keeps Cinette off the local network. */
+export const LOCAL_NETWORK_DENIED =
+	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
+
+/** What shows while iOS keeps Cinette off the local network. */
+export const LOCAL_NETWORK_DENIED_IOS =
+	"Cinette can't look for other devices. Allow it in Settings, Privacy & Security, Local Network.";
+
+/** Where to allow the local network on `platform`. */
+export const localNetworkDenied = (platform: Platform): string =>
+	platform === "ios" ? LOCAL_NETWORK_DENIED_IOS : LOCAL_NETWORK_DENIED;
+
 /** A device type as the protocol spells it, like `fire-tv`, in words. */
 export const deviceTypeName = (deviceType: string): string =>
 	TYPE_NAMES.get(deviceType) ?? "Device";

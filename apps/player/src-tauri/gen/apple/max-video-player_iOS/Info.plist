@@ -38,7 +38,7 @@
 		<string>_cinette._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Cinette uses your local network to reach IPTV servers, to find TVs and other devices running Cinette, and to send video to them.</string>
+	<string>Cinette uses your local network to reach IPTV servers on it, and to find other devices running Cinette and let them find this one, so one can control the other.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

@@ -841,25 +841,91 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
         .unwrap_or_default()
 }
 
+/// Where the store says the user has opened Devices or the Remote control
+/// settings once, after which remote control starts with the app.
+const OPENED_KEY: &str = "remoteOpened";
+
+/// Whether remote control waits for the user before it starts. On iOS it
+/// does until they first open Devices or the Remote control settings, so
+/// the local network prompt, which starting it raises, comes when they
+/// can tell what it's for.
+pub fn waits_for_user(ios: bool, opened_before: bool) -> bool {
+    ios && !opened_before
+}
+
+fn opened_before<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.store(SETTINGS_STORE_FILE)
+        .ok()
+        .and_then(|store| store.get(OPENED_KEY))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn remember_opened<R: Runtime>(app: &AppHandle<R>) {
+    let saved = app.store(SETTINGS_STORE_FILE).and_then(|store| {
+        store.set(OPENED_KEY, true);
+        store.save()
+    });
+    if let Err(e) = saved {
+        tracing::warn!("[remote] couldn't remember that remote control was opened: {e}");
+    }
+}
+
+/// Starts remote control with the app, unless it waits for the user (see
+/// [`waits_for_user`]). Says whether it started.
+pub fn start_at_launch<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
+    if waits_for_user(cfg!(target_os = "ios"), opened_before(app)) {
+        tracing::info!("[remote] waiting for Devices or the settings before starting");
+        return false;
+    }
+    start(app, key_dir)
+}
+
 /// Starts the target on every address and advertises it, and manages a
 /// [`RemoteService`]. A failure is logged and the app carries on without
-/// remote control. Says whether it started.
+/// remote control, which [`open`] tries again. Says whether it started.
 pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
-    let started = tauri::async_runtime::block_on(async {
-        let listener = target::bind_default().await.map_err(|e| e.to_string())?;
-        start_on(
-            app,
-            key_dir,
-            listener,
-            Box::new(advertise_on_network),
-            browse_network(),
-            target::Limits::STANDARD,
-        )
-    });
+    let started = tauri::async_runtime::block_on(start_on_network(app, key_dir));
     if let Err(e) = &started {
         tracing::error!("[remote] remote control didn't start: {e}");
     }
     started.is_ok()
+}
+
+async fn start_on_network<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> Result<(), String> {
+    let listener = target::bind_default().await.map_err(|e| e.to_string())?;
+    start_on(
+        app,
+        key_dir,
+        listener,
+        Box::new(advertise_on_network),
+        browse_network(),
+        target::Limits::STANDARD,
+    )
+}
+
+/// Starts remote control if it isn't running: on iOS the first time the
+/// user opens Devices or the Remote control settings, and anywhere after a
+/// start that failed. Remembers it, so the app starts it from then on.
+pub async fn open<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> Result<(), String> {
+    open_with(app, start_on_network(app, key_dir)).await
+}
+
+/// [`open`], starting with `start`.
+async fn open_with<R: Runtime>(
+    app: &AppHandle<R>,
+    start: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    // One start at a time, so two quick opens don't start it twice.
+    static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = STARTING.lock().await;
+    if app.try_state::<RemoteService>().is_some() {
+        return Ok(());
+    }
+    remember_opened(app);
+    start.await.inspect_err(|e| {
+        tracing::error!("[remote] remote control didn't start: {e}");
+    })
 }
 
 /// [`start`] on `listener`, advertising through `advertiser`, with `limits`. Call it inside

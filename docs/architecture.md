@@ -117,7 +117,9 @@ takes what it found with it. iOS doesn't browse yet, so it lists none.
 `remote/` lets one Cinette control another on the same network, on macOS, Linux, iOS
 and Android. Android runs the Linux code: `mdns-sd` for DNS-SD, with a Wi-Fi multicast
 lock held while the app is in the foreground. iOS runs the macOS code, with the device
-key in the Keychain. On both, going to the background withdraws the record and closes
+key in the Keychain, and starts it only once the user has opened Devices or Settings,
+so the local network prompt comes then. `remote_open` starts it then, and anywhere a
+start at launch failed. On both, going to the background withdraws the record and closes
 the listener, and coming back listens and advertises again. Open sessions carry on. A
 TV is only controlled; a phone or tablet can also control.
 The target listens on TCP port 47130, or any free port when that one is taken, on one

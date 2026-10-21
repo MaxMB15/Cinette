@@ -66,3 +66,36 @@ fn this_machine_and_its_own_addresses_are_local_and_the_internet_isnt() {
     // A documentation address, which no test machine's network holds.
     assert!(!is_local_peer(ip("203.0.113.9")));
 }
+
+fn interface(addr: &str, mask: &str, is_p2p: bool) -> if_addrs::Interface {
+    let (std::net::IpAddr::V4(ip), std::net::IpAddr::V4(netmask)) = (ip(addr), ip(mask)) else {
+        panic!("IPv4 only here");
+    };
+    if_addrs::Interface {
+        name: "if0".into(),
+        addr: if_addrs::IfAddr::V4(if_addrs::Ifv4Addr {
+            ip,
+            netmask,
+            prefixlen: u32::from(netmask).count_ones() as u8,
+            broadcast: None,
+        }),
+        index: None,
+        oper_status: if_addrs::IfOperStatus::Up,
+        is_p2p,
+    }
+}
+
+#[test]
+fn a_point_to_point_link_doesnt_make_its_subnet_local() {
+    // A phone on cellular, as iOS's pdp_ip0 often is.
+    let cellular = subnets([interface("10.20.30.40", "255.0.0.0", true)]);
+    assert!(cellular.is_empty());
+    assert!(!on_local_network(ip("10.1.2.3"), &cellular));
+}
+
+#[test]
+fn a_broadcast_link_makes_its_subnet_local() {
+    let wifi = subnets([interface("10.20.30.40", "255.0.0.0", false)]);
+    assert_eq!(wifi, [(ip("10.20.30.40"), ip("255.0.0.0"))]);
+    assert!(on_local_network(ip("10.1.2.3"), &wifi));
+}

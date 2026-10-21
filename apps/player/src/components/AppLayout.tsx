@@ -67,8 +67,10 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 					compact && !isPlayer && "pt-safe pl-safe pr-safe"
 				)}
 			>
-				{controlsOthers() && <RemoteBar />}
-				<ControllersBar />
+				{/* A phone's player keeps the whole screen; the bars would sit
+				    under the status bar there. */}
+				{!(compact && isPlayer) && controlsOthers() && <RemoteBar />}
+				{!(compact && isPlayer) && <ControllersBar />}
 				<div className="flex-1 min-h-0">
 					<Outlet />
 				</div>

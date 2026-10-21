@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 fn awake_and_asleep() -> Duration {
     // Linux's and Android's CLOCK_MONOTONIC stops in suspend and
     // CLOCK_BOOTTIME doesn't.
-    // Darwin's CLOCK_MONOTONIC counts sleep, and on iOS the time the app was
-    // suspended (CLOCK_UPTIME_RAW is the one that stops, and Instant uses it).
+    // Darwin's CLOCK_MONOTONIC counts the time the device sleeps, which
+    // CLOCK_UPTIME_RAW, the one Instant uses, doesn't. Suspending an app
+    // stops no clock.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
     #[cfg(any(target_os = "macos", target_os = "ios"))]

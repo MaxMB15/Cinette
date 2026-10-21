@@ -89,6 +89,9 @@ exclude_re = [
     # Reads the iPhone's or iPad's model, which only iOS builds. The choice
     # made from it stays in.
     'src-tauri/src/remote/device\.rs:.*\bmodel_identifier\b',
+    # The calls into the iOS Keychain, which only iOS builds. The decisions
+    # made from its answers (on_load, after_update) stay in.
+    'src-tauri/src/remote/keychain\.rs:.*\b(load_or_create|save|keychain_error)\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
@@ -113,8 +116,6 @@ exclude_globs = [
     "crates/tauri-plugin-mpv/src/android.rs",
     # Bonjour discovery, likewise macOS and iOS only.
     "apps/player/src-tauri/src/discovery/macos.rs",
-    # The device key in the iOS Keychain.
-    "apps/player/src-tauri/src/remote/keychain.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",
     # Writes the tests' media. Only tests use it.

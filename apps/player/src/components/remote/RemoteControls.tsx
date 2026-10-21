@@ -8,17 +8,24 @@ import { Dialog } from "@/components/ui/dialog";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useRemoteSessions } from "@/hooks/useRemoteTarget";
-import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied, remoteOpen } from "@/lib/tauri";
 import { VPN_HINT } from "@/lib/cast";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
 import type { CinetteDestination } from "@/lib/cinette-destination";
-import { endedText, formatCode } from "@/lib/remote-devices";
+import { endedText, formatCode, localNetworkDenied } from "@/lib/remote-devices";
 import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
+/** At least 44 points each way on a touch screen, as iOS asks. */
+const TOUCH = "pointer-coarse:min-h-11 pointer-coarse:min-w-11";
+
 const BUTTON = cn(
-	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+	"px-3 py-1.5 text-xs rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+	TOUCH
 );
+
+/** A button with only an icon. */
+const ICON_BUTTON = cn("inline-flex items-center justify-center", TOUCH);
 
 /**
  * Opens the device picker. While another device is controlled, it shows in
@@ -40,7 +47,11 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 	}, [open]);
 	// Asked each time the picker opens, since the user can allow it meanwhile.
 	const checkNetwork = () => {
-		remoteLocalNetworkDenied()
+		// Remote control may only start now, which is when iOS asks about the
+		// local network.
+		remoteOpen()
+			.catch(() => {})
+			.then(() => remoteLocalNetworkDenied())
 			.then((refused) => setDenied(refused === true))
 			.catch(() => setDenied(false));
 		// Many VPN apps block devices on the local network.
@@ -94,9 +105,7 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 				onOpen={checkNetwork}
 				notice={
 					denied
-						? getPlatform() === "ios"
-							? LOCAL_NETWORK_DENIED_IOS
-							: LOCAL_NETWORK_DENIED
+						? localNetworkDenied(getPlatform())
 						: devices.length > 0
 							? null
 							: looked
@@ -113,14 +122,6 @@ export const DevicesButton = ({ className }: { className?: string }) => {
 		</>
 	);
 };
-
-/** What the picker says while macOS keeps Cinette off the local network. */
-export const LOCAL_NETWORK_DENIED =
-	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
-
-/** What the picker says while iOS keeps Cinette off the local network. */
-export const LOCAL_NETWORK_DENIED_IOS =
-	"Cinette can't look for other devices. Allow it in Settings, Privacy & Security, Local Network.";
 
 /** How long the picker looks before it says it found no device. */
 export const LOOKING_MS = 3000;
@@ -159,7 +160,7 @@ const Notice = ({
 			<button
 				type="button"
 				aria-label="Dismiss"
-				className="text-muted-foreground hover:text-foreground"
+				className={cn(ICON_BUTTON, "text-muted-foreground hover:text-foreground")}
 				onClick={onDismiss}
 			>
 				<X className="h-4 w-4" aria-hidden />
@@ -246,7 +247,7 @@ const NowPlaying = ({ destination }: { destination: CinetteDestination }) => {
 				<button
 					type="button"
 					aria-label={playing ? "Pause" : "Play"}
-					className="p-1 rounded hover:bg-accent"
+					className={cn(ICON_BUTTON, "p-1 rounded hover:bg-accent")}
 					onClick={() => run(playing ? destination.pause : destination.play)}
 				>
 					{playing ? (
@@ -260,7 +261,7 @@ const NowPlaying = ({ destination }: { destination: CinetteDestination }) => {
 				<button
 					type="button"
 					aria-label="Stop"
-					className="p-1 rounded hover:bg-accent"
+					className={cn(ICON_BUTTON, "p-1 rounded hover:bg-accent")}
 					onClick={() => run(destination.stop)}
 				>
 					<Square className="h-4 w-4" aria-hidden />
