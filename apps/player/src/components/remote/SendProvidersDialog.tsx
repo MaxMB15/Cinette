@@ -31,7 +31,8 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 	const titleId = useId();
 	const [picked, setPicked] = useState<string[]>([]);
 	const [state, setState] = useState<SendState>({ step: "choosing" });
-	const [now, setNow] = useState(() => performance.now());
+	// Set from each notice, before the countdown shows.
+	const [now, setNow] = useState(0);
 	useTauriEvent<RemoteTransferNotice>("remote://transfer", (notice) => {
 		if (notice.link !== link.id) return;
 		const at = performance.now();
@@ -41,7 +42,6 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 	});
 	const waiting = state.step === "waiting";
 	useEffect(() => {
-		// Stryker disable next-line ConditionalExpression: an interval while not waiting only sets the same time again, which shows nothing.
 		if (!waiting) return;
 		const timer = setInterval(() => setNow(performance.now()), 250);
 		return () => clearInterval(timer);

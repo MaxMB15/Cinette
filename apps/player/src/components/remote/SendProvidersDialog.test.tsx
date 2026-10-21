@@ -204,6 +204,7 @@ describe("SendProvidersDialog", () => {
 	});
 
 	it("lists providers that share a name each on their own line", () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		render(<SendProvidersDialog link={link()} onClose={onClose} />);
 		pickAndSend("Home");
 		notify({
@@ -218,6 +219,8 @@ describe("SendProvidersDialog", () => {
 			},
 		});
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+		expect(error, "keys are unique").not.toHaveBeenCalled();
+		error.mockRestore();
 	});
 
 	it("cancels while saving too, but not before sending", () => {
@@ -230,5 +233,26 @@ describe("SendProvidersDialog", () => {
 		notify({ step: "pending", expiresInMs: 30_000 });
 		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 		expect(remoteCancelTransfer).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the others picked when one is unpicked", () => {
+		render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("checkbox", { name: "Home" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Sports" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Home" }));
+		expect(screen.getByRole("checkbox", { name: "Sports" })).toBeChecked();
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		expect(remoteSendProviders).toHaveBeenCalledWith(3, ["xt-2"]);
+	});
+
+	it("runs a timer only while it counts down", () => {
+		vi.useFakeTimers();
+		const { unmount } = render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		expect(vi.getTimerCount()).toBe(0);
+		pickAndSend("Home");
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(vi.getTimerCount()).toBe(1);
+		unmount();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });
