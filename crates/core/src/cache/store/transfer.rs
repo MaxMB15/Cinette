@@ -269,6 +269,8 @@ impl CacheStore {
             pins,
             current,
             sent_at: now,
+            received_at: 0,
+            dropped: 0,
         }
         .only(what))
     }
@@ -329,6 +331,7 @@ impl CacheStore {
                     season: row.get(8)?,
                     episode: row.get(9)?,
                     imdb: row.get(10)?,
+                    show: None,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -372,6 +375,7 @@ impl CacheStore {
                         season: e.season,
                         episode: e.episode,
                         imdb: None,
+                        show: Some(show_id.clone()),
                     }),
             );
         }

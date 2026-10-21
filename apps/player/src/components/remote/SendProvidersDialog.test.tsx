@@ -186,6 +186,40 @@ describe("SendProvidersDialog", () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
+	it("cancels while saving", () => {
+		render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		pickAndSend("Home");
+		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(remoteCancelTransfer).toHaveBeenCalledWith(3);
+	});
+
+	it("counts down from when the other device started asking", () => {
+		vi.useFakeTimers();
+		render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		pickAndSend("Home");
+		act(() => vi.advanceTimersByTime(10_000));
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(screen.getByText("Expires in 30 s")).toBeInTheDocument();
+	});
+
+	it("lists providers that share a name each on their own line", () => {
+		render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		pickAndSend("Home");
+		notify({
+			step: "progress",
+			transfer: "t",
+			progress: {
+				state: "providersDone",
+				data: [
+					{ name: "Home", outcome: "added" },
+					{ name: "Home", outcome: "exists" },
+				],
+			},
+		});
+		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+	});
+
 	it("cancels while saving too, but not before sending", () => {
 		const { unmount } = render(<SendProvidersDialog link={link()} onClose={onClose} />);
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

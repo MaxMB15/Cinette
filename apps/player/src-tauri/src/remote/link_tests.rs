@@ -14,7 +14,7 @@ use mvp_core::remote::message::{DeviceType, Feature, PlaybackSnapshot, PROTOCOL_
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
 use mvp_core::remote::transfer::flow::{
-    ControllerEvent, Progress, ProviderKind, ProviderName, ProviderSettings, GRANT_TIMEOUT,
+    ControllerEvent, Progress, ProviderKind, ProviderName, ProviderSettings, WRITE_TIMEOUT,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -1276,7 +1276,7 @@ async fn providers_go_through_a_link_and_a_stalled_transfer_ends_alone() {
     .await;
     // The target never answers. Once the grant's time is up, the transfer
     // ends, and the session isn't closed for it.
-    *skew.lock().unwrap() = GRANT_TIMEOUT;
+    *skew.lock().unwrap() = WRITE_TIMEOUT;
     link.until(|l| {
         l.transfers().iter().any(|e| {
             matches!(

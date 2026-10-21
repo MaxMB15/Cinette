@@ -220,6 +220,7 @@ fn known_types_match_the_message_enum() {
                 last: true,
                 sent_at: None,
                 current: None,
+                dropped: None,
                 items: vec![],
                 pins: vec![],
             },

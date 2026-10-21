@@ -12,7 +12,8 @@ use crate::commands::{add_m3u_url, add_xtream};
 use mvp_core::cache::store::CacheStore;
 use mvp_core::models::playlist::{Provider, ProviderType};
 use mvp_core::remote::transfer::flow::{
-    ProviderKind, ProviderName, ProviderOutcome, ProviderResult, ProviderSettings,
+    provider_name_ok, ProviderKind, ProviderName, ProviderOutcome, ProviderResult,
+    ProviderSettings, MAX_PROVIDERS, MAX_PROVIDER_FIELD,
 };
 use mvp_core::remote::transfer::refs::{account_tag, Salt};
 use std::sync::Mutex;
@@ -57,9 +58,27 @@ pub fn names_for(cache: &Mutex<CacheStore>, ids: &[String]) -> Result<Vec<Provid
     if ids.is_empty() {
         return Err("Pick a provider to send.".into());
     }
+    if ids.len() > MAX_PROVIDERS {
+        return Err(format!("Pick at most {MAX_PROVIDERS} providers at a time."));
+    }
     let providers = chosen(cache, ids)?;
     if providers.iter().any(is_local_file) {
         return Err("A playlist that's a file on this device can't be sent.".into());
+    }
+    for p in &providers {
+        if !provider_name_ok(&p.name) {
+            return Err(format!(
+                "Rename “{}” before sending it: its name is too long or has characters the other device can't show.",
+                p.name.trim()
+            ));
+        }
+        let long = |s: &Option<String>| s.as_ref().is_some_and(|s| s.len() > MAX_PROVIDER_FIELD);
+        if p.url.len() > MAX_PROVIDER_FIELD || long(&p.username) || long(&p.password) {
+            return Err(format!(
+                "“{}” can't be sent: its address or login is too long.",
+                p.name
+            ));
+        }
     }
     let names: Vec<ProviderName> = providers
         .iter()
@@ -93,7 +112,10 @@ pub fn settings_for(
                 url: p.url.clone(),
                 username: p.username.clone(),
                 password: p.password.clone(),
-                epg_url: p.epg_url.clone(),
+                // The other device finds the guide the way adding the
+                // provider by hand does; for Xtream this would only repeat
+                // the password.
+                epg_url: None,
             };
             forget(&mut p);
             settings
@@ -102,6 +124,7 @@ pub fn settings_for(
 }
 
 /// Clears a provider's address and login from memory.
+// mutants: skip FnValue: clearing memory that's freed right after can't be seen from a test.
 fn forget(provider: &mut Provider) {
     provider.url.zeroize();
     provider.username.zeroize();
@@ -181,6 +204,10 @@ pub(crate) async fn save(
     from: &str,
     providers: Vec<ProviderSettings>,
 ) -> Vec<ProviderResult> {
+    // One save at a time, so two devices sending one account at once can't
+    // both find it missing and both add it.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE_AT_A_TIME.lock().await;
     let mut results = Vec::with_capacity(providers.len());
     for settings in providers {
         let result = save_one(cache, loader, from, &settings).await;

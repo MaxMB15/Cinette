@@ -324,8 +324,10 @@ export const RemoteBar = () => {
 	const { link, ended, leave } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
 	const [leaveFailed, setLeaveFailed] = useState(false);
-	const [sending, setSending] = useState(false);
-	const [transferring, setTransferring] = useState(false);
+	// The link each dialog was opened for, so neither comes back by itself
+	// on the next link.
+	const [sendingFor, setSendingFor] = useState<number | null>(null);
+	const [transferringFor, setTransferringFor] = useState<number | null>(null);
 	// Leaving clears the link here before the backend answers, so this
 	// shows whatever the bar shows by then.
 	const failed = leaveFailed && (
@@ -352,7 +354,7 @@ export const RemoteBar = () => {
 						<button
 							type="button"
 							className={`${BUTTON} hover:bg-accent`}
-							onClick={() => setTransferring(true)}
+							onClick={() => setTransferringFor(link.id)}
 						>
 							Transfer history
 						</button>
@@ -361,15 +363,17 @@ export const RemoteBar = () => {
 						<button
 							type="button"
 							className={`${BUTTON} hover:bg-accent`}
-							onClick={() => setSending(true)}
+							onClick={() => setSendingFor(link.id)}
 						>
 							Send providers
 						</button>
 					)}
 				</span>
-				{sending && <SendProvidersDialog link={link} onClose={() => setSending(false)} />}
-				{transferring && (
-					<TransferHistoryDialog link={link} onClose={() => setTransferring(false)} />
+				{sendingFor === link.id && (
+					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
+				)}
+				{transferringFor === link.id && (
+					<TransferHistoryDialog link={link} onClose={() => setTransferringFor(null)} />
 				)}
 				<button
 					type="button"

@@ -1685,3 +1685,141 @@ async fn asking_for_history_needs_a_link_and_something_to_copy() {
     mac.invoke("remote_progress_saved", json!({ "playing": null }))
         .unwrap();
 }
+
+impl Running {
+    /// Whether an event called `name` came, looking at what came so far
+    /// without waiting.
+    fn has_had(&mut self, name: &str) -> bool {
+        while let Ok(event) = self.events.try_recv() {
+            self.unclaimed.push(event);
+        }
+        self.unclaimed.iter().any(|(got, _)| got == name)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_cancelled_while_it_waits_for_the_cache_never_asks() {
+    let (mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    // Another thread holds the cache, as a refresh would.
+    let (locked, release) = (
+        std::sync::mpsc::channel::<()>(),
+        std::sync::mpsc::channel::<()>(),
+    );
+    let (locked_tx, locked_rx) = locked;
+    let (release_tx, release_rx) = release;
+    let holder = mac.app.handle();
+    let holding = std::thread::spawn(move || {
+        let state = holder.state::<AppState>();
+        let _held = state.cache.lock().unwrap();
+        locked_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    locked_rx.recv().unwrap();
+    let handle = mac.app.handle();
+    let send = tokio::task::spawn_blocking(move || {
+        crate::test_support::invoke_on(
+            &handle,
+            "remote_send_providers",
+            json!({ "link": 1, "providerIds": ["m3u-home"] }),
+        )
+    });
+    // The send is waiting on the cache when the user cancels.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    mac.invoke("remote_cancel_transfer", json!({ "link": 1 }))
+        .unwrap();
+    release_tx.send(()).unwrap();
+    holding.join().unwrap();
+    assert_eq!(send.await.unwrap(), Err(json!("Cancelled.")));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!tv.has_had("remote://consent"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_a_waiting_send_takes_the_dialog_down_and_saves_nothing() {
+    let (mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    invoke_async(
+        &mac,
+        "remote_send_providers",
+        json!({ "link": 1, "providerIds": ["m3u-home"] }),
+    )
+    .await
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    mac.invoke("remote_cancel_transfer", json!({ "link": 1 }))
+        .unwrap();
+    let hidden = tv.event("remote://consent-hidden").await;
+    assert_eq!(hidden["request"], consent["request"]);
+    assert!(tv
+        .app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_providers()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_removed_before_the_allow_sends_nothing() {
+    let (mut mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    invoke_async(
+        &mac,
+        "remote_send_providers",
+        json!({ "link": 1, "providerIds": ["m3u-home"] }),
+    )
+    .await
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    mac.app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .remove_provider("m3u-home")
+        .unwrap();
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    let refused = transfer_step(&mut mac, "refused").await;
+    assert_eq!(refused["code"], json!("failed"));
+    assert!(tv
+        .app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_providers()
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn after_a_denial_the_same_providers_can_be_sent_again() {
+    let (mut mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    let args = || json!({ "link": 1, "providerIds": ["m3u-home"] });
+    invoke_async(&mac, "remote_send_providers", args())
+        .await
+        .unwrap();
+    let consent = tv.event("remote://consent").await;
+    // A second send while the first waits is refused here.
+    assert_eq!(
+        invoke_async(&mac, "remote_send_providers", args()).await,
+        Err(json!("Another transfer with that device is going on."))
+    );
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": false }),
+    )
+    .unwrap();
+    transfer_step(&mut mac, "refused").await;
+    // The denial's cooldown turns the next one away on the TV, but this
+    // device no longer thinks one is waiting.
+    let again = invoke_async(&mac, "remote_send_providers", args()).await;
+    assert_ne!(
+        again,
+        Err(json!("Another transfer with that device is going on."))
+    );
+}

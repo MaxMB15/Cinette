@@ -36,7 +36,7 @@ export const consentTitle = (asked: RemoteAsked | undefined): [string, string] =
 
 /** "a, b and c". */
 export const listOf = (items: string[]): string => {
-	if (items.length <= 1) return items.join("");
+	if (items.length <= 1) return items[0] ?? "";
 	return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 };
 

@@ -41,6 +41,7 @@ fn export() -> Export {
         pins: vec![pin()],
         current: Some(ItemRef::named(ItemKind::Movie, "Dune")),
         sent_at: 9,
+        ..Export::default()
     }
 }
 

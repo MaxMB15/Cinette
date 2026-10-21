@@ -668,7 +668,7 @@ async fn connection(
                     }
                 },
                 Some(Input::AskProviders(names, reply)) => {
-                    let asked = controller.ask_providers(names).map(|bytes| {
+                    let asked = controller.ask_providers(names, (config.clock)()).map(|bytes| {
                         let _ = writer.send(bytes);
                         last_sent = (config.clock)();
                     });
@@ -679,7 +679,7 @@ async fn connection(
                     pass_on(out, &writer, &mut last_sent, config, host, link, device);
                 }
                 Some(Input::AskHistory(direction, what, counts, reply)) => {
-                    let asked = controller.ask_history(direction, what, counts).map(|bytes| {
+                    let asked = controller.ask_history(direction, what, counts, (config.clock)()).map(|bytes| {
                         let _ = writer.send(bytes);
                         last_sent = (config.clock)();
                     });

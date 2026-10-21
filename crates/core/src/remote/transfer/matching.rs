@@ -46,7 +46,14 @@ pub struct DestChannel {
     pub season: Option<u32>,
     pub episode: Option<u32>,
     pub imdb: Option<String>,
+    /// For an episode from a show's saved list, or made from a show's id,
+    /// the show's channel id. Such an episode has no row in `channels`.
+    pub show: Option<String>,
 }
+
+/// Where the app keeps channels it downloaded episodes of. They're copies
+/// of channels a provider lists too.
+pub const DOWNLOADS_PROVIDER: &str = "__downloads__";
 
 impl DestChannel {
     fn kind(&self) -> Option<ItemKind> {
@@ -69,10 +76,13 @@ impl DestChannel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
     /// The channel a history row or a favorite goes on. `None` when only the
-    /// show was found, which is enough for a position but not for a row.
+    /// show was found, or several items share the key, which is enough for
+    /// a position but not for a row.
     pub channel: Option<DestChannel>,
     /// The key a position goes under. `None` for a live channel.
     pub key: Option<String>,
+    /// Why there's no channel, when there isn't.
+    pub why: Miss,
 }
 
 /// Why a reference matched nothing.
@@ -83,6 +93,9 @@ pub enum Miss {
     Missing,
     /// Several items could be, and nothing says which.
     Ambiguous,
+    /// What the other device sent doesn't make sense, such as a negative
+    /// position, so it wasn't copied.
+    Invalid,
 }
 
 /// The destination's catalog, arranged for matching.
@@ -99,6 +112,8 @@ pub struct Index {
     by_title: HashMap<(ItemKind, String), Vec<usize>>,
     by_episode: HashMap<(String, u32, u32), Vec<usize>>,
     groups: HashSet<(String, String, String)>,
+    /// The shows whose episode lists the destination has saved.
+    listed_shows: HashSet<String>,
 }
 
 /// The items a lookup found, if any.
@@ -109,7 +124,7 @@ fn get(found: Option<&Vec<usize>>) -> &[usize] {
 /// One result of a rule.
 enum Pick {
     One(usize),
-    Several,
+    Several(Vec<usize>),
     None,
 }
 
@@ -132,7 +147,30 @@ impl Index {
                 }
             }
         }
+        // A downloaded episode is in the list twice, once as the app's copy;
+        // the provider's own one is kept.
+        let mut kept: HashMap<&str, usize> = HashMap::new();
         for (i, ch) in channels.iter().enumerate() {
+            match kept.get(ch.id.as_str()) {
+                Some(&j)
+                    if channels[j].provider_id == DOWNLOADS_PROVIDER
+                        && ch.provider_id != DOWNLOADS_PROVIDER =>
+                {
+                    kept.insert(&ch.id, i);
+                }
+                Some(_) => {}
+                None => {
+                    kept.insert(&ch.id, i);
+                }
+            }
+        }
+        for (i, ch) in channels.iter().enumerate() {
+            if kept.get(ch.id.as_str()) != Some(&i) {
+                continue;
+            }
+            if let Some(show) = &ch.show {
+                index.listed_shows.insert(show.clone());
+            }
             let Some(kind) = ch.kind() else { continue };
             let account = index.accounts.get(&ch.provider_id).cloned();
             if let Some(account) = &account {
@@ -209,13 +247,23 @@ impl Index {
         ))
     }
 
-    /// Narrows several items to the one with the reference's account.
-    fn pick(&self, found: &[usize], account: Option<&AccountTag>) -> Pick {
-        match found {
+    /// Narrows several items to the one with the reference's account. A
+    /// candidate whose IMDb id differs from the reference's isn't the same
+    /// film or show, whatever its title.
+    fn pick(&self, found: &[usize], account: Option<&AccountTag>, imdb: Option<&str>) -> Pick {
+        let found: Vec<usize> = found
+            .iter()
+            .copied()
+            .filter(|&i| match (imdb, self.channels[i].imdb.as_deref()) {
+                (Some(want), Some(have)) => want == have,
+                _ => true,
+            })
+            .collect();
+        match found[..] {
             [] => Pick::None,
-            [one] => Pick::One(*one),
-            several => {
-                let mine: Vec<usize> = several
+            [one] => Pick::One(one),
+            _ => {
+                let mine: Vec<usize> = found
                     .iter()
                     .copied()
                     .filter(|&i| {
@@ -225,7 +273,7 @@ impl Index {
                     .collect();
                 match mine[..] {
                     [one] => Pick::One(one),
-                    _ => Pick::Several,
+                    _ => Pick::Several(found),
                 }
             }
         }
@@ -234,12 +282,14 @@ impl Index {
     /// The destination's item for a reference.
     pub fn find(&self, r: &ItemRef) -> Result<Found, Miss> {
         let account = r.account.as_ref();
-        let mut ambiguous = false;
+        let imdb = r.imdb.as_deref().filter(|t| !t.is_empty());
+        // The first rule that found several, if none found one.
+        let mut several: Option<Vec<usize>> = None;
         let mut first = |found: Pick| -> Option<usize> {
             match found {
                 Pick::One(i) => Some(i),
-                Pick::Several => {
-                    ambiguous = true;
+                Pick::Several(list) => {
+                    several.get_or_insert(list);
                     None
                 }
                 Pick::None => None,
@@ -269,6 +319,7 @@ impl Index {
                 && let Some(i) = first(self.pick(
                     get(self.by_account_name.get(&(account.clone(), r.kind, name))),
                     Some(account),
+                    imdb,
                 ))
             {
                 return Ok(self.found(i));
@@ -282,23 +333,23 @@ impl Index {
                     let by_name = self
                         .by_tvg_name
                         .get(&(tvg.to_string(), normalize_title(&r.name)));
-                    if let Some(i) = first(self.pick(get(by_name), account)) {
+                    if let Some(i) = first(self.pick(get(by_name), account, None)) {
                         return Ok(self.found(i));
                     }
-                    if let Some(i) = first(self.pick(get(self.by_tvg.get(tvg)), account)) {
+                    if let Some(i) = first(self.pick(get(self.by_tvg.get(tvg)), account, None)) {
                         return Ok(self.found(i));
                     }
                 }
             }
             ItemKind::Movie | ItemKind::Series => {
-                if let Some(imdb) = r.imdb.as_deref().filter(|t| !t.is_empty()) {
+                if let Some(imdb) = imdb {
                     let found = self.by_imdb.get(&(r.kind, imdb.to_string()));
-                    if let Some(i) = first(self.pick(get(found), account)) {
+                    if let Some(i) = first(self.pick(get(found), account, None)) {
                         return Ok(self.found(i));
                     }
                 }
                 let found = self.by_title.get(&(r.kind, normalize_title(&r.name)));
-                if let Some(i) = first(self.pick(get(found), account)) {
+                if let Some(i) = first(self.pick(get(found), account, imdb)) {
                     return Ok(self.found(i));
                 }
             }
@@ -309,58 +360,87 @@ impl Index {
                     let found = self
                         .by_episode
                         .get(&(normalize_title(series), season, episode));
-                    if let Some(i) = first(self.pick(get(found), account)) {
+                    if let Some(i) = first(self.pick(get(found), account, None)) {
                         return Ok(self.found(i));
                     }
                     // Only the show: enough for the position, whose key can
-                    // only ever resume that episode of that show.
+                    // only ever resume that episode of that show, unless the
+                    // show's saved list says it has no such episode.
                     let shows = self
                         .by_title
                         .get(&(ItemKind::Series, normalize_title(series)));
-                    if let Some(i) = first(self.pick(get(shows), account)) {
+                    if let Some(i) = first(self.pick(get(shows), account, None)) {
                         let show = &self.channels[i];
-                        return Ok(Found {
-                            channel: None,
-                            key: Some(refs::episode_key(&show.name, season, episode)),
-                        });
+                        if !self.listed_shows.contains(&show.id) {
+                            return Ok(Found {
+                                channel: None,
+                                key: Some(refs::episode_key(&show.name, season, episode)),
+                                why: Miss::Missing,
+                            });
+                        }
                     }
                 }
             }
         }
-        Err(if ambiguous {
-            Miss::Ambiguous
-        } else {
-            Miss::Missing
-        })
+        // Several items that all resume under one key, such as one film
+        // listed in two groups, still place the position.
+        if let Some(list) = several {
+            let keys: Vec<Option<String>> = list.iter().map(|&i| self.found(i).key).collect();
+            if let Some(Some(key)) = keys.first()
+                && keys.iter().all(|k| k.as_ref() == Some(key))
+            {
+                return Ok(Found {
+                    channel: None,
+                    key: Some(key.clone()),
+                    why: Miss::Ambiguous,
+                });
+            }
+            return Err(Miss::Ambiguous);
+        }
+        Err(Miss::Missing)
     }
 
     /// An Xtream episode whose list the destination hasn't saved: the same
-    /// account has the show, and episode ids follow from the show's.
+    /// account has the show, and episode ids follow from the show's. The
+    /// name is made from the destination's show, not taken from the other
+    /// device. The key uses the show's title as the source has it, which is
+    /// the panel's own name for it, as the player's key does.
     fn episode_by_panel(&self, r: &ItemRef) -> Option<Found> {
         let account = r.account.as_ref()?;
         let panel = r.panel_id.as_deref()?;
-        let show = refs::series_of_episode(panel)?;
-        let &i = self.by_panel.get(&(account.clone(), show))?;
-        let show = &self.channels[i];
-        let key = match (r.season, r.episode) {
-            (Some(season), Some(episode)) => Some(refs::episode_key(&show.name, season, episode)),
-            _ => None,
+        let (series_id, season, _) = refs::parse_episode_id(panel)?;
+        let (Some(want_season), Some(episode)) = (r.season, r.episode) else {
+            return None;
         };
+        if season != want_season {
+            return None;
+        }
+        let &i = self
+            .by_panel
+            .get(&(account.clone(), format!("series-{series_id}")))?;
+        let show = &self.channels[i];
+        // A saved list would have had the episode under rule 1.
+        if self.listed_shows.contains(&show.id) {
+            return None;
+        }
+        let title = r.series.as_deref().unwrap_or(&show.name);
         Some(Found {
             channel: Some(DestChannel {
                 id: format!("{}-{panel}", show.provider_id),
                 provider_id: show.provider_id.clone(),
-                name: r.name.clone(),
+                name: format!("{} S{season:02}E{episode:02}", show.name),
                 content_type: "series".into(),
                 group: show.group.clone(),
                 logo: show.logo.clone(),
                 tvg_id: None,
-                series_title: Some(show.name.clone()),
-                season: r.season,
-                episode: r.episode,
+                series_title: Some(title.to_string()),
+                season: Some(season),
+                episode: Some(episode),
                 imdb: None,
+                show: Some(show.id.clone()),
             }),
-            key,
+            key: Some(refs::episode_key(title, season, episode)),
+            why: Miss::Missing,
         })
     }
 
@@ -381,6 +461,7 @@ impl Index {
         Found {
             channel: Some(ch.clone()),
             key,
+            why: Miss::Missing,
         }
     }
 }

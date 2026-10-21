@@ -1217,3 +1217,29 @@ fn install_info_points_manual_updates_at_the_latest_release() {
         assert_eq!(info.install_type, "native");
     }
 }
+
+#[tokio::test]
+async fn a_playlist_whose_channels_cant_be_saved_leaves_no_provider() {
+    let app = TestApp::new();
+    let db = cache_on_disk(&app);
+    refuse_saves(&db, "channels");
+    let url = test_server::serve_once("200 OK", playlist(None, &["Alpha"]));
+    let err = load_m3u_playlist(app.state(), "Home".into(), url)
+        .await
+        .unwrap_err();
+    assert_eq!(err, SAVE_REFUSED);
+    assert!(get_providers(app.state()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_panel_whose_channels_cant_be_saved_leaves_no_provider() {
+    let app = TestApp::new();
+    let db = cache_on_disk(&app);
+    refuse_saves(&db, "channels");
+    let (url, _requests) = xtream_panel();
+    let err = load_panel(&app, &url, &test_server::password())
+        .await
+        .unwrap_err();
+    assert_eq!(err, SAVE_REFUSED);
+    assert!(get_providers(app.state()).await.unwrap().is_empty());
+}

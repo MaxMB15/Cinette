@@ -70,7 +70,7 @@ pub fn import(
 ) -> Result<Imported, ErrorCode> {
     locked(cache, |c| {
         let index = c.transfer_index(salt)?;
-        let plan = merge::plan(export, &index, merge::clock_offset(export.sent_at, now()));
+        let plan = merge::plan(export, &index, now());
         let report = c.apply_transfer(&plan)?;
         let channel = match &report.resume {
             Some(resume) => c.find_channel(&resume.channel_id)?,

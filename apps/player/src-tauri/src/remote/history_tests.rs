@@ -57,7 +57,10 @@ fn a_movie_watched_here_resumes_there() {
         }
     );
     let salt = Salt::generate();
-    let sent = export(&mac, &salt, What::ALL, Some("xt-mac-movie-8")).unwrap();
+    let mut sent = export(&mac, &salt, What::ALL, Some("xt-mac-movie-8")).unwrap();
+    // As the first chunk arrives, at once.
+    sent.received_at = sent.sent_at;
+    assert!((sent.sent_at - chrono::Utc::now().timestamp()).abs() < 5);
     let imported = import(&tv, &salt, &sent).unwrap();
     assert_eq!(imported.report.history.added, 1);
     assert_eq!(imported.report.positions.added, 1);
@@ -70,6 +73,8 @@ fn a_movie_watched_here_resumes_there() {
         .unwrap()
         .unwrap();
     assert_eq!(saved.position_seconds, 1234.0);
+    // Its time is the Mac's, which no clamp to "now" moved.
+    assert!((saved.updated_at - chrono::Utc::now().timestamp()).abs() < 5);
 }
 
 #[test]

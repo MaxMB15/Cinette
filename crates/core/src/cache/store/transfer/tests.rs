@@ -158,21 +158,17 @@ fn transfer_at(
     let export = from
         .export_transfer(&salt, what, playing, from_now)
         .unwrap();
-    let (parts, dropped) = chunks::split(&export);
+    let (parts, dropped) = chunks::split(&export, from_now);
     assert_eq!(dropped, 0);
     let mut assembler = Assembler::new();
     let mut received = None;
     for part in parts {
         let bytes = serde_json::to_vec(&part).unwrap().len();
-        received = assembler.push(part, bytes).unwrap();
+        received = assembler.push(part, bytes, to_now).unwrap();
     }
     let received = received.unwrap();
     let index = to.transfer_index(&salt).unwrap();
-    let plan = merge::plan(
-        &received,
-        &index,
-        merge::clock_offset(received.sent_at, to_now),
-    );
+    let plan = merge::plan(&received, &index, to_now);
     to.apply_transfer(&plan).unwrap()
 }
 
@@ -267,7 +263,7 @@ fn a_partial_episode_resumes_at_its_place_on_the_other_device() {
         report.resume,
         Some(merge::Resume {
             channel_id: "xt-tv-xt-ep-42-s1-3".into(),
-            name: "Lost S01E04 Walkabout".into(),
+            name: "Lost S01E04".into(),
             position: Some(1234.5),
             key: Some("series:lost:s1e4".into()),
         })
@@ -578,7 +574,7 @@ fn a_failed_write_leaves_the_destination_as_it_was() {
 
     let salt = Salt::generate();
     let export = mac.export_transfer(&salt, What::ALL, None, NOW).unwrap();
-    let plan = merge::plan(&export, &tv.transfer_index(&salt).unwrap(), 0);
+    let plan = merge::plan(&export, &tv.transfer_index(&salt).unwrap(), NOW);
     assert!(tv.apply_transfer(&plan).is_err());
     assert_eq!(snapshot(&tv), before);
 }
@@ -822,7 +818,7 @@ fn the_export_carries_references_and_never_ids_logins_or_logos() {
     assert_eq!(export.sent_at, NOW);
     assert_eq!(export.current.as_ref().unwrap().name, "BBC One");
 
-    let json = serde_json::to_string(&chunks::split(&export).0).unwrap();
+    let json = serde_json::to_string(&chunks::split(&export, NOW).0).unwrap();
     for secret in [
         "made-up",
         "viewer",
@@ -831,7 +827,10 @@ fn the_export_carries_references_and_never_ids_logins_or_logos() {
         "logo.example",
         "file://",
     ] {
-        assert!(!json.contains(secret), "the export carries something it mustn't");
+        assert!(
+            !json.contains(secret),
+            "the export carries something it mustn't"
+        );
     }
 }
 
@@ -1212,4 +1211,111 @@ fn only_shows_lists_and_numbered_episodes_reach_the_index() {
     assert!(index.find(&odd).is_err());
     let special = ItemRef::named(ItemKind::Series, "Lost Special");
     assert!(index.find(&special).is_err());
+}
+
+/// Applies an export built by hand, as one from a broken or hostile device.
+fn apply_forged(to: &CacheStore, items: Vec<Item>, now: i64) -> Report {
+    let salt = Salt::generate();
+    let export = Export {
+        items,
+        sent_at: now,
+        received_at: now,
+        ..Export::default()
+    };
+    let plan = merge::plan(&export, &to.transfer_index(&salt).unwrap(), now);
+    to.apply_transfer(&plan).unwrap()
+}
+
+#[test]
+fn a_huge_play_count_from_another_device_cant_break_the_history() {
+    let tv = device("xt-tv");
+    let report = apply_forged(
+        &tv,
+        vec![Item {
+            reference: ItemRef::named(ItemKind::Movie, "Heat"),
+            watched: Some(watched(1, 2, i64::MAX, 60)),
+            position: Some(Position {
+                position: -500.0,
+                ..at(0.0, 2)
+            }),
+            favorite: false,
+        }],
+        NOW,
+    );
+    assert_eq!(report.unmatched_total, 1);
+    tv.record_play_start("xt-tv-movie-8", "Heat", None, "movie")
+        .unwrap();
+    let rows = tv.get_watch_history(10).unwrap();
+    assert_eq!(rows[0].play_count, 1);
+    assert_eq!(saved_position(&tv, "movie:heat"), None);
+}
+
+#[test]
+fn the_same_transfer_under_a_clock_a_second_apart_changes_nothing() {
+    let mac = device("xt-mac");
+    let tv = device("xt-tv");
+    history(
+        &mac,
+        "xt-mac-movie-8",
+        "Heat",
+        "movie",
+        watched(10, 20, 2, 300),
+    );
+    position(&mac, "movie:heat", at(300.0, 20));
+    transfer_at(&mac, NOW, &tv, NOW + 600, What::ALL, None);
+    let before = snapshot(&tv);
+    let again = transfer_at(&mac, NOW, &tv, NOW + 601, What::ALL, None);
+    assert_eq!(snapshot(&tv), before);
+    assert_eq!(again.history.updated + again.history.added, 0);
+    assert_eq!(again.positions.updated + again.positions.added, 0);
+}
+
+#[test]
+fn time_the_export_waited_isnt_taken_for_clock_drift() {
+    let mac = device("xt-mac");
+    let tv = device("xt-tv");
+    // The Mac read its history 90 s before the chunks went, as an import
+    // waits on its preview. The TV saved a rewatch 30 s ago.
+    position(&mac, "movie:heat", at(2000.0, NOW - 100));
+    position(&tv, "movie:heat", at(60.0, NOW - 30));
+    let salt = Salt::generate();
+    let export = mac
+        .export_transfer(&salt, What::ALL, None, NOW - 90)
+        .unwrap();
+    let (parts, _) = chunks::split(&export, NOW);
+    let mut assembler = Assembler::new();
+    let mut received = None;
+    for part in parts {
+        received = assembler.push(part, 10, NOW).unwrap();
+    }
+    let received = received.unwrap();
+    let plan = merge::plan(&received, &tv.transfer_index(&salt).unwrap(), NOW);
+    tv.apply_transfer(&plan).unwrap();
+    assert_eq!(
+        saved_position(&tv, "movie:heat").unwrap().position_seconds,
+        60.0
+    );
+}
+
+#[test]
+fn an_item_too_big_to_send_is_counted_as_not_transferred() {
+    let tv = device("xt-tv");
+    let salt = Salt::generate();
+    let export = Export {
+        items: vec![Item {
+            reference: ItemRef::named(ItemKind::Movie, "x".repeat(chunks::MAX_NAME_BYTES + 1)),
+            watched: Some(watched(1, 2, 1, 1)),
+            position: None,
+            favorite: false,
+        }],
+        ..Export::default()
+    };
+    let (parts, _) = chunks::split(&export, NOW);
+    let mut assembler = Assembler::new();
+    let mut received = None;
+    for part in parts {
+        received = assembler.push(part, 10, NOW).unwrap();
+    }
+    let plan = merge::plan(&received.unwrap(), &tv.transfer_index(&salt).unwrap(), NOW);
+    assert_eq!(tv.apply_transfer(&plan).unwrap().unmatched_total, 1);
 }
