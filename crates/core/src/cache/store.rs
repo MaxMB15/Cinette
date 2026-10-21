@@ -107,6 +107,10 @@ pub struct PlaybackPosition {
     pub position_seconds: f64,
     pub duration_seconds: f64,
     pub updated_at: i64,
+    /// Watched to the end. The row stays, so the item counts as watched
+    /// and a history transfer can carry that.
+    #[serde(default)]
+    pub finished: bool,
 }
 
 /// A cache table that keeps one JSON value per key, with the time it was saved.
@@ -362,6 +366,7 @@ impl CacheStore {
                 updated_at       INTEGER NOT NULL
             );"
         )?;
+        self.add_column("playback_positions", "finished INTEGER NOT NULL DEFAULT 0")?;
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS pinned_groups (
                 provider_id TEXT NOT NULL,
@@ -1643,18 +1648,39 @@ impl CacheStore {
         position_seconds: f64,
         duration_seconds: f64,
     ) -> Result<(), CacheError> {
+        self.write_position(content_key, position_seconds, duration_seconds, false)
+    }
+
+    /// Saves that `content_key` was watched to the end, with the position at
+    /// the end. The player doesn't offer to resume it.
+    pub fn mark_position_finished(
+        &self,
+        content_key: &str,
+        duration_seconds: f64,
+    ) -> Result<(), CacheError> {
+        self.write_position(content_key, duration_seconds, duration_seconds, true)
+    }
+
+    fn write_position(
+        &self,
+        content_key: &str,
+        position_seconds: f64,
+        duration_seconds: f64,
+        finished: bool,
+    ) -> Result<(), CacheError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
         self.conn.execute(
-            "INSERT INTO playback_positions (content_key, position_seconds, duration_seconds, updated_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO playback_positions (content_key, position_seconds, duration_seconds, updated_at, finished)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(content_key) DO UPDATE SET
                 position_seconds = excluded.position_seconds,
                 duration_seconds = excluded.duration_seconds,
-                updated_at       = excluded.updated_at",
-            params![content_key, position_seconds, duration_seconds, now],
+                updated_at       = excluded.updated_at,
+                finished         = excluded.finished",
+            params![content_key, position_seconds, duration_seconds, now, finished],
         )?;
         Ok(())
     }
@@ -1664,7 +1690,7 @@ impl CacheStore {
         content_key: &str,
     ) -> Result<Option<PlaybackPosition>, CacheError> {
         let result = self.conn.query_row(
-            "SELECT content_key, position_seconds, duration_seconds, updated_at
+            "SELECT content_key, position_seconds, duration_seconds, updated_at, finished
              FROM playback_positions WHERE content_key = ?1",
             params![content_key],
             |row| {
@@ -1673,6 +1699,7 @@ impl CacheStore {
                     position_seconds: row.get(1)?,
                     duration_seconds: row.get(2)?,
                     updated_at: row.get(3)?,
+                    finished: row.get(4)?,
                 })
             },
         );
@@ -2192,7 +2219,7 @@ impl CacheStore {
 /// position under. Keep the two in step. Series without a season and episode
 /// are parsed from the name, as `enrich_stale_series` does before the frontend
 /// sees them. None for live channels, which have no position.
-fn playback_key(
+pub(crate) fn playback_key(
     name: &str,
     content_type: &str,
     series_title: Option<String>,
@@ -2220,11 +2247,7 @@ fn playback_key(
 /// Trim, lowercase and collapse runs of whitespace, like `normalize` in
 /// `lib/playback.ts`.
 fn normalize_title(title: &str) -> String {
-    title
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    crate::remote::transfer::refs::normalize_title(title)
 }
 
 /// For series channels loaded from an older cache that has NULL series_title/season/episode,
@@ -2244,6 +2267,8 @@ fn enrich_stale_series(channels: &mut [Channel]) {
         }
     }
 }
+
+mod transfer;
 
 #[cfg(test)]
 mod tests {
