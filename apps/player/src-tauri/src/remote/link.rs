@@ -54,6 +54,10 @@ pub struct Limits {
     pub request: Duration,
     /// The most commands and queries waiting for answers at once.
     pub waiting: usize,
+    /// The longest the task sleeps without looking at the clock.
+    pub nap: Duration,
+    /// The wait before reconnection attempt `attempt + 1`.
+    pub backoff: fn(attempt: u32) -> Duration,
 }
 
 impl Limits {
@@ -62,6 +66,8 @@ impl Limits {
         ping: PING_INTERVAL,
         request: Duration::from_secs(15),
         waiting: 32,
+        nap: MAX_NAP,
+        backoff,
     };
 }
 
@@ -323,7 +329,7 @@ async fn run(
                     Some(Ended::Lost)
                 } else {
                     // The last try comes as the grace runs out.
-                    let wait = backoff(attempt).min(left);
+                    let wait = (config.limits.backoff)(attempt).min(left);
                     attempt += 1;
                     match wait_or_leave(wait, &mut inbox).await {
                         true => Some(Ended::Left),
@@ -598,7 +604,7 @@ async fn connection(
                     }
                 },
             },
-            () = tokio::time::sleep(MAX_NAP.min(config.limits.ping)) => {}
+            () = tokio::time::sleep(config.limits.nap.min(config.limits.ping)) => {}
         }
         let now = (config.clock)();
         // The core gives up on a handshake or an answer that takes too long.

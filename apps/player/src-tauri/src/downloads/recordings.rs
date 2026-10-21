@@ -56,10 +56,18 @@ const CHECK_INTERVAL_SECS: i64 = 30;
 const STOP_GRACE: Duration = Duration::from_secs(15);
 /// How long a recording waits after it stops its provider's downloads or
 /// recordings, so the provider sees their connections close first.
-#[cfg(desktop)]
+#[cfg(all(desktop, not(test)))]
 const HANDOVER_PAUSE: Duration = Duration::from_secs(3);
+/// Tests wait less, still far longer than stopping a recording takes.
+#[cfg(all(desktop, test))]
+const HANDOVER_PAUSE: Duration = Duration::from_secs(1);
 /// How long quitting waits for recordings to close their files.
+#[cfg(not(test))]
 const EXIT_GRACE: Duration = Duration::from_secs(3);
+/// Tests wait less. Every test app quits, and most leave an ffmpeg running
+/// that ignores the request to stop.
+#[cfg(test)]
+const EXIT_GRACE: Duration = Duration::from_millis(300);
 /// How early ffmpeg may reach its length limit, in seconds. The limit counts
 /// the stream's own time, and a provider often sends the first seconds of a
 /// stream in a burst.
@@ -422,19 +430,24 @@ fn try_begin<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     tauri::async_runtime::spawn(watch(app.clone(), id.to_string(), pid, claim.url, rx));
 
     // A stop that came while ffmpeg started found nothing to stop yet.
-    let ended = {
+    let latest = {
         let app_state = app.state::<AppState>();
         let cache = app_state.cache.lock().map_err(|e| e.to_string())?;
         cache.get_download(id).map_err(|e| e.to_string())?
-    }
-    .is_none_or(|r| {
-        r.status != DownloadStatus::Recording
-            || r.end_at.is_some_and(|end| end <= manager::now_secs())
-    });
-    if ended {
+    };
+    if ended_meanwhile(latest.as_ref(), manager::now_secs()) {
         ask_to_stop(app, id);
     }
     Ok(())
+}
+
+/// Whether a recording, read again once its ffmpeg runs, was stopped, ended
+/// or removed while ffmpeg started. `None` is one that's gone.
+#[cfg(desktop)]
+fn ended_meanwhile(rec: Option<&DownloadRecord>, now: i64) -> bool {
+    rec.is_none_or(|r| {
+        r.status != DownloadStatus::Recording || r.end_at.is_some_and(|end| end <= now)
+    })
 }
 
 /// Run `f` on the cache and log what goes wrong.
@@ -1002,6 +1015,7 @@ pub fn stop_all_for_exit<R: Runtime>(app: &AppHandle<R>) {
         let _ = run.child.write(b"q");
     }
     let deadline = Instant::now() + EXIT_GRACE;
+    // mutants: skip BinaryOperator: < and <= differ only at one instant of a clock that never stops.
     while Instant::now() < deadline && !recorder.running().is_empty() {
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -1024,8 +1038,8 @@ fn modified_at(path: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::downloads::test_support::{
-        self, add_channel, missing_url, process_runs, stalls, video_url, wait_until, DownloadEvent,
-        Events,
+        self, add_channel, missing_url, process_runs, stalls, video_url, wait_until, wait_within,
+        DownloadEvent, Events,
     };
     use crate::test_support::{poison, TestApp};
     use chrono::NaiveDate;
@@ -1371,6 +1385,24 @@ mod tests {
         assert_eq!(end_now(&cache, "movie", 400).unwrap(), Stopped::Nothing);
     }
 
+    #[test]
+    fn a_recording_read_again_has_ended_at_its_end_or_once_it_stops_recording() {
+        let mut rec = download("rec", "xt-1-xt-0", DownloadStatus::Recording);
+        assert!(!ended_meanwhile(Some(&rec), 500), "it records with no end");
+        rec.end_at = Some(501);
+        assert!(!ended_meanwhile(Some(&rec), 500), "its end is still ahead");
+        rec.end_at = Some(500);
+        assert!(ended_meanwhile(Some(&rec), 500), "it ends now");
+        rec.end_at = Some(499);
+        assert!(ended_meanwhile(Some(&rec), 500), "its end went by");
+
+        // A record that isn't recording any more has ended, whatever its end.
+        rec.end_at = Some(1_000);
+        rec.status = DownloadStatus::Completed;
+        assert!(ended_meanwhile(Some(&rec), 500), "it stopped recording");
+        assert!(ended_meanwhile(None, 500), "it's gone");
+    }
+
     /// A recording of "City News" from 100 to 1 000 that started at 100 and
     /// is writing `contents` to `file`.
     fn running_with_file(cache: &CacheStore, file: &Path, contents: &[u8]) -> String {
@@ -1707,10 +1739,14 @@ mod tests {
     }
 
     /// Waits for the app to send a record of recording `id` that's no longer
-    /// recording, and returns it.
+    /// recording, and returns it. ffmpeg ends a few hundredths of a second
+    /// after these tests start or kill it. A recording that never started
+    /// never settles, and the test fails after five seconds, well before
+    /// cargo-mutants gives up on the run.
+    #[track_caller]
     fn settled(events: &Events, id: &str) -> DownloadRecord {
         let mut found = None;
-        wait_until("the recording settles", || {
+        wait_within(Duration::from_secs(5), "the recording settles", || {
             found = events
                 .progress(id)
                 .into_iter()
@@ -1873,6 +1909,13 @@ mod tests {
         };
         let started = Instant::now();
         run_check(&handle);
+        // The check claimed the recording before it waited, and found it
+        // stopped after. A check that never claimed it leaves it scheduled
+        // and the stopper waiting, so this comes before the join.
+        assert!(
+            test_support::download(&app, &rec.id).is_none(),
+            "the check didn't delete the stopped recording"
+        );
         stopper.join().unwrap();
 
         // The download went back in the queue, and the recording waited for
@@ -1882,7 +1925,6 @@ mod tests {
             .iter()
             .any(|r| r.status == DownloadStatus::Queued));
         assert!(started.elapsed() >= HANDOVER_PAUSE);
-        assert!(test_support::download(&app, &rec.id).is_none());
         assert!(events
             .sent()
             .contains(&DownloadEvent::Removed(rec.id.clone())));
@@ -2015,7 +2057,15 @@ mod tests {
         let pid = pid_of(&app, &id);
         let started = Instant::now();
 
-        stop_all_for_exit(&app.handle());
+        let quitting = {
+            let handle = app.handle();
+            std::thread::spawn(move || stop_all_for_exit(&handle))
+        };
+        // Long before this ffmpeg would give up on its stream by itself.
+        wait_within(Duration::from_secs(5), "quitting returns", || {
+            quitting.is_finished()
+        });
+        quitting.join().unwrap();
 
         assert!(app.downloads().exiting.load(Ordering::SeqCst));
         // This ffmpeg ignores the request to stop, so quitting waits the
