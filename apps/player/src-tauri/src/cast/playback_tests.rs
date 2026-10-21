@@ -1442,3 +1442,128 @@ async fn a_newer_load_waits_until_the_one_it_overtook_lets_go_of_the_provider() 
     assert!(loaded.body["media"]["contentId"].is_string());
     assert!(ffmpeg_starts_at(&source, "2.000"));
 }
+
+/// Has stopped conversions wait before they kill ffmpeg, until dropped.
+struct SlowKill;
+
+impl SlowKill {
+    fn new(delay: Duration) -> Self {
+        let ms = u64::try_from(delay.as_millis()).unwrap();
+        crate::convert::KILL_DELAY_MS.store(ms, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for SlowKill {
+    fn drop(&mut self) {
+        crate::convert::KILL_DELAY_MS.store(0, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_overtaken_load_lets_go_of_the_provider_before_it_returns() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    // A receiver that takes a second to answer, so the newer load comes
+    // while the first connects with its converter running.
+    let (addr, mut got, receiver) = fake_receiver::start_controlled(Duration::from_secs(1)).await;
+    add_receiver(&app, "tv", addr);
+    let (source, connections) = counting_source(wav16_lasting(24), Duration::ZERO, false);
+    let film = channel("m-1", &source, "movie");
+    let other = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &film);
+    add_channel(&app, &other);
+    // A stopped ffmpeg takes a moment to go, so a load that only dropped it
+    // would return while it still runs.
+    let _slow = SlowKill::new(Duration::from_millis(1500));
+    let first = load_in_background(&app, &film, converted(), None);
+    // Its converter runs, and it connects to the receiver.
+    wait_until("the connection to the receiver", || {
+        receiver.accepted() >= 1
+    })
+    .await;
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    load(&app, "cast:tv", &other, direct("mp4"), None).unwrap();
+    assert_eq!(first.join().unwrap(), Err(json!("superseded")));
+    // Its ffmpeg exited before it let the newer load go on.
+    assert!(!ffmpeg_runs_for(&source));
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["media"]["contentId"], "http://192.0.2.1/2.mp4");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_release_waits_for_an_overtaken_load_to_let_go_of_the_provider() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _got, receiver) = fake_receiver::start_controlled(Duration::from_secs(1)).await;
+    add_receiver(&app, "tv", addr);
+    let (source, connections) = counting_source(wav16_lasting(24), Duration::ZERO, false);
+    let film = channel("m-1", &source, "movie");
+    add_channel(&app, &film);
+    let _slow = SlowKill::new(Duration::from_millis(1500));
+    let first = load_in_background(&app, &film, converted(), None);
+    // Its converter runs, and it connects to the receiver.
+    wait_until("the connection to the receiver", || {
+        receiver.accepted() >= 1
+    })
+    .await;
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    // The load under way gives up, and lets go of the provider, before the
+    // release answers, whether or not it had opened a session to release.
+    let _ = app.invoke("cast_release", json!({ "receiverId": "cast:tv" }));
+    assert!(!ffmpeg_runs_for(&source));
+    assert_eq!(first.join().unwrap(), Err(json!("superseded")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_whose_cast_ended_while_it_started_opens_none() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, mut got, first) = fake_receiver::start_controlled(Duration::ZERO).await;
+    add_receiver(&app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(&app, &movie);
+    load(&app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // A converted restart whose source takes a while to answer.
+    let (source, connections) = counting_source(wav16(), Duration::from_secs(2), false);
+    let slow = channel("m-2", &source, "movie");
+    add_channel(&app, &slow);
+    let generation = app
+        .handle()
+        .state::<crate::streams::StreamsState>()
+        .remember(&slow.id, vec![slow.url.clone()]);
+    let mut route = converted();
+    route["generation"] = json!(generation);
+    let handle = app.handle();
+    let args = json!({ "receiverId": "cast:tv", "channel": slow, "route": route,
+                       "startAt": null, "restart": true });
+    let restarting =
+        std::thread::spawn(move || crate::test_support::invoke_on(&handle, "cast_load", args));
+    wait_until("the probe's connection", || {
+        connections.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    // The receiver ends the cast meanwhile.
+    first.hang_up();
+    assert_eq!(restarting.join().unwrap(), Err(json!("notConnected")));
+    assert!(!ffmpeg_runs_for(&source));
+    // It never connected again.
+    let opened = tokio::time::timeout(Duration::from_millis(500), async {
+        while let Some(message) = got.recv().await {
+            if message.connection > 0 {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(!opened);
+}

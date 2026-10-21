@@ -6,6 +6,7 @@
 //! each message it gets.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use rustls::ServerConfig;
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio_rustls::TlsAcceptor;
 
 /// A message the fake got: its namespace and its JSON body, who sent it,
@@ -67,38 +68,93 @@ pub async fn start_with(
     acceptors: Vec<TlsAcceptor>,
     delay: Duration,
 ) -> (SocketAddr, mpsc::UnboundedReceiver<Got>) {
+    let (addr, messages, _) = serve(acceptors, delay).await;
+    (addr, messages)
+}
+
+/// What a test does to a fake receiver's first connection.
+#[derive(Clone, Default)]
+pub struct FirstConnection {
+    hung_up: Arc<Notify>,
+    accepted: Arc<AtomicUsize>,
+}
+
+impl FirstConnection {
+    /// How many connections the receiver has taken, before their
+    /// handshakes.
+    pub fn accepted(&self) -> usize {
+        self.accepted.load(Ordering::SeqCst)
+    }
+
+    /// It closes, as when the receiver ends the connection.
+    pub fn hang_up(&self) {
+        self.hung_up.notify_one();
+    }
+}
+
+/// Starts a fake receiver like [`start`] that waits `delay` before each
+/// handshake, and gives what a test does to its first connection.
+pub async fn start_controlled(
+    delay: Duration,
+) -> (SocketAddr, mpsc::UnboundedReceiver<Got>, FirstConnection) {
+    serve(vec![acceptor().0], delay).await
+}
+
+async fn serve(
+    acceptors: Vec<TlsAcceptor>,
+    delay: Duration,
+) -> (SocketAddr, mpsc::UnboundedReceiver<Got>, FirstConnection) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (got, messages) = mpsc::unbounded_channel();
+    let first = FirstConnection::default();
+    let control = first.clone();
     tokio::spawn(async move {
         let mut connection = 0;
         while let Ok((tcp, _)) = listener.accept().await {
+            control.accepted.fetch_add(1, Ordering::SeqCst);
             let acceptor = acceptors[connection % acceptors.len()].clone();
             let got = got.clone();
+            let control = (connection == 0).then(|| control.clone());
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
                 if let Ok(stream) = acceptor.accept(tcp).await {
-                    answer(stream, got, connection).await;
+                    answer_unless(stream, got, connection, control).await;
                 }
             });
             connection += 1;
         }
     });
-    (addr, messages)
+    (addr, messages, first)
 }
 
 /// Answers `connection` like the Default Media Receiver: nothing running
 /// at first, then the app after a launch, then the media after a load.
 pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
+    got: mpsc::UnboundedSender<Got>,
+    connection: usize,
+) {
+    answer_unless(stream, got, connection, None).await;
+}
+
+/// [`answer`], hanging up when `control` says.
+async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     got: mpsc::UnboundedSender<Got>,
     connection: usize,
+    control: Option<FirstConnection>,
 ) {
     let mut reader = FrameReader::default();
     let mut buf = [0u8; 4096];
     let mut launched = false;
+    let control = control.unwrap_or_default();
     loop {
-        let n = match stream.read(&mut buf).await {
+        let read = tokio::select! {
+            read = stream.read(&mut buf) => read,
+            () = control.hung_up.notified() => return,
+        };
+        let n = match read {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };

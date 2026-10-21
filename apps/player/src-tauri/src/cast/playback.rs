@@ -679,7 +679,13 @@ pub async fn load<R: Runtime>(
                     start_conversion(app, url, plan, receiver, cancel)
                 })
                 .await;
-            state.still_turn(receiver_id, ticket)?;
+            if let Err(e) = state.still_turn(receiver_id, ticket) {
+                // It lets go of the provider before the next load may ask.
+                if let Ok(started) = started {
+                    started.stop().await;
+                }
+                return Err(e);
+            }
             let started = match started {
                 Ok(started) => started,
                 Err(e) => {
@@ -699,29 +705,46 @@ pub async fn load<R: Runtime>(
             plan_used = Some(known);
         }
     }
-    let opened = ensure_connected(app, receiver_id).await?;
-    if let Err(e) = state.still_turn(receiver_id, ticket) {
-        // A stop that came while this connected ends the session it opened.
-        if opened && state.stopped(receiver_id) {
-            end_session(&state, receiver_id);
+    let sent = async {
+        // A restart whose cast ended while it started stays out of the
+        // way, rather than open a cast the user just ended.
+        if restart && commands_for(&state, receiver_id).is_none() {
+            return Err("notConnected".to_string());
         }
-        return Err(e);
+        let opened = ensure_connected(app, receiver_id).await?;
+        if let Err(e) = state.still_turn(receiver_id, ticket) {
+            // A stop that came while this connected ends the session it
+            // opened.
+            if opened && state.stopped(receiver_id) {
+                end_session(&state, receiver_id);
+            }
+            return Err(e);
+        }
+        let mut active = lock(&state.active);
+        let active = active
+            .as_mut()
+            .filter(|a| a.receiver_id == receiver_id)
+            .ok_or("unreachable")?;
+        active
+            .commands
+            .send(Command::Load(Box::new(request)))
+            .map_err(|_| "unreachable")?;
+        if let Some((started, receiver)) = conversion.take() {
+            watch_conversion(app, receiver_id, receiver, active.generation, &started);
+            active.conversion = Some(started);
+        }
+        active.plan = plan_used;
+        Ok(())
     }
-    let mut active = lock(&state.active);
-    let active = active
-        .as_mut()
-        .filter(|a| a.receiver_id == receiver_id)
-        .ok_or("unreachable")?;
-    active
-        .commands
-        .send(Command::Load(Box::new(request)))
-        .map_err(|_| "unreachable")?;
-    if let Some((conversion, receiver)) = &conversion {
-        watch_conversion(app, receiver_id, *receiver, active.generation, conversion);
+    .await;
+    if sent.is_err()
+        && let Some((started, _)) = conversion
+    {
+        // The converter this load started lets go of the provider before
+        // the next load may ask.
+        started.stop().await;
     }
-    active.conversion = conversion.map(|(conversion, _)| conversion);
-    active.plan = plan_used;
-    Ok(())
+    sent
 }
 
 /// Drops the plan of the cast on `receiver_id`, if it has one.
@@ -832,6 +855,8 @@ pub fn control(state: &CastPlayback, receiver_id: &str, action: CastAction) -> R
 /// is cast there.
 pub async fn release(state: &CastPlayback, receiver_id: &str) -> Result<(), String> {
     state.take_turn(receiver_id, false);
+    // A load under way gives up, and lets go of the provider, first.
+    let _loading = state.loading.lock().await;
     let (commands, conversion) = {
         let mut active = lock(&state.active);
         let active = active

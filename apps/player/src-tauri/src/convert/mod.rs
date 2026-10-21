@@ -47,6 +47,13 @@ const START_LIMIT: Duration = Duration::from_secs(30);
 const MAX_ERRORS: usize = 64 << 10;
 /// How long the error reader gets to finish once ffmpeg has exited.
 const ERRORS_LIMIT: Duration = Duration::from_secs(1);
+/// How long a stopped conversion waits before it kills ffmpeg, so a test
+/// can tell a caller that waited for the exit from one that only dropped
+/// the conversion. Zero but in the tests that set it.
+#[cfg(test)]
+pub(crate) static KILL_DELAY_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// How long [`Conversion::stop`] waits for ffmpeg to exit.
 const STOP_LIMIT: Duration = Duration::from_secs(5);
 
@@ -342,6 +349,11 @@ async fn read_output(
     };
     if let Some(feed) = &feed {
         feed.end();
+    }
+    #[cfg(test)]
+    if stopped {
+        let delay = KILL_DELAY_MS.load(std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(delay)).await;
     }
     if stopped || broken.is_some() {
         let _ = child.start_kill();
