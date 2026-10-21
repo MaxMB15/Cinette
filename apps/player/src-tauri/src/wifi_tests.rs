@@ -95,3 +95,69 @@ fn serves_the_subnet_of_the_default_routes_address() {
     let link_local = [interface("en7", [169, 254, 3, 4], [255, 255, 0, 0])];
     assert_eq!(peers_at(Ipv4Addr::new(169, 254, 3, 4), &link_local), None);
 }
+
+fn subnet(local: [u8; 4], prefix: u8) -> Option<Peers> {
+    Some(Peers::Subnet {
+        local: Ipv4Addr::from(local),
+        prefix,
+    })
+}
+
+#[test]
+fn a_mac_on_a_vpn_serves_its_wifi_not_the_vpn() {
+    let found = [
+        interface("lo0", [127, 0, 0, 1], [255, 0, 0, 0]),
+        interface("en0", [192, 168, 1, 23], [255, 255, 255, 0]),
+        interface("utun4", [10, 8, 0, 2], [255, 255, 255, 255]),
+    ];
+    let vpn = Some(Ipv4Addr::new(10, 8, 0, 2));
+    assert_eq!(lan_peers(vpn, &found), subnet([192, 168, 1, 23], 24));
+    // A VPN with a public address doesn't count either.
+    let found = [
+        interface("en0", [172, 16, 5, 9], [255, 255, 0, 0]),
+        interface("utun2", [203, 0, 113, 7], [255, 255, 255, 0]),
+    ];
+    let vpn = Some(Ipv4Addr::new(203, 0, 113, 7));
+    assert_eq!(lan_peers(vpn, &found), subnet([172, 16, 5, 9], 16));
+}
+
+#[test]
+fn a_mac_prefers_the_local_network_of_its_default_route() {
+    let found = [
+        interface("en0", [192, 168, 1, 23], [255, 255, 255, 0]),
+        interface("en7", [10, 0, 4, 9], [255, 255, 252, 0]),
+        interface("bridge100", [192, 168, 2, 1], [255, 255, 255, 0]),
+    ];
+    let ethernet = Some(Ipv4Addr::new(10, 0, 4, 9));
+    assert_eq!(lan_peers(ethernet, &found), subnet([10, 0, 4, 9], 22));
+    // Without a default route, the first that fits.
+    assert_eq!(lan_peers(None, &found), subnet([192, 168, 1, 23], 24));
+    // A bridge counts too.
+    let bridge = [interface("bridge100", [192, 168, 2, 1], [255, 255, 255, 0])];
+    assert_eq!(lan_peers(None, &bridge), subnet([192, 168, 2, 1], 24));
+}
+
+#[test]
+fn a_local_address_that_doesnt_fit_gives_way_to_the_next() {
+    let found = [
+        // Too wide a subnet to serve.
+        interface("en0", [10, 0, 0, 5], [255, 0, 0, 0]),
+        interface("en1", [192, 168, 1, 23], [255, 255, 255, 0]),
+    ];
+    let wide = Some(Ipv4Addr::new(10, 0, 0, 5));
+    assert_eq!(lan_peers(wide, &found), subnet([192, 168, 1, 23], 24));
+}
+
+#[test]
+fn a_mac_with_no_private_local_address_serves_its_default_route() {
+    // A network with public addresses, on Ethernet.
+    let found = [
+        interface("en0", [198, 51, 100, 20], [255, 255, 255, 0]),
+        // Private, but not Wi-Fi, Ethernet or a bridge.
+        interface("utun1", [10, 9, 0, 2], [255, 255, 255, 0]),
+    ];
+    let public = Some(Ipv4Addr::new(198, 51, 100, 20));
+    assert_eq!(lan_peers(public, &found), subnet([198, 51, 100, 20], 24));
+    assert_eq!(lan_peers(None, &found), None);
+    assert_eq!(lan_peers(None, &[]), None);
+}

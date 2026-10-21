@@ -60,8 +60,7 @@ pub async fn load_converted<R: Runtime>(
         .clone();
     let live = channel.content_type == "live";
     let start = start_at.filter(|_| !live).unwrap_or(0.0);
-    let peers = wifi::default_route_address()
-        .and_then(|local| wifi::peers_at(local, &wifi::interfaces()))
+    let peers = wifi::lan_peers(wifi::default_route_address(), &wifi::interfaces())
         .ok_or_else(|| HlsError::NoNetwork.for_player())?;
     tracing::info!("[AirPlay] converting live={live}");
     let starting = async {
