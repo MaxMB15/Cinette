@@ -134,6 +134,10 @@ struct Active {
     plan: Option<KnownPlan>,
 }
 
+/// How long a load waits to ask the provider again after it refused the
+/// stream right after the load closed the receiver's old connection.
+const FREED_WAIT: Duration = Duration::from_millis(1500);
+
 /// What a load rejects with when a newer load or a stop for the same
 /// receiver came while it ran.
 pub const SUPERSEDED: &str = "superseded";
@@ -233,6 +237,30 @@ impl CastPlayback {
         turn.stopped = stopped;
         self.turned.send_replace(());
         turn.ticket
+    }
+
+    /// Runs `ask`, which asks the provider for the stream, and once more
+    /// after [`FREED_WAIT`] when the provider refused it right after this
+    /// load closed the receiver's connection, since a provider can count a
+    /// closed connection for a moment after. A newer turn ends the wait.
+    async fn ask_provider<T, F>(
+        &self,
+        receiver_id: &str,
+        ticket: u64,
+        freed: bool,
+        mut ask: impl FnMut() -> F,
+    ) -> Result<T, String>
+    where
+        F: Future<Output = Result<T, String>>,
+    {
+        let asked = ask().await;
+        if !freed || asked.as_ref().err().map(String::as_str) != Some(REFUSED) {
+            return asked;
+        }
+        tokio::select! {
+            () = tokio::time::sleep(FREED_WAIT) => ask().await,
+            () = self.overtaken(receiver_id, ticket) => asked,
+        }
     }
 
     /// Finishes once `ticket` isn't `receiver_id`'s newest turn.
@@ -536,12 +564,15 @@ pub async fn load<R: Runtime>(
     let url = &app
         .state::<StreamsState>()
         .url(&channel.id, generation, source)?;
+    let playback: &CastPlayback = &state;
     let _loading = state.loading.lock().await;
     state.still_turn(receiver_id, ticket)?;
     let old = lock(&state.active)
         .as_mut()
         .filter(|a| a.receiver_id == receiver_id)
         .and_then(|a| Some((a.conversion.take()?, a.commands.clone())));
+    // This load closed the receiver's connection to the provider.
+    let freed = old.is_some();
     if let Some((old, commands)) = old {
         // The receiver ends the old media as cancelled before its stream
         // goes away, rather than fetch from a stream that's gone and give
@@ -622,8 +653,12 @@ pub async fn load<R: Runtime>(
                         live,
                         start_at,
                     };
-                    let planned =
-                        conversion_plan(app, &input, state.overtaken(receiver_id, ticket)).await;
+                    let input = &input;
+                    let planned = playback
+                        .ask_provider(receiver_id, ticket, freed, move || {
+                            conversion_plan(app, input, playback.overtaken(receiver_id, ticket))
+                        })
+                        .await;
                     state.still_turn(receiver_id, ticket)?;
                     let (plan, has_length) = planned?;
                     KnownPlan {
@@ -637,8 +672,13 @@ pub async fn load<R: Runtime>(
                     }
                 }
             };
-            let cancel = state.overtaken(receiver_id, ticket);
-            let started = start_conversion(app, url, &known.plan, receiver, cancel).await;
+            let plan = &known.plan;
+            let started = playback
+                .ask_provider(receiver_id, ticket, freed, move || {
+                    let cancel = playback.overtaken(receiver_id, ticket);
+                    start_conversion(app, url, plan, receiver, cancel)
+                })
+                .await;
             state.still_turn(receiver_id, ticket)?;
             let started = match started {
                 Ok(started) => started,

@@ -368,7 +368,13 @@ fn ffmpeg_runs_for(url: &str) -> bool {
 /// Eight seconds of 16-bit mono WAV at 8192 Hz, which the sidecar decodes. The
 /// test server sends text, and every byte of this one is ASCII.
 fn wav16() -> String {
-    let samples: u32 = 8 * 8192 * 2;
+    wav16_lasting(8)
+}
+
+/// [`wav16`] lasting `seconds`, which keep its lengths ASCII when they're a
+/// multiple of 4 below 512.
+fn wav16_lasting(seconds: u32) -> String {
+    let samples: u32 = seconds * 8192 * 2;
     let mut bytes = b"RIFF".to_vec();
     bytes.extend_from_slice(&(36 + samples).to_le_bytes());
     bytes.extend_from_slice(b"WAVEfmt ");
@@ -835,6 +841,10 @@ fn counting_source(
     refusing_source(body, hold, one_at_a_time, Vec::new())
 }
 
+/// How long a one-connection source waits for a closed connection to
+/// count as closed before it turns the next away.
+const FREED_WITHIN: Duration = Duration::from_secs(2);
+
 /// A [`counting_source`] that also refuses the connections numbered in
 /// `refused`, counting from 0.
 fn refusing_source(
@@ -857,7 +867,17 @@ fn refusing_source(
             std::thread::spawn(move || {
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request);
-                if refuse || one_at_a_time && open.load(Ordering::SeqCst) > 0 {
+                // A provider frees the slot once it sees the close, which the
+                // thread here may only notice a moment after the reader
+                // closed.
+                let busy = one_at_a_time && {
+                    let asked = std::time::Instant::now();
+                    while open.load(Ordering::SeqCst) > 0 && asked.elapsed() < FREED_WITHIN {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    open.load(Ordering::SeqCst) > 0
+                };
+                if refuse || busy {
                     let _ =
                         stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
                     return;
@@ -1011,14 +1031,17 @@ async fn a_seek_through_the_converter_closes_the_old_connection_first() {
     }
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    // An account that allows one connection.
-    let (source, connections) = counting_source(wav16(), Duration::ZERO, true);
+    // An account that allows one connection, and a film longer than the
+    // converter's first burst, so it reads at the film's pace and keeps its
+    // connection open.
+    let (source, connections) = counting_source(wav16_lasting(24), Duration::ZERO, true);
     let movie = channel("m-1", &source, "movie");
     add_channel(&app, &movie);
     load(&app, "cast:tv", &movie, converted(), None).unwrap();
     next_of(&mut got, "LOAD").await;
     // The probe, then the converter, which still reads.
     assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert!(ffmpeg_runs_for(&source));
     load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
     next_of(&mut got, "LOAD").await;
     // The same item keeps its plan, so only the new converter connects.
@@ -1265,8 +1288,9 @@ async fn a_converter_that_couldnt_start_probes_again_next_time() {
     }
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    // The provider turns away the seek's converter once.
-    let (source, connections) = refusing_source(wav16(), Duration::ZERO, false, vec![2]);
+    // The provider turns away the seek's converter, and again when it asks
+    // once more.
+    let (source, connections) = refusing_source(wav16(), Duration::ZERO, false, vec![2, 3]);
     let movie = channel("m-1", &source, "movie");
     add_channel(&app, &movie);
     load(&app, "cast:tv", &movie, converted(), None).unwrap();
@@ -1275,11 +1299,42 @@ async fn a_converter_that_couldnt_start_probes_again_next_time() {
         load(&app, "cast:tv", &movie, converted(), Some(2.0)),
         Err(json!("refused"))
     );
-    assert_eq!(connections.load(Ordering::SeqCst), 3);
+    assert_eq!(connections.load(Ordering::SeqCst), 4);
     // The plan that just failed isn't tried again as it was.
     load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
     next_of(&mut got, "LOAD").await;
-    assert_eq!(connections.load(Ordering::SeqCst), 5);
+    assert_eq!(connections.load(Ordering::SeqCst), 6);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_seek_the_provider_turns_away_once_asks_again() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    // The provider still counts the old connection a moment after it
+    // closed, so it turns away the seek's converter once.
+    let (source, connections) = refusing_source(wav16(), Duration::ZERO, false, vec![2]);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    load(&app, "cast:tv", &movie, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
+    next_of(&mut got, "LOAD").await;
+    assert_eq!(connections.load(Ordering::SeqCst), 4);
+    // A first cast closed nothing, so a refusal there is the answer.
+    let (refused, connections) = refusing_source(wav16(), Duration::ZERO, false, vec![0]);
+    let other = channel("m-2", &refused, "movie");
+    add_channel(&app, &other);
+    app.invoke("cast_stop", json!({ "receiverId": "cast:tv" }))
+        .unwrap();
+    assert_eq!(
+        load(&app, "cast:tv", &other, converted(), None),
+        Err(json!("refused"))
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
