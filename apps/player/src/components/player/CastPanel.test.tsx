@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { PlaybackCapabilities, PlaybackState } from "@/lib/destination";
-import { CastPanel, positionNow } from "./CastPanel";
+import { CastPanel } from "./CastPanel";
 
 const state = (patch: Partial<PlaybackState> = {}): PlaybackState => ({
 	status: "playing",
@@ -59,23 +59,6 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe("positionNow", () => {
-	it("moves on with the time since the receiver said, while it plays", () => {
-		expect(positionNow(state(), 3000)).toBe(602);
-		// Never back, for a reading from this device's future.
-		expect(positionNow(state(), 500)).toBe(600);
-		// Not past the end.
-		expect(positionNow(state({ position: 5399 }), 4000)).toBe(5400);
-		// Live has no end to stop at.
-		expect(positionNow(state({ duration: 0 }), 3000)).toBe(602);
-	});
-
-	it("stays where it was while it doesn't play", () => {
-		for (const status of ["paused", "buffering", "opening", "idle"] as const)
-			expect(positionNow(state({ status }), 3000)).toBe(600);
-	});
-});
-
 describe("CastPanel", () => {
 	it("says where it casts, what, and each status", () => {
 		const { view } = show(state());
@@ -101,6 +84,10 @@ describe("CastPanel", () => {
 		expect(
 			line(state({ error: { code: "failed" }, connection: "reconnecting", status: "error" }))
 		).toBe("The stream stopped on the TV.");
+		// A load that failed says why.
+		expect(
+			line(state({ error: { code: "openFailed", message: "refused" }, status: "error" }))
+		).toBe("The provider refused the stream. The login may have expired.");
 		expect(line(state({ item: null }))).toBeNull();
 		expect(screen.queryByText("A Film")).toBeNull();
 	});

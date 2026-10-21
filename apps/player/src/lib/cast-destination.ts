@@ -56,6 +56,10 @@ export interface CastSnapshot {
 	converted: boolean;
 	/** A load was sent and nothing has played yet. */
 	loading: boolean;
+	/** Where the item was last known to be, in its seconds: where it was
+	 *  asked to start, then what the receiver said. It stays when the media
+	 *  goes, so a resume point keeps it. */
+	position: number;
 }
 
 export const idleSnapshot: CastSnapshot = {
@@ -71,6 +75,7 @@ export const idleSnapshot: CastSnapshot = {
 	duration: 0,
 	converted: false,
 	loading: false,
+	position: 0,
 };
 
 /** The snapshot after `update`, which arrived at `at`. */
@@ -90,6 +95,9 @@ export const applyUpdate = (
 				...snapshot,
 				media: update.media,
 				mediaAt: at,
+				position: update.media
+					? snapshot.offset + update.media.position
+					: snapshot.position,
 				loading: snapshot.loading && !played && update.media?.idleReason !== "error",
 				error: played ? null : snapshot.error,
 			};
@@ -138,7 +146,7 @@ const statusOf = (s: CastSnapshot): PlaybackStatus => {
 
 /** The cast's state in the destination's terms. */
 export const castPlaybackState = (s: CastSnapshot): PlaybackState => {
-	const position = s.media ? s.offset + s.media.position : s.offset;
+	const position = s.media ? s.offset + s.media.position : s.position;
 	const duration = s.media?.live && !s.converted ? 0 : (s.media?.duration ?? s.duration);
 	return {
 		status: statusOf(s),
@@ -263,6 +271,10 @@ const FORMAT_FAILED = ["notPlaylist", "cors"];
  */
 export const PAUSE_LIMIT_MS = 10_000;
 
+/** What `castLoad` rejects with when a newer load or a stop for the same
+ *  receiver came while it ran. */
+export const SUPERSEDED = "superseded";
+
 /** What `castLoad` rejects with when the formats were listed before the
  *  backend's newest list of the item's URLs. */
 export const STALE = "stale";
@@ -329,8 +341,16 @@ export const createCastDestination = (
 			sources: formats.sources.filter((_, i) => keep[i]),
 		});
 	};
-	const send = (channel: Channel, route: CastRoute, formats: StreamFormats, startAt?: number) => {
+	/** Counts loads and stops, so only the newest load's answer shows. */
+	let sends = 0;
+	const send = async (
+		channel: Channel,
+		route: CastRoute,
+		formats: StreamFormats,
+		startAt?: number
+	) => {
 		const converted = route.via === "converted";
+		const sent = ++sends;
 		publish({
 			...snapshot,
 			// A closed cast connects again for this load.
@@ -340,11 +360,23 @@ export const createCastDestination = (
 			item: { title: channel.name, contentType: channel.contentType, ref: channel.id },
 			converted,
 			offset: converted ? (startAt ?? 0) : 0,
+			position: startAt ?? 0,
 			duration: formats.duration ?? 0,
 			media: null,
 		});
 		loaded = { channel, route, formats };
-		return backend.castLoad(receiver.id, channel, route, startAt);
+		await backend.castLoad(receiver.id, channel, route, startAt).catch((e: unknown) => {
+			// The backend stopped what played before it asked for this, so
+			// nothing plays now. A newer load or a stop says for itself.
+			if (sent === sends)
+				publish({
+					...snapshot,
+					loading: false,
+					media: null,
+					error: { code: "openFailed", message: String(e) },
+				});
+			throw e;
+		});
 	};
 	const control = (action: CastAction) => backend.castControl(receiver.id, action);
 
@@ -358,6 +390,8 @@ export const createCastDestination = (
 		},
 		route: async (item) => decide(channelOf(item)),
 		load: async (item, opts) => {
+			// A stop or a newer load while this one works out its route wins.
+			const asked = sends;
 			const channel = channelOf(item);
 			let route = opts?.route;
 			if (route === undefined) {
@@ -370,17 +404,13 @@ export const createCastDestination = (
 			// A live channel plays from now, whatever start it was given, so
 			// the receiver's clock and the backend get none.
 			const startAt = channel.contentType === "live" ? undefined : opts?.startAt;
+			if (asked !== sends) throw SUPERSEDED;
 			try {
 				await send(channel, castRoute, formats, startAt);
 			} catch (e) {
 				if (FORMAT_FAILED.includes(String(e))) forget(channel, formats, castRoute.source);
 				// The backend has a newer list of the item's URLs, so ask again.
 				if (String(e) === STALE) known.delete(channel.id);
-				publish({
-					...snapshot,
-					loading: false,
-					error: { code: "openFailed", message: String(e) },
-				});
 				throw e;
 			}
 		},
@@ -413,6 +443,7 @@ export const createCastDestination = (
 		},
 		stop: async () => {
 			loaded = null;
+			++sends;
 			await backend.castStop(receiver.id);
 		},
 		getState: () => state,
@@ -428,6 +459,7 @@ export const createCastDestination = (
 		release: async () => {
 			loaded = null;
 			pausedAt = null;
+			++sends;
 			publish({ ...snapshot, loading: true, media: null, error: null });
 			await backend.castRelease(receiver.id);
 		},

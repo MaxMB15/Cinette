@@ -293,7 +293,7 @@ describe("useCast", () => {
 		expect(report).not.toHaveBeenCalled();
 	});
 
-	it("leaves a newer cast alone when an older one fails to load", async () => {
+	it("lets an older cast's failure go quietly once a newer one is under way", async () => {
 		tauri.getCastReceivers.mockResolvedValue(receivers(1, [tv, den]));
 		let fail: (e: unknown) => void = () => {};
 		tauri.castLoad.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
@@ -311,8 +311,145 @@ describe("useCast", () => {
 		await act(async () => {
 			why = await first;
 		});
-		expect(why).toBe("Couldn't reach Hotel TV. Nothing is playing.");
+		expect(why).toBeNull();
 		expect(result.current.destination?.id).toBe("cast:den");
+	});
+
+	describe("a cast that something overtakes", () => {
+		const other = makeMovie({ id: "mv2", name: "Another" });
+
+		const casting = async () => {
+			const hook = await render();
+			await act(async () => {
+				await hook.result.current.send("cast:tv", film, { stopLocal });
+			});
+			tauri.castLoad.mockClear();
+			return hook;
+		};
+
+		/** Holds the next lookup until the test answers it. */
+		const heldLookup = () => {
+			let answer: () => void = () => {};
+			tauri.getStreamFormats.mockReturnValueOnce(
+				new Promise(
+					(r) =>
+						(answer = () =>
+							r({ formats: [mp4], sources: [0], duration: 5400, generation: 9 }))
+				)
+			);
+			return () => answer();
+		};
+
+		it("plays nothing when the cast stops while the next item is looked up", async () => {
+			const { result } = await casting();
+			const answer = heldLookup();
+			let sent: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				sent = result.current.send("cast:tv", other, { stopLocal });
+			});
+			await act(() => result.current.stop());
+			answer();
+			let why: string | null = "";
+			await act(async () => {
+				why = await sent;
+			});
+			expect(why).toBeNull();
+			expect(tauri.castLoad).not.toHaveBeenCalled();
+			expect(result.current.destination).toBeNull();
+		});
+
+		it("plays nothing when the page goes while a cast starts", async () => {
+			const answer = heldLookup();
+			const hook = await render();
+			let sent: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				sent = hook.result.current.send("cast:tv", film, { stopLocal });
+			});
+			hook.unmount();
+			answer();
+			await sent;
+			expect(stopLocal).not.toHaveBeenCalled();
+			expect(tauri.castLoad).not.toHaveBeenCalled();
+		});
+
+		it("plays only the newest of two quick switches", async () => {
+			const { result } = await casting();
+			const answer = heldLookup();
+			let first: Promise<string | null> = Promise.resolve("");
+			act(() => {
+				first = result.current.send("cast:tv", other, { stopLocal });
+			});
+			const third = makeMovie({ id: "mv3", name: "Third" });
+			await act(async () => {
+				await result.current.send("cast:tv", third, { stopLocal });
+			});
+			answer();
+			let why: string | null = "";
+			await act(async () => {
+				why = await first;
+			});
+			expect(why).toBeNull();
+			expect(tauri.castLoad).toHaveBeenCalledTimes(1);
+			expect(tauri.castLoad).toHaveBeenLastCalledWith(
+				"cast:tv",
+				third,
+				expect.anything(),
+				undefined
+			);
+		});
+
+		it("says nothing when the backend says a newer load or a stop came", async () => {
+			const { result } = await casting();
+			tauri.castLoad.mockRejectedValueOnce("superseded");
+			let why: string | null = "";
+			await act(async () => {
+				why = await result.current.send("cast:tv", other, { stopLocal });
+			});
+			expect(why).toBeNull();
+			expect(result.current.destination?.id).toBe("cast:tv");
+		});
+
+		it("keeps the cast, saying why, when a switch fails", async () => {
+			const { result } = await casting();
+			tauri.castLoad.mockRejectedValueOnce("refused");
+			let why: string | null = "";
+			await act(async () => {
+				why = await result.current.send("cast:tv", other, { stopLocal });
+			});
+			expect(why).toBe(
+				"The provider refused the stream. The login may have expired. Nothing is playing."
+			);
+			expect(result.current.destination?.id).toBe("cast:tv");
+			expect(result.current.state).toMatchObject({
+				status: "error",
+				error: { message: "refused" },
+			});
+			expect(tauri.castStop).not.toHaveBeenCalled();
+		});
+	});
+
+	it("checks a receiver found while the picker is open", async () => {
+		const { result } = await render();
+		act(() => result.current.check(film));
+		await flush();
+		expect(result.current.statuses.has("cast:den")).toBe(false);
+		act(() => events.emit("cast://receivers", receivers(2, [tv, den])));
+		await flush();
+		expect(result.current.statuses.get("cast:den")).toEqual({ via: "direct" });
+		// Once it's closed, a new one waits for the next time it opens.
+		act(() => result.current.release());
+		const third = { ...tv, id: "cast:third", name: "Third" };
+		act(() => events.emit("cast://receivers", receivers(3, [tv, den, third])));
+		await flush();
+		expect(result.current.statuses.has("cast:third")).toBe(false);
+		// Opened again, it checks it. One that's unavailable isn't.
+		act(() => result.current.check(film));
+		await flush();
+		expect(result.current.statuses.get("cast:third")).toEqual({ via: "direct" });
+		const gone = { ...tv, id: "cast:gone", name: "Gone", available: false };
+		act(() => events.emit("cast://receivers", receivers(4, [tv, gone])));
+		await flush();
+		expect(result.current.statuses.has("cast:gone")).toBe(false);
 	});
 
 	it("drops routes worked out for an item checked before the last", async () => {

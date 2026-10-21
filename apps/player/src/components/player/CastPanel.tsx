@@ -4,7 +4,8 @@
 import { Cast, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { PlaybackCapabilities, PlaybackState } from "@/lib/destination";
+import { positionNow, type PlaybackCapabilities, type PlaybackState } from "@/lib/destination";
+import { castFailureMessage } from "@/lib/cast";
 import { formatTime } from "@/lib/format";
 
 interface CastPanelProps {
@@ -26,21 +27,15 @@ interface CastPanelProps {
 	onStop: () => void;
 }
 
-const statusLine = (state: PlaybackState): string | null => {
+const statusLine = (state: PlaybackState, name: string): string | null => {
+	// A load that failed says why, such as a provider that refused it.
+	if (state.error?.message) return castFailureMessage(name, state.error.message);
 	if (state.error) return "The stream stopped on the TV.";
 	if (state.connection === "reconnecting") return "Connecting…";
 	if (state.status === "opening") return "Starting on the TV…";
 	if (state.status === "buffering") return "Buffering…";
 	if (state.status === "ended") return "Finished.";
 	return null;
-};
-
-/** Where the receiver is now: the last position it reported, moved on by
- *  the time since while it plays. */
-export const positionNow = (state: PlaybackState, now: number): number => {
-	if (state.status !== "playing") return state.position;
-	const moved = state.position + Math.max(0, now - state.positionAt) / 1000;
-	return state.duration > 0 ? Math.min(moved, state.duration) : moved;
 };
 
 /**
@@ -67,7 +62,7 @@ export const CastPanel = ({
 		state.status === "ended" ||
 		(state.status === "idle" && state.item !== null);
 	const playing = state.status === "playing" || state.status === "buffering";
-	const line = statusLine(state);
+	const line = statusLine(state, name);
 	const [now, setNow] = useState(() => performance.now());
 	// While dragging, the slider shows where it's going, and the seek goes
 	// once it's let go, since a converted stream starts again for each.

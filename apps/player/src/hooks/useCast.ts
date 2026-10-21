@@ -7,6 +7,7 @@ import { useLatestRef } from "@/hooks/useLatestRef";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { readStreamThrough, STREAM_THROUGH_EVENT } from "@/lib/player-prefs";
 import {
+	SUPERSEDED,
 	createCastDestination,
 	type CastBackend,
 	type CastDestination,
@@ -125,7 +126,12 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 	/** The routes the picker showed, by receiver and channel. */
 	const decisions = useRef(new Map<string, RouteDecision>());
 	const active = useRef<CastDestination | null>(null);
+	/** Counts sends and stops, so a send that a newer one or a stop overtook
+	 *  gives up quietly wherever it is. */
+	const sequence = useRef({ count: 0 });
 	const checking = useRef(0);
+	/** What the open picker checks, and the receivers it asked about. */
+	const picking = useRef<{ channel: Channel; asked: Set<string> } | null>(null);
 	const [held, setHeld] = useState<string[]>([]);
 
 	const destinationFor = useCallback(
@@ -146,6 +152,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 	useEffect(() => {
 		if (!enabled) return;
 		let current = true;
+		const sends = sequence.current;
 		const unlisten = [
 			listen<CastReceiverList>(CAST_RECEIVERS_EVENT, (e) =>
 				setList((old) => newerList(old, e.payload))
@@ -166,6 +173,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			.catch(() => {});
 		return () => {
 			current = false;
+			++sends.count;
 			for (const p of unlisten) void p.then((fn) => fn());
 			// Leaving the page ends the cast, as the stop button ends local
 			// playback.
@@ -186,36 +194,56 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 	const receivers = list?.receivers ?? NO_RECEIVERS;
 	const receiversRef = useLatestRef(receivers);
 
+	/** Works out `receiver`'s route for `channel`, for the picker's run
+	 *  `run`. */
+	const ask = useCallback(
+		(receiver: CastReceiver, channel: Channel, run: number) => {
+			picking.current?.asked.add(receiver.id);
+			destinationFor(receiver)
+				.route({ kind: "local", channel })
+				.catch((): RouteDecision => ({ ok: false, reason: "unreachable" }))
+				.then((decision) => {
+					if (run !== checking.current) return;
+					decisions.current.set(routeKey(receiver.id, channel), decision);
+					setStatuses((old) => new Map(old).set(receiver.id, castStatus(decision)));
+				});
+		},
+		// Stryker disable next-line ArrayDeclaration: destinationFor never changes, so the function is the same with any deps.
+		[destinationFor]
+	);
+
 	const check = useCallback(
 		(channel: Channel) => {
 			const run = ++checking.current;
 			decisions.current = new Map();
 			setStatuses(new Map());
-			const available = receiversRef.current.filter((r) => r.available);
+			picking.current = { channel, asked: new Set() };
 			setHeld(receiversRef.current.map((r) => r.id));
 			void getVpnActive()
 				.then((on) => {
 					if (run === checking.current) setVpnActive(on);
 				})
 				.catch(() => {});
-			for (const receiver of available) {
-				destinationFor(receiver)
-					.route({ kind: "local", channel })
-					.catch((): RouteDecision => ({ ok: false, reason: "unreachable" }))
-					.then((decision) => {
-						if (run !== checking.current) return;
-						decisions.current.set(routeKey(receiver.id, channel), decision);
-						setStatuses((old) => new Map(old).set(receiver.id, castStatus(decision)));
-					});
-			}
+			for (const receiver of receiversRef.current.filter((r) => r.available))
+				ask(receiver, channel, run);
 		},
-		// Stryker disable next-line ArrayDeclaration: destinationFor never changes and receiversRef is a ref, so the function is the same with any deps.
-		[destinationFor, receiversRef]
+		// Stryker disable next-line ArrayDeclaration: ask never changes and receiversRef is a ref, so the function is the same with any deps.
+		[ask, receiversRef]
 	);
+
+	// A receiver found, or back, while the picker is open is checked too.
+	useEffect(() => {
+		const open = picking.current;
+		if (!open) return;
+		for (const receiver of receivers)
+			if (receiver.available && !open.asked.has(receiver.id))
+				ask(receiver, open.channel, checking.current);
+	}, [receivers, ask]);
 
 	const release = useCallback(
 		() => {
 			++checking.current;
+			picking.current = null;
 			setHeld([]);
 		},
 		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
@@ -240,6 +268,8 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 
 	const send: Cast["send"] = useCallback(
 		async (receiverId, channel, opts) => {
+			const sent = ++sequence.current.count;
+			const newest = () => sent === sequence.current.count;
 			const receiver = receiversRef.current.find((r) => r.id === receiverId);
 			if (!receiver) return "That receiver is gone.";
 			const target = destinationFor(receiver);
@@ -254,6 +284,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			const prepare = async (): Promise<{ route: PlayRoute } | { why: string | null }> => {
 				const shown = decisions.current.get(routeKey(receiverId, channel));
 				let routed: Routed = shown ? { decision: shown } : await look();
+				if (!newest()) return { why: null };
 				// While this receiver plays, the provider may refuse a second
 				// connection, as many accounts allow one. It lets go of the
 				// stream, keeping the cast, and looks again.
@@ -262,6 +293,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					await target.release().catch(() => {});
 					for (const ms of RELEASE_RETRY_MS) {
 						await wait(ms);
+						if (!newest()) return { why: null };
 						routed = await look();
 						if (!("error" in routed)) break;
 					}
@@ -279,6 +311,8 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 				return { route };
 			};
 			const ready = await prepare();
+			// A newer send or a stop took over, and says for itself.
+			if (!newest()) return null;
 			if ("why" in ready) {
 				// A cast that let go of its stream has stopped.
 				if (released) target.settle();
@@ -286,6 +320,8 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			}
 			const { route } = ready;
 			await opts.stopLocal();
+			if (!newest()) return null;
+			const switching = active.current === target;
 			const old = active.current;
 			if (old && old !== target) void old.stop().catch(() => {});
 			active.current = target;
@@ -295,7 +331,10 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			return target.load(item, { startAt: opts.startAt, route }).then(
 				() => null,
 				(e: unknown) => {
-					if (active.current === target) {
+					if (!newest() || String(e) === SUPERSEDED) return null;
+					// A first cast that failed lets go of the receiver. A switch
+					// keeps the cast, whose panel says why and offers Play here.
+					if (!switching && active.current === target) {
 						active.current = null;
 						setDestination(null);
 						void target.stop().catch(() => {});
@@ -310,6 +349,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 
 	const stop = useCallback(
 		async () => {
+			++sequence.current.count;
 			const left = active.current;
 			active.current = null;
 			setDestination(null);

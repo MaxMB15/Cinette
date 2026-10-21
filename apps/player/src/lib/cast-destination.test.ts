@@ -176,7 +176,8 @@ describe("castPlaybackState", () => {
 			snap({ media: media({ duration: null }), converted: true, offset: 300, duration: 900 })
 		);
 		expect(converted).toMatchObject({ position: 310, duration: 900 });
-		expect(castPlaybackState(snap({ offset: 300 })).position).toBe(300);
+		// With no media, it's where the item was last known to be.
+		expect(castPlaybackState(snap({ offset: 300, position: 1234 })).position).toBe(1234);
 	});
 
 	it("gives live streams no length, and VOD the receiver's or the probe's", () => {
@@ -719,5 +720,95 @@ describe("createCastDestination", () => {
 		// A movie keeps its start.
 		await cast.load({ kind: "local", channel: movie }, { startAt: 1800 });
 		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, expect.anything(), 1800);
+	});
+
+	describe("what it shows when a load doesn't go", () => {
+		const film: StreamFormats = {
+			formats: [{ ...ts, audio: "ac3" }],
+			sources: [4],
+			duration: 5400,
+			generation: 7,
+		};
+
+		it("shows a failed converted seek as stopped, with why, at the last place", async () => {
+			const fake = backend(film);
+			const cast = createCastDestination(receiver, fake);
+			await cast.load({ kind: "local", channel: movie }, { startAt: 60 });
+			cast.receive({
+				kind: "media",
+				media: media({ position: 30, duration: null, live: true }),
+			});
+			fake.castLoad.mockRejectedValueOnce("refused");
+			await expect(cast.seek(1200)).rejects.toBe("refused");
+			expect(cast.getState()).toMatchObject({
+				status: "error",
+				error: { code: "openFailed", message: "refused" },
+				position: 1200,
+			});
+			// The same for Play after a long pause, which converts again.
+			let clock = 0;
+			const pausedBackend = backend(film);
+			const paused = createCastDestination(receiver, pausedBackend, { now: () => clock });
+			await paused.load({ kind: "local", channel: movie });
+			paused.receive({
+				kind: "media",
+				media: media({ position: 30, duration: null, live: true }),
+			});
+			await paused.pause();
+			clock += PAUSE_LIMIT_MS;
+			pausedBackend.castLoad.mockRejectedValueOnce("converterFailed");
+			await expect(paused.play()).rejects.toBe("converterFailed");
+			expect(paused.getState()).toMatchObject({
+				status: "error",
+				error: { message: "converterFailed" },
+				position: 30,
+			});
+		});
+
+		it("lets an older load's failure go once a newer one or a stop came", async () => {
+			const fake = backend(film);
+			const cast = createCastDestination(receiver, fake);
+			let fail: (e: unknown) => void = () => {};
+			fake.castLoad.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+			const first = expect(
+				cast.load({ kind: "local", channel: movie }, { startAt: 60 })
+			).rejects.toBe("superseded");
+			// Until it has asked the backend.
+			while (fake.castLoad.mock.calls.length === 0) await Promise.resolve();
+			await cast.load({ kind: "local", channel: movie }, { startAt: 900 });
+			fail("superseded");
+			await first;
+			expect(cast.getState()).toMatchObject({
+				status: "opening",
+				position: 900,
+				error: null,
+			});
+			// A stop too, even before the load reaches the backend.
+			const third = expect(
+				cast.load({ kind: "local", channel: movie }, { startAt: 30 })
+			).rejects.toBe("superseded");
+			await cast.stop();
+			await third;
+			expect(cast.getState().error).toBeNull();
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+		});
+
+		it("keeps where the item was when the media goes", async () => {
+			const fake = backend(film);
+			const cast = createCastDestination(receiver, fake);
+			await cast.load({ kind: "local", channel: movie }, { startAt: 1200 });
+			cast.receive({ kind: "ready" });
+			cast.receive({
+				kind: "media",
+				media: media({ position: 1200, duration: null, live: true }),
+			});
+			expect(cast.getState().position).toBe(2400);
+			await cast.release();
+			expect(cast.getState().position).toBe(2400);
+			cast.settle();
+			expect(cast.getState().position).toBe(2400);
+			cast.receive({ kind: "closed", reason: "connectionLost" });
+			expect(cast.getState()).toMatchObject({ position: 2400, connection: "lost" });
+		});
 	});
 });

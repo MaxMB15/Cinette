@@ -3889,6 +3889,8 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper(), { episodes: [] });
 		fakeMpv.actions.load.mockClear();
 		const destination = tv();
+		// A reading from just now.
+		destination.getState.mockReturnValue(tvState({ positionAt: performance.now() }));
 		act(() => fakeAirPlay.set({ destination, state: tvState() }));
 		await press(" ");
 		expect(destination.pause).toHaveBeenCalledTimes(1);
@@ -3896,7 +3898,7 @@ describe("AirPlay", () => {
 		expect(destination.seek).not.toHaveBeenCalled();
 		expect(fakeMpv.actions.pause).not.toHaveBeenCalled();
 		await press("ArrowRight");
-		expect(destination.seek).toHaveBeenCalledWith(610);
+		expect(destination.seek).toHaveBeenCalledWith(expect.closeTo(610, 0));
 		expect(destination.play).not.toHaveBeenCalled();
 		expect(destination.pause).toHaveBeenCalledTimes(1);
 		await press("5");
@@ -4623,6 +4625,57 @@ describe("Google Cast", () => {
 			await press("p");
 			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
 			expect(vi.mocked(fakeCast.get().send)).not.toHaveBeenCalled();
+		});
+
+		it("leaves the receiver alone while it asks", async () => {
+			await openItem(ep1, { episodes: [ep1, ep2, ep3] });
+			const tvNow = casting();
+			vi.mocked(fakeCast.get().send).mockImplementation(async (_, __, opts) => {
+				await opts.confirm!("on");
+				return null;
+			});
+			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+			await flush();
+			expect(screen.getByRole("dialog", { name: "Play on Hotel TV?" })).toBeTruthy();
+			for (const key of ["ArrowRight", " ", "n", "p"]) await press(key);
+			expect(tvNow.seek).not.toHaveBeenCalled();
+			expect(tvNow.pause).not.toHaveBeenCalled();
+			expect(vi.mocked(fakeCast.get().send)).toHaveBeenCalledTimes(1);
+		});
+
+		it("says in the cast's words why a key's control failed", async () => {
+			await openItem(lanternKeeper());
+			const tvNow = casting();
+			tvNow.pause.mockRejectedValueOnce("notConnected");
+			await press(" ");
+			expect(screen.getByRole("alert").textContent).toBe("Hotel TV didn't respond.");
+			fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+			act(() => fakeCast.set({ state: castState({ status: "paused" }) }));
+			tvNow.getState.mockReturnValue(castState({ status: "paused" }));
+			tvNow.play.mockRejectedValueOnce("converterFailed");
+			await press(" ");
+			expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on Hotel TV.");
+			fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+			// Once the connection is going, the cast says so itself.
+			tvNow.getState.mockReturnValue(castState({ connection: "reconnecting" }));
+			tvNow.seek.mockRejectedValueOnce("unreachable");
+			await press("ArrowRight");
+			expect(screen.queryByRole("alert")).toBeNull();
+		});
+
+		it("says nothing when AirPlay's play from the keys fails", async () => {
+			await openItem(lanternKeeper());
+			const airplayTv = { ...tv(), id: "airplay:tv", kind: "airplay" as const };
+			airplayTv.pause.mockRejectedValueOnce("x");
+			act(() =>
+				fakeAirPlay.set({
+					destination: airplayTv as unknown as AirPlay["destination"],
+					state: castState(),
+				})
+			);
+			await press(" ");
+			expect(airplayTv.pause).toHaveBeenCalled();
+			expect(screen.queryByRole("alert")).toBeNull();
 		});
 
 		it("closes the question at once on Cancel or Escape, as a no", async () => {

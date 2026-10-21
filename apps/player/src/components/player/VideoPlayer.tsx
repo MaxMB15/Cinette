@@ -119,6 +119,23 @@ interface PlayerNotice {
 }
 
 /**
+ * What the player says when a key's control failed on `tv`, or `null`. A
+ * cast says why in its own words while it's connected, and says for itself
+ * when it's going. AirPlay says why a seek failed.
+ */
+const keyFailure = (
+	tv: PlaybackDestination,
+	error: unknown,
+	seeking: boolean
+): PlayerNotice | null => {
+	if (tv.kind === "cast")
+		return tv.getState().connection === "connected"
+			? { text: castControlMessage(tv.name, error), cast: true }
+			: null;
+	return seeking ? { text: airplaySeekMessage(error), cast: false } : null;
+};
+
+/**
  * The player's note once a cast was asked for: why it didn't go, or, when
  * it went, no note about an earlier cast, which would only mislead next to
  * one that plays. A note about something else stays.
@@ -1237,9 +1254,10 @@ export const PlayerView = () => {
 			// A confirm opened from the controls renders in a portal, and it keeps
 			// its keys while it's open.
 			if (!isInside(containerRef.current, e.target)) return;
-			// The resume prompt handles its own keys. Its dialog takes Escape
-			// first, even when focus is on the player behind it.
-			if (pendingResume) return;
+			// The resume prompt and the cast question handle their own keys.
+			// Their dialogs take Escape first, even when focus is on the
+			// player behind them.
+			if (pendingResume || castConfirm) return;
 			if (isTypingTarget(e.target)) return;
 			// Space or Enter on a button reached with Tab presses that button.
 			if ((e.key === " " || e.key === "Enter") && isKeyboardFocusedControl(e.target)) return;
@@ -1278,13 +1296,14 @@ export const PlayerView = () => {
 			const tv = tvRef.current;
 			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
 			if (tv && !(tv.kind === "cast" && episode)) {
-				const key = airplayKey(action, tv.getState(), tv.capabilities);
-				if (key.kind === "play") void tv.play();
-				if (key.kind === "pause") void tv.pause();
-				if (key.kind === "seek")
-					tv.seek(key.to).catch((error: unknown) =>
-						setNotice({ text: airplaySeekMessage(error), cast: tv.kind === "cast" })
-					);
+				const key = airplayKey(action, tv.getState(), tv.capabilities, performance.now());
+				const failed = (seeking: boolean) => (error: unknown) => {
+					const failure = keyFailure(tv, error, seeking);
+					if (failure) setNotice(failure);
+				};
+				if (key.kind === "play") void tv.play().catch(failed(false));
+				if (key.kind === "pause") void tv.pause().catch(failed(false));
+				if (key.kind === "seek") void tv.seek(key.to).catch(failed(true));
 				if (key.kind !== "pass") return;
 			}
 
@@ -1371,6 +1390,7 @@ export const PlayerView = () => {
 			playback,
 			tvRef,
 			pendingResume,
+			castConfirm,
 			showShortcuts,
 			isFullscreen,
 			showInfoDrawer,
