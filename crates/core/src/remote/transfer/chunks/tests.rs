@@ -345,3 +345,33 @@ fn no_chunk_goes_over_the_limit_wherever_the_boundary_falls() {
     // Some chunk came within a few bytes of the limit.
     assert!(fullest > CHUNK_BYTES - 4, "{fullest}");
 }
+
+#[test]
+fn items_fill_a_chunk_right_up_to_the_limit() {
+    // The count runs a little over what's written, such as the first
+    // item's comma, which is counted but never written, so a full chunk
+    // comes within a couple of bytes of the limit.
+    // As many items as leave a few hundred bytes of room in one chunk.
+    let one_chunk = |n: usize| {
+        serde_json::to_vec(&split(&export(n, 0)).0[0])
+            .unwrap()
+            .len()
+    };
+    let n = (200..).find(|&n| CHUNK_BYTES - one_chunk(n) < 400).unwrap();
+    let padded = |pad: usize| {
+        let mut original = export(n, 0);
+        original.items[n - 1]
+            .reference
+            .name
+            .push_str(&"x".repeat(pad));
+        split(&original).0
+    };
+    let room = CHUNK_BYTES - one_chunk(n);
+    let fullest = (room.saturating_sub(40)..room + 5)
+        .flat_map(padded)
+        .map(|chunk| serde_json::to_vec(&chunk).unwrap().len())
+        .max()
+        .unwrap();
+    assert!(fullest + 2 >= CHUNK_BYTES, "{fullest}");
+    assert!(fullest <= CHUNK_BYTES);
+}
