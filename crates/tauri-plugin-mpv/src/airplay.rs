@@ -19,6 +19,7 @@
 
 use crate::lock::lock_or_recover;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime, State};
@@ -35,6 +36,8 @@ use macos as backend;
 mod unavailable;
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
 use unavailable as backend;
+#[cfg(any(target_os = "macos", test))]
+mod pick;
 #[cfg(test)]
 mod tests;
 
@@ -227,6 +230,10 @@ pub struct Tracker {
     length: Option<f64>,
     ready: bool,
     external_seen: bool,
+    /// The item is opening until the video reaches a receiver, at the
+    /// position it started from. A Mac plays its item here, muted, until
+    /// then, and it may never get there, so nothing it plays counts.
+    awaits_receiver: bool,
     /// Where the wait started, and the position then.
     waiting_since: Option<(Instant, f64)>,
     lost: bool,
@@ -240,6 +247,7 @@ impl Tracker {
             length: None,
             ready: false,
             external_seen: false,
+            awaits_receiver: false,
             waiting_since: None,
             lost: false,
         }
@@ -252,6 +260,15 @@ impl Tracker {
             offset: converted.offset.max(0.0),
             length: converted.duration,
             ..Self::new(live)
+        }
+    }
+
+    /// The same tracker, for a Mac, which only knows a receiver took the
+    /// video once the video is there.
+    pub fn awaiting_receiver(self) -> Self {
+        Self {
+            awaits_receiver: true,
+            ..self
         }
     }
 
@@ -297,6 +314,10 @@ impl Tracker {
             "ended" => Status::Ended,
             _ => Status::Error,
         };
+        if self.awaits_receiver && !self.external_seen && state.status != Status::Error {
+            state.status = Status::Opening;
+            state.position = self.offset;
+        }
         if !matches!(state.status, Status::Opening | Status::Error) {
             self.ready = true;
         }
@@ -355,15 +376,20 @@ impl Tracker {
 /// Tauri managed state: the item AirPlay plays, if any.
 #[derive(Default)]
 pub struct AirPlay {
-    tracker: Mutex<Option<Tracker>>,
+    /// The tracked item, and the load it came from.
+    tracker: Mutex<Option<(u64, Tracker)>>,
     last: Mutex<Option<AirPlayState>>,
+    loads: AtomicU64,
 }
 
 impl AirPlay {
-    /// Starts tracking a new item.
-    pub fn begin(&self, tracker: Tracker) {
-        *lock_or_recover(&self.tracker) = Some(tracker);
+    /// Starts tracking a new item. Returns its load, which the reports
+    /// about it carry on a Mac.
+    pub fn begin(&self, tracker: Tracker) -> u64 {
+        let load = self.loads.fetch_add(1, Ordering::Relaxed) + 1;
+        *lock_or_recover(&self.tracker) = Some((load, tracker));
         *lock_or_recover(&self.last) = None;
+        load
     }
 
     /// Stops tracking, after AirPlay stopped.
@@ -375,7 +401,26 @@ impl AirPlay {
     /// The state for `report`, or `None` when no item is tracked or nothing
     /// changed since the last one.
     pub fn report(&self, report: &Report, now: Instant) -> Option<AirPlayState> {
-        let state = lock_or_recover(&self.tracker).as_mut()?.update(report, now);
+        self.report_from(None, report, now)
+    }
+
+    /// The same, for a report about `load`'s item, or any item when it's
+    /// `None`. A report about an earlier load, read just before a quick
+    /// reload, is dropped.
+    pub fn report_from(
+        &self,
+        load: Option<u64>,
+        report: &Report,
+        now: Instant,
+    ) -> Option<AirPlayState> {
+        let state = {
+            let mut tracked = lock_or_recover(&self.tracker);
+            let (current, tracker) = tracked.as_mut()?;
+            if load.is_some_and(|load| load != *current) {
+                return None;
+            }
+            tracker.update(report, now)
+        };
         let mut last = lock_or_recover(&self.last);
         if last.as_ref() == Some(&state) {
             return None;
@@ -393,13 +438,17 @@ impl AirPlay {
         })
     }
 
-    /// Stops tracking, after no receiver took the video.
-    pub fn not_picked(&self) -> AirPlayState {
-        self.fail_with(PlaybackError {
+    /// Stops tracking `load`'s item, after no receiver took the video.
+    /// `None` when another load came since.
+    pub fn not_picked(&self, load: u64) -> Option<AirPlayState> {
+        if lock_or_recover(&self.tracker).as_ref()?.0 != load {
+            return None;
+        }
+        Some(self.fail_with(PlaybackError {
             code: "openFailed",
             unsupported: false,
             not_picked: true,
-        })
+        }))
     }
 
     fn fail_with(&self, error: PlaybackError) -> AirPlayState {
@@ -430,18 +479,38 @@ pub(crate) fn handle_report<R: Runtime>(app: &AppHandle<R>, json: &str, now: Ins
 }
 
 /// Emits the state for `report`, if it changed.
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
+#[cfg(any(target_os = "ios", test))]
 pub(crate) fn handle<R: Runtime>(app: &AppHandle<R>, report: &Report, now: Instant) {
     if let Some(state) = app.state::<AirPlay>().report(report, now) {
         let _ = app.emit(EVENT_STATE, state);
     }
 }
 
-/// Says no receiver took the video, so nothing plays.
+/// Emits the state for `report` about `load`'s item, if it's still the
+/// one tracked and its state changed.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn not_picked<R: Runtime>(app: &AppHandle<R>) {
-    let state = app.state::<AirPlay>().not_picked();
+pub(crate) fn handle_from<R: Runtime>(
+    app: &AppHandle<R>,
+    load: u64,
+    report: &Report,
+    now: Instant,
+) {
+    if let Some(state) = app.state::<AirPlay>().report_from(Some(load), report, now) {
+        let _ = app.emit(EVENT_STATE, state);
+    }
+}
+
+/// Says no receiver took `load`'s video, so nothing plays, and that the
+/// route went with it, unless another load came since. Returns whether
+/// it said so.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn not_picked<R: Runtime>(app: &AppHandle<R>, load: u64) -> bool {
+    let Some(state) = app.state::<AirPlay>().not_picked(load) else {
+        return false;
+    };
+    let _ = app.emit(EVENT_ROUTE, None::<Route>);
     let _ = app.emit(EVENT_STATE, state);
+    true
 }
 
 /// A stream this device converts for the receiver, as `load` gets it.
@@ -472,8 +541,14 @@ pub fn load<R: Runtime>(
         Some(converted) => (Tracker::converted(live, converted), 0.0),
         None => (Tracker::new(live), start_position(start_at, live)),
     };
-    app.state::<AirPlay>().begin(tracker);
-    backend::load(url, title, start, live, converted.is_some())
+    // A Mac never says whether a receiver took the video until it's there.
+    let tracker = if cfg!(target_os = "macos") {
+        tracker.awaiting_receiver()
+    } else {
+        tracker
+    };
+    let load = app.state::<AirPlay>().begin(tracker);
+    backend::load(url, title, start, live, converted.is_some(), load)
 }
 
 /// Says the stream this device converts stopped, with `code` as its

@@ -10,21 +10,25 @@
 //!
 //! - The picker is bound to this module's one `AVPlayer`. When it closes,
 //!   the route counts as picked, and the app loads the item.
-//! - AVPlayer starts muted, and unmutes once `isExternalPlaybackActive`
-//!   says the video is on a receiver. If that hasn't happened
-//!   [`PICK_LIMIT`] after the item is ready, nothing was picked: AVPlayer
-//!   stops, and the player hears it as [`Callback::NotPicked`].
+//! - AVPlayer is muted whenever `isExternalPlaybackActive` says the video
+//!   isn't on a receiver, so the Mac's own speakers never play it. If the
+//!   video hasn't got there [`PICK_LIMIT`](super::pick::PICK_LIMIT) after the item is ready,
+//!   nothing was picked: AVPlayer stops, and the player hears it as
+//!   [`Callback::NotPicked`]. [`Pick`] holds these rules.
+//! - The picker stays in the window only while it's open, hidden the rest
+//!   of the time, so it never takes the page's clicks.
 //! - mpv's own sound never moves, since the route is AVPlayer's.
 //!
 //! There's no KVO here. A timer reads AVPlayer's state four times a second
 //! while there's something to watch, and the tracker drops the reports
 //! that change nothing.
 
+use super::pick::Pick;
 use super::{
-    handle, Report, ReportError, Route, EVENT_AVAILABLE, EVENT_PICKER_CLOSED, EVENT_ROUTE,
+    handle_from, Report, ReportError, Route, EVENT_AVAILABLE, EVENT_PICKER_CLOSED, EVENT_ROUTE,
 };
 use crate::lock::lock_or_recover;
-use dispatch2::{DispatchQueue, MainThreadBound};
+use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
@@ -42,9 +46,6 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-/// How long after the item is ready AVPlayer may take to reach a receiver
-/// before the pick counts as none.
-const PICK_LIMIT: Duration = Duration::from_secs(5);
 /// How often the timer reads AVPlayer's state.
 const POLL: Duration = Duration::from_millis(250);
 /// How close to the end a paused item counts as ended.
@@ -59,8 +60,10 @@ enum Callback {
     Available(bool),
     Route(Option<Route>),
     PickerClosed,
-    Report(Report),
-    NotPicked,
+    /// A report about a load's item.
+    Report(u64, Report),
+    /// No receiver took a load's video.
+    NotPicked(u64),
 }
 
 type Sink = Box<dyn Fn(Callback) + Send + Sync>;
@@ -100,8 +103,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
         Callback::PickerClosed => {
             let _ = sink_app.emit(EVENT_PICKER_CLOSED, ());
         }
-        Callback::Report(report) => handle(&sink_app, &report, Instant::now()),
-        Callback::NotPicked => super::not_picked(&sink_app),
+        Callback::Report(load, report) => handle_from(&sink_app, load, &report, Instant::now()),
+        Callback::NotPicked(load) => {
+            if super::not_picked(&sink_app, load) {
+                *lock_or_recover(&ROUTE) = None;
+            }
+        }
     });
     if SINK.set(sink).is_err() {
         return;
@@ -135,18 +142,37 @@ fn on_main_host<F: FnOnce(&mut Host, MainThreadMarker) + Send + 'static>(
     view: Option<usize>,
     f: F,
 ) {
-    DispatchQueue::main().exec_async(move || {
-        // SAFETY: the main queue only runs its work on the main thread.
-        let mtm = unsafe { MainThreadMarker::new_unchecked() };
-        let host = HOST.get_or_init(|| MainThreadBound::new(RefCell::new(Host::new()), mtm));
-        let mut host = host.get(mtm).borrow_mut();
-        if host.view.is_none() {
-            // SAFETY: the address is the main window's view, which stays
-            // as long as the app runs, since closing that window quits it.
-            host.view = view.and_then(|v| unsafe { Retained::retain(v as *mut NSView) });
+    DispatchQueue::main().exec_async(move || run_on_host(view, f, true));
+}
+
+/// How long work waits for the host while it's in use.
+const BUSY_RETRY: Duration = Duration::from_millis(50);
+
+/// Runs `f` with the host, on the main thread. A click on the picker can
+/// run the main queue again before it returns, while the host is still in
+/// use, so work that comes then waits a moment and tries again, or is
+/// dropped unless it must `retry`: a reading can wait for the next.
+fn run_on_host<F: FnOnce(&mut Host, MainThreadMarker) + Send + 'static>(
+    view: Option<usize>,
+    f: F,
+    retry: bool,
+) {
+    // SAFETY: the main queue only runs its work on the main thread.
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let host = HOST.get_or_init(|| MainThreadBound::new(RefCell::new(Host::new()), mtm));
+    let Ok(mut host) = host.get(mtm).try_borrow_mut() else {
+        if retry {
+            let when = DispatchTime::try_from(BUSY_RETRY).unwrap_or(DispatchTime::NOW);
+            let _ = DispatchQueue::main().after(when, move || run_on_host(view, f, true));
         }
-        f(&mut host, mtm);
-    });
+        return;
+    };
+    if host.view.is_none() {
+        // SAFETY: the address is the main window's view, which stays
+        // as long as the app runs, since closing that window quits it.
+        host.view = view.and_then(|v| unsafe { Retained::retain(v as *mut NSView) });
+    }
+    f(&mut host, mtm);
 }
 
 /// Starts or stops the timer.
@@ -166,11 +192,17 @@ fn watch() {
         drop(watching);
         std::thread::sleep(POLL);
         // Only the calls that show something need the window's view.
-        on_main_host(None, |host, mtm| {
-            let more = host.poll(mtm);
-            if !more {
-                *lock_or_recover(&WATCHING) = false;
-            }
+        DispatchQueue::main().exec_async(|| {
+            run_on_host(
+                None,
+                |host, mtm| {
+                    let more = host.poll(mtm);
+                    if !more {
+                        *lock_or_recover(&WATCHING) = false;
+                    }
+                },
+                false,
+            )
         });
     }
 }
@@ -186,7 +218,9 @@ define_class!(
 
     unsafe impl AVRoutePickerViewDelegate for PickerDelegate {
         #[unsafe(method(routePickerViewDidEndPresentingRoutes:))]
-        fn did_end(&self, _view: &AVRoutePickerView) {
+        fn did_end(&self, view: &AVRoutePickerView) {
+            // Out of the page's way until it opens again.
+            view.setHidden(true);
             // macOS doesn't say what was picked, so the app loads, and the
             // load finds out.
             send(Callback::Route(Some(Route::new(ROUTE_UID, ROUTE_NAME))));
@@ -204,13 +238,13 @@ impl PickerDelegate {
 
 /// The item AVPlayer plays.
 struct Item {
+    /// The load it came from, which its reports carry.
+    load: u64,
     live: bool,
     start_at: f64,
     /// It got ready and started playing.
     started: bool,
-    ready_at: Option<Instant>,
-    /// The video reached a receiver.
-    external: bool,
+    pick: Pick,
 }
 
 struct Host {
@@ -247,8 +281,8 @@ impl Host {
         }
         let player = unsafe { AVPlayer::new(mtm) };
         unsafe {
+            // usesExternalPlaybackWhileExternalScreenIsActive is iOS only.
             player.setAllowsExternalPlayback(true);
-            player.setUsesExternalPlaybackWhileExternalScreenIsActive(true);
             player.setAutomaticallyWaitsToMinimizeStalling(true);
         }
         if let Some(view) = &self.view {
@@ -295,10 +329,9 @@ impl Host {
                     AVRoutePickerView::initWithFrame(AVRoutePickerView::alloc(mtm), rect)
                 };
                 let delegate = PickerDelegate::new(mtm);
-                unsafe {
-                    picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-                    picker.setPrioritizesVideoDevices(true);
-                }
+                // prioritizesVideoDevices is iOS only. The picker is bound
+                // to a player, so it lists the receivers for video anyway.
+                unsafe { picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
                 // Invisible but there, so the menu has somewhere to open.
                 picker.setAlphaValue(0.02);
                 view.addSubview(&picker);
@@ -320,20 +353,24 @@ impl Host {
             .iter()
             .find_map(|v| v.downcast::<NSButton>().ok());
         match button {
-            Some(button) => unsafe { button.performClick(None) },
+            Some(button) => {
+                picker.setHidden(false);
+                unsafe { button.performClick(None) };
+            }
             None => {
                 tracing::warn!("[AirPlay] the route picker has no button");
+                picker.setHidden(true);
                 send(Callback::PickerClosed);
             }
         }
     }
 
-    fn load(&mut self, url: &str, start_at: f64, live: bool, mtm: MainThreadMarker) {
+    fn load(&mut self, url: &str, start_at: f64, live: bool, load: u64, mtm: MainThreadMarker) {
         self.stop_item();
         let player = self.player(mtm);
         let Some(url) = NSURL::URLWithString(&NSString::from_str(url)) else {
             tracing::warn!("[AirPlay] load without a valid stream address");
-            send(Callback::Report(failed_report()));
+            send(Callback::Report(load, failed_report()));
             return;
         };
         let item = unsafe { AVPlayerItem::playerItemWithURL(&url, mtm) };
@@ -344,11 +381,11 @@ impl Host {
             player.replaceCurrentItemWithPlayerItem(Some(&item));
         }
         self.item = Some(Item {
+            load,
             live,
             start_at,
             started: false,
-            ready_at: None,
-            external: false,
+            pick: Pick::default(),
         });
         set_watching(true);
     }
@@ -358,6 +395,7 @@ impl Host {
         if let Some(player) = &self.player {
             unsafe {
                 player.pause();
+                player.setMuted(true);
                 player.replaceCurrentItemWithPlayerItem(None);
             }
         }
@@ -393,7 +431,6 @@ impl Host {
         let ready = status == AVPlayerItemStatus::ReadyToPlay;
         if ready && !item.started {
             item.started = true;
-            item.ready_at = Some(Instant::now());
             unsafe {
                 if item.start_at > 0.0 {
                     // AVPlayerItem can't take a start time before it's
@@ -408,19 +445,24 @@ impl Host {
             }
         }
         let external = unsafe { player.isExternalPlaybackActive() };
-        if external && !item.external {
-            item.external = true;
-            unsafe { player.setMuted(false) };
-        } else if !external && item.external {
-            // The video left the receiver. AVPlayer would carry on here,
-            // so it stops, and the tracker says the receiver was lost.
-            unsafe { player.pause() };
+        let step = item.pick.step(ready, external, Instant::now());
+        unsafe {
+            if player.isMuted() != step.muted {
+                player.setMuted(step.muted);
+            }
+            if step.pause {
+                // The video left the receiver. The tracker says the
+                // receiver was lost.
+                player.pause();
+            }
         }
-        if !item.external && item.ready_at.is_some_and(|at| at.elapsed() >= PICK_LIMIT) {
+        if step.not_picked {
+            let load = item.load;
             self.stop_item();
-            send(Callback::NotPicked);
+            send(Callback::NotPicked(load));
             return false;
         }
+        let load = item.load;
         let position = finite(unsafe { player.currentTime().seconds() });
         let duration = unsafe { current.duration() };
         let duration = (!item.live && is_numeric(duration))
@@ -448,17 +490,20 @@ impl Host {
             code: e.code() as i64,
             http_status: http_status(&current),
         });
-        send(Callback::Report(Report {
-            status: status.to_string(),
-            position,
-            duration,
-            external,
-            error,
-            subtitles: Vec::new(),
-            subtitle: None,
-            audio: Vec::new(),
-            audio_track: None,
-        }));
+        send(Callback::Report(
+            load,
+            Report {
+                status: status.to_string(),
+                position,
+                duration,
+                external,
+                error,
+                subtitles: Vec::new(),
+                subtitle: None,
+                audio: Vec::new(),
+                audio_track: None,
+            },
+        ));
         true
     }
 }
@@ -518,9 +563,10 @@ pub fn load(
     start: f64,
     live: bool,
     _converted: bool,
+    load: u64,
 ) -> Result<(), String> {
     let url = url.to_string();
-    on_host(move |host, mtm| host.load(&url, start, live, mtm));
+    on_host(move |host, mtm| host.load(&url, start, live, load, mtm));
     Ok(())
 }
 
