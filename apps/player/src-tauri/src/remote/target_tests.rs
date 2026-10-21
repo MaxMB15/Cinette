@@ -1058,7 +1058,7 @@ async fn the_background_stops_advertising_and_listening_but_keeps_sessions() {
     let port = h.handle.port();
     let mut phone = h.connect("Phone").await;
     phone.connected().await;
-    h.handle.background();
+    h.handle.background().await;
     assert_eq!(
         h.wait_for(|s| match s {
             Seen::Advertise(r) => Some(r.clone()),
@@ -1079,7 +1079,7 @@ async fn the_background_stops_advertising_and_listening_but_keeps_sessions() {
 #[tokio::test]
 async fn back_in_the_foreground_it_listens_and_advertises_on_the_new_port() {
     let mut h = Harness::start(ControlMode::Always).await;
-    h.handle.background();
+    h.handle.background().await;
     h.wait_for(|s| matches!(s, Seen::Advertise(None)).then_some(()))
         .await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1101,7 +1101,7 @@ async fn back_in_the_foreground_it_listens_and_advertises_on_the_new_port() {
 #[tokio::test]
 async fn nothing_is_advertised_in_the_background_until_the_app_comes_back() {
     let mut h = Harness::start(ControlMode::Always).await;
-    h.handle.background();
+    h.handle.background().await;
     h.wait_for(|s| matches!(s, Seen::Advertise(None)).then_some(()))
         .await;
     // A rename would advertise the new name, and a new identity a new id.
@@ -1135,4 +1135,17 @@ async fn a_new_listener_replaces_the_old_one() {
     until_refused(old).await;
     let mut phone = h.connect("Phone").await;
     phone.connected().await;
+}
+
+#[tokio::test]
+async fn the_background_frees_the_port_before_it_answers() {
+    let h = Harness::start(ControlMode::Always).await;
+    let port = h.handle.port();
+    h.handle.background().await;
+    // Coming straight back can take the same port again.
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .await
+        .expect("the port is free");
+    h.handle.foreground(listener).unwrap();
+    assert_eq!(h.handle.port(), port);
 }

@@ -24,6 +24,8 @@ pub mod commands;
 mod conn;
 #[cfg(remote)]
 pub mod device;
+#[cfg(any(target_os = "android", test))]
+pub mod held;
 #[cfg(remote)]
 pub mod devices;
 #[cfg(remote)]
@@ -43,7 +45,7 @@ pub mod target;
 mod test_client;
 
 #[cfg(mobile)]
-pub use service::set_foreground;
+pub use service::{set_foreground, Lifecycle};
 #[cfg(remote)]
 pub use service::{start, stop_for_exit, RemoteService};
 

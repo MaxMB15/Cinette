@@ -99,6 +99,7 @@ afterEach(() => {
 	cleanup();
 	resetFakeWindow();
 	vi.clearAllMocks();
+	delete window.__CINETTE_TV__;
 });
 
 describe("App", () => {
@@ -160,7 +161,6 @@ describe("App", () => {
 		);
 		expect(listen).not.toHaveBeenCalledWith("remote://controller", expect.any(Function));
 		expect(screen.queryByText("Connect dialog")).toBeNull();
-		delete window.__CINETTE_TV__;
 	});
 
 	it("listens for both on iOS", async () => {

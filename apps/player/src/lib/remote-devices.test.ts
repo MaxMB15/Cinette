@@ -17,8 +17,8 @@ import {
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
 describe("discoveryLimit", () => {
-	it("says phones, tablets and TVs are only found while Cinette is open", () => {
-		const note = "Other devices can only find this one while Cinette is open on screen.";
+	it("says phones, tablets and TVs are only found while Cinette is in the foreground", () => {
+		const note = "Other devices can only find this one while Cinette is in the foreground.";
 		expect(discoveryLimit("android")).toBe(note);
 		expect(discoveryLimit("tv")).toBe(note);
 		expect(discoveryLimit("ios")).toBe(note);

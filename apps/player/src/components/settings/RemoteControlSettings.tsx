@@ -173,6 +173,9 @@ export const RemoteControlSettings = () => {
 		else save({ remoteControl: mode });
 	};
 
+	// When other devices can find this one, where that depends on the app.
+	const limit = discoveryLimit();
+
 	// Two devices with one name show the start of their ids.
 	const named = new Map<string, number>();
 	for (const s of sessions) named.set(s.name, (named.get(s.name) ?? 0) + 1);
@@ -190,7 +193,7 @@ export const RemoteControlSettings = () => {
 							Lets other Cinette devices on this network find this one. Turning this
 							off stops new connections. Devices already connected stay connected
 							until you disconnect them.
-							{discoveryLimit() && ` ${discoveryLimit()}`}
+							{limit && ` ${limit}`}
 						</p>
 					</div>
 					<Button

@@ -18,7 +18,9 @@ use std::io::{self, Write};
 #[cfg(not(target_os = "ios"))]
 use std::path::{Path, PathBuf};
 
-/// The key's file name in the app data folder.
+/// The key's file name in the app data folder. Android's backup rules
+/// (res/xml/backup_rules.xml and data_extraction_rules.xml) leave out this
+/// name at the top of the app's data folder, so they change with it.
 #[cfg_attr(target_os = "ios", allow(dead_code))]
 pub const KEY_FILE: &str = "remote-device.key";
 
