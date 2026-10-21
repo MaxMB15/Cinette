@@ -32,7 +32,11 @@ impl Channel {
 
     /// Encrypts a message and frames it for sending.
     pub fn seal<T: Serialize>(&mut self, message: &T) -> Result<Vec<u8>, ChannelError> {
-        self.seal_bytes(&message::encode(message))
+        let mut plain = message::encode(message);
+        let sealed = self.seal_bytes(&plain);
+        // It may hold a provider's login.
+        zeroize::Zeroize::zeroize(&mut plain);
+        sealed
     }
 
     pub(crate) fn seal_bytes(&mut self, plain: &[u8]) -> Result<Vec<u8>, ChannelError> {

@@ -139,7 +139,7 @@ pub fn clean_name(name: &str) -> Option<String> {
 
 /// Whether `c` is a Unicode format character (category Cf), such as a
 /// bidi control, a zero-width space or joiner, or a tag character.
-fn is_format(c: char) -> bool {
+pub(crate) fn is_format(c: char) -> bool {
     matches!(
         c,
         '\u{AD}'

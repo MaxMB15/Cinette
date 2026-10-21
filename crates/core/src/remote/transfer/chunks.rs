@@ -158,6 +158,17 @@ fn json_len<T: Serialize>(value: &T) -> usize {
         .len()
 }
 
+/// Whether an export is within what a receiver takes, checked before it's
+/// sent so it doesn't fail halfway.
+pub fn within_limits(export: &Export) -> bool {
+    if export.items.len() > MAX_ITEMS || export.pins.len() > MAX_PINS {
+        return false;
+    }
+    let bytes: usize = export.items.iter().map(|i| json_len(i) + 1).sum::<usize>()
+        + export.pins.iter().map(|p| json_len(p) + 1).sum::<usize>();
+    bytes <= MAX_TOTAL_BYTES
+}
+
 /// Why the receiver gave up on a transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AssembleError {

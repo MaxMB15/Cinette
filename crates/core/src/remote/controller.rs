@@ -244,7 +244,10 @@ impl Controller {
                 let message = match read(&mut channel, frame, &mut out) {
                     Ok(Some(message)) => Some(message),
                     Ok(None) => None,
-                    Err(()) => return closed(out, CloseReason::Protocol),
+                    Err(()) => {
+                        self.lose_flow(&mut out);
+                        return closed(out, CloseReason::Protocol);
+                    }
                 };
                 let message = match (message, self.flow.take()) {
                     (Some(message), Some(flow)) => {
@@ -275,7 +278,20 @@ impl Controller {
                             out.events.push(Event::State(state));
                         }
                     }
-                    Some(Message::Closed { reason }) => return closed(out, reason),
+                    Some(Message::Closed { reason }) => {
+                        self.lose_flow(&mut out);
+                        return closed(out, reason);
+                    }
+                    // A grant for a request this device stopped making,
+                    // such as one cancelled on its way: the target is told,
+                    // so it doesn't keep the grant.
+                    Some(Message::Granted { transfer, .. }) => {
+                        if super::transfer::flow::valid_id(&transfer)
+                            && let Ok(bytes) = channel.seal(&Message::TransferCancel { transfer })
+                        {
+                            out.send.push(bytes);
+                        }
+                    }
                     Some(other) => handle_common(other, &mut out),
                 }
                 self.stage = Stage::InSession {
@@ -289,10 +305,12 @@ impl Controller {
         out
     }
 
-    /// Time passed. Gives up on a target that hasn't finished the handshake
-    /// within [`HANDSHAKE_TIMEOUT`] of connecting, or let the controller in
-    /// within [`GIVE_UP_AFTER`]. Giving up withdraws the request, so send the
-    /// bytes, then close the socket.
+    /// Time passed. Before the session, gives up on a target that hasn't
+    /// finished the handshake within [`HANDSHAKE_TIMEOUT`] of connecting, or
+    /// let the controller in within [`GIVE_UP_AFTER`]: that withdraws the
+    /// request, so send the bytes, then close the socket. In a session, it
+    /// only ends a transfer that waited too long; send the bytes, and the
+    /// session goes on.
     pub fn tick(&mut self, now: Instant) -> Output {
         if self.next_deadline().is_none_or(|deadline| now < deadline) {
             return Output::default();
@@ -312,8 +330,8 @@ impl Controller {
         closed(out, CloseReason::Timeout)
     }
 
-    /// When [`Controller::tick`] next has something to do: never once the
-    /// controller is in or closed.
+    /// When [`Controller::tick`] next has something to do: in a session,
+    /// only when a transfer is waiting on something; never once closed.
     pub fn next_deadline(&self) -> Option<Instant> {
         match self.stage {
             Stage::Handshake(_) => Some(self.opened + HANDSHAKE_TIMEOUT),
@@ -379,6 +397,7 @@ impl Controller {
         direction: Direction,
         what: What,
         counts: Option<Counts>,
+        now: Instant,
     ) -> Result<Vec<u8>, AskError> {
         self.ask(
             Feature::History,
@@ -387,16 +406,21 @@ impl Controller {
                 what,
                 counts: counts.filter(|_| direction == Direction::Send),
             },
+            now,
         )
     }
 
     /// Asks to send the named providers. Once allowed,
     /// [`ControllerEvent::ProvidersGranted`] asks for their settings.
-    pub fn ask_providers(&mut self, providers: Vec<ProviderName>) -> Result<Vec<u8>, AskError> {
-        self.ask(Feature::Providers, Asked::Providers(providers))
+    pub fn ask_providers(
+        &mut self,
+        providers: Vec<ProviderName>,
+        now: Instant,
+    ) -> Result<Vec<u8>, AskError> {
+        self.ask(Feature::Providers, Asked::Providers(providers), now)
     }
 
-    fn ask(&mut self, feature: Feature, asked: Asked) -> Result<Vec<u8>, AskError> {
+    fn ask(&mut self, feature: Feature, asked: Asked, now: Instant) -> Result<Vec<u8>, AskError> {
         let Stage::InSession { peer, .. } = &self.stage else {
             return Err(AskError::NotConnected);
         };
@@ -409,7 +433,7 @@ impl Controller {
         let (id, bytes) = self
             .request(|id| asked.request(id))
             .map_err(|_| AskError::NotConnected)?;
-        self.flow = Some(ControllerFlow::Asking { id, asked });
+        self.flow = Some(ControllerFlow::asking(id, asked, now));
         Ok(bytes)
     }
 
@@ -460,12 +484,19 @@ impl Controller {
         self.transfer(|flow, out| flow.send_providers(grant, providers, now, out))
     }
 
-    /// Stops the transfer asked for or running. Nothing is written.
+    /// Stops the transfer asked for or running, and nothing is written.
+    /// Once either side is writing what it has, it's too late, and the
+    /// transfer ends with its result as usual.
     pub fn cancel_transfer(&mut self) -> Output {
-        self.transfer(|flow, out| {
-            flow.cancel(out);
-            None
-        })
+        self.transfer(|flow, out| flow.cancel(out))
+    }
+
+    /// The connection is going: a transfer on it can't go on.
+    fn lose_flow(&mut self, out: &mut Output) {
+        let mut flow_out = ControllerOut::default();
+        self.flow = self.flow.take().and_then(|f| f.lost(&mut flow_out));
+        out.events
+            .extend(flow_out.events.into_iter().map(Event::Transfer));
     }
 
     /// A ping, to send when nothing else went out for [`PING_INTERVAL`].
@@ -518,8 +549,11 @@ fn closed(mut out: Output, reason: CloseReason) -> Output {
 /// Decrypts and reads a frame. `Ok(None)` is a message to skip, and `Err`
 /// means the connection must close.
 fn read(channel: &mut Channel, frame: &[u8], out: &mut Output) -> Result<Option<Message>, ()> {
-    let plain = channel.open(frame).map_err(|_| ())?;
-    match message::decode(&plain) {
+    let mut plain = channel.open(frame).map_err(|_| ())?;
+    let decoded = message::decode(&plain);
+    // It may hold a provider's login.
+    zeroize::Zeroize::zeroize(&mut plain);
+    match decoded {
         Ok(message) => Ok(Some(message)),
         // Something a newer target sends that this build doesn't know.
         Err(DecodeError::UnknownType { .. }) => Ok(None),

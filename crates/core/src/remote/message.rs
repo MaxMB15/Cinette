@@ -185,6 +185,8 @@ pub enum ErrorCode {
     Busy,
     /// Either side stopped a transfer.
     Cancelled,
+    /// A transfer is larger than the other side takes.
+    TooLarge,
     /// A code from a newer version of Cinette.
     #[serde(other)]
     Unknown,

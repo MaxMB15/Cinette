@@ -372,6 +372,7 @@ impl Target {
                     self.sync_prompt(&mut actions);
                 }
                 Stage::InSession(_) => {
+                    flow_lost(conn, &c, &mut actions);
                     if self.consent.withdraw(conn).is_some() {
                         self.sync_prompt(&mut actions);
                     }
@@ -515,10 +516,14 @@ impl Target {
             }
             Stage::InSession(mut auth) => {
                 let opened = open(&mut auth, conn, frame, &mut actions);
-                // A running transfer's chunks only go as fast as the other
-                // side acknowledges them, so they don't count.
-                let allowed = matches!(&opened, Opened::Message(m) if is_transfer_step(m))
-                    || self.conn_token(conn, now);
+                // The running transfer's next step only goes as fast as the
+                // other side acknowledges, so it doesn't count. Anything
+                // else does, including steps of no transfer here.
+                let expected = match (&opened, self.conns.get(&conn)) {
+                    (Opened::Message(m), Some(c)) => c.flow.as_ref().is_some_and(|f| f.expects(m)),
+                    _ => false,
+                };
+                let allowed = expected || self.conn_token(conn, now);
                 let message = match opened {
                     Opened::Broken => {
                         // A broken frame ends the connection, not the
@@ -721,12 +726,11 @@ impl Target {
                             actions,
                         );
                         self.set_stage(conn, Stage::Waiting(auth, request));
+                        // A control request ends this device's earlier one,
+                        // and a transfer request it was waiting on leaves
+                        // its session alone.
                         for resolved in replaced {
-                            self.close(
-                                resolved.request.conn,
-                                Some(CloseReason::Cancelled),
-                                actions,
-                            );
+                            self.resolve(resolved, now, actions);
                         }
                         self.sync_prompt(actions);
                     }
@@ -1127,6 +1131,7 @@ impl Target {
         let Some(mut c) = self.conns.remove(&conn) else {
             return;
         };
+        flow_lost(conn, &c, actions);
         if c.flow.is_some() && self.consent.withdraw(conn).is_some() {
             self.sync_prompt(actions);
         }
@@ -1141,10 +1146,11 @@ impl Target {
 
     /// Closes without a word, for a connection that broke the protocol.
     fn drop_conn(&mut self, conn: ConnId, actions: &mut Vec<Action>) {
-        if self.conns.remove(&conn).is_some_and(|c| c.flow.is_some())
-            && self.consent.withdraw(conn).is_some()
-        {
-            self.sync_prompt(actions);
+        if let Some(c) = self.conns.remove(&conn) {
+            flow_lost(conn, &c, actions);
+            if c.flow.is_some() && self.consent.withdraw(conn).is_some() {
+                self.sync_prompt(actions);
+            }
         }
         actions.push(Action::Close { conn });
     }
@@ -1212,14 +1218,7 @@ impl Target {
                     c.flow = Some(TargetFlow::Asking { id, asked });
                 }
                 for resolved in replaced {
-                    self.resolve(
-                        Resolved {
-                            outcome: Outcome::Refused(CloseReason::Cancelled),
-                            ..resolved
-                        },
-                        now,
-                        actions,
-                    );
+                    self.resolve(resolved, now, actions);
                 }
                 self.sync_prompt(actions);
             }
@@ -1227,13 +1226,13 @@ impl Target {
     }
 
     /// The controller stopped asking for a transfer.
+    /// A grant that crossed the cancel on the way is dropped too, since the
+    /// controller won't use it. A transfer under way is left alone.
     fn cancel_asking(&mut self, conn: ConnId, actions: &mut Vec<Action>) {
-        let asking = self
-            .conns
-            .get(&conn)
-            .and_then(|c| c.flow.as_ref())
-            .is_some_and(|f| f.asked().is_some());
-        if !asking {
+        let Some(c) = self.conns.get_mut(&conn) else {
+            return;
+        };
+        let Some(flow) = c.flow.as_ref() else {
             self.reply(
                 conn,
                 &Message::Error {
@@ -1243,12 +1242,14 @@ impl Target {
                 actions,
             );
             return;
-        }
-        if let Some(c) = self.conns.get_mut(&conn) {
+        };
+        if flow.asked().is_some() {
+            c.flow = None;
+            self.consent.withdraw(conn);
+            self.sync_prompt(actions);
+        } else if flow.untouched() {
             c.flow = None;
         }
-        self.consent.withdraw(conn);
-        self.sync_prompt(actions);
     }
 
     /// A chunk, acknowledgement or other step of a running transfer.
@@ -1260,6 +1261,21 @@ impl Target {
         now: Instant,
         actions: &mut Vec<Action>,
     ) {
+        let id = match &message {
+            Message::TransferChunk { transfer, .. }
+            | Message::TransferStart { transfer }
+            | Message::TransferAck { transfer, .. }
+            | Message::TransferDone { transfer, .. }
+            | Message::TransferError { transfer, .. }
+            | Message::TransferCancel { transfer } => transfer,
+            Message::ProvidersSend { grant, .. } => grant,
+            _ => return,
+        };
+        // An id this side never makes gets no answer, so a long one can't
+        // make one too large to send.
+        if !super::transfer::flow::valid_id(id) {
+            return;
+        }
         let mut steps = Vec::new();
         let Some(c) = self.conns.get_mut(&conn) else {
             return;
@@ -1406,6 +1422,27 @@ impl Target {
     }
 }
 
+/// A transfer on a connection that's going can't go on, so the UI hears it
+/// failed, unless this device is writing what it has, which ends by itself.
+fn flow_lost(conn: ConnId, c: &Conn, actions: &mut Vec<Action>) {
+    let (Some(flow), Stage::InSession(auth)) = (&c.flow, &c.stage) else {
+        return;
+    };
+    if flow.writing() {
+        return;
+    }
+    if let Some(transfer) = flow.transfer() {
+        actions.push(Action::TransferProgress {
+            conn,
+            device_id: auth.peer.id.clone(),
+            name: auth.peer.name.clone(),
+            transfer: transfer.to_string(),
+            kind: flow.kind(),
+            progress: Progress::Failed(ErrorCode::Cancelled),
+        });
+    }
+}
+
 /// What the controller hears when its transfer request isn't granted.
 fn refusal(reason: CloseReason) -> ErrorCode {
     match reason {
@@ -1463,10 +1500,13 @@ enum Opened {
 }
 
 fn open(auth: &mut Authenticated, conn: ConnId, frame: &[u8], actions: &mut Vec<Action>) -> Opened {
-    let Ok(plain) = auth.channel.open(frame) else {
+    let Ok(mut plain) = auth.channel.open(frame) else {
         return Opened::Broken;
     };
-    match message::decode(&plain) {
+    let decoded = message::decode(&plain);
+    // It may hold a provider's login.
+    zeroize::Zeroize::zeroize(&mut plain);
+    match decoded {
         Ok(message) => Opened::Message(Box::new(message)),
         Err(DecodeError::UnknownType { id }) => Opened::Undecodable {
             id,
