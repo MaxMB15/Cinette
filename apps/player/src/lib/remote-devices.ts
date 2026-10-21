@@ -3,6 +3,9 @@
 
 /** How remote control names devices and counts down a request. */
 
+import { getPlatform } from "@/lib/platform";
+import type { Platform } from "@/lib/types";
+
 const TYPE_NAMES = new Map([
 	["mac", "Mac"],
 	["linux-pc", "Linux PC"],
@@ -14,6 +17,15 @@ const TYPE_NAMES = new Map([
 	["android-tv", "Android TV"],
 	["fire-tv", "Fire TV"],
 ]);
+
+/**
+ * What the settings add about when other devices can find this one, where
+ * that depends on the app being open: on Android, phones and TVs alike.
+ */
+export const discoveryLimit = (platform: Platform = getPlatform()): string | null =>
+	platform === "android" || platform === "tv"
+		? "Other devices can only find this one while you're using Cinette."
+		: null;
 
 /** A device type as the protocol spells it, like `fire-tv`, in words. */
 export const deviceTypeName = (deviceType: string): string =>

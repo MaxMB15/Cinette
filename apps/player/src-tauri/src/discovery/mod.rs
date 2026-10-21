@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! DNS-SD on the local network: browsing for a service type and advertising
-//! one, on macOS and Linux.
+//! one, on macOS, Linux and Android.
 //!
-//! macOS uses Bonjour through `dns_sd.h` in libSystem. Linux uses the
-//! `mdns-sd` crate, which needs no Avahi daemon and runs beside one. Both
+//! macOS uses Bonjour through `dns_sd.h` in libSystem. Linux and Android use
+//! the `mdns-sd` crate, which needs no Avahi daemon and runs beside one. Both
 //! give the same [`Event`]s, so callers don't know which one runs.
 //!
 //! Nothing is advertised until [`advertise`] is called, and dropping the
@@ -15,11 +15,11 @@
 // The macOS backend's decisions, which the tests on Linux check too.
 #[cfg(any(target_os = "macos", test))]
 mod bonjour;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
