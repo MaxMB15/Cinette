@@ -24,7 +24,7 @@ const TYPE_NAMES = new Map([
  */
 export const discoveryLimit = (platform: Platform = getPlatform()): string | null =>
 	platform === "android" || platform === "tv"
-		? "Other devices can only find this one while Cinette is in the foreground."
+		? "Other devices can only find this one while you're using Cinette."
 		: null;
 
 /** A device type as the protocol spells it, like `fire-tv`, in words. */

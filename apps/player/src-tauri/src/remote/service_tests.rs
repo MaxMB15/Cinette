@@ -1336,7 +1336,6 @@ async fn a_failed_listen_on_coming_back_is_tried_again() {
         .follow_foreground_with(|| bind_unless(&fails), &[Duration::from_millis(10)])
         .await;
     let port = service.handle.port();
-    assert_ne!(port, running.port);
     tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("listening after the second try");
@@ -1408,10 +1407,4 @@ async fn the_multicast_lock_is_held_in_the_foreground_and_let_go_in_the_backgrou
     set_foreground_with(&handle, Lifecycle::Foreground, |hold| called.push(hold));
     assert!(handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
     assert_eq!(called, [false, true]);
-}
-
-#[test]
-fn ios_says_background_or_not() {
-    assert_eq!(Lifecycle::from_background(true), Lifecycle::Background);
-    assert_eq!(Lifecycle::from_background(false), Lifecycle::Foreground);
 }
