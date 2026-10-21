@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 use super::mkv::{MkvError, MkvSplitter, Piece};
-use super::serve::{head_end, ok_head, read_request, token, Request, MAX_HEAD};
+use super::serve::{head_end, not_found_head, ok_head, read_request, token, Request, MAX_HEAD};
 use super::{
     args, matroska_copies, output_args, pick_audio, unsupported, AacEncoder, AudioPlan,
     Encoders, HardwareEncoder, NoEncoder, Output, Plan, VideoPlan, CAST_AUDIO,
@@ -723,6 +723,15 @@ fn answers_with_no_length_for_a_live_stream() {
     );
     assert!(
         ok_head("text/vtt", Some(12)).contains("Content-Type: text/vtt\r\nContent-Length: 12\r\n")
+    );
+}
+
+#[test]
+fn answers_a_missing_name_with_an_empty_404() {
+    assert_eq!(
+        not_found_head(),
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nCache-Control: no-store\r\n\
+         Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
     );
 }
 

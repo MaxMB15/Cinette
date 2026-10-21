@@ -198,12 +198,14 @@ async fn serves_a_movie_as_hls_from_the_start() {
         "ffmpeg couldn't read the HLS back"
     );
 
-    // A name that was never made gets no answer at all.
+    // A segment that was never made, or that the window dropped, is a 404,
+    // so a receiver moves on.
     let missing = test_server::client()
         .get(beside(&conversion.url, "seg9.ts"))
         .send()
-        .await;
-    assert!(missing.is_err(), "{missing:?}");
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
 }
 
 #[tokio::test]

@@ -239,12 +239,13 @@ async fn drops_old_segments_from_the_window() {
     let media = text(&format!("{base}media.m3u8")).await;
     assert_eq!(media.matches("#EXTINF").count(), WINDOW.segments, "{media}");
     assert!(!media.contains("seg0.ts"), "{media}");
-    // Gone from the server, which closes the connection with no answer.
+    // Gone from the server, which says so, so the receiver moves on.
     let gone = test_server::client()
         .get(format!("{base}seg0.ts"))
         .send()
-        .await;
-    assert!(gone.is_err());
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
 }
 
 #[tokio::test]

@@ -353,7 +353,10 @@ async fn serves_named_files_that_change_while_it_runs() {
     assert!(head.bytes().await.unwrap().is_empty());
 
     server.files.remove("index.m3u8");
-    assert!(client.get(server.url("index.m3u8")).send().await.is_err());
+    let gone = client.get(server.url("index.m3u8")).send().await.unwrap();
+    assert_eq!(gone.status(), 404);
+    assert_eq!(gone.headers()["content-length"], "0");
+    assert!(gone.bytes().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -366,8 +369,9 @@ async fn answers_nothing_outside_its_token() {
     let root = format!("http://{}/a.vtt", address(&server));
     assert!(client.get(&root).send().await.is_err());
     assert!(client.post(server.url("a.vtt")).send().await.is_err());
-    // No pipe was set, so its name is just a missing file.
-    assert!(client.get(server.url("stream.mkv")).send().await.is_err());
+    // No pipe was set, so its name is just a missing file, under the token.
+    let missing = client.get(server.url("stream.mkv")).send().await.unwrap();
+    assert_eq!(missing.status(), 404);
     // A head that never ends, or one with nothing in it, gets nothing.
     assert!(raw(&server, &vec![b'a'; MAX_HEAD + 1024]).await.is_empty());
     assert!(raw(&server, b"GET\r\n\r\n").await.is_empty());
