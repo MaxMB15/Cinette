@@ -118,6 +118,10 @@ pub struct MpvEngine {
     current_url: Option<String>,
     audio_logged_playing: bool,
     playback_started: bool,
+    /// The subtitle file `sub_add` put on `sub-files` while mpv had no file
+    /// open. mpv reads the list early on as it opens a file, and can open
+    /// the file without one that came later. `get_state` adds that one.
+    sub_on_open: Option<String>,
 }
 
 impl MpvEngine {
@@ -127,6 +131,7 @@ impl MpvEngine {
             current_url: None,
             audio_logged_playing: false,
             playback_started: false,
+            sub_on_open: None,
         }
     }
 
@@ -345,6 +350,7 @@ impl MpvEngine {
         self.current_url = None;
         self.audio_logged_playing = false;
         self.playback_started = false;
+        self.sub_on_open = None;
     }
 
     pub fn play(&self) -> Result<(), String> {
@@ -405,15 +411,13 @@ impl MpvEngine {
     /// it's false, since the frontend draws the new subtitles. While mpv
     /// opens a file, or has none, the file only goes on the list of subtitles
     /// mpv adds as it opens one. mpv doesn't read the file until then, so one
-    /// it can't read doesn't fail the add.
-    pub fn sub_add(&self, path: &str, visible: bool) -> Result<(), String> {
+    /// it can't read doesn't fail the add. mpv may have read the list
+    /// already, so `get_state` makes sure the file is there once mpv has
+    /// opened the stream.
+    pub fn sub_add(&mut self, path: &str, visible: bool) -> Result<(), String> {
         let mpv = self.mpv.as_ref().ok_or_else(|| "no mpv instance".to_string())?;
         let uri = subtitle_uri(path);
-        // "no" when no track is in use, which isn't a number.
-        let in_use = mpv
-            .get_property::<String>("sid")
-            .ok()
-            .and_then(|id| id.parse::<i64>().ok());
+        let in_use = sub_in_use(mpv);
         let set_visible = || {
             if let Err(e) = mpv.set_property("sub-visibility", visible) {
                 tracing::warn!("[MPV] sub-visibility={} failed: {}", visible, e);
@@ -442,12 +446,16 @@ impl MpvEngine {
             Ok(())
         };
         if !file_open(mpv) {
-            return add_on_open();
+            add_on_open()?;
+            self.sub_on_open = Some(uri);
+            return Ok(());
         }
         if let Err(e) = mpv.command("sub-add", &[&uri, "select"]) {
             // Another load can start between the check and the add.
             if !file_open(mpv) {
-                return add_on_open();
+                add_on_open()?;
+                self.sub_on_open = Some(uri);
+                return Ok(());
             }
             tracing::warn!("[MPV] sub-add failed: {}", e);
             return Err(e.to_string());
@@ -463,17 +471,51 @@ impl MpvEngine {
             set_visible();
         }
         let _ = set_sub_files(mpv, Some(&uri));
+        // This file takes the place of one picked while mpv opened the file.
+        self.sub_on_open = None;
         tracing::info!("[MPV] sub-add: complete, sub-visibility={}", visible);
         Ok(())
     }
 
+    /// Once the file that plays is open, adds the subtitle file `sub_add`
+    /// put on `sub-files` while mpv opened it, since mpv may have read the
+    /// list before the file went on it. With `cached`, mpv only selects the
+    /// track when it did add the file from the list, so the file is never
+    /// there twice. As in `sub_add`, the track that was in use goes.
+    /// `sub_add` has set `sub-visibility` already.
+    fn add_missed_subtitle(&mut self) {
+        let (Some(mpv), Some(uri)) = (&self.mpv, &self.sub_on_open) else {
+            return;
+        };
+        if !file_open(mpv) {
+            return;
+        }
+        let in_use = sub_in_use(mpv);
+        tracing::info!("[MPV] sub-add once open: {}", origin_for_log(uri));
+        match mpv.command("sub-add", &[uri.as_str(), "cached"]) {
+            Ok(()) => {
+                if let Some(id) = in_use
+                    && sub_in_use(mpv) != Some(id)
+                    && let Err(e) = mpv.command("sub-remove", &[&id.to_string()])
+                {
+                    tracing::debug!("[MPV] sub-remove {} failed: {}", id, e);
+                }
+            }
+            Err(e) => tracing::warn!("[MPV] sub-add once open failed: {}", e),
+        }
+        // Tried once. A load that starts now reads `sub-files` itself.
+        self.sub_on_open = None;
+    }
+
     /// Remove an external subtitle track. Pass -1 to remove the current track (no-arg form).
-    /// mpv also stops adding the file when it reloads the stream.
-    pub fn sub_remove(&self, id: i64) -> Result<(), String> {
+    /// mpv also stops adding the file when it reloads the stream, and the
+    /// engine no longer adds a file `sub_add` left for when the stream opens.
+    pub fn sub_remove(&mut self, id: i64) -> Result<(), String> {
         let mpv = self
             .mpv
             .as_ref()
             .ok_or_else(|| "no mpv instance".to_string())?;
+        self.sub_on_open = None;
         let _ = set_sub_files(mpv, None);
         if id == -1 {
             mpv.command("sub-remove", &[]).map_err(|e| e.to_string())
@@ -572,6 +614,9 @@ impl MpvEngine {
             }
             state.playback_started = self.playback_started;
         }
+        // After the open check, so the poll that first reports playback has
+        // started has the subtitle too.
+        self.add_missed_subtitle();
         if !self.audio_logged_playing && state.position > 0.0 {
             self.audio_logged_playing = true;
             self.log_audio_state("playing");
@@ -600,6 +645,14 @@ fn subtitle_uri(path: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+/// The id of the subtitle track in use. mpv reads "no" when none is, which
+/// isn't a number.
+fn sub_in_use(mpv: &Mpv) -> Option<i64> {
+    mpv.get_property::<String>("sid")
+        .ok()
+        .and_then(|id| id.parse::<i64>().ok())
 }
 
 /// Whether mpv has a file open. `playback-abort` is true from a `loadfile`

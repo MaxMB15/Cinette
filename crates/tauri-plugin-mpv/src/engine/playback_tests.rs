@@ -5,8 +5,8 @@
 
 use super::{MediaInfo, MpvEngine, PlayerState};
 use crate::test_support::{
-    after_seconds, headless, wait_for, wait_for_position, wait_until, wav, y4m, MediaDir, Reply,
-    Server, POSITION_SLACK,
+    after_seconds, headless, wait_for, wait_for_position, wait_until, wav, y4m, Hook, MediaDir,
+    Reply, Server, POSITION_SLACK,
 };
 use libmpv2::Mpv;
 
@@ -51,6 +51,39 @@ fn reload(engine: &MpvEngine, path: &str) {
 /// The engine's player, for reading properties the state doesn't report.
 fn mpv(engine: &MpvEngine) -> &Mpv {
     engine.mpv.as_ref().expect("an mpv instance")
+}
+
+/// How many tracks the file that plays has, of every kind.
+fn track_count(engine: &MpvEngine) -> i64 {
+    mpv(engine).get_property::<i64>("track-list/count").unwrap()
+}
+
+/// The id of the selected subtitle track, or "no".
+fn selected_sub(engine: &MpvEngine) -> String {
+    mpv(engine).get_property::<String>("sid").unwrap()
+}
+
+/// The file of the selected subtitle track, or nothing when none is selected.
+fn selected_sub_file(engine: &MpvEngine) -> String {
+    mpv(engine)
+        .get_property::<String>("current-tracks/sub/external-filename")
+        .unwrap_or_default()
+}
+
+/// Whether mpv draws the subtitles.
+fn sub_visible(engine: &MpvEngine) -> bool {
+    mpv(engine).get_property::<bool>("sub-visibility").unwrap()
+}
+
+/// Loads `path` and waits until mpv stops it at `on_preloaded`. mpv has read
+/// `sub-files` by then, and has the file open only after the hook. Returns
+/// the hook and the id that lets the load go on.
+fn hold_after_the_list(engine: &mut MpvEngine, path: &str) -> (Hook, u64) {
+    let hook = Hook::new(mpv(engine), c"on_preloaded");
+    engine.loadfile(path, None).expect("loadfile");
+    engine.set_current_url(path);
+    let id = hook.wait();
+    (hook, id)
 }
 
 #[test]
@@ -455,6 +488,170 @@ fn adds_a_subtitle_when_the_file_starts() {
     assert_eq!(tracks(&third), 2);
     assert_eq!(selected(&third), "1");
     assert!(visible(&third));
+}
+
+#[test]
+fn adds_a_subtitle_mpv_opened_the_file_without() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes"), ("sub-visibility", "no")]);
+
+    // The pick comes after mpv read the list, so the file opens without it.
+    let (hook, id) = hold_after_the_list(&mut engine, &path);
+    engine.sub_add(&subtitles, true).unwrap();
+    hook.resume(id);
+
+    // The poll that first sees the file open adds the track and selects it.
+    wait_until("playback to start", || engine.get_state().playback_started);
+    assert_eq!(track_count(&engine), 2);
+    assert_eq!(selected_sub(&engine), "1");
+    assert!(selected_sub_file(&engine).ends_with("/en.srt"));
+    assert!(sub_visible(&engine));
+
+    // Later polls don't add it again.
+    engine.get_state();
+    assert_eq!(track_count(&engine), 2);
+}
+
+#[test]
+fn adds_a_subtitle_mpv_reloaded_the_stream_without() {
+    let media = MediaDir::new();
+    let one = media.file("one.wav", &wav(10));
+    let two = media.file("two.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+    start(&mut engine, &one, None);
+
+    // A reconnect loads the stream again on the same player, and the engine
+    // still reports that playback has started.
+    let hook = Hook::new(mpv(&engine), c"on_preloaded");
+    engine.loadfile(&two, None).unwrap();
+    let id = hook.wait();
+    engine.sub_add(&subtitles, true).unwrap();
+    hook.resume(id);
+    wait_until("the new file to play", || {
+        mpv(&engine)
+            .get_property::<String>("filename")
+            .is_ok_and(|n| n == "two.wav")
+            && mpv(&engine)
+                .get_property::<bool>("seeking")
+                .is_ok_and(|seeking| !seeking)
+    });
+
+    engine.get_state();
+    assert_eq!(track_count(&engine), 2);
+    assert_eq!(selected_sub(&engine), "1");
+}
+
+#[test]
+fn a_subtitle_mpv_missed_takes_the_place_of_the_one_in_use() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let first = media.file("first.srt", SRT.as_bytes());
+    let second = media.file("second.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+    engine.restore_subtitles(&first, true, 0.0).unwrap();
+
+    // mpv opens the file with the restored subtitles, and the overlay is to
+    // draw the ones picked while it opened it.
+    let (hook, id) = hold_after_the_list(&mut engine, &path);
+    engine.sub_add(&second, false).unwrap();
+    hook.resume(id);
+
+    wait_until("playback to start", || engine.get_state().playback_started);
+    assert_eq!(track_count(&engine), 2);
+    assert!(selected_sub_file(&engine).ends_with("/second.srt"));
+    assert!(!sub_visible(&engine));
+}
+
+#[test]
+fn leaves_a_subtitle_mpv_added_as_it_opened_the_file() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+
+    // At `on_load`, mpv has started to open the file but hasn't read the
+    // list yet. It adds the file from the list, and the polls don't add it
+    // a second time.
+    let hook = Hook::new(mpv(&engine), c"on_load");
+    engine.loadfile(&path, None).unwrap();
+    engine.set_current_url(&path);
+    let id = hook.wait();
+    engine.sub_add(&subtitles, true).unwrap();
+    // A poll before the file is open leaves the file to mpv.
+    engine.get_state();
+    hook.resume(id);
+
+    wait_until("playback to start", || engine.get_state().playback_started);
+    engine.get_state();
+    assert_eq!(track_count(&engine), 2);
+    assert_eq!(selected_sub(&engine), "1");
+}
+
+#[test]
+fn adds_no_missed_subtitle_once_it_was_removed() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+
+    // There's no track to remove yet, so mpv turns the removal down.
+    let (hook, id) = hold_after_the_list(&mut engine, &path);
+    engine.sub_add(&subtitles, true).unwrap();
+    assert!(engine.sub_remove(-1).is_err());
+    hook.resume(id);
+
+    wait_until("playback to start", || engine.get_state().playback_started);
+    engine.get_state();
+    assert_eq!(track_count(&engine), 1);
+    assert_eq!(selected_sub(&engine), "no");
+}
+
+#[test]
+fn adds_no_missed_subtitle_to_another_stream() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let other = media.file("other.wav", &wav(10));
+    let subtitles = media.file("en.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+
+    // `MpvState` plays another stream in a new player.
+    let (hook, _) = hold_after_the_list(&mut engine, &path);
+    engine.sub_add(&subtitles, true).unwrap();
+    if let Err(e) = engine.create(&headless(&[("pause", "yes")])) {
+        panic!("create mpv: {e}");
+    }
+    drop(hook);
+    start(&mut engine, &other, None);
+    engine.get_state();
+    assert_eq!(track_count(&engine), 1);
+    assert_eq!(selected_sub(&engine), "no");
+}
+
+#[test]
+fn a_pick_after_the_file_opens_replaces_the_missed_one() {
+    let media = MediaDir::new();
+    let path = media.file("tone.wav", &wav(10));
+    let first = media.file("first.srt", SRT.as_bytes());
+    let second = media.file("second.srt", SRT.as_bytes());
+    let mut engine = engine(&[("pause", "yes")]);
+
+    // The second pick comes once the file is open, before any poll.
+    let (hook, id) = hold_after_the_list(&mut engine, &path);
+    engine.sub_add(&first, true).unwrap();
+    hook.resume(id);
+    wait_until("the file to open", || {
+        mpv(&engine)
+            .get_property::<bool>("seeking")
+            .is_ok_and(|seeking| !seeking)
+    });
+    engine.sub_add(&second, true).unwrap();
+
+    engine.get_state();
+    assert_eq!(track_count(&engine), 2);
+    assert!(selected_sub_file(&engine).ends_with("/second.srt"));
 }
 
 #[test]
