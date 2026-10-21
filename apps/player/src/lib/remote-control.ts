@@ -28,6 +28,8 @@ export interface Link {
 	phase: LinkPhase;
 	/** The verification code, once the handshake is done. */
 	code: string | null;
+	/** What the other device offers besides control, once the handshake is done. */
+	features: string[];
 	destination: CinetteDestination;
 }
 
@@ -90,7 +92,15 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 		} else if (phase.phase === "verifying") {
 			// The name the device gave once its key was checked, and the code,
 			// which stays shown while that device asks.
-			set({ link: { ...link, name: phase.name, phase, code: phase.code } });
+			set({
+				link: {
+					...link,
+					name: phase.name,
+					phase,
+					code: phase.code,
+					features: phase.features ?? [],
+				},
+			});
 		} else {
 			set({ link: { ...link, phase } });
 		}
@@ -156,6 +166,7 @@ export const createRemoteControl = (backend: RemoteControlBackend): RemoteContro
 					name: device.name,
 					phase: { phase: "connecting" },
 					code: null,
+					features: [],
 					destination,
 				},
 				ended: null,

@@ -130,5 +130,7 @@
 	"remote_link": {},
 	"remote_leave": { "required": ["link"] },
 	"remote_command": { "required": ["command", "link"] },
-	"remote_catalog": { "required": ["catalogQuery", "link"] }
+	"remote_catalog": { "required": ["catalogQuery", "link"] },
+	"remote_send_providers": { "required": ["link", "providerIds"] },
+	"remote_cancel_transfer": { "required": ["link"] }
 }

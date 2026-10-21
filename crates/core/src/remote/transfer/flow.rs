@@ -237,7 +237,13 @@ impl Asked {
 }
 
 /// How far a transfer has got, for the UI on either side.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "state",
+    content = "data",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Progress {
     /// Chunks sent and acknowledged, out of all of them.
     Sending { done: u32, total: u32 },

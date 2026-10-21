@@ -170,6 +170,8 @@ register_commands![
     remote_commands::remote_leave,
     remote_commands::remote_command,
     remote_commands::remote_catalog,
+    remote_commands::remote_send_providers,
+    remote_commands::remote_cancel_transfer,
     commands::load_m3u_playlist,
     commands::load_m3u_file,
     commands::load_xtream_provider,

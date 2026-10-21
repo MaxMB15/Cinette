@@ -2663,6 +2663,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]

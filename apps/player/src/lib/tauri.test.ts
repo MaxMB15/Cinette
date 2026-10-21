@@ -769,6 +769,18 @@ describe("backend commands", () => {
 			"remote_catalog",
 			{ catalogQuery: { kind: "search", query: "news", limit: 20 }, link: 5 },
 		],
+		[
+			"remoteSendProviders",
+			() => tauri.remoteSendProviders(5, ["xt-1"]),
+			"remote_send_providers",
+			{ link: 5, providerIds: ["xt-1"] },
+		],
+		[
+			"remoteCancelTransfer",
+			() => tauri.remoteCancelTransfer(5),
+			"remote_cancel_transfer",
+			{ link: 5 },
+		],
 	];
 
 	const rows = cases.map(([name, call, command, args]) => ({ name, call, command, args }));

@@ -27,6 +27,7 @@ vi.mock("@/components/remote/RemoteControls", () => ({
 	DevicesButton: () => <button type="button">Devices</button>,
 	RemoteBar: () => <p>Remote bar</p>,
 	ControllersBar: () => <p>Controllers bar</p>,
+	ProvidersAddedNotice: () => <p>Providers added</p>,
 }));
 
 import { AppLayout } from "./AppLayout";
@@ -182,6 +183,7 @@ describe("AppLayout", () => {
 			expect(screen.getByRole("button", { name: "Devices" })).toBeInTheDocument();
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+			expect(screen.getByText("Providers added")).toBeInTheDocument();
 			expect(screen.getByText("page")).toBeInTheDocument();
 		});
 
@@ -191,6 +193,7 @@ describe("AppLayout", () => {
 			expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
 			expect(screen.queryByText("Remote bar")).toBeNull();
 			expect(screen.queryByText("Controllers bar")).toBeNull();
+			expect(screen.queryByText("Providers added")).toBeNull();
 		});
 	});
 });

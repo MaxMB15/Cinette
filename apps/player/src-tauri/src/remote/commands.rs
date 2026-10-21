@@ -550,6 +550,47 @@ pub async fn remote_catalog<R: Runtime>(
     }
 }
 
+/// Asks the device link `link` controls to take the providers with these
+/// ids. Only their names go now; how it goes comes as `remote://transfer`.
+#[command]
+pub async fn remote_send_providers<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+    provider_ids: Vec<String>,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use tauri::Manager;
+        let state = app.state::<crate::commands::AppState>();
+        imp::service(&app)?
+            .send_providers(&state.cache, link, provider_ids)
+            .await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, link, provider_ids);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Stops the transfer on link `link`. Nothing is written on either device.
+#[command]
+pub async fn remote_cancel_transfer<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        imp::service(&app)?.cancel_transfer(link);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (app, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
 #[cfg(test)]
 #[path = "commands_tests.rs"]
 mod tests;

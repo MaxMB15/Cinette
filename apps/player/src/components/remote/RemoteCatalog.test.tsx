@@ -27,6 +27,7 @@ const link = (): Link => ({
 	name: "Living Room",
 	phase: { phase: "connected" },
 	code: null,
+	features: [],
 	destination: createCinetteDestination("tv1", "Living Room", send),
 });
 

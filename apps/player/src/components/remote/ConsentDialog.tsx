@@ -7,6 +7,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { useConsentRequest, type ConsentRequest } from "@/hooks/useRemoteTarget";
 import { cn } from "@/lib/utils";
 import { deviceTypeName, formatCode, secondsLeft } from "@/lib/remote-devices";
+import { consentBody, consentTitle } from "@/lib/remote-transfer";
 
 /** How long Allow waits after a request shows, or the window gains focus,
  *  before it works, so a click or key meant for something else can't
@@ -19,8 +20,10 @@ const BUTTON = cn(
 
 /**
  * Asks whether another device may control this one, under "Only when
- * allowed". It shows the device's name and type and the code the other
- * screen shows, so the user can tell their own request from a neighbor's.
+ * allowed", or, from a device already in control, whether it may copy
+ * history or add providers, which always asks. It shows the device's name
+ * and type and the code the other screen shows, so the user can tell their
+ * own request from a neighbor's.
  * Closing it, Escape or a click outside denies. It goes away by itself when
  * the request runs out or is withdrawn.
  */
@@ -66,6 +69,7 @@ const ConsentPrompt = ({
 		[]
 	);
 	const armed = now >= armedAt;
+	const [before, after] = consentTitle(request.asked);
 	// A pointer press that began before this prompt was on screen was
 	// meant for what was there before.
 	const pressedHere = useRef(false);
@@ -90,12 +94,12 @@ const ConsentPrompt = ({
 				tabIndex={0}
 				className="text-base font-semibold mb-1 break-words focus-visible:outline-hidden"
 			>
-				Allow “<bdi className="font-bold">{request.name}</bdi>” to control this device?
+				{before}
+				<bdi className="font-bold">{request.name}</bdi>
+				{after}
 			</h2>
-			<p className="text-xs text-muted-foreground mb-4">
-				{deviceTypeName(request.deviceType)} on your network. It will be able to play, pause
-				and choose what plays here, and see what this device can play. Only allow it if the
-				code matches the one on that device.
+			<p className="text-xs text-muted-foreground mb-4 break-words">
+				{consentBody(deviceTypeName(request.deviceType), request.asked)}
 			</p>
 			<p className="text-3xl font-mono font-semibold tracking-widest text-center mb-1">
 				<span aria-hidden>{formatCode(request.code)}</span>

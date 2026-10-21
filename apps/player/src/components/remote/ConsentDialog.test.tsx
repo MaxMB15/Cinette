@@ -22,7 +22,7 @@ vi.mock("@/lib/tauri", () => ({
 import { remoteAnswerConsent, remotePendingConsent } from "@/lib/tauri";
 import { ARM_MS, ConsentDialog } from "./ConsentDialog";
 
-const ask = (request = 3, expiresInMs = 30_000) =>
+const ask = (request = 3, expiresInMs = 30_000, asked?: object) =>
 	act(() =>
 		handlers.get("remote://consent")!({
 			event: "remote://consent",
@@ -34,6 +34,7 @@ const ask = (request = 3, expiresInMs = 30_000) =>
 				deviceType: "iphone",
 				code: "042917",
 				expiresInMs,
+				asked,
 			},
 		})
 	);
@@ -95,6 +96,17 @@ describe("ConsentDialog", () => {
 			"aria-disabled",
 			"true"
 		);
+	});
+
+	it("asks about a transfer from a device in control, with the same code", async () => {
+		await shown();
+		ask(4, 30_000, { kind: "providers", providers: [{ name: "Home", kind: "xtream" }] });
+		const dialog = screen.getByRole("dialog", { name: "Add a provider from “Max's iPhone”?" });
+		expect(screen.getByText("Max's iPhone").tagName).toBe("BDI");
+		expect(dialog).toHaveTextContent(
+			"“Home”, with its login, will be saved on this device as its own."
+		);
+		expect(screen.getByText("042 917")).toBeInTheDocument();
 	});
 
 	it("allows once it has been on screen for a moment", async () => {

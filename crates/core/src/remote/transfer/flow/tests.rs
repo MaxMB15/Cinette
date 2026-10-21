@@ -1412,3 +1412,24 @@ fn controller_flows_name_their_transfer_and_deadline() {
     .is_some());
     assert!(out.send.is_empty());
 }
+
+#[test]
+fn progress_reads_as_a_state_with_its_data() {
+    let json = |p: Progress| serde_json::to_value(p).unwrap();
+    assert_eq!(
+        json(Progress::Sending { done: 1, total: 4 }),
+        serde_json::json!({ "state": "sending", "data": { "done": 1, "total": 4 } })
+    );
+    assert_eq!(
+        json(Progress::Saving),
+        serde_json::json!({ "state": "saving" })
+    );
+    assert_eq!(
+        json(Progress::Failed(ErrorCode::Expired)),
+        serde_json::json!({ "state": "failed", "data": "expired" })
+    );
+    assert_eq!(
+        json(Progress::ProvidersDone(vec![])),
+        serde_json::json!({ "state": "providersDone", "data": [] })
+    );
+}

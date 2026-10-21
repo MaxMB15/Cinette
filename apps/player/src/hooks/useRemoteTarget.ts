@@ -23,6 +23,7 @@ import {
 	remoteFinishCommand,
 	remoteSessions,
 	remoteSetState,
+	type RemoteAsked,
 	type RemoteSession,
 } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
@@ -32,7 +33,7 @@ import type { Channel } from "@/lib/types";
  * handler is read when an event comes, so it can change without
  * listening again.
  */
-const useTauriEvent = <T>(event: string, handler: (payload: T) => void): void => {
+export const useTauriEvent = <T>(event: string, handler: (payload: T) => void): void => {
 	const handlerRef = useLatestRef(handler);
 	useEffect(
 		() => {
@@ -157,6 +158,8 @@ export interface ConsentRequest {
 	code: string;
 	/** `performance.now()` when the request runs out. */
 	expiresAt: number;
+	/** A transfer the device asks for, or nothing for control. */
+	asked?: RemoteAsked;
 }
 
 type ConsentEvent = Omit<ConsentRequest, "expiresAt"> & { expiresInMs: number };

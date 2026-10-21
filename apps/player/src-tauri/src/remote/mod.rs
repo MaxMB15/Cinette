@@ -26,10 +26,12 @@ pub mod devices;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod identity;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod link;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod local;
 pub mod logos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod link;
+pub mod providers;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod service;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

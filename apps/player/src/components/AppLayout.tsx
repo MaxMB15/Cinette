@@ -9,7 +9,12 @@ import { useEffect } from "react";
 import { mpvSetVisible } from "@/lib/tauri";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { Tv, List, FolderOpen, Settings as SettingsIcon } from "lucide-react";
-import { ControllersBar, DevicesButton, RemoteBar } from "@/components/remote/RemoteControls";
+import {
+	ControllersBar,
+	DevicesButton,
+	ProvidersAddedNotice,
+	RemoteBar,
+} from "@/components/remote/RemoteControls";
 import { isMobilePlatform } from "@/lib/platform";
 
 const navItems = [
@@ -70,6 +75,7 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 				{/* Remote control runs on macOS and Linux for now. */}
 				{!isMobilePlatform() && <RemoteBar />}
 				{!isMobilePlatform() && <ControllersBar />}
+				{!isMobilePlatform() && <ProvidersAddedNotice />}
 				<div className="flex-1 min-h-0">
 					<Outlet />
 				</div>

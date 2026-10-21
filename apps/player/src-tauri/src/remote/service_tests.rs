@@ -32,7 +32,7 @@ struct Running {
     found: mpsc::UnboundedSender<discovery::Event>,
 }
 
-const EVENTS: [&str; 7] = [
+const EVENTS: [&str; 10] = [
     "remote://consent",
     "remote://consent-hidden",
     "remote://sessions",
@@ -40,6 +40,9 @@ const EVENTS: [&str; 7] = [
     "remote://devices",
     "remote://controller",
     "remote://state",
+    "remote://transfer",
+    "remote://transfer-target",
+    "remote://providers-added",
 ];
 
 impl Running {
@@ -942,6 +945,7 @@ async fn only_the_current_link_reaches_the_webview() {
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
         throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
     };
     let state = VersionedState {
         epoch: "e".into(),
@@ -1049,6 +1053,7 @@ async fn a_flood_of_states_reaches_the_webview_as_a_few_with_the_newest_last() {
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
         throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
     };
     let state = |version| VersionedState {
         epoch: "e".into(),
@@ -1080,6 +1085,7 @@ async fn a_held_state_from_a_link_that_went_is_dropped() {
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: slot.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
     };
     let state = |version| VersionedState {
         epoch: "e".into(),
@@ -1155,6 +1161,7 @@ async fn logos_another_device_sends_reach_the_webview_only_from_public_hosts() {
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
         throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
     };
     let with_logo = |logo: &str| VersionedState {
         epoch: "e".into(),
@@ -1231,4 +1238,220 @@ async fn a_catalog_page_keeps_only_logos_this_device_may_load() {
         .map(|i| i.get("logo").cloned().unwrap_or(Value::Null))
         .collect();
     assert_eq!(logos, [Value::Null, json!("https://logos.example/b.png")]);
+}
+
+/// The Mac controlling the TV, with an M3U provider the TV can load.
+async fn mac_controls_tv_with_a_provider() -> (Running, Running, String) {
+    let (url, _) = serve_routes(vec![route(
+        "list.m3u",
+        "200 OK",
+        "#EXTM3U\n#EXTINF:-1 tvg-id=\"news.uk\",News\nhttp://127.0.0.1:9/1.ts\n",
+    )]);
+    let list = format!("{url}/list.m3u?password={}", test_server::password());
+    let (mut mac, mut tv) = pair("always").await;
+    {
+        let state = mac.app.state();
+        let cache = state.cache.lock().unwrap();
+        cache
+            .upsert_provider(&Provider {
+                id: "m3u-home".into(),
+                name: "Home".into(),
+                provider_type: ProviderType::M3u,
+                url: list.clone(),
+                username: None,
+                password: None,
+                last_updated: None,
+                channel_count: 1,
+                epg_url: None,
+            })
+            .unwrap();
+    }
+    mac.event("remote://devices").await;
+    let tv_id = tv.device_id().to_string();
+    mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
+        .unwrap();
+    let verifying = phase(&mut mac, "verifying").await;
+    assert!(verifying["features"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("providers")));
+    phase(&mut mac, "connected").await;
+    let _ = &mut tv;
+    (mac, tv, list)
+}
+
+/// The next `remote://transfer` event on the Mac with this `step`.
+async fn transfer_step(mac: &mut Running, step: &str) -> Value {
+    loop {
+        let event = mac.event("remote://transfer").await;
+        if event["step"] == json!(step) {
+            return event;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_instance_sends_a_provider_to_another_after_its_own_allow() {
+    let (mut mac, mut tv, list) = mac_controls_tv_with_a_provider().await;
+    // Always allow let the Mac in without a dialog; providers still ask.
+    let send = {
+        let handle = mac.app.handle();
+        tokio::task::spawn_blocking(move || {
+            crate::test_support::invoke_on(
+                &handle,
+                "remote_send_providers",
+                json!({ "link": 1, "providerIds": ["m3u-home"] }),
+            )
+        })
+    };
+    let consent = tv.event("remote://consent").await;
+    assert_eq!(
+        consent["asked"],
+        json!({ "kind": "providers", "providers": [{ "name": "Home", "kind": "m3u" }] })
+    );
+    send.await.unwrap().unwrap();
+    let pending = transfer_step(&mut mac, "pending").await;
+    assert_eq!(pending["expiresInMs"], json!(30_000));
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+
+    let added = tv.event("remote://providers-added").await;
+    assert_eq!(added["names"], json!(["Home"]));
+    loop {
+        let done = transfer_step(&mut mac, "progress").await;
+        if done["progress"]["state"] == json!("providersDone") {
+            assert_eq!(
+                done["progress"]["data"],
+                json!([{ "name": "Home", "outcome": "added" }])
+            );
+            break;
+        }
+    }
+    let providers = tv
+        .app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_providers()
+        .unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].name, "Home");
+    assert_eq!(providers[0].url, list);
+    assert_ne!(
+        providers[0].id, "m3u-home",
+        "the copy gets an id of its own"
+    );
+    let channels = tv
+        .app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_channels(&providers[0].id)
+        .unwrap();
+    assert_eq!(channels.len(), 1);
+    loop {
+        let event = tv.event("remote://transfer-target").await;
+        if event["progress"]["state"] == json!("providersDone") {
+            assert_eq!(event["kind"], json!("providers"));
+            break;
+        }
+    }
+
+    // Sending it again finds it there.
+    let handle = mac.app.handle();
+    tokio::task::spawn_blocking(move || {
+        crate::test_support::invoke_on(
+            &handle,
+            "remote_send_providers",
+            json!({ "link": 1, "providerIds": ["m3u-home"] }),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": true }),
+    )
+    .unwrap();
+    loop {
+        let done = transfer_step(&mut mac, "progress").await;
+        if done["progress"]["state"] == json!("providersDone") {
+            assert_eq!(done["progress"]["data"][0]["outcome"], json!("exists"));
+            break;
+        }
+    }
+    assert_eq!(
+        tv.app
+            .state()
+            .cache
+            .lock()
+            .unwrap()
+            .get_providers()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_provider_request_sends_no_login() {
+    let (mut mac, mut tv, _) = mac_controls_tv_with_a_provider().await;
+    let handle = mac.app.handle();
+    tokio::task::spawn_blocking(move || {
+        crate::test_support::invoke_on(
+            &handle,
+            "remote_send_providers",
+            json!({ "link": 1, "providerIds": ["m3u-home"] }),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let consent = tv.event("remote://consent").await;
+    tv.invoke(
+        "remote_answer_consent",
+        json!({ "request": consent["request"], "allow": false }),
+    )
+    .unwrap();
+    let refused = transfer_step(&mut mac, "refused").await;
+    assert_eq!(refused["code"], json!("denied"));
+    assert!(tv
+        .app
+        .state()
+        .cache
+        .lock()
+        .unwrap()
+        .get_providers()
+        .unwrap()
+        .is_empty());
+    // Control goes on.
+    assert_eq!(mac.invoke("remote_link", json!({})).unwrap(), json!(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sending_providers_needs_a_link_and_a_provider() {
+    let (mac, _tv, _) = mac_controls_tv_with_a_provider().await;
+    assert_eq!(
+        mac.invoke(
+            "remote_send_providers",
+            json!({ "link": 9, "providerIds": ["m3u-home"] })
+        ),
+        Err(json!("Not connected to that device."))
+    );
+    assert_eq!(
+        mac.invoke(
+            "remote_send_providers",
+            json!({ "link": 1, "providerIds": [] })
+        ),
+        Err(json!("Pick a provider to send."))
+    );
+    mac.invoke("remote_cancel_transfer", json!({ "link": 1 }))
+        .unwrap();
 }

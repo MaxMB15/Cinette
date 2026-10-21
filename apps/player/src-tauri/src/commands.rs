@@ -41,6 +41,16 @@ pub async fn load_m3u_playlist(
     name: String,
     url: String,
 ) -> Result<Vec<Channel>, String> {
+    add_m3u_url(&state.cache, name, url).await
+}
+
+/// Loads an M3U playlist from `url` and saves it as a new provider with its
+/// channels. Nothing is saved when the list doesn't load.
+pub(crate) async fn add_m3u_url(
+    cache: &Mutex<CacheStore>,
+    name: String,
+    url: String,
+) -> Result<Vec<Channel>, String> {
     tracing::info!(
         "[IPTV] loading M3U playlist name={:?} from {}",
         name,
@@ -71,7 +81,7 @@ pub async fn load_m3u_playlist(
         epg_url,
     };
 
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    let cache = cache.lock().map_err(|e| e.to_string())?;
     cache.upsert_provider(&provider).map_err(|e| {
         tracing::error!("[IPTV] failed to save provider: {e}");
         e.to_string()
@@ -141,6 +151,18 @@ pub async fn load_xtream_provider(
     username: String,
     password: String,
 ) -> Result<Vec<Channel>, String> {
+    add_xtream(&state.cache, name, url, username, password).await
+}
+
+/// Loads an Xtream account's lists and saves it as a new provider with its
+/// channels. Nothing is saved when they don't load.
+pub(crate) async fn add_xtream(
+    cache: &Mutex<CacheStore>,
+    name: String,
+    url: String,
+    username: String,
+    password: String,
+) -> Result<Vec<Channel>, String> {
     tracing::info!(
         "[IPTV] loading Xtream provider name={:?} from {}",
         name,
@@ -171,7 +193,7 @@ pub async fn load_xtream_provider(
         epg_url,
     };
 
-    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    let cache = cache.lock().map_err(|e| e.to_string())?;
     cache.upsert_provider(&provider).map_err(|e| e.to_string())?;
     cache.save_channels(&provider_id, &channels).map_err(|e| e.to_string())?;
     tracing::info!("[IPTV] saved Xtream provider={} with {} channels", provider_id, channels.len());

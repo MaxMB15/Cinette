@@ -20,12 +20,14 @@ use crate::discovery::{Registration, Txt};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::consent::{Answer, RequestId};
 use mvp_core::remote::identity::DeviceKey;
-use mvp_core::remote::message::{Command, DeviceType, ErrorCode, PlaybackSnapshot};
+use mvp_core::remote::message::{Command, DeviceType, ErrorCode, PlaybackSnapshot, RequestKind};
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{
     Action, ConsentPrompt, DiscoveryRecord, SessionInfo, Target, SERVICE_TYPE,
 };
+use mvp_core::remote::transfer::flow::{Progress, ProviderResult, ProviderSettings};
 use mvp_core::remote::ConnId;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -77,6 +79,32 @@ pub trait TargetHost: Send + Sync + 'static {
     fn catalog(&self, query: CatalogQuery) -> CatalogPage;
     /// Advertise this, in place of anything advertised before, or stop.
     fn advertise(&self, registration: Option<Registration>);
+    /// Save providers the device named `from` sent, as this device's own,
+    /// then call `done` with what became of each. It mustn't block: the
+    /// host does the work on a task of its own. A host that can't save
+    /// providers answers that none were.
+    fn save_providers(&self, from: String, providers: Vec<ProviderSettings>, done: SavedProviders) {
+        drop(providers);
+        let _ = from;
+        done(Vec::new());
+    }
+    /// A transfer with a controller moved along.
+    fn transfer(&self, _event: &TransferEvent) {}
+}
+
+/// Hands the results of [`TargetHost::save_providers`] back to the target.
+pub type SavedProviders = Box<dyn FnOnce(Vec<ProviderResult>) + Send>;
+
+/// How a transfer with a controller is going, as `remote://transfer-target`
+/// carries it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferEvent {
+    pub device_id: String,
+    pub name: String,
+    pub transfer: String,
+    pub kind: RequestKind,
+    pub progress: Progress,
 }
 
 enum Input {
@@ -88,6 +116,7 @@ enum Input {
     State(Box<PlaybackSnapshot>),
     Finished(u64, Result<(), ErrorCode>),
     CatalogDone(Epoch, ConnId, u64, CatalogPage),
+    ProvidersSaved(Epoch, ConnId, String, Vec<ProviderResult>),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
     Shutdown(oneshot::Sender<()>),
 }
@@ -182,6 +211,13 @@ fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
     Ok(socket.into())
 }
 
+/// A target that offers what this device carries out: receiving providers.
+fn new_target(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Target {
+    let mut target = Target::new(key, device_type, settings);
+    target.offer(false, true);
+    target
+}
+
 /// The port remote control uses when it's free, so a firewall rule can name it.
 pub const DEFAULT_PORT: u16 = 47130;
 
@@ -218,7 +254,7 @@ pub(crate) fn start_with(
     });
     let (reads, read_rx) = mpsc::unbounded_channel();
     let task = Task {
-        target: Target::new(key.clone(), device_type, settings),
+        target: new_target(key.clone(), device_type, settings),
         key,
         device_type,
         host,
@@ -424,7 +460,7 @@ impl Task {
                 self.carry_out(goodbye);
                 let settings = self.target.settings().clone();
                 self.key = key;
-                self.target = Target::new(self.key.clone(), self.device_type, settings);
+                self.target = new_target(self.key.clone(), self.device_type, settings);
                 self.epoch += 1;
                 self.pending.clear();
                 vec![
@@ -441,6 +477,13 @@ impl Task {
                 self.catalog_jobs.remove(&(epoch, conn));
                 if epoch == self.epoch {
                     self.target.finish_catalog(conn, request, page)
+                } else {
+                    Vec::new()
+                }
+            }
+            Input::ProvidersSaved(epoch, conn, grant, results) => {
+                if epoch == self.epoch {
+                    self.target.providers_saved(conn, &grant, results)
                 } else {
                     Vec::new()
                 }
@@ -541,12 +584,39 @@ impl Task {
                         let _ = inbox.send(Input::CatalogDone(epoch, conn, request, page));
                     });
                 }
-                // This device doesn't offer transfers yet, so the core
-                // refuses them before any of these.
-                Action::ExportHistory { .. }
-                | Action::ImportHistory { .. }
-                | Action::SaveProviders { .. }
-                | Action::TransferProgress { .. } => {}
+                Action::SaveProviders {
+                    conn,
+                    grant,
+                    from,
+                    providers,
+                } => {
+                    let inbox = self.inbox.clone();
+                    let epoch = self.epoch;
+                    self.host.save_providers(
+                        from,
+                        providers,
+                        Box::new(move |results| {
+                            let _ = inbox.send(Input::ProvidersSaved(epoch, conn, grant, results));
+                        }),
+                    );
+                }
+                Action::TransferProgress {
+                    device_id,
+                    name,
+                    transfer,
+                    kind,
+                    progress,
+                    ..
+                } => self.host.transfer(&TransferEvent {
+                    device_id: device_id.to_string(),
+                    name,
+                    transfer,
+                    kind,
+                    progress,
+                }),
+                // This device doesn't offer history transfers yet, so the
+                // core refuses them before any of these.
+                Action::ExportHistory { .. } | Action::ImportHistory { .. } => {}
                 Action::Advertise(record) => self.advertise(record),
             }
         }

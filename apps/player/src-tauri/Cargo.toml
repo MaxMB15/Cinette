@@ -30,6 +30,9 @@ tempfile = "3"
 libc = "0.2"
 # Reads the logo addresses other Cinette devices send. The same version as mvp-core's.
 url = "2"
+# Clears the logins of providers sent between devices from memory. The same
+# version as mvp-core's.
+zeroize = "1"
 
 [dev-dependencies]
 # The mock runtime, so tests can build an app and call commands without a window.
