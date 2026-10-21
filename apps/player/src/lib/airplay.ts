@@ -56,6 +56,10 @@ export interface AirPlayNativeState {
 		code: PlaybackError["code"];
 		/** The receiver couldn't play the stream as it is. */
 		unsupported?: boolean;
+		/** No receiver took the video: on a Mac, the picker closed without
+		 *  one, or with this Mac. The player plays here again, as if AirPlay
+		 *  never started, so it shows as opening, with no error. */
+		notPicked?: boolean;
 	} | null;
 }
 
@@ -82,14 +86,24 @@ export const IDLE_NATIVE_STATE: AirPlayNativeState = {
  */
 export const AIRPLAY_RECEIVER = airplayTvProfile;
 
-/** This device, for AirPlay. A conversion keeps going with the screen
- *  locked, through the audio background mode. */
+/** This device, for AirPlay. On an iPhone or iPad, a conversion keeps
+ *  going with the screen locked, through the audio background mode. A Mac
+ *  converts with the bundled ffmpeg and stays awake while it does, so its
+ *  `desktopSender` is this same profile. */
 export const airplaySender = (support: ConverterSupport): SenderProfile =>
 	iosSender(support, { needsScreen: false });
 
 /** What the confirm step says before a conversion starts. */
 export const CONVERT_WARNING =
 	"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock.";
+
+/** The same, on a Mac. */
+export const MAC_CONVERT_WARNING =
+	"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network.";
+
+/** The confirm step's warning for this device. */
+export const airplayConvertWarning = (mac: boolean) =>
+	mac ? MAC_CONVERT_WARNING : CONVERT_WARNING;
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));
@@ -155,13 +169,14 @@ export const airplayBlockedMessage = ({ reason, detail }: Blocked): string => {
 	}
 };
 
-/** The backend's state in the destination's terms. */
+/** The backend's state in the destination's terms. A pick that found no
+ *  receiver is still opening, since the player takes the item back. */
 export const airplayPlaybackState = (
 	native: AirPlayNativeState,
 	item: PlaybackState["item"],
 	positionAt: number
 ): PlaybackState => ({
-	status: native.status,
+	status: native.error?.notPicked ? "opening" : native.status,
 	item,
 	position: native.position,
 	positionAt,
@@ -173,9 +188,10 @@ export const airplayPlaybackState = (
 	audio: tracks(native.audio),
 	audioId: native.audioId,
 	connection: native.connection,
-	error: native.error
-		? { code: native.error.code, message: airplayErrorMessage(native.error) }
-		: null,
+	error:
+		native.error && !native.error.notPicked
+			? { code: native.error.code, message: airplayErrorMessage(native.error) }
+			: null,
 });
 
 /** What AirPlay can do for the item it plays. A converted live stream
@@ -237,7 +253,8 @@ export type AirPlayKey =
 	| { kind: "ignore" };
 
 /** What `action` does while AirPlay plays `state`. Nothing starts here, so
- *  the provider never sees a second connection. */
+ *  the provider never sees a second connection, and nothing plays while
+ *  the TV is lost. */
 export const airplayKey = (
 	action: PlayerAction,
 	state: PlaybackState,
@@ -250,6 +267,7 @@ export const airplayKey = (
 			: { kind: "ignore" };
 	switch (action.type) {
 		case "togglePlay":
+			if (state.connection === "lost") return { kind: "ignore" };
 			if (state.status !== "playing" && state.status !== "buffering") return { kind: "play" };
 			return capabilities.pause ? { kind: "pause" } : { kind: "ignore" };
 		case "seekBy":
@@ -312,6 +330,9 @@ const formatsWhenReady = async (bridge: AirPlayBridge, channel: Channel) => {
 
 export interface AirPlayDestination extends PlaybackDestination {
 	readonly kind: "airplay";
+	/** No receiver took the video, on a Mac, so the player plays it here
+	 *  again. */
+	readonly notPicked: boolean;
 	/** Stops listening. The destination can't be used after. */
 	dispose(): void;
 }
@@ -339,15 +360,19 @@ export const createAirPlayDestination = (
 		for (const listener of listeners) listener(state);
 	};
 
+	/** The end of a conversion the TV's state ended, so whatever plays next
+	 *  waits for it to hang up on the provider. */
+	let ending: Promise<void> = Promise.resolve();
 	let unlisten: (() => void) | null = null;
 	let disposed = false;
 	void bridge
 		.listen((next) => {
 			native = next;
-			// The TV is gone, so nothing will fetch what this device converts.
-			if (converted && next.connection === "lost") {
+			// The TV is gone, it took nothing, or the item failed, so nothing
+			// will fetch what this device converts.
+			if (converted && (next.connection === "lost" || next.error)) {
 				converted = null;
-				void bridge.endConversion().catch(() => {});
+				ending = bridge.endConversion().catch(() => {});
 			}
 			publish();
 		})
@@ -398,6 +423,9 @@ export const createAirPlayDestination = (
 		get capabilities() {
 			return airplayCapabilities(native, live, converted !== null);
 		},
+		get notPicked() {
+			return native.error?.notPicked === true;
+		},
 		route: async (target: PlaybackItem): Promise<RouteDecision> => {
 			if (target.kind !== "local") return { ok: false, reason: "notFound" };
 			const found = await formatsWhenReady(bridge, target.channel);
@@ -423,11 +451,18 @@ export const createAirPlayDestination = (
 			// after it's set, and subscribers read both together.
 			publish();
 			const from = live ? undefined : startAt;
+			await ending;
 			if (converted) await bridge.loadConverted(channel, generation, source, from);
 			else await bridge.load(channel, generation, source, from);
 		},
-		play: () => bridge.play(),
-		pause: () => bridge.pause(),
+		// Nothing plays or pauses while the TV is lost: a Mac would play it
+		// itself.
+		play: async () => {
+			if (native.connection !== "lost") await bridge.play();
+		},
+		pause: async () => {
+			if (native.connection !== "lost") await bridge.pause();
+		},
 		// A converted movie only has the segments around where it plays, so
 		// a seek converts again from there.
 		seek: (seconds) =>
@@ -440,6 +475,7 @@ export const createAirPlayDestination = (
 			const wasConverted = converted !== null;
 			converted = null;
 			if (wasConverted) await bridge.endConversion();
+			else await ending;
 			await bridge.stop();
 			native = IDLE_NATIVE_STATE;
 			item = null;

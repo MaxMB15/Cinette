@@ -125,6 +125,46 @@ fn keeps_the_newest_segment_whatever_its_size() {
 }
 
 #[test]
+fn a_segment_longer_than_the_target_is_listed_as_the_target() {
+    let mut playlist = MediaPlaylist::new(by_count(4), 10);
+    playlist.push(12.0, 1);
+    playlist.push_after(10.0, 1, true);
+    let text = playlist.text();
+    assert_eq!(text.matches("#EXTINF:10.000,").count(), 2, "{text}");
+}
+
+#[test]
+fn marks_a_discontinuity_and_counts_those_that_left() {
+    let mut playlist = MediaPlaylist::new(by_count(2), 4);
+    playlist.push(2.0, 1);
+    assert_eq!(playlist.push_after(2.0, 1, true), (1, vec![]));
+    let text = playlist.text();
+    assert!(
+        text.contains("seg0.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2.000,\nseg1.ts\n"),
+        "{text}"
+    );
+    assert!(!text.contains("DISCONTINUITY-SEQUENCE"), "{text}");
+    // seg0 leaving takes no discontinuity with it.
+    playlist.push(2.0, 1);
+    assert!(!playlist.text().contains("DISCONTINUITY-SEQUENCE"));
+    // seg1 leaving does.
+    playlist.push_after(2.0, 1, true);
+    let text = playlist.text();
+    assert!(text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:1\n"), "{text}");
+    assert_eq!(text.matches("#EXT-X-DISCONTINUITY\n").count(), 1, "{text}");
+    playlist.push(2.0, 1);
+    playlist.push(2.0, 1);
+    let text = playlist.text();
+    assert!(text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:2\n"), "{text}");
+    assert!(!text.contains("#EXT-X-DISCONTINUITY\n"), "{text}");
+    // It comes right after the media sequence.
+    assert!(
+        text.contains("#EXT-X-MEDIA-SEQUENCE:4\n#EXT-X-DISCONTINUITY-SEQUENCE:2\n#EXTINF"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_broken_duration_counts_as_zero() {
     let mut playlist = MediaPlaylist::new(by_count(4), 1);
     playlist.push(f64::NAN, 1);
@@ -283,4 +323,27 @@ fn the_pacer_waits_for_a_resume_at_exactly_the_lead() {
     assert_eq!(pacer.wait(0.0), None);
     pacer.resume(0.0);
     assert_eq!(pacer.wait(0.0), Some(0.0));
+}
+
+#[test]
+fn the_master_declares_a_fifth_more_than_the_first_segment_took() {
+    // 1 MB in 2 s is 4 Mb/s, so 4.8 Mb/s.
+    assert_eq!(bandwidth(1_000_000, 2.0), 4_800_000);
+    assert_eq!(bandwidth(1_000_000, 4.0), 2_400_000);
+    // A tiny segment still declares the minimum.
+    assert_eq!(bandwidth(1000, 2.0), MIN_BANDWIDTH);
+    assert_eq!(MIN_BANDWIDTH, 500_000);
+    // A segment with no length counts as a tenth of a second.
+    assert_eq!(bandwidth(100_000, 0.0), 9_600_000);
+}
+
+#[test]
+fn keeps_the_output_settings_it_says() {
+    // 200 MB in the window.
+    assert_eq!(WINDOW.bytes, 209_715_200);
+    assert_eq!(WINDOW.segments, 15);
+    assert_eq!(WINDOW.seconds, 50.0);
+    assert_eq!(SEGMENT, 2.0);
+    assert_eq!(TARGET, 10);
+    assert_eq!(AVC_FALLBACK, "avc1.640028");
 }
