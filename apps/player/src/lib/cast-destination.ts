@@ -193,7 +193,8 @@ export interface CastBackend {
 		receiverId: string,
 		channel: Channel,
 		route: CastRoute,
-		startAt?: number
+		startAt: number | undefined,
+		restart: boolean
 	) => Promise<void>;
 	castControl: (receiverId: string, action: CastAction) => Promise<void>;
 	castStop: (receiverId: string) => Promise<void>;
@@ -284,8 +285,8 @@ export const PAUSE_LIMIT_MS = 10_000;
  */
 export const RESTART_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000];
 
-/** How long after a try to start the stream again the next stop counts as
- *  a first one again. */
+/** How long a stream that started again has to play before its next stop
+ *  counts as a first one again. */
 export const STEADY_MS = 60_000;
 
 /** What `castLoad` rejects with when the provider refused the login, which
@@ -371,10 +372,10 @@ export const createCastDestination = (
 	/** The newest load's token. A stop or a release puts in another, so
 	 *  only the newest load's answer shows. */
 	let newest: object = {};
-	/** The tries to start the stream again since it last ran steadily, and
-	 *  when the last one was asked for. */
+	/** The tries to start the stream again since it last ran steadily. */
 	let tries = 0;
-	let triedAt = 0;
+	/** When the stream was first seen playing since it last started. */
+	let playingSince: number | null = null;
 	/** Cancels the try waiting to start the stream again, if one is. */
 	let cancelRestart = () => {};
 	/** Forgets the tries, for a load, a stop or a release the user asked
@@ -410,7 +411,8 @@ export const createCastDestination = (
 			media: null,
 		});
 		loaded = { channel, route, formats };
-		await backend.castLoad(receiver.id, channel, route, startAt).catch((e: unknown) => {
+		playingSince = null;
+		await backend.castLoad(receiver.id, channel, route, startAt, quiet).catch((e: unknown) => {
 			// The backend stopped what played before it asked for this, so
 			// nothing plays now. A newer load or a stop says for itself.
 			if (sent === newest && !quiet)
@@ -436,9 +438,9 @@ export const createCastDestination = (
 	 */
 	const restart = () => {
 		cancelRestart();
-		if (loaded === null) return;
-		if (now() - triedAt >= STEADY_MS) tries = 0;
-		triedAt = now();
+		// A cast that ended stays ended, whatever it played.
+		if (loaded === null || snapshot.phase === "closed") return;
+		if (playingSince !== null && now() - playingSince >= STEADY_MS) tries = 0;
 		if (tries >= RESTART_DELAYS_MS.length) return giveUp("loadFailed");
 		const delay = RESTART_DELAYS_MS[tries];
 		tries += 1;
@@ -534,6 +536,10 @@ export const createCastDestination = (
 		receive: (update) => {
 			publish(applyUpdate(snapshot, update, now()));
 			if (update.kind === "conversionStopped") restart();
+			// A cast that ended takes the tries to start it again with it.
+			if (update.kind === "closed") resetRestarts();
+			if (update.kind === "media" && update.media?.player === "playing")
+				playingSince ??= now();
 		},
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,

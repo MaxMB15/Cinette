@@ -100,7 +100,7 @@ fn load(
     }
     app.invoke(
         "cast_load",
-        json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at }),
+        json!({ "receiverId": receiver, "channel": channel, "route": route, "startAt": start_at, "restart": false }),
     )
 }
 
@@ -455,23 +455,50 @@ async fn cast_converted(
         .to_string()
 }
 
+/// This computer's loopback address, which the address tests take away.
+const LOOPBACK: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+/// Has casts on `app` check this computer's addresses every 50 ms with
+/// `route` and `ours`.
+fn check_addresses(
+    app: &TestApp,
+    route: fn(std::net::IpAddr) -> Result<std::net::IpAddr, crate::lan_server::NoRoute>,
+    ours: fn(std::net::IpAddr) -> bool,
+) {
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .check_addresses_with(route, ours, Duration::from_millis(50));
+}
+
+/// Loads `channel` again as the frontend does when it starts the stream
+/// again by itself.
+fn restart(app: &TestApp, channel: &Channel, route: Value) -> Result<Value, Value> {
+    let generation = app
+        .handle()
+        .state::<crate::streams::StreamsState>()
+        .remember(&channel.id, vec![channel.url.clone()]);
+    let mut route = route;
+    route["generation"] = json!(generation);
+    app.invoke(
+        "cast_load",
+        json!({ "receiverId": "cast:tv", "channel": channel, "route": route,
+                "startAt": null, "restart": true }),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn asks_for_the_stream_again_once_the_receiver_cant_reach_this_computer() {
+async fn starts_the_stream_again_on_the_new_address_after_a_move() {
     let app = TestApp::new();
-    if !crate::convert::support::support(&app.handle())
-        .await
-        .convert
-    {
+    if !converts(&app).await {
         return;
     }
     // After a sleep on another network, the route to the receiver goes from
-    // another address.
-    app.handle()
-        .state::<super::playback::CastPlayback>()
-        .check_addresses_with(
-            |_| Ok("192.0.2.7".parse().unwrap()),
-            std::time::Duration::from_millis(50),
-        );
+    // another address, and the old one is gone.
+    check_addresses(
+        &app,
+        |_| Ok("192.0.2.7".parse().unwrap()),
+        |ip| ip != LOOPBACK,
+    );
     let events = updates(&app);
     let (addr, _, mut got) = fake_receiver::start().await;
     let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
@@ -480,6 +507,107 @@ async fn asks_for_the_stream_again_once_the_receiver_cant_reach_this_computer() 
     let moved = next_update(&events, "conversionStopped");
     assert_eq!(moved["receiverId"], "cast:tv");
     assert_eq!(moved["update"]["why"], "moved");
+    // The session went from the old address too, so starting again opens a
+    // new one, quietly: the receiver keeps its app, and the frontend sees
+    // no end.
+    restart(&app, &movie, converted()).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.connection, 1);
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event["update"]["kind"], "closed");
+    }
+    let mut stops = 0;
+    while let Ok(message) = got.try_recv() {
+        stops += usize::from(message.kind() == "STOP");
+    }
+    assert_eq!(stops, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keeps_the_session_while_its_address_is_still_this_computers() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let first = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    let second = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &first);
+    add_channel(&app, &second);
+    // A new address alongside the old one, as when a cable is plugged in.
+    check_addresses(&app, |_| Ok("192.0.2.7".parse().unwrap()), |_| true);
+    load(&app, "cast:tv", &first, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    load(&app, "cast:tv", &second, direct("mp4"), None).unwrap();
+    assert_eq!(next_of(&mut got, "LOAD").await.connection, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_an_address_gone_for_two_checks_starts_the_stream_again() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    let movie = channel("m-1", &format!("{source}/movie/1.wav"), "movie");
+    let quiet = |app: &TestApp| {
+        let events = updates(app);
+        async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            while let Ok(event) = events.try_recv() {
+                assert_ne!(event["update"]["kind"], "conversionStopped");
+            }
+        }
+    };
+    // No route at all, for a moment without a network.
+    check_addresses(
+        &app,
+        |_| Err(crate::lan_server::NoRoute),
+        |ip| ip != LOOPBACK,
+    );
+    let checked = quiet(&app);
+    cast_converted(&app, addr, &mut got, &movie).await;
+    checked.await;
+    // A new address alongside the old one.
+    check_addresses(&app, |_| Ok("192.0.2.7".parse().unwrap()), |_| true);
+    let checked = quiet(&app);
+    load(&app, "cast:tv", &movie, converted(), Some(1.0)).unwrap();
+    checked.await;
+    // A route that changes and changes back, one check at a time.
+    static FLIP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    check_addresses(
+        &app,
+        |_| {
+            if FLIP.fetch_xor(true, Ordering::SeqCst) {
+                Ok(LOOPBACK)
+            } else {
+                Ok("192.0.2.7".parse().unwrap())
+            }
+        },
+        |ip| ip != LOOPBACK,
+    );
+    let checked = quiet(&app);
+    load(&app, "cast:tv", &movie, converted(), Some(2.0)).unwrap();
+    checked.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn starting_again_never_opens_a_cast() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(&app, &movie);
+    // A cast that ended, or never was.
+    assert_eq!(
+        restart(&app, &movie, direct("mp4")),
+        Err(json!("notConnected"))
+    );
+    assert!(!gets(&mut got, "CONNECT", Duration::from_millis(500)).await);
+    // One that goes on takes it.
+    load(&app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    restart(&app, &movie, direct("mp4")).unwrap();
+    next_of(&mut got, "LOAD").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -653,8 +781,7 @@ fn load_in_background(
     let streams = handle.state::<crate::streams::StreamsState>();
     let generation = streams.remember(&channel.id, vec![channel.url.clone()]);
     route["generation"] = json!(generation);
-    let args =
-        json!({ "receiverId": "cast:tv", "channel": channel, "route": route, "startAt": start_at });
+    let args = json!({ "receiverId": "cast:tv", "channel": channel, "route": route, "startAt": start_at, "restart": false });
     let handle = handle.clone();
     std::thread::spawn(move || crate::test_support::invoke_on(&handle, "cast_load", args))
 }
@@ -690,7 +817,8 @@ async fn gets(
 }
 
 /// A source on loopback that serves `body` to each connection, holding
-/// back all but its first 44 bytes for `hold`. It counts the connections,
+/// back all but its first 44 bytes for `hold`, or until the reader hangs
+/// up. It counts the connections,
 /// and with `one_at_a_time` it refuses one with 403 Forbidden while another
 /// is open, as accounts that allow one connection do.
 fn counting_source(
@@ -732,8 +860,13 @@ fn refusing_source(
                 let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
                 let sent = stream.write_all(head.as_bytes()).is_ok()
                     && stream.write_all(&body.as_bytes()[..44]).is_ok();
-                if sent {
-                    std::thread::sleep(hold);
+                // A read that ends at once is the reader hanging up.
+                let hung_up = sent
+                    && !hold.is_zero()
+                    && stream.set_read_timeout(Some(hold)).is_ok()
+                    && matches!(stream.read(&mut request), Ok(0));
+                if sent && !hung_up {
+                    let _ = stream.set_read_timeout(None);
                     let _ = stream.write_all(&body.as_bytes()[44..]);
                     // Stay open until the reader hangs up.
                     let _ = stream.read(&mut request);
@@ -963,7 +1096,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
                             "container": "mkv", "video": video, "audio": audio });
         app.invoke(
             "cast_load",
-            json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": start }),
+            json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": start, "restart": false }),
         )
         .unwrap();
     };
@@ -995,7 +1128,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
                         "container": "mkv", "video": "none", "audio": "copy" });
     app.invoke(
         "cast_load",
-        json!({ "receiverId": "cast:tv", "channel": other, "route": route, "startAt": null }),
+        json!({ "receiverId": "cast:tv", "channel": other, "route": route, "startAt": null, "restart": false }),
     )
     .unwrap();
     next_of(&mut got, "LOAD").await;
@@ -1006,7 +1139,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
                         "container": "mkv", "video": "none", "audio": "copy" });
     app.invoke(
         "cast_load",
-        json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": null }),
+        json!({ "receiverId": "cast:tv", "channel": movie, "route": route, "startAt": null, "restart": false }),
     )
     .unwrap();
     next_of(&mut got, "LOAD").await;
@@ -1210,4 +1343,41 @@ async fn a_live_channel_that_dropped_starts_again_without_a_probe() {
     load(&app, "cast:tv", &live, converted(), None).unwrap();
     next_of(&mut got, "LOAD").await;
     assert_eq!(connections.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_load_waits_until_the_one_it_overtook_lets_go_of_the_provider() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    // An account that allows one connection, and a source that holds back
+    // its sound, so the converter waits on it.
+    let (source, connections) = counting_source(wav16(), Duration::from_secs(4), true);
+    let movie = channel("m-1", &source, "movie");
+    add_channel(&app, &movie);
+    let first = load_in_background(&app, &movie, converted(), None);
+    // The probe, then the converter, which waits.
+    wait_until("the converter's connection", || {
+        connections.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    // A seek, say, meanwhile.
+    let second = load_in_background(&app, &movie, converted(), Some(2.0));
+    let asked = std::time::Instant::now();
+    // The first gives up at once rather than when its source answers.
+    assert_eq!(first.join().unwrap(), Err(json!("superseded")));
+    assert!(
+        asked.elapsed() < Duration::from_millis(2500),
+        "{:?}",
+        asked.elapsed()
+    );
+    // The second's connections never overlap the first's, so none is turned
+    // away.
+    second.join().unwrap().unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert!(loaded.body["media"]["contentId"].is_string());
+    assert!(ffmpeg_starts_at(&source, "2.000"));
 }

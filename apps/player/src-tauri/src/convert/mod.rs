@@ -13,6 +13,7 @@
 // The Cast destination starts conversions from the next step on.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -127,12 +128,17 @@ impl Conversion {
 /// take a few seconds. A source that stops sending before then holds it
 /// back until the read times out, and ffmpeg then writes what it has and
 /// ends, so `ended` can change as soon as this returns.
+///
+/// It gives up once `cancel` finishes, as when a newer load overtakes it.
+/// Whenever it fails, it returns only after ffmpeg has exited, so a
+/// conversion started next isn't a second connection to the provider.
 pub async fn start<R: Runtime>(
     app: &AppHandle<R>,
     source: &str,
     plan: &Plan,
     encoders: Encoders,
     receiver: IpAddr,
+    cancel: impl Future<Output = ()>,
 ) -> Result<Conversion, ConvertError> {
     let args = args(source, plan, encoders)?;
     let server = LanServer::start(receiver)
@@ -168,7 +174,7 @@ pub async fn start<R: Runtime>(
         },
     ));
 
-    let feed = tokio::time::timeout(START_LIMIT, async {
+    let header = tokio::time::timeout(START_LIMIT, async {
         loop {
             if let Some(feed) = feed_rx.borrow_and_update().clone() {
                 return Ok(feed);
@@ -186,13 +192,20 @@ pub async fn start<R: Runtime>(
                 _ = ended.changed() => {}
             }
         }
-    })
-    .await;
+    });
+    let feed = tokio::select! {
+        header = header => header.unwrap_or(Err(ConvertError::Unreachable)),
+        () = cancel => Err(ConvertError::Unreachable),
+    };
     let feed = match feed {
-        Ok(Ok(feed)) => feed,
-        Ok(Err(e)) => return Err(e),
-        // Dropping `stop` kills ffmpeg.
-        Err(_) => return Err(ConvertError::Unreachable),
+        Ok(feed) => feed,
+        Err(e) => {
+            // Dropping `stop` kills ffmpeg, and the reader ends once it has
+            // exited.
+            drop(stop);
+            let _ = tokio::time::timeout(STOP_LIMIT, reader).await;
+            return Err(e);
+        }
     };
 
     let stalls = feed.stalls();

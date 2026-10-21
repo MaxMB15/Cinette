@@ -12,6 +12,7 @@
 //!   [`UPDATE_EVENT`].
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -121,6 +122,10 @@ struct Active {
     /// clear a new one.
     generation: u64,
     commands: mpsc::UnboundedSender<Command>,
+    /// The task that drives the session.
+    driver: tauri::async_runtime::JoinHandle<()>,
+    /// This computer's address on the session's connection, when known.
+    local: Option<IpAddr>,
     /// The converter serving the receiver, for a converted route.
     conversion: Option<Conversion>,
     /// The plan the converter follows, which a seek or a resume of the
@@ -159,11 +164,13 @@ struct KnownPlan {
 /// this computer's address.
 const ADDRESS_CHECK: Duration = Duration::from_secs(5);
 
-/// How a converted cast checks this computer's address on the route to its
-/// receiver. Tests give it their own.
+/// How a cast checks this computer's addresses: its address on the route
+/// to the receiver, and whether an address is still one of its own. Tests
+/// give it their own.
 #[derive(Clone, Copy)]
 struct AddressCheck {
     route: fn(IpAddr) -> Result<IpAddr, NoRoute>,
+    ours: fn(IpAddr) -> bool,
     every: Duration,
 }
 
@@ -171,10 +178,22 @@ impl Default for AddressCheck {
     fn default() -> Self {
         Self {
             route: route_to,
+            ours: is_ours,
             every: ADDRESS_CHECK,
         }
     }
 }
+
+/// Whether `ip` is still one of this computer's addresses, which it is
+/// when a socket can listen on it.
+fn is_ours(ip: IpAddr) -> bool {
+    std::net::UdpSocket::bind((ip, 0)).is_ok()
+}
+
+/// How many address checks in a row have to find the converter's address
+/// gone before its stream starts again, so a check that lands on a moment
+/// of change doesn't end a stream that would have gone on.
+const MOVED_CHECKS: u32 = 2;
 
 /// The app's casts, managed by Tauri.
 #[derive(Default)]
@@ -182,21 +201,27 @@ pub struct CastPlayback {
     active: Mutex<Option<Active>>,
     generation: Mutex<u64>,
     turns: Mutex<HashMap<String, Turn>>,
-    /// Held while a load connects, so two loads don't both open a session.
-    connecting: tokio::sync::Mutex<()>,
+    /// Changes with every turn, so a load can give up while it waits.
+    turned: tokio::sync::watch::Sender<()>,
+    /// Held for a whole load, so one load at a time asks the provider for a
+    /// stream and opens a session. One that a newer turn overtook lets go
+    /// once its ffmpeg has exited, so the next isn't a second connection to
+    /// the provider.
+    loading: tokio::sync::Mutex<()>,
     addresses: Mutex<AddressCheck>,
 }
 
 impl CastPlayback {
-    /// Has converted casts find this computer's address with `route`, each
-    /// `every`.
+    /// Has casts find this computer's address with `route`, and whether an
+    /// address is still its own with `ours`, each `every`.
     #[cfg(test)]
     pub(crate) fn check_addresses_with(
         &self,
         route: fn(IpAddr) -> Result<IpAddr, NoRoute>,
+        ours: fn(IpAddr) -> bool,
         every: Duration,
     ) {
-        *lock(&self.addresses) = AddressCheck { route, every };
+        *lock(&self.addresses) = AddressCheck { route, ours, every };
     }
 
     /// Starts a load's or a stop's turn on `receiver_id`, and returns its
@@ -206,7 +231,17 @@ impl CastPlayback {
         let turn = turns.entry(receiver_id.to_string()).or_default();
         turn.ticket += 1;
         turn.stopped = stopped;
+        self.turned.send_replace(());
         turn.ticket
+    }
+
+    /// Finishes once `ticket` isn't `receiver_id`'s newest turn.
+    async fn overtaken(&self, receiver_id: &str, ticket: u64) {
+        let mut turned = self.turned.subscribe();
+        while self.still_turn(receiver_id, ticket).is_ok() {
+            // `self` holds the sender, so this always waits for a change.
+            let _ = turned.changed().await;
+        }
     }
 
     /// Rejects with [`SUPERSEDED`] once `ticket` isn't the newest turn.
@@ -246,9 +281,9 @@ fn sender_id() -> String {
     format!("sender-{}", &mvp_core::convert::serve::token()[..8])
 }
 
-/// Starts driving a cast to `receiver_id` over `stream`, and makes it the
-/// active one in place of any other.
-pub(crate) fn begin<R, S>(app: &AppHandle<R>, receiver_id: &str, stream: S)
+/// Starts driving a cast to `receiver_id` over `stream`, whose end on this
+/// computer is `local`, and makes it the active one in place of any other.
+pub(crate) fn begin<R, S>(app: &AppHandle<R>, receiver_id: &str, stream: S, local: Option<IpAddr>)
 where
     R: Runtime,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -261,30 +296,41 @@ where
     };
     let (commands, receiver) = mpsc::unbounded_channel();
     let (session, first) = Session::start(sender_id(), std::time::Instant::now());
+    let driver = {
+        let app = app.clone();
+        let id = receiver_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            drive(stream, session, first, receiver, |update| {
+                emit(&app, &id, update)
+            })
+            .await;
+            // Over: the converter stops with it.
+            let state = app.state::<CastPlayback>();
+            let mut active = lock(&state.active);
+            if active.as_ref().is_some_and(|a| a.generation == generation) {
+                *active = None;
+            }
+        })
+    };
     let old = lock(&state.active).replace(Active {
         receiver_id: receiver_id.to_string(),
         generation,
         commands,
+        driver,
+        local,
         conversion: None,
         plan: None,
     });
-    if let Some(old) = old {
-        let _ = old.commands.send(Command::Stop);
-    }
-    let app = app.clone();
-    let id = receiver_id.to_string();
-    tauri::async_runtime::spawn(async move {
-        drive(stream, session, first, receiver, |update| {
-            emit(&app, &id, update)
-        })
-        .await;
-        // Over: the converter stops with it.
-        let state = app.state::<CastPlayback>();
-        let mut active = lock(&state.active);
-        if active.as_ref().is_some_and(|a| a.generation == generation) {
-            *active = None;
+    match old {
+        // The same receiver on a new connection, as after this computer's
+        // address changed. The old one goes without a word, so the receiver
+        // keeps its app and the frontend sees no end.
+        Some(old) if old.receiver_id == receiver_id => old.driver.abort(),
+        Some(old) => {
+            let _ = old.commands.send(Command::Stop);
         }
-    });
+        None => {}
+    }
 }
 
 /// The active cast's command sender, if `receiver_id` has it.
@@ -295,14 +341,19 @@ fn commands_for(state: &CastPlayback, receiver_id: &str) -> Option<mpsc::Unbound
         .map(|a| a.commands.clone())
 }
 
-/// Connects to `receiver_id` unless it's the active cast already. Says
-/// whether it opened a new session.
+/// Connects to `receiver_id` unless it's the active cast already, on an
+/// address this computer still has. Says whether it opened a new session.
 async fn ensure_connected<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
 ) -> Result<bool, String> {
     let state = app.state::<CastPlayback>();
-    if commands_for(&state, receiver_id).is_some_and(|c| !c.is_closed()) {
+    let ours = lock(&state.addresses).ours;
+    let open = lock(&state.active)
+        .as_ref()
+        .filter(|a| a.receiver_id == receiver_id)
+        .is_some_and(|a| !a.commands.is_closed() && a.local.is_none_or(ours));
+    if open {
         return Ok(false);
     }
     let (addr, port) = app
@@ -313,7 +364,8 @@ async fn ensure_connected<R: Runtime>(
         .ok_or("notFound")?;
     match tls::connect(addr, port).await {
         Ok((stream, _)) => {
-            begin(app, receiver_id, stream);
+            let local = stream.get_ref().0.local_addr().ok().map(|a| a.ip());
+            begin(app, receiver_id, stream, local);
             Ok(true)
         }
         Err(_) => {
@@ -385,10 +437,11 @@ struct ConversionInput<'a> {
 async fn conversion_plan<R: Runtime>(
     app: &AppHandle<R>,
     input: &ConversionInput<'_>,
+    cancel: impl Future<Output = ()>,
 ) -> Result<(Plan, bool), String> {
     let support = crate::convert::support::support(app).await;
     let decoders = support.decoders;
-    let probed = crate::streams::probe(app, input.url)
+    let probed = crate::streams::probe_unless(app, input.url, cancel)
         .await
         .map_err(|e| match e {
             ProbeError::Refused(_) => REFUSED.to_string(),
@@ -423,16 +476,18 @@ async fn conversion_plan<R: Runtime>(
     Ok((plan, has_length))
 }
 
-/// Starts the converter for `url` by `plan`, and serves it to `receiver`.
+/// Starts the converter for `url` by `plan`, and serves it to `receiver`,
+/// unless `cancel` finishes first.
 async fn start_conversion<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,
     plan: &Plan,
     receiver: IpAddr,
+    cancel: impl Future<Output = ()>,
 ) -> Result<Conversion, String> {
     let support = crate::convert::support::support(app).await;
     let encoders = support.encoders.ok_or("noConverter")?;
-    crate::convert::start(app, url, plan, encoders, receiver)
+    crate::convert::start(app, url, plan, encoders, receiver, cancel)
         .await
         .map_err(|e| match e {
             ConvertError::Refused(_) => REFUSED.to_string(),
@@ -465,8 +520,15 @@ pub async fn load<R: Runtime>(
     channel: &Channel,
     route: CastRoute,
     start_at: Option<f64>,
+    restart: bool,
 ) -> Result<(), String> {
     let state = app.state::<CastPlayback>();
+    // Starting a stream again goes on with the cast it belongs to, and
+    // never opens one: a cast that ended, or went to another receiver,
+    // stays as it is.
+    if restart && commands_for(&state, receiver_id).is_none() {
+        return Err("notConnected".into());
+    }
     let ticket = state.take_turn(receiver_id, false);
     // The URL the route was worked out for, which a newer list of the
     // item's URLs makes stale.
@@ -474,6 +536,8 @@ pub async fn load<R: Runtime>(
     let url = &app
         .state::<StreamsState>()
         .url(&channel.id, generation, source)?;
+    let _loading = state.loading.lock().await;
+    state.still_turn(receiver_id, ticket)?;
     let old = lock(&state.active)
         .as_mut()
         .filter(|a| a.receiver_id == receiver_id)
@@ -558,8 +622,10 @@ pub async fn load<R: Runtime>(
                         live,
                         start_at,
                     };
-                    let (plan, has_length) = conversion_plan(app, &input).await?;
+                    let planned =
+                        conversion_plan(app, &input, state.overtaken(receiver_id, ticket)).await;
                     state.still_turn(receiver_id, ticket)?;
+                    let (plan, has_length) = planned?;
                     KnownPlan {
                         channel_id: channel.id.clone(),
                         generation,
@@ -571,7 +637,10 @@ pub async fn load<R: Runtime>(
                     }
                 }
             };
-            let started = match start_conversion(app, url, &known.plan, receiver).await {
+            let cancel = state.overtaken(receiver_id, ticket);
+            let started = start_conversion(app, url, &known.plan, receiver, cancel).await;
+            state.still_turn(receiver_id, ticket)?;
+            let started = match started {
                 Ok(started) => started,
                 Err(e) => {
                     // The next load probes again rather than repeat a plan
@@ -580,10 +649,6 @@ pub async fn load<R: Runtime>(
                     return Err(e);
                 }
             };
-            if let Err(e) = state.still_turn(receiver_id, ticket) {
-                started.stop().await;
-                return Err(e);
-            }
             // The converted stream starts where the plan does, and has no
             // length the receiver can seek in.
             request.url = started.url.clone();
@@ -594,10 +659,7 @@ pub async fn load<R: Runtime>(
             plan_used = Some(known);
         }
     }
-    let connecting = state.connecting.lock().await;
-    state.still_turn(receiver_id, ticket)?;
     let opened = ensure_connected(app, receiver_id).await?;
-    drop(connecting);
     if let Err(e) = state.still_turn(receiver_id, ticket) {
         // A stop that came while this connected ends the session it opened.
         if opened && state.stopped(receiver_id) {
@@ -652,6 +714,8 @@ fn watch_conversion<R: Runtime>(
     let check = *lock(&app.state::<CastPlayback>().addresses);
     tauri::async_runtime::spawn(async move {
         let mut ticks = tokio::time::interval(check.every);
+        // The checks in a row that found the converter's address gone.
+        let mut gone = 0;
         let update = loop {
             tokio::select! {
                 end = ended.wait_for(Option::is_some) => {
@@ -667,11 +731,22 @@ fn watch_conversion<R: Runtime>(
                         _ => return,
                     };
                 }
-                _ = ticks.tick() => {
-                    if (check.route)(receiver) != Ok(served) {
-                        break CastUpdate::ConversionStopped { why: "moved" };
+                _ = ticks.tick() => match (check.route)(receiver) {
+                    // The route goes from another address, and the one the
+                    // receiver was given is no longer this computer's. A new
+                    // address alongside it, such as a cable plugged in,
+                    // changes nothing.
+                    Ok(local) if local != served && !(check.ours)(served) => {
+                        gone += 1;
+                        if gone >= MOVED_CHECKS {
+                            break CastUpdate::ConversionStopped { why: "moved" };
+                        }
                     }
-                }
+                    Ok(_) => gone = 0,
+                    // No route at all, as for a moment while the network
+                    // changes, says nothing either way.
+                    Err(NoRoute) => {}
+                },
             }
         };
         let state = app.state::<CastPlayback>();
