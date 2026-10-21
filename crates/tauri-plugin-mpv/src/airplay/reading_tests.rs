@@ -5,6 +5,10 @@ use super::*;
 use crate::airplay::{AirPlay, Status, Tracker};
 use std::time::Instant;
 
+const POSITIVE_INFINITY: u32 = 0x04;
+const NEGATIVE_INFINITY: u32 = 0x08;
+const INDEFINITE: u32 = 0x10;
+
 #[test]
 fn a_time_avplayer_doesnt_know_is_zero() {
     assert_eq!(finite(12.5), 12.5);
@@ -20,7 +24,10 @@ fn only_a_valid_finite_time_is_numeric() {
     // Rounded is still a number.
     assert!(is_numeric(VALID | 1 << 1));
     assert!(!is_numeric(0));
-    assert_eq!(NOT_A_NUMBER, INDEFINITE + POSITIVE_INFINITY + NEGATIVE_INFINITY);
+    assert_eq!(
+        NOT_A_NUMBER,
+        INDEFINITE + POSITIVE_INFINITY + NEGATIVE_INFINITY
+    );
     for other in [INDEFINITE, POSITIVE_INFINITY, NEGATIVE_INFINITY] {
         assert!(!is_numeric(VALID | other), "{other}");
         assert!(!is_numeric(other), "{other}");

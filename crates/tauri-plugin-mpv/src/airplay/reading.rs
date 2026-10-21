@@ -10,12 +10,10 @@ use super::{Report, ReportError};
 #[path = "reading_tests.rs"]
 mod tests;
 
-/// `CMTimeFlags`' bits, as Core Media defines them.
-pub const VALID: u32 = 0x01;
-pub const POSITIVE_INFINITY: u32 = 0x04;
-pub const NEGATIVE_INFINITY: u32 = 0x08;
-pub const INDEFINITE: u32 = 0x10;
-/// The bits that make a time not a number: the last three.
+/// `CMTimeFlags`' valid bit, as Core Media defines it.
+const VALID: u32 = 0x01;
+/// Its positive infinity (0x04), negative infinity (0x08) and indefinite
+/// (0x10) bits, which make a time not a number.
 const NOT_A_NUMBER: u32 = 0x1C;
 
 /// Seconds, or 0 for a time AVPlayer doesn't know, which it gives as NaN.
