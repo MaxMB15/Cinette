@@ -3,7 +3,8 @@
 
 use super::*;
 
-const SALT: Salt = Salt([7; SALT_LEN]);
+/// One salt for the whole run, as one transfer uses one.
+static SALT: std::sync::LazyLock<Salt> = std::sync::LazyLock::new(Salt::generate);
 
 fn provider(kind: ProviderType, url: &str, username: Option<&str>) -> Provider {
     Provider {
@@ -64,10 +65,7 @@ fn the_password_isnt_part_of_the_account() {
 #[test]
 fn a_new_salt_gives_a_new_tag() {
     let p = provider(ProviderType::Xtream, "http://panel.example", Some("alice"));
-    assert_ne!(
-        account_tag(&SALT, &p),
-        account_tag(&Salt([8; SALT_LEN]), &p)
-    );
+    assert_ne!(account_tag(&SALT, &p), account_tag(&Salt::generate(), &p));
 }
 
 #[test]

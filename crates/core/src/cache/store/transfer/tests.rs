@@ -724,7 +724,7 @@ fn the_export_carries_references_and_never_ids_logins_or_logos() {
     mac.pin_group("xt-mac", "live", "News", 0).unwrap();
     mac.pin_group("m3u-file", "live", "All", 0).unwrap();
 
-    let salt = Salt([1; 16]);
+    let salt = Salt::generate();
     let export = mac.export_transfer(&salt, What::ALL, None, NOW).unwrap();
     let account = refs::account_tag(
         &salt,
@@ -831,7 +831,7 @@ fn the_export_carries_references_and_never_ids_logins_or_logos() {
         "logo.example",
         "file://",
     ] {
-        assert!(!json.contains(secret), "{secret} in {json}");
+        assert!(!json.contains(secret), "the export carries something it mustn't");
     }
 }
 
