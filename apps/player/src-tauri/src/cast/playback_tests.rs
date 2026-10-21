@@ -1567,3 +1567,33 @@ async fn a_restart_whose_cast_ended_while_it_started_opens_none() {
     .unwrap_or(false);
     assert!(!opened);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_load_doesnt_wait_out_a_playlist_that_never_answers() {
+    let app = TestApp::new();
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    // A provider that takes the connection and never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let silent = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().flatten().collect();
+        drop(held);
+    });
+    let stuck = channel("l-1", &format!("http://{silent}/live/1.m3u8"), "live");
+    let other = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &stuck);
+    add_channel(&app, &other);
+    let first = load_in_background(&app, &stuck, direct("hls-ts"), None);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let asked = std::time::Instant::now();
+    load(&app, "cast:tv", &other, direct("mp4"), None).unwrap();
+    assert!(
+        asked.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(first.join().unwrap(), Err(json!("superseded")));
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["media"]["contentId"], "http://192.0.2.1/2.mp4");
+}

@@ -602,8 +602,14 @@ pub async fn load<R: Runtime>(
     match route {
         CastRoute::Direct { container, .. } => {
             if matches!(container, Container::HlsTs | Container::HlsFmp4) {
-                check_playlist(url).await?;
+                // A newer turn needn't wait out a provider that doesn't
+                // answer.
+                let checked = tokio::select! {
+                    checked = check_playlist(url) => checked,
+                    () = playback.overtaken(receiver_id, ticket) => Ok(()),
+                };
                 state.still_turn(receiver_id, ticket)?;
+                checked?;
             }
             let (content_type, ts) = content_type(container);
             request.url = url.clone();
