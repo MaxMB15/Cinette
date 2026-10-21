@@ -721,3 +721,15 @@ fn reads_a_full_33_bit_timestamp() {
         None
     );
 }
+
+#[test]
+fn never_cuts_a_segment_with_no_length() {
+    // With no shortest length, every keyframe could cut, but not one at the
+    // same time as the segment's start.
+    let mut stream = video_stream();
+    for pts in [0, 0, SECOND] {
+        stream.push(pes(VIDEO_PID, pts, true, &[]));
+    }
+    let (segments, _) = cut(&stream, 0.0);
+    assert_eq!(durations(&segments), [1.0]);
+}
