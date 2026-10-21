@@ -81,6 +81,7 @@ async fn launches_loads_and_controls_the_receiver() {
         update,
         CastUpdate::Media {
             media: Some(MediaView {
+                media_session_id: 1,
                 player: "playing",
                 idle_reason: None,
                 position: 42.5,
@@ -236,7 +237,7 @@ fn every_update_reads_as_the_frontend_expects() {
     assert_eq!(
         json,
         serde_json::json!({ "kind": "media", "media": {
-            "player": "playing", "idleReason": null, "position": 3.0, "duration": null,
+            "mediaSessionId": 1, "player": "playing", "idleReason": null, "position": 3.0, "duration": null,
             "live": true, "canPause": false, "canSeek": false } })
     );
     assert_eq!(

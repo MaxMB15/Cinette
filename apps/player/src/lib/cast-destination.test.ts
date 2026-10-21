@@ -54,6 +54,7 @@ const xtream: StreamFormats = {
 type Media = NonNullable<Extract<CastUpdate, { kind: "media" }>["media"]>;
 
 const media = (over: Partial<Media> = {}): Media => ({
+	mediaSessionId: 1,
 	player: "playing",
 	idleReason: null,
 	position: 10,
@@ -1050,6 +1051,25 @@ describe("createCastDestination", () => {
 			clock.now += STEADY_MS;
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
 			expect(pending()).toEqual([2_000]);
+		});
+
+		it("doesn't count the old media's reports as the new stream playing", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 1, live: true }) });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// The receiver still plays what it has of the old stream.
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 1, live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([1_000]);
+			// The new stream plays.
+			await next();
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([0]);
 		});
 
 		it("says at once when the provider turns the login away", async () => {

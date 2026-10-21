@@ -666,6 +666,8 @@ export type CastUpdate =
 	| {
 			kind: "media";
 			media: {
+				/** The receiver's id for this media, which a new load changes. */
+				mediaSessionId: number;
 				player: "idle" | "buffering" | "playing" | "paused";
 				idleReason: "finished" | "cancelled" | "interrupted" | "error" | null;
 				position: number;

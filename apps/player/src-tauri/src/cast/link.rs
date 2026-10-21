@@ -42,6 +42,8 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaView {
+    /// The receiver's id for this media, which a new load changes.
+    pub media_session_id: i64,
     /// `idle`, `buffering`, `playing` or `paused`.
     pub player: &'static str,
     /// Why it's idle: `finished`, `cancelled`, `interrupted` or `error`.
@@ -72,6 +74,7 @@ impl From<&MediaState> for MediaView {
             PlayerState::Paused => ("paused", None),
         };
         Self {
+            media_session_id: media.media_session_id,
             player,
             idle_reason,
             position: media.current_time,
