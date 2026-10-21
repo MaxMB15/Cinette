@@ -295,3 +295,53 @@ fn a_later_chunk_cant_change_the_clock_or_current_item() {
     assert_eq!(export.sent_at, 5);
     assert_eq!(export.current, None);
 }
+
+#[test]
+fn a_chunk_holds_up_to_48_kib() {
+    // About 40 KB of items fit in one chunk.
+    let (chunks, _) = split(&export(220, 0));
+    let len = serde_json::to_vec(&chunks[0]).unwrap().len();
+    assert!(len > 45_000, "{len}");
+    assert_eq!(chunks.len(), 1);
+}
+
+#[test]
+fn a_transfer_takes_up_to_16_mib() {
+    let chunk = Chunk {
+        seq: 0,
+        last: true,
+        sent_at: None,
+        current: None,
+        items: vec![],
+        pins: vec![],
+    };
+    assert!(Assembler::new().push(chunk, 16_000_000).is_ok());
+}
+
+#[test]
+fn no_chunk_goes_over_the_limit_wherever_the_boundary_falls() {
+    // Lengthening the last item a byte at a time puts the end of the items
+    // at every distance from the limit, including the few bytes the first
+    // pin's list adds.
+    let padded = |pad: usize| {
+        let mut original = export(230, 1);
+        original.items[229]
+            .reference
+            .name
+            .push_str(&"x".repeat(pad));
+        split(&original).0
+    };
+    let base = serde_json::to_vec(&padded(0)[0]).unwrap().len();
+    let room = CHUNK_BYTES - base;
+    assert!((40..460).contains(&room), "{room}");
+    let mut fullest = 0;
+    for pad in room - 40..room + 5 {
+        for chunk in padded(pad) {
+            let len = serde_json::to_vec(&chunk).unwrap().len();
+            assert!(len <= CHUNK_BYTES, "pad {pad}: {len}");
+            fullest = fullest.max(len);
+        }
+    }
+    // Some chunk came within a few bytes of the limit.
+    assert!(fullest > CHUNK_BYTES - 4, "{fullest}");
+}

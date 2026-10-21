@@ -1064,3 +1064,87 @@ fn an_empty_imdb_id_in_the_cache_isnt_sent() {
         .unwrap();
     assert_eq!(export.items[0].reference.imdb, None);
 }
+
+#[test]
+fn a_favorite_live_channel_with_an_empty_tvg_id_sends_none() {
+    let mac = CacheStore::open_in_memory().unwrap();
+    mac.upsert_provider(&provider(
+        "m3u-a",
+        ProviderType::M3u,
+        "http://l.example/a.m3u",
+        None,
+    ))
+    .unwrap();
+    mac.save_channels(
+        "m3u-a",
+        &[
+            Channel {
+                tvg_id: Some(String::new()),
+                ..channel("m3u-a-ch-0", "Blank", "live")
+            },
+            Channel {
+                tvg_id: Some("cnn.us".into()),
+                ..channel("m3u-a-ch-1", "CNN", "live")
+            },
+        ],
+    )
+    .unwrap();
+    mac.toggle_favorite("m3u-a-ch-0").unwrap();
+    mac.toggle_favorite("m3u-a-ch-1").unwrap();
+    let export = mac
+        .export_transfer(&Salt::generate(), What::ALL, None, NOW)
+        .unwrap();
+    let tvg: Vec<Option<&str>> = export
+        .items
+        .iter()
+        .map(|i| i.reference.tvg_id.as_deref())
+        .collect();
+    assert_eq!(tvg, [None, Some("cnn.us")]);
+}
+
+#[test]
+fn the_index_keeps_stored_episode_numbers_over_the_name() {
+    let tv = CacheStore::open_in_memory().unwrap();
+    tv.upsert_provider(&provider(
+        "m3u-a",
+        ProviderType::M3u,
+        "http://l.example/a.m3u",
+        None,
+    ))
+    .unwrap();
+    tv.save_channels(
+        "m3u-a",
+        &[
+            // The name gives no show, season or episode.
+            Channel {
+                series_title: Some("Lost".into()),
+                season: Some(2),
+                episode: Some(3),
+                ..channel("m3u-a-ch-0", "The Long Con", "series")
+            },
+            // The name says another episode than the stored one.
+            Channel {
+                series_title: Some("Lost".into()),
+                season: Some(1),
+                episode: Some(6),
+                ..channel("m3u-a-ch-1", "Lost S01E05 part two", "series")
+            },
+        ],
+    )
+    .unwrap();
+    let index = tv.transfer_index(&Salt::generate()).unwrap();
+    let episode = |season, episode| ItemRef {
+        series: Some("Lost".into()),
+        season: Some(season),
+        episode: Some(episode),
+        ..ItemRef::named(ItemKind::Episode, "x")
+    };
+    assert_eq!(
+        index.find(&episode(2, 3)).unwrap().channel.unwrap().id,
+        "m3u-a-ch-0"
+    );
+    assert_eq!(
+        index.find(&episode(1, 6)).unwrap().channel.unwrap().id,
+        "m3u-a-ch-1"
+    );
+}
