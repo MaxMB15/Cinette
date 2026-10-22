@@ -678,3 +678,10 @@ fn an_item_with_nothing_wrong_and_nothing_written_isnt_listed() {
     assert_eq!(plan.unmatched_total, 0);
 }
 
+
+#[test]
+fn an_episode_with_only_its_show_found_and_nothing_to_carry_isnt_listed() {
+    let plan = plan(&export(vec![lost_episode(false, false)]), &index(), LATER);
+    assert!(plan.unmatched.is_empty());
+    assert_eq!(plan.unmatched_total, 0);
+}
