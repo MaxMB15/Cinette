@@ -1508,14 +1508,16 @@ export const PlayerView = () => {
 	/**
 	 * Where a receiver should start the item. Until mpv reaches the start it
 	 * was given, as just after a resume, that start; mpv still reports the
-	 * beginning then. After that, where mpv is, once it knows the length.
-	 * A live channel, or an item mpv hasn't opened, starts where the
-	 * receiver does.
+	 * beginning then. After that, mpv's last known position, which a
+	 * reconnect doesn't reset to 0. A live channel, or an item that hasn't
+	 * got going, starts where the receiver does.
 	 */
 	const sendFrom = (): number | undefined => {
+		if (activeChannelRef.current?.contentType === "live") return undefined;
 		const pending = progressRef.current.pendingStart;
 		if (pending !== null) return pending;
-		return mpv.state.duration > 0 ? mpv.state.position : undefined;
+		const at = mpv.getLastKnownPosition();
+		return at > 1 ? at : undefined;
 	};
 	/** Stops the item here once a receiver takes it, saving where it was. */
 	const stopForReceiver = async () => {

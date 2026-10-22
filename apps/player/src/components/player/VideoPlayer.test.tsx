@@ -131,7 +131,10 @@ const fakeMpv = vi.hoisted(() => {
 	const actions = {
 		load: vi.fn<Mpv["load"]>(async () => {}),
 		reload: vi.fn<Mpv["reload"]>(async () => true),
-		getLastKnownPosition: vi.fn<Mpv["getLastKnownPosition"]>(() => 0),
+		// As useMpv's: the last position past 1 s that mpv reported.
+		getLastKnownPosition: vi.fn<Mpv["getLastKnownPosition"]>(() =>
+			current.state.position > 1 ? current.state.position : 0
+		),
 		play: vi.fn<Mpv["play"]>(async () => {}),
 		pause: vi.fn<Mpv["pause"]>(async () => {}),
 		stop: vi.fn<Mpv["stop"]>(async () => {}),
@@ -3768,6 +3771,18 @@ describe("AirPlay", () => {
 		fireEvent.click(airplayButton()!);
 		await flush();
 		expect(send.mock.calls[1][1].startAt).toBe(1805);
+	});
+
+	it("sends the movie from where it last was while mpv reconnects", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 5400) });
+		// A fresh load in flight reads 0 for a moment.
+		fakeMpv.actions.getLastKnownPosition.mockReturnValue(900);
+		await setMpv({ state: playing(MOVIE_URL, 0, 0) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(vi.mocked(fakeAirPlay.get().send).mock.calls[0][1].startAt).toBe(900);
 	});
 
 	it("sends the movie from where it is, after stopping it here", async () => {
