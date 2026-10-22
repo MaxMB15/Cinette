@@ -15,6 +15,8 @@ const events = vi.hoisted(() => {
 	const handlers = new Map<string, Set<(e: { payload: unknown }) => void>>();
 	return {
 		handlers,
+		/** Events whose next listen fails. */
+		failing: new Set<string>(),
 		emit: (name: string, payload: unknown) => {
 			for (const h of [...(handlers.get(name) ?? [])]) h({ payload });
 		},
@@ -24,6 +26,7 @@ const events = vi.hoisted(() => {
 
 vi.mock("@tauri-apps/api/event", () => ({
 	listen: async (name: string, handler: (e: { payload: unknown }) => void) => {
+		if (events.failing.delete(name)) throw new Error("couldn't listen");
 		const set = events.handlers.get(name) ?? new Set();
 		set.add(handler);
 		events.handlers.set(name, set);
@@ -73,6 +76,7 @@ const flush = () =>
 
 beforeEach(() => {
 	events.handlers.clear();
+	events.failing.clear();
 	tauri.getStreamFormats.mockResolvedValue({
 		formats: [mp4],
 		sources: [2],
@@ -171,6 +175,33 @@ describe("useAirPlay", () => {
 		rerender({ on: true });
 		await flush();
 		// Nothing has said a TV is in reach since it came back on.
+		expect(result.current.available).toBe(false);
+	});
+
+	it("turns detection on and off in pairs even when it can't listen", async () => {
+		events.failing.add("airplay://available");
+		const first = renderHook(() => useAirPlay(true));
+		await flush();
+		first.unmount();
+		await flush();
+		expect(tauri.airplaySetDetection.mock.calls).toEqual([[true], [false]]);
+		// The next player still gets detection.
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		expect(tauri.airplaySetDetection).toHaveBeenLastCalledWith(true);
+		act(() => events.emit("airplay://available", true));
+		expect(result.current.available).toBe(true);
+	});
+
+	it("takes no answer once a newer report came", async () => {
+		let answer: (known: boolean | null) => void = () => {};
+		tauri.airplaySetDetection.mockImplementationOnce(
+			() => new Promise((resolve) => (answer = resolve))
+		);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		act(() => events.emit("airplay://available", false));
+		await act(async () => answer(true));
 		expect(result.current.available).toBe(false);
 	});
 
