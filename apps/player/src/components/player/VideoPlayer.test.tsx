@@ -82,6 +82,7 @@ const picker = vi.hoisted(() => ({ pick: undefined as SubtitlePick | undefined }
 
 const tauri = vi.hoisted(() => ({
 	mpvSetBounds: vi.fn<typeof Bridge.mpvSetBounds>(async () => {}),
+	warmStreamFormats: vi.fn<typeof Bridge.warmStreamFormats>(async () => {}),
 	mpvSetMediaInfo: vi.fn<typeof Bridge.mpvSetMediaInfo>(async () => {}),
 	mpvGetState: vi.fn<typeof Bridge.mpvGetState>(async () => idleState()),
 	mpvSubAdd: vi.fn<typeof Bridge.mpvSubAdd>(async () => {}),
@@ -3724,6 +3725,25 @@ describe("AirPlay", () => {
 		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
 	});
 
+	it("asks the panel ahead once a receiver is in reach", async () => {
+		await openItem(lanternKeeper());
+		expect(tauri.warmStreamFormats).not.toHaveBeenCalled();
+		act(() => fakeAirPlay.set({ available: true }));
+		await flush();
+		expect(tauri.warmStreamFormats).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "mv1" })
+		);
+	});
+
+	it("doesn't mind a panel that can't be asked ahead", async () => {
+		tauri.warmStreamFormats.mockRejectedValueOnce(new Error("offline"));
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await flush();
+		expect(tauri.warmStreamFormats).toHaveBeenCalled();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
 	it("shows its button only while a receiver is in reach", async () => {
 		await openItem(lanternKeeper());
 		expect(airplayButton()).toBeNull();
@@ -3934,6 +3954,19 @@ describe("AirPlay", () => {
 		act(() => fakeAirPlay.set({ notPicked: true }));
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
+	});
+
+	it("keeps its notice below the notch and on the screen", async () => {
+		setUpTouchScreen();
+		await openItem(lanternKeeper());
+		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
+		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
+		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:00" }));
+		await flush();
+		const notice = screen.getByRole("alert");
+		expect(notice.classList).toContain("top-[calc(1rem+env(safe-area-inset-top))]");
+		expect(notice.classList).not.toContain("top-4");
+		expect(notice.classList).toContain("max-w-[calc(100%-2rem)]");
 	});
 
 	it("says so when it can't play here again", async () => {

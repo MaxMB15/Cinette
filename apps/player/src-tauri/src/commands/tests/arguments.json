@@ -5,6 +5,7 @@
 	"get_providers": {},
 	"get_converter_support": {},
 	"get_stream_formats": { "required": ["channel"] },
+	"warm_stream_formats": { "required": ["channel"] },
 	"airplay_load": { "required": ["channel", "generation", "source"], "optional": ["startAt"] },
 	"airplay_load_converted": {
 		"required": ["channel", "generation", "source"],

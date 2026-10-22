@@ -30,11 +30,20 @@ pub struct Step {
     pub pause: bool,
     /// No receiver took the video in time.
     pub not_picked: bool,
+    /// The item just got ready, this long after the load.
+    pub ready_after: Option<Duration>,
+    /// The video just reached a receiver for the first time, this long
+    /// after the load.
+    pub reached_after: Option<Duration>,
+    /// `isExternalPlaybackActive` changed with this reading.
+    pub changed: bool,
 }
 
 /// One item's pick.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Pick {
+    /// When the item was loaded, which the times in a [`Step`] count from.
+    loaded_at: Instant,
     ready_at: Option<Instant>,
     /// The video is on a receiver now.
     external: bool,
@@ -43,13 +52,27 @@ pub struct Pick {
 }
 
 impl Pick {
+    /// The pick of an item loaded at `now`.
+    pub fn loaded(now: Instant) -> Self {
+        Self {
+            loaded_at: now,
+            ready_at: None,
+            external: false,
+            reached: false,
+        }
+    }
+
     /// Takes a reading of the item, `ready` to play and `external` or not,
     /// at `now`.
     pub fn step(&mut self, ready: bool, external: bool, now: Instant) -> Step {
-        if ready && self.ready_at.is_none() {
+        let since_load = now.saturating_duration_since(self.loaded_at);
+        let ready_after = (ready && self.ready_at.is_none()).then_some(since_load);
+        if ready_after.is_some() {
             self.ready_at = Some(now);
         }
         let left = self.external && !external;
+        let changed = self.external != external;
+        let reached_after = (external && !self.reached).then_some(since_load);
         self.external = external;
         self.reached |= external;
         let waited = self
@@ -59,6 +82,9 @@ impl Pick {
             muted: !external,
             pause: left,
             not_picked: !self.reached && waited,
+            ready_after,
+            reached_after,
+            changed,
         }
     }
 }
