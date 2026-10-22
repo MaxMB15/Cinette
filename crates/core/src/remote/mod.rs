@@ -27,6 +27,7 @@ pub mod message;
 pub mod sessions;
 pub mod settings;
 pub mod target;
+pub mod transfer;
 
 #[cfg(test)]
 mod tests;
