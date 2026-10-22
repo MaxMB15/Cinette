@@ -376,9 +376,12 @@ export const createCastDestination = (
 	let tries = 0;
 	/** When the stream was first seen playing since it last started. */
 	let playingSince: number | null = null;
-	/** The receiver's id for the media that played when the stream was last
-	 *  sent, whose late reports don't count as the new stream playing. */
-	let oldMedia: number | null = null;
+	/** The highest id of the media the receiver has reported, which a new
+	 *  load's media goes above. */
+	let seenMedia = 0;
+	/** {@link seenMedia} when the stream was last sent: media up to it is
+	 *  older, and its late reports don't count as the new stream playing. */
+	let oldMedia = 0;
 	/** Cancels the try waiting to start the stream again, if one is. */
 	let cancelRestart = () => {};
 	/** Forgets the tries, for a load, a stop or a release the user asked
@@ -400,7 +403,7 @@ export const createCastDestination = (
 		const sent = {};
 		newest = sent;
 		if (!quiet) resetRestarts();
-		oldMedia = snapshot.media?.mediaSessionId ?? null;
+		oldMedia = seenMedia;
 		publish({
 			...snapshot,
 			// A closed cast connects again for this load.
@@ -543,7 +546,8 @@ export const createCastDestination = (
 			// A cast that ended takes the tries to start it again with it.
 			if (update.kind === "closed") resetRestarts();
 			const media = snapshot.media;
-			if (media?.player === "playing" && media.mediaSessionId !== oldMedia)
+			if (media !== null) seenMedia = Math.max(seenMedia, media.mediaSessionId);
+			if (media?.player === "playing" && media.mediaSessionId > oldMedia)
 				playingSince ??= now();
 		},
 		closedReason: () => snapshot.closedReason,

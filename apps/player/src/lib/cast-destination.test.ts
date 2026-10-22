@@ -1111,6 +1111,23 @@ describe("createCastDestination", () => {
 			expect(pending()).toEqual([0]);
 		});
 
+		it("knows the old media even when nothing showed as the stream was sent", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// It stops again before anything new plays, so no media shows as
+			// the next try goes out.
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// The receiver still reports the old media.
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([2_000]);
+		});
+
 		it("says at once when the provider turns the login away", async () => {
 			const { fake, cast, pending, next } = setUp(liveConverted);
 			await cast.load(item);
