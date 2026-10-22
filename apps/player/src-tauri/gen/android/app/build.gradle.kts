@@ -24,9 +24,30 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// The upload key for release builds, from gen/android/keystore.properties,
+// which .gitignore keeps out of the repo, as it does the key. See
+// docs/amazon-appstore.md. Without the file, release builds come out
+// unsigned.
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 37
     namespace = "app.cinette"
+    if (!keystoreProperties.isEmpty) {
+        signingConfigs {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
     defaultConfig {
         // Many IPTV servers only speak plain HTTP. res/xml/network_security_config.xml
         // allows it too, and that file wins on every Android version the app runs on.
@@ -52,6 +73,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             optimization {
                enable = true
             }
