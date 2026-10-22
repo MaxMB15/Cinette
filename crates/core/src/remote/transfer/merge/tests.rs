@@ -284,22 +284,18 @@ fn lost_episode(watched_row: bool, position: bool) -> Item {
 }
 
 #[test]
-fn an_episode_with_only_its_show_found_keeps_its_position_and_reports_its_row() {
+fn an_episode_with_only_its_show_found_keeps_its_position_and_counts_as_copied() {
+    // A device that hasn't loaded the show's episodes has nowhere for the
+    // history row, but the place goes over, so it isn't listed as missed.
     let plan = plan(&export(vec![lost_episode(true, true)]), &index(), LATER);
     assert_eq!(plan.positions["series:lost:s1e2"], at(700.0, 2));
     assert!(plan.history.is_empty());
-    assert_eq!(
-        plan.unmatched,
-        vec![Unmatched {
-            name: "Lost S01E02".into(),
-            kind: UnmatchedKind::Episode,
-            reason: Miss::Missing,
-        }]
-    );
+    assert!(plan.unmatched.is_empty());
+    assert_eq!(plan.unmatched_total, 0);
 }
 
 #[test]
-fn a_film_listed_twice_gets_its_position_and_its_row_is_reported() {
+fn a_film_listed_twice_gets_its_position_and_counts_as_copied() {
     let twin = Item {
         watched: Some(watched(1, 2, 1, 60)),
         position: Some(at(500.0, 2)),
@@ -308,8 +304,8 @@ fn a_film_listed_twice_gets_its_position_and_its_row_is_reported() {
     let plan = plan(&export(vec![twin]), &index(), LATER);
     assert_eq!(plan.positions["movie:twin"], at(500.0, 2));
     assert!(plan.history.is_empty());
-    assert_eq!(plan.unmatched[0].reason, Miss::Ambiguous);
-    assert_eq!(plan.unmatched_total, 1);
+    assert!(plan.unmatched.is_empty());
+    assert_eq!(plan.unmatched_total, 0);
 }
 
 #[test]
@@ -406,7 +402,7 @@ fn what_either_side_left_out_counts_as_not_transferred() {
 }
 
 #[test]
-fn a_favorite_on_an_episode_without_a_channel_row_is_reported() {
+fn a_favorite_on_an_episode_without_a_channel_row_is_left_out() {
     let index = Index::new(
         &[DestProvider {
             id: "xt-a".into(),
@@ -436,7 +432,8 @@ fn a_favorite_on_an_episode_without_a_channel_row_is_reported() {
     let plan = plan(&export(vec![fav]), &index, LATER);
     assert!(plan.favorites.is_empty());
     assert_eq!(plan.history.len(), 1, "its history still goes");
-    assert_eq!(plan.unmatched_total, 1);
+    // So it counts as copied.
+    assert_eq!(plan.unmatched_total, 0);
 }
 
 #[test]
@@ -672,3 +669,12 @@ fn an_item_whose_place_was_written_counts_as_transferred() {
     assert_eq!(plan.unmatched_total, 0);
     assert!(plan.unmatched.is_empty());
 }
+
+#[test]
+fn an_item_with_nothing_wrong_and_nothing_written_isnt_listed() {
+    // Matched, but carrying nothing: no history row, no place, no favorite.
+    let plan = plan(&export(vec![item("Heat")]), &index(), LATER);
+    assert!(plan.unmatched.is_empty());
+    assert_eq!(plan.unmatched_total, 0);
+}
+
