@@ -848,7 +848,7 @@ describe("createCastDestination", () => {
 		const setUp = (formats: StreamFormats) => {
 			const fake = backend(formats);
 			const waiting: { run: () => void; ms: number; on: boolean }[] = [];
-			const clock = { now: 1000 };
+			const clock = { now: 1_000_000 };
 			const cast = createCastDestination(receiver, fake, {
 				now: () => clock.now,
 				schedule: (run, ms) => {
@@ -1025,32 +1025,71 @@ describe("createCastDestination", () => {
 			expect(cast.getState().error).toEqual({ code: "loadFailed" });
 		});
 
-		it("counts the minute from when the stream first played", async () => {
+		it("counts the minute from when the new stream first played", async () => {
 			const { cast, clock, pending, next } = setUp(liveConverted);
 			await cast.load(item);
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
 			await next();
-			// No media, then playing, then playing still, which keeps the
-			// first time, so a minute from that counts as steady.
+			// No media, then the new media playing, then playing still, which
+			// keeps the first time, so a minute from that counts as steady.
 			cast.receive({ kind: "media", media: null });
-			cast.receive({ kind: "media", media: media({ live: true }) });
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
 			clock.now += STEADY_MS - 1;
-			cast.receive({ kind: "media", media: media({ live: true }) });
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
 			clock.now += 1;
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
 			expect(pending()).toEqual([0]);
 			// Playing for less than a minute isn't steady.
 			await next();
-			cast.receive({ kind: "media", media: media({ live: true }) });
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 3, live: true }) });
 			clock.now += STEADY_MS - 1;
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
 			expect(pending()).toEqual([1_000]);
 			// Nor is buffering, however long.
 			await next();
-			cast.receive({ kind: "media", media: media({ player: "buffering", live: true }) });
+			cast.receive({
+				kind: "media",
+				media: media({ mediaSessionId: 4, player: "buffering", live: true }),
+			});
 			clock.now += STEADY_MS;
 			cast.receive({ kind: "conversionStopped", why: "dropped" });
 			expect(pending()).toEqual([2_000]);
+		});
+
+		it("gives up on a stream that keeps playing for just under a minute", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			let id = 1;
+			/** The new stream plays for `ms`, then stops. */
+			const playsThenStops = (ms: number) => {
+				id += 1;
+				cast.receive({ kind: "media", media: media({ mediaSessionId: id, live: true }) });
+				clock.now += ms;
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+			};
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			for (let i = 0; i < RESTART_DELAYS_MS.length; i++) {
+				await next();
+				playsThenStops(STEADY_MS - 1);
+			}
+			expect(pending()).toEqual([]);
+			expect(cast.getState().error).toEqual({ code: "loadFailed" });
+		});
+
+		it("keeps starting a stream that plays a full minute each time", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			let id = 1;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			for (let i = 0; i < RESTART_DELAYS_MS.length * 2; i++) {
+				await next();
+				id += 1;
+				cast.receive({ kind: "media", media: media({ mediaSessionId: id, live: true }) });
+				clock.now += STEADY_MS;
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				expect(pending()).toEqual([0]);
+			}
+			expect(cast.getState().error).toBeNull();
 		});
 
 		it("doesn't count the old media's reports as the new stream playing", async () => {
