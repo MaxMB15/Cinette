@@ -70,3 +70,16 @@ fn the_manifest_asks_for_the_multicast_lock() {
         r#"<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />"#
     ));
 }
+
+/// `android_device.rs` reads the store from the manifest, which gets it from
+/// the Gradle property through a placeholder.
+#[test]
+fn the_manifest_names_the_store_from_gradle() {
+    let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(
+        r#"<meta-data android:name="app.cinette.STORE" android:value="${store}" />"#
+    ));
+    let gradle = include_str!("../gen/android/app/build.gradle.kts");
+    assert!(gradle.contains(r#"manifestPlaceholders["store"] = store"#));
+    assert!(gradle.contains(r#"val stores = listOf("google", "amazon")"#));
+}

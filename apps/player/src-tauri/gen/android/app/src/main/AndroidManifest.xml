@@ -20,6 +20,10 @@
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <!-- The store this build is for, google or amazon. app/build.gradle.kts
+             sets it from the store property. -->
+        <meta-data android:name="app.cinette.STORE" android:value="${store}" />
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

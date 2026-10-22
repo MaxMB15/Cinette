@@ -7,6 +7,16 @@ plugins {
     id("rust")
 }
 
+// The store the build is for: google (the default) or amazon. Set it with
+// -Pstore=amazon, or ORG_GRADLE_PROJECT_store=amazon around
+// `pnpm tauri android build`. A property rather than a flavor dimension,
+// because a second dimension renames the variant tasks that Tauri's
+// RustPlugin.kt and CLI expect. Both stores get the same Rust library.
+val stores = listOf("google", "amazon")
+val store = (findProperty("store") as? String ?: "google").also {
+    require(it in stores) { "store must be one of $stores, not \"$it\"" }
+}
+
 val tauriProperties = Properties().apply {
     val propFile = file("tauri.properties")
     if (propFile.exists()) {
@@ -21,6 +31,8 @@ android {
         // Many IPTV servers only speak plain HTTP. res/xml/network_security_config.xml
         // allows it too, and that file wins on every Android version the app runs on.
         manifestPlaceholders["usesCleartextTraffic"] = "true"
+        // android_device.rs reads it from the manifest's app.cinette.STORE.
+        manifestPlaceholders["store"] = store
         applicationId = "app.cinette"
         minSdk = 28
         targetSdk = 37
