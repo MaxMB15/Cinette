@@ -248,6 +248,10 @@ pub struct CastPlayback {
     /// see that what it says no longer counts.
     #[cfg(test)]
     pub(crate) keep_replaced: std::sync::atomic::AtomicBool,
+    /// Where each conversion this app's loads started begins, in order, so
+    /// a test needn't look for ffmpeg among the running processes.
+    #[cfg(test)]
+    pub(crate) started_at: Mutex<Vec<Option<f64>>>,
 }
 
 impl CastPlayback {
@@ -858,6 +862,8 @@ pub async fn load<R: Runtime>(
                 }
             };
             let plan = &known.plan;
+            #[cfg(test)]
+            lock(&state.started_at).push(plan.start_at);
             let started = playback
                 .ask_provider(receiver_id, ticket, freed, move || {
                     let cancel = playback.overtaken(receiver_id, ticket);

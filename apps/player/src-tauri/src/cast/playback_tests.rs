@@ -523,7 +523,9 @@ async fn starts_the_stream_again_on_the_new_address_after_a_move() {
     );
     let events = updates(&app);
     let (addr, _, mut got) = fake_receiver::start().await;
-    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    // Longer than the converter's 10 s burst, so the conversion, and its
+    // address checks, still run when the address goes.
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16_lasting(24))]);
     let movie = channel("m-1", &format!("{source}/movie/1.wav"), "movie");
     cast_converted(&app, addr, &mut got, &movie).await;
     let moved = next_update(&events, "conversionStopped");
@@ -743,7 +745,9 @@ async fn says_when_the_converter_stops_with_an_error_while_it_casts() {
     let events = updates(&app);
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16())]);
+    // Longer than the converter's 10 s burst, so ffmpeg still runs when the
+    // test needs it to.
+    let (source, _) = serve_routes(vec![route("/movie/", "200 OK", wav16_lasting(24))]);
     let source_url = format!("{source}/movie/broken.wav");
     let movie = channel("m-1", &source_url, "movie");
     add_channel(&app, &movie);
@@ -1131,12 +1135,12 @@ async fn a_newer_load_keeps_the_session_an_older_one_opened() {
     control(&app, "cast:tv", json!({ "action": "play" })).unwrap();
 }
 
-/// Whether an ffmpeg runs that starts `url` at `seconds`.
-fn ffmpeg_starts_at(url: &str, seconds: &str) -> bool {
-    std::process::Command::new("pgrep")
-        .args(["-f", &format!("ss {seconds} -i {url}")])
-        .status()
-        .is_ok_and(|s| s.success())
+/// Where the last conversion a load on `app` started begins.
+fn last_start(app: &TestApp) -> Option<f64> {
+    let handle = app.handle();
+    let playback = handle.state::<super::playback::CastPlayback>();
+    let starts = playback.started_at.lock().unwrap();
+    *starts.last().expect("a conversion")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1175,7 +1179,7 @@ async fn keeps_a_plan_only_for_the_same_item_source_and_choices() {
     cast(0, "copy", "aac", Some(2.0));
     next_of(&mut got, "LOAD").await;
     opened(3);
-    assert!(ffmpeg_starts_at(&source, "2.000"));
+    assert_eq!(last_start(&app), Some(2.0));
     // Each other choice probes again.
     cast(0, "copy", "copy", None);
     next_of(&mut got, "LOAD").await;
@@ -1227,7 +1231,9 @@ async fn a_seek_through_the_converter_stops_the_old_media_first() {
     }
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    let (source, _) = counting_source(wav16(), Duration::ZERO, false);
+    // Longer than the converter's 10 s burst, so ffmpeg still runs when the
+    // test needs it to.
+    let (source, _) = counting_source(wav16_lasting(24), Duration::ZERO, false);
     let movie = channel("m-1", &source, "movie");
     add_channel(&app, &movie);
     let events = updates(&app);
@@ -1264,7 +1270,7 @@ async fn a_seek_through_the_converter_stops_the_old_media_first() {
     assert_eq!(next[1].kind(), "LOAD");
     // The old converter is gone, and the new one starts at 2 s.
     assert!(ffmpeg_pids(&source).iter().all(|pid| !old.contains(pid)));
-    assert!(ffmpeg_starts_at(&source, "2.000"));
+    assert_eq!(last_start(&app), Some(2.0));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1383,7 +1389,9 @@ async fn a_converter_that_failed_while_it_cast_probes_again_next_time() {
     let events = updates(&app);
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
-    let (source, connections) = counting_source(wav16(), Duration::ZERO, false);
+    // Longer than the converter's 10 s burst, so ffmpeg still runs when the
+    // test needs it to.
+    let (source, connections) = counting_source(wav16_lasting(24), Duration::ZERO, false);
     let movie = channel("m-1", &source, "movie");
     add_channel(&app, &movie);
     load(&app, "cast:tv", &movie, converted(), None).unwrap();
@@ -1479,7 +1487,7 @@ async fn a_newer_load_waits_until_the_one_it_overtook_lets_go_of_the_provider() 
         connections.load(Ordering::SeqCst) >= 4
     })
     .await;
-    assert!(ffmpeg_starts_at(&source, "2.000"));
+    assert_eq!(last_start(&app), Some(2.0));
     // Its connections never overlapped the first's, so none was turned
     // away.
     second.join().unwrap().unwrap();
