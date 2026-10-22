@@ -1518,7 +1518,14 @@ impl ControllerFlow {
             return Some(self);
         }
         match &self {
-            ControllerFlow::Asking { .. } => out.send.push(Message::Cancel),
+            ControllerFlow::Asking { .. } => {
+                out.send.push(Message::Cancel);
+                // Said here too, as `lost` does, so the app knows nothing is
+                // under way any more: no transfer id came, so no other event
+                // will.
+                out.events
+                    .push(ControllerEvent::Refused(ErrorCode::Cancelled));
+            }
             flow => {
                 if let Some(id) = flow.transfer() {
                     out.send.push(Message::TransferCancel {

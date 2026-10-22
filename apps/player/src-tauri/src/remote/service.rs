@@ -33,7 +33,7 @@ use mvp_core::remote::transfer::flow::{
 use mvp_core::remote::transfer::refs::Salt;
 use mvp_core::remote::transfer::{Counts, Export, What};
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -47,6 +47,8 @@ use tokio::sync::oneshot;
 /// discovery found, and the device this one controls, if any.
 pub struct RemoteService {
     pub(crate) handle: TargetHandle,
+    /// The transfers under way, shared with the hosts.
+    transfers: Arc<Transfers>,
     key_dir: PathBuf,
     state: Mutex<Saved>,
     resetting: Mutex<()>,
@@ -208,6 +210,7 @@ impl RemoteService {
         let old = slot.replace(link::start(config, self.link_host.clone()));
         drop(slot);
         if let Some(old) = old {
+            self.end_link_transfer(old.generation());
             tauri::async_runtime::spawn(async move { old.leave().await });
         }
         Ok(())
@@ -231,9 +234,16 @@ impl RemoteService {
             }
         };
         if let Some(old) = old {
+            self.end_link_transfer(link);
             old.leave().await;
         }
         self.forget_kept();
+    }
+
+    /// A link this device left, or replaced, reports nothing more, so a
+    /// transfer it had under way ends here.
+    fn end_link_transfer(&self, link: u64) {
+        self.transfers.set(&link_key(link), false);
     }
 
     /// Stops keeping the device left in the list, unless a link to another
@@ -478,6 +488,7 @@ impl RemoteService {
         // webview didn't ask, so it's told.
         let old = lock(&self.link).take();
         if let Some(old) = old {
+            self.end_link_transfer(old.generation());
             self.events.left(old.generation(), old.device());
             tauri::async_runtime::spawn(async move { old.leave().await });
             self.forget_kept();
@@ -783,6 +794,13 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 
     fn sessions_changed(&self, sessions: &[SessionInfo]) {
+        // A session that ended, however it ended, took its transfers along,
+        // sometimes without a last word about them.
+        let devices: HashSet<String> = sessions.iter().map(|s| s.device_id.to_string()).collect();
+        self.transfers.retain(|key| match target_key_device(key) {
+            Some(device) => devices.contains(device),
+            None => true,
+        });
         let list: Vec<SessionEvent> = sessions.iter().map(SessionEvent::from).collect();
         let _ = self.app.emit("remote://sessions", list);
     }
@@ -860,8 +878,11 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 
     fn transfer(&self, event: &TransferEvent) {
+        // An import this device is asked for starts with its export right
+        // after Allow, before the first progress, so that short moment isn't
+        // covered.
         self.transfers.set(
-            &format!("in:{}", event.transfer),
+            &target_key(&event.device_id, &event.transfer),
             super::running::under_way(&event.progress),
         );
         let _ = self.app.emit("remote://transfer-target", event);
@@ -1062,7 +1083,7 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
     fn phase(&self, link: u64, device: &DeviceId, phase: &Phase) {
         if let Phase::Closed { reason } = phase {
             // Whatever it was sending ended with it.
-            self.transfers.set(&format!("link:{link}"), false);
+            self.transfers.set(&link_key(link), false);
             tracing::info!("[remote] the session with {device} ended: {reason:?}");
             let mut slot = lock(&self.link);
             if !slot.as_ref().is_some_and(|l| l.generation() == link) {
@@ -1139,7 +1160,7 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
             TransferUpdate::Progress { progress, .. } => super::running::under_way(progress),
             _ => true,
         };
-        self.transfers.set(&format!("link:{link}"), under_way);
+        self.transfers.set(&link_key(link), under_way);
         let update = match event {
             TransferUpdate::ProvidersGranted { grant } => {
                 return self.send_granted(link, device, grant.clone());
@@ -1413,6 +1434,22 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
         .unwrap_or_default()
 }
 
+/// The key a transfer on link `link`, which this device asked for, is
+/// tracked under.
+fn link_key(link: u64) -> String {
+    format!("link:{link}")
+}
+
+/// The key a transfer another device runs with this one is tracked under.
+fn target_key(device: &str, transfer: &str) -> String {
+    format!("in:{device}:{transfer}")
+}
+
+/// The device a [`target_key`] belongs to, or `None` for another key.
+fn target_key_device(key: &str) -> Option<&str> {
+    key.strip_prefix("in:")?.split_once(':').map(|(device, _)| device)
+}
+
 /// The transfers tracker for this platform: on iOS it asks for time to
 /// finish in the background. Android keeps running for a while anyway once
 /// the app leaves the screen, and computers don't suspend it.
@@ -1588,7 +1625,7 @@ fn start_on<R: Runtime>(
     let sending = Arc::new(Mutex::new(None));
     let link_host = Arc::new(TauriLinkHost {
         app: app.clone(),
-        transfers,
+        transfers: transfers.clone(),
         devices: devices.clone(),
         link: link.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),
@@ -1597,6 +1634,7 @@ fn start_on<R: Runtime>(
     });
     app.manage(RemoteService {
         handle,
+        transfers,
         key_dir,
         state: Mutex::new(Saved { settings, key }),
         link_host: link_host.clone(),

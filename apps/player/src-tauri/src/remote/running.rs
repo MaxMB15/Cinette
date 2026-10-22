@@ -42,16 +42,40 @@ impl Transfers {
     /// Notes that the transfer `key` is under way or over. The system is
     /// asked when the first one starts and told when the last one ends.
     pub fn set(&self, key: &str, running: bool) {
+        self.change(|set| {
+            if running {
+                set.insert(key.to_owned());
+            } else {
+                set.remove(key);
+            }
+        });
+    }
+
+    /// Ends every transfer whose key `still` doesn't keep, as when the
+    /// sessions they ran in have ended without a word about them.
+    pub fn retain(&self, still: impl Fn(&str) -> bool) {
+        self.change(|set| set.retain(|key| still(key)));
+    }
+
+    /// Changes the set, and asks or tells the system when it goes from
+    /// empty to not, or back.
+    fn change(&self, f: impl FnOnce(&mut HashSet<String>)) {
         let mut set = self.lock();
         let before = !set.is_empty();
-        if running {
-            set.insert(key.to_owned());
-        } else {
-            set.remove(key);
-        }
+        f(&mut set);
         let now = !set.is_empty();
         if now != before {
             (self.keep)(now);
+        }
+    }
+}
+
+impl Drop for Transfers {
+    /// Whatever was under way here ends with it, so the system isn't left
+    /// keeping the app running for nothing.
+    fn drop(&mut self) {
+        if !self.lock().is_empty() {
+            (self.keep)(false);
         }
     }
 }
@@ -87,6 +111,36 @@ mod tests {
         transfers.set("link:1", false);
         assert_eq!(*asked.lock().unwrap(), [true], "one still runs");
         transfers.set("in:a", false);
+        assert_eq!(*asked.lock().unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn ending_the_ones_a_session_ran_lets_go_once_none_are_left() {
+        let (transfers, asked) = watched();
+        transfers.set("in:phone:a", true);
+        transfers.set("in:mac:b", true);
+        transfers.retain(|key| !key.starts_with("in:phone:"));
+        assert_eq!(*asked.lock().unwrap(), [true], "the Mac's still runs");
+        transfers.retain(|key| !key.starts_with("in:mac:"));
+        assert_eq!(*asked.lock().unwrap(), [true, false]);
+        transfers.retain(|_| false);
+        assert_eq!(*asked.lock().unwrap(), [true, false], "nothing left to end");
+    }
+
+    #[test]
+    fn dropping_it_lets_go_of_what_was_under_way() {
+        let (transfers, asked) = watched();
+        transfers.set("link:1", true);
+        drop(transfers);
+        assert_eq!(*asked.lock().unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn dropping_it_idle_says_nothing() {
+        let (transfers, asked) = watched();
+        transfers.set("link:1", true);
+        transfers.set("link:1", false);
+        drop(transfers);
         assert_eq!(*asked.lock().unwrap(), [true, false]);
     }
 

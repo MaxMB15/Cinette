@@ -2593,3 +2593,97 @@ async fn a_link_that_closes_lets_go_of_its_transfer() {
     );
     assert_eq!(*lock(&kept), [true, false]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_while_the_other_device_asks_lets_go_at_once() {
+    let (mac, mut tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "send",
+                "what": { "history": true, "favorites": true, "pins": true } }),
+    )
+    .await
+    .unwrap();
+    tv.event("remote://consent").await;
+    until_kept(&mac, &[true]).await;
+    mac.invoke("remote_cancel_transfer", json!({ "link": 1 }))
+        .unwrap();
+    until_kept(&mac, &[true, false]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaving_the_link_while_the_other_device_asks_lets_go() {
+    let (mac, mut tv) = history_pair().await;
+    watch(&mac, "xt-mac-movie-8", 1234.0);
+    invoke_async(
+        &mac,
+        "remote_ask_history",
+        json!({ "link": 1, "direction": "send",
+                "what": { "history": true, "favorites": true, "pins": true } }),
+    )
+    .await
+    .unwrap();
+    tv.event("remote://consent").await;
+    until_kept(&mac, &[true]).await;
+    invoke_async(&mac, "remote_leave", json!({ "link": 1 }))
+        .await
+        .unwrap();
+    until_kept(&mac, &[true, false]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_ends_takes_its_transfers_along() {
+    let running = Running::start(|_| {}).await;
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let keep = kept.clone();
+    let host = TauriHost {
+        transfers: Arc::new(Transfers::new(Box::new(move |on| lock(&keep).push(on)))),
+        app: running.app.handle(),
+        advertiser: Box::new(|_: &Registration| None),
+        advertisement: Mutex::new(None),
+        episodes: Mutex::new(VecDeque::new()),
+        raised: Mutex::new(None),
+        fetches: Mutex::new(Bucket::full()),
+        loading: Gates::default(),
+        prompt: Arc::new(Mutex::new(None)),
+        progress: Arc::new(Mutex::new(None)),
+    };
+    let phone = DeviceKey::generate().device_id();
+    let mac = DeviceKey::generate().device_id();
+    let session = |device: &DeviceId| SessionInfo {
+        session_id: "s".into(),
+        device_id: device.clone(),
+        name: "Phone".into(),
+        device_type: DeviceType::Iphone,
+        connected: false,
+    };
+    host.transfer(&TransferEvent {
+        device_id: phone.to_string(),
+        name: "Phone".into(),
+        transfer: "t".into(),
+        kind: mvp_core::remote::message::RequestKind::History,
+        progress: Progress::Receiving { received: 1 },
+    });
+    assert_eq!(*lock(&kept), [true]);
+    // Still a session, waiting to resume: the transfer may still finish.
+    host.sessions_changed(&[session(&phone), session(&mac)]);
+    assert_eq!(*lock(&kept), [true]);
+    // A transfer this device asked for, on its own link, isn't the
+    // sessions' to end.
+    host.transfers.set("link:4", true);
+    // Gone, as after Never allow or a new identity, with no word about it.
+    host.sessions_changed(&[session(&mac)]);
+    assert_eq!(*lock(&kept), [true], "the link's still runs");
+    host.transfers.set("link:4", false);
+    assert_eq!(*lock(&kept), [true, false]);
+}
+
+#[test]
+fn a_target_key_names_its_device_and_no_other_key_does() {
+    let key = target_key("abc", "t-1");
+    assert_eq!(target_key_device(&key), Some("abc"));
+    assert_eq!(target_key_device(&link_key(4)), None);
+    assert_eq!(target_key_device("in:nocolon"), None);
+}

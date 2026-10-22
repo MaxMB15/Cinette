@@ -82,27 +82,28 @@ afterEach(() => {
 });
 
 describe("HistoryImportedNotice", () => {
-	it("brings a TV remote to Continue watching, and Back closes it", () => {
+	it("brings a TV remote to the notice, not to Continue watching, and Back closes it", async () => {
 		os.platform = "tv";
 		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
 		show(imported());
-		const resume = screen.getByRole("button", { name: /Continue watching/ });
-		expect(resume).toHaveFocus();
-		fireEvent.keyDown(resume, { key: "Escape" });
+		const notice = screen.getByRole("status");
+		expect(notice).toHaveFocus();
+		// A center press meant for the player, or a second one after Allow.
+		fireEvent.keyDown(notice, { key: "Enter" });
+		fireEvent.keyUp(notice, { key: "Enter" });
+		await act(async () => {});
+		expect(target.load, "nothing plays").not.toHaveBeenCalled();
+		expect(navigate).not.toHaveBeenCalled();
+		expect(screen.getByRole("status")).toBeInTheDocument();
+		fireEvent.keyDown(notice, { key: "Escape" });
 		expect(screen.queryByRole("status")).toBeNull();
 		expect(target.load, "Back plays nothing").not.toHaveBeenCalled();
-	});
-
-	it("brings a TV remote to Dismiss when there's nothing to continue", () => {
-		os.platform = "tv";
-		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
-		show(imported({ channel: undefined }));
-		expect(screen.getByRole("button", { name: "Dismiss" })).toHaveFocus();
 	});
 
 	it("leaves the focus where it is off a TV", () => {
 		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
 		show(imported());
+		expect(screen.getByRole("status")).not.toHaveFocus();
 		expect(screen.getByRole("button", { name: /Continue watching/ })).not.toHaveFocus();
 	});
 

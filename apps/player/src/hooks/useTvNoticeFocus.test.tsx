@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { useRef } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 const os = vi.hoisted(() => ({ platform: "tv" }));
@@ -15,17 +14,14 @@ import { useTvNoticeFocus } from "./useTvNoticeFocus";
 
 /** A page button, and a notice showing `message` while there is one. */
 const Page = ({ message, onDismiss }: { message: string | null; onDismiss: () => void }) => {
-	const target = useRef<HTMLButtonElement>(null);
-	const onKeyDown = useTvNoticeFocus(target, message, onDismiss);
+	const tv = useTvNoticeFocus(message, onDismiss);
 	return (
 		<>
 			<button type="button">Page</button>
 			{message && (
-				<div role="status" onKeyDown={onKeyDown}>
+				<div role="status" {...tv}>
 					<span>{message}</span>
-					<button ref={target} type="button">
-						Dismiss
-					</button>
+					<button type="button">Dismiss</button>
 				</div>
 			)}
 		</>
@@ -37,13 +33,16 @@ afterEach(() => {
 });
 
 describe("useTvNoticeFocus", () => {
-	it("brings the focus to a notice on a TV and back to the page when it goes", () => {
+	it("brings the focus to the notice itself on a TV and back to the page when it goes", () => {
 		const onDismiss = vi.fn();
 		const { rerender } = render(<Page message={null} onDismiss={onDismiss} />);
 		const page = screen.getByRole("button", { name: "Page" });
 		page.focus();
 		rerender(<Page message="Added" onDismiss={onDismiss} />);
-		expect(screen.getByRole("button", { name: "Dismiss" })).toHaveFocus();
+		const notice = screen.getByRole("status");
+		expect(notice).toHaveFocus();
+		// A place the D-pad moves from, into its buttons.
+		expect(notice).toHaveAttribute("tabindex", "0");
 		rerender(<Page message={null} onDismiss={onDismiss} />);
 		expect(page).toHaveFocus();
 	});
@@ -53,16 +52,17 @@ describe("useTvNoticeFocus", () => {
 		const page = screen.getByRole("button", { name: "Page" });
 		page.focus();
 		rerender(<Page message="Two" onDismiss={() => {}} />);
-		expect(screen.getByRole("button", { name: "Dismiss" })).toHaveFocus();
+		expect(screen.getByRole("status")).toHaveFocus();
 	});
 
-	it("leaves the focus alone off a TV", () => {
+	it("leaves the focus, and the tab order, alone off a TV", () => {
 		os.platform = "android";
 		const { rerender } = render(<Page message={null} onDismiss={() => {}} />);
 		const page = screen.getByRole("button", { name: "Page" });
 		page.focus();
 		rerender(<Page message="Added" onDismiss={() => {}} />);
 		expect(page).toHaveFocus();
+		expect(screen.getByRole("status")).not.toHaveAttribute("tabindex");
 	});
 
 	it("doesn't move the focus while nothing shows", () => {
@@ -80,7 +80,7 @@ describe("useTvNoticeFocus", () => {
 		svg.focus();
 		expect(document.activeElement).toBe(svg);
 		const { rerender } = render(<Page message="Added" onDismiss={() => {}} />);
-		expect(screen.getByRole("button", { name: "Dismiss" })).toHaveFocus();
+		expect(screen.getByRole("status")).toHaveFocus();
 		rerender(<Page message={null} onDismiss={() => {}} />);
 		expect(document.activeElement).toBe(svg);
 		svg.remove();
@@ -99,8 +99,8 @@ describe("useTvNoticeFocus", () => {
 	it("dismisses with Escape, the TV's Back, and only with it", () => {
 		const onDismiss = vi.fn();
 		render(<Page message="Added" onDismiss={onDismiss} />);
-		const dismiss = screen.getByRole("button", { name: "Dismiss" });
-		fireEvent.keyDown(dismiss, { key: "Enter" });
+		const notice = screen.getByRole("status");
+		fireEvent.keyDown(notice, { key: "Enter" });
 		expect(onDismiss).not.toHaveBeenCalled();
 		const escape = new KeyboardEvent("keydown", {
 			key: "Escape",
@@ -109,7 +109,7 @@ describe("useTvNoticeFocus", () => {
 		});
 		const reachedTop = vi.fn();
 		document.addEventListener("keydown", reachedTop);
-		dismiss.dispatchEvent(escape);
+		notice.dispatchEvent(escape);
 		document.removeEventListener("keydown", reachedTop);
 		expect(onDismiss).toHaveBeenCalledOnce();
 		// So the TV's Back stops here rather than going home.

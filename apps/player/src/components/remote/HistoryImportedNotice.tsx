@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -49,9 +49,8 @@ export const HistoryImportedNotice = () => {
 			setShown((current) => (current?.imported === event ? { imported: event, at } : current))
 		);
 	});
-	// On a TV the focus goes to Continue watching, or else to Dismiss.
-	const first = useRef<HTMLButtonElement>(null);
-	const onKeyDown = useTvNoticeFocus(first, shown?.imported, () => setShown(null));
+	// On a TV the focus goes to the notice, and the D-pad on to its buttons.
+	const tv = useTvNoticeFocus(shown?.imported, () => setShown(null));
 	if (!shown) return null;
 	const { imported, at } = shown;
 	const channel = imported.channel;
@@ -73,7 +72,7 @@ export const HistoryImportedNotice = () => {
 	return createPortal(
 		<div
 			role="status"
-			onKeyDown={onKeyDown}
+			{...tv}
 			className="fixed left-1/2 -translate-x-1/2 bottom-4 z-10000 flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl max-w-[calc(100vw-2rem)] break-words"
 		>
 			<span>
@@ -81,7 +80,6 @@ export const HistoryImportedNotice = () => {
 			</span>
 			{channel && (
 				<button
-					ref={first}
 					type="button"
 					className="px-3 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
 					onClick={() => void resume(channel)}
@@ -91,7 +89,6 @@ export const HistoryImportedNotice = () => {
 				</button>
 			)}
 			<button
-				ref={channel ? undefined : first}
 				type="button"
 				aria-label="Dismiss"
 				className="text-muted-foreground hover:text-foreground"
