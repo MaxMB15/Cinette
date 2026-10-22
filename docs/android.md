@@ -24,6 +24,9 @@ remote. See [The TV remote](#the-tv-remote).
   binary that downloads use, so `tauri.android.conf.json` leaves it out of the
   bundle.
 - Plain HTTP is allowed, because many IPTV servers only speak HTTP.
+- Android sets no `TMPDIR`, so Rust's `std::env::temp_dir()` would be
+  `/data/local/tmp`, which apps can't write. `MainActivity` points it at the app's
+  cache folder before the Rust library loads.
 
 ## Building
 
