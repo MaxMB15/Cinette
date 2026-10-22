@@ -266,13 +266,14 @@ pub fn plan(export: &Export, index: &Index, now: i64) -> Plan {
                 wrote = true;
             }
         }
-        // Each item is listed once. A row or favorite with nowhere to go
-        // is listed; a part that made no sense is listed only when nothing
-        // else of the item was written.
-        if lost {
-            plan.miss(&r.name, r.kind.into(), found.why);
-        } else if invalid && !wrote {
-            plan.miss(&r.name, r.kind.into(), Miss::Invalid);
+        // Each item is listed once, and only when none of it was written:
+        // one whose place was copied counts as transferred.
+        if !wrote {
+            if lost {
+                plan.miss(&r.name, r.kind.into(), found.why);
+            } else if invalid {
+                plan.miss(&r.name, r.kind.into(), Miss::Invalid);
+            }
         }
     }
     // Items the source or this device left out for being too large.
