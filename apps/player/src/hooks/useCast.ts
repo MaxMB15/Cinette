@@ -264,6 +264,9 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			if (next.connection !== "lost" || active.current !== destination) return;
 			active.current = null;
 			setDestination(null);
+			// Nothing it was still doing, such as starting its stream again,
+			// may bring it back.
+			void destination.stop().catch(() => {});
 			reportRef.current(castEndedMessage(destination.name, destination.closedReason()));
 		});
 	}, [destination, reportRef]);
