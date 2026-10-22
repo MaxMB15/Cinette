@@ -136,6 +136,7 @@ fn a_failure_before_the_item_is_ready_is_open_failed() {
             code: "openFailed",
             unsupported: false,
             not_picked: false,
+            conversion_stopped: false,
         })
     );
 }
@@ -564,6 +565,7 @@ fn a_failed_conversion_ends_the_item_where_it_was() {
             code: "refused",
             unsupported: false,
             not_picked: false,
+            conversion_stopped: true,
         })
     );
     // Everything else stays as AVPlayer last had it.
@@ -587,6 +589,7 @@ fn a_failure_with_nothing_tracked_starts_from_idle() {
                 code: "failed",
                 unsupported: false,
                 not_picked: false,
+                conversion_stopped: true,
             }),
             ..AirPlayState::idle()
         }
@@ -602,7 +605,10 @@ fn emits_a_failed_conversion() {
     fail_converted(&handle, "failed");
     let state = events.wait_for(EVENT_STATE);
     assert_eq!(state["status"], json!("error"));
-    assert_eq!(state["error"], json!({ "code": "failed" }));
+    assert_eq!(
+        state["error"],
+        json!({ "code": "failed", "conversionStopped": true })
+    );
 }
 
 #[test]
@@ -619,6 +625,7 @@ fn a_receiver_that_never_took_the_video_ends_the_item_as_not_picked() {
             code: "openFailed",
             unsupported: false,
             not_picked: true,
+            conversion_stopped: false,
         })
     );
     assert_eq!(state.position, opening.position);
