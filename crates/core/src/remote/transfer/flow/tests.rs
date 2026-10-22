@@ -852,6 +852,30 @@ fn providers_send(grant: &str, part: u32, last: bool, names: &[&str]) -> Message
 }
 
 #[test]
+fn saving_providers_has_time_for_each_of_them() {
+    let now = Instant::now();
+    let (flow, grant) = granted_providers(now, 5);
+    let later = now + Duration::from_secs(1);
+    let mut steps = Vec::new();
+    let flow = flow
+        .receive(
+            providers_send(&grant, 0, true, &["P0", "P1", "P2", "P3", "P4"]),
+            later,
+            &mut steps,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(matches!(flow, TargetFlow::Saving { .. }));
+    let due = later + providers_write_time(5);
+    assert!(providers_write_time(5) > WRITE_TIMEOUT);
+    let flow = flow
+        .tick(due - Duration::from_millis(1), &mut steps)
+        .expect("still saving");
+    assert!(flow.tick(due, &mut steps).is_none());
+    assert!(progress_of(&steps).contains(&&Progress::Failed(ErrorCode::Expired)));
+}
+
+#[test]
 fn providers_can_come_in_parts() {
     let now = Instant::now();
     let (flow, grant) = granted_providers(now, 2);
