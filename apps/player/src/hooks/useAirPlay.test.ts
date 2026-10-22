@@ -52,7 +52,7 @@ const tauri = vi.hoisted(() => ({
 	airplaySeek: vi.fn<typeof Bridge.airplaySeek>(async () => {}),
 	airplaySelectAudio: vi.fn<typeof Bridge.airplaySelectAudio>(async () => {}),
 	airplaySelectSubtitle: vi.fn<typeof Bridge.airplaySelectSubtitle>(async () => {}),
-	airplaySetDetection: vi.fn<typeof Bridge.airplaySetDetection>(async () => {}),
+	airplaySetDetection: vi.fn<typeof Bridge.airplaySetDetection>(async () => null),
 	airplayStop: vi.fn<typeof Bridge.airplayStop>(async () => {}),
 	getStreamFormats: vi.fn<typeof Bridge.getStreamFormats>(),
 }));
@@ -117,6 +117,46 @@ describe("useAirPlay", () => {
 		expect(events.count("airplay://route")).toBe(0);
 	});
 
+	it("turns detection on only once it listens, so the first report isn't missed", async () => {
+		const listening: number[] = [];
+		tauri.airplaySetDetection.mockImplementationOnce(async () => {
+			listening.push(events.count("airplay://available"), events.count("airplay://route"));
+			return null;
+		});
+		renderHook(() => useAirPlay(true));
+		await flush();
+		expect(listening).toEqual([1, 1]);
+	});
+
+	it("takes what detection last found, which may not change again", async () => {
+		// Another player turned it on, and a TV was found then.
+		tauri.airplaySetDetection.mockResolvedValueOnce(true);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		expect(result.current.available).toBe(true);
+		act(() => events.emit("airplay://available", false));
+		expect(result.current.available).toBe(false);
+	});
+
+	it("waits for an event when detection hasn't found anything yet", async () => {
+		tauri.airplaySetDetection.mockResolvedValueOnce(null);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		expect(result.current.available).toBe(false);
+	});
+
+	it("ignores what detection found once the page has gone", async () => {
+		let answer: (known: boolean) => void = () => {};
+		tauri.airplaySetDetection.mockImplementationOnce(
+			() => new Promise((resolve) => (answer = resolve))
+		);
+		const { result, unmount } = renderHook(() => useAirPlay(true));
+		await flush();
+		unmount();
+		await act(async () => answer(true));
+		expect(result.current.available).toBe(false);
+	});
+
 	it("counts as available while the audio route is already AirPlay", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		const { result } = renderHook(() => useAirPlay(true));
@@ -137,7 +177,9 @@ describe("useAirPlay", () => {
 		rerender({ on: false });
 		rerender({ on: true });
 		await flush();
-		expect(tauri.airplaySetDetection.mock.calls).toEqual([[true], [false], [true]]);
+		// The first on waits for its listeners, so its off comes first. The
+		// backend counts them, so the order doesn't matter: on twice, off once.
+		expect(tauri.airplaySetDetection.mock.calls).toEqual([[false], [true], [true]]);
 		answer(tv);
 		await flush();
 		expect(result.current.available).toBe(false);

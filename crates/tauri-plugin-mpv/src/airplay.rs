@@ -375,9 +375,21 @@ impl Tracker {
     }
 }
 
+/// Who wants receiver detection, and what it last found.
+#[derive(Debug, Default)]
+struct Detection {
+    /// Turns on less turns off. A player that mounts and one that goes
+    /// each ask, and the commands can run in either order, so this counts
+    /// them instead of taking the last one.
+    users: i64,
+    /// What the backend last said while detection was on.
+    available: Option<bool>,
+}
+
 /// Tauri managed state: the item AirPlay plays, if any.
 #[derive(Default)]
 pub struct AirPlay {
+    detection: Mutex<Detection>,
     /// The tracked item, and the load it came from.
     tracker: Mutex<Option<(u64, Tracker)>>,
     last: Mutex<Option<AirPlayState>>,
@@ -385,6 +397,32 @@ pub struct AirPlay {
 }
 
 impl AirPlay {
+    /// One player wants detection on, or no longer does. Calls `switch`
+    /// with the new setting when that changes, under the lock, so the
+    /// backend gets them in order. Returns what detection last found, for
+    /// a player that turns it on.
+    pub fn set_detection(&self, enabled: bool, switch: impl FnOnce(bool)) -> Option<bool> {
+        let mut detection = lock_or_recover(&self.detection);
+        let was_on = detection.users > 0;
+        detection.users += if enabled { 1 } else { -1 };
+        let on = detection.users > 0;
+        if on != was_on {
+            if !on {
+                detection.available = None;
+            }
+            switch(on);
+        }
+        detection.available.filter(|_| enabled)
+    }
+
+    /// The backend found receivers in reach, or none.
+    pub fn detected(&self, available: bool) {
+        let mut detection = lock_or_recover(&self.detection);
+        if detection.users > 0 {
+            detection.available = Some(available);
+        }
+    }
+
     /// Starts tracking a new item. Returns its load, which the reports
     /// about it carry on a Mac.
     pub fn begin(&self, tracker: Tracker) -> u64 {
@@ -567,13 +605,27 @@ fn start_position(start_at: Option<f64>, live: bool) -> f64 {
     start_at.filter(|_| !live).unwrap_or(0.0)
 }
 
-/// Turns receiver detection on while the player is open. It costs power,
-/// so it's off otherwise.
+/// Turns receiver detection on while a player is open. It costs power, so
+/// it's off otherwise. Each player turns it on and off once, and it stays
+/// on while any player wants it. Turning it on answers what it last found,
+/// or `null` before the backend has said, when an [`EVENT_AVAILABLE`]
+/// follows.
 #[command]
-pub async fn airplay_set_detection(enabled: bool) -> Result<(), String> {
+pub async fn airplay_set_detection<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<Option<bool>, String> {
     backend::ensure()?;
-    backend::set_detection(enabled);
-    Ok(())
+    Ok(app
+        .state::<AirPlay>()
+        .set_detection(enabled, backend::set_detection))
+}
+
+/// Keeps and emits what detection found.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+pub(crate) fn detected<R: Runtime>(app: &AppHandle<R>, available: bool) {
+    app.state::<AirPlay>().detected(available);
+    let _ = app.emit(EVENT_AVAILABLE, available);
 }
 
 /// Opens the system route picker, anchored at a rect in the page's CSS

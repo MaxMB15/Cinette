@@ -193,7 +193,15 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 			listen<boolean>(AIRPLAY_AVAILABLE_EVENT, (e) => setAvailable(e.payload)),
 			listen<AirPlayRoute | null>(AIRPLAY_ROUTE_EVENT, (e) => setRoute(e.payload)),
 		];
-		void airplaySetDetection(true).catch(() => {});
+		// Detection goes on once the listeners are there, so the backend's
+		// first report isn't missed, and it answers what it last found,
+		// which may never change again while a receiver stays in reach.
+		void Promise.all(unlisten)
+			.then(() => airplaySetDetection(true))
+			.then((known) => {
+				if (current && typeof known === "boolean") setAvailable(known);
+			})
+			.catch(() => {});
 		void airplayGetRoute()
 			.then((r) => {
 				if (current) setRoute(r);
