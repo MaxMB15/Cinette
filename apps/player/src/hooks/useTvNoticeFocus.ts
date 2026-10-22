@@ -24,7 +24,10 @@ export const useTvNoticeFocus = (
 		const before = document.activeElement;
 		target.current.focus();
 		return () => {
-			if (before instanceof HTMLElement && before.isConnected) before.focus();
+			// The page's element may have gone meanwhile, and focusing one
+			// that's off the page does nothing.
+			// Stryker disable next-line ConditionalExpression: document.activeElement is always the body or a focused element here, which these are, so no test can make it anything else.
+			if (before instanceof HTMLElement || before instanceof SVGElement) before.focus();
 		};
 	}, [target, shown]);
 	return (e) => {

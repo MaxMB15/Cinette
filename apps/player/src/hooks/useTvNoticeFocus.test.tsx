@@ -73,6 +73,19 @@ describe("useTvNoticeFocus", () => {
 		expect(page).toHaveFocus();
 	});
 
+	it("brings the focus back to an SVG control too", () => {
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		svg.setAttribute("tabindex", "0");
+		document.body.append(svg);
+		svg.focus();
+		expect(document.activeElement).toBe(svg);
+		const { rerender } = render(<Page message="Added" onDismiss={() => {}} />);
+		expect(screen.getByRole("button", { name: "Dismiss" })).toHaveFocus();
+		rerender(<Page message={null} onDismiss={() => {}} />);
+		expect(document.activeElement).toBe(svg);
+		svg.remove();
+	});
+
 	it("doesn't send the focus to something that left the page", () => {
 		const outside = document.createElement("button");
 		document.body.append(outside);

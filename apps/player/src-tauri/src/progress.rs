@@ -71,6 +71,7 @@ fn hand_off<R: Runtime>(
     Some(saving)
 }
 
+// mutants: skip FnValue: it only reads mpv's state, and the tests' mpv never has a stream; save_now_at, which decides and saves, is tested.
 /// Saves the handed-over item's position now, from where mpv is, as an
 /// export of this device's history is about to read it. The thread saves
 /// only every few seconds, and not at all while iOS has suspended the app.

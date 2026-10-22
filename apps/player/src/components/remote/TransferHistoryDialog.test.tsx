@@ -195,13 +195,14 @@ describe("TransferHistoryDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));
 		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
 		notify({ step: "pending", expiresInMs: 30_000 });
-		expect(screen.getByText(/Keep Cinette open until it's done/)).toBeInTheDocument();
+		// A line of its own, in both places.
+		expect(screen.getByText(/Keep Cinette open until it's done/).tagName).toBe("P");
 		notify({
 			step: "progress",
 			transfer: "t",
 			progress: { state: "sending", data: { done: 1, total: 5 } },
 		});
-		expect(screen.getByText(/Keep Cinette open until it's done/)).toBeInTheDocument();
+		expect(screen.getByText(/Keep Cinette open until it's done/).tagName).toBe("P");
 		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
 		expect(screen.queryByText(/Keep Cinette open/)).toBeNull();
 		expect(screen.getByText(/too late to stop it now/)).toBeInTheDocument();
@@ -218,6 +219,8 @@ describe("TransferHistoryDialog", () => {
 			progress: { state: "sending", data: { done: 1, total: 5 } },
 		});
 		expect(screen.queryByText(/Keep Cinette open/)).toBeNull();
+		// Not even an empty line in its place.
+		expect(screen.getByRole("dialog").querySelectorAll("p:empty")).toHaveLength(0);
 	});
 
 	it("leaves out the unmatched list when everything matched", async () => {
