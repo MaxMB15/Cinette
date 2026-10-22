@@ -30,5 +30,7 @@ kotlin {
 }
 
 dependencies {
+    // For the lifecycle callbacks' AppCompatActivity. The app's version.
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation(project(":tauri-android"))
 }
