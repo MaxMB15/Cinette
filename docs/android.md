@@ -70,7 +70,10 @@ Leave out `--target` to build all four ABIs, including the x86 ones an emulator 
 an Intel computer needs. `--target x86_64` builds just that one. An Apple Silicon
 Mac's emulator runs `aarch64`.
 
-A release APK or app bundle has to be signed. That isn't set up yet.
+A release APK or app bundle has to be signed. `app/build.gradle.kts` signs release
+builds with the key that `gen/android/keystore.properties` names, when that file
+exists. [amazon-appstore.md](amazon-appstore.md#signing) says how to make both. CI
+doesn't build release builds.
 
 ### Google and Amazon builds
 

@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated October 20, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad.
+Last updated October 22, 2026. This policy covers Cinette, formerly called Max Video Player, on macOS, Linux, iPhone and iPad, and on Android, including Android TV and Fire TV.
 
 The developer of Cinette receives no data from the app. The app has no accounts, ads or analytics, and no server of its own. Your data stays on your device. The app sends data only to the services listed under "Who the app talks to", and only when you use a feature that needs one.
 
@@ -25,6 +25,8 @@ In the app, you can remove a playlist or provider on the Playlists page. That de
 In Settings, you can clear your watch history and where you stopped. Clear All Caches deletes the downloaded movie and series details, ratings, skip times, subtitle search results, guide data, episode lists and subtitle files. It keeps your playlists, favorites and history.
 
 On iPhone and iPad, deleting the app deletes all of its data from the device. Copies in your iCloud or computer backups stay until those backups are replaced.
+
+On Android, Android TV and Fire TV, uninstalling the app deletes all of its data from the device. Where the device backs up app data, as Android does to your Google account when backup is on, the backup holds a copy of the app's data, logins included, until the backup is replaced or deleted.
 
 On macOS, the app's data is in `~/Library/Application Support/app.cinette`, `~/Library/WebKit/app.cinette` and `~/Library/Caches/app.cinette`. On Linux, it's in `~/.local/share/app.cinette`, with cached files under `~/.cache`. Before 0.8.0, these folders were named `com.maxvideoplayer.app`, and the first launch of 0.8.0 renames them. Deleting these folders deletes the data. Downloads stay where you saved them until you delete them.
 
