@@ -1802,7 +1802,9 @@ export const PlayerView = () => {
 			{notice && (
 				<p
 					role="alert"
-					className="absolute top-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded bg-black/90 px-4 py-2 text-sm text-white"
+					// Below the notch or the Dynamic Island in portrait, and no
+					// wider than the screen.
+					className="absolute top-[calc(1rem+env(safe-area-inset-top))] left-1/2 z-40 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded bg-black/90 px-4 py-2 text-sm text-white"
 				>
 					<span>{notice.text}</span>
 					<button
