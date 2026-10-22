@@ -304,6 +304,9 @@ describe("TransferHistoryDialog", () => {
 			progress: { state: "sending", data: { done: 2, total: 5 } },
 		});
 		expect(screen.queryByText(/too late to stop it now/)).toBeNull();
+		// While it moves, it can still be stopped.
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
 		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
 		expect(screen.getByText(/too late to stop it now/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
