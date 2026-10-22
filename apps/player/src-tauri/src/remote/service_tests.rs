@@ -1967,6 +1967,9 @@ async fn history_imported_from_another_instance_waits_for_the_preview() {
             break;
         }
     }
+    // Done, so the next transfer can be asked for, either way.
+    ask_all(&mac, "send").await.unwrap();
+    tv.event("remote://consent").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1990,6 +1993,12 @@ async fn a_denied_history_transfer_writes_nothing() {
     let refused = transfer_step(&mut mac, "refused").await;
     assert_eq!(refused["code"], json!("denied"));
     assert_eq!(position_of(&tv), None);
+    // The denial's cooldown may turn the next one away on the TV, but this
+    // device no longer thinks one is waiting.
+    assert_ne!(
+        ask_all(&mac, "send").await,
+        Err(json!("Another transfer with that device is going on."))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -18,28 +18,43 @@ import type { Channel } from "@/lib/types";
  * Says history from another device was added here, and loads the history,
  * favorites and pinned groups again, so they show without a restart. When
  * the other device's last item matched one here, it offers to continue it
- * at the saved place. Nothing plays until that's chosen, and then it starts
- * from the place saved here by then.
+ * at the place saved here, which the button names. Nothing plays until
+ * that's chosen, and then it starts from the place saved by then.
  */
+/** Where `channel` would continue here: the place saved for it now, or
+ *  undefined to start from the beginning. */
+const savedPlace = async (channel: Channel): Promise<number | undefined> => {
+	const key = playbackKey(channel);
+	const saved = key ? await getPlaybackPosition(key).catch(() => undefined) : undefined;
+	return saved && !saved.finished ? saved.positionSeconds : undefined;
+};
+
 export const HistoryImportedNotice = () => {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const [imported, setImported] = useState<RemoteHistoryImported | null>(null);
+	// The import shown, and the place its button names, read as Continue
+	// reads it.
+	const [shown, setShown] = useState<{ imported: RemoteHistoryImported; at?: number } | null>(
+		null
+	);
 	useTauriEvent<RemoteHistoryImported>("remote://history-imported", (event) => {
 		void queryClient.invalidateQueries({ queryKey: historyKey() });
 		void queryClient.invalidateQueries({ queryKey: channelsQuery().queryKey });
 		void queryClient.invalidateQueries({ queryKey: ["local", "pinnedGroups"] });
-		setImported(event);
+		setShown({ imported: event });
+		if (!event.channel) return;
+		void savedPlace(event.channel).then((at) =>
+			// A newer import may have taken its place meanwhile.
+			setShown((current) => (current?.imported === event ? { imported: event, at } : current))
+		);
 	});
-	if (!imported) return null;
+	if (!shown) return null;
+	const { imported, at } = shown;
 	const channel = imported.channel;
-	const at = imported.report.resume?.position;
 	const resume = async (channel: Channel) => {
-		setImported(null);
-		// It may have been watched here since the import.
-		const key = playbackKey(channel);
-		const saved = key ? await getPlaybackPosition(key).catch(() => undefined) : null;
-		const startAt = saved && !saved.finished ? saved.positionSeconds : undefined;
+		setShown(null);
+		// It may have been watched here since the button showed.
+		const startAt = await savedPlace(channel);
 		await applyRemoteCommand(
 			{ action: "load", itemId: channel.id, startAt },
 			{
@@ -73,7 +88,7 @@ export const HistoryImportedNotice = () => {
 				type="button"
 				aria-label="Dismiss"
 				className="text-muted-foreground hover:text-foreground"
-				onClick={() => setImported(null)}
+				onClick={() => setShown(null)}
 			>
 				<X className="h-4 w-4" aria-hidden />
 			</button>

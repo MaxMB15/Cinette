@@ -91,7 +91,9 @@ describe("HistoryImportedNotice", () => {
 	it("continues the other device's item here at its place", async () => {
 		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
 		show(imported());
-		fireEvent.click(screen.getByRole("button", { name: "Continue watching Heat at 20:34" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "Continue watching Heat at 20:34" })
+		);
 		await waitFor(() =>
 			expect(target.load).toHaveBeenCalledWith(
 				{ kind: "local", channel: heat },
@@ -101,6 +103,32 @@ describe("HistoryImportedNotice", () => {
 		expect(getPlaybackPosition).toHaveBeenCalledWith("movie:heat");
 		expect(navigate).toHaveBeenCalledWith("/player");
 		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("names the place saved here, which may not be the one sent", async () => {
+		vi.mocked(getPlaybackPosition).mockResolvedValue(saved(2000));
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(imported());
+		expect(
+			await screen.findByRole("button", { name: "Continue watching Heat at 33:20" })
+		).toBeInTheDocument();
+	});
+
+	it("names no time when it was finished here, or for an import that was replaced", async () => {
+		let answer: (p: ReturnType<typeof saved>) => void = () => {};
+		vi.mocked(getPlaybackPosition)
+			.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+			.mockResolvedValueOnce(saved(6990, true));
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(imported());
+		show(imported({ from: "TV" }));
+		await waitFor(() => expect(getPlaybackPosition).toHaveBeenCalledTimes(2));
+		// The first one's answer comes last and is for an import no longer shown.
+		await act(async () => answer(saved(900)));
+		expect(screen.getByRole("status")).toHaveTextContent("Added history from TV.");
+		expect(screen.getByRole("button", { name: /Continue watching Heat/ })).toHaveTextContent(
+			/^Continue watching Heat$/
+		);
 	});
 
 	it("starts from the place saved here when it's pressed", async () => {

@@ -344,7 +344,10 @@ impl RemoteService {
             if slot.as_ref().is_some_and(|(l, _)| *l == link) {
                 return Err(BUSY.into());
             }
-            *slot = Some((link, playing));
+            // Only a send needs the player's channel, once it's allowed.
+            if direction == Direction::Send {
+                *slot = Some((link, playing));
+            }
         }
         let asked = handle.ask_history(direction, what, counts).await;
         if asked.is_err() {
@@ -911,9 +914,7 @@ async fn run_blocking<R: Runtime, T: Send + 'static>(
     app: AppHandle<R>,
     work: impl FnOnce(&AppState) -> Result<T, ErrorCode> + Send + 'static,
 ) -> Result<T, ErrorCode> {
-    tauri::async_runtime::spawn_blocking(move || work(&app.state::<AppState>()))
-        .await
-        .unwrap_or(Err(ErrorCode::Failed))
+    blocking(app, work).await.unwrap_or(Err(ErrorCode::Failed))
 }
 
 // mutants: skip FnValue: it only acts on a real window, which the mock runtime doesn't have.
@@ -1128,6 +1129,7 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
             },
             TransferUpdate::Refused(code) => {
                 lock(&self.sending).take_if(|(l, _)| *l == link);
+                lock(&self.history).take_if(|(l, _)| *l == link);
                 TransferStep::Refused { code: *code }
             }
             TransferUpdate::Progress { transfer, progress } => TransferStep::Progress {

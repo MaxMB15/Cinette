@@ -610,13 +610,13 @@ pub async fn remote_ask_history<R: Runtime>(
     what: mvp_core::remote::transfer::What,
     playing: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?
             .ask_history(app.clone(), link, direction, what, playing)
             .await
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link, direction, what, playing);
         Err(UNAVAILABLE.into())
@@ -629,13 +629,13 @@ pub async fn remote_history_counts<R: Runtime>(
     app: AppHandle<R>,
     what: mvp_core::remote::transfer::What,
 ) -> Result<mvp_core::remote::transfer::Counts, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         super::service::history_counts(app, what)
             .await
             .map_err(|_| "Couldn't read this device's history.".to_string())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, what);
         Err(UNAVAILABLE.into())
@@ -649,11 +649,11 @@ pub async fn remote_start_import<R: Runtime>(
     link: u64,
     transfer: String,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?.start_import(link, transfer)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link, transfer);
         Err(UNAVAILABLE.into())
@@ -667,12 +667,12 @@ pub async fn remote_progress_saved<R: Runtime>(
     app: AppHandle<R>,
     playing: Option<String>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?.progress_saved(playing);
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, playing);
         Err(UNAVAILABLE.into())
