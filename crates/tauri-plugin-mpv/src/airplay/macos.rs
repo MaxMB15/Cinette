@@ -75,6 +75,8 @@ type ViewFinder = Box<dyn Fn() -> Option<usize> + Send + Sync>;
 static VIEW: OnceLock<ViewFinder> = OnceLock::new();
 /// The route the picker gave, until AirPlay stops.
 static ROUTE: Mutex<Option<Route>> = Mutex::new(None);
+/// When the picker was last clicked open, for the log.
+static OPENED: Mutex<Option<Instant>> = Mutex::new(None);
 /// The host, made on the main thread on first use.
 static HOST: OnceLock<MainThreadBound<RefCell<Host>>> = OnceLock::new();
 /// Whether the timer has anything to watch, and its wake-up.
@@ -222,6 +224,12 @@ define_class!(
         fn did_end(&self, view: &AVRoutePickerView) {
             // Out of the page's way until it opens again.
             view.setHidden(true);
+            if let Some(opened) = lock_or_recover(&OPENED).take() {
+                tracing::debug!(
+                    "[AirPlay] the picker closed after {} ms",
+                    opened.elapsed().as_millis()
+                );
+            }
             // macOS doesn't say what was picked, so the app loads, and the
             // load finds out.
             send(Callback::Route(Some(Route::new(ROUTE_UID, ROUTE_NAME))));
@@ -356,7 +364,15 @@ impl Host {
         match button {
             Some(button) => {
                 picker.setHidden(false);
+                let clicked = Instant::now();
+                *lock_or_recover(&OPENED) = Some(clicked);
                 unsafe { button.performClick(None) };
+                // Whether the click returns at once or only once the menu
+                // closes says how the picker shows it.
+                tracing::debug!(
+                    "[AirPlay] the picker's click returned after {} ms",
+                    clicked.elapsed().as_millis()
+                );
             }
             None => {
                 tracing::warn!("[AirPlay] the route picker has no button");
@@ -386,7 +402,7 @@ impl Host {
             live,
             start_at,
             started: false,
-            pick: Pick::default(),
+            pick: Pick::loaded(Instant::now()),
         });
         set_watching(true);
     }
@@ -447,6 +463,18 @@ impl Host {
         }
         let external = unsafe { player.isExternalPlaybackActive() };
         let step = item.pick.step(ready, external, Instant::now());
+        if let Some(after) = step.ready_after {
+            tracing::debug!(
+                "[AirPlay] the item was ready {} ms after the load",
+                after.as_millis()
+            );
+        }
+        if let Some(after) = step.reached_after {
+            tracing::debug!(
+                "[AirPlay] the TV took the video {} ms after the load",
+                after.as_millis()
+            );
+        }
         unsafe {
             if player.isMuted() != step.muted {
                 player.setMuted(step.muted);

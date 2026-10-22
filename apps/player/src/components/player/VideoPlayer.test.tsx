@@ -82,6 +82,7 @@ const picker = vi.hoisted(() => ({ pick: undefined as SubtitlePick | undefined }
 
 const tauri = vi.hoisted(() => ({
 	mpvSetBounds: vi.fn<typeof Bridge.mpvSetBounds>(async () => {}),
+	warmStreamFormats: vi.fn<typeof Bridge.warmStreamFormats>(async () => {}),
 	mpvSetMediaInfo: vi.fn<typeof Bridge.mpvSetMediaInfo>(async () => {}),
 	mpvGetState: vi.fn<typeof Bridge.mpvGetState>(async () => idleState()),
 	mpvSubAdd: vi.fn<typeof Bridge.mpvSubAdd>(async () => {}),
@@ -3722,6 +3723,25 @@ describe("AirPlay", () => {
 		fakeAirPlay.enabled = [];
 		await goTo({ url: MOVIE_URL, channel: lanternKeeper() });
 		expect(fakeAirPlay.enabled.every((on) => !on)).toBe(true);
+	});
+
+	it("asks the panel ahead once a receiver is in reach", async () => {
+		await openItem(lanternKeeper());
+		expect(tauri.warmStreamFormats).not.toHaveBeenCalled();
+		act(() => fakeAirPlay.set({ available: true }));
+		await flush();
+		expect(tauri.warmStreamFormats).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "mv1" })
+		);
+	});
+
+	it("doesn't mind a panel that can't be asked ahead", async () => {
+		tauri.warmStreamFormats.mockRejectedValueOnce(new Error("offline"));
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await flush();
+		expect(tauri.warmStreamFormats).toHaveBeenCalled();
+		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
 	it("shows its button only while a receiver is in reach", async () => {
