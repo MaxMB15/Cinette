@@ -246,6 +246,38 @@ fn rejoins_only_the_same_receiver_app() {
 }
 
 #[test]
+fn stops_the_same_receiver_app_and_launches_none() {
+    let now = Instant::now();
+    let (mut session, first) = Session::stop_app(SENDER.into(), "s1".into(), now);
+    assert_eq!(
+        types(&first),
+        vec!["receiver-0 CONNECT", "receiver-0 GET_STATUS"]
+    );
+    let out = session.receive(&receiver_status(dmr("s1")), now);
+    assert_eq!(
+        types(&out.send),
+        vec!["receiver-0 STOP", "receiver-0 CLOSE"]
+    );
+    assert_eq!(sent(&out.send)[0].2["sessionId"], "s1");
+    assert_eq!(
+        out.events.last(),
+        Some(&Event::Closed(CloseReason::Stopped))
+    );
+    assert!(session.is_closed());
+
+    // Another sender's app, or none, is left alone.
+    for apps in [dmr("s2"), json!([])] {
+        let (mut session, _) = Session::stop_app(SENDER.into(), "s1".into(), now);
+        let out = session.receive(&receiver_status(apps), now);
+        assert!(out.send.is_empty());
+        assert_eq!(
+            out.events.last(),
+            Some(&Event::Closed(CloseReason::AppStopped))
+        );
+    }
+}
+
+#[test]
 fn the_load_message_carries_only_what_playback_needs() {
     let now = Instant::now();
     let mut session = ready(now);

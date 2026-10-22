@@ -2052,15 +2052,34 @@ async fn a_reconnect_leaves_a_cast_that_went_to_another_receiver_alone() {
 static GONE_THEN_STOPPED: AtomicBool = AtomicBool::new(false);
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_reconnect_opens_nothing_once_the_cast_was_stopped() {
+async fn a_stop_while_it_reconnects_reaches_the_tv() {
     let app = TestApp::new();
     let ours = |ip| !(GONE_THEN_STOPPED.load(Ordering::SeqCst) && ip == LOOPBACK);
     let (_events, mut got) = reconnecting(&app, &GONE_THEN_STOPPED, ours).await;
-    // The user stops the cast while the try connects.
+    // The user stops the cast while the try connects, which the old
+    // connection can no longer tell the TV.
     app.invoke("cast_stop", json!({ "receiverId": "cast:tv" }))
         .unwrap();
-    // The try gets through after that, and starts nothing on the TV.
-    assert!(!gets_on(&mut got, 1, Duration::from_secs(3)).await);
+    // The try gets through after that, and stops the app the cast had on
+    // the TV, without opening anything.
+    let mut on_new = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(4), async {
+        while let Some(message) = got.recv().await {
+            if message.connection == 1 {
+                on_new.push(message);
+            }
+        }
+    })
+    .await;
+    let stop = on_new
+        .iter()
+        .find(|m| m.kind() == "STOP")
+        .expect("a stop on the new connection");
+    assert_eq!(stop.namespace, mvp_core::cast::message::NS_RECEIVER);
+    assert_eq!(stop.body["sessionId"], "s1");
+    assert!(on_new
+        .iter()
+        .all(|m| !matches!(m.kind(), "LAUNCH" | "LOAD")));
     assert_eq!(
         control(&app, "cast:tv", json!({ "action": "play" })),
         Err(json!("notConnected"))
@@ -2126,4 +2145,31 @@ async fn a_reconnect_that_gives_up_after_a_load_connected_says_nothing() {
     // The try gives up later, and says nothing of the cast that goes on.
     assert_eq!(closed_within(&events, Duration::from_secs(7)), None);
     control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
+}
+
+static GONE_THEN_ENDED: AtomicBool = AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_finds_an_app_that_ended_meanwhile_and_says_so() {
+    let app = TestApp::new();
+    let ours = |ip| !(GONE_THEN_ENDED.load(Ordering::SeqCst) && ip == LOOPBACK);
+    let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), ours).await;
+    GONE_THEN_ENDED.store(true, Ordering::SeqCst);
+    first.go_quiet();
+    // Someone ends the app on the TV while the connection is gone.
+    first.end_app();
+    // The session connects again to pick the app up, finds it gone, and
+    // says so, rather than launch another.
+    assert_eq!(
+        closed_within(&events, Duration::from_secs(10)),
+        Some(json!("appStopped"))
+    );
+    GONE_THEN_ENDED.store(false, Ordering::SeqCst);
+    let opened = tokio::time::timeout(Duration::from_millis(500), async {
+        while let Some(message) = got.recv().await {
+            assert!(!(message.connection == 1 && message.kind() == "LAUNCH"));
+        }
+    })
+    .await;
+    assert!(opened.is_err());
 }

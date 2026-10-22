@@ -151,9 +151,10 @@ pub enum CommandError {
 
 enum Stage {
     /// Waiting for the first receiver status. `rejoin` is the session to
-    /// pick back up, which must still be running.
+    /// pick back up, which must still be running. `stop` stops it instead.
     Connecting {
         rejoin: Option<String>,
+        stop: bool,
         since: Instant,
     },
     Launching {
@@ -188,19 +189,37 @@ impl Session {
     /// Starts a cast. `sender` is this connection's source id, such as
     /// `sender-<random>`. Returns the frames to send first.
     pub fn start(sender: String, now: Instant) -> (Self, Vec<Vec<u8>>) {
-        Self::open(sender, None, now)
+        Self::open(sender, None, false, now)
     }
 
     /// Picks up `session_id` again on a new connection. If it isn't running
     /// any more, the session closes with [`CloseReason::AppStopped`].
     pub fn rejoin(sender: String, session_id: String, now: Instant) -> (Self, Vec<Vec<u8>>) {
-        Self::open(sender, Some(session_id), now)
+        Self::open(sender, Some(session_id), false, now)
     }
 
-    fn open(sender: String, rejoin: Option<String>, now: Instant) -> (Self, Vec<Vec<u8>>) {
+    /// Stops `session_id` on a new connection, as when the cast ended while
+    /// its own connection was gone, and closes. It never launches an app,
+    /// and leaves one that isn't that session alone. The session closes
+    /// with [`CloseReason::Stopped`] once it has sent the stop, or with
+    /// [`CloseReason::AppStopped`] when the app had ended already.
+    pub fn stop_app(sender: String, session_id: String, now: Instant) -> (Self, Vec<Vec<u8>>) {
+        Self::open(sender, Some(session_id), true, now)
+    }
+
+    fn open(
+        sender: String,
+        rejoin: Option<String>,
+        stop: bool,
+        now: Instant,
+    ) -> (Self, Vec<Vec<u8>>) {
         let mut session = Self {
             sender,
-            stage: Stage::Connecting { rejoin, since: now },
+            stage: Stage::Connecting {
+                rejoin,
+                stop,
+                since: now,
+            },
             reader: FrameReader::default(),
             next_request: 0,
             last_received: now,
@@ -474,8 +493,14 @@ impl Session {
             .into_iter()
             .find(|a| a.app_id == DEFAULT_MEDIA_RECEIVER);
         match std::mem::replace(&mut self.stage, Stage::Closed) {
-            Stage::Connecting { rejoin, .. } => match (running, rejoin) {
+            Stage::Connecting { rejoin, stop, .. } => match (running, rejoin) {
                 (Some(app), None) => self.ready(app, now, out),
+                (Some(app), Some(id)) if app.session_id == id && stop => {
+                    let stop = json!({ "type": "STOP", "sessionId": app.session_id });
+                    out.send.push(self.request(PLATFORM, NS_RECEIVER, stop).1);
+                    out.send.push(self.close_to(PLATFORM));
+                    self.close(CloseReason::Stopped, out);
+                }
                 (Some(app), Some(id)) if app.session_id == id => self.ready(app, now, out),
                 (_, Some(_)) => self.close(CloseReason::AppStopped, out),
                 (None, None) => {
