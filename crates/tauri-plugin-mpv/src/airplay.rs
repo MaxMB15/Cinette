@@ -335,6 +335,7 @@ impl Tracker {
 
     /// Counts the receiver as lost for good, and logs the first time.
     fn lose(&mut self, why: &str, position: f64) {
+        // mutants: skip UnaryOperator: It only decides whether a debug line is written, which no test reads.
         if !self.lost {
             tracing::debug!("[AirPlay] lost the receiver at {position:.1} s: {why}");
         }
