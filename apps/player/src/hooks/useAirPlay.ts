@@ -207,7 +207,8 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 		void Promise.allSettled(unlisten)
 			.then(() => airplaySetDetection(true))
 			.then((known) => {
-				if (current && !heard && typeof known === "boolean") setAvailable(known);
+				// Nothing found yet is no TV in reach, until a report says.
+				if (current && !heard) setAvailable(known === true);
 			})
 			.catch(() => {});
 		void airplayGetRoute()
