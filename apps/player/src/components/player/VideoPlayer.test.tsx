@@ -3773,6 +3773,15 @@ describe("AirPlay", () => {
 		expect(send.mock.calls[1][1].startAt).toBe(1805);
 	});
 
+	it("sends a movie that hasn't got going from the start", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 0, 5400) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(vi.mocked(fakeAirPlay.get().send).mock.calls[0][1].startAt).toBeUndefined();
+	});
+
 	it("sends the movie from where it last was while mpv reconnects", async () => {
 		fakeAirPlay.set({ available: true });
 		await openItem(lanternKeeper());

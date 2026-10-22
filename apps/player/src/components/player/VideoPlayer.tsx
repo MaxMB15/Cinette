@@ -1512,12 +1512,13 @@ export const PlayerView = () => {
 	 * reconnect doesn't reset to 0. A live channel, or an item that hasn't
 	 * got going, starts where the receiver does.
 	 */
-	const sendFrom = (): number | undefined => {
-		if (activeChannelRef.current?.contentType === "live") return undefined;
+	const sendFrom = (channel: Channel): number | undefined => {
+		if (channel.contentType === "live") return undefined;
 		const pending = progressRef.current.pendingStart;
 		if (pending !== null) return pending;
+		// 0 until mpv has played past the first second.
 		const at = mpv.getLastKnownPosition();
-		return at > 1 ? at : undefined;
+		return at > 0 ? at : undefined;
 	};
 	/** Stops the item here once a receiver takes it, saving where it was. */
 	const stopForReceiver = async () => {
@@ -1531,7 +1532,7 @@ export const PlayerView = () => {
 		anchor: DOMRect,
 		confirm: () => Promise<boolean>
 	): Promise<string | null> => {
-		const startAt = sendFrom();
+		const startAt = sendFrom(channel);
 		airplayFrom.current = startAt;
 		const result = await airplay.send(channel, {
 			anchor,
@@ -1554,7 +1555,7 @@ export const PlayerView = () => {
 	const sendToCast = (receiverId: string, channel: Channel): Promise<void> =>
 		cast
 			.send(receiverId, channel, {
-				startAt: sendFrom(),
+				startAt: sendFrom(channel),
 				stopLocal: stopForReceiver,
 			})
 			.then((why) => setNotice(afterCast(why)));
