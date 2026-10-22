@@ -2,10 +2,11 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! DNS-SD on the local network: browsing for a service type and advertising
-//! one, on macOS and Linux.
+//! one, on macOS, iOS, Linux and Android.
 //!
-//! macOS uses Bonjour through `dns_sd.h` in libSystem. Linux uses the
-//! `mdns-sd` crate, which needs no Avahi daemon and runs beside one. Both
+//! macOS and iOS use Bonjour through `dns_sd.h` in libSystem, which on iOS
+//! needs `NSBonjourServices` and no multicast entitlement. Linux and Android use
+//! the `mdns-sd` crate, which needs no Avahi daemon and runs beside one. Both
 //! give the same [`Event`]s, so callers don't know which one runs.
 //!
 //! Nothing is advertised until [`advertise`] is called, and dropping the
@@ -13,15 +14,15 @@
 //! can run at once.
 
 // The macOS backend's decisions, which the tests on Linux check too.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 mod bonjour;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use linux as platform;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use macos as platform;
 
 #[cfg(test)]
@@ -142,7 +143,7 @@ impl fmt::Display for DiscoveryError {
 
 impl std::error::Error for DiscoveryError {}
 
-// Whether macOS refused the app local network access. Each platform's
+// Whether macOS or iOS refused the app local network access. Each platform's
 // function has the details.
 pub use platform::local_network_denied;
 
@@ -395,7 +396,7 @@ impl Tracker {
 /// The instance name in a full service name such as
 /// `Living\032Room._cinette._tcp.local.`, with DNS escapes undone: `\.`,
 /// `\\` and `\DDD`.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(dead_code))]
 pub(crate) fn instance_name(fullname: &str, service_type: &str) -> Option<String> {
     let suffix = format!(".{service_type}.local.");
     let escaped = fullname.strip_suffix(&suffix)?;

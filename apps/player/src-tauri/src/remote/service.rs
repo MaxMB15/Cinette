@@ -4,6 +4,7 @@
 //! Starts the target when the app starts, and connects it to Tauri: events
 //! for the webview, the cache for catalog answers, and DNS-SD.
 
+use super::device::device_type;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
 use super::target::{self, CatalogPage, SavedProviders, TargetHandle, TargetHost, TransferEvent};
@@ -29,17 +30,12 @@ use mvp_core::remote::transfer::{Counts, What};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::mpsc;
-
-/// This device's type, as other devices see it.
-#[cfg(target_os = "macos")]
-pub const DEVICE_TYPE: DeviceType = DeviceType::Mac;
-#[cfg(target_os = "linux")]
-pub const DEVICE_TYPE: DeviceType = DeviceType::LinuxPc;
 
 /// Remote control as Tauri managed state: the running target, the devices
 /// discovery found, and the device this one controls, if any.
@@ -63,6 +59,15 @@ pub struct RemoteService {
     /// How many cancels each link has had, so a send that was cancelled
     /// while it waited for the cache doesn't ask after all.
     cancels: Mutex<std::collections::HashMap<u64, u64>>,
+    /// Whether the app is in the foreground, as the system last said.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    wants_foreground: AtomicBool,
+    /// Whether the target listens and advertises, as it was last told. Held
+    /// while the target is told, so changes reach it one at a time.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    in_foreground: tokio::sync::Mutex<bool>,
 }
 
 struct Saved {
@@ -127,12 +132,12 @@ impl RemoteService {
         }
         let (key, name) = {
             let saved = lock(&self.state);
-            (saved.key.clone(), saved.settings.name(DEVICE_TYPE))
+            (saved.key.clone(), saved.settings.name(device_type()))
         };
         let hello = Hello {
             id: key.device_id(),
             name,
-            device_type: DEVICE_TYPE,
+            device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
             features: vec![Feature::Control, Feature::Catalog, Feature::Providers],
         };
@@ -265,6 +270,73 @@ impl RemoteService {
     /// How many cancels link `link` has had.
     fn cancel_count(&self, link: u64) -> u64 {
         lock(&self.cancels).get(&link).copied().unwrap_or(0)
+    }
+
+    /// Notes that the app went to the background or came back. Call
+    /// [`Self::follow_foreground`] next.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub fn set_foreground(&self, foreground: bool) {
+        self.wants_foreground.store(foreground, Ordering::SeqCst);
+    }
+
+    /// Brings the target in line with the last [`Self::set_foreground`]:
+    /// in the background it stops advertising and listening, and back in
+    /// the foreground it listens again and advertises. Open sessions carry
+    /// on either way. However the calls overlap, the last word wins.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub async fn follow_foreground(&self) {
+        self.follow_foreground_with(target::bind_default, &BIND_RETRIES)
+            .await;
+    }
+
+    /// [`Self::follow_foreground`], listening on what `bind` gives. When it
+    /// fails, it tries again after each of `retries` for as long as the app
+    /// stays in the foreground.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    async fn follow_foreground_with<F, Fut>(&self, bind: F, retries: &[Duration])
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = std::io::Result<tokio::net::TcpListener>>,
+    {
+        let mut in_foreground = self.in_foreground.lock().await;
+        let wanted = self.wants_foreground.load(Ordering::SeqCst);
+        if wanted == *in_foreground {
+            return;
+        }
+        if !wanted {
+            tracing::info!("[remote] in the background; not taking new connections");
+            self.handle.background().await;
+            *in_foreground = false;
+            return;
+        }
+        let mut waits = retries.iter();
+        loop {
+            let listening = match bind().await {
+                Ok(listener) => self.handle.foreground(listener),
+                Err(e) => Err(e),
+            };
+            match listening {
+                Ok(()) => {
+                    tracing::info!(
+                        "[remote] in the foreground; listening on port {}",
+                        self.handle.port()
+                    );
+                    *in_foreground = true;
+                    return;
+                }
+                Err(e) => tracing::warn!("[remote] couldn't listen again: {e}"),
+            }
+            let Some(wait) = waits.next() else {
+                return;
+            };
+            tokio::time::sleep(*wait).await;
+            if !self.wants_foreground.load(Ordering::SeqCst) {
+                return;
+            }
+        }
     }
 
     /// Makes and saves a new key, so a new device id. Every session ends.
@@ -413,6 +485,17 @@ const FETCH_BURST: u32 = 4;
 /// How often a controller may load one more series from the provider, so
 /// browsing can't make the provider turn this device's account away.
 const FETCH_EVERY: Duration = Duration::from_secs(1);
+/// The waits before each new try at listening when the app comes back to
+/// the foreground and the port can't be bound, such as when the app is out
+/// of file descriptors for a moment.
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+const BIND_RETRIES: [Duration; 4] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
 /// The shortest time between two consent requests that ask for attention.
 const RAISE_EVERY: Duration = Duration::from_secs(120);
 
@@ -653,7 +736,11 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
 // mutants: skip FnValue: it only acts on a real window, which the mock runtime doesn't have.
 /// Brings a minimized or hidden main window back without focusing it, and
 /// asks for attention: the Dock icon bounces, or the taskbar entry flashes.
+/// On a phone or TV the app is on screen whenever a request can come in.
 fn ask_for_attention<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(mobile)]
+    let _ = app;
+    #[cfg(desktop)]
     if let Some(window) = app.get_webview_window("main") {
         if window.is_minimized().unwrap_or(false) {
             let _ = window.unminimize();
@@ -1000,24 +1087,115 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
         .unwrap_or_default()
 }
 
+/// Where the store says the user has opened Devices or the Remote control
+/// settings once, after which remote control starts with the app.
+const OPENED_KEY: &str = "remoteOpened";
+
+/// Whether remote control waits for the user before it starts. On iOS it
+/// does until they first open Devices or the Remote control settings, so
+/// the local network prompt, which starting it raises, comes when they
+/// can tell what it's for.
+pub fn waits_for_user(ios: bool, opened_before: bool) -> bool {
+    ios && !opened_before
+}
+
+fn opened_before<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.store(SETTINGS_STORE_FILE)
+        .ok()
+        .and_then(|store| store.get(OPENED_KEY))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn remember_opened<R: Runtime>(app: &AppHandle<R>) {
+    let saved = app.store(SETTINGS_STORE_FILE).and_then(|store| {
+        store.set(OPENED_KEY, true);
+        store.save()
+    });
+    if let Err(e) = saved {
+        tracing::warn!("[remote] couldn't remember that remote control was opened: {e}");
+    }
+}
+
+/// Starts remote control with the app, unless it waits for the user (see
+/// [`waits_for_user`]). Says whether it started.
+pub fn start_at_launch<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
+    start_at_launch_with(cfg!(target_os = "ios"), opened_before(app), || {
+        start(app, key_dir)
+    })
+}
+
+/// [`start_at_launch`] on iOS or not, with the user having opened it before
+/// or not, starting with `start`.
+fn start_at_launch_with(ios: bool, opened_before: bool, start: impl FnOnce() -> bool) -> bool {
+    if waits_for_user(ios, opened_before) {
+        tracing::info!("[remote] waiting for Devices or the settings before starting");
+        return false;
+    }
+    start()
+}
+
 /// Starts the target on every address and advertises it, and manages a
 /// [`RemoteService`]. A failure is logged and the app carries on without
-/// remote control.
-pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) {
-    let started = tauri::async_runtime::block_on(async {
-        let listener = target::bind_default().await.map_err(|e| e.to_string())?;
-        start_on(
-            app,
-            key_dir,
-            listener,
-            Box::new(advertise_on_network),
-            browse_network(),
-            target::Limits::STANDARD,
-        )
-    });
-    if let Err(e) = started {
+/// remote control, which [`open`] tries again. Says whether it started.
+pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
+    let started = tauri::async_runtime::block_on(start_on_network(app, key_dir));
+    if let Err(e) = &started {
         tracing::error!("[remote] remote control didn't start: {e}");
     }
+    started.is_ok()
+}
+
+async fn start_on_network<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> Result<(), String> {
+    let listener = target::bind_default().await.map_err(|e| e.to_string())?;
+    start_on(
+        app,
+        key_dir,
+        listener,
+        Box::new(advertise_on_network),
+        browse_network,
+        target::Limits::STANDARD,
+    )
+}
+
+/// Starts remote control if it isn't running: on iOS the first time the
+/// user opens Devices or the Remote control settings, and anywhere after a
+/// start that failed. Once it starts, the app starts it from then on, and
+/// `multicast` is told to hold the Wi-Fi multicast lock if the app is still
+/// in the foreground.
+pub async fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    key_dir: PathBuf,
+    multicast: impl FnOnce(bool),
+) -> Result<(), String> {
+    open_with(app, start_on_network(app, key_dir), multicast).await
+}
+
+/// [`open`], starting with `start`.
+async fn open_with<R: Runtime>(
+    app: &AppHandle<R>,
+    start: impl std::future::Future<Output = Result<(), String>>,
+    multicast: impl FnOnce(bool),
+) -> Result<(), String> {
+    // One start at a time, so two quick opens don't start it twice.
+    static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = STARTING.lock().await;
+    if app.try_state::<RemoteService>().is_some() {
+        return Ok(());
+    }
+    start.await.inspect_err(|e| {
+        tracing::error!("[remote] remote control didn't start: {e}");
+    })?;
+    // Only a start that worked counts, so a failed one doesn't make every
+    // later launch start it, and ask about the local network, by itself.
+    remember_opened(app);
+    // The app may have gone to the background while it started.
+    if let Some(service) = app.try_state::<RemoteService>()
+        && service.wants_foreground.load(Ordering::SeqCst)
+    {
+        multicast(true);
+    }
+    Ok(())
 }
 
 /// [`start`] on `listener`, advertising through `advertiser`, with `limits`. Call it inside
@@ -1027,7 +1205,7 @@ fn start_on<R: Runtime>(
     key_dir: PathBuf,
     listener: tokio::net::TcpListener,
     advertiser: Advertiser,
-    found: mpsc::UnboundedReceiver<discovery::Event>,
+    browse: impl FnOnce() -> mpsc::UnboundedReceiver<discovery::Event>,
     limits: target::Limits,
 ) -> Result<(), String> {
     let key = identity::load_or_create(&key_dir)
@@ -1048,7 +1226,7 @@ fn start_on<R: Runtime>(
     let handle = target::start_with(
         listener,
         key.clone(),
-        DEVICE_TYPE,
+        device_type(),
         settings.clone(),
         host,
         limits,
@@ -1056,7 +1234,10 @@ fn start_on<R: Runtime>(
     .map_err(|e| format!("couldn't listen: {e}"))?;
     let devices = Arc::new(Mutex::new(Devices::new(device_id.clone())));
     let link = Arc::new(Mutex::new(None));
-    follow_discovery(app.clone(), devices.clone(), found);
+    // Only now, with the key loaded and the target listening, so a start
+    // that failed leaves no browse running, which on iOS would raise the
+    // local network prompt by itself.
+    follow_discovery(app.clone(), devices.clone(), browse());
     tracing::info!(
         "[remote] listening on port {} as {device_id}",
         handle.port()
@@ -1082,8 +1263,77 @@ fn start_on<R: Runtime>(
         prompt,
         sending,
         cancels: Mutex::default(),
+        wants_foreground: AtomicBool::new(true),
+        in_foreground: tokio::sync::Mutex::new(true),
     });
     Ok(())
+}
+
+/// Where the app is, as the system says. Each platform maps its own events
+/// to these, so the mapping reads the same in each and can't swap a bare
+/// true and false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+pub enum Lifecycle {
+    /// Android's onResume, iOS's willEnterForeground.
+    Foreground,
+    /// Android's onPause, which also comes while a system panel or a share
+    /// sheet covers part of the app, and iOS's didEnterBackground.
+    Background,
+}
+
+impl Lifecycle {
+    /// From whether the app is in the background, as the mpv plugin passes
+    /// on iOS's didEnterBackground (`true`) and willEnterForeground
+    /// (`false`). Not Tauri's own Suspended, which iOS sends on
+    /// applicationWillResignActive.
+    // Only iOS reports it this way.
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub fn from_background(background: bool) -> Self {
+        if background {
+            Self::Background
+        } else {
+            Self::Foreground
+        }
+    }
+}
+
+/// Tells remote control that the app went to the background or came back.
+/// On a phone, tablet or TV, the device can only be found while the app is
+/// in the foreground.
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+pub fn set_foreground<R: Runtime>(app: &AppHandle<R>, state: Lifecycle) {
+    set_foreground_with(app, state, |hold| {
+        #[cfg(target_os = "android")]
+        crate::android_device::hold_multicast(hold);
+        #[cfg(not(target_os = "android"))]
+        let _ = hold;
+    });
+}
+
+/// [`set_foreground`], calling `multicast` to hold the Wi-Fi multicast lock
+/// or let it go, but only when remote control runs.
+// Only the mobile apps go to the background.
+#[cfg_attr(not(mobile), allow(dead_code))]
+fn set_foreground_with<R: Runtime>(
+    app: &AppHandle<R>,
+    state: Lifecycle,
+    multicast: impl FnOnce(bool),
+) {
+    let Some(service) = app.try_state::<RemoteService>() else {
+        return;
+    };
+    let foreground = state == Lifecycle::Foreground;
+    multicast(foreground);
+    service.set_foreground(foreground);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(service) = app.try_state::<RemoteService>() {
+            service.follow_foreground().await;
+        }
+    });
 }
 
 /// Closes every connection with `shutdown` and withdraws the record.

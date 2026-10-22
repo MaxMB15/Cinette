@@ -22,19 +22,44 @@ pub fn on_local_network(peer: IpAddr, interfaces: &[(IpAddr, IpAddr)]) -> bool {
 /// [`on_local_network`] with this machine's interfaces as they are now.
 pub fn is_local_peer(peer: IpAddr) -> bool {
     let interfaces = match if_addrs::get_if_addrs() {
-        Ok(list) => list
-            .into_iter()
-            .map(|interface| match interface.addr {
-                if_addrs::IfAddr::V4(a) => (IpAddr::V4(a.ip), IpAddr::V4(a.netmask)),
-                if_addrs::IfAddr::V6(a) => (IpAddr::V6(a.ip), IpAddr::V6(a.netmask)),
-            })
-            .collect(),
+        Ok(list) => subnets(list),
         Err(e) => {
             tracing::warn!("[remote] couldn't list the network interfaces: {e}");
             Vec::new()
         }
     };
     on_local_network(peer, &interfaces)
+}
+
+/// Each interface's address and netmask. A point-to-point link, such as a
+/// phone's cellular one or a VPN tunnel, counts only its own address: its
+/// subnet, often a carrier's 10.0.0.0/8, is someone else's network, not the
+/// one this device shares with the user's other devices.
+pub fn subnets(interfaces: impl IntoIterator<Item = if_addrs::Interface>) -> Vec<(IpAddr, IpAddr)> {
+    interfaces
+        .into_iter()
+        .map(|interface| {
+            let own = interface.is_p2p();
+            match interface.addr {
+                if_addrs::IfAddr::V4(a) => {
+                    let mask = if own {
+                        std::net::Ipv4Addr::BROADCAST
+                    } else {
+                        a.netmask
+                    };
+                    (IpAddr::V4(a.ip), IpAddr::V4(mask))
+                }
+                if_addrs::IfAddr::V6(a) => {
+                    let mask = if own {
+                        std::net::Ipv6Addr::from(u128::MAX)
+                    } else {
+                        a.netmask
+                    };
+                    (IpAddr::V6(a.ip), IpAddr::V6(mask))
+                }
+            }
+        })
+        .collect()
 }
 
 fn plain(ip: IpAddr) -> IpAddr {

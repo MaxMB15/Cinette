@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import {
 	deviceTypeName,
+	discoveryLimit,
+	LOCAL_NETWORK_DENIED,
+	LOCAL_NETWORK_DENIED_IOS,
+	localNetworkDenied,
 	endedText,
 	fitName,
 	formatCode,
@@ -11,6 +16,35 @@ import {
 	MAX_NAME_BYTES,
 	secondsLeft,
 } from "./remote-devices";
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
+
+describe("localNetworkDenied", () => {
+	it("names iOS's Settings on iOS and System Settings elsewhere", () => {
+		expect(localNetworkDenied("ios")).toBe(LOCAL_NETWORK_DENIED_IOS);
+		expect(localNetworkDenied("macos")).toBe(LOCAL_NETWORK_DENIED);
+		expect(LOCAL_NETWORK_DENIED_IOS).not.toBe(LOCAL_NETWORK_DENIED);
+	});
+});
+
+describe("discoveryLimit", () => {
+	it("says phones, tablets and TVs are only found while you're using Cinette", () => {
+		const note = "Other devices can only find this one while you're using Cinette.";
+		expect(discoveryLimit("android")).toBe(note);
+		expect(discoveryLimit("tv")).toBe(note);
+		expect(discoveryLimit("ios")).toBe(note);
+	});
+
+	it("says nothing on a computer, which only has to be running", () => {
+		expect(discoveryLimit("macos")).toBeNull();
+		expect(discoveryLimit("linux")).toBeNull();
+	});
+
+	it("asks the platform when given none", () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		expect(discoveryLimit()).not.toBeNull();
+	});
+});
 
 describe("deviceTypeName", () => {
 	it("names every type the protocol has", () => {

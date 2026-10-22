@@ -3,6 +3,9 @@
 
 /** How remote control names devices and counts down a request. */
 
+import { getPlatform, isMobilePlatform } from "@/lib/platform";
+import type { Platform } from "@/lib/types";
+
 const TYPE_NAMES = new Map([
 	["mac", "Mac"],
 	["linux-pc", "Linux PC"],
@@ -14,6 +17,27 @@ const TYPE_NAMES = new Map([
 	["android-tv", "Android TV"],
 	["fire-tv", "Fire TV"],
 ]);
+
+/**
+ * What the settings add about when other devices can find this one, where
+ * that depends on the app being open: on phones, tablets and TVs.
+ */
+export const discoveryLimit = (platform: Platform = getPlatform()): string | null =>
+	isMobilePlatform(platform)
+		? "Other devices can only find this one while you're using Cinette."
+		: null;
+
+/** What shows while macOS keeps Cinette off the local network. */
+export const LOCAL_NETWORK_DENIED =
+	"Cinette can't look for other devices. Allow it under Local Network in System Settings, Privacy & Security.";
+
+/** What shows while iOS keeps Cinette off the local network. */
+export const LOCAL_NETWORK_DENIED_IOS =
+	"Cinette can't look for other devices. Allow it in Settings, Privacy & Security, Local Network.";
+
+/** Where to allow the local network on `platform`. */
+export const localNetworkDenied = (platform: Platform): string =>
+	platform === "ios" ? LOCAL_NETWORK_DENIED_IOS : LOCAL_NETWORK_DENIED;
 
 /** A device type as the protocol spells it, like `fire-tv`, in words. */
 export const deviceTypeName = (deviceType: string): string =>

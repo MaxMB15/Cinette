@@ -83,6 +83,16 @@ fn an_incomplete_history_request_isnt_read() {
             counts: None,
             providers: None,
         },
+        // A send that doesn't say what it carries.
+        Message::Request {
+            kind: RequestKind::History,
+            resume: None,
+            id: Some(4),
+            direction: Some(Direction::Send),
+            what: Some(What::ALL),
+            counts: None,
+            providers: None,
+        },
         Message::control_request(None),
         Message::Ping,
     ] {
@@ -371,7 +381,7 @@ fn the_receiver_acks_each_chunk_and_hands_over_the_last() {
     let mut steps = Vec::new();
     let later = now + Duration::from_secs(1);
     let flow = flow
-        .receive(chunk(&id, 0, false), 100, later, &mut steps)
+        .receive(chunk(&id, 0, false), later, &mut steps)
         .unwrap()
         .unwrap();
     assert_eq!(flow.deadline(), Some(later + STEP_TIMEOUT));
@@ -385,11 +395,12 @@ fn the_receiver_acks_each_chunk_and_hands_over_the_last() {
     assert_eq!(progress_of(&steps), [&Progress::Receiving { received: 1 }]);
     steps.clear();
     let flow = flow
-        .receive(chunk(&id, 1, true), 100, now, &mut steps)
+        .receive(chunk(&id, 1, true), now, &mut steps)
         .unwrap()
         .unwrap();
     assert!(matches!(flow, TargetFlow::Importing { .. }));
-    assert_eq!(flow.deadline(), None);
+    // The app has a while to write it, not forever.
+    assert_eq!(flow.deadline(), Some(now + WRITE_TIMEOUT));
     assert!(steps.iter().any(|s| matches!(
         s,
         Step::Import { export, .. } if export.sent_at == 5
@@ -402,9 +413,7 @@ fn a_chunk_out_of_order_ends_the_transfer() {
     let now = Instant::now();
     let (flow, id) = receiving(now);
     let mut steps = Vec::new();
-    let flow = flow
-        .receive(chunk(&id, 1, false), 100, now, &mut steps)
-        .unwrap();
+    let flow = flow.receive(chunk(&id, 1, false), now, &mut steps).unwrap();
     assert!(flow.is_none());
     assert!(sent(&steps).contains(&&Message::TransferError {
         transfer: id,
@@ -419,7 +428,7 @@ fn a_message_for_another_transfer_is_answered_and_changes_nothing() {
     let (flow, id) = receiving(now);
     let mut steps = Vec::new();
     let flow = flow
-        .receive(chunk("other", 0, true), 100, now, &mut steps)
+        .receive(chunk("other", 0, true), now, &mut steps)
         .unwrap()
         .unwrap();
     assert_eq!(flow.transfer(), Some(id.as_str()));
@@ -447,7 +456,7 @@ fn a_message_for_another_transfer_is_answered_and_changes_nothing() {
 }
 
 fn flow_of(flow: TargetFlow, message: Message, steps: &mut Vec<Step>) -> Option<TargetFlow> {
-    flow.receive(message, 10, Instant::now(), steps).unwrap()
+    flow.receive(message, Instant::now(), steps).unwrap()
 }
 
 #[test]
@@ -455,7 +464,7 @@ fn a_message_that_isnt_a_transfer_step_is_given_back() {
     let now = Instant::now();
     let (flow, _) = receiving(now);
     let mut steps = Vec::new();
-    let (flow, message) = *flow.receive(Message::Ping, 4, now, &mut steps).unwrap_err();
+    let (flow, message) = *flow.receive(Message::Ping, now, &mut steps).unwrap_err();
     assert_eq!(message, Message::Ping);
     assert!(flow.transfer().is_some());
     assert!(steps.is_empty());
@@ -523,9 +532,104 @@ fn a_flow_with_no_deadline_never_expires() {
     assert_eq!(flow.deadline(), None);
     let far = Instant::now() + Duration::from_secs(100_000);
     assert!(flow.tick(far, &mut steps).is_some());
-    let saving = TargetFlow::Saving { grant: "g".into() };
-    assert!(saving.tick(far, &mut steps).is_some());
     assert!(steps.is_empty());
+}
+
+#[test]
+fn a_write_the_app_never_finishes_ends_the_transfer() {
+    let now = Instant::now();
+    for flow in [
+        TargetFlow::Importing {
+            transfer: "t".into(),
+            deadline: now + WRITE_TIMEOUT,
+        },
+        TargetFlow::Saving {
+            grant: "t".into(),
+            deadline: now + WRITE_TIMEOUT,
+        },
+    ] {
+        let mut steps = Vec::new();
+        let flow = flow
+            .tick(now + WRITE_TIMEOUT - Duration::from_millis(1), &mut steps)
+            .expect("still writing");
+        assert!(steps.is_empty());
+        assert!(flow.tick(now + WRITE_TIMEOUT, &mut steps).is_none());
+        assert_eq!(
+            sent(&steps),
+            [&Message::TransferError {
+                transfer: "t".into(),
+                code: ErrorCode::Expired,
+            }]
+        );
+    }
+}
+
+#[test]
+fn many_providers_get_longer_to_save() {
+    assert_eq!(providers_write_time(1), WRITE_TIMEOUT);
+    assert_eq!(providers_write_time(3), WRITE_TIMEOUT);
+    assert_eq!(providers_write_time(4), PROVIDER_SAVE_TIME * 4);
+    assert_eq!(providers_write_time(32), PROVIDER_SAVE_TIME * 32);
+    assert!(providers_write_time(usize::MAX) >= providers_write_time(32));
+}
+
+#[test]
+fn a_send_that_keeps_being_acked_still_has_a_limit() {
+    let now = Instant::now();
+    let mut out = ControllerOut::default();
+    let mut flow = ControllerFlow::Exporting {
+        transfer: "t".into(),
+        deadline: later(),
+    }
+    .send_export("t", Ok(export(20_000)), now, &mut out)
+    .unwrap();
+    // One acknowledgement every 29 s keeps the step timeout away.
+    let mut at = now;
+    for seq in 0..20 {
+        at += Duration::from_secs(29);
+        flow = flow.tick(at, &mut out).expect("each ack comes in time");
+        let ack = Message::TransferAck {
+            transfer: "t".into(),
+            seq,
+        };
+        flow = flow.receive(ack, at, &mut out).unwrap().unwrap();
+    }
+    assert!(matches!(flow, ControllerFlow::Sending(_)));
+    assert_eq!(flow.deadline(), Some(now + TRANSFER_LIMIT));
+    assert!(flow.tick(now + TRANSFER_LIMIT, &mut out).is_none());
+}
+
+#[test]
+fn a_cancel_after_the_last_chunk_went_is_too_late() {
+    let now = Instant::now();
+    let mut out = ControllerOut::default();
+    // One chunk: it goes at once, before its acknowledgement.
+    let flow = ControllerFlow::Exporting {
+        transfer: "t".into(),
+        deadline: later(),
+    }
+    .send_export("t", Ok(export(1)), now, &mut out)
+    .unwrap();
+    let mut out = ControllerOut::default();
+    let flow = flow.cancel(&mut out).expect("too late to cancel");
+    assert_eq!(out, ControllerOut::default());
+    assert!(matches!(flow, ControllerFlow::Sending(_)));
+
+    // With chunks still to go, it stops.
+    let flow = ControllerFlow::Exporting {
+        transfer: "t".into(),
+        deadline: later(),
+    }
+    .send_export("t", Ok(export(5000)), now, &mut out)
+    .unwrap();
+    let mut out = ControllerOut::default();
+    assert!(flow.cancel(&mut out).is_none());
+    assert_eq!(
+        out.send,
+        [Message::TransferCancel {
+            transfer: "t".into()
+        }]
+    );
 }
 
 #[test]
@@ -628,7 +732,7 @@ fn an_import_sends_once_started_and_finishes_with_the_result() {
     let start = Message::TransferStart {
         transfer: id.clone(),
     };
-    let flow = flow.receive(start, 10, later, &mut steps).unwrap().unwrap();
+    let flow = flow.receive(start, later, &mut steps).unwrap().unwrap();
     assert_eq!(flow.deadline(), Some(later + STEP_TIMEOUT));
     let chunks = sent(&steps).len();
     assert_eq!(chunks, WINDOW);
@@ -655,7 +759,7 @@ fn an_import_sends_once_started_and_finishes_with_the_result() {
             transfer: id.clone(),
             seq,
         };
-        flow = flow.receive(ack, 10, later, &mut steps).unwrap().unwrap();
+        flow = flow.receive(ack, later, &mut steps).unwrap().unwrap();
         assert_eq!(
             progress_of(&steps),
             [&Progress::Sending {
@@ -756,12 +860,7 @@ fn providers_can_come_in_parts() {
     assert!(steps.is_empty());
     let later = now + Duration::from_secs(1);
     let flow = flow
-        .receive(
-            providers_send(&grant, 1, true, &["P1"]),
-            1,
-            later,
-            &mut steps,
-        )
+        .receive(providers_send(&grant, 1, true, &["P1"]), later, &mut steps)
         .unwrap()
         .unwrap();
     assert!(matches!(flow, TargetFlow::Saving { .. }));
@@ -807,12 +906,7 @@ fn a_provider_part_moves_the_deadline() {
     let later = now + Duration::from_secs(5);
     let mut steps = Vec::new();
     let flow = flow
-        .receive(
-            providers_send(&grant, 0, false, &["P0"]),
-            1,
-            later,
-            &mut steps,
-        )
+        .receive(providers_send(&grant, 0, false, &["P0"]), later, &mut steps)
         .unwrap()
         .unwrap();
     assert_eq!(flow.deadline(), Some(later + STEP_TIMEOUT));
@@ -868,7 +962,11 @@ fn the_flows_kind_follows_what_it_carries() {
     let now = Instant::now();
     assert_eq!(granted_providers(now, 1).0.kind(), RequestKind::Providers);
     assert_eq!(
-        TargetFlow::Saving { grant: "g".into() }.kind(),
+        TargetFlow::Saving {
+            grant: "g".into(),
+            deadline: later()
+        }
+        .kind(),
         RequestKind::Providers
     );
     assert_eq!(receiving(now).0.kind(), RequestKind::History);
@@ -886,12 +984,16 @@ fn every_running_flow_names_its_transfer() {
     let flows = [
         TargetFlow::Importing {
             transfer: "a".into(),
+            deadline: now,
         },
         TargetFlow::Finishing {
             transfer: "b".into(),
             deadline: now,
         },
-        TargetFlow::Saving { grant: "c".into() },
+        TargetFlow::Saving {
+            grant: "c".into(),
+            deadline: later(),
+        },
     ];
     let ids: Vec<_> = flows.iter().map(|f| f.transfer().unwrap()).collect();
     assert_eq!(ids, ["a", "b", "c"]);
@@ -931,7 +1033,7 @@ fn step(
     now: Instant,
 ) -> (Option<ControllerFlow>, ControllerOut) {
     let mut out = ControllerOut::default();
-    let next = flow.receive(message, 10, now, &mut out).unwrap();
+    let next = flow.receive(message, now, &mut out).unwrap();
     (next, out)
 }
 
@@ -954,21 +1056,21 @@ fn the_controller_hears_pending_only_for_its_own_request() {
         re: Some(4),
     };
     assert!(controller_asking(send_history())
-        .receive(other, 1, now, &mut out)
+        .receive(other, now, &mut out)
         .is_err());
     let control = Message::Pending {
         expires_in: 10,
         re: None,
     };
     assert!(controller_asking(send_history())
-        .receive(control, 1, now, &mut out)
+        .receive(control, now, &mut out)
         .is_err());
     let error = Message::Error {
         re: Some(9),
         code: ErrorCode::Denied,
     };
     assert!(controller_asking(send_history())
-        .receive(error, 1, now, &mut out)
+        .receive(error, now, &mut out)
         .is_err());
     assert!(out.events.is_empty());
 }
@@ -1305,12 +1407,12 @@ fn a_controller_message_for_another_transfer_is_given_back() {
         transfer: "u".into(),
     };
     let (flow, message) = *flow
-        .receive(other.clone(), 1, Instant::now(), &mut out)
+        .receive(other.clone(), Instant::now(), &mut out)
         .unwrap_err();
     assert_eq!(message, other);
     assert_eq!(flow.transfer(), Some("t"));
     let (_, message) = *flow
-        .receive(Message::Pong, 1, Instant::now(), &mut out)
+        .receive(Message::Pong, Instant::now(), &mut out)
         .unwrap_err();
     assert_eq!(message, Message::Pong);
 }
@@ -1689,12 +1791,16 @@ fn once_the_target_writes_a_cancel_or_error_doesnt_stop_it() {
 fn flow_back(id: &str) -> TargetFlow {
     TargetFlow::Importing {
         transfer: id.into(),
+        deadline: later(),
     }
 }
 
 #[test]
 fn saving_providers_isnt_stopped_either() {
-    let saving = TargetFlow::Saving { grant: "g".into() };
+    let saving = TargetFlow::Saving {
+        grant: "g".into(),
+        deadline: later(),
+    };
     let mut steps = Vec::new();
     let next = flow_of(
         saving,
@@ -1836,7 +1942,11 @@ fn a_flow_is_untouched_until_its_first_step() {
     assert!(!providers.untouched());
     let (ready, _) = ready(now, 3);
     assert!(ready.untouched());
-    assert!(!TargetFlow::Saving { grant: "g".into() }.untouched());
+    assert!(!TargetFlow::Saving {
+        grant: "g".into(),
+        deadline: later()
+    }
+    .untouched());
     assert!(!asking(send_history()).untouched());
 }
 
@@ -1903,7 +2013,6 @@ fn providers_trickling_in_still_end_at_the_limit() {
         flow = flow
             .receive(
                 providers_send(&grant, part, false, &[&name]),
-                1,
                 at,
                 &mut steps,
             )
@@ -1947,15 +2056,12 @@ fn a_receiver_says_when_a_transfer_is_too_large() {
             sent_at: Some(5),
             current: None,
             dropped: None,
-            items: vec![],
+            items: export(chunks::MAX_ITEMS + 1).items,
             pins: vec![],
         },
     };
     let mut steps = Vec::new();
-    assert!(flow
-        .receive(big, chunks::MAX_TOTAL_BYTES + 1, now, &mut steps)
-        .unwrap()
-        .is_none());
+    assert!(flow.receive(big, now, &mut steps).unwrap().is_none());
     assert_eq!(
         progress_of(&steps),
         [&Progress::Failed(ErrorCode::TooLarge)]
@@ -2051,7 +2157,7 @@ fn a_grant_for_another_request_is_given_back() {
         counts: None,
     };
     let back = controller_asking(send_history())
-        .receive(other, 1, Instant::now(), &mut out)
+        .receive(other, Instant::now(), &mut out)
         .unwrap_err();
     assert!(matches!(back.0, ControllerFlow::Asking { .. }));
     assert!(out.events.is_empty());
@@ -2105,4 +2211,19 @@ fn provider_parts_fill_each_message_close_to_the_limit() {
         }
         assert_eq!(parts.iter().map(Vec::len).sum::<usize>(), 30);
     }
+}
+
+#[test]
+fn continue_watching_comes_only_with_the_history() {
+    let with_current = Export {
+        current: Some(ItemRef::named(ItemKind::Movie, "Heat")),
+        ..Export::default()
+    };
+    let favorites_only = What {
+        history: false,
+        ..What::ALL
+    };
+    assert!(fits_grant(&with_current, What::ALL, None));
+    assert!(!fits_grant(&with_current, favorites_only, None));
+    assert!(fits_grant(&Export::default(), favorites_only, None));
 }

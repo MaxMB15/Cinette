@@ -11,6 +11,14 @@ vi.mock("@/lib/tauri", () => ({
 	remoteSetSettings: vi.fn(),
 	remoteResetIdentity: vi.fn(),
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
+	remoteOpen: vi.fn(() => Promise.resolve()),
+	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
+}));
+
+const limit = vi.hoisted(() => ({ text: null as string | null }));
+vi.mock("@/lib/remote-devices", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/remote-devices")>()),
+	discoveryLimit: () => limit.text,
 }));
 
 const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -19,9 +27,12 @@ vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.li
 import {
 	remoteDisconnect,
 	remoteGetSettings,
+	remoteLocalNetworkDenied,
+	remoteOpen,
 	remoteResetIdentity,
 	remoteSetSettings,
 } from "@/lib/tauri";
+import { LOCAL_NETWORK_DENIED } from "@/lib/remote-devices";
 import {
 	ALWAYS_WARNING,
 	NOT_STARTED,
@@ -47,6 +58,7 @@ const shown = async (settings: RemoteSettings = defaults) => {
 beforeEach(() => {
 	vi.clearAllMocks();
 	sessions.list = [];
+	limit.text = null;
 	vi.mocked(remoteSetSettings).mockImplementation(async (s) => ({
 		...defaults,
 		...s,
@@ -122,6 +134,95 @@ describe("RemoteControlSettings", () => {
 		expect(screen.getByLabelText("Device name")).toHaveValue("");
 		expect(screen.getByText(/Devices already connected stay connected/)).toBeInTheDocument();
 		expect(screen.getByText("No device is controlling this one.")).toBeInTheDocument();
+	});
+
+	it("says when other devices can find this one, where that depends on the app being open", async () => {
+		limit.text = "Only while open.";
+		await shown();
+		expect(
+			screen.getByText(/until you disconnect them\. Only while open\.$/)
+		).toBeInTheDocument();
+	});
+
+	it("adds nothing about it on a computer", async () => {
+		await shown();
+		expect(screen.getByText(/until you disconnect them\.$/)).toBeInTheDocument();
+	});
+
+	it("starts remote control before it loads the settings", async () => {
+		const order: string[] = [];
+		vi.mocked(remoteOpen).mockImplementationOnce(async () => {
+			order.push("open");
+		});
+		vi.mocked(remoteGetSettings).mockImplementationOnce(async () => {
+			order.push("load");
+			return defaults;
+		});
+		render(<RemoteControlSettings />);
+		await screen.findByText("Remote control", { selector: "h3,div" });
+		expect(order).toEqual(["open", "load"]);
+	});
+
+	it("still loads the settings when starting remote control failed", async () => {
+		vi.mocked(remoteOpen).mockRejectedValueOnce("couldn't start");
+		await shown();
+		expect(
+			screen.getByRole("button", { name: "Discoverable on this network" })
+		).toBeInTheDocument();
+	});
+
+	it("says where to allow the local network when the system refuses it", async () => {
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		await shown();
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
+	});
+
+	it("asks again when the app comes back, as after the system's alert", async () => {
+		await shown();
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(1));
+		expect(screen.queryByText(LOCAL_NETWORK_DENIED)).toBeNull();
+		// Don't Allow at the alert, then the app is active again.
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+		});
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
+		// Allowed in the system's settings, then back to the app.
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(false);
+		act(() => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		await waitFor(() => expect(screen.queryByText(LOCAL_NETWORK_DENIED)).toBeNull());
+	});
+
+	it("doesn't ask while the app is hidden, or after the card closed", async () => {
+		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+		const { unmount } = render(<RemoteControlSettings />);
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(1));
+		const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		act(() => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		hidden.mockRestore();
+		unmount();
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(1);
+	});
+
+	it("says nothing about the local network while it's allowed or unknown", async () => {
+		vi.mocked(remoteLocalNetworkDenied).mockRejectedValueOnce("unknown");
+		await shown();
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalled());
+		// Let the refusal settle, then the settings are still there.
+		await act(async () => {});
+		expect(screen.queryByText(LOCAL_NETWORK_DENIED)).toBeNull();
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(
+			screen.getByRole("button", { name: "Discoverable on this network" })
+		).toBeInTheDocument();
 	});
 
 	it("turns discovery off and on", async () => {

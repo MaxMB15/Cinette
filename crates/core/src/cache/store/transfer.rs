@@ -253,7 +253,8 @@ impl CacheStore {
             .collect();
 
         // History is in newest-first order, so the first item with an entry
-        // is the one watched last.
+        // is the one watched last. It's part of the history, so it goes only
+        // with it.
         let current = playing
             .and_then(|id| by_channel.get(id))
             .map(|&i| items[i].reference.clone())
@@ -262,7 +263,8 @@ impl CacheStore {
                     .iter()
                     .find(|i| i.watched.is_some())
                     .map(|i| i.reference.clone())
-            });
+            })
+            .filter(|_| what.history);
 
         Ok(Export {
             items,

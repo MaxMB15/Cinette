@@ -144,10 +144,26 @@ pub fn in_background() -> bool {
     IN_BACKGROUND.load(Ordering::Acquire)
 }
 
+/// What else wants to know when the app goes to the background (`true`) or
+/// comes back (`false`).
+type BackgroundWatcher = Box<dyn Fn(bool) + Send + Sync>;
+static WATCHERS: Mutex<Vec<BackgroundWatcher>> = Mutex::new(Vec::new());
+
+/// Calls `watcher` on the main thread each time the app goes to the
+/// background (`true`) or comes back to the foreground (`false`), as
+/// `UIApplicationDidEnterBackgroundNotification` and
+/// `UIApplicationWillEnterForegroundNotification` say. It must not block.
+pub fn watch_background(watcher: impl Fn(bool) + Send + Sync + 'static) {
+    lock_or_recover(&WATCHERS).push(Box::new(watcher));
+}
+
 /// iOS stops apps that use the GPU in the background, so video output is
 /// off while the app is in the background. Audio keeps playing.
 extern "C" fn on_lifecycle(background: bool) {
     IN_BACKGROUND.store(background, Ordering::Release);
+    for watcher in lock_or_recover(&WATCHERS).iter() {
+        watcher(background);
+    }
     run_in_order(move |state| state.set_video_enabled(!background));
 }
 

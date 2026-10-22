@@ -10,7 +10,7 @@ mod cast;
 mod commands;
 mod convert;
 /// DNS-SD browsing and advertising, for Cinette devices and Cast receivers.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 pub mod discovery;
 mod downloads;
 #[cfg(any(target_os = "ios", all(test, target_os = "linux")))]
@@ -28,6 +28,8 @@ mod streams;
 mod wifi;
 #[cfg(test)]
 mod android_project_tests;
+#[cfg(test)]
+mod ios_project_tests;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vpn;
 #[cfg(test)]
@@ -156,6 +158,7 @@ macro_rules! register_commands {
 }
 
 register_commands![
+    remote_commands::remote_open,
     remote_commands::remote_get_settings,
     remote_commands::remote_set_settings,
     remote_commands::remote_reset_identity,
@@ -399,8 +402,31 @@ pub fn run() {
             crate::downloads::manager::restore_settings(app.handle());
 
             // Listens for other Cinette devices and advertises this one.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            crate::remote::start(app.handle(), app_dir.clone());
+            // The key goes in `app_dir` (on Android, the `root` domain that
+            // res/xml/backup_rules.xml and data_extraction_rules.xml leave
+            // its file out of), so moving it needs those rules to follow.
+            #[cfg(remote)]
+            let remote_started = crate::remote::start_at_launch(app.handle(), app_dir.clone());
+            // DNS-SD needs it over Wi-Fi. The app starts in the foreground.
+            #[cfg(target_os = "android")]
+            if remote_started {
+                crate::android_device::hold_multicast(true);
+            }
+            // A phone or tablet can only be found while the app is in the
+            // foreground. Tauri's own Suspended comes when iOS only makes the
+            // app inactive, as for Control Center, with no Resumed after, so
+            // the mpv plugin's background notifications are used instead.
+            // Remote control may start later, when the user first opens it.
+            #[cfg(target_os = "ios")]
+            {
+                let handle = app.handle().clone();
+                tauri_plugin_mpv::watch_background(move |background| {
+                    let state = crate::remote::Lifecycle::from_background(background);
+                    crate::remote::set_foreground(&handle, state)
+                });
+            }
+            #[cfg(all(remote, not(target_os = "android")))]
+            let _ = remote_started;
 
             #[cfg(desktop)]
             {
@@ -459,10 +485,24 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
+            // A phone, tablet or TV can only be found while the app is in
+            // the foreground.
+            #[cfg(target_os = "android")]
+            if let tauri::RunEvent::WindowEvent { event, .. } = &event {
+                match event {
+                    tauri::WindowEvent::Suspended => {
+                        crate::remote::set_foreground(app, crate::remote::Lifecycle::Background)
+                    }
+                    tauri::WindowEvent::Resumed => {
+                        crate::remote::set_foreground(app, crate::remote::Lifecycle::Foreground)
+                    }
+                    _ => {}
+                }
+            }
             if let tauri::RunEvent::Exit = event {
                 crate::downloads::manager::stop_all_for_exit(app);
                 crate::downloads::recordings::stop_all_for_exit(app);
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                #[cfg(remote)]
                 crate::remote::stop_for_exit(app);
             }
         });

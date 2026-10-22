@@ -75,7 +75,10 @@ impl From<AccountTag> for String {
 /// any. An M3U playlist is its address without the query, and the
 /// username in it. Each part ends with a 0 byte, so two can't run into
 /// each other. Neither ever leaves the device: only the hash with the salt
-/// does, and no password goes into it.
+/// does. No password field goes into it, but an M3U address that carries
+/// the login in its path, such as `http://host/get/USER/PASS/list.m3u`, is
+/// hashed with that path. The other device has the salt, so it could test
+/// guesses at such a password against the tag.
 pub fn account_tag(salt: &Salt, provider: &Provider) -> Option<AccountTag> {
     let (kind, place, username) = match provider.provider_type {
         ProviderType::Xtream => (
