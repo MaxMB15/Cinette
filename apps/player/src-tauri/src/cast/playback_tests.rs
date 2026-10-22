@@ -1448,8 +1448,9 @@ async fn a_newer_load_waits_until_the_one_it_overtook_lets_go_of_the_provider() 
     let (addr, _, mut got) = fake_receiver::start().await;
     add_receiver(&app, "tv", addr);
     // An account that allows one connection, and a source that holds back
-    // its sound, so the converter waits on it.
-    let (source, connections) = counting_source(wav16(), Duration::from_secs(4), true);
+    // its sound, so the converter waits on it. The film is longer than the
+    // converter's burst, so it doesn't finish the moment the sound comes.
+    let (source, connections) = counting_source(wav16_lasting(24), Duration::from_secs(4), true);
     let movie = channel("m-1", &source, "movie");
     add_channel(&app, &movie);
     let first = load_in_background(&app, &movie, converted(), None);
@@ -1468,12 +1469,18 @@ async fn a_newer_load_waits_until_the_one_it_overtook_lets_go_of_the_provider() 
         "{:?}",
         asked.elapsed()
     );
-    // The second's connections never overlap the first's, so none is turned
+    // The second's probe, then its converter, which starts at 2 s and runs
+    // while the source holds back its sound.
+    wait_until("the newer converter's connection", || {
+        connections.load(Ordering::SeqCst) >= 4
+    })
+    .await;
+    assert!(ffmpeg_starts_at(&source, "2.000"));
+    // Its connections never overlapped the first's, so none was turned
     // away.
     second.join().unwrap().unwrap();
     let loaded = next_of(&mut got, "LOAD").await;
     assert!(loaded.body["media"]["contentId"].is_string());
-    assert!(ffmpeg_starts_at(&source, "2.000"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1897,5 +1904,212 @@ async fn a_session_a_newer_one_replaced_says_nothing_more() {
     .expect("the load and the old session's end within 10 s");
     // Nothing it said ended the cast that took over.
     assert_eq!(closed_within(&events, Duration::from_millis(500)), None);
+    control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
+}
+
+/// A playlist on loopback that answers 403 to its first request, as a
+/// provider that still counts a connection that just closed, and the
+/// playlist after.
+fn playlist_refused_once() -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for (asked, mut stream) in listener.incoming().flatten().enumerate() {
+            let mut request = [0u8; 4096];
+            let n = stream.read(&mut request).unwrap_or(0);
+            let segment = String::from_utf8_lossy(&request[..n]).contains("/s.ts");
+            let answer = if asked == 0 {
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_string()
+            } else {
+                let body = if segment {
+                    "ab"
+                } else {
+                    "#EXTM3U\n#EXTINF:4.0,\ns.ts\n"
+                };
+                format!(
+                    "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let _ = stream.write_all(answer.as_bytes());
+        }
+    });
+    format!("http://{address}/live/u/SECRET/7.m3u8")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_switch_to_a_direct_playlist_asks_again_after_one_refusal() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (addr, _, mut got) = fake_receiver::start().await;
+    add_receiver(&app, "tv", addr);
+    let (source, _) = counting_source(wav16(), Duration::ZERO, false);
+    let film = channel("m-1", &source, "movie");
+    add_channel(&app, &film);
+    load(&app, "cast:tv", &film, converted(), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // The switch closes the converter's connection, and the provider turns
+    // the playlist away once.
+    let live = channel("l-1", &playlist_refused_once(), "live");
+    add_channel(&app, &live);
+    load(&app, "cast:tv", &live, direct("hls-ts"), None).unwrap();
+    let loaded = next_of(&mut got, "LOAD").await;
+    assert_eq!(loaded.body["media"]["contentType"], "application/x-mpegURL");
+}
+
+/// Whether the receiver gets anything on connection `number` within
+/// `within`.
+async fn gets_on(
+    got: &mut tokio::sync::mpsc::UnboundedReceiver<fake_receiver::Got>,
+    number: usize,
+    within: Duration,
+) -> bool {
+    tokio::time::timeout(within, async {
+        while let Some(message) = got.recv().await {
+            if message.connection == number {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// A cast to a receiver whose handshakes take 1.5 s, whose first connection
+/// has just gone quiet with this computer's address, while the session's
+/// try to connect again is still under way. `gone` is the flag the app's
+/// address check reads.
+async fn reconnecting(
+    app: &TestApp,
+    gone: &'static AtomicBool,
+    ours: fn(std::net::IpAddr) -> bool,
+) -> (
+    mpsc::Receiver<Value>,
+    tokio::sync::mpsc::UnboundedReceiver<fake_receiver::Got>,
+) {
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .set_timing(Duration::from_millis(2500), Duration::from_secs(10));
+    check_addresses(app, |_| Ok(LOOPBACK), ours);
+    let events = updates(app);
+    let (addr, mut got, first) = fake_receiver::start_controlled(Duration::from_millis(1500)).await;
+    add_receiver(app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    add_channel(app, &movie);
+    load(app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    gone.store(true, Ordering::SeqCst);
+    first.go_quiet();
+    wait_until("the try to connect again", || first.accepted() >= 2).await;
+    gone.store(false, Ordering::SeqCst);
+    (events, got)
+}
+
+static GONE_THEN_ELSEWHERE: AtomicBool = AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_leaves_a_cast_that_went_to_another_receiver_alone() {
+    let app = TestApp::new();
+    let ours = |ip| !(GONE_THEN_ELSEWHERE.load(Ordering::SeqCst) && ip == LOOPBACK);
+    let (events, mut got) = reconnecting(&app, &GONE_THEN_ELSEWHERE, ours).await;
+    // The user casts to another receiver while the try connects.
+    let (den, _, mut den_got) = fake_receiver::start().await;
+    add_receiver(&app, "den", den);
+    let other = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &other);
+    load(&app, "cast:den", &other, direct("mp4"), None).unwrap();
+    next_of(&mut den_got, "LOAD").await;
+    // The try gets through after that, and leaves the new cast alone.
+    assert!(!gets_on(&mut got, 1, Duration::from_secs(3)).await);
+    assert!(!gets(&mut den_got, "STOP", Duration::from_millis(500)).await);
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !(event["receiverId"] == "cast:den" && event["update"]["kind"] == "closed"),
+            "{event}"
+        );
+    }
+    control(&app, "cast:den", json!({ "action": "play" })).unwrap();
+}
+
+static GONE_THEN_STOPPED: AtomicBool = AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_opens_nothing_once_the_cast_was_stopped() {
+    let app = TestApp::new();
+    let ours = |ip| !(GONE_THEN_STOPPED.load(Ordering::SeqCst) && ip == LOOPBACK);
+    let (_events, mut got) = reconnecting(&app, &GONE_THEN_STOPPED, ours).await;
+    // The user stops the cast while the try connects.
+    app.invoke("cast_stop", json!({ "receiverId": "cast:tv" }))
+        .unwrap();
+    // The try gets through after that, and starts nothing on the TV.
+    assert!(!gets_on(&mut got, 1, Duration::from_secs(3)).await);
+    assert_eq!(
+        control(&app, "cast:tv", json!({ "action": "play" })),
+        Err(json!("notConnected"))
+    );
+}
+
+static GONE_THEN_LOADED: AtomicBool = AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_that_gives_up_after_a_load_connected_says_nothing() {
+    let app = TestApp::new();
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .set_timing(Duration::from_millis(2500), Duration::from_secs(1));
+    check_addresses(
+        &app,
+        |_| Ok(LOOPBACK),
+        |ip| !(GONE_THEN_LOADED.load(Ordering::SeqCst) && ip == LOOPBACK),
+    );
+    let events = updates(&app);
+    let (addr, mut got, first) = fake_receiver::start_controlled(Duration::ZERO).await;
+    add_receiver(&app, "tv", addr);
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    let next = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &movie);
+    add_channel(&app, &next);
+    load(&app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // An address that takes the connection and never answers, so the try
+    // to connect again lasts until the handshake gives up.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let silent_addr = silent.local_addr().unwrap();
+    let taken = Arc::new(AtomicUsize::new(0));
+    let counted = taken.clone();
+    std::thread::spawn(move || {
+        let held: Vec<_> = silent
+            .incoming()
+            .flatten()
+            .inspect(|_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+            })
+            .collect();
+        drop(held);
+    });
+    add_receiver(&app, "tv", silent_addr);
+    GONE_THEN_LOADED.store(true, Ordering::SeqCst);
+    first.go_quiet();
+    wait_until("the try to connect again", || {
+        taken.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    GONE_THEN_LOADED.store(false, Ordering::SeqCst);
+    // A load opens a new session meanwhile, as a restart does. That aborts
+    // the old session's task, reconnect and all, unless it's already
+    // giving up as the abort comes, which this switch stands for.
+    add_receiver(&app, "tv", addr);
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .keep_replaced
+        .store(true, Ordering::SeqCst);
+    load(&app, "cast:tv", &next, direct("mp4"), None).unwrap();
+    assert_eq!(next_of(&mut got, "LOAD").await.connection, 1);
+    // The try gives up later, and says nothing of the cast that goes on.
+    assert_eq!(closed_within(&events, Duration::from_secs(7)), None);
     control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
 }

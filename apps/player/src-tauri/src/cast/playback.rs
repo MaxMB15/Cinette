@@ -363,7 +363,30 @@ where
     R: Runtime,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    start_session(app, receiver_id, stream, local, None);
+}
+
+/// [`begin`], but only in place of session `replacing` when it's given:
+/// if another session is active by then, or none is, `stream` is dropped
+/// and this says so.
+fn start_session<R, S>(
+    app: &AppHandle<R>,
+    receiver_id: &str,
+    stream: S,
+    local: Option<IpAddr>,
+    replacing: Option<u64>,
+) -> bool
+where
+    R: Runtime,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let state = app.state::<CastPlayback>();
+    // Held until the new session is in place, so nothing replaces or ends
+    // the one it's meant to replace meanwhile.
+    let mut active = lock(&state.active);
+    if replacing.is_some_and(|g| active.as_ref().is_none_or(|a| a.generation != g)) {
+        return false;
+    }
     let generation = {
         let mut generation = lock(&state.generation);
         *generation += 1;
@@ -396,7 +419,10 @@ where
                 } else {
                     // Under the lock `begin` replaces a session under, so a
                     // session a newer one replaced says nothing more, even
-                    // about what it read just before.
+                    // about what it read just before. No Rust code listens
+                    // to the update event; one that did must not call back
+                    // into `CastPlayback` from its handler, or it would wait
+                    // on this lock forever.
                     let active = lock(&state.active);
                     if !replaced(active.as_ref(), &id, generation) {
                         emit(&app, &id, update);
@@ -404,20 +430,22 @@ where
                 }
             })
             .await;
-            if let Some(closed) = lost {
-                if reconnect(&app, &id, generation).await {
-                    return;
-                }
-                emit(&app, &id, closed);
-            }
-            // Over: the converter stops with it.
+            let lost = match lost {
+                Some(_) if reconnect(&app, &id, generation).await => return,
+                lost => lost,
+            };
+            // Over, unless something newer took over meanwhile: the
+            // converter stops with it, and the frontend hears of an end
+            // that the reconnect held back.
             let mut active = lock(&state.active);
             if active.as_ref().is_some_and(|a| a.generation == generation) {
                 *active = None;
+                if let Some(closed) = lost {
+                    emit(&app, &id, closed);
+                }
             }
         })
     };
-    let mut active = lock(&state.active);
     let mut old = active.take();
     // A new connection to the same receiver goes on with its cast.
     let (conversion, plan) = match old.as_mut() {
@@ -440,8 +468,11 @@ where
         // keeps its app and the frontend sees no end.
         Some(old) if old.receiver_id == receiver_id => {
             #[cfg(test)]
-            if state.keep_replaced.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
+            if state
+                .keep_replaced
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return true;
             }
             old.driver.abort();
         }
@@ -450,6 +481,7 @@ where
         }
         None => {}
     }
+    true
 }
 
 /// Whether `active`, the newest session, is a newer one for `receiver_id`
@@ -460,7 +492,6 @@ where
 fn replaced(active: Option<&Active>, receiver_id: &str, generation: u64) -> bool {
     active.is_some_and(|a| a.receiver_id == receiver_id && a.generation > generation)
 }
-
 
 /// Connects to `receiver_id` again after session `generation` lost its
 /// connection with this computer's old address, trying for a while, as
@@ -479,7 +510,10 @@ async fn reconnect<R: Runtime>(app: &AppHandle<R>, receiver_id: &str, generation
             return true;
         }
         if let Ok((stream, local)) = connect(app, receiver_id).await {
-            begin(app, receiver_id, stream, local);
+            // The cast may have gone on without it while it connected: to
+            // another receiver, by a stop, or on a connection a load
+            // opened. Then this one isn't needed.
+            start_session(app, receiver_id, stream, local, Some(generation));
             return true;
         }
         if tokio::time::Instant::now() >= until {
@@ -745,8 +779,12 @@ pub async fn load<R: Runtime>(
             if matches!(container, Container::HlsTs | Container::HlsFmp4) {
                 // A newer turn needn't wait out a provider that doesn't
                 // answer.
+                // A provider that still counts the old converter's
+                // connection gets asked once more, as for a converted route.
+                let check =
+                    playback.ask_provider(receiver_id, ticket, freed, || check_playlist(url));
                 let checked = tokio::select! {
-                    checked = check_playlist(url) => checked,
+                    checked = check => checked,
                     () = playback.overtaken(receiver_id, ticket) => Ok(()),
                 };
                 state.still_turn(receiver_id, ticket)?;
