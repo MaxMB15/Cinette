@@ -806,6 +806,14 @@ fn a_player_that_turns_detection_on_hears_what_it_last_found() {
     airplay.set_detection(false, ignore);
     airplay.detected(true);
     assert_eq!(airplay.set_detection(true, ignore), None);
+    // An on that still leaves it off, after an off that came early, has
+    // nothing to tell either.
+    let airplay = AirPlay::default();
+    airplay.set_detection(true, ignore);
+    airplay.detected(true);
+    airplay.set_detection(false, ignore);
+    airplay.set_detection(false, ignore);
+    assert_eq!(airplay.set_detection(true, ignore), None);
 }
 
 #[test]
