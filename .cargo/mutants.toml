@@ -83,9 +83,19 @@ exclude_re = [
     'src-tauri/src/vpn\.rs:.*\bvpn_active\b',
     'src-tauri/src/cast/mod\.rs:.*\bget_vpn_active\b',
     # These bind remote control's real port and advertise this machine on the
-    # network. The tests start the target on loopback with start_on instead.
-    'src-tauri/src/remote/service\.rs:.*\b(start|advertise_on_network)\b',
+    # network, or start the browse on it. The tests start the target on
+    # loopback with start_on, and the decisions around it through
+    # start_at_launch_with and open_with, instead.
+    'src-tauri/src/remote/service\.rs:.*\b(start|start_at_launch|start_on_network|open|advertise_on_network)\b',
+    # Finds the app data folder and calls open, which starts on the network.
+    'src-tauri/src/remote/commands\.rs:.*\bremote_open\b',
     'src-tauri/src/remote/target\.rs:.*\bbind_default\b',
+    # Reads the iPhone's or iPad's model, which only iOS builds. The choice
+    # made from it stays in.
+    'src-tauri/src/remote/device\.rs:.*\bmodel_identifier\b',
+    # The calls into the iOS Keychain, which only iOS builds. The decisions
+    # made from its answers (on_load, after_update) stay in.
+    'src-tauri/src/remote/keychain\.rs:.*\b(load_or_create|save|keychain_error)\b',
 ]
 
 # Without --in-place, cargo-mutants copies the tree to build each mutant. This
@@ -108,7 +118,7 @@ exclude_globs = [
     "apps/player/src-tauri/src/android_device.rs",
     "apps/player/src-tauri/src/android_tls.rs",
     "crates/tauri-plugin-mpv/src/android.rs",
-    # Bonjour discovery, likewise macOS only.
+    # Bonjour discovery, likewise macOS and iOS only.
     "apps/player/src-tauri/src/discovery/macos.rs",
     # It only calls the library's run.
     "apps/player/src-tauri/src/main.rs",

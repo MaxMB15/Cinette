@@ -47,7 +47,7 @@ fn a_one_label_host_is_its_own_site() {
 }
 
 #[test]
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 fn a_logo_from_another_device_must_be_on_a_public_host() {
     for ok in [
         "https://logos.example/a.png",
@@ -126,7 +126,7 @@ fn a_logo_from_another_device_must_be_on_a_public_host() {
 }
 
 #[test]
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 fn an_item_keeps_only_a_logo_it_may_load() {
     let item = |logo: &str| CatalogItem {
         id: "a".into(),
