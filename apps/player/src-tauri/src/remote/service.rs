@@ -220,16 +220,23 @@ impl RemoteService {
     /// Asks the device link `link` controls to take the providers with
     /// these ids. Only their names go now. The logins go once that device's
     /// user allows it, which `remote://transfer` reports.
-    pub async fn send_providers(
+    pub async fn send_providers<R: Runtime>(
         &self,
-        cache: &Mutex<mvp_core::cache::store::CacheStore>,
+        app: AppHandle<R>,
         link: u64,
         ids: Vec<String>,
     ) -> Result<(), String> {
         let handle = self.link(link).ok_or("Not connected to that device.")?;
         let ticket = self.cancel_count(link);
         // This can wait on the cache, for a refresh or a guide save.
-        let names = super::providers::names_for(cache, &ids)?;
+        let names = {
+            let ids = ids.clone();
+            blocking(app, move |state| {
+                super::providers::names_for(&state.cache, &ids)
+            })
+            .await
+            .unwrap_or_else(|| Err("This device couldn't read its providers.".into()))?
+        };
         {
             let mut slot = lock(&self.sending);
             if self.cancel_count(link) != ticket {
@@ -365,6 +372,17 @@ impl RemoteService {
 /// The providers the webview asked to send, as the link and the provider
 /// ids, until the other device allows it.
 type Sending = Arc<Mutex<Option<(u64, Vec<String>)>>>;
+
+/// Runs `work` on a blocking thread, where waiting on the cache holds up
+/// no async task. `None` when the thread panicked.
+async fn blocking<R: Runtime, T: Send + 'static>(
+    app: AppHandle<R>,
+    work: impl FnOnce(&AppState) -> T + Send + 'static,
+) -> Option<T> {
+    tauri::async_runtime::spawn_blocking(move || work(&app.state::<AppState>()))
+        .await
+        .ok()
+}
 
 /// What a send or ask cancelled on its way says.
 const CANCELLED: &str = "Cancelled.";
@@ -979,20 +997,32 @@ impl<R: Runtime> TauriLinkHost<R> {
         let (Some(handle), Some(ids)) = (handle, ids) else {
             return;
         };
-        let state = self.app.state::<AppState>();
-        match super::providers::settings_for(&state.cache, &ids) {
-            Ok(settings) => handle.send_providers(grant, settings),
-            Err(_) => {
-                handle.cancel_transfer();
-                self.notify(
-                    link,
-                    device,
-                    TransferStep::Refused {
-                        code: mvp_core::remote::message::ErrorCode::Failed,
-                    },
-                );
+        // The logins are read on a blocking thread, so a cache that's busy
+        // doesn't hold up this link.
+        let app = self.app.clone();
+        let device = device.to_string();
+        tauri::async_runtime::spawn(async move {
+            let settings = blocking(app.clone(), move |state| {
+                super::providers::settings_for(&state.cache, &ids)
+            })
+            .await;
+            match settings {
+                Some(Ok(settings)) => handle.send_providers(grant, settings),
+                _ => {
+                    handle.cancel_transfer();
+                    let _ = app.emit(
+                        "remote://transfer",
+                        TransferNotice {
+                            device_id: device,
+                            link,
+                            update: TransferStep::Refused {
+                                code: mvp_core::remote::message::ErrorCode::Failed,
+                            },
+                        },
+                    );
+                }
             }
-        }
+        });
     }
 }
 

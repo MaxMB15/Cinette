@@ -585,15 +585,13 @@ pub async fn remote_send_providers<R: Runtime>(
     link: u64,
     provider_ids: Vec<String>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
-        use tauri::Manager;
-        let state = app.state::<crate::commands::AppState>();
         imp::service(&app)?
-            .send_providers(&state.cache, link, provider_ids)
+            .send_providers(app.clone(), link, provider_ids)
             .await
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link, provider_ids);
         Err(UNAVAILABLE.into())
@@ -606,12 +604,12 @@ pub async fn remote_cancel_transfer<R: Runtime>(
     app: AppHandle<R>,
     link: u64,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?.cancel_transfer(link);
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link);
         Err(UNAVAILABLE.into())

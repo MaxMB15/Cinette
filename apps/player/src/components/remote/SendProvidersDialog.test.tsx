@@ -186,12 +186,15 @@ describe("SendProvidersDialog", () => {
 		expect(onClose).toHaveBeenCalled();
 	});
 
-	it("cancels while saving", () => {
+	it("says it's too late once the other device is saving, and doesn't cancel", () => {
 		render(<SendProvidersDialog link={link()} onClose={onClose} />);
 		pickAndSend("Home");
 		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
-		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-		expect(remoteCancelTransfer).toHaveBeenCalledWith(3);
+		expect(screen.getByText(/too late to stop it now/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Close" }));
+		expect(onClose).toHaveBeenCalled();
+		expect(remoteCancelTransfer).not.toHaveBeenCalled();
 	});
 
 	it("counts down from when the other device started asking", () => {
@@ -223,7 +226,7 @@ describe("SendProvidersDialog", () => {
 		error.mockRestore();
 	});
 
-	it("cancels while saving too, but not before sending", () => {
+	it("cancels while waiting, but not before sending", () => {
 		const { unmount } = render(<SendProvidersDialog link={link()} onClose={onClose} />);
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(remoteCancelTransfer).not.toHaveBeenCalled();

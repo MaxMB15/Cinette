@@ -578,3 +578,92 @@ async fn a_playlist_file_here_isnt_taken_for_a_sent_account() {
     .await;
     assert_eq!(results[0].outcome, ProviderOutcome::Added);
 }
+
+#[test]
+fn forgetting_a_provider_clears_its_address_and_login() {
+    let mut p = home();
+    forget(&mut p);
+    assert!(p.url.is_empty());
+    assert_eq!(p.username, None);
+    assert_eq!(p.password, None);
+    assert_eq!(p.epg_url, None);
+    assert_eq!(p.name, "Home", "the name isn't secret");
+}
+
+#[tokio::test]
+async fn m3u_addresses_that_differ_only_in_a_token_are_two_accounts() {
+    let lists = provider(
+        "m3u-1",
+        "Lists",
+        ProviderType::M3u,
+        "http://l.example/get.php?token=AAA",
+        None,
+    );
+    let cache = cache(&[lists]);
+    let fake = Fake::new(false);
+    let results = save(
+        &cache,
+        &fake,
+        "Mac",
+        vec![
+            sent(
+                "Other",
+                ProviderKind::M3u,
+                "http://l.example/get.php?token=BBB",
+                None,
+            ),
+            // The same address, with the host typed another way.
+            sent(
+                "Again",
+                ProviderKind::M3u,
+                " http://L.example:80/get.php?token=AAA ",
+                None,
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(results[0].outcome, ProviderOutcome::Added);
+    assert_eq!(results[1].outcome, ProviderOutcome::Exists);
+}
+
+#[test]
+fn an_xtream_account_is_its_server_and_username() {
+    let xtream =
+        |url: &str, user: Option<&str>| provider("x", "X", ProviderType::Xtream, url, user);
+    let here = xtream("http://panel.example:8080", Some("viewer"));
+    assert!(same_account(
+        &here,
+        &xtream("http://Panel.example:8080/any/path", Some(" viewer"))
+    ));
+    assert!(!same_account(
+        &here,
+        &xtream("http://panel.example:8081", Some("viewer"))
+    ));
+    assert!(!same_account(
+        &here,
+        &xtream("https://panel.example:8080", Some("viewer"))
+    ));
+    assert!(!same_account(
+        &here,
+        &xtream("http://other.example:8080", Some("viewer"))
+    ));
+    assert!(!same_account(
+        &here,
+        &xtream("http://panel.example:8080", Some("guest"))
+    ));
+    assert!(!same_account(&here, &xtream("not a url", Some("viewer"))));
+    let plain = xtream("http://panel.example", None);
+    assert!(same_account(
+        &plain,
+        &xtream("http://panel.example:80", None)
+    ));
+    // An M3U list is never the same account as an Xtream one.
+    let m3u = provider(
+        "m",
+        "M",
+        ProviderType::M3u,
+        "http://panel.example:8080",
+        None,
+    );
+    assert!(!same_account(&here, &m3u));
+}
