@@ -35,6 +35,8 @@ pub struct Step {
     /// The video just reached a receiver for the first time, this long
     /// after the load.
     pub reached_after: Option<Duration>,
+    /// `isExternalPlaybackActive` changed with this reading.
+    pub changed: bool,
 }
 
 /// One item's pick.
@@ -69,6 +71,7 @@ impl Pick {
             self.ready_at = Some(now);
         }
         let left = self.external && !external;
+        let changed = self.external != external;
         let reached_after = (external && !self.reached).then_some(since_load);
         self.external = external;
         self.reached |= external;
@@ -81,6 +84,7 @@ impl Pick {
             not_picked: !self.reached && waited,
             ready_after,
             reached_after,
+            changed,
         }
     }
 }
