@@ -636,7 +636,7 @@ impl Target {
                     }
                     step if is_transfer_step(&step) => {
                         self.set_stage(conn, Stage::InSession(auth));
-                        self.transfer_step(conn, step, frame.len(), now, &mut actions);
+                        self.transfer_step(conn, step, now, &mut actions);
                     }
                     Message::Ping => {
                         send(&mut auth, conn, &Message::Pong, &mut actions);
@@ -1257,7 +1257,6 @@ impl Target {
         &mut self,
         conn: ConnId,
         message: Message,
-        bytes: usize,
         now: Instant,
         actions: &mut Vec<Action>,
     ) {
@@ -1281,7 +1280,7 @@ impl Target {
             return;
         };
         match c.flow.take() {
-            Some(flow) => match flow.receive(message, bytes, now, &mut steps) {
+            Some(flow) => match flow.receive(message, now, &mut steps) {
                 Ok(next) => c.flow = next,
                 Err(back) => c.flow = Some(back.0),
             },

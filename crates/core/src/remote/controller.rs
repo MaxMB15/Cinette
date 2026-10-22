@@ -122,6 +122,10 @@ pub struct Controller {
     latest: Option<(String, u64)>,
     /// The transfer asked for or running.
     flow: Option<ControllerFlow>,
+    /// Every message read in a session, for tests to check what the
+    /// target sent.
+    #[cfg(test)]
+    pub(crate) heard: Vec<Message>,
 }
 
 impl Controller {
@@ -145,6 +149,8 @@ impl Controller {
                 next_request: 0,
                 latest: None,
                 flow: None,
+                #[cfg(test)]
+                heard: Vec::new(),
             },
             first,
         ))
@@ -242,7 +248,11 @@ impl Controller {
                 session_id,
             } => {
                 let message = match read(&mut channel, frame, &mut out) {
-                    Ok(Some(message)) => Some(message),
+                    Ok(Some(message)) => {
+                        #[cfg(test)]
+                        self.heard.push(message.clone());
+                        Some(message)
+                    }
                     Ok(None) => None,
                     Err(()) => {
                         self.lose_flow(&mut out);
@@ -252,7 +262,7 @@ impl Controller {
                 let message = match (message, self.flow.take()) {
                     (Some(message), Some(flow)) => {
                         let mut flow_out = ControllerOut::default();
-                        match flow.receive(message, frame.len(), now, &mut flow_out) {
+                        match flow.receive(message, now, &mut flow_out) {
                             Ok(next) => {
                                 self.flow = next;
                                 seal_flow(&mut channel, flow_out, &mut out);
