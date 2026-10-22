@@ -23,10 +23,15 @@ describe("AirPlayButton", () => {
 		fireEvent.click(button());
 		expect(onSend).toHaveBeenCalledWith(rect, expect.any(Function));
 		expect(button().disabled).toBe(true);
+		// It shows it's working while the item is checked.
+		expect(button().getAttribute("aria-busy")).toBe("true");
+		expect(button().querySelector(".animate-spin")).not.toBeNull();
 		fireEvent.click(button());
 		expect(onSend).toHaveBeenCalledTimes(1);
 		await act(async () => sending.resolve(null));
 		expect(button().disabled).toBe(false);
+		expect(button().getAttribute("aria-busy")).toBe("false");
+		expect(button().querySelector(".animate-spin")).toBeNull();
 		expect(notice()).toBeNull();
 	});
 

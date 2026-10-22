@@ -248,6 +248,12 @@ describe("backend commands", () => {
 			{ channel: episode },
 		],
 		[
+			"warmStreamFormats",
+			() => tauri.warmStreamFormats(episode),
+			"warm_stream_formats",
+			{ channel: episode },
+		],
+		[
 			"airplayLoad",
 			() => tauri.airplayLoad(episode, 7, 1, 30),
 			"airplay_load",

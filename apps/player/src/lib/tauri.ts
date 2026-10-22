@@ -123,6 +123,14 @@ export const getStreamFormats = (channel: Channel): Promise<StreamFormats> =>
 	invoke("get_stream_formats", { channel });
 
 /**
+ * Asks `channel`'s panel ahead of time what `getStreamFormats` needs from
+ * it, so a send doesn't wait on it. It's the panel's API, not a stream, so
+ * it takes no connection of the account's.
+ */
+export const warmStreamFormats = (channel: Channel): Promise<void> =>
+	invoke("warm_stream_formats", { channel });
+
+/**
  * Plays `channel` on the chosen AirPlay receiver, from the URL at `source`
  * in the `getStreamFormats` list named `generation`. The URL stays in the
  * backend. Stop local playback first.

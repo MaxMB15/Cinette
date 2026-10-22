@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { Airplay } from "lucide-react";
+import { Airplay, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -97,8 +97,15 @@ export const AirPlayButton = ({ onSend, warning }: AirPlayButtonProps) => {
 				onClick={(e) => void send(e.currentTarget.getBoundingClientRect())}
 				disabled={busy}
 				aria-label="AirPlay"
+				aria-busy={busy}
 			>
-				<Airplay className="h-5 w-5" />
+				{/* The item is checked before the picker opens, which can take a
+				    moment with a provider's stream. */}
+				{busy ? (
+					<Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+				) : (
+					<Airplay className="h-5 w-5" aria-hidden />
+				)}
 			</Button>
 			{asking && (
 				<ConfirmConvert

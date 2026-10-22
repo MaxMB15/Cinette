@@ -64,6 +64,7 @@ import {
 	enqueueEpisodeDownload,
 	stopDownload,
 	removeDownload,
+	warmStreamFormats,
 } from "@/lib/tauri";
 import { parseSrt } from "@/lib/subtitle-parser";
 import type { Channel, SubtitleCue, SubtitleEntry } from "@/lib/types";
@@ -634,6 +635,12 @@ export const PlayerView = () => {
 	// The receiver the player's controls drive instead of mpv, while one plays.
 	const tv: PlaybackDestination | null = airplay.destination ?? cast.destination;
 	const tvRef = useLatestRef(tv);
+	// Once a TV is in reach, the panel is asked ahead what a send would wait
+	// on, so the button opens the picker sooner.
+	const canSend = airplay.available || showsCastButton(cast);
+	useEffect(() => {
+		if (canSend && activeChannel) void warmStreamFormats(activeChannel).catch(() => {});
+	}, [canSend, activeChannel]);
 	// The receiver's position goes into the same resume point as local
 	// playback's, since mpv is stopped while AirPlay or Cast plays.
 	const tvState = airplay.state ?? cast.state;
