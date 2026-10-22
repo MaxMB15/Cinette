@@ -481,6 +481,13 @@ impl Host {
                 after.as_millis()
             );
         }
+        if step.changed {
+            tracing::debug!(
+                "[AirPlay] external playback {} at {:.1} s",
+                if external { "on" } else { "off" },
+                finite(unsafe { player.currentTime().seconds() })
+            );
+        }
         if let Some(after) = step.reached_after {
             tracing::debug!(
                 "[AirPlay] the TV took the video {} ms after the load",
