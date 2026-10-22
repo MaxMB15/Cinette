@@ -13,7 +13,7 @@ use super::handshake::{Next, Peer, TargetHandshake};
 use super::identity::DeviceKey;
 use super::message::{
     Capabilities, CloseReason, Command, DeviceType, ErrorCode, Feature, Hello, Message,
-    PlaybackSnapshot, PlaybackStatus, RequestKind, Track, PROTOCOL_VERSION,
+    PlaybackSnapshot, PlaybackStatus, Track, PROTOCOL_VERSION,
 };
 use super::sessions::RESUME_GRACE;
 use super::settings::{ControlMode, RemoteSettings};
@@ -38,7 +38,12 @@ pub(crate) fn hello(key: &DeviceKey, name: &str, device_type: DeviceType) -> Hel
         name: name.into(),
         device_type,
         versions: vec![PROTOCOL_VERSION],
-        features: vec![Feature::Control, Feature::Catalog],
+        features: vec![
+            Feature::Control,
+            Feature::Catalog,
+            Feature::History,
+            Feature::Providers,
+        ],
     }
 }
 
@@ -113,7 +118,7 @@ fn controller_and_bare_target(now: Instant) -> (Controller, Channel) {
         match next {
             Next::Continue(handshake) => {
                 target = handshake;
-                let out = controller.receive(&unframe(&reply.unwrap()));
+                let out = controller.receive(&unframe(&reply.unwrap()), Instant::now());
                 to_target.extend(out.send);
             }
             Next::Done(established) => return (controller, established.channel),
@@ -240,6 +245,7 @@ impl Net {
 
     /// Carries out what the target asked for.
     pub fn handle(&mut self, actions: Vec<Action>) {
+        let now = self.now;
         for action in actions {
             match action {
                 Action::Send { conn, bytes } => {
@@ -248,7 +254,7 @@ impl Net {
                     };
                     client.from_target.push(&bytes);
                     while let Some(frame) = client.from_target.next_frame().unwrap() {
-                        let out = client.controller.receive(&frame);
+                        let out = client.controller.receive(&frame, now);
                         client.outbox.extend(out.send);
                         client.events.extend(out.events);
                     }
@@ -296,6 +302,31 @@ impl Net {
     /// Sends bytes a controller produced outside `receive`, like a command.
     pub fn send(&mut self, client: usize, bytes: Vec<u8>) {
         self.clients[client].outbox.push_back(bytes);
+        self.pump();
+    }
+
+    /// Queues frames without delivering them, for [`Net::deliver`].
+    pub fn queue(&mut self, client: usize, frames: Vec<Vec<u8>>) {
+        self.clients[client].outbox.extend(frames);
+    }
+
+    /// Delivers the next queued frame of one controller, and nothing more.
+    pub fn deliver(&mut self, client: usize) {
+        let Some(bytes) = self.clients[client].outbox.pop_front() else {
+            return;
+        };
+        let conn = self.clients[client].conn;
+        let mut reader = FrameReader::new();
+        reader.push(&bytes);
+        while let Some(frame) = reader.next_frame().unwrap() {
+            let actions = self.target.receive(conn, &frame, self.now);
+            self.handle(actions);
+        }
+    }
+
+    /// Sends several frames in the order they were sealed.
+    pub fn send_all(&mut self, client: usize, frames: Vec<Vec<u8>>) {
+        self.clients[client].outbox.extend(frames);
         self.pump();
     }
 
@@ -1296,8 +1327,13 @@ fn a_frame_that_doesnt_decrypt_ends_the_connection_but_not_the_session() {
 fn a_controller_never_waits_longer_than_the_consent_timeout() {
     let (mut controller, mut target) = controller_and_bare_target(Instant::now());
     for (said, shown) in [(3600, 30), (30, 30), (12, 12)] {
-        let bytes = target.seal(&Message::Pending { expires_in: said }).unwrap();
-        let out = controller.receive(&unframe(&bytes));
+        let bytes = target
+            .seal(&Message::Pending {
+                expires_in: said,
+                re: None,
+            })
+            .unwrap();
+        let out = controller.receive(&unframe(&bytes), Instant::now());
         assert_eq!(out.events, [Event::Pending { expires_in: shown }]);
     }
 }
@@ -1378,33 +1414,15 @@ fn shutting_down_with_no_controllers_only_stops_advertising() {
 // Transfers
 
 #[test]
-fn always_allow_never_grants_history_or_providers() {
-    for kind in [RequestKind::History, RequestKind::Providers] {
-        let mut net = Net::with_mode(ControlMode::Always);
-        let phone = net.connect("Phone");
-        let bytes = net.clients[phone]
-            .controller
-            .seal_raw(&Message::Request { kind, resume: None })
-            .unwrap();
-        net.send(phone, bytes);
-        assert!(net.clients[phone]
-            .events
-            .contains(&Event::Error(ErrorCode::Unsupported)));
-        assert_eq!(net.prompt(), None);
-        assert!(net.applied.is_empty());
-        // The control session goes on.
-        assert!(net.clients[phone].connected());
-    }
-}
-
-#[test]
-fn a_target_has_no_message_that_hands_out_its_providers() {
-    // Every type a controller can send, and what each one asks of the app:
-    // playback commands and catalog queries only.
-    let types: Vec<&str> = super::message::KNOWN_TYPES.to_vec();
-    for t in types {
-        assert!(!t.to_lowercase().contains("provider"), "{t}");
-    }
+fn a_target_never_sends_its_own_providers() {
+    // The only provider messages are the controller's settings going to the
+    // target, and the target's results, which hold names and outcomes.
+    let types: Vec<&str> = super::message::KNOWN_TYPES
+        .iter()
+        .copied()
+        .filter(|t| t.to_lowercase().contains("provider"))
+        .collect();
+    assert_eq!(types, ["providersSend", "providersAdded"]);
 }
 
 // Over a real socket
@@ -1480,7 +1498,7 @@ fn a_controller_and_target_talk_over_loopback_tcp() {
         assert!(n > 0, "the target hung up early");
         reader.push(&buf[..n]);
         while let Some(frame) = reader.next_frame().unwrap() {
-            let out = controller.receive(&frame);
+            let out = controller.receive(&frame, Instant::now());
             for bytes in out.send {
                 stream.write_all(&bytes).unwrap();
             }

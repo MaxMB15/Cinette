@@ -103,6 +103,11 @@ fn ask(target: &mut Target, conn: ConnId, channel: &mut Channel, now: Instant) -
     let request = Message::Request {
         kind: RequestKind::Control,
         resume: None,
+        id: None,
+        direction: None,
+        what: None,
+        counts: None,
+        providers: None,
     };
     say(target, conn, channel, &request, now)
 }
@@ -644,6 +649,11 @@ fn before_asking_a_controller_can_ping_and_hear_what_isnt_offered() {
     let history = Message::Request {
         kind: RequestKind::History,
         resume: None,
+        id: None,
+        direction: None,
+        what: None,
+        counts: None,
+        providers: None,
     };
     let actions = say(&mut target, conn, &mut channel, &history, now);
     assert_eq!(
@@ -770,6 +780,11 @@ fn over_the_limit_a_session_hears_only_that_it_is_limited() {
     let history = Message::Request {
         kind: RequestKind::History,
         resume: None,
+        id: None,
+        direction: None,
+        what: None,
+        counts: None,
+        providers: None,
     };
     assert!(say(&mut target, conn, &mut channel, &history, now).is_empty());
     let limited = |re| Message::Error {

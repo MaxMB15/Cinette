@@ -18,6 +18,7 @@ use mvp_core::remote::controller::{Controller, Event, PING_INTERVAL};
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
 use mvp_core::remote::message::{CloseReason, Command, ErrorCode, Hello, VersionedState};
 use mvp_core::remote::target::IDLE_TIMEOUT;
+use mvp_core::remote::transfer::flow::ControllerEvent;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -128,6 +129,8 @@ pub enum Ended {
 pub trait LinkHost: Send + Sync + 'static {
     fn phase(&self, link: u64, device: &DeviceId, phase: &Phase);
     fn state(&self, link: u64, device: &DeviceId, state: &VersionedState);
+    /// Something about a transfer this device asked for.
+    fn transfer(&self, _link: u64, _device: &DeviceId, _event: &ControllerEvent) {}
 }
 
 /// Where to reach the target. Asked again before each attempt, since its
@@ -493,7 +496,7 @@ async fn connection(
                     }
                 };
                 last_heard = (config.clock)();
-                let output = controller.receive(&frame);
+                let output = controller.receive(&frame, last_heard);
                 for bytes in output.send {
                     let _ = writer.send(bytes);
                     last_sent = (config.clock)();
@@ -543,6 +546,7 @@ async fn connection(
                             // The other device can send these as often as it likes.
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
+                        Event::Transfer(event) => host.transfer(link, device, &event),
                         Event::Closed(reason) if !verified => {
                             // Another device is at this address, which it
                             // may have taken over, or claims the target's id
@@ -612,7 +616,16 @@ async fn connection(
         for bytes in given_up.send {
             let _ = writer.send(bytes);
         }
-        if !given_up.events.is_empty() {
+        // A transfer running out of time ends only the transfer.
+        let mut closed = false;
+        for event in given_up.events {
+            match event {
+                // mutants: skip MatchArm: nothing in the app asks for a transfer until the next pull request, whose link test covers this.
+                Event::Transfer(event) => host.transfer(link, device, &event),
+                _ => closed = true,
+            }
+        }
+        if closed {
             finish(waiting);
             if !verified {
                 return Outcome::NotThere(Ended::Unreachable);

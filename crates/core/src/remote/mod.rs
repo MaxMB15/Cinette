@@ -31,6 +31,8 @@ pub mod transfer;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transfer_tests;
 
 /// A connection the platform layer opened, as [`target::Target`] numbers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

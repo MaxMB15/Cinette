@@ -600,6 +600,12 @@ impl Task {
                         let _ = inbox.send(Input::CatalogDone(epoch, conn, request, page));
                     });
                 }
+                // This device doesn't offer transfers yet, so the core
+                // refuses them before any of these.
+                Action::ExportHistory { .. }
+                | Action::ImportHistory { .. }
+                | Action::SaveProviders { .. }
+                | Action::TransferProgress { .. } => {}
                 Action::Advertise(record) => self.advertise(record),
             }
         }

@@ -10,6 +10,10 @@
 
 use super::catalog::{CatalogItem, CatalogQuery};
 use super::identity::DeviceId;
+use super::transfer::chunks::Chunk;
+use super::transfer::flow::{Direction, ProviderName, ProviderResult, ProviderSettings};
+use super::transfer::merge::Report;
+use super::transfer::{Counts, What};
 use serde::{Deserialize, Serialize};
 
 /// The protocol version this build speaks.
@@ -82,9 +86,9 @@ impl DeviceType {
 pub enum Feature {
     Control,
     Catalog,
-    /// Copying history and favorites between devices, spec 5. Not handled yet.
+    /// Copying history and favorites between devices, spec 5.
     History,
-    /// Sending providers to the target, answer 4 to spec 5. Not handled yet.
+    /// Sending providers to the target, answer 4 to spec 5.
     Providers,
     /// A feature from a newer version of Cinette, which this one ignores.
     #[serde(other)]
@@ -118,11 +122,11 @@ pub struct ControllerHello {
 #[serde(rename_all = "camelCase")]
 pub enum RequestKind {
     Control,
-    /// Copying history one way or the other, spec 5. It always needs its own
-    /// consent, whatever the control setting, and is refused for now.
+    /// Copying history one way or the other, spec 5, inside a session. It
+    /// always needs its own consent, whatever the control setting.
     History,
-    /// Sending providers, with their logins, to the target. It always needs
-    /// its own consent, separate from history, and is refused for now.
+    /// Sending providers, with their logins, to the target, inside a
+    /// session. It always needs its own consent, separate from history.
     Providers,
 }
 
@@ -173,6 +177,16 @@ pub enum ErrorCode {
     RateLimited,
     /// The target couldn't carry it out, for example because its player failed.
     Failed,
+    /// The user on the target said no to a transfer.
+    Denied,
+    /// No one answered in time, or a transfer stalled.
+    Expired,
+    /// The target is already asking about, or running, another transfer.
+    Busy,
+    /// Either side stopped a transfer.
+    Cancelled,
+    /// A transfer is larger than the other side takes.
+    TooLarge,
     /// A code from a newer version of Cinette.
     #[serde(other)]
     Unknown,
@@ -324,15 +338,31 @@ pub enum Message {
     Reveal {
         nonce: String,
     },
-    /// Asks for control, or to resume the session with this id.
+    /// Asks for control, or to resume the session with this id. Inside a
+    /// session, asks for a transfer: history with `direction` and `what`
+    /// (and the controller's `counts` when it sends), or the `providers`
+    /// named. A transfer request has an `id` its answers name.
     Request {
         kind: RequestKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<Direction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        what: Option<What>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        counts: Option<Counts>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        providers: Option<Vec<ProviderName>>,
     },
-    /// The target is asking its user. The request ends after this many seconds.
+    /// The target is asking its user. The request ends after this many
+    /// seconds. `re` names a transfer request.
     Pending {
         expires_in: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        re: Option<u64>,
     },
     /// The controller stops asking.
     Cancel,
@@ -371,6 +401,69 @@ pub enum Message {
     },
     Ping,
     Pong,
+    /// A transfer request was allowed. `transfer` names it from now on. A
+    /// history transfer has the `salt` for account tags, and an import the
+    /// target's `counts` for the preview.
+    Granted {
+        re: u64,
+        transfer: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        salt: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        counts: Option<Counts>,
+    },
+    /// The controller confirmed the import's preview.
+    TransferStart {
+        transfer: String,
+    },
+    TransferChunk {
+        transfer: String,
+        chunk: Chunk,
+    },
+    TransferAck {
+        transfer: String,
+        seq: u32,
+    },
+    /// The side that wrote the history says what it did.
+    TransferDone {
+        transfer: String,
+        report: Report,
+    },
+    /// The transfer stopped, and nothing was written.
+    TransferError {
+        transfer: String,
+        code: ErrorCode,
+    },
+    TransferCancel {
+        transfer: String,
+    },
+    /// The settings of the providers a grant named, logins included.
+    ProvidersSend {
+        grant: String,
+        part: u32,
+        #[serde(default)]
+        last: bool,
+        providers: Vec<ProviderSettings>,
+    },
+    ProvidersAdded {
+        grant: String,
+        results: Vec<ProviderResult>,
+    },
+}
+
+impl Message {
+    /// Asks for control, or to resume the session `resume`.
+    pub fn control_request(resume: Option<String>) -> Self {
+        Message::Request {
+            kind: RequestKind::Control,
+            resume,
+            id: None,
+            direction: None,
+            what: None,
+            counts: None,
+            providers: None,
+        }
+    }
 }
 
 /// The `type` of every message this version knows.
@@ -390,6 +483,15 @@ pub(crate) const KNOWN_TYPES: &[&str] = &[
     "error",
     "ping",
     "pong",
+    "granted",
+    "transferStart",
+    "transferChunk",
+    "transferAck",
+    "transferDone",
+    "transferError",
+    "transferCancel",
+    "providersSend",
+    "providersAdded",
 ];
 
 /// Why a message couldn't be read.
