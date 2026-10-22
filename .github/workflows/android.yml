@@ -169,6 +169,12 @@ jobs:
               echo "::error::The $store APK has no TV launcher activity"
               exit 1
             fi
+            # Both stores hide an app from every device that lacks a feature
+            # it requires, including one a permission implies, like Wi-Fi.
+            if grep -E "^\s*uses-feature:" "$BADGING"; then
+              echo "::error::The $store APK requires the features above, which hides it from TVs without them"
+              exit 1
+            fi
             # android_device.rs reads the store from this meta-data.
             "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > "$RUNNER_TEMP/manifest-$store.txt"
             if ! grep -A1 'A: http://schemas.android.com/apk/res/android:name(0x01010003)="app.cinette.STORE"' "$RUNNER_TEMP/manifest-$store.txt" \

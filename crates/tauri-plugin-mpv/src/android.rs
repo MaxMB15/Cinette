@@ -256,6 +256,22 @@ pub extern "system" fn Java_app_cinette_mpv_MpvNative_surfaceChanged<'local>(
     surface_changed(&mut state, resized, global, width, height);
 }
 
+/// `MpvNative.pause()` in the Kotlin plugin, called on the UI thread when
+/// the app stops or the HDMI output goes. Pauses whatever plays, if
+/// anything does, through the surface callback's own client.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_app_cinette_mpv_MpvNative_pause<'local>(
+    _env: jni::EnvUnowned<'local>,
+    _class: jni::objects::JClass<'local>,
+) {
+    let state = lock_or_recover(&SURFACE);
+    if let Some(client) = &state.client
+        && let Err(e) = client.set_property("pause", true)
+    {
+        tracing::warn!("[MPV android] pausing failed: {e}");
+    }
+}
+
 /// The surface below the web view. The view outlives this value: Kotlin
 /// keeps it for the next stream and only hides it on detach.
 pub struct AndroidSurfaceRenderer {

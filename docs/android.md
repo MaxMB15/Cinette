@@ -178,6 +178,12 @@ Rust half is `src/android.rs`.
   MediaCodec and AudioTrack need. That's why FFmpeg is built as shared libraries.
 - While a stream plays, the window has `FLAG_KEEP_SCREEN_ON`, which also keeps a TV's
   screensaver away.
+- Playback pauses when the app stops, as on Home, through `MpvNative.pause`, which
+  uses the surface callback's client. Nothing plays in the background: there's no
+  media notification to control it from, and Fire TV's test criteria ask for that.
+- It also pauses when the HDMI output goes (`ACTION_HDMI_AUDIO_PLUG`), as when the TV
+  turns off, and stays paused when it comes back. Fire TV's test criteria ask for that
+  too.
 
 The libraries come from `scripts/lib/libmpv-android.sh`. It follows
 [mpv-android's build scripts](https://github.com/mpv-android/mpv-android/tree/master/buildscripts)

@@ -83,3 +83,13 @@ fn the_manifest_names_the_store_from_gradle() {
     assert!(gradle.contains(r#"manifestPlaceholders["store"] = store"#));
     assert!(gradle.contains(r#"val stores = listOf("google", "amazon")"#));
 }
+
+/// The multicast permission implies Wi-Fi, so without this the stores would
+/// hide the app from TVs on Ethernet only.
+#[test]
+fn wifi_is_not_required() {
+    let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(
+        r#"<uses-feature android:name="android.hardware.wifi" android:required="false" />"#
+    ));
+}
