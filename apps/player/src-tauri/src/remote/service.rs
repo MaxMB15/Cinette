@@ -1128,14 +1128,21 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
                 expires_in_ms: u64::from(*expires_in) * 1000,
             },
             TransferUpdate::Refused(code) => {
-                lock(&self.sending).take_if(|(l, _)| *l == link);
-                lock(&self.history).take_if(|(l, _)| *l == link);
+                self.ended(link);
                 TransferStep::Refused { code: *code }
             }
-            TransferUpdate::Progress { transfer, progress } => TransferStep::Progress {
-                transfer: transfer.clone(),
-                progress: progress.clone(),
-            },
+            TransferUpdate::Progress { transfer, progress } => {
+                if matches!(
+                    progress,
+                    Progress::Failed(_) | Progress::Done(_) | Progress::ProvidersDone(_)
+                ) {
+                    self.ended(link);
+                }
+                TransferStep::Progress {
+                    transfer: transfer.clone(),
+                    progress: progress.clone(),
+                }
+            }
             TransferUpdate::Preview { transfer, counts } => TransferStep::Preview {
                 transfer: transfer.clone(),
                 counts: *counts,
@@ -1173,6 +1180,13 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
 }
 
 impl<R: Runtime> TauriLinkHost<R> {
+    /// The transfer on `link` ended, however it ended: nothing waits for an
+    /// Allow on it any more, so the next one can be asked for.
+    fn ended(&self, link: u64) {
+        lock(&self.sending).take_if(|(l, _)| *l == link);
+        lock(&self.history).take_if(|(l, _)| *l == link);
+    }
+
     fn notify(&self, link: u64, device: &DeviceId, update: TransferStep) {
         let _ = self.app.emit(
             "remote://transfer",

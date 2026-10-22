@@ -14,13 +14,6 @@ import { applyRemoteCommand, getMountedPlayer, waitForMountedPlayer } from "@/li
 import { getPlaybackPosition, mpvStop, type RemoteHistoryImported } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
 
-/**
- * Says history from another device was added here, and loads the history,
- * favorites and pinned groups again, so they show without a restart. When
- * the other device's last item matched one here, it offers to continue it
- * at the place saved here, which the button names. Nothing plays until
- * that's chosen, and then it starts from the place saved by then.
- */
 /** Where `channel` would continue here: the place saved for it now, or
  *  undefined to start from the beginning. */
 const savedPlace = async (channel: Channel): Promise<number | undefined> => {
@@ -29,6 +22,13 @@ const savedPlace = async (channel: Channel): Promise<number | undefined> => {
 	return saved && !saved.finished ? saved.positionSeconds : undefined;
 };
 
+/**
+ * Says history from another device was added here, and loads the history,
+ * favorites and pinned groups again, so they show without a restart. When
+ * the other device's last item matched one here, it offers to continue it
+ * at the place saved here, which the button names. Nothing plays until
+ * that's chosen, and then it starts from the place saved by then.
+ */
 export const HistoryImportedNotice = () => {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();

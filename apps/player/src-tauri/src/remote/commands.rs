@@ -679,7 +679,9 @@ pub async fn remote_progress_saved<R: Runtime>(
     }
 }
 
-/// Stops the transfer on link `link`. Nothing is written on either device.
+/// Stops the transfer on link `link`, unless one side already has it all
+/// and is writing it, which then goes on. Stopped in time, nothing is
+/// written on either device.
 #[command]
 pub async fn remote_cancel_transfer<R: Runtime>(
     app: AppHandle<R>,

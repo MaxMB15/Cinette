@@ -294,6 +294,24 @@ describe("TransferHistoryDialog", () => {
 		expect(remoteCancelTransfer).toHaveBeenCalledWith(3);
 	});
 
+	it("says it's too late once it's being written, and doesn't cancel", async () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		notify({
+			step: "progress",
+			transfer: "t",
+			progress: { state: "sending", data: { done: 2, total: 5 } },
+		});
+		expect(screen.queryByText(/too late to stop it now/)).toBeNull();
+		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
+		expect(screen.getByText(/too late to stop it now/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Close" }));
+		expect(onClose).toHaveBeenCalled();
+		expect(remoteCancelTransfer).not.toHaveBeenCalled();
+	});
+
 	it("cancels while waiting or moving too", async () => {
 		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
 		fireEvent.click(screen.getByRole("button", { name: "Send" }));

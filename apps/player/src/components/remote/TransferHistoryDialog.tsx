@@ -108,10 +108,13 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 
 	const finished = state.step === "choosing" || state.step === "done" || state.step === "failed";
 	const cancel = () => void remoteCancelTransfer(link.id).catch(() => {});
+	// Once one side has it all and is writing it, a cancel can't stop it.
+	const tooLate = state.step === "saving";
 	const close = () => {
 		closed.current = true;
-		// Closing while it runs stops it; nothing is written on either device.
-		if (!finished) cancel();
+		// Closing before that stops it, and nothing is written on either
+		// device.
+		if (!finished && !tooLate) cancel();
 		onClose();
 	};
 	const nothing = !what.history && !what.favorites && !what.pins;
@@ -256,9 +259,14 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 					<p className="text-sm mb-3" role="status">
 						{progressText(state, sending)}
 					</p>
+					{tooLate && (
+						<p className="text-xs text-muted-foreground mb-3">
+							It's too late to stop it now. Closing this doesn't undo it.
+						</p>
+					)}
 					<div className="flex justify-end">
 						<button type="button" className={PLAIN} onClick={close}>
-							Cancel
+							{tooLate ? "Close" : "Cancel"}
 						</button>
 					</div>
 				</>

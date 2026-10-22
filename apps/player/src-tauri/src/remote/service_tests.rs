@@ -1285,7 +1285,10 @@ async fn the_background_hides_the_device_and_the_foreground_brings_it_back() {
         .expect("listening again");
     let deadline = tokio::time::Instant::now() + WAIT;
     while lock(&running.advertised).len() == before {
-        assert!(tokio::time::Instant::now() < deadline, "not advertised again");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "not advertised again"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(running.last_advertised().unwrap().port, port);
@@ -1406,7 +1409,9 @@ async fn it_stops_trying_when_the_app_goes_back_to_the_background() {
 fn the_multicast_lock_follows_the_foreground_only_while_remote_control_runs() {
     let app = TestApp::new();
     let mut called = Vec::new();
-    set_foreground_with(&app.handle(), Lifecycle::Foreground, |hold| called.push(hold));
+    set_foreground_with(&app.handle(), Lifecycle::Foreground, |hold| {
+        called.push(hold)
+    });
     assert!(called.is_empty(), "no remote control, no lock");
 }
 
@@ -1416,9 +1421,15 @@ async fn the_multicast_lock_is_held_in_the_foreground_and_let_go_in_the_backgrou
     let mut called = Vec::new();
     let handle = running.app.handle();
     set_foreground_with(&handle, Lifecycle::Background, |hold| called.push(hold));
-    assert!(!handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
+    assert!(!handle
+        .state::<RemoteService>()
+        .wants_foreground
+        .load(Ordering::SeqCst));
     set_foreground_with(&handle, Lifecycle::Foreground, |hold| called.push(hold));
-    assert!(handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
+    assert!(handle
+        .state::<RemoteService>()
+        .wants_foreground
+        .load(Ordering::SeqCst));
     assert_eq!(called, [false, true]);
 }
 
@@ -1468,14 +1479,22 @@ async fn opening_starts_remote_control_once_and_remembers_it() {
     let app = TestApp::new();
     assert!(!opened_before(&app.handle()));
     let mut multicast = Vec::new();
-    open_with(&app.handle(), start_on_loopback(&app), |hold| multicast.push(hold))
-        .await
-        .unwrap();
+    open_with(&app.handle(), start_on_loopback(&app), |hold| {
+        multicast.push(hold)
+    })
+    .await
+    .unwrap();
     assert!(app.handle().try_state::<RemoteService>().is_some());
-    assert!(opened_before(&app.handle()), "starts with the app from now on");
+    assert!(
+        opened_before(&app.handle()),
+        "starts with the app from now on"
+    );
     assert_eq!(multicast, [true], "holds the lock in the foreground");
     let text = std::fs::read_to_string(app.app_dir().join(SETTINGS_STORE_FILE)).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()[OPENED_KEY], json!(true));
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()[OPENED_KEY],
+        json!(true)
+    );
     // Already running: nothing starts again.
     open_with(&app.handle(), async { panic!("started twice") }, |_| {
         panic!("held again")
@@ -1493,7 +1512,10 @@ async fn a_start_that_fails_says_why_and_can_be_tried_again() {
     .await;
     assert_eq!(failed, Err("no port".to_owned()));
     assert!(app.handle().try_state::<RemoteService>().is_none());
-    assert!(!opened_before(&app.handle()), "a failed start isn't remembered");
+    assert!(
+        !opened_before(&app.handle()),
+        "a failed start isn't remembered"
+    );
     open_with(&app.handle(), start_on_loopback(&app), |_| {})
         .await
         .unwrap();
@@ -1527,8 +1549,13 @@ async fn a_start_that_fails_at_the_key_starts_no_browse() {
     let browsed = AtomicBool::new(false);
     let failed = start_on_loopback_in(&app, blocked, &browsed).await;
     assert!(failed.unwrap_err().contains("device key"));
-    assert!(!browsed.load(Ordering::SeqCst), "no browse without remote control");
-    assert!(start_on_loopback_in(&app, app.app_dir(), &browsed).await.is_ok());
+    assert!(
+        !browsed.load(Ordering::SeqCst),
+        "no browse without remote control"
+    );
+    assert!(start_on_loopback_in(&app, app.app_dir(), &browsed)
+        .await
+        .is_ok());
     assert!(browsed.load(Ordering::SeqCst));
 }
 
@@ -1542,9 +1569,15 @@ fn the_launch_starts_it_unless_ios_waits_for_the_user() {
     assert!(!start_at_launch_with(true, false, start), "iOS waits");
     assert_eq!(started.get(), 0);
     assert!(start_at_launch_with(true, true, start), "until opened once");
-    assert!(start_at_launch_with(false, false, start), "elsewhere at once");
+    assert!(
+        start_at_launch_with(false, false, start),
+        "elsewhere at once"
+    );
     assert_eq!(started.get(), 2);
-    assert!(!start_at_launch_with(false, false, || false), "says when it failed");
+    assert!(
+        !start_at_launch_with(false, false, || false),
+        "says when it failed"
+    );
 }
 
 /// The Mac controlling the TV, with an M3U provider the TV can load.
@@ -2406,4 +2439,48 @@ async fn a_send_refused_as_busy_doesnt_hold_up_the_next() {
     // The refused send left nothing behind, so the next one asks again.
     send_home(&mac).await.unwrap();
     tv.event("remote://consent").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transfer_that_ends_however_it_ends_frees_the_link_for_the_next() {
+    let running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let host = TauriLinkHost {
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
+    };
+    let progress = |progress: Progress| TransferUpdate::Progress {
+        transfer: "t".into(),
+        progress,
+    };
+    let waiting = |host: &TauriLinkHost<_>| {
+        *host.sending.lock().unwrap() = Some((2, vec!["p".into()]));
+        *host.history.lock().unwrap() = Some((2, Some("ch".into())));
+    };
+    let held = |host: &TauriLinkHost<_>| {
+        (
+            host.sending.lock().unwrap().is_some(),
+            host.history.lock().unwrap().is_some(),
+        )
+    };
+    // Still going: the slots stay.
+    waiting(&host);
+    host.transfer(2, &device, &progress(Progress::Saving));
+    assert_eq!(held(&host), (true, true));
+    // Any end frees them, a failure before the export too.
+    for end in [
+        TransferUpdate::Refused(ErrorCode::Denied),
+        progress(Progress::Failed(ErrorCode::Invalid)),
+        progress(Progress::Done(Box::default())),
+        progress(Progress::ProvidersDone(Vec::new())),
+    ] {
+        waiting(&host);
+        host.transfer(2, &device, &end);
+        assert_eq!(held(&host), (false, false), "{end:?}");
+    }
 }

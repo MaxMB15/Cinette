@@ -200,6 +200,7 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
+			expect(screen.getByText("History imported")).toBeInTheDocument();
 		});
 
 		it("leaves both bars off a phone's player, which keeps the whole screen", () => {
@@ -208,6 +209,7 @@ describe("AppLayout", () => {
 			expect(screen.queryByText("Remote bar")).toBeNull();
 			expect(screen.queryByText("Controllers bar")).toBeNull();
 			expect(screen.queryByText("Providers added")).toBeNull();
+			expect(screen.queryByText("History imported")).toBeNull();
 			expect(screen.getByText("page")).toBeInTheDocument();
 			unmount();
 			// The sidebar layout keeps them on the player.
@@ -216,6 +218,7 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
+			expect(screen.getByText("History imported")).toBeInTheDocument();
 		});
 
 		it("shows a device that's only controlled who controls it, and nothing to control others with", () => {

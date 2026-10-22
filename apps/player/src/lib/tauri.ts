@@ -932,7 +932,9 @@ export interface RemoteProvidersAdded {
 export const remoteSendProviders = (link: number, providerIds: string[]): Promise<void> =>
 	invoke("remote_send_providers", { link, providerIds });
 
-/** Stops the transfer on link `link`. Nothing is written on either device. */
+/** Stops the transfer on link `link`, unless one side already has it all and
+ *  is writing it, which then goes on. Stopped in time, nothing is written on
+ *  either device. */
 export const remoteCancelTransfer = (link: number): Promise<void> =>
 	invoke("remote_cancel_transfer", { link });
 
