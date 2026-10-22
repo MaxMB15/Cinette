@@ -226,6 +226,7 @@ register_commands![
     commands::delete_playback_position,
     progress::hand_off_progress,
     streams::get_stream_formats,
+    streams::warm_stream_formats,
     airplay::airplay_load,
     airplay::airplay_load_converted,
     airplay::airplay_end_conversion,

@@ -303,7 +303,7 @@ impl Tracker {
             // The video left the receiver: the TV went off, another device
             // took it, or the user picked this device in Control Center.
             // AVPlayer would carry on here, which Swift stops.
-            self.lost = true;
+            self.lose("the video left the receiver", report.position);
         }
         state.status = match report.status.as_str() {
             "opening" => Status::Opening,
@@ -331,6 +331,15 @@ impl Tracker {
             state.connection = Connection::Lost;
         }
         state
+    }
+
+    /// Counts the receiver as lost for good, and logs the first time.
+    fn lose(&mut self, why: &str, position: f64) {
+        // mutants: skip UnaryOperator: It only decides whether a debug line is written, which no test reads.
+        if !self.lost {
+            tracing::debug!("[AirPlay] lost the receiver at {position:.1} s: {why}");
+        }
+        self.lost = true;
     }
 
     fn error(&self, error: Option<&ReportError>) -> PlaybackError {
@@ -368,7 +377,7 @@ impl Tracker {
         };
         let waited = now.saturating_duration_since(since);
         if waited >= LOST_AFTER {
-            self.lost = true;
+            self.lose("it waited too long for data", position);
         } else if waited >= RECONNECTING_AFTER && self.ready {
             state.connection = Connection::Reconnecting;
         }

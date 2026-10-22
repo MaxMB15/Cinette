@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 #[cfg(desktop)]
 use std::time::Duration;
+use std::time::Instant;
 
 use mvp_core::http::origin_for_log;
 use mvp_core::iptv::xtream::{XtreamClient, XtreamCredentials};
@@ -171,7 +172,13 @@ async fn output_formats(streams: &StreamsState, provider: &Provider) -> Vec<Stri
         provider.username.as_deref().unwrap_or_default(),
         provider.password.as_deref().unwrap_or_default(),
     ));
-    match client.output_formats().await {
+    let asked = Instant::now();
+    let answer = client.output_formats().await;
+    tracing::debug!(
+        "[Streams] the panel's output formats took {} ms",
+        asked.elapsed().as_millis()
+    );
+    match answer {
         Ok(formats) => {
             lock(&streams.output_formats).insert(provider.id.clone(), formats.clone());
             formats
@@ -182,6 +189,19 @@ async fn output_formats(streams: &StreamsState, provider: &Provider) -> Vec<Stri
             Vec::new()
         }
     }
+}
+
+/// Asks `channel`'s panel for what it lets the login fetch, if it's an
+/// Xtream live channel, so a later `get_stream_formats` doesn't wait on it.
+/// It's the panel's API, which a login check asks too, not a stream, so it
+/// takes none of the account's connections. The answer is kept for the run.
+#[command]
+pub async fn warm_stream_formats(
+    state: State<'_, AppState>,
+    streams: State<'_, StreamsState>,
+    channel: Channel,
+) -> Result<(), String> {
+    fetch_urls(&state, &streams, &channel).await.map(|_| ())
 }
 
 /// The formats `channel` comes in.
@@ -210,7 +230,9 @@ pub(crate) async fn stream_formats<R: Runtime>(
     channel: Channel,
     now: Option<(String, MediaInfo)>,
 ) -> Result<StreamFormats, String> {
+    let started = Instant::now();
     let urls = fetch_urls(state, streams, &channel).await?;
+    let listed = started.elapsed();
     let playing = playing_info(now, &urls, &channel.url)?;
     let source = urls
         .iter()
@@ -232,7 +254,16 @@ pub(crate) async fn stream_formats<R: Runtime>(
             }
         },
     };
+    let probed = started.elapsed();
     let mut result = check_hls(streams, &urls, codecs, source, playing.is_some()).await?;
+    tracing::debug!(
+        "[Streams] formats in {} ms: the URLs {} ms, {} {} ms, the HLS checks {} ms",
+        started.elapsed().as_millis(),
+        listed.as_millis(),
+        if playing.is_some() { "mpv's codecs" } else { "the probe" },
+        (probed - listed).as_millis(),
+        (started.elapsed() - probed).as_millis(),
+    );
     result.duration = duration;
     result.generation = streams.remember(&channel.id, urls);
     Ok(result)

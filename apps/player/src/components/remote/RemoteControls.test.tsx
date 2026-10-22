@@ -586,6 +586,20 @@ describe("RemoteBar", () => {
 		}
 	});
 
+	it("wraps onto more lines where one is too narrow, so nothing covers Play and Stop", () => {
+		const l = link({ phase: "connected" });
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
+		control.state = { ...control.state, link: l };
+		render(<RemoteBar />);
+		expect(screen.getByRole("region", { name: "Remote control" })).toHaveClass(
+			"flex",
+			"flex-wrap",
+			"items-center",
+			"gap-x-3",
+			"gap-y-2"
+		);
+	});
+
 	it("shows a buffering item as playing", () => {
 		const l = link({ phase: "connected" });
 		l.destination.receive(

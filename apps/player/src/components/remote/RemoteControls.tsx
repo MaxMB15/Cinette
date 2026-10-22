@@ -353,7 +353,9 @@ export const RemoteBar = () => {
 			<div
 				role="region"
 				aria-label="Remote control"
-				className="flex items-center gap-3 px-4 py-2 border-b border-border bg-primary/10 text-sm"
+				// It wraps on a phone, where one row is too narrow: without
+				// that, the buttons that can't shrink cover Play and Stop.
+				className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 border-b border-border bg-primary/10 text-sm"
 			>
 				<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
 				<span className="font-medium min-w-0 truncate" title={link.name}>

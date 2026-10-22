@@ -538,3 +538,99 @@ async fn a_probe_that_a_newer_cast_overtakes_stops_its_ffmpeg() {
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(!ffmpeg_runs_for(&url));
 }
+
+/// A loopback panel that answers every request `delay` late, and counts
+/// them.
+fn slow_panel(delay: Duration) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let asked = std::sync::Arc::new(AtomicUsize::new(0));
+    let count = asked.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            count.fetch_add(1, Ordering::SeqCst);
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            std::thread::sleep(delay);
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{PANEL_FORMATS}",
+                PANEL_FORMATS.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    (url, asked)
+}
+
+#[tokio::test]
+async fn warmed_formats_dont_wait_on_a_slow_panel() {
+    use std::sync::atomic::Ordering;
+    let delay = Duration::from_millis(1500);
+    let app = TestApp::new();
+    let (panel, asked) = slow_panel(delay);
+    let live = channel("p-live-7", &format!("{panel}/live/{ACCOUNT}/7.ts"), "live");
+    add_provider(
+        &app,
+        ProviderType::Xtream,
+        &panel,
+        std::slice::from_ref(&live),
+    );
+    let handle = app.handle();
+
+    // Warming waits on the panel, while nothing waits on it.
+    let started = std::time::Instant::now();
+    warm_stream_formats(app.state(), handle.state::<StreamsState>(), live.clone())
+        .await
+        .unwrap();
+    assert!(started.elapsed() >= delay);
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
+
+    // The click after it doesn't, and the panel isn't asked again.
+    let started = std::time::Instant::now();
+    let result = formats(&app, live, Some(playing_ts())).await.unwrap();
+    assert!(started.elapsed() < delay / 2, "{:?}", started.elapsed());
+    assert_eq!(result.sources, vec![0, 1]);
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn without_warming_the_first_check_waits_on_the_panel() {
+    let delay = Duration::from_millis(1500);
+    let app = TestApp::new();
+    let (panel, _) = slow_panel(delay);
+    let live = channel("p-live-7", &format!("{panel}/live/{ACCOUNT}/7.ts"), "live");
+    add_provider(
+        &app,
+        ProviderType::Xtream,
+        &panel,
+        std::slice::from_ref(&live),
+    );
+    let started = std::time::Instant::now();
+    formats(&app, live, Some(playing_ts())).await.unwrap();
+    assert!(started.elapsed() >= delay);
+}
+
+#[tokio::test]
+async fn warming_asks_nothing_for_an_m3u_or_vod_item() {
+    let app = TestApp::new();
+    let (panel, requests) = serve_routes(vec![route("player_api.php", "200 OK", PANEL_FORMATS)]);
+    let film = channel(
+        "p-movie-9",
+        &format!("{panel}/movie/{ACCOUNT}/9.mkv"),
+        "movie",
+    );
+    add_provider(
+        &app,
+        ProviderType::Xtream,
+        &panel,
+        std::slice::from_ref(&film),
+    );
+    let handle = app.handle();
+    warm_stream_formats(app.state(), handle.state::<StreamsState>(), film)
+        .await
+        .unwrap();
+    assert!(requests.recv_timeout(Duration::from_millis(200)).is_err());
+}

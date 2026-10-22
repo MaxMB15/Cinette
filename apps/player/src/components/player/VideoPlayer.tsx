@@ -64,6 +64,7 @@ import {
 	enqueueEpisodeDownload,
 	stopDownload,
 	removeDownload,
+	warmStreamFormats,
 } from "@/lib/tauri";
 import { parseSrt } from "@/lib/subtitle-parser";
 import type { Channel, SubtitleCue, SubtitleEntry } from "@/lib/types";
@@ -634,6 +635,12 @@ export const PlayerView = () => {
 	// The receiver the player's controls drive instead of mpv, while one plays.
 	const tv: PlaybackDestination | null = airplay.destination ?? cast.destination;
 	const tvRef = useLatestRef(tv);
+	// Once a TV is in reach, the panel is asked ahead what a send would wait
+	// on, so the button opens the picker sooner.
+	const canSend = airplay.available || showsCastButton(cast);
+	useEffect(() => {
+		if (canSend && activeChannel) void warmStreamFormats(activeChannel).catch(() => {});
+	}, [canSend, activeChannel]);
 	// The receiver's position goes into the same resume point as local
 	// playback's, since mpv is stopped while AirPlay or Cast plays.
 	const tvState = airplay.state ?? cast.state;
@@ -1795,7 +1802,9 @@ export const PlayerView = () => {
 			{notice && (
 				<p
 					role="alert"
-					className="absolute top-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded bg-black/90 px-4 py-2 text-sm text-white"
+					// Below the notch or the Dynamic Island in portrait, and no
+					// wider than the screen.
+					className="absolute top-[calc(1rem+env(safe-area-inset-top))] left-1/2 z-40 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded bg-black/90 px-4 py-2 text-sm text-white"
 				>
 					<span>{notice.text}</span>
 					<button
