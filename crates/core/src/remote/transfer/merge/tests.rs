@@ -641,3 +641,34 @@ fn the_same_plays_a_little_apart_are_unchanged() {
         Some(watched(10, 1001, 2, 301))
     );
 }
+
+#[test]
+fn an_item_with_two_problems_is_counted_once() {
+    // Its row has nowhere to go, and its place makes no sense.
+    let twin = Item {
+        watched: Some(watched(1, 2, 1, 60)),
+        position: Some(at(-5.0, 2)),
+        ..item("Twin")
+    };
+    let plan = plan(&export(vec![twin]), &index(), LATER);
+    assert_eq!(plan.unmatched_total, 1);
+    assert_eq!(plan.unmatched.len(), 1);
+    assert_eq!(plan.unmatched[0].reason, Miss::Ambiguous);
+}
+
+#[test]
+fn an_item_whose_place_was_written_counts_as_transferred() {
+    // The history row makes no sense, but the place and the favorite do.
+    let heat = Item {
+        watched: Some(watched(1, 2, -1, 60)),
+        position: Some(at(700.0, 2)),
+        favorite: true,
+        ..item("Heat")
+    };
+    let plan = plan(&export(vec![heat]), &index(), LATER);
+    assert!(plan.history.is_empty());
+    assert_eq!(plan.positions["movie:heat"], at(700.0, 2));
+    assert!(plan.favorites.contains("xt-a-movie-1"));
+    assert_eq!(plan.unmatched_total, 0);
+    assert!(plan.unmatched.is_empty());
+}

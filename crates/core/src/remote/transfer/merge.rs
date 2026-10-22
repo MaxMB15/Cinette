@@ -214,11 +214,10 @@ pub fn plan(export: &Export, index: &Index, now: i64) -> Plan {
         };
         let watched = item.watched.filter(watched_ok);
         let position = item.position.filter(position_ok);
-        if (item.watched.is_some() && watched.is_none())
-            || (item.position.is_some() && position.is_none())
-        {
-            plan.miss(&r.name, r.kind.into(), Miss::Invalid);
-        }
+        let invalid = (item.watched.is_some() && watched.is_none())
+            || (item.position.is_some() && position.is_none());
+        // Whether any part of the item is written.
+        let mut wrote = false;
         if let (Some(position), Some(key)) = (position, found.key.as_ref()) {
             let position = Position {
                 updated_at: shift(position.updated_at),
@@ -228,6 +227,7 @@ pub fn plan(export: &Export, index: &Index, now: i64) -> Plan {
             if let Some(newer) = merge_position(kept, position) {
                 plan.positions.insert(key.clone(), newer);
             }
+            wrote = true;
         }
         // A history entry and a favorite need a channel of their own. An
         // episode from a saved list has no row in `channels`, so it can't
@@ -236,37 +236,43 @@ pub fn plan(export: &Export, index: &Index, now: i64) -> Plan {
         let row_channel = found.channel.as_ref();
         let lost = (watched.is_some() && row_channel.is_none())
             || (favorite && row_channel.is_none_or(|c| c.show.is_some()));
-        if lost {
-            plan.miss(&r.name, r.kind.into(), found.why);
-        }
-        let Some(channel) = found.channel else {
-            continue;
-        };
-        if let Some(watched) = watched {
-            let watched = Watched {
-                first_watched_at: shift(watched.first_watched_at),
-                last_watched_at: shift(watched.last_watched_at),
-                ..watched
-            };
-            match plan.history.get_mut(&channel.id) {
-                Some(row) => {
-                    if let Some(merged) = merge_watched(Some(row.watched), watched) {
-                        row.watched = merged;
+        if let Some(channel) = found.channel {
+            if let Some(watched) = watched {
+                let watched = Watched {
+                    first_watched_at: shift(watched.first_watched_at),
+                    last_watched_at: shift(watched.last_watched_at),
+                    ..watched
+                };
+                match plan.history.get_mut(&channel.id) {
+                    Some(row) => {
+                        if let Some(merged) = merge_watched(Some(row.watched), watched) {
+                            row.watched = merged;
+                        }
+                    }
+                    None => {
+                        plan.history.insert(
+                            channel.id.clone(),
+                            HistoryRow {
+                                channel: channel.clone(),
+                                watched,
+                            },
+                        );
                     }
                 }
-                None => {
-                    plan.history.insert(
-                        channel.id.clone(),
-                        HistoryRow {
-                            channel: channel.clone(),
-                            watched,
-                        },
-                    );
-                }
+                wrote = true;
+            }
+            if favorite && channel.show.is_none() {
+                plan.favorites.insert(channel.id.clone());
+                wrote = true;
             }
         }
-        if favorite && channel.show.is_none() {
-            plan.favorites.insert(channel.id.clone());
+        // Each item is listed once. A row or favorite with nowhere to go
+        // is listed; a part that made no sense is listed only when nothing
+        // else of the item was written.
+        if lost {
+            plan.miss(&r.name, r.kind.into(), found.why);
+        } else if invalid && !wrote {
+            plan.miss(&r.name, r.kind.into(), Miss::Invalid);
         }
     }
     // Items the source or this device left out for being too large.

@@ -61,8 +61,7 @@ fn reassemble(chunks: Vec<Chunk>) -> Result<Option<Export>, AssembleError> {
     let mut assembler = Assembler::new();
     let mut result = Ok(None);
     for chunk in chunks {
-        let bytes = serde_json::to_vec(&chunk).unwrap().len();
-        result = assembler.push(chunk, bytes, CLOCK);
+        result = assembler.push(chunk, CLOCK);
         if result.is_err() {
             break;
         }
@@ -203,7 +202,7 @@ fn the_receiver_drops_what_breaks_the_limits() {
         "x".repeat(MAX_NAME_BYTES + 1),
     ));
     let mut assembler = Assembler::new();
-    let export = assembler.push(chunk, 100, CLOCK).unwrap().unwrap();
+    let export = assembler.push(chunk, CLOCK).unwrap().unwrap();
     assert_eq!(export.items, vec![item(1)]);
     assert_eq!(export.pins, vec![pin(1)]);
     assert_eq!(export.current, None);
@@ -226,15 +225,12 @@ fn chunks_out_of_order_or_after_the_last_are_refused() {
 
     let mut assembler = Assembler::new();
     let only = split(&export(1, 0), CLOCK).0.remove(0);
-    assert!(assembler.push(only.clone(), 10, CLOCK).unwrap().is_some());
-    assert_eq!(
-        assembler.push(only, 10, CLOCK),
-        Err(AssembleError::OutOfOrder)
-    );
+    assert!(assembler.push(only.clone(), CLOCK).unwrap().is_some());
+    assert_eq!(assembler.push(only, CLOCK), Err(AssembleError::OutOfOrder));
 
     let mut late_start = Assembler::new();
     assert_eq!(
-        late_start.push(chunks[1].clone(), 10, CLOCK),
+        late_start.push(chunks[1].clone(), CLOCK),
         Err(AssembleError::OutOfOrder)
     );
 }
@@ -250,37 +246,77 @@ fn a_transfer_over_the_limits_is_refused() {
         items: (0..items).map(item).collect(),
         pins: (0..pins).map(pin).collect(),
     };
-    assert!(Assembler::new().push(chunk(MAX_ITEMS, 0), 1, CLOCK).is_ok());
+    assert!(Assembler::new().push(chunk(MAX_ITEMS, 0), CLOCK).is_ok());
     assert_eq!(
-        Assembler::new().push(chunk(MAX_ITEMS + 1, 0), 1, CLOCK),
+        Assembler::new().push(chunk(MAX_ITEMS + 1, 0), CLOCK),
         Err(AssembleError::TooLarge)
     );
-    assert!(Assembler::new().push(chunk(0, MAX_PINS), 1, CLOCK).is_ok());
+    assert!(Assembler::new().push(chunk(0, MAX_PINS), CLOCK).is_ok());
     assert_eq!(
-        Assembler::new().push(chunk(0, MAX_PINS + 1), 1, CLOCK),
-        Err(AssembleError::TooLarge)
-    );
-    assert!(Assembler::new()
-        .push(chunk(0, 0), MAX_TOTAL_BYTES, CLOCK)
-        .is_ok());
-    assert_eq!(
-        Assembler::new().push(chunk(0, 0), MAX_TOTAL_BYTES + 1, CLOCK),
+        Assembler::new().push(chunk(0, MAX_PINS + 1), CLOCK),
         Err(AssembleError::TooLarge)
     );
 
     // The totals count across chunks.
     let mut assembler = Assembler::new();
-    assert!(assembler
-        .push(chunk(MAX_ITEMS - 1, 0), MAX_TOTAL_BYTES - 1, CLOCK)
-        .is_ok());
+    assert!(assembler.push(chunk(MAX_ITEMS - 1, 0), CLOCK).is_ok());
     let second = Chunk {
         seq: 1,
         ..chunk(1, 0)
     };
-    assert_eq!(
-        assembler.push(second, 2, CLOCK),
-        Err(AssembleError::TooLarge)
-    );
+    assert!(assembler.push(second, CLOCK).is_ok());
+    let third = Chunk {
+        seq: 2,
+        ..chunk(1, 0)
+    };
+    assert_eq!(assembler.push(third, CLOCK), Err(AssembleError::TooLarge));
+}
+
+/// Items whose JSON and commas come to exactly `total` bytes, the names
+/// padded to get there.
+fn items_of(total: usize) -> Vec<Item> {
+    let size = |i: &Item| serde_json::to_vec(i).unwrap().len() + 1;
+    let mut items = Vec::new();
+    let mut left = total;
+    loop {
+        let mut next = item(items.len());
+        let base = size(&next);
+        // Leave room for at least one more item of about the same size.
+        let pad = if left <= base + 450 {
+            left - base
+        } else {
+            (left - 2 * base - 20).min(450)
+        };
+        next.reference.name.push_str(&"x".repeat(pad));
+        left -= size(&next);
+        items.push(next);
+        if left == 0 {
+            return items;
+        }
+    }
+}
+
+#[test]
+fn an_export_right_at_the_size_limit_is_sent_and_taken_whole() {
+    let at_limit = Export {
+        items: items_of(MAX_TOTAL_BYTES),
+        sent_at: CLOCK,
+        ..Export::default()
+    };
+    assert_eq!(export_bytes(&at_limit), MAX_TOTAL_BYTES);
+    assert!(within_limits(&at_limit));
+    let (chunks, _) = split(&at_limit, CLOCK);
+    let got = reassemble(chunks).unwrap().unwrap();
+    assert_eq!(got.items.len(), at_limit.items.len());
+
+    let over = Export {
+        items: items_of(MAX_TOTAL_BYTES + 1),
+        sent_at: CLOCK,
+        ..Export::default()
+    };
+    assert!(!within_limits(&over));
+    let (chunks, _) = split(&over, CLOCK);
+    assert_eq!(reassemble(chunks), Err(AssembleError::TooLarge));
 }
 
 #[test]
@@ -296,7 +332,7 @@ fn a_first_chunk_without_a_clock_is_refused() {
         pins: vec![],
     };
     assert_eq!(
-        Assembler::new().push(chunk, 10, CLOCK),
+        Assembler::new().push(chunk, CLOCK),
         Err(AssembleError::NoClock)
     );
 }
@@ -329,7 +365,7 @@ fn the_clocks_come_from_the_split_and_the_arrival() {
     let (chunks, _) = split(&original, 700);
     assert_eq!(chunks[0].sent_at, Some(700));
     let mut assembler = Assembler::new();
-    let got = assembler.push(chunks[0].clone(), 10, 900).unwrap().unwrap();
+    let got = assembler.push(chunks[0].clone(), 900).unwrap().unwrap();
     assert_eq!((got.sent_at, got.received_at), (700, 900));
 }
 
@@ -354,8 +390,8 @@ fn a_later_chunk_cant_change_the_clock_or_current_item() {
         pins: vec![],
     };
     let mut assembler = Assembler::new();
-    assembler.push(first, 10, CLOCK).unwrap();
-    let export = assembler.push(second, 10, CLOCK).unwrap().unwrap();
+    assembler.push(first, CLOCK).unwrap();
+    let export = assembler.push(second, CLOCK).unwrap().unwrap();
     assert_eq!(export.sent_at, 5);
     assert_eq!(export.current, None);
 }
@@ -367,20 +403,6 @@ fn a_chunk_holds_up_to_48_kib() {
     let len = serde_json::to_vec(&chunks[0]).unwrap().len();
     assert!(len > 45_000, "{len}");
     assert_eq!(chunks.len(), 1);
-}
-
-#[test]
-fn a_transfer_takes_up_to_16_mib() {
-    let chunk = Chunk {
-        seq: 0,
-        last: true,
-        sent_at: Some(CLOCK),
-        current: None,
-        dropped: None,
-        items: vec![],
-        pins: vec![],
-    };
-    assert!(Assembler::new().push(chunk, 16_000_000, CLOCK).is_ok());
 }
 
 #[test]

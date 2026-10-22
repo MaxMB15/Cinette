@@ -41,6 +41,16 @@ pub const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long one side waits while the other writes what it was sent, such
 /// as a large history or providers whose lists have to load.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long saving one provider may take: its list loads first, and a
+/// slow server can take minutes.
+pub const PROVIDER_SAVE_TIME: Duration = Duration::from_secs(180);
+/// How long the side that sent `count` providers waits for them to be
+/// saved, and the side saving them may take.
+pub fn providers_write_time(count: usize) -> Duration {
+    let count = u32::try_from(count).unwrap_or(u32::MAX);
+    WRITE_TIMEOUT.max(PROVIDER_SAVE_TIME.saturating_mul(count))
+}
+
 /// The longest a transfer may take from its grant to its last chunk or
 /// part, however steadily they come.
 pub const TRANSFER_LIMIT: Duration = Duration::from_secs(600);
@@ -248,10 +258,16 @@ impl Asked {
                     return None;
                 }
                 let direction = (*direction)?;
+                // A send says what it carries, which the dialog shows and
+                // the receiver holds it to.
+                let counts = match direction {
+                    Direction::Send => Some((*counts)?),
+                    Direction::Import => None,
+                };
                 Asked::History {
                     direction,
                     what,
-                    counts: counts.filter(|_| direction == Direction::Send),
+                    counts,
                 }
             }
             RequestKind::Providers => {
@@ -340,6 +356,9 @@ pub struct Sender {
     sent: u32,
     acked: u32,
     deadline: Instant,
+    /// The end of [`TRANSFER_LIMIT`], however steadily acknowledgements
+    /// come.
+    until: Instant,
 }
 
 /// This device's clock, in Unix seconds, for the times in a transfer. The
@@ -362,7 +381,14 @@ impl Sender {
             sent: 0,
             acked: 0,
             deadline: now + STEP_TIMEOUT,
+            until: now + TRANSFER_LIMIT,
         }
+    }
+
+    /// When it gives up: no acknowledgement in time, or the whole send took
+    /// too long.
+    fn due(&self) -> Instant {
+        self.deadline.min(self.until)
     }
 
     /// Sends what the window has room for.
@@ -392,6 +418,11 @@ impl Sender {
 
     fn all_acked(&self) -> bool {
         self.acked == self.total
+    }
+
+    /// The last chunk has gone, so the other side may have everything.
+    fn all_sent(&self) -> bool {
+        self.sent == self.total
     }
 }
 
@@ -425,12 +456,15 @@ fn allowed(announced: u32) -> u32 {
 }
 
 /// Whether an export carries only the parts the user allowed, and not
-/// far more than the counts they were shown.
+/// far more than the counts they were shown. A send always has counts; an
+/// import's come from the preview the user confirmed.
 fn fits_grant(export: &Export, what: What, counts: Option<Counts>) -> bool {
     let kinds = export.items.iter().all(|i| {
         (what.history || (i.watched.is_none() && i.position.is_none()))
             && (what.favorites || !i.favorite)
-    }) && (what.pins || export.pins.is_empty());
+    }) && (what.pins || export.pins.is_empty())
+        // "Continue watching" is part of the history.
+        && (what.history || export.current.is_none());
     let sizes = counts.is_none_or(|c| {
         let got = export.counts();
         got.history <= allowed(c.history)
@@ -455,13 +489,13 @@ impl Receiver {
         }
     }
 
-    fn push(&mut self, chunk: Chunk, bytes: usize, now: Instant) -> Received {
+    fn push(&mut self, chunk: Chunk, now: Instant) -> Received {
         let seq = chunk.seq;
         let ack = Message::TransferAck {
             transfer: self.transfer.clone(),
             seq,
         };
-        match self.assembler.push(chunk, bytes, unix_now()) {
+        match self.assembler.push(chunk, unix_now()) {
             Ok(None) => {
                 self.received += 1;
                 self.deadline = now + STEP_TIMEOUT;
@@ -508,8 +542,8 @@ pub enum TargetFlow {
     Asking { id: u64, asked: Asked },
     /// History coming from the controller.
     Receiving(Box<Receiver>),
-    /// Writing it.
-    Importing { transfer: String },
+    /// Writing it, until the app says it's done or it takes too long.
+    Importing { transfer: String, deadline: Instant },
     /// Exporting history for the controller.
     Exporting {
         id: u64,
@@ -538,8 +572,9 @@ pub enum TargetFlow {
         /// The end of [`TRANSFER_LIMIT`].
         until: Instant,
     },
-    /// Saving the providers.
-    Saving { grant: String },
+    /// Saving the providers, until the app says it's done or it takes too
+    /// long.
+    Saving { grant: String, deadline: Instant },
 }
 
 impl TargetFlow {
@@ -669,7 +704,7 @@ impl TargetFlow {
         steps: &mut Vec<Step>,
     ) -> Option<TargetFlow> {
         match self {
-            TargetFlow::Importing { transfer: t } if t == transfer => {
+            TargetFlow::Importing { transfer: t, .. } if t == transfer => {
                 match result {
                     Ok(report) => {
                         steps.push(send(Message::TransferDone {
@@ -701,7 +736,7 @@ impl TargetFlow {
         steps: &mut Vec<Step>,
     ) -> Option<TargetFlow> {
         match self {
-            TargetFlow::Saving { grant: g } if g == grant => {
+            TargetFlow::Saving { grant: g, .. } if g == grant => {
                 steps.push(send(Message::ProvidersAdded {
                     grant: g.clone(),
                     results: results.clone(),
@@ -717,13 +752,11 @@ impl TargetFlow {
         }
     }
 
-    /// A transfer message from the controller. `bytes` is the size of the
-    /// frame it came in. Returns `Err` with the flow unchanged when the
-    /// message isn't part of a transfer.
+    /// A transfer message from the controller. Returns `Err` with the flow
+    /// unchanged when the message isn't part of a transfer.
     pub fn receive(
         self,
         message: Message,
-        bytes: usize,
         now: Instant,
         steps: &mut Vec<Step>,
     ) -> Result<Option<TargetFlow>, Box<(TargetFlow, Message)>> {
@@ -771,7 +804,7 @@ impl TargetFlow {
                 Ok(None)
             }
             (TargetFlow::Receiving(mut receiver), Message::TransferChunk { chunk, .. }) => {
-                match receiver.push(chunk, bytes, now) {
+                match receiver.push(chunk, now) {
                     Received::More(ack) => {
                         steps.push(send(ack));
                         steps.push(progress(
@@ -791,7 +824,10 @@ impl TargetFlow {
                             salt: receiver.salt,
                             export,
                         });
-                        Ok(Some(TargetFlow::Importing { transfer: id }))
+                        Ok(Some(TargetFlow::Importing {
+                            transfer: id,
+                            deadline: now + WRITE_TIMEOUT,
+                        }))
                     }
                     Received::Broken(code) => fail(steps, code),
                 }
@@ -866,12 +902,13 @@ impl TargetFlow {
                     return fail(steps, ErrorCode::Invalid);
                 }
                 if last {
+                    let deadline = now + providers_write_time(received.len());
                     steps.push(progress(&grant, kind, Progress::Saving));
                     steps.push(Step::SaveProviders {
                         grant: grant.clone(),
                         providers: received,
                     });
-                    return Ok(Some(TargetFlow::Saving { grant }));
+                    return Ok(Some(TargetFlow::Saving { grant, deadline }));
                 }
                 Ok(Some(TargetFlow::Providers {
                     grant,
@@ -894,10 +931,10 @@ impl TargetFlow {
             TargetFlow::Receiving(r) => Some(&r.transfer),
             TargetFlow::Sending(sender) => Some(&sender.transfer),
             TargetFlow::Ready { transfer, .. }
-            | TargetFlow::Importing { transfer }
+            | TargetFlow::Importing { transfer, .. }
             | TargetFlow::Exporting { transfer, .. }
             | TargetFlow::Finishing { transfer, .. } => Some(transfer),
-            TargetFlow::Providers { grant, .. } | TargetFlow::Saving { grant } => Some(grant),
+            TargetFlow::Providers { grant, .. } | TargetFlow::Saving { grant, .. } => Some(grant),
         }
     }
 
@@ -949,19 +986,21 @@ impl TargetFlow {
         }
     }
 
-    /// When [`TargetFlow::tick`] has something to do. Nothing while this
-    /// device or its user is working on it.
+    /// When [`TargetFlow::tick`] has something to do. Nothing while its
+    /// user decides, which the consent queue times.
     pub fn deadline(&self) -> Option<Instant> {
         match self {
             TargetFlow::Receiving(r) => Some(r.deadline()),
-            TargetFlow::Sending(sender) => Some(sender.deadline),
+            TargetFlow::Sending(sender) => Some(sender.due()),
             TargetFlow::Providers {
                 deadline, until, ..
             } => Some((*deadline).min(*until)),
             TargetFlow::Exporting { deadline, .. }
             | TargetFlow::Ready { deadline, .. }
-            | TargetFlow::Finishing { deadline, .. } => Some(*deadline),
-            _ => None,
+            | TargetFlow::Finishing { deadline, .. }
+            | TargetFlow::Importing { deadline, .. }
+            | TargetFlow::Saving { deadline, .. } => Some(*deadline),
+            TargetFlow::Asking { .. } => None,
         }
     }
 
@@ -1119,12 +1158,15 @@ impl ControllerFlow {
 
     /// The target has everything and is writing it, or this device is.
     fn writing(&self) -> bool {
-        matches!(
-            self,
+        match self {
+            // Once the last chunk is out, the target may have it all and
+            // be writing, and it doesn't stop then.
+            ControllerFlow::Sending(s) => s.all_sent(),
             ControllerFlow::Finishing { .. }
-                | ControllerFlow::Importing { .. }
-                | ControllerFlow::ProvidersSent { .. }
-        )
+            | ControllerFlow::Importing { .. }
+            | ControllerFlow::ProvidersSent { .. } => true,
+            _ => false,
+        }
     }
 
     /// A message from the target that may be about this transfer. `Err`
@@ -1132,7 +1174,6 @@ impl ControllerFlow {
     pub fn receive(
         self,
         message: Message,
-        bytes: usize,
         now: Instant,
         out: &mut ControllerOut,
     ) -> Result<Option<ControllerFlow>, Box<(ControllerFlow, Message)>> {
@@ -1241,7 +1282,7 @@ impl ControllerFlow {
                 let Some(id) = about.filter(|id| flow.transfer() == Some(id.as_str())) else {
                     return Err(Box::new((flow, message)));
                 };
-                Ok(flow.step(id, message, bytes, now, out))
+                Ok(flow.step(id, message, now, out))
             }
         }
     }
@@ -1250,7 +1291,6 @@ impl ControllerFlow {
         self,
         id: String,
         message: Message,
-        bytes: usize,
         now: Instant,
         out: &mut ControllerOut,
     ) -> Option<ControllerFlow> {
@@ -1297,7 +1337,7 @@ impl ControllerFlow {
                 None
             }
             (ControllerFlow::Receiving(mut receiver), Message::TransferChunk { chunk, .. }) => {
-                match receiver.push(chunk, bytes, now) {
+                match receiver.push(chunk, now) {
                     Received::More(ack) => {
                         out.send.push(ack);
                         out.progress(
@@ -1452,6 +1492,7 @@ impl ControllerFlow {
                     out.fail(&g, ErrorCode::Invalid, true);
                     return None;
                 }
+                let deadline = now + providers_write_time(picked.len());
                 let parts = provider_parts(picked);
                 let count = parts.len();
                 for (part, providers) in parts.into_iter().enumerate() {
@@ -1463,10 +1504,7 @@ impl ControllerFlow {
                     });
                 }
                 out.progress(&g, Progress::Saving);
-                Some(ControllerFlow::ProvidersSent {
-                    grant: g,
-                    deadline: now + WRITE_TIMEOUT,
-                })
+                Some(ControllerFlow::ProvidersSent { grant: g, deadline })
             }
             other => Some(other),
         }
@@ -1510,7 +1548,7 @@ impl ControllerFlow {
 
     pub fn deadline(&self) -> Option<Instant> {
         match self {
-            ControllerFlow::Sending(s) => Some(s.deadline),
+            ControllerFlow::Sending(s) => Some(s.due()),
             ControllerFlow::Receiving(r) => Some(r.deadline()),
             ControllerFlow::Asking { deadline, .. }
             | ControllerFlow::Exporting { deadline, .. }

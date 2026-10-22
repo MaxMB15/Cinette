@@ -33,6 +33,12 @@ export const getPlatform = (): Platform => {
 export const isMobilePlatform = (p: Platform = getPlatform()): boolean =>
 	p === "ios" || p === "android" || p === "tv";
 
+/**
+ * Whether this device can control other Cinette devices. Every device can
+ * be controlled, but a TV doesn't control others.
+ */
+export const controlsOthers = (p: Platform = getPlatform()): boolean => p !== "tv";
+
 /** The narrowest iPad, an iPad mini in portrait. Below this a tablet gets the phone layout. */
 export const TABLET_MIN_WIDTH = 744;
 /** An 11-inch iPad in landscape and up get the desktop layout. */

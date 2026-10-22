@@ -3,7 +3,13 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { platform as osPlatform } from "@tauri-apps/plugin-os";
-import { getPlatform, isMobilePlatform, layoutModeFor, type Viewport } from "./platform";
+import {
+	getPlatform,
+	isMobilePlatform,
+	layoutModeFor,
+	controlsOthers,
+	type Viewport,
+} from "./platform";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
@@ -101,5 +107,24 @@ describe("isMobilePlatform", () => {
 		expect(isMobilePlatform("tv")).toBe(true);
 		expect(isMobilePlatform("macos")).toBe(false);
 		expect(isMobilePlatform("linux")).toBe(false);
+	});
+});
+
+describe("controlsOthers", () => {
+	it("lets computers, phones and tablets control other devices", () => {
+		for (const p of ["macos", "linux", "windows", "android", "ios"] as const) {
+			expect(controlsOthers(p)).toBe(true);
+		}
+	});
+
+	it("doesn't let a TV", () => {
+		expect(controlsOthers("tv")).toBe(false);
+	});
+
+	it("asks the platform when given none", () => {
+		vi.mocked(osPlatform).mockReturnValue("android");
+		window.__CINETTE_TV__ = true;
+		expect(controlsOthers()).toBe(false);
+		delete window.__CINETTE_TV__;
 	});
 });

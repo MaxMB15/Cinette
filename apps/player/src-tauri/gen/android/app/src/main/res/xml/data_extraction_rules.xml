@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12 and later: cloud backups and transfers to a new device leave
+    out the remote-control device key, which would give the other device the
+    same id as this one. Everything else goes as before. Older versions read
+    backup_rules.xml.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="remote-device.key" />
+        <exclude domain="root" path="remote-device.key.tmp" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="remote-device.key" />
+        <exclude domain="root" path="remote-device.key.tmp" />
+    </device-transfer>
+</data-extraction-rules>

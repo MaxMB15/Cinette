@@ -121,6 +121,7 @@
 	"cast_stop": { "required": ["receiverId"] },
 	"cast_release": { "required": ["receiverId"] },
 	"get_vpn_active": {},
+	"remote_open": {},
 	"remote_get_settings": {},
 	"remote_set_settings": { "required": ["settings"] },
 	"remote_reset_identity": {},

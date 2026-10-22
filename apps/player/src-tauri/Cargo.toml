@@ -81,6 +81,13 @@ oslog = { version = "0.2", default-features = false }
 hls-remux = { path = "../../../crates/hls-remux" }
 # getifaddrs, for this device's Wi-Fi address.
 libc = "0.2"
+# Remote control, as on macOS: the interfaces' subnets for the local-peer
+# check and the dual-stack listener. The device key is kept in the Keychain.
+# The same versions as mdns-sd's, tokio's and native-tls's.
+if-addrs = "0.15"
+socket2 = "0.6"
+security-framework = "3"
+core-foundation = "0.10"
 
 # The HLS converter's tests build its C against the system's FFmpeg. The
 # Linux app itself never links it.
@@ -93,6 +100,13 @@ hls-remux = { path = "../../../crates/hls-remux", features = ["test-media"] }
 jni = { version = "0.22", default-features = false }
 ndk-context = "0.1"
 rustls-platform-verifier = "0.7"
+# Remote control, as on Linux: DNS-SD without a daemon, the interfaces'
+# subnets for the local-peer check, the dual-stack listener, and
+# CLOCK_BOOTTIME.
+mdns-sd = { version = "0.21", default-features = false }
+if-addrs = "0.15"
+socket2 = "0.6"
+libc = "0.2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 # The folders Tauri names after the identifier, found before the app is built.

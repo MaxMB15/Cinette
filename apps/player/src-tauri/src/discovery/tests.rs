@@ -504,7 +504,7 @@ fn an_srv_record_moves_the_instance_when_it_changes() {
     assert!(!bonjour::srv_moved(None, &[0, 0], 8009), "too short to say");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
 fn the_mdns_watcher_counts_the_errors() {
     use mdns_sd::{DaemonEvent, Error};
@@ -520,7 +520,7 @@ fn the_mdns_watcher_counts_the_errors() {
 
 /// A UDP port that was free when first asked for. Every daemon the tests
 /// start uses it, so they hear each other.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn test_port() -> u16 {
     static PORT: OnceLock<u16> = OnceLock::new();
     *PORT.get_or_init(|| {
@@ -535,7 +535,7 @@ fn test_port() -> u16 {
 /// own, so nothing the tests advertise or look for reaches the network. The
 /// module's daemon is one of these in the tests. It handles commands in
 /// order, so the interfaces are set before any browse or advertisement.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn loopback_daemon() -> mdns_sd::Result<mdns_sd::ServiceDaemon> {
     let daemon = mdns_sd::ServiceDaemon::new_with_port(test_port())?;
     daemon.disable_interface(mdns_sd::IfKind::All)?;
@@ -546,7 +546,7 @@ pub(super) fn loopback_daemon() -> mdns_sd::Result<mdns_sd::ServiceDaemon> {
 /// Whether a daemon of mdns-sd's own, outside the module, finds the
 /// service, which says whether multicast works on the loopback interface
 /// here at all.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 async fn loopback_multicast_works(service_type: &str) -> bool {
     let raw = loopback_daemon().unwrap();
     let events = raw.browse(&format!("{service_type}.local.")).unwrap();
@@ -585,7 +585,7 @@ async fn advertising_and_browsing_find_each_other() {
     })
     .unwrap();
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     if !loopback_multicast_works(service_type).await {
         // As in some containers.
         eprintln!("skipped: mDNS found nothing over multicast on the loopback interface");
@@ -611,7 +611,7 @@ async fn advertising_and_browsing_find_each_other() {
     .await;
     let (host, addrs, port, txt) = found.expect("the browse found nothing");
     // macOS names its own host on the local-only interface.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     assert_eq!(host, "abcdefghijklmnopqrstuvwxyz.local.");
     assert!(!host.is_empty(), "a host");
     assert!(!addrs.is_empty());

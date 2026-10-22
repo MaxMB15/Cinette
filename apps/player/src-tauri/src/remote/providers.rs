@@ -15,7 +15,6 @@ use mvp_core::remote::transfer::flow::{
     provider_name_ok, ProviderKind, ProviderName, ProviderOutcome, ProviderResult,
     ProviderSettings, MAX_PROVIDERS, MAX_PROVIDER_FIELD,
 };
-use mvp_core::remote::transfer::refs::{account_tag, Salt};
 use std::sync::Mutex;
 use zeroize::Zeroize;
 
@@ -123,8 +122,38 @@ pub fn settings_for(
         .collect())
 }
 
+/// Whether two providers are the same account: for Xtream the same server
+/// and username, for M3U the same address, query and all, since a token
+/// in it can name the account.
+fn same_account(a: &Provider, b: &Provider) -> bool {
+    if a.provider_type != b.provider_type {
+        return false;
+    }
+    match a.provider_type {
+        ProviderType::Xtream => {
+            server(&a.url).is_some_and(|s| server(&b.url) == Some(s))
+                && a.username.as_deref().unwrap_or_default().trim()
+                    == b.username.as_deref().unwrap_or_default().trim()
+        }
+        ProviderType::M3u => address(&a.url) == address(&b.url),
+    }
+}
+
+/// An address in one form however it was typed: the host in lower case
+/// and a default port left out.
+fn address(url: &str) -> String {
+    let url = url.trim();
+    url::Url::parse(url).map_or_else(|_| url.to_string(), |u| u.to_string())
+}
+
+/// The scheme, host and port of an Xtream server.
+fn server(url: &str) -> Option<(String, String, Option<u16>)> {
+    let u = url::Url::parse(url.trim()).ok()?;
+    let host = u.host_str().filter(|h| !h.is_empty())?.to_string();
+    Some((u.scheme().to_string(), host, u.port_or_known_default()))
+}
+
 /// Clears a provider's address and login from memory.
-// mutants: skip FnValue: clearing memory that's freed right after can't be seen from a test.
 fn forget(provider: &mut Provider) {
     provider.url.zeroize();
     provider.username.zeroize();
@@ -166,6 +195,15 @@ pub(crate) trait Loader {
         settings: &ProviderSettings,
         name: String,
     ) -> Result<(), String>;
+
+    /// The providers saved here now.
+    fn saved(&self, cache: &Mutex<CacheStore>) -> Result<Vec<Provider>, ()> {
+        cache
+            .lock()
+            .map_err(|_| ())?
+            .get_providers()
+            .map_err(|_| ())
+    }
 }
 
 /// Loads providers from their servers, as adding them by hand does.
@@ -192,6 +230,18 @@ impl Loader for Network {
             ProviderKind::M3u => add_m3u_url(cache, name, settings.url.clone()).await,
         };
         loaded.map(|_| ())
+    }
+
+    // mutants: skip FnValue: the default reads the same list; this only moves the wait off the async thread.
+    fn saved(&self, cache: &Mutex<CacheStore>) -> Result<Vec<Provider>, ()> {
+        // A refresh or a guide save can hold the cache for a while.
+        tokio::task::block_in_place(|| {
+            cache
+                .lock()
+                .map_err(|_| ())?
+                .get_providers()
+                .map_err(|_| ())
+        })
     }
 }
 
@@ -231,12 +281,9 @@ async fn save_one(
     if settings.url.trim().starts_with("file:") {
         return failed("A playlist file on another device can't be opened here.");
     }
-    let existing = match cache.lock() {
-        Ok(cache) => cache.get_providers().unwrap_or_default(),
-        Err(_) => return failed("This device couldn't save it."),
+    let Ok(existing) = loader.saved(cache) else {
+        return failed("This device couldn't save it.");
     };
-    // A new salt for the comparison only: the tags never leave this function.
-    let salt = Salt::generate();
     let incoming = Provider {
         id: String::new(),
         name: settings.name.clone(),
@@ -251,16 +298,15 @@ async fn save_one(
         channel_count: 0,
         epg_url: None,
     };
-    let tag = account_tag(&salt, &incoming);
     let mut incoming = incoming;
-    forget(&mut incoming);
     let mut taken = Vec::with_capacity(existing.len());
     let mut exists = false;
     for mut p in existing {
-        exists |= tag.is_some() && account_tag(&salt, &p) == tag;
+        exists |= same_account(&incoming, &p);
         taken.push(p.name.clone());
         forget(&mut p);
     }
+    forget(&mut incoming);
     if exists {
         return ProviderResult {
             name: settings.name.clone(),

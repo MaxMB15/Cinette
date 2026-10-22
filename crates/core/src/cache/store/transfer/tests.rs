@@ -163,8 +163,7 @@ fn transfer_at(
     let mut assembler = Assembler::new();
     let mut received = None;
     for part in parts {
-        let bytes = serde_json::to_vec(&part).unwrap().len();
-        received = assembler.push(part, bytes, to_now).unwrap();
+        received = assembler.push(part, to_now).unwrap();
     }
     let received = received.unwrap();
     let index = to.transfer_index(&salt).unwrap();
@@ -861,6 +860,17 @@ fn the_current_item_is_the_one_playing() {
     assert_eq!(current(Some("xt-mac-movie-8")).as_deref(), Some("Heat"));
     assert_eq!(current(Some("xt-mac-movie-9")).as_deref(), Some("BBC One"));
     assert_eq!(current(None).as_deref(), Some("BBC One"));
+    // Without the history, there's nothing to continue.
+    let favorites_only = What {
+        history: false,
+        ..What::ALL
+    };
+    assert_eq!(
+        mac.export_transfer(&salt, favorites_only, Some("xt-mac-movie-8"), NOW)
+            .unwrap()
+            .current,
+        None
+    );
     let empty = CacheStore::open_in_memory().unwrap();
     assert_eq!(
         empty
@@ -1286,7 +1296,7 @@ fn time_the_export_waited_isnt_taken_for_clock_drift() {
     let mut assembler = Assembler::new();
     let mut received = None;
     for part in parts {
-        received = assembler.push(part, 10, NOW).unwrap();
+        received = assembler.push(part, NOW).unwrap();
     }
     let received = received.unwrap();
     let plan = merge::plan(&received, &tv.transfer_index(&salt).unwrap(), NOW);
@@ -1314,7 +1324,7 @@ fn an_item_too_big_to_send_is_counted_as_not_transferred() {
     let mut assembler = Assembler::new();
     let mut received = None;
     for part in parts {
-        received = assembler.push(part, 10, NOW).unwrap();
+        received = assembler.push(part, NOW).unwrap();
     }
     let plan = merge::plan(&received.unwrap(), &tv.transfer_index(&salt).unwrap(), NOW);
     assert_eq!(tv.apply_transfer(&plan).unwrap().unmatched_total, 1);

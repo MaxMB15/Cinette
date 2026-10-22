@@ -509,7 +509,7 @@ fn a_target_that_doesnt_offer_transfers_refuses_them() {
     let request = super::transfer::flow::Asked::History {
         direction: Direction::Send,
         what: What::ALL,
-        counts: None,
+        counts: Some(Counts::default()),
     }
     .request(77);
     let bytes = net.clients[phone].controller.seal_raw(&request).unwrap();
@@ -919,6 +919,16 @@ fn steps_of_no_transfer_here_get_an_error_each() {
     ];
     for message in answered {
         assert_eq!(target_takes(&mut net, phone, &message), 1, "{message:?}");
+        // The one answer is that there's no such transfer here.
+        let heard = net.clients[phone].controller.heard.last().cloned();
+        assert_eq!(
+            heard,
+            Some(Message::TransferError {
+                transfer: id.clone(),
+                code: ErrorCode::Invalid,
+            }),
+            "{message:?}"
+        );
     }
     for quiet in [
         Message::TransferCancel {
@@ -1124,4 +1134,12 @@ fn a_target_never_sends_providers() {
     assert!(!transfer_events(&net, phone)
         .iter()
         .any(|e| matches!(e, ControllerEvent::ProvidersGranted { grant: g } if *g != grant)));
+    // Nothing the phone heard carries a provider's settings.
+    let heard = &net.clients[phone].controller.heard;
+    assert!(heard
+        .iter()
+        .any(|m| matches!(m, Message::ProvidersAdded { .. })));
+    assert!(!heard
+        .iter()
+        .any(|m| matches!(m, Message::ProvidersSend { .. })));
 }

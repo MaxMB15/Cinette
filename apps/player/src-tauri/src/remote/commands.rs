@@ -4,12 +4,12 @@
 //! The `remote_*` commands the webview calls for remote control.
 //!
 //! They're registered on every platform, so the frontend's calls are the
-//! same everywhere. Where remote control doesn't run yet (iOS) they fail
+//! same everywhere. Where remote control doesn't run (Windows) they fail
 //! with [`UNAVAILABLE`].
 
 // Only the error path builds where remote control doesn't run, so the
 // types it would read go unused there.
-#![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+#![cfg_attr(not(remote), allow(dead_code))]
 
 use mvp_core::models::channel::Channel;
 use mvp_core::remote::message::{
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Runtime};
 
 /// The error where remote control doesn't run.
-#[cfg_attr(any(target_os = "linux", target_os = "macos"), allow(dead_code))]
+#[cfg_attr(remote, allow(dead_code))]
 pub const UNAVAILABLE: &str = "Remote control isn't available on this device yet.";
 
 /// The settings screen's view of remote control.
@@ -184,10 +184,11 @@ impl CommandOutcome {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 mod imp {
     use super::*;
-    use crate::remote::service::{SessionEvent, DEVICE_TYPE};
+    use crate::remote::device::device_type;
+    use crate::remote::service::SessionEvent;
     use crate::remote::RemoteService;
     use mvp_core::remote::consent::Answer;
     use tauri::{Manager, State};
@@ -203,7 +204,7 @@ mod imp {
             discoverable: settings.discoverable,
             remote_control: settings.remote_control,
             device_name: settings.device_name,
-            default_name: mvp_core::remote::settings::default_name(DEVICE_TYPE).to_owned(),
+            default_name: mvp_core::remote::settings::default_name(device_type()).to_owned(),
             device_id: service.device_id().to_string(),
         }
     }
@@ -262,11 +263,11 @@ mod imp {
 pub async fn remote_get_settings<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<RemoteSettingsView, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         Ok(imp::settings_view(&*imp::service(&app)?))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = app;
         Err(UNAVAILABLE.into())
@@ -279,13 +280,13 @@ pub async fn remote_set_settings<R: Runtime>(
     app: AppHandle<R>,
     settings: RemoteSettingsInput,
 ) -> Result<RemoteSettingsView, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let service = imp::service(&app)?;
         service.set_settings(&app, settings.into_settings())?;
         Ok(imp::settings_view(&service))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, settings);
         Err(UNAVAILABLE.into())
@@ -297,13 +298,13 @@ pub async fn remote_set_settings<R: Runtime>(
 pub async fn remote_reset_identity<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<RemoteSettingsView, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let service = imp::service(&app)?;
         service.reset_identity()?;
         Ok(imp::settings_view(&service))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = app;
         Err(UNAVAILABLE.into())
@@ -317,12 +318,12 @@ pub async fn remote_answer_consent<R: Runtime>(
     request: u64,
     allow: bool,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::answer(&*imp::service(&app)?, request, allow);
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, request, allow);
         Err(UNAVAILABLE.into())
@@ -332,12 +333,12 @@ pub async fn remote_answer_consent<R: Runtime>(
 /// The controllers, connected or waiting to resume.
 #[command]
 pub async fn remote_sessions<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let sessions = imp::sessions(&*imp::service(&app)?).await;
         serde_json::to_value(sessions).map_err(|e| e.to_string())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = app;
         Err(UNAVAILABLE.into())
@@ -350,11 +351,11 @@ pub async fn remote_sessions<R: Runtime>(app: AppHandle<R>) -> Result<serde_json
 pub async fn remote_pending_consent<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<serde_json::Value, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         serde_json::to_value(imp::service(&app)?.pending_consent()).map_err(|e| e.to_string())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = app;
         Err(UNAVAILABLE.into())
@@ -367,12 +368,12 @@ pub async fn remote_disconnect<R: Runtime>(
     app: AppHandle<R>,
     session_id: String,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?.handle.disconnect(session_id);
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, session_id);
         Err(UNAVAILABLE.into())
@@ -385,14 +386,14 @@ pub async fn remote_set_state<R: Runtime>(
     app: AppHandle<R>,
     state: PlayerState,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let service = imp::service(&app)?;
         let hosts = imp::provider_hosts(&app);
         service.handle.set_state(state.into_snapshot(&hosts));
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, state);
         Err(UNAVAILABLE.into())
@@ -406,14 +407,14 @@ pub async fn remote_finish_command<R: Runtime>(
     token: u64,
     outcome: CommandOutcome,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?
             .handle
             .finish_command(token, outcome.into_result());
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, token, outcome);
         Err(UNAVAILABLE.into())
@@ -423,27 +424,53 @@ pub async fn remote_finish_command<R: Runtime>(
 /// The other Cinette devices on the network.
 #[command]
 pub async fn remote_devices<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         serde_json::to_value(imp::service(&app)?.devices()).map_err(|e| e.to_string())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = app;
         Err(UNAVAILABLE.into())
     }
 }
 
-/// Whether macOS refuses this app the local network, so no device can be
-/// found. Always false elsewhere.
+/// Starts remote control if it isn't running yet: on iOS when the user first
+/// opens Devices or the Remote control settings, and anywhere after a start
+/// that failed. The webview calls it before either of those loads.
+#[command]
+pub async fn remote_open<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        // The multicast lock goes with remote control running, and the
+        // launch didn't take it if this is what starts it.
+        crate::remote::open(&app, dir, |hold| {
+            #[cfg(target_os = "android")]
+            crate::android_device::hold_multicast(hold);
+            #[cfg(not(target_os = "android"))]
+            let _ = hold;
+        })
+        .await
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = app;
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Whether macOS or iOS refuses this app the local network, so no device can
+/// be found. Always false elsewhere.
 // mutants: skip FnValue: mutation runs build on Linux, where nothing refuses local network access, so false is what the code returns there too.
 #[command]
 pub async fn remote_local_network_denied() -> bool {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         crate::discovery::local_network_denied()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         false
     }
@@ -458,13 +485,13 @@ pub async fn remote_connect<R: Runtime>(
     device_id: String,
     link: u64,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let id = mvp_core::remote::identity::DeviceId::parse(&device_id)
             .ok_or_else(|| "That isn't a device id.".to_owned())?;
         imp::service(&app)?.connect(id, link)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, device_id, link);
         Err(UNAVAILABLE.into())
@@ -475,11 +502,11 @@ pub async fn remote_connect<R: Runtime>(
 /// was given. A webview that reloaded uses it to drop a link it forgot.
 #[command]
 pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         Ok(imp::service(&app)?.current_link())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = app;
         Err(UNAVAILABLE.into())
@@ -490,12 +517,12 @@ pub async fn remote_link<R: Runtime>(app: AppHandle<R>) -> Result<Option<u64>, S
 /// device keeps playing. Another link that took its place stays.
 #[command]
 pub async fn remote_leave<R: Runtime>(app: AppHandle<R>, link: u64) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?.leave(link).await;
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link);
         Err(UNAVAILABLE.into())
@@ -513,14 +540,14 @@ pub async fn remote_command<R: Runtime>(
     command: mvp_core::remote::message::Command,
     link: u64,
 ) -> Result<u64, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let link = imp::service(&app)?
             .link(link)
             .ok_or_else(imp::not_connected)?;
         link.command(command).await.map_err(imp::link_error)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, command, link);
         Err(UNAVAILABLE.into())
@@ -534,7 +561,7 @@ pub async fn remote_catalog<R: Runtime>(
     catalog_query: mvp_core::remote::catalog::CatalogQuery,
     link: u64,
 ) -> Result<serde_json::Value, String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         let link = imp::service(&app)?
             .link(link)
@@ -543,7 +570,7 @@ pub async fn remote_catalog<R: Runtime>(
         let items: Vec<_> = items.into_iter().map(super::logos::checked).collect();
         Ok(serde_json::json!({ "items": items, "next": next }))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, catalog_query, link);
         Err(UNAVAILABLE.into())
@@ -558,15 +585,13 @@ pub async fn remote_send_providers<R: Runtime>(
     link: u64,
     provider_ids: Vec<String>,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
-        use tauri::Manager;
-        let state = app.state::<crate::commands::AppState>();
         imp::service(&app)?
-            .send_providers(&state.cache, link, provider_ids)
+            .send_providers(app.clone(), link, provider_ids)
             .await
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link, provider_ids);
         Err(UNAVAILABLE.into())
@@ -660,12 +685,12 @@ pub async fn remote_cancel_transfer<R: Runtime>(
     app: AppHandle<R>,
     link: u64,
 ) -> Result<(), String> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(remote)]
     {
         imp::service(&app)?.cancel_transfer(link);
         Ok(())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(remote))]
     {
         let _ = (app, link);
         Err(UNAVAILABLE.into())

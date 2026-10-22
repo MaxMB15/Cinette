@@ -1040,6 +1040,116 @@ async fn a_controller_that_stops_reading_is_let_go() {
     drop(phone);
 }
 
+/// Waits until nothing listens on `port` any more.
+async fn until_refused(port: u16) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_ok()
+    {
+        assert!(tokio::time::Instant::now() < deadline, "still listening");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn the_background_stops_advertising_and_listening_but_keeps_sessions() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    let port = h.handle.port();
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+    h.handle.background().await;
+    assert_eq!(
+        h.wait_for(|s| match s {
+            Seen::Advertise(r) => Some(r.clone()),
+            _ => None,
+        })
+        .await,
+        None
+    );
+    until_refused(port).await;
+    // The open session still takes commands.
+    let (_, bytes) = phone.controller.command(Command::Stop).unwrap();
+    phone.write(&bytes).await;
+    h.wait_for(|s| matches!(s, Seen::Apply(_, Command::Stop)).then_some(()))
+        .await;
+    assert_eq!(h.handle.sessions().await.len(), 1);
+}
+
+#[tokio::test]
+async fn back_in_the_foreground_it_listens_and_advertises_on_the_new_port() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    h.handle.background().await;
+    h.wait_for(|s| matches!(s, Seen::Advertise(None)).then_some(()))
+        .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    h.handle.foreground(listener).unwrap();
+    assert_eq!(h.handle.port(), port);
+    let record = h
+        .wait_for(|s| match s {
+            Seen::Advertise(r) => Some(r.clone()),
+            _ => None,
+        })
+        .await
+        .expect("advertised again");
+    assert_eq!(record.port, port);
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+}
+
+#[tokio::test]
+async fn nothing_is_advertised_in_the_background_until_the_app_comes_back() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    h.handle.background().await;
+    h.wait_for(|s| matches!(s, Seen::Advertise(None)).then_some(()))
+        .await;
+    // A rename would advertise the new name, and a new identity a new id.
+    h.handle.update_settings(RemoteSettings {
+        device_name: Some("Kitchen".into()),
+        ..RemoteSettings::default()
+    });
+    h.handle.reset_identity(DeviceKey::generate());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    h.handle.foreground(listener).unwrap();
+    let record = h
+        .wait_for(|s| match s {
+            Seen::Advertise(Some(r)) => Some(r.clone()),
+            Seen::Advertise(None) => None,
+            _ => None,
+        })
+        .await;
+    // The first record since going to the background is the foreground's.
+    assert_eq!(record.instance, "Kitchen");
+    assert_eq!(record.port, h.handle.port());
+}
+
+#[tokio::test]
+async fn a_new_listener_replaces_the_old_one() {
+    let mut h = Harness::start(ControlMode::Always).await;
+    let old = h.handle.port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    h.handle.foreground(listener).unwrap();
+    h.wait_for(|s| matches!(s, Seen::Advertise(Some(_))).then_some(()))
+        .await;
+    until_refused(old).await;
+    let mut phone = h.connect("Phone").await;
+    phone.connected().await;
+}
+
+#[tokio::test]
+async fn the_background_frees_the_port_before_it_answers() {
+    let h = Harness::start(ControlMode::Always).await;
+    let port = h.handle.port();
+    h.handle.background().await;
+    // Coming straight back can take the same port again.
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .await
+        .expect("the port is free");
+    h.handle.foreground(listener).unwrap();
+    assert_eq!(h.handle.port(), port);
+}
+
 fn fake_host() -> FakeHost {
     let (seen, _) = mpsc::unbounded_channel();
     FakeHost {

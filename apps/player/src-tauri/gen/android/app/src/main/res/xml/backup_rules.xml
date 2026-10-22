@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 and older, which covers Fire OS: Auto Backup leaves out the
+    remote-control device key. Restored onto another device, it would give
+    that device the same id as this one. Everything else is backed up as
+    before. Android 12 and later read data_extraction_rules.xml instead.
+-->
+<full-backup-content>
+    <exclude domain="root" path="remote-device.key" />
+    <exclude domain="root" path="remote-device.key.tmp" />
+</full-backup-content>

@@ -47,10 +47,11 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 		return () => clearInterval(timer);
 	}, [waiting]);
 
-	const running = state.step === "asking" || waiting || state.step === "saving";
+	const saving = state.step === "saving";
 	const close = () => {
-		// Closing while it runs stops it; nothing is saved on the other device.
-		if (running) void remoteCancelTransfer(link.id).catch(() => {});
+		// Closing before the other device has the logins stops it, and
+		// nothing is saved there. Once it's saving them, it's too late.
+		if (state.step === "asking" || waiting) void remoteCancelTransfer(link.id).catch(() => {});
 		onClose();
 	};
 	const toggle = (id: string) =>
@@ -130,16 +131,21 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 					</div>
 				</>
 			)}
-			{(state.step === "asking" || waiting || state.step === "saving") && (
+			{(state.step === "asking" || waiting || saving) && (
 				<>
 					<p className="text-sm mb-3" role="status">
-						{state.step === "saving" ? (
+						{saving ? (
 							<>Saving on {nameOf(link.name)}…</>
 						) : (
 							<>Waiting for {nameOf(link.name)} to allow it</>
 						)}
 					</p>
-					{state.step !== "saving" && link.code && (
+					{saving && (
+						<p className="text-xs text-muted-foreground mb-3">
+							It's too late to stop it now. Closing this doesn't undo it.
+						</p>
+					)}
+					{!saving && link.code && (
 						<>
 							<p className="text-xs text-muted-foreground mb-2">
 								Check that this code matches the one on that device.
@@ -163,7 +169,7 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 							className={`${BUTTON} hover:bg-accent`}
 							onClick={close}
 						>
-							Cancel
+							{saving ? "Close" : "Cancel"}
 						</button>
 					</div>
 				</>

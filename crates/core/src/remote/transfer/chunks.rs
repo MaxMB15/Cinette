@@ -172,11 +172,20 @@ fn fits(items: usize, pins: usize, bytes: impl FnOnce() -> usize) -> bool {
     items <= MAX_ITEMS && pins <= MAX_PINS && bytes() <= MAX_TOTAL_BYTES
 }
 
-/// What an export's items and pins come to as the receiver counts them:
+/// What an export's items and pins come to, as both sides count them:
 /// each one's JSON and the comma after it.
 fn export_bytes(export: &Export) -> usize {
-    let items: usize = export.items.iter().map(|i| json_len(i) + 1).sum();
-    let pins: usize = export.pins.iter().map(|p| json_len(p) + 1).sum();
+    sizes(&export.items, &export.pins)
+}
+
+/// A chunk's items and pins, counted as [`export_bytes`] counts them.
+fn chunk_bytes(chunk: &Chunk) -> usize {
+    sizes(&chunk.items, &chunk.pins)
+}
+
+fn sizes(items: &[Item], pins: &[Pin]) -> usize {
+    let items: usize = items.iter().map(|i| json_len(i) + 1).sum();
+    let pins: usize = pins.iter().map(|p| json_len(p) + 1).sum();
     items + pins
 }
 
@@ -210,21 +219,18 @@ impl Assembler {
         Self::default()
     }
 
-    /// Adds a chunk that arrived as `bytes` bytes of JSON when this device's
-    /// clock read `now`. Returns the whole export with the last chunk.
-    pub fn push(
-        &mut self,
-        chunk: Chunk,
-        bytes: usize,
-        now: i64,
-    ) -> Result<Option<Export>, AssembleError> {
+    /// Adds a chunk that arrived when this device's clock read `now`.
+    /// Returns the whole export with the last chunk. Its size counts as the
+    /// sender's check before sending does, so an export that passed that
+    /// check is taken whole.
+    pub fn push(&mut self, chunk: Chunk, now: i64) -> Result<Option<Export>, AssembleError> {
         if self.done || chunk.seq != self.next {
             return Err(AssembleError::OutOfOrder);
         }
         if chunk.seq == 0 && chunk.sent_at.is_none() {
             return Err(AssembleError::NoClock);
         }
-        self.bytes = self.bytes.saturating_add(bytes);
+        self.bytes = self.bytes.saturating_add(chunk_bytes(&chunk));
         let items = self.export.items.len() + chunk.items.len();
         let pins = self.export.pins.len() + chunk.pins.len();
         if self.bytes > MAX_TOTAL_BYTES || items > MAX_ITEMS || pins > MAX_PINS {

@@ -2,16 +2,16 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import type { LayoutMode } from "@/lib/types";
 
-const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode, mobile: false }));
+const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode, controller: true }));
 
 vi.mock("@/lib/platform", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/platform")>()),
-	isMobilePlatform: () => platform.mobile,
+	controlsOthers: () => platform.controller,
 }));
 
 vi.mock("@/hooks/usePlatform", () => ({
@@ -177,7 +177,7 @@ describe("AppLayout", () => {
 
 	describe("remote control", () => {
 		afterEach(() => {
-			platform.mobile = false;
+			platform.controller = true;
 			platform.layoutMode = "desktop";
 		});
 
@@ -191,14 +191,51 @@ describe("AppLayout", () => {
 			expect(screen.getByText("page")).toBeInTheDocument();
 		});
 
-		it("leaves both out on a phone or tablet, where it doesn't run yet", () => {
-			platform.mobile = true;
+		it("puts the devices button in a phone's tab bar, beside the pages", () => {
+			platform.layoutMode = "mobile";
+			render(tree("/"));
+			const tabs = screen.getByRole("navigation");
+			expect(within(tabs).getByRole("button", { name: "Devices" })).toBeInTheDocument();
+			expect(within(tabs).getByRole("link", { name: "Settings" })).toBeInTheDocument();
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+		});
+
+		it("leaves both bars off a phone's player, which keeps the whole screen", () => {
+			platform.layoutMode = "mobile";
+			const { unmount } = render(tree("/player"));
+			expect(screen.queryByText("Remote bar")).toBeNull();
+			expect(screen.queryByText("Controllers bar")).toBeNull();
+			expect(screen.getByText("page")).toBeInTheDocument();
+			unmount();
+			// The sidebar layout keeps them on the player.
+			platform.layoutMode = "desktop";
+			render(tree("/player"));
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+		});
+
+		it("shows a device that's only controlled who controls it, and nothing to control others with", () => {
+			platform.controller = false;
 			render(tree("/"));
 			expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
 			expect(screen.queryByText("Remote bar")).toBeNull();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+		});
+
+		it("shows a TV's controllers above every page but the player", () => {
+			platform.layoutMode = "tv";
+			platform.controller = false;
+			const { unmount } = render(tree("/settings"));
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+			expect(screen.getByText("page")).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
+			unmount();
+			render(tree("/player"));
 			expect(screen.queryByText("Controllers bar")).toBeNull();
 			expect(screen.queryByText("Providers added")).toBeNull();
 			expect(screen.queryByText("History imported")).toBeNull();
+			expect(screen.getByText("page")).toBeInTheDocument();
 		});
 	});
 });

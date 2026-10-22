@@ -74,7 +74,7 @@ impl Running {
                 lock(&record).push(r.clone());
                 None
             }),
-            found_rx,
+            move || found_rx,
             // Tests load one item after another at once.
             target::Limits {
                 load_gap: Duration::ZERO,
@@ -158,7 +158,7 @@ async fn starts_with_the_defaults_and_a_saved_key() {
     assert_eq!(view["discoverable"], json!(true));
     assert_eq!(view["remoteControl"], json!("ask"));
     assert_eq!(view["deviceName"], Value::Null);
-    assert_eq!(view["defaultName"], json!(default_name(DEVICE_TYPE)));
+    assert_eq!(view["defaultName"], json!(default_name(device_type())));
     let key = std::fs::read(running.app.app_dir().join(identity::KEY_FILE)).unwrap();
     let key = DeviceKey::from_private(key.try_into().unwrap());
     assert_eq!(view["deviceId"], json!(key.device_id().to_string()));
@@ -171,7 +171,7 @@ async fn starts_with_the_defaults_and_a_saved_key() {
     }
     let record = running.last_advertised().expect("advertised");
     assert_eq!(record.port, running.port);
-    assert_eq!(record.instance, default_name(DEVICE_TYPE));
+    assert_eq!(record.instance, default_name(device_type()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -696,7 +696,7 @@ async fn one_instance_controls_another() {
     let tv_id = tv.device_id().to_string();
     assert_eq!(
         devices,
-        json!([{ "deviceId": tv_id, "name": "TV", "deviceType": DEVICE_TYPE.as_str(),
+        json!([{ "deviceId": tv_id, "name": "TV", "deviceType": device_type().as_str(),
                  "controlAllowed": true, "available": true }])
     );
     assert_eq!(mac.invoke("remote_devices", json!({})).unwrap(), devices);
@@ -710,7 +710,7 @@ async fn one_instance_controls_another() {
         consent["code"], verifying["code"],
         "both screens show one code"
     );
-    assert_eq!(consent["name"], json!(default_name(DEVICE_TYPE)));
+    assert_eq!(consent["name"], json!(default_name(device_type())));
     phase(&mut mac, "pending").await;
     tv.invoke(
         "remote_answer_consent",
@@ -1244,6 +1244,307 @@ async fn a_catalog_page_keeps_only_logos_this_device_may_load() {
         .map(|i| i.get("logo").cloned().unwrap_or(Value::Null))
         .collect();
     assert_eq!(logos, [Value::Null, json!("https://logos.example/b.png")]);
+}
+
+/// Waits until nothing listens on `port` any more.
+async fn until_refused(port: u16) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_ok()
+    {
+        assert!(tokio::time::Instant::now() < deadline, "still listening");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_background_hides_the_device_and_the_foreground_brings_it_back() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    // The record from the start, which the target sends when it runs.
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while running.last_advertised().is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "never advertised");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let before = lock(&running.advertised).len();
+
+    service.set_foreground(false);
+    service.follow_foreground().await;
+    until_refused(running.port).await;
+    // Not listening anywhere else either.
+    until_refused(service.handle.port()).await;
+
+    service.set_foreground(true);
+    service.follow_foreground().await;
+    let port = service.handle.port();
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("listening again");
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while lock(&running.advertised).len() == before {
+        assert!(tokio::time::Instant::now() < deadline, "not advertised again");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(running.last_advertised().unwrap().port, port);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_last_word_on_the_foreground_counts() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    // Away and back before either was carried out: nothing changes.
+    service.set_foreground(false);
+    service.set_foreground(true);
+    service.follow_foreground().await;
+    service.follow_foreground().await;
+    assert_eq!(service.handle.port(), running.port);
+    let mut phone = running.phone().await;
+    phone.pending().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_going_to_the_background_reaches_the_service() {
+    let running = Running::start(|_| {}).await;
+    set_foreground(&running.app.handle(), Lifecycle::Background);
+    until_refused(running.port).await;
+}
+
+#[test]
+fn going_to_the_background_without_remote_control_does_nothing() {
+    let app = TestApp::new();
+    set_foreground(&app.handle(), Lifecycle::Background);
+    assert!(app.handle().try_state::<RemoteService>().is_none());
+}
+
+/// A listener on loopback, or the error `fail` gives while it gives one.
+async fn bind_unless(fail: &Mutex<u32>) -> std::io::Result<tokio::net::TcpListener> {
+    let failing = {
+        let mut left = lock(fail);
+        let failing = *left > 0;
+        *left = left.saturating_sub(1);
+        failing
+    };
+    if failing {
+        return Err(std::io::Error::other("out of file descriptors"));
+    }
+    tokio::net::TcpListener::bind("127.0.0.1:0").await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_listen_on_coming_back_is_tried_again() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    service.set_foreground(false);
+    service.follow_foreground().await;
+    until_refused(running.port).await;
+
+    let fails = Mutex::new(1);
+    service.set_foreground(true);
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[Duration::from_millis(10)])
+        .await;
+    let port = service.handle.port();
+    tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("listening after the second try");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn it_stops_trying_once_the_tries_run_out_and_tries_again_next_time() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    service.set_foreground(false);
+    service.follow_foreground().await;
+
+    let fails = Mutex::new(3);
+    service.set_foreground(true);
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[Duration::from_millis(10)])
+        .await;
+    assert_eq!(*lock(&fails), 1, "one try and one retry");
+    // Still hidden, so the next change in the foreground tries again.
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[])
+        .await;
+    assert_eq!(*lock(&fails), 0);
+    service
+        .follow_foreground_with(|| bind_unless(&fails), &[])
+        .await;
+    tokio::net::TcpStream::connect(("127.0.0.1", service.handle.port()))
+        .await
+        .expect("listening");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn it_stops_trying_when_the_app_goes_back_to_the_background() {
+    let running = Running::start(|_| {}).await;
+    let handle = running.app.handle();
+    let service = handle.state::<RemoteService>();
+    service.set_foreground(false);
+    service.follow_foreground().await;
+
+    let fails = Mutex::new(1);
+    service.set_foreground(true);
+    let retries = [Duration::from_millis(300)];
+    let trying = service.follow_foreground_with(|| bind_unless(&fails), &retries);
+    let leaving = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        service.set_foreground(false);
+    };
+    tokio::join!(trying, leaving);
+    assert_eq!(*lock(&fails), 0, "the first try failed");
+    until_refused(service.handle.port()).await;
+}
+
+#[test]
+fn the_multicast_lock_follows_the_foreground_only_while_remote_control_runs() {
+    let app = TestApp::new();
+    let mut called = Vec::new();
+    set_foreground_with(&app.handle(), Lifecycle::Foreground, |hold| called.push(hold));
+    assert!(called.is_empty(), "no remote control, no lock");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_multicast_lock_is_held_in_the_foreground_and_let_go_in_the_background() {
+    let running = Running::start(|_| {}).await;
+    let mut called = Vec::new();
+    let handle = running.app.handle();
+    set_foreground_with(&handle, Lifecycle::Background, |hold| called.push(hold));
+    assert!(!handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
+    set_foreground_with(&handle, Lifecycle::Foreground, |hold| called.push(hold));
+    assert!(handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
+    assert_eq!(called, [false, true]);
+}
+
+#[test]
+fn ios_says_background_or_not() {
+    assert_eq!(Lifecycle::from_background(true), Lifecycle::Background);
+    assert_eq!(Lifecycle::from_background(false), Lifecycle::Foreground);
+}
+
+#[test]
+fn only_ios_waits_and_only_until_the_user_has_opened_it() {
+    assert!(waits_for_user(true, false));
+    assert!(!waits_for_user(true, true));
+    assert!(!waits_for_user(false, false));
+    assert!(!waits_for_user(false, true));
+}
+
+/// Starts the service on loopback with nothing advertised, as a test's
+/// stand-in for starting it on the network.
+async fn start_on_loopback(app: &TestApp) -> Result<(), String> {
+    start_on_loopback_in(app, app.app_dir(), &AtomicBool::new(false)).await
+}
+
+/// [`start_on_loopback`] with the key in `key_dir`, setting `browsed` when
+/// the browse starts.
+async fn start_on_loopback_in(
+    app: &TestApp,
+    key_dir: PathBuf,
+    browsed: &AtomicBool,
+) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    start_on(
+        &app.handle(),
+        key_dir,
+        listener,
+        Box::new(|_: &Registration| None),
+        || {
+            browsed.store(true, Ordering::SeqCst);
+            mpsc::unbounded_channel().1
+        },
+        target::Limits::STANDARD,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_starts_remote_control_once_and_remembers_it() {
+    let app = TestApp::new();
+    assert!(!opened_before(&app.handle()));
+    let mut multicast = Vec::new();
+    open_with(&app.handle(), start_on_loopback(&app), |hold| multicast.push(hold))
+        .await
+        .unwrap();
+    assert!(app.handle().try_state::<RemoteService>().is_some());
+    assert!(opened_before(&app.handle()), "starts with the app from now on");
+    assert_eq!(multicast, [true], "holds the lock in the foreground");
+    let text = std::fs::read_to_string(app.app_dir().join(SETTINGS_STORE_FILE)).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()[OPENED_KEY], json!(true));
+    // Already running: nothing starts again.
+    open_with(&app.handle(), async { panic!("started twice") }, |_| {
+        panic!("held again")
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_fails_says_why_and_can_be_tried_again() {
+    let app = TestApp::new();
+    let failed = open_with(&app.handle(), async { Err("no port".to_owned()) }, |_| {
+        panic!("no lock without remote control")
+    })
+    .await;
+    assert_eq!(failed, Err("no port".to_owned()));
+    assert!(app.handle().try_state::<RemoteService>().is_none());
+    assert!(!opened_before(&app.handle()), "a failed start isn't remembered");
+    open_with(&app.handle(), start_on_loopback(&app), |_| {})
+        .await
+        .unwrap();
+    assert!(app.handle().try_state::<RemoteService>().is_some());
+    assert!(opened_before(&app.handle()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_finishes_in_the_background_takes_no_lock() {
+    let app = TestApp::new();
+    let start = async {
+        start_on_loopback(&app).await?;
+        // The app went to the background meanwhile.
+        app.handle().state::<RemoteService>().set_foreground(false);
+        Ok(())
+    };
+    let mut multicast = Vec::new();
+    open_with(&app.handle(), start, |hold| multicast.push(hold))
+        .await
+        .unwrap();
+    assert!(multicast.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_fails_at_the_key_starts_no_browse() {
+    let app = TestApp::new();
+    // A file where the key's folder should be, so the key can't be saved.
+    let blocked = app.app_dir().join("blocked");
+    std::fs::create_dir_all(app.app_dir()).unwrap();
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    let browsed = AtomicBool::new(false);
+    let failed = start_on_loopback_in(&app, blocked, &browsed).await;
+    assert!(failed.unwrap_err().contains("device key"));
+    assert!(!browsed.load(Ordering::SeqCst), "no browse without remote control");
+    assert!(start_on_loopback_in(&app, app.app_dir(), &browsed).await.is_ok());
+    assert!(browsed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn the_launch_starts_it_unless_ios_waits_for_the_user() {
+    let started = std::cell::Cell::new(0);
+    let start = || {
+        started.set(started.get() + 1);
+        true
+    };
+    assert!(!start_at_launch_with(true, false, start), "iOS waits");
+    assert_eq!(started.get(), 0);
+    assert!(start_at_launch_with(true, true, start), "until opened once");
+    assert!(start_at_launch_with(false, false, start), "elsewhere at once");
+    assert_eq!(started.get(), 2);
+    assert!(!start_at_launch_with(false, false, || false), "says when it failed");
 }
 
 /// The Mac controlling the TV, with an M3U provider the TV can load.

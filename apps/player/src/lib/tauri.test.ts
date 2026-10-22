@@ -780,6 +780,7 @@ describe("backend commands", () => {
 			"remote_finish_command",
 			{ token: 9, outcome: "staleItem" },
 		],
+		["remoteOpen", () => tauri.remoteOpen(), "remote_open"],
 		["remoteDevices", () => tauri.remoteDevices(), "remote_devices"],
 		[
 			"remoteLocalNetworkDenied",
