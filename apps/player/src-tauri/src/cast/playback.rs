@@ -388,8 +388,14 @@ where
                     // again below, and the frontend hears of it only if
                     // that fails.
                     lost = Some(update);
-                } else if !replaced(&state, &id, generation) {
-                    emit(&app, &id, update);
+                } else {
+                    // Under the lock `begin` replaces a session under, so a
+                    // session a newer one replaced says nothing more, even
+                    // about what it read just before.
+                    let active = lock(&state.active);
+                    if !replaced(active.as_ref(), &id, generation) {
+                        emit(&app, &id, update);
+                    }
                 }
             })
             .await;
@@ -427,7 +433,13 @@ where
         // The same receiver on a new connection, as after this computer's
         // address changed. The old one goes without a word, so the receiver
         // keeps its app and the frontend sees no end.
-        Some(old) if old.receiver_id == receiver_id => old.driver.abort(),
+        Some(old) if old.receiver_id == receiver_id => {
+            #[cfg(test)]
+            if KEEP_REPLACED.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            old.driver.abort();
+        }
         Some(old) => {
             let _ = old.commands.send(Command::Stop);
         }
@@ -435,13 +447,21 @@ where
     }
 }
 
-/// Whether a newer session for `receiver_id` replaced session
-/// `generation`, so what the older one says no longer counts.
-fn replaced(state: &CastPlayback, receiver_id: &str, generation: u64) -> bool {
-    lock(&state.active)
-        .as_ref()
-        .is_some_and(|a| a.receiver_id == receiver_id && a.generation > generation)
+/// Whether `active`, the newest session, is a newer one for `receiver_id`
+/// than session `generation`, so what the older one says no longer counts.
+///
+/// `begin` aborts the session it replaces right after, so this counts for
+/// what that session's task is already handling when the abort lands.
+fn replaced(active: Option<&Active>, receiver_id: &str, generation: u64) -> bool {
+    active.is_some_and(|a| a.receiver_id == receiver_id && a.generation > generation)
 }
+
+/// Has `begin` leave the session it replaces for the same receiver
+/// running, as it is for a moment before its abort lands, so a test can
+/// see that what it says no longer counts.
+#[cfg(test)]
+pub(crate) static KEEP_REPLACED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Connects to `receiver_id` again after session `generation` lost its
 /// connection with this computer's old address, trying for a while, as
@@ -473,7 +493,8 @@ async fn reconnect<R: Runtime>(app: &AppHandle<R>, receiver_id: &str, generation
 /// A TLS connection to a receiver.
 type Connection = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 
-/// A connection to `receiver_id`, and this computer's address on it.
+/// A connection to `receiver_id`, and this computer's address on it. A
+/// receiver that doesn't answer is marked unreachable for a while.
 async fn connect<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
@@ -484,9 +505,10 @@ async fn connect<R: Runtime>(
         .get(receiver_id)
         .map(|r| (r.addr, r.port))
         .ok_or("notFound")?;
-    let (stream, _) = tls::connect(addr, port)
-        .await
-        .map_err(|_| "unreachable".to_string())?;
+    let Ok((stream, _)) = tls::connect(addr, port).await else {
+        super::mark_unreachable(app, receiver_id);
+        return Err("unreachable".into());
+    };
     let local = stream.get_ref().0.local_addr().ok().map(|a| a.ip());
     Ok((stream, local))
 }
@@ -514,17 +536,9 @@ async fn ensure_connected<R: Runtime>(
     if open {
         return Ok(false);
     }
-    match connect(app, receiver_id).await {
-        Ok((stream, local)) => {
-            begin(app, receiver_id, stream, local);
-            Ok(true)
-        }
-        Err(e) if e == "unreachable" => {
-            super::mark_unreachable(app, receiver_id);
-            Err(e)
-        }
-        Err(e) => Err(e),
-    }
+    let (stream, local) = connect(app, receiver_id).await?;
+    begin(app, receiver_id, stream, local);
+    Ok(true)
 }
 
 /// The MIME type a receiver expects for `container`, and whether it's HLS

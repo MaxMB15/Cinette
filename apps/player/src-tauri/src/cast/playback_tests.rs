@@ -533,9 +533,29 @@ async fn starts_the_stream_again_on_the_new_address_after_a_move() {
     // new one, quietly: the receiver keeps its app, and the frontend sees
     // no end.
     restart(&app, &movie, converted()).unwrap();
-    let loaded = next_of(&mut got, "LOAD").await;
+    // The old media stops, but nothing stops the receiver's app, before or
+    // after the load goes out on the new connection.
+    let stops_the_app = |message: &fake_receiver::Got| {
+        message.kind() == "STOP" && message.namespace == mvp_core::cast::message::NS_RECEIVER
+    };
+    let loaded = loop {
+        let message = tokio::time::timeout(Duration::from_secs(10), got.recv())
+            .await
+            .expect("the load within 10 s")
+            .expect("the receiver's messages");
+        assert!(!stops_the_app(&message));
+        if message.kind() == "LOAD" {
+            break message;
+        }
+    };
     assert_eq!(loaded.connection, 1);
-    assert!(!gets(&mut got, "STOP", Duration::from_millis(500)).await);
+    let later = tokio::time::timeout(Duration::from_millis(500), async {
+        while let Some(message) = got.recv().await {
+            assert!(!stops_the_app(&message));
+        }
+    })
+    .await;
+    assert!(later.is_err());
     while let Ok(event) = events.try_recv() {
         assert_ne!(event["update"]["kind"], "closed");
     }
@@ -1624,6 +1644,22 @@ async fn quiet_cast(
     tokio::sync::mpsc::UnboundedReceiver<fake_receiver::Got>,
     fake_receiver::FirstConnection,
 ) {
+    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    quiet_cast_of(app, reconnect_for, ours, &movie, direct("mp4")).await
+}
+
+/// [`quiet_cast`] of `item` by `route`.
+async fn quiet_cast_of(
+    app: &TestApp,
+    reconnect_for: Duration,
+    ours: fn(std::net::IpAddr) -> bool,
+    item: &Channel,
+    route: Value,
+) -> (
+    mpsc::Receiver<Value>,
+    tokio::sync::mpsc::UnboundedReceiver<fake_receiver::Got>,
+    fake_receiver::FirstConnection,
+) {
     app.handle()
         .state::<super::playback::CastPlayback>()
         .set_timing(Duration::from_millis(2500), reconnect_for);
@@ -1631,9 +1667,8 @@ async fn quiet_cast(
     let events = updates(app);
     let (addr, mut got, first) = fake_receiver::start_controlled(Duration::ZERO).await;
     add_receiver(app, "tv", addr);
-    let movie = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
-    add_channel(app, &movie);
-    load(app, "cast:tv", &movie, direct("mp4"), None).unwrap();
+    add_channel(app, item);
+    load(app, "cast:tv", item, route, None).unwrap();
     next_of(&mut got, "LOAD").await;
     (events, got, first)
 }
@@ -1660,10 +1695,26 @@ async fn a_session_that_went_with_the_old_address_connects_again() {
     let ours = |ip| !(GONE_AFTER_A_MOVE.load(Ordering::SeqCst) && ip == LOOPBACK);
     let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), ours).await;
     // This computer's address changes, and the old connection's route goes
-    // with it: the receiver hears nothing more on it.
+    // with it: the receiver hears nothing more on it. For a moment it can't
+    // be reached at all, as while Wi-Fi comes back.
+    let handle = app.handle();
+    let receivers = handle.state::<super::CastReceivers>();
+    let addr = receivers.registry().get("cast:tv").unwrap();
+    let addr = SocketAddr::new(addr.addr, addr.port);
+    let gone = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    add_receiver(&app, "tv", gone);
     GONE_AFTER_A_MOVE.store(true, Ordering::SeqCst);
     first.go_quiet();
-    // After the silence limit, the session connects again by itself.
+    // A try to connect again fails, and later ones go on.
+    wait_until("a failed try", || {
+        !receivers.registry().get("cast:tv").unwrap().available
+    })
+    .await;
+    add_receiver(&app, "tv", addr);
+    // The session connects again by itself.
     let again = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(message) = got.recv().await {
             if message.connection == 1 {
@@ -1729,4 +1780,122 @@ async fn a_receiver_that_goes_quiet_on_the_same_address_is_lost() {
     .await
     .unwrap_or(false);
     assert!(!opened);
+}
+
+static GONE_WHILE_CONVERTING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_connects_again_keeps_its_converter() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let ours = |ip| !(GONE_WHILE_CONVERTING.load(Ordering::SeqCst) && ip == LOOPBACK);
+    let (source, _) = counting_source(wav16_lasting(24), Duration::ZERO, false);
+    let film = channel("m-1", &source, "movie");
+    let (events, mut got, first) =
+        quiet_cast_of(&app, Duration::from_secs(5), ours, &film, converted()).await;
+    GONE_WHILE_CONVERTING.store(true, Ordering::SeqCst);
+    first.go_quiet();
+    let again = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(message) = got.recv().await {
+            if message.connection == 1 {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(again, Ok(true));
+    GONE_WHILE_CONVERTING.store(false, Ordering::SeqCst);
+    assert_eq!(closed_within(&events, Duration::from_millis(500)), None);
+    // The converter goes on with the new connection, and goes with it.
+    assert!(ffmpeg_runs_for(&source));
+    app.invoke("cast_release", json!({ "receiverId": "cast:tv" }))
+        .unwrap();
+    assert!(!ffmpeg_runs_for(&source));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cast_to_another_receiver_leaves_the_first_ones_converter_behind() {
+    let app = TestApp::new();
+    if !converts(&app).await {
+        return;
+    }
+    let (first, _, mut first_got) = fake_receiver::start().await;
+    let (second, _, mut second_got) = fake_receiver::start().await;
+    add_receiver(&app, "a", first);
+    add_receiver(&app, "b", second);
+    let (source, _) = counting_source(wav16_lasting(24), Duration::ZERO, false);
+    let film = channel("m-1", &source, "movie");
+    let other = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &film);
+    add_channel(&app, &other);
+    load(&app, "cast:a", &film, converted(), None).unwrap();
+    next_of(&mut first_got, "LOAD").await;
+    assert!(ffmpeg_runs_for(&source));
+    load(&app, "cast:b", &other, direct("mp4"), None).unwrap();
+    next_of(&mut second_got, "LOAD").await;
+    wait_until("the first converter ends", || !ffmpeg_runs_for(&source)).await;
+}
+
+static MOVED_FOR_A_LOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Keeps a replaced session running until dropped.
+struct KeepReplaced;
+
+impl KeepReplaced {
+    fn new() -> Self {
+        super::playback::KEEP_REPLACED.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for KeepReplaced {
+    fn drop(&mut self) {
+        super::playback::KEEP_REPLACED.store(false, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_a_newer_one_replaced_says_nothing_more() {
+    let app = TestApp::new();
+    check_addresses(
+        &app,
+        |_| Ok(LOOPBACK),
+        |ip| !(MOVED_FOR_A_LOAD.load(Ordering::SeqCst) && ip == LOOPBACK),
+    );
+    let events = updates(&app);
+    let (addr, mut got, _first) = fake_receiver::start_controlled(Duration::ZERO).await;
+    add_receiver(&app, "tv", addr);
+    let first = channel("m-1", "http://192.0.2.1/1.mp4", "movie");
+    let second = channel("m-2", "http://192.0.2.1/2.mp4", "movie");
+    add_channel(&app, &first);
+    add_channel(&app, &second);
+    load(&app, "cast:tv", &first, direct("mp4"), None).unwrap();
+    next_of(&mut got, "LOAD").await;
+    // The address moved, so the next load connects again. The old session
+    // still runs a moment, and here it goes on to stop and say it closed.
+    {
+        let _keep = KeepReplaced::new();
+        MOVED_FOR_A_LOAD.store(true, Ordering::SeqCst);
+        load(&app, "cast:tv", &second, direct("mp4"), None).unwrap();
+        MOVED_FOR_A_LOAD.store(false, Ordering::SeqCst);
+    }
+    // The load goes out on the new connection, and the old session stops on
+    // its own.
+    let (mut loaded, mut stopped) = (false, false);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !(loaded && stopped) {
+            let message = got.recv().await.expect("the receiver's messages");
+            loaded |= message.kind() == "LOAD" && message.connection == 1;
+            stopped |= message.kind() == "CLOSE" && message.connection == 0;
+        }
+    })
+    .await
+    .expect("the load and the old session's end within 10 s");
+    // Nothing it said ended the cast that took over.
+    assert_eq!(closed_within(&events, Duration::from_millis(500)), None);
+    control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
 }
