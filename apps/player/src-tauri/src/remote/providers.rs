@@ -16,7 +16,7 @@ use mvp_core::remote::transfer::flow::{
     ProviderSettings, MAX_PROVIDERS, MAX_PROVIDER_FIELD,
 };
 use std::sync::Mutex;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// What a provider that didn't load says on the device that sent it. The
 /// error itself can hold the provider's address.
@@ -140,10 +140,12 @@ fn same_account(a: &Provider, b: &Provider) -> bool {
 }
 
 /// An address in one form however it was typed: the host in lower case
-/// and a default port left out.
-fn address(url: &str) -> String {
+/// and a default port left out. It can hold a token, so it's cleared from
+/// memory when dropped.
+fn address(url: &str) -> Zeroizing<String> {
     let url = url.trim();
-    url::Url::parse(url).map_or_else(|_| url.to_string(), |u| u.to_string())
+    // The parsed address hands over its own buffer, so no copy is left.
+    Zeroizing::new(url::Url::parse(url).map_or_else(|_| url.to_string(), String::from))
 }
 
 /// The scheme, host and port of an Xtream server.
@@ -232,7 +234,6 @@ impl Loader for Network {
         loaded.map(|_| ())
     }
 
-    // mutants: skip FnValue: the default reads the same list; this only moves the wait off the async thread.
     fn saved(&self, cache: &Mutex<CacheStore>) -> Result<Vec<Provider>, ()> {
         // A refresh or a guide save can hold the cache for a while.
         tokio::task::block_in_place(|| {
