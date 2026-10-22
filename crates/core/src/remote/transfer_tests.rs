@@ -153,9 +153,13 @@ fn imports(net: &mut Net) -> Vec<(super::ConnId, String, Salt, Export)> {
         Action::ImportHistory {
             conn,
             transfer,
+            from,
             salt,
             export,
-        } => Some((*conn, transfer.clone(), *salt, (**export).clone())),
+        } => {
+            assert_eq!(from, "Phone");
+            Some((*conn, transfer.clone(), *salt, (**export).clone()))
+        }
         _ => None,
     })
 }

@@ -1169,3 +1169,23 @@ fn a_host_that_cant_save_providers_answers_that_none_were() {
     );
     assert_eq!(rx.try_recv(), Ok(Vec::new()));
 }
+
+#[test]
+fn a_host_that_cant_copy_history_says_so() {
+    let host = fake_host();
+    let (tx, rx) = std::sync::mpsc::channel();
+    host.export_history(
+        Salt::generate(),
+        What::ALL,
+        Box::new(move |exported| tx.send(exported.map(|_| ())).unwrap()),
+    );
+    assert_eq!(rx.try_recv(), Ok(Err(ErrorCode::Unsupported)));
+    let (tx, rx) = std::sync::mpsc::channel();
+    host.import_history(
+        "Mac".into(),
+        Salt::generate(),
+        Export::default(),
+        Box::new(move |imported| tx.send(imported.map(|_| ())).unwrap()),
+    );
+    assert_eq!(rx.try_recv(), Ok(Err(ErrorCode::Unsupported)));
+}

@@ -7,7 +7,9 @@
 use super::device::device_type;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
-use super::target::{self, CatalogPage, SavedProviders, TargetHandle, TargetHost, TransferEvent};
+use super::target::{
+    self, CatalogPage, Exported, Imported, SavedProviders, TargetHandle, TargetHost, TransferEvent,
+};
 use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
 use crate::discovery::{self, Advertisement, Registration};
@@ -16,6 +18,7 @@ use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
 use mvp_core::remote::controller::AskError;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
+use mvp_core::remote::message::ErrorCode;
 use mvp_core::remote::message::{
     Command, DeviceType, Feature, Hello, VersionedState, PROTOCOL_VERSION,
 };
@@ -26,7 +29,8 @@ use mvp_core::remote::transfer::flow::{
     Asked, ControllerEvent as TransferUpdate, Direction, Progress, ProviderName, ProviderOutcome,
     ProviderSettings,
 };
-use mvp_core::remote::transfer::{Counts, What};
+use mvp_core::remote::transfer::refs::Salt;
+use mvp_core::remote::transfer::{Counts, Export, What};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -36,6 +40,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 /// Remote control as Tauri managed state: the running target, the devices
 /// discovery found, and the device this one controls, if any.
@@ -56,6 +61,10 @@ pub struct RemoteService {
     /// The providers the webview asked to send, by link, until the other
     /// device allows it.
     sending: Sending,
+    /// See [`SendingHistory`].
+    history: SendingHistory,
+    /// See [`ProgressWaiter`].
+    progress: ProgressWaiter,
     /// How many cancels each link has had, so a send that was cancelled
     /// while it waited for the cache doesn't ask after all.
     cancels: Mutex<std::collections::HashMap<u64, u64>>,
@@ -68,6 +77,39 @@ pub struct RemoteService {
     // Only the mobile apps go to the background.
     #[cfg_attr(not(mobile), allow(dead_code))]
     in_foreground: tokio::sync::Mutex<bool>,
+}
+
+/// A history "send" waiting for the other device's Allow: the link, and the
+/// channel the player had open when it was asked.
+type SendingHistory = Arc<Mutex<Option<(u64, Option<String>)>>>;
+
+/// Waiting for the webview to save the player's position before an export,
+/// with the channel it has open.
+type ProgressWaiter = Arc<Mutex<Option<oneshot::Sender<Option<String>>>>>;
+
+/// How long an export waits for the player to save its position.
+const SAVE_PROGRESS_WAIT: Duration = Duration::from_secs(2);
+
+/// Asks the webview to save the player's position now, and waits a moment
+/// for it. Returns the channel the player has open, if it said.
+async fn save_progress<R: Runtime>(app: &AppHandle<R>, waiter: &ProgressWaiter) -> Option<String> {
+    let (tx, rx) = oneshot::channel();
+    *lock(waiter) = Some(tx);
+    let _ = app.emit("remote://save-progress", ());
+    tokio::time::timeout(SAVE_PROGRESS_WAIT, rx)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+}
+
+/// What `remote://history-imported` carries: history written here.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryImported {
+    pub from: String,
+    #[serde(flatten)]
+    pub imported: super::history::Imported,
 }
 
 struct Saved {
@@ -139,7 +181,12 @@ impl RemoteService {
             name,
             device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
-            features: vec![Feature::Control, Feature::Catalog, Feature::Providers],
+            features: vec![
+                Feature::Control,
+                Feature::Catalog,
+                Feature::History,
+                Feature::Providers,
+            ],
         };
         let devices = self.devices.clone();
         let target = device.clone();
@@ -265,6 +312,75 @@ impl RemoteService {
         })
     }
 
+    /// Asks the device link `link` controls for a history transfer. For
+    /// "send", `playing` is the channel this device's player has open,
+    /// whose position the webview saved first.
+    pub async fn ask_history<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        link: u64,
+        direction: Direction,
+        what: What,
+        playing: Option<String>,
+    ) -> Result<(), String> {
+        let handle = self.link(link).ok_or("Not connected to that device.")?;
+        if what.is_empty() {
+            return Err("Pick something to copy.".into());
+        }
+        let ticket = self.cancel_count(link);
+        let counts = match direction {
+            Direction::Send => Some(
+                history_counts(app, what)
+                    .await
+                    .map_err(|_| "Couldn't read this device's history.")?,
+            ),
+            Direction::Import => None,
+        };
+        {
+            let mut slot = lock(&self.history);
+            if self.cancel_count(link) != ticket {
+                return Err(CANCELLED.into());
+            }
+            if slot.as_ref().is_some_and(|(l, _)| *l == link) {
+                return Err(BUSY.into());
+            }
+            // Only a send needs the player's channel, once it's allowed.
+            if direction == Direction::Send {
+                *slot = Some((link, playing));
+            }
+        }
+        let asked = handle.ask_history(direction, what, counts).await;
+        if asked.is_err() {
+            lock(&self.history).take_if(|(l, _)| *l == link);
+        }
+        // Cancelled while the request went out: it's withdrawn.
+        if asked.is_ok() && self.cancel_count(link) != ticket {
+            handle.cancel_transfer();
+            return Err(CANCELLED.into());
+        }
+        asked.map_err(|e| match e {
+            AskError::Unsupported => {
+                "That device's Cinette can't copy history. Update it first.".to_string()
+            }
+            AskError::Busy => BUSY.to_string(),
+            AskError::NotConnected => "Not connected to that device.".to_string(),
+        })
+    }
+
+    /// "Import": the user confirmed the preview.
+    pub fn start_import(&self, link: u64, transfer: String) -> Result<(), String> {
+        let handle = self.link(link).ok_or("Not connected to that device.")?;
+        handle.start_import(transfer);
+        Ok(())
+    }
+
+    /// The webview saved the player's position, which an export waits for.
+    pub fn progress_saved(&self, playing: Option<String>) {
+        if let Some(waiter) = lock(&self.progress).take() {
+            let _ = waiter.send(playing);
+        }
+    }
+
     /// Stops the transfer on link `link`, if one is going on.
     pub fn cancel_transfer(&self, link: u64) {
         *lock(&self.cancels).entry(link).or_default() += 1;
@@ -272,6 +388,7 @@ impl RemoteService {
             handle.cancel_transfer();
         }
         lock(&self.sending).take_if(|(l, _)| *l == link);
+        lock(&self.history).take_if(|(l, _)| *l == link);
     }
 
     /// How many cancels link `link` has had.
@@ -537,6 +654,8 @@ struct TauriHost<R: Runtime> {
     /// The consent prompt on screen, for a webview that wasn't listening
     /// when it came.
     prompt: Arc<Mutex<Option<ConsentPrompt>>>,
+    /// See [`ProgressWaiter`].
+    progress: ProgressWaiter,
 }
 
 /// A lock for each key in use, made when the first user comes and dropped
@@ -741,6 +860,37 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         let _ = self.app.emit("remote://transfer-target", event);
     }
 
+    fn export_history(&self, salt: Salt, what: What, done: Exported) {
+        let app = self.app.clone();
+        let waiter = self.progress.clone();
+        tauri::async_runtime::spawn(async move {
+            let playing = save_progress(&app, &waiter).await;
+            let export = run_blocking(app, move |state| {
+                super::history::export(&state.cache, &salt, what, playing.as_deref())
+            })
+            .await;
+            done(export);
+        });
+    }
+
+    fn import_history(&self, from: String, salt: Salt, export: Export, done: Imported) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let emit = app.clone();
+            let imported = run_blocking(app, move |state| {
+                super::history::import(&state.cache, &salt, &export)
+            })
+            .await;
+            done(imported.clone().map(|i| i.report));
+            if let Ok(imported) = imported {
+                let _ = emit.emit(
+                    "remote://history-imported",
+                    HistoryImported { from, imported },
+                );
+            }
+        });
+    }
+
     fn advertise(&self, registration: Option<Registration>) {
         let mut current = lock(&self.advertisement);
         // The old record goes first, with a goodbye, so the name is free.
@@ -749,6 +899,22 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             *current = (self.advertiser)(&registration);
         }
     }
+}
+
+/// How many of each this device would send, read on a blocking thread.
+pub async fn history_counts<R: Runtime>(
+    app: AppHandle<R>,
+    what: What,
+) -> Result<Counts, ErrorCode> {
+    run_blocking(app, move |state| super::history::counts(&state.cache, what)).await
+}
+
+/// Runs cache work on a blocking thread. A thread that panics fails it.
+async fn run_blocking<R: Runtime, T: Send + 'static>(
+    app: AppHandle<R>,
+    work: impl FnOnce(&AppState) -> Result<T, ErrorCode> + Send + 'static,
+) -> Result<T, ErrorCode> {
+    blocking(app, work).await.unwrap_or(Err(ErrorCode::Failed))
 }
 
 // mutants: skip FnValue: it only acts on a real window, which the mock runtime doesn't have.
@@ -831,6 +997,8 @@ struct TauriLinkHost<R: Runtime> {
     throttle: Arc<Mutex<Throttle>>,
     /// See [`RemoteService::send_providers`].
     sending: Sending,
+    /// See [`SendingHistory`].
+    history: SendingHistory,
 }
 
 /// What `remote://transfer` carries: a transfer this device asked for.
@@ -861,6 +1029,11 @@ pub enum TransferStep {
         transfer: String,
         progress: Progress,
     },
+    /// "Import" was allowed: what the other device has, until the user
+    /// starts it.
+    Preview { transfer: String, counts: Counts },
+    /// "Send" was allowed, and this device is reading its history out.
+    Granted { transfer: String },
 }
 
 impl<R: Runtime> TauriLinkHost<R> {
@@ -955,24 +1128,65 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
                 expires_in_ms: u64::from(*expires_in) * 1000,
             },
             TransferUpdate::Refused(code) => {
-                lock(&self.sending).take_if(|(l, _)| *l == link);
+                self.ended(link);
                 TransferStep::Refused { code: *code }
             }
-            TransferUpdate::Progress { transfer, progress } => TransferStep::Progress {
+            TransferUpdate::Progress { transfer, progress } => {
+                if matches!(
+                    progress,
+                    Progress::Failed(_) | Progress::Done(_) | Progress::ProvidersDone(_)
+                ) {
+                    self.ended(link);
+                }
+                TransferStep::Progress {
+                    transfer: transfer.clone(),
+                    progress: progress.clone(),
+                }
+            }
+            TransferUpdate::Preview { transfer, counts } => TransferStep::Preview {
                 transfer: transfer.clone(),
-                progress: progress.clone(),
+                counts: *counts,
             },
-            // History transfers come in a later step; this device doesn't
-            // ask for them yet.
-            TransferUpdate::ExportNeeded { .. }
-            | TransferUpdate::Preview { .. }
-            | TransferUpdate::ImportReady { .. } => return,
+            TransferUpdate::ExportNeeded {
+                transfer,
+                salt,
+                what,
+            } => {
+                self.notify(
+                    link,
+                    device,
+                    TransferStep::Granted {
+                        transfer: transfer.clone(),
+                    },
+                );
+                return self.export_granted(link, transfer.clone(), *salt, *what);
+            }
+            TransferUpdate::ImportReady {
+                transfer,
+                salt,
+                export,
+            } => {
+                return self.import_arrived(
+                    link,
+                    device,
+                    transfer.clone(),
+                    *salt,
+                    (**export).clone(),
+                );
+            }
         };
         self.notify(link, device, update);
     }
 }
 
 impl<R: Runtime> TauriLinkHost<R> {
+    /// The transfer on `link` ended, however it ended: nothing waits for an
+    /// Allow on it any more, so the next one can be asked for.
+    fn ended(&self, link: u64) {
+        lock(&self.sending).take_if(|(l, _)| *l == link);
+        lock(&self.history).take_if(|(l, _)| *l == link);
+    }
+
     fn notify(&self, link: u64, device: &DeviceId, update: TransferStep) {
         let _ = self.app.emit(
             "remote://transfer",
@@ -1021,6 +1235,66 @@ impl<R: Runtime> TauriLinkHost<R> {
                         },
                     );
                 }
+            }
+        });
+    }
+}
+
+impl<R: Runtime> TauriLinkHost<R> {
+    fn handle(&self, link: u64) -> Option<LinkHandle> {
+        lock(&self.link)
+            .as_ref()
+            .filter(|l| l.generation() == link)
+            .cloned()
+    }
+
+    /// "Send" was allowed: this device's history goes now.
+    fn export_granted(&self, link: u64, transfer: String, salt: Salt, what: What) {
+        let Some(handle) = self.handle(link) else {
+            return;
+        };
+        let playing = lock(&self.history)
+            .take_if(|(l, _)| *l == link)
+            .and_then(|(_, playing)| playing);
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let export = run_blocking(app, move |state| {
+                super::history::export(&state.cache, &salt, what, playing.as_deref())
+            })
+            .await;
+            handle.send_export(transfer, export);
+        });
+    }
+
+    /// "Import": the other device's history arrived; it's written here.
+    fn import_arrived(
+        &self,
+        link: u64,
+        device: &DeviceId,
+        transfer: String,
+        salt: Salt,
+        export: Export,
+    ) {
+        let Some(handle) = self.handle(link) else {
+            return;
+        };
+        let from = lock(&self.devices)
+            .get(device)
+            .map(|d| d.name.clone())
+            .unwrap_or_default();
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let emit = app.clone();
+            let imported = run_blocking(app, move |state| {
+                super::history::import(&state.cache, &salt, &export)
+            })
+            .await;
+            handle.imported(transfer, imported.clone().map(|i| i.report));
+            if let Ok(imported) = imported {
+                let _ = emit.emit(
+                    "remote://history-imported",
+                    HistoryImported { from, imported },
+                );
             }
         });
     }
@@ -1242,6 +1516,8 @@ fn start_on<R: Runtime>(
         .map_err(|e| format!("couldn't load the device key: {e}"))?;
     let settings = load_settings(app);
     let prompt = Arc::new(Mutex::new(None));
+    let progress: ProgressWaiter = Arc::new(Mutex::new(None));
+    let history: SendingHistory = Arc::new(Mutex::new(None));
     let host = Arc::new(TauriHost {
         app: app.clone(),
         advertiser,
@@ -1251,6 +1527,7 @@ fn start_on<R: Runtime>(
         fetches: Mutex::new(Bucket::full()),
         loading: Gates::default(),
         prompt: prompt.clone(),
+        progress: progress.clone(),
     });
     let device_id = key.device_id();
     let handle = target::start_with(
@@ -1279,6 +1556,7 @@ fn start_on<R: Runtime>(
         link: link.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),
         sending: sending.clone(),
+        history: history.clone(),
     });
     app.manage(RemoteService {
         handle,
@@ -1292,6 +1570,8 @@ fn start_on<R: Runtime>(
         left_through: Mutex::new(0),
         prompt,
         sending,
+        history,
+        progress,
         cancels: Mutex::default(),
         wants_foreground: AtomicBool::new(true),
         in_foreground: tokio::sync::Mutex::new(true),

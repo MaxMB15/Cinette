@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { mpvSetVisible } from "@/lib/tauri";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { Tv, List, FolderOpen, Settings as SettingsIcon } from "lucide-react";
+import { HistoryImportedNotice } from "@/components/remote/HistoryImportedNotice";
 import {
 	ControllersBar,
 	DevicesButton,
@@ -77,6 +78,7 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 				{!(compact && isPlayer) && controlsOthers() && <RemoteBar />}
 				{!(compact && isPlayer) && <ControllersBar />}
 				{!(compact && isPlayer) && <ProvidersAddedNotice />}
+				{!(compact && isPlayer) && <HistoryImportedNotice />}
 				<div className="flex-1 min-h-0">
 					<Outlet />
 				</div>

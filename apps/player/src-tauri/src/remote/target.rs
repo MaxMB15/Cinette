@@ -26,6 +26,9 @@ use mvp_core::remote::target::{
     Action, ConsentPrompt, DiscoveryRecord, SessionInfo, Target, SERVICE_TYPE,
 };
 use mvp_core::remote::transfer::flow::{Progress, ProviderResult, ProviderSettings};
+use mvp_core::remote::transfer::merge::Report;
+use mvp_core::remote::transfer::refs::Salt;
+use mvp_core::remote::transfer::{Export, What};
 use mvp_core::remote::ConnId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -91,7 +94,24 @@ pub trait TargetHost: Send + Sync + 'static {
     }
     /// A transfer with a controller moved along.
     fn transfer(&self, _event: &TransferEvent) {}
+    /// A controller is importing this device's history: save the player's
+    /// position, export the history under `salt` with only `what`, and call
+    /// `done`. It mustn't block. A host that can't answers `unsupported`.
+    fn export_history(&self, _salt: Salt, _what: What, done: Exported) {
+        done(Err(ErrorCode::Unsupported));
+    }
+    /// The device named `from` sent its history: match and write it here,
+    /// then call `done`. It mustn't block. A host that can't answers
+    /// `unsupported`.
+    fn import_history(&self, _from: String, _salt: Salt, _export: Export, done: Imported) {
+        done(Err(ErrorCode::Unsupported));
+    }
 }
+
+/// Hands an export back to the target.
+pub type Exported = Box<dyn FnOnce(Result<Export, ErrorCode>) + Send>;
+/// Hands what an import did back to the target.
+pub type Imported = Box<dyn FnOnce(Result<Report, ErrorCode>) + Send>;
 
 /// Hands the results of [`TargetHost::save_providers`] back to the target.
 pub type SavedProviders = Box<dyn FnOnce(Vec<ProviderResult>) + Send>;
@@ -118,6 +138,8 @@ enum Input {
     Finished(u64, Result<(), ErrorCode>),
     CatalogDone(Epoch, ConnId, u64, CatalogPage),
     ProvidersSaved(Epoch, ConnId, String, Vec<ProviderResult>),
+    Exported(Epoch, ConnId, String, Box<Result<Export, ErrorCode>>),
+    Imported(Epoch, ConnId, String, Box<Result<Report, ErrorCode>>),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
     // Only the mobile apps go to the background.
     #[cfg_attr(not(mobile), allow(dead_code))]
@@ -239,10 +261,11 @@ fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
     Ok(socket.into())
 }
 
-/// A target that offers what this device carries out: receiving providers.
+/// A target that offers what this device carries out: history transfers
+/// and receiving providers.
 fn new_target(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Target {
     let mut target = Target::new(key, device_type, settings);
-    target.offer(false, true);
+    target.offer(true, true);
     target
 }
 
@@ -526,6 +549,20 @@ impl Task {
                     Vec::new()
                 }
             }
+            Input::Exported(epoch, conn, transfer, export) => {
+                if epoch == self.epoch {
+                    self.target.exported(conn, &transfer, *export, now)
+                } else {
+                    Vec::new()
+                }
+            }
+            Input::Imported(epoch, conn, transfer, result) => {
+                if epoch == self.epoch {
+                    self.target.imported(conn, &transfer, *result)
+                } else {
+                    Vec::new()
+                }
+            }
             Input::Sessions(reply) => {
                 let _ = reply.send(self.target.sessions());
                 Vec::new()
@@ -673,9 +710,50 @@ impl Task {
                     kind,
                     progress,
                 }),
-                // This device doesn't offer history transfers yet, so the
-                // core refuses them before any of these.
-                Action::ExportHistory { .. } | Action::ImportHistory { .. } => {}
+                Action::ExportHistory {
+                    conn,
+                    transfer,
+                    salt,
+                    what,
+                } => {
+                    let inbox = self.inbox.clone();
+                    let epoch = self.epoch;
+                    self.host.export_history(
+                        salt,
+                        what,
+                        Box::new(move |export| {
+                            let _ = inbox.send(Input::Exported(
+                                epoch,
+                                conn,
+                                transfer,
+                                Box::new(export),
+                            ));
+                        }),
+                    );
+                }
+                Action::ImportHistory {
+                    conn,
+                    transfer,
+                    from,
+                    salt,
+                    export,
+                } => {
+                    let inbox = self.inbox.clone();
+                    let epoch = self.epoch;
+                    self.host.import_history(
+                        from,
+                        salt,
+                        *export,
+                        Box::new(move |result| {
+                            let _ = inbox.send(Input::Imported(
+                                epoch,
+                                conn,
+                                transfer,
+                                Box::new(result),
+                            ));
+                        }),
+                    );
+                }
                 Action::Advertise(record) => self.advertise(record),
             }
         }

@@ -49,6 +49,7 @@ import { deferred } from "@/test/deferred";
 import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
 import { getMountedPlayer } from "@/lib/remote-target";
+import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
 
 type Mpv = ReturnType<typeof useMpv>;
@@ -96,6 +97,7 @@ const tauri = vi.hoisted(() => ({
 	getPlaybackPosition: vi.fn<typeof Bridge.getPlaybackPosition>(async () => null),
 	savePlaybackPosition: vi.fn<typeof Bridge.savePlaybackPosition>(async () => {}),
 	deletePlaybackPosition: vi.fn<typeof Bridge.deletePlaybackPosition>(async () => {}),
+	markPositionFinished: vi.fn<typeof Bridge.markPositionFinished>(async () => {}),
 	handOffProgress: vi.fn<typeof Bridge.handOffProgress>(async () => {}),
 	resolveLocalDownload: vi.fn<typeof Bridge.resolveLocalDownload>(async () => null),
 	enqueueMovieDownload: vi.fn<typeof Bridge.enqueueMovieDownload>(async () => "dl-new"),
@@ -944,6 +946,21 @@ describe("opening something to watch", () => {
 		expect(loadedUrls()).toEqual([ep1.url, ep2.url]);
 	});
 
+	it("keeps a place exactly at the shortest one worth resuming", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, 30, 3600) });
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 30, 3600);
+		expect(tauri.deletePlaybackPosition).not.toHaveBeenCalled();
+	});
+
+	it("saves its place for a history transfer and says what it has open", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
+		tauri.savePlaybackPosition.mockClear();
+		await expect(saveProgressNow()).resolves.toBe("mv1");
+		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 900, 3600);
+	});
+
 	it("opening another movie from inside the player saves the first and records its end", async () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
@@ -1316,13 +1333,19 @@ describe("saving progress", () => {
 		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 100, 3600);
 	});
 
-	it.each([
-		["the end", 3590],
-		["the first seconds", 20],
-	])("forgets the spot of a movie stopped in %s", async (_, position) => {
+	it("forgets the spot of a movie stopped in the first seconds", async () => {
 		await openItem(lanternKeeper());
-		await setMpv({ state: paused(MOVIE_URL, position, 3600) });
+		await setMpv({ state: paused(MOVIE_URL, 20, 3600) });
 		expect(tauri.deletePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY);
+		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		expect(tauri.markPositionFinished).not.toHaveBeenCalled();
+	});
+
+	it("keeps a movie stopped at the end as finished, so it isn't offered to resume", async () => {
+		await openItem(lanternKeeper());
+		await setMpv({ state: paused(MOVIE_URL, 3590, 3600) });
+		expect(tauri.markPositionFinished).toHaveBeenCalledWith(MOVIE_KEY, 3600);
+		expect(tauri.deletePlaybackPosition).not.toHaveBeenCalled();
 		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
 	});
 
@@ -3539,6 +3562,7 @@ describe("when the app's backend fails", () => {
 		tauri.recordPlayEnd.mockRejectedValue(down);
 		tauri.savePlaybackPosition.mockRejectedValue(down);
 		tauri.deletePlaybackPosition.mockRejectedValue(down);
+		tauri.markPositionFinished.mockRejectedValue(down);
 		tauri.handOffProgress.mockRejectedValue(down);
 		tauri.fetchWhatsonData.mockRejectedValue(down);
 		tauri.fetchOmdbData.mockResolvedValue(lanternOmdb());
@@ -3547,6 +3571,7 @@ describe("when the app's backend fails", () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: paused(MOVIE_URL, 700, 3600) });
 		await setMpv({ state: paused(MOVIE_URL, 20, 3600) });
+		await setMpv({ state: paused(MOVIE_URL, 3590, 3600) });
 		await setVisibility("hidden");
 		await setVisibility("visible");
 		pickSource(2);

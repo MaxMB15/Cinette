@@ -129,7 +129,11 @@ impl Tracker {
             return true;
         };
         let key = &self.item.key;
-        let result = if is_finished(position, duration) || position < MIN_RESUME_SECONDS {
+        // A finished item keeps its row, marked finished, so it counts as
+        // watched; one rewound to the start has nothing to resume.
+        let result = if is_finished(position, duration) {
+            cache.mark_position_finished(key, duration)
+        } else if position < MIN_RESUME_SECONDS {
             cache.delete_playback_position(key)
         } else {
             cache.save_playback_position(key, position, duration)
@@ -252,16 +256,29 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_or_barely_started_item_has_no_resume_point() {
+    fn a_barely_started_item_has_no_resume_point() {
         let app = TestApp::new();
         let handle = app.handle();
         let mut tracker = tracker(None);
-        for (position, duration) in [(5900.0, 6000.0), (20.0, 6000.0)] {
-            assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
-            assert_eq!(saved(&app), Some((600.0, 6000.0)));
-            assert!(tracker.saw(&handle, Some(URL), position, duration));
-            assert_eq!(saved(&app), None, "{position} of {duration}");
-        }
+        assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+        assert_eq!(saved(&app), Some((600.0, 6000.0)));
+        assert!(tracker.saw(&handle, Some(URL), 20.0, 6000.0));
+        assert_eq!(saved(&app), None);
+    }
+
+    /// The row stays, at the end and marked finished, so the item counts as
+    /// watched and isn't offered to resume.
+    #[test]
+    fn a_finished_item_is_kept_as_finished() {
+        let app = TestApp::new();
+        let handle = app.handle();
+        let mut tracker = tracker(None);
+        assert!(tracker.saw(&handle, Some(URL), 600.0, 6000.0));
+        assert!(tracker.saw(&handle, Some(URL), 5900.0, 6000.0));
+        assert_eq!(saved(&app), Some((6000.0, 6000.0)));
+        let state = app.state();
+        let cache = state.cache.lock().unwrap();
+        assert!(cache.get_playback_position(KEY).unwrap().unwrap().finished);
     }
 
     /// The page offers to resume from 30 seconds in, so that's kept too.

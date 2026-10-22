@@ -22,11 +22,13 @@ import {
 	remotePendingConsent,
 	remoteFinishCommand,
 	remoteSessions,
+	remoteProgressSaved,
 	remoteSetState,
 	type RemoteAsked,
 	type RemoteSession,
 } from "@/lib/tauri";
 import type { Channel } from "@/lib/types";
+import { saveProgressNow } from "@/lib/player-progress";
 
 /**
  * Listens to a Tauri event for as long as the component is mounted. The
@@ -81,6 +83,13 @@ export const useRemoteTarget = (): void => {
 				.catch(() => {});
 		}
 	);
+	// A controller is copying this device's history: the player saves where
+	// it is first, and says what it has open.
+	useTauriEvent<null>("remote://save-progress", () => {
+		void saveProgressNow()
+			.then((playing) => remoteProgressSaved(playing))
+			.catch(() => {});
+	});
 };
 
 /** The devices controlling this one, kept up to date. Empty where remote

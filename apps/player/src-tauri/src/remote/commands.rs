@@ -598,7 +598,90 @@ pub async fn remote_send_providers<R: Runtime>(
     }
 }
 
-/// Stops the transfer on link `link`. Nothing is written on either device.
+/// Asks the device link `link` controls to copy history one way or the
+/// other. For "send", `playing` is the channel this device's player has
+/// open, whose position the webview saved first. How it goes comes as
+/// `remote://transfer`.
+#[command]
+pub async fn remote_ask_history<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+    direction: mvp_core::remote::transfer::flow::Direction,
+    what: mvp_core::remote::transfer::What,
+    playing: Option<String>,
+) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        imp::service(&app)?
+            .ask_history(app.clone(), link, direction, what, playing)
+            .await
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, link, direction, what, playing);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// How many of each this device would send, for the preview before asking.
+#[command]
+pub async fn remote_history_counts<R: Runtime>(
+    app: AppHandle<R>,
+    what: mvp_core::remote::transfer::What,
+) -> Result<mvp_core::remote::transfer::Counts, String> {
+    #[cfg(remote)]
+    {
+        super::service::history_counts(app, what)
+            .await
+            .map_err(|_| "Couldn't read this device's history.".to_string())
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, what);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Starts an import the other device allowed, after its preview.
+#[command]
+pub async fn remote_start_import<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+    transfer: String,
+) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        imp::service(&app)?.start_import(link, transfer)
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, link, transfer);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// The player saved its position, as `remote://save-progress` asked, and
+/// has `playing` open.
+#[command]
+pub async fn remote_progress_saved<R: Runtime>(
+    app: AppHandle<R>,
+    playing: Option<String>,
+) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        imp::service(&app)?.progress_saved(playing);
+        Ok(())
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, playing);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Stops the transfer on link `link`, unless one side already has it all
+/// and is writing it, which then goes on. Stopped in time, nothing is
+/// written on either device.
 #[command]
 pub async fn remote_cancel_transfer<R: Runtime>(
     app: AppHandle<R>,

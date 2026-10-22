@@ -482,6 +482,12 @@ describe("backend commands", () => {
 			{ contentKey: "movie:c1" },
 		],
 		[
+			"markPositionFinished",
+			() => tauri.markPositionFinished("movie:heat", 6000),
+			"mark_position_finished",
+			{ contentKey: "movie:heat", durationSeconds: 6000 },
+		],
+		[
 			"deletePlaybackPosition",
 			() => tauri.deletePlaybackPosition("movie:c1"),
 			"delete_playback_position",
@@ -808,6 +814,41 @@ describe("backend commands", () => {
 			() => tauri.remoteSendProviders(5, ["xt-1"]),
 			"remote_send_providers",
 			{ link: 5, providerIds: ["xt-1"] },
+		],
+		[
+			"remoteAskHistory",
+			() =>
+				tauri.remoteAskHistory(
+					5,
+					"send",
+					{ history: true, favorites: false, pins: true },
+					"c1"
+				),
+			"remote_ask_history",
+			{
+				link: 5,
+				direction: "send",
+				what: { history: true, favorites: false, pins: true },
+				playing: "c1",
+			},
+		],
+		[
+			"remoteHistoryCounts",
+			() => tauri.remoteHistoryCounts({ history: true, favorites: true, pins: true }),
+			"remote_history_counts",
+			{ what: { history: true, favorites: true, pins: true } },
+		],
+		[
+			"remoteStartImport",
+			() => tauri.remoteStartImport(5, "t1"),
+			"remote_start_import",
+			{ link: 5, transfer: "t1" },
+		],
+		[
+			"remoteProgressSaved",
+			() => tauri.remoteProgressSaved(null),
+			"remote_progress_saved",
+			{ playing: null },
 		],
 		[
 			"remoteCancelTransfer",

@@ -29,6 +29,8 @@ pub mod held;
 #[cfg(remote)]
 pub mod devices;
 #[cfg(remote)]
+pub mod history;
+#[cfg(remote)]
 pub mod identity;
 #[cfg(any(target_os = "ios", test))]
 mod keychain;

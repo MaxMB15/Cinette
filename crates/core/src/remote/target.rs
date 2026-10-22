@@ -126,6 +126,8 @@ pub enum Action {
     ImportHistory {
         conn: ConnId,
         transfer: String,
+        /// The sending device's name, for the notice.
+        from: String,
         salt: Salt,
         export: Box<Export>,
     },
@@ -1368,6 +1370,17 @@ impl Target {
         }
     }
 
+    /// The name the device on `conn` gave in its handshake.
+    fn peer_name(&self, conn: ConnId) -> String {
+        match self.conns.get(&conn) {
+            Some(Conn {
+                stage: Stage::InSession(auth),
+                ..
+            }) => auth.peer.name.clone(),
+            _ => String::new(),
+        }
+    }
+
     /// Carries out what a transfer needs.
     fn run_steps(&mut self, conn: ConnId, steps: Vec<Step>, actions: &mut Vec<Action>) {
         for step in steps {
@@ -1390,24 +1403,16 @@ impl Target {
                 } => actions.push(Action::ImportHistory {
                     conn,
                     transfer,
+                    from: self.peer_name(conn),
                     salt,
                     export,
                 }),
-                Step::SaveProviders { grant, providers } => {
-                    let from = match self.conns.get(&conn) {
-                        Some(Conn {
-                            stage: Stage::InSession(auth),
-                            ..
-                        }) => auth.peer.name.clone(),
-                        _ => String::new(),
-                    };
-                    actions.push(Action::SaveProviders {
-                        conn,
-                        grant,
-                        from,
-                        providers,
-                    })
-                }
+                Step::SaveProviders { grant, providers } => actions.push(Action::SaveProviders {
+                    conn,
+                    grant,
+                    from: self.peer_name(conn),
+                    providers,
+                }),
                 Step::Progress {
                     transfer,
                     kind,

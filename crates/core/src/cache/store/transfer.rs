@@ -536,6 +536,29 @@ impl CacheStore {
     }
 }
 
+impl CacheStore {
+    /// The channel or saved episode with this id, for "Continue watching
+    /// here" after a transfer. Episodes have no row of their own, so their
+    /// shows' saved lists are looked through.
+    pub fn find_channel(&self, id: &str) -> Result<Option<Channel>, CacheError> {
+        if let Some(channel) = self.get_channel_by_id(id)? {
+            return Ok(Some(channel));
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT episodes_json FROM series_episode_cache")?;
+        let lists = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(lists.into_iter().find_map(|json| {
+            serde_json::from_str::<Vec<Channel>>(&json)
+                .ok()?
+                .into_iter()
+                .find(|e| e.id == id)
+        }))
+    }
+}
+
 /// Fills in the show, season and episode of series channels saved before
 /// they were stored, as [`CacheStore::get_all_channels`] does.
 fn enrich_names(channels: &mut [DestChannel]) {

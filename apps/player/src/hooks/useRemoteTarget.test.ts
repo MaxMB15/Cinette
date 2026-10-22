@@ -20,6 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@/lib/tauri", () => ({
 	mpvStop: vi.fn(() => Promise.resolve()),
 	remoteFinishCommand: vi.fn(() => Promise.resolve()),
+	remoteProgressSaved: vi.fn(() => Promise.resolve()),
 	remoteSessions: vi.fn(() => Promise.resolve([])),
 	remoteSetState: vi.fn(() => Promise.resolve()),
 }));
@@ -31,7 +32,14 @@ const channels = vi.hoisted(() => ({ list: [] as Channel[] }));
 vi.mock("@/hooks/useChannels", () => ({ useChannels: () => ({ channels: channels.list }) }));
 
 import { listen } from "@tauri-apps/api/event";
-import { mpvStop, remoteFinishCommand, remoteSessions, remoteSetState } from "@/lib/tauri";
+import {
+	mpvStop,
+	remoteFinishCommand,
+	remoteProgressSaved,
+	remoteSessions,
+	remoteSetState,
+} from "@/lib/tauri";
+import { setProgressSaver } from "@/lib/player-progress";
 import { usePublishRemoteState, useRemoteSessions, useRemoteTarget } from "./useRemoteTarget";
 import { getMountedPlayer, IDLE_REMOTE_STATE, setMountedPlayer } from "@/lib/remote-target";
 import { localCapabilities, type PlaybackDestination, type PlaybackState } from "@/lib/destination";
@@ -119,6 +127,23 @@ const pageOpens = () => {
 };
 
 describe("useRemoteTarget", () => {
+	it("saves the player's place when a controller copies history, and says what's open", async () => {
+		const stop = setProgressSaver(async () => "live-1");
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://save-progress")).toBe(true));
+		emit("remote://save-progress", null);
+		await waitFor(() => expect(remoteProgressSaved).toHaveBeenCalledWith("live-1"));
+		stop();
+	});
+
+	it("answers a save with nothing open", async () => {
+		vi.mocked(remoteProgressSaved).mockClear();
+		renderHook(() => useRemoteTarget());
+		await waitFor(() => expect(handlers.has("remote://save-progress")).toBe(true));
+		emit("remote://save-progress", null);
+		await waitFor(() => expect(remoteProgressSaved).toHaveBeenCalledWith(null));
+	});
+
 	it("opens the player for a load when none is open, and plays there", async () => {
 		const page = pageOpens();
 		renderHook(() => useRemoteTarget());
@@ -141,7 +166,8 @@ describe("useRemoteTarget", () => {
 		rerender();
 		emit("remote://command", { token: 5, command: { action: "load", itemId: "live-1" } });
 		await waitFor(() => expect(remoteFinishCommand).toHaveBeenCalledWith(5, "ok"));
-		expect(vi.mocked(listen)).toHaveBeenCalledTimes(1);
+		// One listener each for commands and saves, not one more per render.
+		expect(vi.mocked(listen)).toHaveBeenCalledTimes(2);
 	});
 
 	it("sends other commands to the mounted player", async () => {
@@ -202,9 +228,10 @@ describe("useRemoteTarget", () => {
 
 	it("stops listening when unmounted, even before listening started", async () => {
 		const view = renderHook(() => useRemoteTarget());
-		await waitFor(() => expect(unlisteners).toHaveLength(1));
+		await waitFor(() => expect(unlisteners).toHaveLength(2));
 		view.unmount();
 		expect(unlisteners[0]).toHaveBeenCalledTimes(1);
+		expect(unlisteners[1]).toHaveBeenCalledTimes(1);
 
 		let resolve: (stop: () => void) => void = () => {};
 		vi.mocked(listen).mockImplementationOnce(

@@ -257,6 +257,8 @@ export interface PlaybackPosition {
 	positionSeconds: number;
 	durationSeconds: number;
 	updatedAt: number;
+	/** Watched to the end; the row stays so the item counts as watched. */
+	finished?: boolean;
 }
 
 /**

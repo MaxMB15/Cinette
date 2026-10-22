@@ -28,6 +28,13 @@ vi.mock("@/hooks/useRemoteTarget", () => ({
 		tauriEvents.set(event, handler);
 	},
 }));
+vi.mock("@/components/remote/TransferHistoryDialog", () => ({
+	TransferHistoryDialog: ({ onClose }: { onClose: () => void }) => (
+		<button type="button" onClick={onClose}>
+			Close transfer
+		</button>
+	),
+}));
 vi.mock("@/components/remote/SendProvidersDialog", () => ({
 	SendProvidersDialog: ({ onClose }: { onClose: () => void }) => (
 		<button type="button" onClick={onClose}>
@@ -457,7 +464,19 @@ describe("RemoteBar", () => {
 		expect(screen.getByRole("button", { name: "Send providers" })).toBeInTheDocument();
 	});
 
-	it("doesn't bring the dialog back by itself on the next link", () => {
+	it("offers to transfer history with a connected device that takes it", () => {
+		control.state = {
+			...control.state,
+			link: link({ phase: "connected" }, "123456", ["history"]),
+		};
+		render(<RemoteBar />);
+		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Transfer history" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close transfer" }));
+		expect(screen.queryByRole("button", { name: "Close transfer" })).toBeNull();
+	});
+
+	it("doesn't bring either dialog back by itself on the next link", () => {
 		control.state = {
 			...control.state,
 			link: link({ phase: "connected" }, "123456", ["providers"]),
@@ -471,6 +490,18 @@ describe("RemoteBar", () => {
 		};
 		rerender(<RemoteBar />);
 		expect(screen.queryByRole("button", { name: "Close sending" })).toBeNull();
+		control.state = {
+			...control.state,
+			link: link({ phase: "connected" }, "123456", ["history"]),
+		};
+		rerender(<RemoteBar />);
+		fireEvent.click(screen.getByRole("button", { name: "Transfer history" }));
+		control.state = {
+			...control.state,
+			link: { ...link({ phase: "connected" }, "123456", ["history"]), id: 5 },
+		};
+		rerender(<RemoteBar />);
+		expect(screen.queryByRole("button", { name: "Close transfer" })).toBeNull();
 	});
 
 	it("doesn't offer it to a device that doesn't take them, or while reconnecting", () => {
@@ -480,10 +511,11 @@ describe("RemoteBar", () => {
 		unmount();
 		control.state = {
 			...control.state,
-			link: link({ phase: "reconnecting", attempt: 1 }, null, ["providers"]),
+			link: link({ phase: "reconnecting", attempt: 1 }, null, ["providers", "history"]),
 		};
 		render(<RemoteBar />);
 		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Transfer history" })).toBeNull();
 	});
 
 	it("shows nothing without a link or an ending to explain", () => {

@@ -1244,6 +1244,20 @@ pub async fn save_playback_position(
         .map_err(|e| e.to_string())
 }
 
+/// Saves that `content_key` was watched to the end, so it counts as watched
+/// and isn't offered to resume.
+#[command]
+pub async fn mark_position_finished(
+    state: State<'_, AppState>,
+    content_key: String,
+    duration_seconds: f64,
+) -> Result<(), String> {
+    let cache = state.cache.lock().map_err(|e| e.to_string())?;
+    cache
+        .mark_position_finished(&content_key, duration_seconds)
+        .map_err(|e| e.to_string())
+}
+
 #[command]
 pub async fn get_playback_position(
     state: State<'_, AppState>,

@@ -387,6 +387,10 @@ export const savePlaybackPosition = (
 export const getPlaybackPosition = (contentKey: string): Promise<PlaybackPosition | null> =>
 	invoke<PlaybackPosition | null>("get_playback_position", { contentKey });
 
+/** Saves that an item was watched to the end. It isn't offered to resume. */
+export const markPositionFinished = (contentKey: string, durationSeconds: number): Promise<void> =>
+	invoke<void>("mark_position_finished", { contentKey, durationSeconds });
+
 export const deletePlaybackPosition = (contentKey: string): Promise<void> =>
 	invoke<void>("delete_playback_position", { contentKey });
 
@@ -842,6 +846,7 @@ export type RemoteErrorCode =
 	| "expired"
 	| "busy"
 	| "cancelled"
+	| "too_large"
 	| "unknown";
 
 /** How far a transfer has got. */
@@ -858,7 +863,63 @@ export type RemoteTransferNotice = { deviceId: string; link: number } & (
 	| { step: "pending"; expiresInMs: number }
 	| { step: "refused"; code: RemoteErrorCode }
 	| { step: "progress"; transfer: string; progress: TransferProgress }
+	| { step: "preview"; transfer: string; counts: TransferCounts }
+	| { step: "granted"; transfer: string }
 );
+
+/** How one kind of row fared in a history transfer. */
+export interface TransferTally {
+	added: number;
+	updated: number;
+	unchanged: number;
+}
+
+/** Something a history transfer couldn't place. */
+export interface TransferUnmatched {
+	name: string;
+	kind: "live" | "movie" | "series" | "episode" | "pinnedGroup";
+	reason: "missing" | "ambiguous" | "invalid";
+}
+
+/** What a history transfer did on the device that wrote it. */
+export interface TransferReport {
+	history: TransferTally;
+	positions: TransferTally;
+	favorites: TransferTally;
+	pins: TransferTally;
+	unmatched: TransferUnmatched[];
+	unmatchedTotal: number;
+	resume?: { channelId: string; name: string; position?: number };
+}
+
+/** History written here, as `remote://history-imported` brings it. */
+export interface RemoteHistoryImported {
+	from: string;
+	report: TransferReport;
+	/** The channel to continue watching, when it matched one here. */
+	channel?: Channel;
+}
+
+/** Asks the device link `link` controls to copy history. For "send",
+ *  `playing` is the channel this device's player has open. */
+export const remoteAskHistory = (
+	link: number,
+	direction: "send" | "import",
+	what: TransferWhat,
+	playing: string | null
+): Promise<void> => invoke("remote_ask_history", { link, direction, what, playing });
+
+/** How many of each this device would send. */
+export const remoteHistoryCounts = (what: TransferWhat): Promise<TransferCounts> =>
+	invoke("remote_history_counts", { what });
+
+/** Starts an import the other device allowed, after its preview. */
+export const remoteStartImport = (link: number, transfer: string): Promise<void> =>
+	invoke("remote_start_import", { link, transfer });
+
+/** Says the player saved its position, as `remote://save-progress` asked. */
+export const remoteProgressSaved = (playing: string | null): Promise<void> =>
+	invoke("remote_progress_saved", { playing });
 
 /** A transfer another device runs with this one, as `remote://transfer-target` brings it. */
 export interface RemoteTargetTransfer {
@@ -880,7 +941,9 @@ export interface RemoteProvidersAdded {
 export const remoteSendProviders = (link: number, providerIds: string[]): Promise<void> =>
 	invoke("remote_send_providers", { link, providerIds });
 
-/** Stops the transfer on link `link`. Nothing is written on either device. */
+/** Stops the transfer on link `link`, unless one side already has it all and
+ *  is writing it, which then goes on. Stopped in time, nothing is written on
+ *  either device. */
 export const remoteCancelTransfer = (link: number): Promise<void> =>
 	invoke("remote_cancel_transfer", { link });
 

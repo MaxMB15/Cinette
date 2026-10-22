@@ -55,6 +55,7 @@
 	"clear_watch_history_of_type": { "required": ["contentType"] },
 	"save_playback_position": { "required": ["contentKey", "positionSeconds", "durationSeconds"] },
 	"get_playback_position": { "required": ["contentKey"] },
+	"mark_position_finished": { "required": ["contentKey", "durationSeconds"] },
 	"delete_playback_position": { "required": ["contentKey"] },
 	"hand_off_progress": { "optional": ["item"] },
 	"get_group_hierarchy": { "required": ["providerId", "contentType"] },
@@ -141,5 +142,9 @@
 	"remote_command": { "required": ["command", "link"] },
 	"remote_catalog": { "required": ["catalogQuery", "link"] },
 	"remote_send_providers": { "required": ["link", "providerIds"] },
-	"remote_cancel_transfer": { "required": ["link"] }
+	"remote_cancel_transfer": { "required": ["link"] },
+	"remote_ask_history": { "required": ["link", "direction", "what"], "optional": ["playing"] },
+	"remote_start_import": { "required": ["link", "transfer"] },
+	"remote_history_counts": { "required": ["what"] },
+	"remote_progress_saved": { "optional": ["playing"] }
 }

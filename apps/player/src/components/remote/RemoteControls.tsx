@@ -8,6 +8,7 @@ import { MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
+import { TransferHistoryDialog } from "@/components/remote/TransferHistoryDialog";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useRemoteSessions, useTauriEvent } from "@/hooks/useRemoteTarget";
 import { channelsQuery, providersQuery } from "@/lib/queries";
@@ -332,15 +333,17 @@ export const RemoteBar = () => {
 	const { link, ended, leave } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
 	const [leaveFailed, setLeaveFailed] = useState(false);
-	// The link the dialog was opened for, so it doesn't come back by
-	// itself on the next link.
+	// The link each dialog was opened for, so neither comes back by itself
+	// on the next link.
 	const [sendingFor, setSendingFor] = useState<number | null>(null);
+	const [transferringFor, setTransferringFor] = useState<number | null>(null);
 	// Leaving clears the link here before the backend answers, so this
 	// shows whatever the bar shows by then.
 	const failed = leaveFailed && (
 		<Notice message={LEAVE_FAILED} onDismiss={() => setLeaveFailed(false)} raised />
 	);
 	if (link && (link.phase.phase === "connected" || link.phase.phase === "reconnecting")) {
+		const connected = link.phase.phase === "connected";
 		return (
 			<div
 				role="region"
@@ -354,27 +357,36 @@ export const RemoteBar = () => {
 					{link.phase.phase === "reconnecting" ? "…" : ""}
 				</span>
 				<NowPlaying destination={link.destination} />
-				{link.phase.phase === "connected" && link.features.includes("providers") && (
-					<button
-						type="button"
-						className={`${BUTTON} ml-auto shrink-0 hover:bg-accent`}
-						onClick={() => setSendingFor(link.id)}
-					>
-						Send providers
-					</button>
-				)}
+				{/* Transfers need the session up, and a device that offers them. */}
+				<span className="ml-auto flex shrink-0 gap-1">
+					{connected && link.features.includes("history") && (
+						<button
+							type="button"
+							className={`${BUTTON} hover:bg-accent`}
+							onClick={() => setTransferringFor(link.id)}
+						>
+							Transfer history
+						</button>
+					)}
+					{connected && link.features.includes("providers") && (
+						<button
+							type="button"
+							className={`${BUTTON} hover:bg-accent`}
+							onClick={() => setSendingFor(link.id)}
+						>
+							Send providers
+						</button>
+					)}
+				</span>
 				{sendingFor === link.id && (
 					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
 				)}
+				{transferringFor === link.id && (
+					<TransferHistoryDialog link={link} onClose={() => setTransferringFor(null)} />
+				)}
 				<button
 					type="button"
-					className={cn(
-						BUTTON,
-						"shrink-0 hover:bg-accent",
-						!(
-							link.phase.phase === "connected" && link.features.includes("providers")
-						) && "ml-auto"
-					)}
+					className={`${BUTTON} shrink-0 hover:bg-accent`}
 					onClick={() => {
 						setLeaveFailed(false);
 						leave().catch(() => setLeaveFailed(true));

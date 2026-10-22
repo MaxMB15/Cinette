@@ -145,6 +145,20 @@ async fn a_new_app_starts_with_no_providers() {
     assert!(get_providers(app.state()).await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn a_finished_item_keeps_its_row_marked_finished() {
+    let app = TestApp::new();
+    mark_position_finished(app.state(), "movie:heat".into(), 6000.0)
+        .await
+        .unwrap();
+    let saved = cache(&app)
+        .get_playback_position("movie:heat")
+        .unwrap()
+        .unwrap();
+    assert!(saved.finished);
+    assert_eq!(saved.duration_seconds, 6000.0);
+}
+
 /// The arguments of one command, by the names the frontend sends them under.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,6 +214,8 @@ fn sample(argument: &str) -> Value {
         "keep" | "allow" | "restart" => json!(true),
         "request" | "token" => json!(1),
         "outcome" => json!("ok"),
+        "direction" => json!("send"),
+        "what" => json!({ "history": true }),
         "command" => json!({ "action": "stop" }),
         "catalogQuery" => json!({ "kind": "groups", "contentType": "live", "limit": 100 }),
         "settings" => json!({ "discoverable": true, "remoteControl": "ask", "deviceName": null }),
