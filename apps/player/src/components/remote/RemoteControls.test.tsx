@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import type { RemoteControlState, Link } from "@/lib/remote-control";
 import { createCinetteDestination, type RemoteSnapshot } from "@/lib/cinette-destination";
@@ -22,20 +22,26 @@ vi.mock("@/hooks/useRemoteControl", () => ({
 
 const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
+const os = vi.hoisted(() => ({ platform: "macos" }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	getPlatform: () => os.platform,
+}));
 vi.mock("@/lib/tauri", () => ({
 	remoteDisconnect: vi.fn(() => Promise.resolve()),
 	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
+	remoteOpen: vi.fn(() => Promise.resolve()),
 	getVpnActive: vi.fn(() => Promise.resolve(false)),
 }));
 
-import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied } from "@/lib/tauri";
+import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied, remoteOpen } from "@/lib/tauri";
+import { LOCAL_NETWORK_DENIED, LOCAL_NETWORK_DENIED_IOS } from "@/lib/remote-devices";
 import { VPN_HINT } from "@/lib/cast";
 import {
 	ConnectStatusDialog,
 	ControllersBar,
 	DevicesButton,
 	LEAVE_FAILED,
-	LOCAL_NETWORK_DENIED,
 	LOOKING,
 	LOOKING_MS,
 	NONE_FOUND,
@@ -99,6 +105,10 @@ beforeEach(() => {
 	send.mockClear();
 });
 
+afterEach(() => {
+	os.platform = "macos";
+});
+
 describe("DevicesButton", () => {
 	it("opens the picker with this device and the Cinette devices", () => {
 		render(<DevicesButton />);
@@ -128,6 +138,37 @@ describe("DevicesButton", () => {
 		open();
 		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+	});
+
+	it("says where iOS allows the local network", async () => {
+		os.platform = "ios";
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED_IOS);
+		expect(LOCAL_NETWORK_DENIED_IOS).toMatch(/in Settings, Privacy & Security, Local Network/);
+	});
+
+	it("starts remote control before it asks about the network", async () => {
+		const order: string[] = [];
+		vi.mocked(remoteOpen).mockImplementationOnce(async () => {
+			order.push("open");
+		});
+		vi.mocked(remoteLocalNetworkDenied).mockImplementationOnce(async () => {
+			order.push("denied?");
+			return false;
+		});
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		await waitFor(() => expect(order).toEqual(["open", "denied?"]));
+	});
+
+	it("still asks about the network when starting remote control failed", async () => {
+		vi.mocked(remoteOpen).mockRejectedValueOnce("couldn't start");
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		render(<DevicesButton />);
+		fireEvent.click(screen.getByRole("button", { name: "Devices" }));
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
 	});
 
 	it("says nothing about the network until it knows, or when it can't tell", async () => {
@@ -183,6 +224,11 @@ describe("DevicesButton", () => {
 		fireEvent.click(screen.getByRole("button", { name: /Living Room/ }));
 		expect(await screen.findByRole("status")).toHaveTextContent(
 			"That device isn't on the network now."
+		);
+		expect(screen.getByRole("button", { name: "Dismiss" })).toHaveClass(
+			"inline-flex",
+			"pointer-coarse:min-h-11",
+			"pointer-coarse:min-w-11"
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
@@ -432,6 +478,24 @@ describe("RemoteBar", () => {
 		render(<RemoteBar />);
 		expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
 		expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+	});
+
+	it("makes its buttons big enough to tap on a touch screen", () => {
+		const l = link({ phase: "connected" });
+		l.destination.receive({ epoch: "e", version: 1, state: snapshot }, 0);
+		control.state = { ...control.state, link: l };
+		render(<RemoteBar />);
+		for (const name of ["Pause", "Stop", "Return to independent playback"]) {
+			const button = screen.getByRole("button", { name });
+			expect(button).toHaveClass("pointer-coarse:min-h-11", "pointer-coarse:min-w-11");
+		}
+		for (const name of ["Pause", "Stop"]) {
+			expect(screen.getByRole("button", { name })).toHaveClass(
+				"inline-flex",
+				"items-center",
+				"justify-center"
+			);
+		}
 	});
 
 	it("shows a buffering item as playing", () => {

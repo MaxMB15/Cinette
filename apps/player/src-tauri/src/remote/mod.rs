@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! Remote control between Cinette devices on the same network: the
-//! platform layer around `mvp_core::remote`, on macOS, Linux and Android.
+//! platform layer around `mvp_core::remote`, on macOS, Linux, iOS and Android.
 //!
 //! [`target`] runs this device as a target: it listens on TCP, advertises
 //! `_cinette._tcp`, and drives the core's `Target`. Commands for the player
@@ -11,8 +11,9 @@
 //! history. The `remote_*` commands in [`commands`] are how the webview
 //! answers and changes settings.
 //!
-//! Android runs the same code as Linux. iOS doesn't run it yet, so there the
-//! commands say remote control isn't available.
+//! Android runs the same code as Linux, and iOS the same as macOS, with the
+//! device key in the Keychain. On Windows the commands say remote control
+//! isn't available.
 
 #[cfg(remote)]
 pub mod catalog;
@@ -29,6 +30,8 @@ pub mod held;
 pub mod devices;
 #[cfg(remote)]
 pub mod identity;
+#[cfg(any(target_os = "ios", test))]
+mod keychain;
 #[cfg(remote)]
 mod local;
 pub mod logos;
@@ -41,10 +44,10 @@ pub mod target;
 #[cfg(all(test, remote))]
 mod test_client;
 
-#[cfg(target_os = "android")]
+#[cfg(mobile)]
 pub use service::{set_foreground, Lifecycle};
 #[cfg(remote)]
-pub use service::{start, stop_for_exit, RemoteService};
+pub use service::{open, start_at_launch, stop_for_exit, RemoteService};
 
 /// Where remote-control settings are kept, beside the app's other settings.
 #[cfg(remote)]

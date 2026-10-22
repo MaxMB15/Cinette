@@ -6,6 +6,9 @@ import { platform as osPlatform } from "@tauri-apps/plugin-os";
 import {
 	deviceTypeName,
 	discoveryLimit,
+	LOCAL_NETWORK_DENIED,
+	LOCAL_NETWORK_DENIED_IOS,
+	localNetworkDenied,
 	endedText,
 	fitName,
 	formatCode,
@@ -16,11 +19,20 @@ import {
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
 
+describe("localNetworkDenied", () => {
+	it("names iOS's Settings on iOS and System Settings elsewhere", () => {
+		expect(localNetworkDenied("ios")).toBe(LOCAL_NETWORK_DENIED_IOS);
+		expect(localNetworkDenied("macos")).toBe(LOCAL_NETWORK_DENIED);
+		expect(LOCAL_NETWORK_DENIED_IOS).not.toBe(LOCAL_NETWORK_DENIED);
+	});
+});
+
 describe("discoveryLimit", () => {
-	it("says Android phones and TVs are only found while Cinette is open", () => {
+	it("says phones, tablets and TVs are only found while you're using Cinette", () => {
 		const note = "Other devices can only find this one while you're using Cinette.";
 		expect(discoveryLimit("android")).toBe(note);
 		expect(discoveryLimit("tv")).toBe(note);
+		expect(discoveryLimit("ios")).toBe(note);
 	});
 
 	it("says nothing on a computer, which only has to be running", () => {

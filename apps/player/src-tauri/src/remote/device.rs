@@ -57,6 +57,48 @@ pub fn device_type() -> DeviceType {
     return DeviceType::LinuxPc;
     #[cfg(target_os = "android")]
     return crate::android_device::device_type();
+    #[cfg(target_os = "ios")]
+    return ios_type(
+        &model_identifier(),
+        std::env::var("SIMULATOR_MODEL_IDENTIFIER").ok().as_deref(),
+    );
+}
+
+/// The model identifier, such as `iPhone17,1` or `iPad16,3`. The simulator
+/// gives the Mac's architecture instead.
+#[cfg(target_os = "ios")]
+fn model_identifier() -> String {
+    let mut buf = [0u8; 64];
+    let mut len = buf.len();
+    // SAFETY: the name is a NUL-terminated string, and `buf` has room for
+    // `len` bytes, which sysctlbyname writes back as the length it used.
+    let ok = unsafe {
+        libc::sysctlbyname(
+            c"hw.machine".as_ptr(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    } == 0;
+    if !ok {
+        return String::new();
+    }
+    let name = buf.get(..len).unwrap_or_default();
+    String::from_utf8_lossy(name)
+        .trim_end_matches('\0')
+        .to_owned()
+}
+
+/// An iPhone's or iPad's type from its model identifier. In the simulator
+/// the simulated model is in `simulated`.
+#[cfg(any(target_os = "ios", test))]
+pub(crate) fn ios_type(model: &str, simulated: Option<&str>) -> DeviceType {
+    if simulated.unwrap_or(model).starts_with("iPad") {
+        DeviceType::Ipad
+    } else {
+        DeviceType::Iphone
+    }
 }
 
 /// See [`AndroidFacts::device_type`].
@@ -131,6 +173,20 @@ mod tests {
         assert_eq!(android_type(false, false, 599), DeviceType::AndroidPhone);
         assert_eq!(android_type(false, false, 600), DeviceType::AndroidTablet);
         assert_eq!(android_type(false, false, 800), DeviceType::AndroidTablet);
+    }
+
+    #[test]
+    fn an_ipad_is_told_from_an_iphone_by_its_model() {
+        assert_eq!(ios_type("iPad16,3", None), DeviceType::Ipad);
+        assert_eq!(ios_type("iPhone17,1", None), DeviceType::Iphone);
+        // An iPod touch is closest to an iPhone.
+        assert_eq!(ios_type("iPod9,1", None), DeviceType::Iphone);
+    }
+
+    #[test]
+    fn the_simulator_names_the_model_it_simulates() {
+        assert_eq!(ios_type("arm64", Some("iPad16,3")), DeviceType::Ipad);
+        assert_eq!(ios_type("arm64", Some("iPhone17,1")), DeviceType::Iphone);
     }
 
     #[test]

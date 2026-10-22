@@ -9,10 +9,13 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/downloads/ConfirmDialog";
 import { useRemoteSessions } from "@/hooks/useRemoteTarget";
 import { shortId } from "@/lib/device-picker";
-import { deviceTypeName, discoveryLimit, fitName } from "@/lib/remote-devices";
+import { getPlatform } from "@/lib/platform";
+import { deviceTypeName, discoveryLimit, fitName, localNetworkDenied } from "@/lib/remote-devices";
 import {
 	remoteDisconnect,
 	remoteGetSettings,
+	remoteLocalNetworkDenied,
+	remoteOpen,
 	remoteResetIdentity,
 	remoteSetSettings,
 	type RemoteControlMode,
@@ -69,6 +72,9 @@ export const RemoteControlSettings = () => {
 	const [error, setError] = useState<string | null>(null);
 	const [done, setDone] = useState<string | null>(null);
 	const [confirm, setConfirm] = useState<"reset" | "always" | null>(null);
+	// Whether the system keeps Cinette off the local network, so no other
+	// device can find this one whatever the toggle says.
+	const [denied, setDenied] = useState(false);
 	const sessions = useRemoteSessions();
 	// What the device runs, as its last answer said. Each save builds on
 	// it when its turn comes, so a change that failed isn't sent again.
@@ -80,17 +86,41 @@ export const RemoteControlSettings = () => {
 	useEffect(
 		() => {
 			let current = true;
-			remoteGetSettings()
+			// Remote control may only start now, which is when iOS asks
+			// about the local network.
+			remoteOpen()
+				.catch(() => {})
+				.then(() => remoteGetSettings())
 				.then((loaded) => {
 					if (!current) return;
 					confirmedRef.current = loaded;
 					setForm({ settings: loaded, name: loaded.deviceName ?? "" });
+					checkNetwork();
 				})
 				.catch((e: unknown) => {
 					if (current && e !== UNAVAILABLE) setLoadError(NOT_STARTED);
 				});
+			// Asked again whenever the app comes back, as after the system's
+			// local network alert, which the first start may have raised, or
+			// after the user changed it in the system's settings.
+			const checkNetwork = () => {
+				// Not knowing says nothing, and the settings still show.
+				remoteLocalNetworkDenied()
+					.then((refused) => {
+						// Stryker disable next-line ConditionalExpression: a state set after the card closed shows nowhere, so no test can tell.
+						if (current) setDenied(refused === true);
+					})
+					.catch(() => {});
+			};
+			const onVisible = () => {
+				if (document.visibilityState === "visible") checkNetwork();
+			};
+			window.addEventListener("focus", checkNetwork);
+			document.addEventListener("visibilitychange", onVisible);
 			return () => {
 				current = false;
+				window.removeEventListener("focus", checkNetwork);
+				document.removeEventListener("visibilitychange", onVisible);
 			};
 		},
 		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.
@@ -195,6 +225,11 @@ export const RemoteControlSettings = () => {
 							until you disconnect them.
 							{limit && ` ${limit}`}
 						</p>
+						{denied && (
+							<p role="status" className="text-xs text-amber-500 mt-1">
+								{localNetworkDenied(getPlatform())}
+							</p>
+						)}
 					</div>
 					<Button
 						variant={settings.discoverable ? undefined : "secondary"}

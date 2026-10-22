@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! DNS-SD on macOS through Bonjour's `dns_sd.h` in libSystem.
+//! DNS-SD on macOS and iOS through Bonjour's `dns_sd.h` in libSystem. On
+//! iOS it needs the service types in `NSBonjourServices`.
 //!
 //! One thread, started on first use, owns every `DNSServiceRef`. They all
 //! share one connection to mDNSResponder, made with
@@ -120,7 +121,7 @@ type RegisterReply = unsafe extern "C" fn(
     *mut c_void,
 );
 
-// libSystem, which every macOS binary links.
+// libSystem, which every macOS and iOS binary links.
 unsafe extern "C" {
     fn DNSServiceCreateConnection(sd: *mut DNSServiceRef) -> DNSServiceErrorType;
     fn DNSServiceRefSockFD(sd: DNSServiceRef) -> c_int;
@@ -187,11 +188,12 @@ fn access() -> MutexGuard<'static, Access> {
     ACCESS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Whether macOS refused the app access to the local network, so browses and
-/// advertisements can't work until the user allows it in System Settings,
-/// under Privacy & Security, then Local Network. They keep trying meanwhile
-/// and pick up once it's allowed. macOS may also refuse while its alert
-/// asking the user is still up, and stops once they allow it. Bonjour gives
+/// Whether macOS or iOS refused the app access to the local network, so
+/// browses and advertisements can't work until the user allows it under
+/// Privacy & Security, then Local Network, in System Settings or Settings.
+/// They keep trying meanwhile and pick up once it's allowed. The system may
+/// also refuse while its alert asking the user is still up, and stops once
+/// they allow it. Bonjour gives
 /// no other sign, so this follows what it answers.
 pub fn local_network_denied() -> bool {
     access().denied(Instant::now())
@@ -656,9 +658,9 @@ fn note(broken: &mut bool, err: DNSServiceErrorType, kind: &str) -> Failure {
         Failure::Denied => {
             if access().refused(Instant::now()) {
                 tracing::warn!(
-                    "[discovery] macOS refused local network access, so Bonjour can't browse or \
-                     advertise until it's allowed in System Settings > Privacy & Security > \
-                     Local Network"
+                    "[discovery] the system refused local network access, so Bonjour can't browse or \
+                     advertise until it's allowed under Privacy & Security > Local Network, in \
+                     System Settings or Settings"
                 );
             }
         }

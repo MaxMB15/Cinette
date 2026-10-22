@@ -2,29 +2,39 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! This device's long-term remote-control key, kept in a file only the user
-//! can read.
+//! can read. iOS keeps it in the Keychain instead (see `keychain.rs`).
 //!
 //! The file holds the 32 private bytes and nothing else. The public half and
 //! the device id are worked out from them. The app data folder already holds
 //! the cache with every provider's login in it, so the key gets the same
 //! protection rather than a store of its own.
 
+#[cfg(not(target_os = "ios"))]
 use mvp_core::remote::identity::{DeviceKey, KEY_LEN};
+#[cfg(not(target_os = "ios"))]
 use std::fs;
+#[cfg(not(target_os = "ios"))]
 use std::io::{self, Write};
+#[cfg(not(target_os = "ios"))]
 use std::path::{Path, PathBuf};
 
 /// The key's file name in the app data folder. Android's backup rules
 /// (res/xml/backup_rules.xml and data_extraction_rules.xml) leave out this
 /// name at the top of the app's data folder, so they change with it.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 pub const KEY_FILE: &str = "remote-device.key";
 
+#[cfg(not(target_os = "ios"))]
 fn key_path(dir: &Path) -> PathBuf {
     dir.join(KEY_FILE)
 }
 
+#[cfg(target_os = "ios")]
+pub use super::keychain::{load_or_create, save};
+
 /// The saved key, or a new one saved in its place when there's none or the
 /// file is broken. A new key means a new device id.
+#[cfg(not(target_os = "ios"))]
 pub fn load_or_create(dir: &Path) -> io::Result<DeviceKey> {
     let path = key_path(dir);
     match fs::read(&path) {
@@ -51,6 +61,7 @@ pub fn load_or_create(dir: &Path) -> io::Result<DeviceKey> {
 /// Saves `key` in place of any earlier one. It goes to a temporary file
 /// that only the user can read, which then replaces the old file in one
 /// step, so a crash leaves either the old key or the new one.
+#[cfg(not(target_os = "ios"))]
 pub fn save(dir: &Path, key: &DeviceKey) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{KEY_FILE}.tmp"));
@@ -80,6 +91,7 @@ pub fn save(dir: &Path, key: &DeviceKey) -> io::Result<()> {
 
 /// Takes away other users' access to a key file that has it, as one copied
 /// back from a backup may.
+#[cfg(not(target_os = "ios"))]
 fn keep_private(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -95,7 +107,8 @@ fn keep_private(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+// The file is the desktop's and Android's store; iOS uses the Keychain.
+#[cfg(all(test, not(target_os = "ios")))]
 mod tests {
     use super::*;
 

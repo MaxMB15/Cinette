@@ -841,25 +841,115 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
         .unwrap_or_default()
 }
 
+/// Where the store says the user has opened Devices or the Remote control
+/// settings once, after which remote control starts with the app.
+const OPENED_KEY: &str = "remoteOpened";
+
+/// Whether remote control waits for the user before it starts. On iOS it
+/// does until they first open Devices or the Remote control settings, so
+/// the local network prompt, which starting it raises, comes when they
+/// can tell what it's for.
+pub fn waits_for_user(ios: bool, opened_before: bool) -> bool {
+    ios && !opened_before
+}
+
+fn opened_before<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.store(SETTINGS_STORE_FILE)
+        .ok()
+        .and_then(|store| store.get(OPENED_KEY))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn remember_opened<R: Runtime>(app: &AppHandle<R>) {
+    let saved = app.store(SETTINGS_STORE_FILE).and_then(|store| {
+        store.set(OPENED_KEY, true);
+        store.save()
+    });
+    if let Err(e) = saved {
+        tracing::warn!("[remote] couldn't remember that remote control was opened: {e}");
+    }
+}
+
+/// Starts remote control with the app, unless it waits for the user (see
+/// [`waits_for_user`]). Says whether it started.
+pub fn start_at_launch<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
+    start_at_launch_with(cfg!(target_os = "ios"), opened_before(app), || {
+        start(app, key_dir)
+    })
+}
+
+/// [`start_at_launch`] on iOS or not, with the user having opened it before
+/// or not, starting with `start`.
+fn start_at_launch_with(ios: bool, opened_before: bool, start: impl FnOnce() -> bool) -> bool {
+    if waits_for_user(ios, opened_before) {
+        tracing::info!("[remote] waiting for Devices or the settings before starting");
+        return false;
+    }
+    start()
+}
+
 /// Starts the target on every address and advertises it, and manages a
 /// [`RemoteService`]. A failure is logged and the app carries on without
-/// remote control. Says whether it started.
+/// remote control, which [`open`] tries again. Says whether it started.
 pub fn start<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
-    let started = tauri::async_runtime::block_on(async {
-        let listener = target::bind_default().await.map_err(|e| e.to_string())?;
-        start_on(
-            app,
-            key_dir,
-            listener,
-            Box::new(advertise_on_network),
-            browse_network(),
-            target::Limits::STANDARD,
-        )
-    });
+    let started = tauri::async_runtime::block_on(start_on_network(app, key_dir));
     if let Err(e) = &started {
         tracing::error!("[remote] remote control didn't start: {e}");
     }
     started.is_ok()
+}
+
+async fn start_on_network<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> Result<(), String> {
+    let listener = target::bind_default().await.map_err(|e| e.to_string())?;
+    start_on(
+        app,
+        key_dir,
+        listener,
+        Box::new(advertise_on_network),
+        browse_network,
+        target::Limits::STANDARD,
+    )
+}
+
+/// Starts remote control if it isn't running: on iOS the first time the
+/// user opens Devices or the Remote control settings, and anywhere after a
+/// start that failed. Once it starts, the app starts it from then on, and
+/// `multicast` is told to hold the Wi-Fi multicast lock if the app is still
+/// in the foreground.
+pub async fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    key_dir: PathBuf,
+    multicast: impl FnOnce(bool),
+) -> Result<(), String> {
+    open_with(app, start_on_network(app, key_dir), multicast).await
+}
+
+/// [`open`], starting with `start`.
+async fn open_with<R: Runtime>(
+    app: &AppHandle<R>,
+    start: impl std::future::Future<Output = Result<(), String>>,
+    multicast: impl FnOnce(bool),
+) -> Result<(), String> {
+    // One start at a time, so two quick opens don't start it twice.
+    static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = STARTING.lock().await;
+    if app.try_state::<RemoteService>().is_some() {
+        return Ok(());
+    }
+    start.await.inspect_err(|e| {
+        tracing::error!("[remote] remote control didn't start: {e}");
+    })?;
+    // Only a start that worked counts, so a failed one doesn't make every
+    // later launch start it, and ask about the local network, by itself.
+    remember_opened(app);
+    // The app may have gone to the background while it started.
+    if let Some(service) = app.try_state::<RemoteService>()
+        && service.wants_foreground.load(Ordering::SeqCst)
+    {
+        multicast(true);
+    }
+    Ok(())
 }
 
 /// [`start`] on `listener`, advertising through `advertiser`, with `limits`. Call it inside
@@ -869,7 +959,7 @@ fn start_on<R: Runtime>(
     key_dir: PathBuf,
     listener: tokio::net::TcpListener,
     advertiser: Advertiser,
-    found: mpsc::UnboundedReceiver<discovery::Event>,
+    browse: impl FnOnce() -> mpsc::UnboundedReceiver<discovery::Event>,
     limits: target::Limits,
 ) -> Result<(), String> {
     let key = identity::load_or_create(&key_dir)
@@ -898,7 +988,10 @@ fn start_on<R: Runtime>(
     .map_err(|e| format!("couldn't listen: {e}"))?;
     let devices = Arc::new(Mutex::new(Devices::new(device_id.clone())));
     let link = Arc::new(Mutex::new(None));
-    follow_discovery(app.clone(), devices.clone(), found);
+    // Only now, with the key loaded and the target listening, so a start
+    // that failed leaves no browse running, which on iOS would raise the
+    // local network prompt by itself.
+    follow_discovery(app.clone(), devices.clone(), browse());
     tracing::info!(
         "[remote] listening on port {} as {device_id}",
         handle.port()
@@ -933,11 +1026,27 @@ fn start_on<R: Runtime>(
 // Only the mobile apps go to the background.
 #[cfg_attr(not(mobile), allow(dead_code))]
 pub enum Lifecycle {
-    /// Android's onResume.
+    /// Android's onResume, iOS's willEnterForeground.
     Foreground,
     /// Android's onPause, which also comes while a system panel or a share
-    /// sheet covers part of the app.
+    /// sheet covers part of the app, and iOS's didEnterBackground.
     Background,
+}
+
+impl Lifecycle {
+    /// From whether the app is in the background, as the mpv plugin passes
+    /// on iOS's didEnterBackground (`true`) and willEnterForeground
+    /// (`false`). Not Tauri's own Suspended, which iOS sends on
+    /// applicationWillResignActive.
+    // Only iOS reports it this way.
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub fn from_background(background: bool) -> Self {
+        if background {
+            Self::Background
+        } else {
+            Self::Foreground
+        }
+    }
 }
 
 /// Tells remote control that the app went to the background or came back.

@@ -69,7 +69,7 @@ impl Running {
                 lock(&record).push(r.clone());
                 None
             }),
-            found_rx,
+            move || found_rx,
             // Tests load one item after another at once.
             target::Limits {
                 load_gap: Duration::ZERO,
@@ -1407,4 +1407,129 @@ async fn the_multicast_lock_is_held_in_the_foreground_and_let_go_in_the_backgrou
     set_foreground_with(&handle, Lifecycle::Foreground, |hold| called.push(hold));
     assert!(handle.state::<RemoteService>().wants_foreground.load(Ordering::SeqCst));
     assert_eq!(called, [false, true]);
+}
+
+#[test]
+fn ios_says_background_or_not() {
+    assert_eq!(Lifecycle::from_background(true), Lifecycle::Background);
+    assert_eq!(Lifecycle::from_background(false), Lifecycle::Foreground);
+}
+
+#[test]
+fn only_ios_waits_and_only_until_the_user_has_opened_it() {
+    assert!(waits_for_user(true, false));
+    assert!(!waits_for_user(true, true));
+    assert!(!waits_for_user(false, false));
+    assert!(!waits_for_user(false, true));
+}
+
+/// Starts the service on loopback with nothing advertised, as a test's
+/// stand-in for starting it on the network.
+async fn start_on_loopback(app: &TestApp) -> Result<(), String> {
+    start_on_loopback_in(app, app.app_dir(), &AtomicBool::new(false)).await
+}
+
+/// [`start_on_loopback`] with the key in `key_dir`, setting `browsed` when
+/// the browse starts.
+async fn start_on_loopback_in(
+    app: &TestApp,
+    key_dir: PathBuf,
+    browsed: &AtomicBool,
+) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    start_on(
+        &app.handle(),
+        key_dir,
+        listener,
+        Box::new(|_: &Registration| None),
+        || {
+            browsed.store(true, Ordering::SeqCst);
+            mpsc::unbounded_channel().1
+        },
+        target::Limits::STANDARD,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opening_starts_remote_control_once_and_remembers_it() {
+    let app = TestApp::new();
+    assert!(!opened_before(&app.handle()));
+    let mut multicast = Vec::new();
+    open_with(&app.handle(), start_on_loopback(&app), |hold| multicast.push(hold))
+        .await
+        .unwrap();
+    assert!(app.handle().try_state::<RemoteService>().is_some());
+    assert!(opened_before(&app.handle()), "starts with the app from now on");
+    assert_eq!(multicast, [true], "holds the lock in the foreground");
+    let text = std::fs::read_to_string(app.app_dir().join(SETTINGS_STORE_FILE)).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()[OPENED_KEY], json!(true));
+    // Already running: nothing starts again.
+    open_with(&app.handle(), async { panic!("started twice") }, |_| {
+        panic!("held again")
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_fails_says_why_and_can_be_tried_again() {
+    let app = TestApp::new();
+    let failed = open_with(&app.handle(), async { Err("no port".to_owned()) }, |_| {
+        panic!("no lock without remote control")
+    })
+    .await;
+    assert_eq!(failed, Err("no port".to_owned()));
+    assert!(app.handle().try_state::<RemoteService>().is_none());
+    assert!(!opened_before(&app.handle()), "a failed start isn't remembered");
+    open_with(&app.handle(), start_on_loopback(&app), |_| {})
+        .await
+        .unwrap();
+    assert!(app.handle().try_state::<RemoteService>().is_some());
+    assert!(opened_before(&app.handle()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_finishes_in_the_background_takes_no_lock() {
+    let app = TestApp::new();
+    let start = async {
+        start_on_loopback(&app).await?;
+        // The app went to the background meanwhile.
+        app.handle().state::<RemoteService>().set_foreground(false);
+        Ok(())
+    };
+    let mut multicast = Vec::new();
+    open_with(&app.handle(), start, |hold| multicast.push(hold))
+        .await
+        .unwrap();
+    assert!(multicast.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_that_fails_at_the_key_starts_no_browse() {
+    let app = TestApp::new();
+    // A file where the key's folder should be, so the key can't be saved.
+    let blocked = app.app_dir().join("blocked");
+    std::fs::create_dir_all(app.app_dir()).unwrap();
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    let browsed = AtomicBool::new(false);
+    let failed = start_on_loopback_in(&app, blocked, &browsed).await;
+    assert!(failed.unwrap_err().contains("device key"));
+    assert!(!browsed.load(Ordering::SeqCst), "no browse without remote control");
+    assert!(start_on_loopback_in(&app, app.app_dir(), &browsed).await.is_ok());
+    assert!(browsed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn the_launch_starts_it_unless_ios_waits_for_the_user() {
+    let started = std::cell::Cell::new(0);
+    let start = || {
+        started.set(started.get() + 1);
+        true
+    };
+    assert!(!start_at_launch_with(true, false, start), "iOS waits");
+    assert_eq!(started.get(), 0);
+    assert!(start_at_launch_with(true, true, start), "until opened once");
+    assert!(start_at_launch_with(false, false, start), "elsewhere at once");
+    assert_eq!(started.get(), 2);
+    assert!(!start_at_launch_with(false, false, || false), "says when it failed");
 }

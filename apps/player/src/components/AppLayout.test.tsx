@@ -7,14 +7,11 @@ import { useEffect } from "react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import type { LayoutMode } from "@/lib/types";
 
-const platform = vi.hoisted(() => ({
-	layoutMode: "desktop" as LayoutMode,
-	roles: { target: true, controller: true },
-}));
+const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode, controller: true }));
 
 vi.mock("@/lib/platform", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/platform")>()),
-	remoteRoles: () => platform.roles,
+	controlsOthers: () => platform.controller,
 }));
 
 vi.mock("@/hooks/usePlatform", () => ({
@@ -176,7 +173,7 @@ describe("AppLayout", () => {
 
 	describe("remote control", () => {
 		afterEach(() => {
-			platform.roles = { target: true, controller: true };
+			platform.controller = true;
 			platform.layoutMode = "desktop";
 		});
 
@@ -198,20 +195,22 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 		});
 
-		it("leaves it all out where remote control doesn't run", () => {
-			platform.roles = { target: false, controller: false };
-			for (const layoutMode of ["desktop", "mobile"] as LayoutMode[]) {
-				platform.layoutMode = layoutMode;
-				const { unmount } = render(tree("/"));
-				expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
-				expect(screen.queryByText("Remote bar")).toBeNull();
-				expect(screen.queryByText("Controllers bar")).toBeNull();
-				unmount();
-			}
+		it("leaves both bars off a phone's player, which keeps the whole screen", () => {
+			platform.layoutMode = "mobile";
+			const { unmount } = render(tree("/player"));
+			expect(screen.queryByText("Remote bar")).toBeNull();
+			expect(screen.queryByText("Controllers bar")).toBeNull();
+			expect(screen.getByText("page")).toBeInTheDocument();
+			unmount();
+			// The sidebar layout keeps them on the player.
+			platform.layoutMode = "desktop";
+			render(tree("/player"));
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 		});
 
 		it("shows a device that's only controlled who controls it, and nothing to control others with", () => {
-			platform.roles = { target: true, controller: false };
+			platform.controller = false;
 			render(tree("/"));
 			expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
 			expect(screen.queryByText("Remote bar")).toBeNull();
@@ -220,7 +219,7 @@ describe("AppLayout", () => {
 
 		it("shows a TV's controllers above every page but the player", () => {
 			platform.layoutMode = "tv";
-			platform.roles = { target: true, controller: false };
+			platform.controller = false;
 			const { unmount } = render(tree("/settings"));
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
 			expect(screen.getByText("page")).toBeInTheDocument();
