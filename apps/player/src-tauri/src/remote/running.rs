@@ -29,6 +29,8 @@ impl Transfers {
     }
 
     /// For a platform that keeps the app running anyway, or can't be asked.
+    // iOS asks, so only its tests use this.
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     pub fn untracked() -> Self {
         Self::new(Box::new(|_| {}))
     }
