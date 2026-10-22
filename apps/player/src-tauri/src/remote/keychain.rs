@@ -35,9 +35,9 @@ pub(crate) fn on_load(read: Result<Vec<u8>, i32>) -> Loaded {
         Ok(bytes) => match <[u8; KEY_LEN]>::try_from(bytes.as_slice()) {
             Ok(private) => Loaded::Use(DeviceKey::from_private(private)),
             Err(_) => {
+                let len = bytes.len();
                 tracing::warn!(
-                    "[remote] the Keychain's device key is {} bytes, not {KEY_LEN}; making a new one",
-                    bytes.len()
+                    "[remote] the Keychain's device key is {len} bytes, not {KEY_LEN}; making a new one"
                 );
                 Loaded::Create
             }

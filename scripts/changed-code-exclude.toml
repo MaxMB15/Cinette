@@ -65,3 +65,13 @@ reason = "It calls MpvState::load, which needs a real window."
 files = ["crates/tauri-plugin-mpv/src/idle_inhibit.rs"]
 functions = ["platform_inhibit", "platform_uninhibit", "cfstring", "dbus_*"]
 reason = "Keeping the display awake goes through IOKit on macOS and D-Bus on Linux. A test would change the machine's own sleep settings."
+
+[[exclude]]
+files = ["apps/player/src-tauri/src/remote/service.rs"]
+functions = ["start", "start_at_launch", "start_on_network", "open"]
+reason = "These bind remote control's real port, advertise on the network and browse it. The tests start the target on loopback with start_on, and the decisions around it through start_at_launch_with and open_with."
+
+[[exclude]]
+files = ["apps/player/src-tauri/src/remote/commands.rs"]
+functions = ["remote_open"]
+reason = "It finds the app data folder and calls open, which starts remote control on the network."
