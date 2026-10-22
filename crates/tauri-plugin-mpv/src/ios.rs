@@ -42,6 +42,7 @@ unsafe extern "C" {
     fn mvp_ios_surface_set_visible(visible: bool);
     fn mvp_ios_surface_detach();
     fn mvp_ios_set_idle_timer_disabled(disabled: bool);
+    fn mvp_ios_keep_running(on: bool);
     fn mvp_ios_set_audio_active(active: bool);
     fn mvp_ios_now_playing(title: *const c_char, duration: f64, position: f64, playing: bool);
     fn mvp_ios_now_playing_clear();
@@ -205,6 +206,13 @@ extern "C" fn on_resized() {
 
 pub fn set_idle_timer_disabled(disabled: bool) {
     unsafe { mvp_ios_set_idle_timer_disabled(disabled) };
+}
+
+/// Asks iOS to keep the app running for a while in the background, as for
+/// a transfer with another device, or says it no longer needs to. iOS gives
+/// about 30 seconds.
+pub fn keep_running(on: bool) {
+    unsafe { mvp_ios_keep_running(on) };
 }
 
 /// Turns the audio session on for playback, or off along with the lock

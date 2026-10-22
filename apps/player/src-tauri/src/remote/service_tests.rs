@@ -30,6 +30,8 @@ struct Running {
     port: u16,
     /// Stands in for discovery: what's sent here is what browsing found.
     found: mpsc::UnboundedSender<discovery::Event>,
+    /// What the app asked of the system to keep running for transfers.
+    kept: Arc<Mutex<Vec<bool>>>,
 }
 
 const EVENTS: [&str; 12] = [
@@ -66,6 +68,8 @@ impl Running {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (found, found_rx) = mpsc::unbounded_channel();
+        let kept = Arc::new(Mutex::new(Vec::new()));
+        let keep = kept.clone();
         start_on(
             &app.handle(),
             app.app_dir(),
@@ -80,6 +84,7 @@ impl Running {
                 load_gap: Duration::ZERO,
                 ..target::Limits::STANDARD
             },
+            Transfers::new(Box::new(move |on| lock(&keep).push(on))),
         )
         .unwrap();
         Self {
@@ -89,6 +94,7 @@ impl Running {
             advertised,
             port,
             found,
+            kept,
         }
     }
 
@@ -943,6 +949,7 @@ async fn only_the_current_link_reaches_the_webview() {
     let own = DeviceKey::generate().device_id();
     let device = DeviceKey::generate().device_id();
     let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::untracked()),
         app: running.app.handle(),
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
@@ -1052,6 +1059,7 @@ async fn a_flood_of_states_reaches_the_webview_as_a_few_with_the_newest_last() {
     let own = DeviceKey::generate().device_id();
     let device = DeviceKey::generate().device_id();
     let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::untracked()),
         app: running.app.handle(),
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
@@ -1085,6 +1093,7 @@ async fn a_held_state_from_a_link_that_went_is_dropped() {
     let device = DeviceKey::generate().device_id();
     let slot = Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone()))));
     let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::untracked()),
         app: running.app.handle(),
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: slot.clone(),
@@ -1162,6 +1171,7 @@ async fn logos_another_device_sends_reach_the_webview_only_from_public_hosts() {
     let own = DeviceKey::generate().device_id();
     let device = DeviceKey::generate().device_id();
     let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::untracked()),
         app: running.app.handle(),
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
@@ -1471,6 +1481,7 @@ async fn start_on_loopback_in(
             mpsc::unbounded_channel().1
         },
         target::Limits::STANDARD,
+        Transfers::untracked(),
     )
 }
 
@@ -1948,6 +1959,22 @@ async fn history_sent_to_another_instance_resumes_there() {
             break;
         }
     }
+    // Both kept running for it while it ran, and let go once it was done.
+    assert_eq!(*lock(&mac.kept), [true, false]);
+    until_kept(&tv, &[true, false]).await;
+}
+
+/// Waits until `running` asked the system exactly `asked`, in order.
+async fn until_kept(running: &Running, asked: &[bool]) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while *lock(&running.kept) != asked {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "asked {:?}",
+            lock(&running.kept)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2026,6 +2053,10 @@ async fn a_denied_history_transfer_writes_nothing() {
     let refused = transfer_step(&mut mac, "refused").await;
     assert_eq!(refused["code"], json!("denied"));
     assert_eq!(position_of(&tv), None);
+    // Kept running while the TV asked, and not after the denial; the TV
+    // never started one.
+    assert_eq!(*lock(&mac.kept), [true, false]);
+    assert!(lock(&tv.kept).is_empty());
     // The denial's cooldown may turn the next one away on the TV, but this
     // device no longer thinks one is waiting.
     assert_ne!(
@@ -2447,6 +2478,7 @@ async fn a_transfer_that_ends_however_it_ends_frees_the_link_for_the_next() {
     let own = DeviceKey::generate().device_id();
     let device = DeviceKey::generate().device_id();
     let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::untracked()),
         app: running.app.handle(),
         devices: Arc::new(Mutex::new(Devices::new(own))),
         link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
@@ -2532,4 +2564,32 @@ async fn an_ask_that_fails_to_go_out_leaves_nothing_waiting() {
         .await;
         assert_eq!(asked, gone);
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_that_closes_lets_go_of_its_transfer() {
+    let running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let keep = kept.clone();
+    let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::new(Box::new(move |on| lock(&keep).push(on)))),
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(1, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
+    };
+    host.transfer(1, &device, &TransferUpdate::Pending { expires_in: 30 });
+    assert_eq!(*lock(&kept), [true]);
+    host.phase(
+        1,
+        &device,
+        &Phase::Closed {
+            reason: super::link::Ended::Left,
+        },
+    );
+    assert_eq!(*lock(&kept), [true, false]);
 }

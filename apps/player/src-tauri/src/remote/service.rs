@@ -5,6 +5,7 @@
 //! for the webview, the cache for catalog answers, and DNS-SD.
 
 use super::device::device_type;
+use super::running::Transfers;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
 use super::target::{
@@ -639,6 +640,8 @@ type Advertiser = Box<dyn Fn(&Registration) -> Option<Advertisement> + Send + Sy
 
 struct TauriHost<R: Runtime> {
     app: AppHandle<R>,
+    /// The transfers under way, to keep the app running for them.
+    transfers: Arc<Transfers>,
     advertiser: Advertiser,
     advertisement: Mutex<Option<Advertisement>>,
     /// The episodes of the series controllers opened last, by series id,
@@ -857,6 +860,10 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
     }
 
     fn transfer(&self, event: &TransferEvent) {
+        self.transfers.set(
+            &format!("in:{}", event.transfer),
+            super::running::under_way(&event.progress),
+        );
         let _ = self.app.emit("remote://transfer-target", event);
     }
 
@@ -865,6 +872,9 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         let waiter = self.progress.clone();
         tauri::async_runtime::spawn(async move {
             let playing = save_progress(&app, &waiter).await;
+            // With the player page closed, the place comes from what was
+            // handed over to Rust, saved now rather than up to a tick ago.
+            crate::progress::save_now(&app);
             let export = run_blocking(app, move |state| {
                 super::history::export(&state.cache, &salt, what, playing.as_deref())
             })
@@ -992,6 +1002,8 @@ const STATE_EVERY: Duration = Duration::from_millis(100);
 
 struct TauriLinkHost<R: Runtime> {
     app: AppHandle<R>,
+    /// The transfers under way, to keep the app running for them.
+    transfers: Arc<Transfers>,
     devices: Arc<Mutex<Devices>>,
     link: Arc<Mutex<Option<LinkHandle>>>,
     throttle: Arc<Mutex<Throttle>>,
@@ -1049,6 +1061,8 @@ impl<R: Runtime> TauriLinkHost<R> {
 impl<R: Runtime> LinkHost for TauriLinkHost<R> {
     fn phase(&self, link: u64, device: &DeviceId, phase: &Phase) {
         if let Phase::Closed { reason } = phase {
+            // Whatever it was sending ended with it.
+            self.transfers.set(&format!("link:{link}"), false);
             tracing::info!("[remote] the session with {device} ended: {reason:?}");
             let mut slot = lock(&self.link);
             if !slot.as_ref().is_some_and(|l| l.generation() == link) {
@@ -1120,6 +1134,12 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
         if !self.current(link) {
             return;
         }
+        let under_way = match event {
+            TransferUpdate::Refused(_) => false,
+            TransferUpdate::Progress { progress, .. } => super::running::under_way(progress),
+            _ => true,
+        };
+        self.transfers.set(&format!("link:{link}"), under_way);
         let update = match event {
             TransferUpdate::ProvidersGranted { grant } => {
                 return self.send_granted(link, device, grant.clone());
@@ -1258,6 +1278,8 @@ impl<R: Runtime> TauriLinkHost<R> {
             .and_then(|(_, playing)| playing);
         let app = self.app.clone();
         tauri::async_runtime::spawn(async move {
+            // As in an export the other device asks for.
+            crate::progress::save_now(&app);
             let export = run_blocking(app, move |state| {
                 super::history::export(&state.cache, &salt, what, playing.as_deref())
             })
@@ -1391,6 +1413,16 @@ fn load_settings<R: Runtime>(app: &AppHandle<R>) -> RemoteSettings {
         .unwrap_or_default()
 }
 
+/// The transfers tracker for this platform: on iOS it asks for time to
+/// finish in the background. Android keeps running for a while anyway once
+/// the app leaves the screen, and computers don't suspend it.
+fn platform_transfers() -> Transfers {
+    #[cfg(target_os = "ios")]
+    return Transfers::new(Box::new(tauri_plugin_mpv::keep_running));
+    #[cfg(not(target_os = "ios"))]
+    Transfers::untracked()
+}
+
 /// Where the store says the user has opened Devices or the Remote control
 /// settings once, after which remote control starts with the app.
 const OPENED_KEY: &str = "remoteOpened";
@@ -1459,6 +1491,7 @@ async fn start_on_network<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> R
         Box::new(advertise_on_network),
         browse_network,
         target::Limits::STANDARD,
+        platform_transfers(),
     )
 }
 
@@ -1511,7 +1544,9 @@ fn start_on<R: Runtime>(
     advertiser: Advertiser,
     browse: impl FnOnce() -> mpsc::UnboundedReceiver<discovery::Event>,
     limits: target::Limits,
+    transfers: Transfers,
 ) -> Result<(), String> {
+    let transfers = Arc::new(transfers);
     let key = identity::load_or_create(&key_dir)
         .map_err(|e| format!("couldn't load the device key: {e}"))?;
     let settings = load_settings(app);
@@ -1520,6 +1555,7 @@ fn start_on<R: Runtime>(
     let history: SendingHistory = Arc::new(Mutex::new(None));
     let host = Arc::new(TauriHost {
         app: app.clone(),
+        transfers: transfers.clone(),
         advertiser,
         advertisement: Mutex::new(None),
         episodes: Mutex::new(VecDeque::new()),
@@ -1552,6 +1588,7 @@ fn start_on<R: Runtime>(
     let sending = Arc::new(Mutex::new(None));
     let link_host = Arc::new(TauriLinkHost {
         app: app.clone(),
+        transfers,
         devices: devices.clone(),
         link: link.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),

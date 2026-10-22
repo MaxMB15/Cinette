@@ -472,6 +472,28 @@ func mvpIosSetIdleTimerDisabled(_ disabled: Bool) {
   DispatchQueue.main.async { UIApplication.shared.isIdleTimerDisabled = disabled }
 }
 
+/// The background task that keeps the app running while a transfer with
+/// another device is under way. Only touched on the main thread.
+private var keepRunningTask = UIBackgroundTaskIdentifier.invalid
+
+/// Asks iOS for time to finish a transfer when the app goes to the
+/// background, or gives it back. iOS ends the time after about 30 seconds,
+/// and then the task is given back so the app isn't killed for holding it.
+@_cdecl("mvp_ios_keep_running")
+func mvpIosKeepRunning(_ on: Bool) {
+  DispatchQueue.main.async {
+    if on && keepRunningTask == .invalid {
+      keepRunningTask = UIApplication.shared.beginBackgroundTask(withName: "Cinette transfer") {
+        UIApplication.shared.endBackgroundTask(keepRunningTask)
+        keepRunningTask = .invalid
+      }
+    } else if !on && keepRunningTask != .invalid {
+      UIApplication.shared.endBackgroundTask(keepRunningTask)
+      keepRunningTask = .invalid
+    }
+  }
+}
+
 @_cdecl("mvp_ios_set_audio_active")
 func mvpIosSetAudioActive(_ active: Bool) {
   DispatchQueue.main.async { MpvHost.shared.setAudioActive(active) }

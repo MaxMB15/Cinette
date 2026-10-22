@@ -29,7 +29,7 @@ mod android_surface;
 #[cfg(target_os = "ios")]
 mod ios;
 #[cfg(target_os = "ios")]
-pub use ios::watch_background;
+pub use ios::{keep_running, watch_background};
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

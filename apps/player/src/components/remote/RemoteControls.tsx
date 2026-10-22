@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
@@ -10,6 +10,7 @@ import { DevicePicker } from "@/components/remote/DevicePicker";
 import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
 import { TransferHistoryDialog } from "@/components/remote/TransferHistoryDialog";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
+import { useTvNoticeFocus } from "@/hooks/useTvNoticeFocus";
 import { useRemoteSessions, useTauriEvent } from "@/hooks/useRemoteTarget";
 import { channelsQuery, providersQuery } from "@/lib/queries";
 import { providersAddedText } from "@/lib/remote-transfer";
@@ -149,7 +150,8 @@ export const LEAVE_FAILED =
 	"Couldn't end the session. If the other device still shows this one, disconnect it there.";
 
 /** A note at the bottom of the screen. A `raised` one sits above the
- *  others, so two don't cover each other. */
+ *  others, so two don't cover each other. On a TV it takes the focus, so
+ *  the remote's Back or center button can dismiss it. */
 const Notice = ({
 	message,
 	onDismiss,
@@ -158,10 +160,13 @@ const Notice = ({
 	message: string;
 	onDismiss: () => void;
 	raised?: boolean;
-}) =>
-	createPortal(
+}) => {
+	const dismiss = useRef<HTMLButtonElement>(null);
+	const onKeyDown = useTvNoticeFocus(dismiss, message, onDismiss);
+	return createPortal(
 		<div
 			role="status"
+			onKeyDown={onKeyDown}
 			className={cn(
 				"fixed left-1/2 -translate-x-1/2 z-10000 flex items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl max-w-[calc(100vw-2rem)] break-words",
 				raised ? "bottom-20" : "bottom-4"
@@ -169,6 +174,7 @@ const Notice = ({
 		>
 			<span>{message}</span>
 			<button
+				ref={dismiss}
 				type="button"
 				aria-label="Dismiss"
 				className={cn(ICON_BUTTON, "text-muted-foreground hover:text-foreground")}
@@ -179,6 +185,7 @@ const Notice = ({
 		</div>,
 		document.body
 	);
+};
 
 /**
  * While this device waits for another to let it in: the code to compare

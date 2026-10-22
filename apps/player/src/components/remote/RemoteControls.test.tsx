@@ -734,6 +734,16 @@ describe("ControllersBar", () => {
 });
 
 describe("ProvidersAddedNotice", () => {
+	it("brings a TV remote to Dismiss, and Back closes it", () => {
+		os.platform = "tv";
+		render(<ProvidersAddedNotice />, { wrapper: wrapperFor() });
+		act(() => tauriEvents.get("remote://providers-added")!({ from: "Mac", names: ["Home"] }));
+		const dismiss = screen.getByRole("button", { name: "Dismiss" });
+		expect(dismiss).toHaveFocus();
+		fireEvent.keyDown(dismiss, { key: "Escape" });
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
 	it("says what was added and loads the lists again", () => {
 		const client = createTestQueryClient();
 		const invalidate = vi.spyOn(client, "invalidateQueries");

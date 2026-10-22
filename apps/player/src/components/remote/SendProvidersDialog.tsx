@@ -12,6 +12,7 @@ import {
 	isLocalFile,
 	nextSendState,
 	providerResultText,
+	stayOpenNote,
 	type SendState,
 } from "@/lib/remote-transfer";
 import { remoteCancelTransfer, remoteSendProviders, type RemoteTransferNotice } from "@/lib/tauri";
@@ -48,6 +49,8 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 	}, [waiting]);
 
 	const saving = state.step === "saving";
+	// On a phone, tablet or TV, leaving the app can stop a transfer.
+	const stayOpen = stayOpenNote();
 	const close = () => {
 		// Closing before the other device has the logins stops it, and
 		// nothing is saved there. Once it's saving them, it's too late.
@@ -162,6 +165,9 @@ export const SendProvidersDialog = ({ link, onClose }: { link: Link; onClose: ()
 						<p className="text-xs text-muted-foreground text-center mb-3">
 							Expires in {secondsLeft(state.expiresAt, now)} s
 						</p>
+					)}
+					{!saving && stayOpen && (
+						<p className="text-xs text-muted-foreground mb-3">{stayOpen}</p>
 					)}
 					<div className="flex justify-end">
 						<button

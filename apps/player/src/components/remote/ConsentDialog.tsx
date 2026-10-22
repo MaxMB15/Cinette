@@ -85,7 +85,9 @@ const ConsentPrompt = ({
 			labelledBy={titleId}
 			// Above the full screen player, which sits at z-9999.
 			overlayClassName="z-10000"
-			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] shadow-xl"
+			// A long list of providers scrolls inside it, so Deny and Allow stay
+			// on screen, and a TV remote's focus scrolls them into view.
+			className="bg-card border border-border rounded-lg p-5 w-[340px] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto shadow-xl"
 		>
 			{/* Focus starts here rather than on Deny, so a key pressed for the
 			    player behind, like Space, doesn't answer the request. */}

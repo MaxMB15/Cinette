@@ -18,6 +18,11 @@ const progress = vi.hoisted(() => ({ playing: "ch-7" as string | null }));
 vi.mock("@/lib/player-progress", () => ({
 	saveProgressNow: vi.fn(() => Promise.resolve(progress.playing)),
 }));
+const os = vi.hoisted(() => ({ platform: "macos" }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	getPlatform: () => os.platform,
+}));
 vi.mock("@/lib/tauri", () => ({
 	remoteAskHistory: vi.fn(() => Promise.resolve()),
 	remoteCancelTransfer: vi.fn(() => Promise.resolve()),
@@ -74,6 +79,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+	os.platform = "macos";
 });
 
 const status = () => screen.getByRole("status");
@@ -181,6 +187,37 @@ describe("TransferHistoryDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Done" }));
 		expect(onClose).toHaveBeenCalled();
 		expect(remoteCancelTransfer).not.toHaveBeenCalled();
+	});
+
+	it("says on a phone to keep Cinette open while it waits and moves, until it's saving", async () => {
+		os.platform = "ios";
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(screen.getByText(/Keep Cinette open until it's done/)).toBeInTheDocument();
+		notify({
+			step: "progress",
+			transfer: "t",
+			progress: { state: "sending", data: { done: 1, total: 5 } },
+		});
+		expect(screen.getByText(/Keep Cinette open until it's done/)).toBeInTheDocument();
+		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
+		expect(screen.queryByText(/Keep Cinette open/)).toBeNull();
+		expect(screen.getByText(/too late to stop it now/)).toBeInTheDocument();
+	});
+
+	it("says nothing about staying open on a computer", async () => {
+		render(<TransferHistoryDialog link={link()} onClose={onClose} />);
+		fireEvent.click(screen.getByRole("button", { name: "Send" }));
+		await waitFor(() => expect(remoteAskHistory).toHaveBeenCalled());
+		notify({ step: "pending", expiresInMs: 30_000 });
+		notify({
+			step: "progress",
+			transfer: "t",
+			progress: { state: "sending", data: { done: 1, total: 5 } },
+		});
+		expect(screen.queryByText(/Keep Cinette open/)).toBeNull();
 	});
 
 	it("leaves out the unmatched list when everything matched", async () => {

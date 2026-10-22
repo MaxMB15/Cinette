@@ -24,6 +24,7 @@ All notable changes to Cinette, formerly called Max Video Player, are listed her
 
 ### Fixed
 
+- On an Android TV or Fire TV, "Added history from…" and providers sent from another device now show, take the remote's focus, and close with Back. On phones, tablets and TVs, the transfer sheets say to keep Cinette open until a transfer is done, and an iPhone or iPad keeps a transfer going for a short while after you switch away. A history sent with the player closed carries the place where it is now.
 - A subtitle file you picked while a stream was still opening, or while it reconnected, could fail to show, even though the player kept it as picked. The player now adds it as soon as the stream has opened (#340).
 
 ## [0.8.0] - 2026-10-17

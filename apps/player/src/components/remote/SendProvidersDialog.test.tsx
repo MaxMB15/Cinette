@@ -16,6 +16,11 @@ vi.mock("@/hooks/useRemoteTarget", () => ({
 }));
 const channels = vi.hoisted(() => ({ providers: [] as Provider[] }));
 vi.mock("@/hooks/useChannels", () => ({ useChannels: () => channels }));
+const os = vi.hoisted(() => ({ platform: "macos" }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	getPlatform: () => os.platform,
+}));
 vi.mock("@/lib/tauri", () => ({
 	remoteSendProviders: vi.fn(() => Promise.resolve()),
 	remoteCancelTransfer: vi.fn(() => Promise.resolve()),
@@ -60,6 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+	os.platform = "macos";
 });
 
 /** Picks providers by name and sends them. */
@@ -195,6 +201,23 @@ describe("SendProvidersDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close" }));
 		expect(onClose).toHaveBeenCalled();
 		expect(remoteCancelTransfer).not.toHaveBeenCalled();
+	});
+
+	it("says on a TV to keep Cinette open while it waits, until the other device saves", () => {
+		os.platform = "tv";
+		render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		pickAndSend("Home");
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(screen.getByText(/Keep Cinette open until it's done/)).toBeInTheDocument();
+		notify({ step: "progress", transfer: "t", progress: { state: "saving" } });
+		expect(screen.queryByText(/Keep Cinette open/)).toBeNull();
+	});
+
+	it("says nothing about staying open on a computer", () => {
+		render(<SendProvidersDialog link={link()} onClose={onClose} />);
+		pickAndSend("Home");
+		notify({ step: "pending", expiresInMs: 30_000 });
+		expect(screen.queryByText(/Keep Cinette open/)).toBeNull();
 	});
 
 	it("counts down from when the other device started asking", () => {

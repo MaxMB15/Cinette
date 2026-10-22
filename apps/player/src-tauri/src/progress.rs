@@ -11,6 +11,7 @@
 use crate::commands::AppState;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{command, AppHandle, Manager, Runtime};
 use tauri_plugin_mpv::MpvState;
@@ -27,7 +28,11 @@ const MAX_MISSES: u32 = 6;
 /// Bumped on every hand-over, so the thread for an older one stops.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Deserialize)]
+/// The item handed over last, with its generation, so its position can be
+/// saved at once when something is about to read it.
+static HANDED: Mutex<Option<(u64, ProgressItem)>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressItem {
     /// The resume key, from `playbackKey` in `lib/playback.ts`.
@@ -58,10 +63,43 @@ fn hand_off<R: Runtime>(
     interval: Duration,
 ) -> Option<std::thread::JoinHandle<()>> {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    *HANDED.lock().unwrap_or_else(|e| e.into_inner()) =
+        item.as_ref().map(|i| (generation, i.clone()));
     let item = item?;
     tracing::debug!("[Progress] saving {} from Rust", item.key);
     let saving = std::thread::spawn(move || track(&app, item, generation, interval));
     Some(saving)
+}
+
+/// Saves the handed-over item's position now, from where mpv is, as an
+/// export of this device's history is about to read it. The thread saves
+/// only every few seconds, and not at all while iOS has suspended the app.
+/// Does nothing when no item is handed over, which means the player page
+/// saves its own, or when mpv plays something else.
+pub fn save_now<R: Runtime>(app: &AppHandle<R>) {
+    let Some(mpv) = app.try_state::<MpvState>() else {
+        return;
+    };
+    let s = mpv.get_state();
+    save_now_at(app, s.current_url.as_deref(), s.position, s.duration);
+}
+
+/// [`save_now`], with mpv at `position` of `duration` in `url`.
+fn save_now_at<R: Runtime>(app: &AppHandle<R>, url: Option<&str>, position: f64, duration: f64) {
+    let handed = HANDED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|(generation, _)| *generation == GENERATION.load(Ordering::SeqCst))
+        .map(|(_, item)| item.clone());
+    if let Some(item) = handed {
+        let mut tracker = Tracker {
+            item,
+            last: None,
+            misses: 0,
+        };
+        tracker.saw(app, url, position, duration);
+    }
 }
 
 /// Saves `item`'s position every `interval` until mpv moves on or a newer
@@ -380,6 +418,42 @@ mod tests {
         assert_eq!(joined.recv_timeout(Duration::from_secs(10)), Ok(true));
 
         assert!(started.elapsed() >= interval * (MAX_MISSES - 1));
+    }
+
+    #[test]
+    fn saves_the_handed_over_item_at_once_when_asked() {
+        let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
+        let app = TestApp::new();
+        hand_off(app.handle(), Some(item(None)), Duration::from_millis(20));
+        save_now_at(&app.handle(), Some(URL), 900.0, 6000.0);
+        assert_eq!(saved(&app), Some((900.0, 6000.0)));
+        hand_off(app.handle(), None, Duration::from_millis(20));
+    }
+
+    #[test]
+    fn saves_nothing_at_once_without_a_hand_over_or_with_another_item_playing() {
+        let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
+        let app = TestApp::new();
+        hand_off(app.handle(), None, Duration::from_millis(20));
+        save_now_at(&app.handle(), Some(URL), 900.0, 6000.0);
+        assert_eq!(saved(&app), None, "the page saves its own");
+        hand_off(app.handle(), Some(item(None)), Duration::from_millis(20));
+        save_now_at(&app.handle(), Some("http://example.test/other.mkv"), 900.0, 6000.0);
+        assert_eq!(saved(&app), None, "mpv moved on");
+        // An idle player: nothing playing.
+        save_now(&app.handle());
+        assert_eq!(saved(&app), None);
+        hand_off(app.handle(), None, Duration::from_millis(20));
+    }
+
+    #[test]
+    fn saves_nothing_at_once_before_the_resume_point_is_reached() {
+        let _lock = HAND_OVERS.lock().unwrap_or_else(PoisonError::into_inner);
+        let app = TestApp::new();
+        hand_off(app.handle(), Some(item(Some(1200.0))), Duration::from_millis(20));
+        save_now_at(&app.handle(), Some(URL), 40.0, 6000.0);
+        assert_eq!(saved(&app), None);
+        hand_off(app.handle(), None, Duration::from_millis(20));
     }
 
     #[test]
