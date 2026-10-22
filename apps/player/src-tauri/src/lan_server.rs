@@ -398,6 +398,10 @@ impl Files {
 pub struct LanServer {
     /// `http://<address>:<port>/cast/<token>/`, which names go after.
     pub base: String,
+    /// This device's address that it listens on. A cast checks it against
+    /// the route to its receiver, and casts run only on Linux and macOS.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub local: IpAddr,
     pub files: Files,
     live: Arc<RwLock<Option<NamedPipe>>>,
     task: JoinHandle<()>,
@@ -452,6 +456,8 @@ impl LanServer {
         ));
         Ok(Self {
             base: format!("http://{host}:{port}{prefix}"),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            local,
             files,
             live,
             task,

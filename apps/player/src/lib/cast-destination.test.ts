@@ -14,6 +14,8 @@ import {
 	type CastBackend,
 	type CastSnapshot,
 	PAUSE_LIMIT_MS,
+	RESTART_DELAYS_MS,
+	STEADY_MS,
 } from "@/lib/cast-destination";
 import type { PlayRoute, StreamFormat } from "@/lib/route";
 import type { StreamFormats } from "@/lib/route-profiles";
@@ -52,6 +54,7 @@ const xtream: StreamFormats = {
 type Media = NonNullable<Extract<CastUpdate, { kind: "media" }>["media"]>;
 
 const media = (over: Partial<Media> = {}): Media => ({
+	mediaSessionId: 1,
 	player: "playing",
 	idleReason: null,
 	position: 10,
@@ -152,6 +155,9 @@ describe("applyUpdate", () => {
 	it("leaves the state alone when a command is turned down", () => {
 		const before = snap({ phase: "ready" });
 		expect(applyUpdate(before, { kind: "rejected", reason: "no" }, 1)).toBe(before);
+		// The destination starts a stopped conversion again, and shows that
+		// itself.
+		expect(applyUpdate(before, { kind: "conversionStopped", why: "dropped" }, 1)).toBe(before);
 	});
 });
 
@@ -392,7 +398,8 @@ describe("createCastDestination", () => {
 			"cast:tv",
 			channel,
 			{ via: "direct", generation: 7, source: 1, container: "ts" },
-			undefined
+			undefined,
+			false
 		);
 		expect(cast.getState()).toMatchObject({
 			status: "opening",
@@ -408,7 +415,8 @@ describe("createCastDestination", () => {
 			"cast:tv",
 			channel,
 			{ via: "direct", generation: 7, source: 0, container: "hls-ts" },
-			undefined
+			undefined,
+			false
 		);
 		expect(seen).toEqual(["opening", "playing"]);
 
@@ -443,7 +451,8 @@ describe("createCastDestination", () => {
 				video: "copy",
 				audio: "aac",
 			},
-			undefined
+			undefined,
+			false
 		);
 		expect(cast.getState().status).toBe("opening");
 	});
@@ -514,12 +523,12 @@ describe("createCastDestination", () => {
 			video: "copy",
 			audio: "aac",
 		};
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60);
+		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 60, false);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState()).toMatchObject({ position: 65, duration: 5400 });
 		expect(cast.capabilities.seek).toBe(true);
 		await cast.seek(1200);
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 1200);
+		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, route, 1200, false);
 		expect(fake.castControl).not.toHaveBeenCalled();
 		expect(cast.getState().position).toBe(1200);
 		// After a stop, a seek goes to the receiver, which has nothing.
@@ -596,7 +605,13 @@ describe("createCastDestination", () => {
 		clock += PAUSE_LIMIT_MS;
 		await cast.play();
 		expect(fake.castLoad).toHaveBeenCalledTimes(2);
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, expect.anything(), 90);
+		expect(fake.castLoad).toHaveBeenLastCalledWith(
+			"cast:tv",
+			movie,
+			expect.anything(),
+			90,
+			false
+		);
 		// Play without a pause before it just plays.
 		await cast.play();
 		expect(fake.castLoad).toHaveBeenCalledTimes(2);
@@ -713,13 +728,20 @@ describe("createCastDestination", () => {
 			"cast:tv",
 			channel,
 			expect.objectContaining({ via: "converted" }),
-			undefined
+			undefined,
+			false
 		);
 		cast.receive({ kind: "media", media: media({ position: 5, duration: null, live: true }) });
 		expect(cast.getState().position).toBe(5);
 		// A movie keeps its start.
 		await cast.load({ kind: "local", channel: movie }, { startAt: 1800 });
-		expect(fake.castLoad).toHaveBeenLastCalledWith("cast:tv", movie, expect.anything(), 1800);
+		expect(fake.castLoad).toHaveBeenLastCalledWith(
+			"cast:tv",
+			movie,
+			expect.anything(),
+			1800,
+			false
+		);
 	});
 
 	describe("what it shows when a load doesn't go", () => {
@@ -809,6 +831,361 @@ describe("createCastDestination", () => {
 			expect(cast.getState().position).toBe(2400);
 			cast.receive({ kind: "closed", reason: "connectionLost" });
 			expect(cast.getState()).toMatchObject({ position: 2400, connection: "lost" });
+		});
+	});
+
+	describe("starting a converted stream again", () => {
+		const film: StreamFormats = {
+			formats: [{ ...ts, audio: "ac3" }],
+			sources: [4],
+			duration: 5400,
+			generation: 7,
+		};
+		const filmItem = { kind: "local" as const, channel: movie };
+		const liveConverted: StreamFormats = { ...film, duration: null };
+
+		/** A cast whose timers and clock the test runs by hand. */
+		const setUp = (formats: StreamFormats) => {
+			const fake = backend(formats);
+			const waiting: { run: () => void; ms: number; on: boolean }[] = [];
+			const clock = { now: 1_000_000 };
+			const cast = createCastDestination(receiver, fake, {
+				now: () => clock.now,
+				schedule: (run, ms) => {
+					const timer = { run, ms, on: true };
+					waiting.push(timer);
+					return () => {
+						timer.on = false;
+					};
+				},
+			});
+			/** The delays still waiting to run. */
+			const pending = () => waiting.filter((t) => t.on).map((t) => t.ms);
+			/** Runs the timer waiting, and what its load does, and gives its
+			 *  delay. */
+			const next = async () => {
+				const timer = waiting.find((t) => t.on);
+				if (timer === undefined) throw new Error("nothing waits");
+				timer.on = false;
+				timer.run();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				return timer.ms;
+			};
+			return { fake, cast, clock, pending, next };
+		};
+
+		it("goes on from where a film is now once the receiver can't reach this computer", async () => {
+			const { fake, cast, clock, next } = setUp(film);
+			await cast.load(filmItem, { startAt: 60 });
+			cast.receive({ kind: "media", media: media({ position: 30, duration: null }) });
+			clock.now += 5000;
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			expect(cast.getState()).toMatchObject({ status: "opening", error: null });
+			expect(await next()).toBe(0);
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+			// It played on for five seconds after it last said where it was.
+			expect(fake.castLoad).toHaveBeenLastCalledWith(
+				"cast:tv",
+				movie,
+				expect.anything(),
+				95,
+				true
+			);
+		});
+
+		it("starts a live channel again from now once its connection ended", async () => {
+			const { fake, cast, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "media", media: media({ position: 300, live: true }) });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			expect(fake.castLoad).toHaveBeenLastCalledWith(
+				"cast:tv",
+				channel,
+				expect.anything(),
+				undefined,
+				true
+			);
+		});
+
+		it("waits longer each time, and says the stream stopped only once the tries run out", async () => {
+			const { fake, cast, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			fake.castLoad.mockRejectedValue("unreachable");
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			const delays = [];
+			while (pending().length > 0) {
+				delays.push(await next());
+				if (pending().length > 0)
+					expect(cast.getState()).toMatchObject({ status: "opening", error: null });
+			}
+			expect(delays).toEqual(RESTART_DELAYS_MS);
+			expect(fake.castLoad).toHaveBeenCalledTimes(1 + RESTART_DELAYS_MS.length);
+			expect(cast.getState()).toMatchObject({
+				status: "error",
+				error: { code: "loadFailed" },
+			});
+		});
+
+		it("counts a stream that keeps stopping, until it has run for a while", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			for (const delay of RESTART_DELAYS_MS) {
+				clock.now += STEADY_MS - 1;
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				expect(pending()).toEqual([delay]);
+				await next();
+			}
+			clock.now += STEADY_MS - 1;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([]);
+			expect(cast.getState().error).toEqual({ code: "loadFailed" });
+			// A stream that ran for a minute starts again at once.
+			cast.receive({ kind: "media", media: media({ live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([0]);
+		});
+
+		it("waits once when the stream stops again before a try starts", async () => {
+			const { fake, cast, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			// The second stop replaces the first one's try.
+			expect(pending()).toEqual([1_000]);
+			await next();
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+		});
+
+		it("waits on real timers unless told otherwise", async () => {
+			vi.useFakeTimers();
+			try {
+				const fake = backend(liveConverted);
+				const cast = createCastDestination(receiver, fake);
+				await cast.load(item);
+				fake.castLoad.mockRejectedValueOnce("unreachable");
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				await vi.advanceTimersByTimeAsync(0);
+				expect(fake.castLoad).toHaveBeenCalledTimes(2);
+				// The next try waits a second.
+				await vi.advanceTimersByTimeAsync(999);
+				expect(fake.castLoad).toHaveBeenCalledTimes(2);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(fake.castLoad).toHaveBeenCalledTimes(3);
+				// It stops again a second later, so the next try waits two, and
+				// a stop meanwhile cancels it.
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				await vi.advanceTimersByTimeAsync(1_999);
+				expect(fake.castLoad).toHaveBeenCalledTimes(3);
+				await cast.stop();
+				await vi.advanceTimersByTimeAsync(10_000);
+				expect(fake.castLoad).toHaveBeenCalledTimes(3);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("leaves a cast that ended alone", async () => {
+			const { fake, cast, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			// Stopped on the TV while the next try waits.
+			fake.castLoad.mockRejectedValueOnce("unreachable");
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			expect(pending()).toEqual([1_000]);
+			cast.receive({ kind: "closed", reason: "appStopped" });
+			expect(pending()).toEqual([]);
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+			// Or while a try is under way, which the backend then turns down.
+			await cast.load(item);
+			let reject: (reason: unknown) => void = () => {};
+			fake.castLoad.mockImplementationOnce(() => new Promise<void>((_, no) => (reject = no)));
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			cast.receive({ kind: "closed", reason: "connectionLost" });
+			reject("notConnected");
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(pending()).toEqual([]);
+			expect(fake.castLoad).toHaveBeenCalledTimes(4);
+			expect(cast.getState().connection).toBe("lost");
+		});
+
+		it("counts a minute from when the stream played, not from when it was asked for", async () => {
+			const { fake, cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			// A source that trickles: each try takes over a minute to fail.
+			fake.castLoad.mockImplementation(async () => {
+				clock.now += STEADY_MS + 1_000;
+				throw "unreachable";
+			});
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			while (pending().length > 0) await next();
+			expect(fake.castLoad).toHaveBeenCalledTimes(1 + RESTART_DELAYS_MS.length);
+			expect(cast.getState().error).toEqual({ code: "loadFailed" });
+		});
+
+		it("counts the minute from when the new stream first played", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// No media, then the new media playing, then playing still, which
+			// keeps the first time, so a minute from that counts as steady.
+			cast.receive({ kind: "media", media: null });
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			clock.now += STEADY_MS - 1;
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			clock.now += 1;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([0]);
+			// Playing for less than a minute isn't steady.
+			await next();
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 3, live: true }) });
+			clock.now += STEADY_MS - 1;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([1_000]);
+			// Nor is buffering, however long.
+			await next();
+			cast.receive({
+				kind: "media",
+				media: media({ mediaSessionId: 4, player: "buffering", live: true }),
+			});
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([2_000]);
+		});
+
+		it("gives up on a stream that keeps playing for just under a minute", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			let id = 1;
+			/** The new stream plays for `ms`, then stops. */
+			const playsThenStops = (ms: number) => {
+				id += 1;
+				cast.receive({ kind: "media", media: media({ mediaSessionId: id, live: true }) });
+				clock.now += ms;
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+			};
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			for (let i = 0; i < RESTART_DELAYS_MS.length; i++) {
+				await next();
+				playsThenStops(STEADY_MS - 1);
+			}
+			expect(pending()).toEqual([]);
+			expect(cast.getState().error).toEqual({ code: "loadFailed" });
+		});
+
+		it("keeps starting a stream that plays a full minute each time", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			let id = 1;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			for (let i = 0; i < RESTART_DELAYS_MS.length * 2; i++) {
+				await next();
+				id += 1;
+				cast.receive({ kind: "media", media: media({ mediaSessionId: id, live: true }) });
+				clock.now += STEADY_MS;
+				cast.receive({ kind: "conversionStopped", why: "dropped" });
+				expect(pending()).toEqual([0]);
+			}
+			expect(cast.getState().error).toBeNull();
+		});
+
+		it("doesn't count the old media's reports as the new stream playing", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 1, live: true }) });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// The receiver still plays what it has of the old stream.
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 1, live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([1_000]);
+			// The new stream plays.
+			await next();
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([0]);
+		});
+
+		it("knows the old media even when nothing showed as the stream was sent", async () => {
+			const { cast, clock, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// It stops again before anything new plays, so no media shows as
+			// the next try goes out.
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			// The receiver still reports the old media.
+			cast.receive({ kind: "media", media: media({ mediaSessionId: 2, live: true }) });
+			clock.now += STEADY_MS;
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			expect(pending()).toEqual([2_000]);
+		});
+
+		it("says at once when the provider turns the login away", async () => {
+			const { fake, cast, pending, next } = setUp(liveConverted);
+			await cast.load(item);
+			fake.castLoad.mockRejectedValueOnce("refused");
+			cast.receive({ kind: "conversionStopped", why: "dropped" });
+			await next();
+			expect(pending()).toEqual([]);
+			expect(cast.getState()).toMatchObject({ status: "error", error: { code: "refused" } });
+		});
+
+		it("leaves it to what the user asked for meanwhile", async () => {
+			const { fake, cast, pending, next } = setUp(film);
+			await cast.load(filmItem);
+			// A seek before the try starts cancels it.
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			expect(pending()).toEqual([0]);
+			await cast.seek(120);
+			expect(pending()).toEqual([]);
+			expect(fake.castLoad).toHaveBeenCalledTimes(2);
+			// The seek started the count again.
+			fake.castLoad.mockRejectedValueOnce("unreachable");
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			await next();
+			expect(pending()).toEqual([1_000]);
+			await cast.seek(240);
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			expect(pending()).toEqual([0]);
+			// A stop or a release cancels a try too.
+			await cast.stop();
+			expect(pending()).toEqual([]);
+			await cast.load(filmItem);
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			await cast.release();
+			expect(pending()).toEqual([]);
+			expect(fake.castLoad).toHaveBeenCalledTimes(5);
+		});
+
+		it("drops a try that a seek overtook while it loaded", async () => {
+			const { fake, cast, pending, next } = setUp(film);
+			await cast.load(filmItem);
+			let reject: (reason: unknown) => void = () => {};
+			fake.castLoad.mockImplementationOnce(() => new Promise<void>((_, no) => (reject = no)));
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			await next();
+			await cast.seek(300);
+			reject("superseded");
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			// The seek's load stands, and nothing tries again.
+			expect(pending()).toEqual([]);
+			expect(cast.getState()).toMatchObject({ status: "opening", error: null });
+		});
+
+		it("does nothing with nothing loaded", () => {
+			const { fake, cast, pending } = setUp(film);
+			cast.receive({ kind: "conversionStopped", why: "moved" });
+			expect(pending()).toEqual([]);
+			expect(fake.castLoad).not.toHaveBeenCalled();
+			expect(cast.getState().status).toBe("idle");
 		});
 	});
 });

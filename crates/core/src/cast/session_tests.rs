@@ -782,6 +782,21 @@ fn ten_quiet_seconds_end_the_session() {
 }
 
 #[test]
+fn a_session_can_have_its_own_heartbeat() {
+    let now = Instant::now();
+    let (ping, silence) = (Duration::from_secs(1), Duration::from_secs(2));
+    let mut session = ready(now).with_heartbeat(ping, silence);
+    let before = now + ping - Duration::from_millis(1);
+    assert!(session.tick(before).send.is_empty());
+    let out = session.tick(now + ping);
+    assert_eq!(sent(&out.send)[0].2, json!({ "type": "PING" }));
+    let before = now + silence - Duration::from_millis(1);
+    assert!(session.tick(before).events.is_empty());
+    let out = session.tick(now + silence);
+    assert_eq!(out.events, vec![Event::Closed(CloseReason::Timeout)]);
+}
+
+#[test]
 fn asks_for_the_status_while_playing() {
     let now = Instant::now();
     let mut session = with_media(now);
