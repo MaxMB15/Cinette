@@ -95,18 +95,32 @@ export const RemoteControlSettings = () => {
 					if (!current) return;
 					confirmedRef.current = loaded;
 					setForm({ settings: loaded, name: loaded.deviceName ?? "" });
-					// Not knowing says nothing, and the settings still show.
-					remoteLocalNetworkDenied()
-						.then((refused) => {
-							if (current) setDenied(refused === true);
-						})
-						.catch(() => {});
+					checkNetwork();
 				})
 				.catch((e: unknown) => {
 					if (current && e !== UNAVAILABLE) setLoadError(NOT_STARTED);
 				});
+			// Asked again whenever the app comes back, as after the system's
+			// local network alert, which the first start may have raised, or
+			// after the user changed it in the system's settings.
+			const checkNetwork = () => {
+				// Not knowing says nothing, and the settings still show.
+				remoteLocalNetworkDenied()
+					.then((refused) => {
+						// Stryker disable next-line ConditionalExpression: a state set after the card closed shows nowhere, so no test can tell.
+						if (current) setDenied(refused === true);
+					})
+					.catch(() => {});
+			};
+			const onVisible = () => {
+				if (document.visibilityState === "visible") checkNetwork();
+			};
+			window.addEventListener("focus", checkNetwork);
+			document.addEventListener("visibilitychange", onVisible);
 			return () => {
 				current = false;
+				window.removeEventListener("focus", checkNetwork);
+				document.removeEventListener("visibilitychange", onVisible);
 			};
 		},
 		// Stryker disable next-line ArrayDeclaration: any list that never changes runs the effect once, as this one does.

@@ -177,6 +177,41 @@ describe("RemoteControlSettings", () => {
 		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
 	});
 
+	it("asks again when the app comes back, as after the system's alert", async () => {
+		await shown();
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(1));
+		expect(screen.queryByText(LOCAL_NETWORK_DENIED)).toBeNull();
+		// Don't Allow at the alert, then the app is active again.
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(true);
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+		});
+		expect(await screen.findByRole("status")).toHaveTextContent(LOCAL_NETWORK_DENIED);
+		// Allowed in the system's settings, then back to the app.
+		vi.mocked(remoteLocalNetworkDenied).mockResolvedValueOnce(false);
+		act(() => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		await waitFor(() => expect(screen.queryByText(LOCAL_NETWORK_DENIED)).toBeNull());
+	});
+
+	it("doesn't ask while the app is hidden, or after the card closed", async () => {
+		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+		const { unmount } = render(<RemoteControlSettings />);
+		await waitFor(() => expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(1));
+		const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		act(() => {
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		hidden.mockRestore();
+		unmount();
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(remoteLocalNetworkDenied).toHaveBeenCalledTimes(1);
+	});
+
 	it("says nothing about the local network while it's allowed or unknown", async () => {
 		vi.mocked(remoteLocalNetworkDenied).mockRejectedValueOnce("unknown");
 		await shown();

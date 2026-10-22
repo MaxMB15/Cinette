@@ -874,11 +874,19 @@ fn remember_opened<R: Runtime>(app: &AppHandle<R>) {
 /// Starts remote control with the app, unless it waits for the user (see
 /// [`waits_for_user`]). Says whether it started.
 pub fn start_at_launch<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> bool {
-    if waits_for_user(cfg!(target_os = "ios"), opened_before(app)) {
+    start_at_launch_with(cfg!(target_os = "ios"), opened_before(app), || {
+        start(app, key_dir)
+    })
+}
+
+/// [`start_at_launch`] on iOS or not, with the user having opened it before
+/// or not, starting with `start`.
+fn start_at_launch_with(ios: bool, opened_before: bool, start: impl FnOnce() -> bool) -> bool {
+    if waits_for_user(ios, opened_before) {
         tracing::info!("[remote] waiting for Devices or the settings before starting");
         return false;
     }
-    start(app, key_dir)
+    start()
 }
 
 /// Starts the target on every address and advertises it, and manages a
@@ -899,22 +907,29 @@ async fn start_on_network<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> R
         key_dir,
         listener,
         Box::new(advertise_on_network),
-        browse_network(),
+        browse_network,
         target::Limits::STANDARD,
     )
 }
 
 /// Starts remote control if it isn't running: on iOS the first time the
 /// user opens Devices or the Remote control settings, and anywhere after a
-/// start that failed. Remembers it, so the app starts it from then on.
-pub async fn open<R: Runtime>(app: &AppHandle<R>, key_dir: PathBuf) -> Result<(), String> {
-    open_with(app, start_on_network(app, key_dir)).await
+/// start that failed. Once it starts, the app starts it from then on, and
+/// `multicast` is told to hold the Wi-Fi multicast lock if the app is still
+/// in the foreground.
+pub async fn open<R: Runtime>(
+    app: &AppHandle<R>,
+    key_dir: PathBuf,
+    multicast: impl FnOnce(bool),
+) -> Result<(), String> {
+    open_with(app, start_on_network(app, key_dir), multicast).await
 }
 
 /// [`open`], starting with `start`.
 async fn open_with<R: Runtime>(
     app: &AppHandle<R>,
     start: impl std::future::Future<Output = Result<(), String>>,
+    multicast: impl FnOnce(bool),
 ) -> Result<(), String> {
     // One start at a time, so two quick opens don't start it twice.
     static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -922,10 +937,19 @@ async fn open_with<R: Runtime>(
     if app.try_state::<RemoteService>().is_some() {
         return Ok(());
     }
-    remember_opened(app);
     start.await.inspect_err(|e| {
         tracing::error!("[remote] remote control didn't start: {e}");
-    })
+    })?;
+    // Only a start that worked counts, so a failed one doesn't make every
+    // later launch start it, and ask about the local network, by itself.
+    remember_opened(app);
+    // The app may have gone to the background while it started.
+    if let Some(service) = app.try_state::<RemoteService>()
+        && service.wants_foreground.load(Ordering::SeqCst)
+    {
+        multicast(true);
+    }
+    Ok(())
 }
 
 /// [`start`] on `listener`, advertising through `advertiser`, with `limits`. Call it inside
@@ -935,7 +959,7 @@ fn start_on<R: Runtime>(
     key_dir: PathBuf,
     listener: tokio::net::TcpListener,
     advertiser: Advertiser,
-    found: mpsc::UnboundedReceiver<discovery::Event>,
+    browse: impl FnOnce() -> mpsc::UnboundedReceiver<discovery::Event>,
     limits: target::Limits,
 ) -> Result<(), String> {
     let key = identity::load_or_create(&key_dir)
@@ -964,7 +988,10 @@ fn start_on<R: Runtime>(
     .map_err(|e| format!("couldn't listen: {e}"))?;
     let devices = Arc::new(Mutex::new(Devices::new(device_id.clone())));
     let link = Arc::new(Mutex::new(None));
-    follow_discovery(app.clone(), devices.clone(), found);
+    // Only now, with the key loaded and the target listening, so a start
+    // that failed leaves no browse running, which on iOS would raise the
+    // local network prompt by itself.
+    follow_discovery(app.clone(), devices.clone(), browse());
     tracing::info!(
         "[remote] listening on port {} as {device_id}",
         handle.port()

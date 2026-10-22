@@ -444,12 +444,15 @@ pub async fn remote_open<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     {
         use tauri::Manager;
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-        crate::remote::open(&app, dir).await?;
         // The multicast lock goes with remote control running, and the
-        // launch didn't take it if this is what started it.
-        #[cfg(target_os = "android")]
-        crate::android_device::hold_multicast(true);
-        Ok(())
+        // launch didn't take it if this is what starts it.
+        crate::remote::open(&app, dir, |hold| {
+            #[cfg(target_os = "android")]
+            crate::android_device::hold_multicast(hold);
+            #[cfg(not(target_os = "android"))]
+            let _ = hold;
+        })
+        .await
     }
     #[cfg(not(remote))]
     {
