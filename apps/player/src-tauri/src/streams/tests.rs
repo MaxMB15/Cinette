@@ -491,7 +491,8 @@ fn slow_source(name: &str) -> String {
         for mut stream in listener.incoming().flatten() {
             std::thread::spawn(move || {
                 use std::io::Write;
-                let head = "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\n\r\n";
+                let head =
+                    "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nConnection: close\r\n\r\n";
                 if stream.write_all(head.as_bytes()).is_err() {
                     return;
                 }

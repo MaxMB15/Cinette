@@ -911,12 +911,16 @@ fn refusing_source(
                     open.load(Ordering::SeqCst) > 0
                 };
                 if refuse || busy {
-                    let _ =
-                        stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                    );
                     return;
                 }
                 open.fetch_add(1, Ordering::SeqCst);
-                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
                 let sent = stream.write_all(head.as_bytes()).is_ok()
                     && stream.write_all(&body.as_bytes()[..44]).is_ok();
                 // A read that ends at once is the reader hanging up.
@@ -1909,7 +1913,8 @@ async fn a_session_a_newer_one_replaced_says_nothing_more() {
 
 /// A playlist on loopback that answers 403 to its first request, as a
 /// provider that still counts a connection that just closed, and the
-/// playlist after.
+/// playlist after. It answers once per connection and says so, or an HTTP
+/// client could reuse a connection it already closed.
 fn playlist_refused_once() -> String {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1920,7 +1925,8 @@ fn playlist_refused_once() -> String {
             let n = stream.read(&mut request).unwrap_or(0);
             let segment = String::from_utf8_lossy(&request[..n]).contains("/s.ts");
             let answer = if asked == 0 {
-                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_string()
+                "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                    .to_string()
             } else {
                 let body = if segment {
                     "ab"
@@ -1928,7 +1934,7 @@ fn playlist_refused_once() -> String {
                     "#EXTM3U\n#EXTINF:4.0,\ns.ts\n"
                 };
                 format!(
-                    "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{body}",
+                    "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
                     body.len()
                 )
             };

@@ -413,7 +413,7 @@ fn live_source(head: Vec<u8>, chunks: Vec<Vec<u8>>, every: Duration, end: End) -
             std::thread::spawn(move || {
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request);
-                let answer = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
+                let answer = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n";
                 if stream.write_all(answer.as_bytes()).is_err() || stream.write_all(&head).is_err()
                 {
                     return;
@@ -449,7 +449,7 @@ fn file_source(body: Vec<u8>) -> String {
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request);
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
                     body.len()
                 );
                 let _ = stream.write_all(head.as_bytes());
