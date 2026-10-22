@@ -128,6 +128,17 @@ describe("createRemoteControl", () => {
 			name: "Lounge TV",
 		});
 		expect(rc.getState().link!.name, "the name its key vouches for").toBe("Lounge TV");
+		expect(link.features, "nothing offered before the handshake").toStrictEqual([]);
+		expect(rc.getState().link!.features, "an older device says nothing").toStrictEqual([]);
+		emit("remote://controller", {
+			deviceId: "tv1",
+			link: id,
+			phase: "verifying",
+			code: "123456",
+			name: "Lounge TV",
+			features: ["control", "providers"],
+		});
+		expect(rc.getState().link!.features).toStrictEqual(["control", "providers"]);
 		emit("remote://controller", {
 			deviceId: "tv1",
 			link: id,

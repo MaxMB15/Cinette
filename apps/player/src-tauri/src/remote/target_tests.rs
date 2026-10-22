@@ -1149,3 +1149,23 @@ async fn the_background_frees_the_port_before_it_answers() {
     h.handle.foreground(listener).unwrap();
     assert_eq!(h.handle.port(), port);
 }
+
+fn fake_host() -> FakeHost {
+    let (seen, _) = mpsc::unbounded_channel();
+    FakeHost {
+        seen,
+        catalog_calls: Mutex::new(Vec::new()),
+        held: (Mutex::new(false), std::sync::Condvar::new()),
+    }
+}
+
+#[test]
+fn a_host_that_cant_save_providers_answers_that_none_were() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    fake_host().save_providers(
+        "Mac".into(),
+        Vec::new(),
+        Box::new(move |results| tx.send(results).unwrap()),
+    );
+    assert_eq!(rx.try_recv(), Ok(Vec::new()));
+}

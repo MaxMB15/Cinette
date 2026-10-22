@@ -777,7 +777,40 @@ export const remoteAnswerConsent = (request: number, allow: boolean): Promise<vo
 
 export const remoteSessions = (): Promise<RemoteSession[]> => invoke("remote_sessions");
 
-/** A device asking to control this one, as `remote://consent` brings it. */
+/** Which parts of the history a transfer copies. */
+export interface TransferWhat {
+	history: boolean;
+	favorites: boolean;
+	pins: boolean;
+}
+
+/** How many of each the device the history comes from has. */
+export interface TransferCounts {
+	history: number;
+	positions: number;
+	favorites: number;
+	pins: number;
+}
+
+/** A provider as a request names it, before any login goes out. */
+export interface ProviderName {
+	name: string;
+	kind: "m3u" | "xtream";
+}
+
+/** A transfer a controller asks for, as the consent dialog shows it. */
+export type RemoteAsked =
+	| {
+			kind: "history";
+			/** From the asking device's side: "send" writes here, "import" reads here. */
+			direction: "send" | "import";
+			what: TransferWhat;
+			counts?: TransferCounts;
+	  }
+	| { kind: "providers"; providers: ProviderName[] };
+
+/** A device asking to control this one, or, with `asked`, for a transfer,
+ *  as `remote://consent` brings it. */
 export interface RemoteConsentEvent {
 	request: number;
 	deviceId: string;
@@ -785,7 +818,71 @@ export interface RemoteConsentEvent {
 	deviceType: string;
 	code: string;
 	expiresInMs: number;
+	asked?: RemoteAsked;
 }
+
+/** What became of one provider sent to another device. */
+export interface ProviderResult {
+	name: string;
+	outcome: "added" | "exists" | "failed" | "unknown";
+	error?: string;
+	/** The name it was saved under, when the other device had one like it. */
+	savedAs?: string;
+}
+
+/** An error code as the remote-control protocol spells it. */
+export type RemoteErrorCode =
+	| "invalid"
+	| "unsupported"
+	| "not_found"
+	| "stale_item"
+	| "rate_limited"
+	| "failed"
+	| "denied"
+	| "expired"
+	| "busy"
+	| "cancelled"
+	| "unknown";
+
+/** How far a transfer has got. */
+export type TransferProgress =
+	| { state: "sending"; data: { done: number; total: number } }
+	| { state: "receiving"; data: { received: number } }
+	| { state: "saving" }
+	| { state: "done"; data: unknown }
+	| { state: "providersDone"; data: ProviderResult[] }
+	| { state: "failed"; data: RemoteErrorCode };
+
+/** A transfer this device asked for, as `remote://transfer` brings it. */
+export type RemoteTransferNotice = { deviceId: string; link: number } & (
+	| { step: "pending"; expiresInMs: number }
+	| { step: "refused"; code: RemoteErrorCode }
+	| { step: "progress"; transfer: string; progress: TransferProgress }
+);
+
+/** A transfer another device runs with this one, as `remote://transfer-target` brings it. */
+export interface RemoteTargetTransfer {
+	deviceId: string;
+	name: string;
+	transfer: string;
+	kind: "history" | "providers";
+	progress: TransferProgress;
+}
+
+/** Providers another device sent, saved here, as `remote://providers-added` brings them. */
+export interface RemoteProvidersAdded {
+	from: string;
+	names: string[];
+}
+
+/** Asks the device link `link` controls to take these providers. Only their
+ *  names go now; the rest comes as `remote://transfer`. */
+export const remoteSendProviders = (link: number, providerIds: string[]): Promise<void> =>
+	invoke("remote_send_providers", { link, providerIds });
+
+/** Stops the transfer on link `link`. Nothing is written on either device. */
+export const remoteCancelTransfer = (link: number): Promise<void> =>
+	invoke("remote_cancel_transfer", { link });
 
 /** The request on screen now, for a page that wasn't listening when it came. */
 export const remotePendingConsent = (): Promise<RemoteConsentEvent | null> =>

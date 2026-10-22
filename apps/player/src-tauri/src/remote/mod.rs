@@ -36,6 +36,8 @@ mod keychain;
 mod local;
 pub mod logos;
 #[cfg(remote)]
+pub mod providers;
+#[cfg(remote)]
 pub mod link;
 #[cfg(remote)]
 mod service;

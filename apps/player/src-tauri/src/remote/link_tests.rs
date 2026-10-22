@@ -13,6 +13,9 @@ use mvp_core::remote::controller::GIVE_UP_AFTER;
 use mvp_core::remote::message::{DeviceType, Feature, PlaybackSnapshot, PROTOCOL_VERSION};
 use mvp_core::remote::settings::{ControlMode, RemoteSettings};
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
+use mvp_core::remote::transfer::flow::{
+    ControllerEvent, Progress, ProviderKind, ProviderName, ProviderSettings, WRITE_TIMEOUT,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -27,9 +30,18 @@ struct Player {
     prompts: mpsc::UnboundedSender<(RequestId, String)>,
     hidden: mpsc::UnboundedSender<RequestId>,
     silent: Arc<std::sync::atomic::AtomicBool>,
+    /// Saves of providers it never finishes, while silent.
+    held: Mutex<Vec<target::SavedProviders>>,
 }
 
 impl TargetHost for Player {
+    fn save_providers(&self, _: String, _: Vec<ProviderSettings>, done: target::SavedProviders) {
+        if self.silent.load(Ordering::SeqCst) {
+            self.held.lock().unwrap().push(done);
+        } else {
+            done(Vec::new());
+        }
+    }
     fn show_consent(&self, prompt: &ConsentPrompt) {
         let _ = self.prompts.send((prompt.request, prompt.code.clone()));
     }
@@ -84,6 +96,7 @@ async fn target_keyed(mode: ControlMode, key: DeviceKey) -> Target {
         prompts: tx,
         hidden: hide,
         silent: silent.clone(),
+        held: Mutex::new(Vec::new()),
     });
     let settings = RemoteSettings {
         remote_control: mode,
@@ -199,6 +212,7 @@ struct Seen {
     /// When each of `phases` came.
     phased_at: Vec<Instant>,
     states: Vec<VersionedState>,
+    transfers: Vec<ControllerEvent>,
 }
 
 struct Recorder {
@@ -218,6 +232,10 @@ impl LinkHost for Recorder {
         self.seen.lock().unwrap().states.push(state.clone());
         let _ = self.tx.send(());
     }
+    fn transfer(&self, _: u64, _: &DeviceId, event: &ControllerEvent) {
+        self.seen.lock().unwrap().transfers.push(event.clone());
+        let _ = self.tx.send(());
+    }
 }
 
 struct Link {
@@ -227,6 +245,10 @@ struct Link {
 }
 
 impl Link {
+    fn transfers(&self) -> Vec<ControllerEvent> {
+        self.recorder.seen.lock().unwrap().transfers.clone()
+    }
+
     fn phases(&self) -> Vec<Phase> {
         self.recorder.seen.lock().unwrap().phases.clone()
     }
@@ -307,7 +329,7 @@ fn link_clocked(
         name: "Mac".into(),
         device_type: DeviceType::Mac,
         versions: vec![PROTOCOL_VERSION],
-        features: vec![Feature::Control, Feature::Catalog],
+        features: vec![Feature::Control, Feature::Catalog, Feature::Providers],
     };
     let handle = super::start(
         LinkConfig {
@@ -359,7 +381,7 @@ async fn connects_and_attaches_to_what_plays() {
     assert_eq!(phases[0], Phase::Connecting);
     let own_name = RemoteSettings::default().name(DeviceType::FireTv);
     assert!(
-        matches!(phases[1], Phase::Verifying { ref code, ref name } if code.len() == 6 && *name == own_name),
+        matches!(phases[1], Phase::Verifying { ref code, ref name, .. } if code.len() == 6 && *name == own_name),
         "{phases:?}"
     );
     assert_eq!(phases[2], Phase::Connected);
@@ -1176,4 +1198,113 @@ async fn only_so_many_wait_for_answers() {
     );
     link.handle.leave().await;
     assert_eq!(first.await.unwrap(), Err(LinkError::NotConnected));
+}
+
+#[tokio::test]
+async fn providers_go_through_a_link_and_a_stalled_transfer_ends_alone() {
+    let mut t = target(ControlMode::Always).await;
+    let skew = Arc::new(Mutex::new(Duration::ZERO));
+    let ahead = skew.clone();
+    let clock: Clock = Arc::new(move || crate::remote::clock::now() + *ahead.lock().unwrap());
+    let port = t.port;
+    let mut link = link_clocked(
+        &t,
+        Arc::new(move || vec![SocketAddr::from(([127, 0, 0, 1], port))]),
+        GRACE,
+        QUICK,
+        clock,
+    );
+    link.until_phase(Phase::Connected).await;
+    let verifying = link
+        .phases()
+        .into_iter()
+        .find(|p| matches!(p, Phase::Verifying { .. }))
+        .unwrap();
+    assert!(
+        matches!(verifying, Phase::Verifying { ref features, .. } if features.contains(&Feature::Providers))
+    );
+
+    let names = vec![ProviderName {
+        name: "Home".into(),
+        kind: ProviderKind::M3u,
+    }];
+    link.handle.ask_providers(names.clone()).await.unwrap();
+    // Asking twice at once is refused here, before it goes anywhere.
+    assert_eq!(
+        link.handle.ask_providers(names).await,
+        Err(mvp_core::remote::controller::AskError::Busy)
+    );
+    let (request, _) = timeout(WAIT, t.prompts.recv()).await.unwrap().unwrap();
+    t.handle.answer(request, Answer::Allow);
+    link.until(|l| {
+        l.transfers()
+            .iter()
+            .any(|e| matches!(e, ControllerEvent::ProvidersGranted { .. }))
+    })
+    .await;
+    let grant = link
+        .transfers()
+        .into_iter()
+        .find_map(|e| match e {
+            ControllerEvent::ProvidersGranted { grant } => Some(grant),
+            _ => None,
+        })
+        .unwrap();
+    t.silent.store(true, Ordering::SeqCst);
+    link.handle.send_providers(
+        grant,
+        vec![ProviderSettings {
+            name: "Home".into(),
+            kind: ProviderKind::M3u,
+            url: "http://lists.example/a.m3u".into(),
+            username: None,
+            password: None,
+            epg_url: None,
+        }],
+    );
+    link.until(|l| {
+        l.transfers().iter().any(|e| {
+            matches!(
+                e,
+                ControllerEvent::Progress {
+                    progress: Progress::Saving,
+                    ..
+                }
+            )
+        })
+    })
+    .await;
+    // The target never answers. Once the grant's time is up, the transfer
+    // ends, and the session isn't closed for it.
+    *skew.lock().unwrap() = WRITE_TIMEOUT;
+    link.until(|l| {
+        l.transfers().iter().any(|e| {
+            matches!(
+                e,
+                ControllerEvent::Progress {
+                    progress: Progress::Failed(ErrorCode::Expired),
+                    ..
+                }
+            )
+        })
+    })
+    .await;
+    assert!(
+        !link.phases().contains(&Phase::Closed {
+            reason: Ended::Target(CloseReason::Timeout)
+        }),
+        "{:?}",
+        link.phases()
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_with_nothing_going_on_sends_nothing() {
+    let t = target(ControlMode::Always).await;
+    let mut link = link_to(&t, t.port, GRACE);
+    link.until_phase(Phase::Connected).await;
+    link.handle.cancel_transfer();
+    // Still in control afterwards.
+    assert!(link.handle.command(Command::Stop).await.is_ok());
+    assert!(link.transfers().is_empty());
 }

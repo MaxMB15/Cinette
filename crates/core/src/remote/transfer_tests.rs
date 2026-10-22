@@ -662,8 +662,12 @@ fn saves(net: &mut Net) -> Vec<(super::ConnId, String, Vec<ProviderSettings>)> {
         Action::SaveProviders {
             conn,
             grant,
+            from,
             providers,
-        } => Some((*conn, grant.clone(), providers.clone())),
+        } => {
+            assert_eq!(from, "Phone");
+            Some((*conn, grant.clone(), providers.clone()))
+        }
         _ => None,
     })
 }

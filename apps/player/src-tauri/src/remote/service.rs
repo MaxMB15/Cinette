@@ -7,13 +7,14 @@
 use super::device::device_type;
 use super::devices::{Devices, RemoteDevice};
 use super::link::{self, LinkConfig, LinkHandle, LinkHost, Phase};
-use super::target::{self, CatalogPage, TargetHandle, TargetHost};
+use super::target::{self, CatalogPage, SavedProviders, TargetHandle, TargetHost, TransferEvent};
 use super::{identity, SETTINGS_KEY, SETTINGS_STORE_FILE};
 use crate::commands::AppState;
 use crate::discovery::{self, Advertisement, Registration};
 use mvp_core::models::channel::Channel;
 use mvp_core::remote::catalog::CatalogQuery;
 use mvp_core::remote::consent::RequestId;
+use mvp_core::remote::controller::AskError;
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
 use mvp_core::remote::message::{
     Command, DeviceType, Feature, Hello, VersionedState, PROTOCOL_VERSION,
@@ -21,6 +22,11 @@ use mvp_core::remote::message::{
 use mvp_core::remote::sessions::RESUME_GRACE;
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{ConsentPrompt, SessionInfo};
+use mvp_core::remote::transfer::flow::{
+    Asked, ControllerEvent as TransferUpdate, Direction, Progress, ProviderName, ProviderOutcome,
+    ProviderSettings,
+};
+use mvp_core::remote::transfer::{Counts, What};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -47,6 +53,12 @@ pub struct RemoteService {
     /// The highest link number the webview has left. A connect numbered
     /// at or below it was overtaken by that leave on the way here.
     left_through: Mutex<u64>,
+    /// The providers the webview asked to send, by link, until the other
+    /// device allows it.
+    sending: Sending,
+    /// How many cancels each link has had, so a send that was cancelled
+    /// while it waited for the cache doesn't ask after all.
+    cancels: Mutex<std::collections::HashMap<u64, u64>>,
     /// Whether the app is in the foreground, as the system last said.
     // Only the mobile apps go to the background.
     #[cfg_attr(not(mobile), allow(dead_code))]
@@ -127,7 +139,7 @@ impl RemoteService {
             name,
             device_type: device_type(),
             versions: vec![PROTOCOL_VERSION],
-            features: vec![Feature::Control, Feature::Catalog],
+            features: vec![Feature::Control, Feature::Catalog, Feature::Providers],
         };
         let devices = self.devices.clone();
         let target = device.clone();
@@ -203,6 +215,68 @@ impl RemoteService {
         state.settings = settings.clone();
         self.handle.update_settings(settings.clone());
         save_settings(app, &settings)
+    }
+
+    /// Asks the device link `link` controls to take the providers with
+    /// these ids. Only their names go now. The logins go once that device's
+    /// user allows it, which `remote://transfer` reports.
+    pub async fn send_providers<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        link: u64,
+        ids: Vec<String>,
+    ) -> Result<(), String> {
+        let handle = self.link(link).ok_or("Not connected to that device.")?;
+        let ticket = self.cancel_count(link);
+        // This can wait on the cache, for a refresh or a guide save.
+        let names = {
+            let ids = ids.clone();
+            blocking(app, move |state| {
+                super::providers::names_for(&state.cache, &ids)
+            })
+            .await
+            .unwrap_or_else(|| Err("This device couldn't read its providers.".into()))?
+        };
+        {
+            let mut slot = lock(&self.sending);
+            if self.cancel_count(link) != ticket {
+                return Err(CANCELLED.into());
+            }
+            if slot.as_ref().is_some_and(|(l, _)| *l == link) {
+                return Err(BUSY.into());
+            }
+            *slot = Some((link, ids));
+        }
+        let asked = handle.ask_providers(names).await;
+        if asked.is_err() {
+            lock(&self.sending).take_if(|(l, _)| *l == link);
+        }
+        // Cancelled while the request went out: it's withdrawn.
+        if asked.is_ok() && self.cancel_count(link) != ticket {
+            handle.cancel_transfer();
+            return Err(CANCELLED.into());
+        }
+        asked.map_err(|e| match e {
+            AskError::Unsupported => {
+                "That device's Cinette can't take providers. Update it first.".to_string()
+            }
+            AskError::Busy => BUSY.to_string(),
+            AskError::NotConnected => "Not connected to that device.".to_string(),
+        })
+    }
+
+    /// Stops the transfer on link `link`, if one is going on.
+    pub fn cancel_transfer(&self, link: u64) {
+        *lock(&self.cancels).entry(link).or_default() += 1;
+        if let Some(handle) = self.link(link) {
+            handle.cancel_transfer();
+        }
+        lock(&self.sending).take_if(|(l, _)| *l == link);
+    }
+
+    /// How many cancels link `link` has had.
+    fn cancel_count(&self, link: u64) -> u64 {
+        lock(&self.cancels).get(&link).copied().unwrap_or(0)
     }
 
     /// Notes that the app went to the background or came back. Call
@@ -295,6 +369,26 @@ impl RemoteService {
     }
 }
 
+/// The providers the webview asked to send, as the link and the provider
+/// ids, until the other device allows it.
+type Sending = Arc<Mutex<Option<(u64, Vec<String>)>>>;
+
+/// Runs `work` on a blocking thread, where waiting on the cache holds up
+/// no async task. `None` when the thread panicked.
+async fn blocking<R: Runtime, T: Send + 'static>(
+    app: AppHandle<R>,
+    work: impl FnOnce(&AppState) -> T + Send + 'static,
+) -> Option<T> {
+    tauri::async_runtime::spawn_blocking(move || work(&app.state::<AppState>()))
+        .await
+        .ok()
+}
+
+/// What a send or ask cancelled on its way says.
+const CANCELLED: &str = "Cancelled.";
+/// What a second send while one waits says.
+const BUSY: &str = "Another transfer with that device is going on.";
+
 /// What `remote://consent` carries.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -305,6 +399,47 @@ pub struct ConsentEvent {
     pub device_type: DeviceType,
     pub code: String,
     pub expires_in_ms: u64,
+    /// What a controller with a session asks for: `None` is control.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asked: Option<AskedEvent>,
+}
+
+/// A transfer a controller asks for, as the dialog shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AskedEvent {
+    History {
+        direction: Direction,
+        what: What,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        counts: Option<Counts>,
+    },
+    Providers {
+        providers: Vec<ProviderName>,
+    },
+}
+
+impl From<&Asked> for AskedEvent {
+    fn from(asked: &Asked) -> Self {
+        match asked {
+            Asked::History {
+                direction,
+                what,
+                counts,
+            } => AskedEvent::History {
+                direction: *direction,
+                what: *what,
+                counts: *counts,
+            },
+            Asked::Providers(providers) => AskedEvent::Providers {
+                providers: providers.clone(),
+            },
+        }
+    }
 }
 
 fn consent_event(prompt: &ConsentPrompt) -> ConsentEvent {
@@ -318,6 +453,7 @@ fn consent_event(prompt: &ConsentPrompt) -> ConsentEvent {
             .expires_at
             .saturating_duration_since(super::clock::now())
             .as_millis() as u64,
+        asked: prompt.asked.as_ref().map(AskedEvent::from),
     }
 }
 
@@ -579,6 +715,32 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
         super::catalog::answer(&state.cache, query)
     }
 
+    fn save_providers(&self, from: String, providers: Vec<ProviderSettings>, done: SavedProviders) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let results =
+                super::providers::save(&state.cache, &super::providers::Network, &from, providers)
+                    .await;
+            let added: Vec<&str> = results
+                .iter()
+                .filter(|r| r.outcome == ProviderOutcome::Added)
+                .map(|r| r.saved_as.as_deref().unwrap_or(&r.name))
+                .collect();
+            if !added.is_empty() {
+                let _ = app.emit(
+                    "remote://providers-added",
+                    serde_json::json!({ "from": from, "names": added }),
+                );
+            }
+            done(results);
+        });
+    }
+
+    fn transfer(&self, event: &TransferEvent) {
+        let _ = self.app.emit("remote://transfer-target", event);
+    }
+
     fn advertise(&self, registration: Option<Registration>) {
         let mut current = lock(&self.advertisement);
         // The old record goes first, with a goodbye, so the name is free.
@@ -667,6 +829,38 @@ struct TauriLinkHost<R: Runtime> {
     devices: Arc<Mutex<Devices>>,
     link: Arc<Mutex<Option<LinkHandle>>>,
     throttle: Arc<Mutex<Throttle>>,
+    /// See [`RemoteService::send_providers`].
+    sending: Sending,
+}
+
+/// What `remote://transfer` carries: a transfer this device asked for.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferNotice {
+    pub device_id: String,
+    pub link: u64,
+    #[serde(flatten)]
+    pub update: TransferStep,
+}
+
+/// How a transfer this device asked for is going.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "step",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransferStep {
+    /// The other device's user is deciding.
+    Pending { expires_in_ms: u64 },
+    /// The other device said no, or couldn't be asked.
+    Refused {
+        code: mvp_core::remote::message::ErrorCode,
+    },
+    Progress {
+        transfer: String,
+        progress: Progress,
+    },
 }
 
 impl<R: Runtime> TauriLinkHost<R> {
@@ -745,6 +939,88 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
             let current = lock(&slot).as_ref().map(LinkHandle::generation);
             if current == Some(event.link) {
                 let _ = app.emit("remote://state", event);
+            }
+        });
+    }
+
+    fn transfer(&self, link: u64, device: &DeviceId, event: &TransferUpdate) {
+        if !self.current(link) {
+            return;
+        }
+        let update = match event {
+            TransferUpdate::ProvidersGranted { grant } => {
+                return self.send_granted(link, device, grant.clone());
+            }
+            TransferUpdate::Pending { expires_in } => TransferStep::Pending {
+                expires_in_ms: u64::from(*expires_in) * 1000,
+            },
+            TransferUpdate::Refused(code) => {
+                lock(&self.sending).take_if(|(l, _)| *l == link);
+                TransferStep::Refused { code: *code }
+            }
+            TransferUpdate::Progress { transfer, progress } => TransferStep::Progress {
+                transfer: transfer.clone(),
+                progress: progress.clone(),
+            },
+            // History transfers come in a later step; this device doesn't
+            // ask for them yet.
+            TransferUpdate::ExportNeeded { .. }
+            | TransferUpdate::Preview { .. }
+            | TransferUpdate::ImportReady { .. } => return,
+        };
+        self.notify(link, device, update);
+    }
+}
+
+impl<R: Runtime> TauriLinkHost<R> {
+    fn notify(&self, link: u64, device: &DeviceId, update: TransferStep) {
+        let _ = self.app.emit(
+            "remote://transfer",
+            TransferNotice {
+                device_id: device.to_string(),
+                link,
+                update,
+            },
+        );
+    }
+
+    /// The other device allowed the providers: their settings go now, read
+    /// from the cache only at this point.
+    fn send_granted(&self, link: u64, device: &DeviceId, grant: String) {
+        let handle = lock(&self.link)
+            .as_ref()
+            .filter(|l| l.generation() == link)
+            .cloned();
+        let ids = lock(&self.sending)
+            .take_if(|(l, _)| *l == link)
+            .map(|(_, ids)| ids);
+        let (Some(handle), Some(ids)) = (handle, ids) else {
+            return;
+        };
+        // The logins are read on a blocking thread, so a cache that's busy
+        // doesn't hold up this link.
+        let app = self.app.clone();
+        let device = device.to_string();
+        tauri::async_runtime::spawn(async move {
+            let settings = blocking(app.clone(), move |state| {
+                super::providers::settings_for(&state.cache, &ids)
+            })
+            .await;
+            match settings {
+                Some(Ok(settings)) => handle.send_providers(grant, settings),
+                _ => {
+                    handle.cancel_transfer();
+                    let _ = app.emit(
+                        "remote://transfer",
+                        TransferNotice {
+                            device_id: device,
+                            link,
+                            update: TransferStep::Refused {
+                                code: mvp_core::remote::message::ErrorCode::Failed,
+                            },
+                        },
+                    );
+                }
             }
         });
     }
@@ -996,11 +1272,13 @@ fn start_on<R: Runtime>(
         "[remote] listening on port {} as {device_id}",
         handle.port()
     );
+    let sending = Arc::new(Mutex::new(None));
     let link_host = Arc::new(TauriLinkHost {
         app: app.clone(),
         devices: devices.clone(),
         link: link.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: sending.clone(),
     });
     app.manage(RemoteService {
         handle,
@@ -1013,6 +1291,8 @@ fn start_on<R: Runtime>(
         link,
         left_through: Mutex::new(0),
         prompt,
+        sending,
+        cancels: Mutex::default(),
         wants_foreground: AtomicBool::new(true),
         in_foreground: tokio::sync::Mutex::new(true),
     });

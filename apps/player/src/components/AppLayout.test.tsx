@@ -27,6 +27,7 @@ vi.mock("@/components/remote/RemoteControls", () => ({
 	DevicesButton: () => <button type="button">Devices</button>,
 	RemoteBar: () => <p>Remote bar</p>,
 	ControllersBar: () => <p>Controllers bar</p>,
+	ProvidersAddedNotice: () => <p>Providers added</p>,
 }));
 
 import { AppLayout } from "./AppLayout";
@@ -182,6 +183,7 @@ describe("AppLayout", () => {
 			expect(screen.getByRole("button", { name: "Devices" })).toBeInTheDocument();
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+			expect(screen.getByText("Providers added")).toBeInTheDocument();
 			expect(screen.getByText("page")).toBeInTheDocument();
 		});
 
@@ -193,6 +195,7 @@ describe("AppLayout", () => {
 			expect(within(tabs).getByRole("link", { name: "Settings" })).toBeInTheDocument();
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+			expect(screen.getByText("Providers added")).toBeInTheDocument();
 		});
 
 		it("leaves both bars off a phone's player, which keeps the whole screen", () => {
@@ -200,6 +203,7 @@ describe("AppLayout", () => {
 			const { unmount } = render(tree("/player"));
 			expect(screen.queryByText("Remote bar")).toBeNull();
 			expect(screen.queryByText("Controllers bar")).toBeNull();
+			expect(screen.queryByText("Providers added")).toBeNull();
 			expect(screen.getByText("page")).toBeInTheDocument();
 			unmount();
 			// The sidebar layout keeps them on the player.
@@ -207,6 +211,7 @@ describe("AppLayout", () => {
 			render(tree("/player"));
 			expect(screen.getByText("Remote bar")).toBeInTheDocument();
 			expect(screen.getByText("Controllers bar")).toBeInTheDocument();
+			expect(screen.getByText("Providers added")).toBeInTheDocument();
 		});
 
 		it("shows a device that's only controlled who controls it, and nothing to control others with", () => {
@@ -227,6 +232,7 @@ describe("AppLayout", () => {
 			unmount();
 			render(tree("/player"));
 			expect(screen.queryByText("Controllers bar")).toBeNull();
+			expect(screen.queryByText("Providers added")).toBeNull();
 			expect(screen.getByText("page")).toBeInTheDocument();
 		});
 	});

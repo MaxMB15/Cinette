@@ -192,6 +192,21 @@ pub enum Asked {
     Providers(Vec<ProviderName>),
 }
 
+/// Whether a provider name can go in a request: not blank, within
+/// [`MAX_PROVIDER_NAME`], with no outer spaces and no control or format
+/// characters, so the other device's dialog shows it as it is.
+pub fn provider_name_ok(name: &str) -> bool {
+    let shown = |c: char| {
+        !c.is_control()
+            && !matches!(c, '\u{2028}' | '\u{2029}')
+            && !crate::remote::settings::is_format(c)
+    };
+    name.len() <= MAX_PROVIDER_NAME
+        && !name.trim().is_empty()
+        && name.trim() == name
+        && name.chars().all(shown)
+}
+
 impl Asked {
     pub fn kind(&self) -> RequestKind {
         match self {
@@ -257,20 +272,7 @@ impl Asked {
             }
             RequestKind::Providers => {
                 let names = providers.as_ref()?;
-                // A name the dialog shows as it is: no control or format
-                // characters that hide or reorder its text, as with device
-                // names.
-                let fits = |p: &ProviderName| {
-                    let shown = |c: char| {
-                        !c.is_control()
-                            && !matches!(c, '\u{2028}' | '\u{2029}')
-                            && !crate::remote::settings::is_format(c)
-                    };
-                    p.name.len() <= MAX_PROVIDER_NAME
-                        && !p.name.trim().is_empty()
-                        && p.name.trim() == p.name
-                        && p.name.chars().all(shown)
-                };
+                let fits = |p: &ProviderName| provider_name_ok(&p.name);
                 if names.is_empty() || names.len() > MAX_PROVIDERS || !names.iter().all(fits) {
                     return None;
                 }
@@ -283,7 +285,13 @@ impl Asked {
 }
 
 /// How far a transfer has got, for the UI on either side.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "state",
+    content = "data",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Progress {
     /// Chunks sent and acknowledged, out of all of them.
     Sending { done: u32, total: u32 },

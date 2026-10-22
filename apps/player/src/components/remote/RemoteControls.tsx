@@ -2,13 +2,23 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { DevicePicker } from "@/components/remote/DevicePicker";
+import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
-import { useRemoteSessions } from "@/hooks/useRemoteTarget";
-import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied, remoteOpen } from "@/lib/tauri";
+import { useRemoteSessions, useTauriEvent } from "@/hooks/useRemoteTarget";
+import { channelsQuery, providersQuery } from "@/lib/queries";
+import { providersAddedText } from "@/lib/remote-transfer";
+import {
+	getVpnActive,
+	remoteDisconnect,
+	remoteLocalNetworkDenied,
+	remoteOpen,
+	type RemoteProvidersAdded,
+} from "@/lib/tauri";
 import { VPN_HINT } from "@/lib/cast";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
 import type { CinetteDestination } from "@/lib/cinette-destination";
@@ -322,6 +332,9 @@ export const RemoteBar = () => {
 	const { link, ended, leave } = useRemoteControl();
 	const [dismissed, setDismissed] = useState<typeof ended>(null);
 	const [leaveFailed, setLeaveFailed] = useState(false);
+	// The link the dialog was opened for, so it doesn't come back by
+	// itself on the next link.
+	const [sendingFor, setSendingFor] = useState<number | null>(null);
 	// Leaving clears the link here before the backend answers, so this
 	// shows whatever the bar shows by then.
 	const failed = leaveFailed && (
@@ -341,9 +354,27 @@ export const RemoteBar = () => {
 					{link.phase.phase === "reconnecting" ? "…" : ""}
 				</span>
 				<NowPlaying destination={link.destination} />
+				{link.phase.phase === "connected" && link.features.includes("providers") && (
+					<button
+						type="button"
+						className={`${BUTTON} ml-auto shrink-0 hover:bg-accent`}
+						onClick={() => setSendingFor(link.id)}
+					>
+						Send providers
+					</button>
+				)}
+				{sendingFor === link.id && (
+					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
+				)}
 				<button
 					type="button"
-					className={`${BUTTON} ml-auto shrink-0 hover:bg-accent`}
+					className={cn(
+						BUTTON,
+						"shrink-0 hover:bg-accent",
+						!(
+							link.phase.phase === "connected" && link.features.includes("providers")
+						) && "ml-auto"
+					)}
 					onClick={() => {
 						setLeaveFailed(false);
 						leave().catch(() => setLeaveFailed(true));
@@ -362,4 +393,21 @@ export const RemoteBar = () => {
 			{text && <Notice message={text} onDismiss={() => setDismissed(ended)} />}
 		</>
 	);
+};
+
+/**
+ * Says which providers another device sent were saved here, and loads the
+ * provider and channel lists again, so they show without a restart.
+ */
+export const ProvidersAddedNotice = () => {
+	const queryClient = useQueryClient();
+	const [added, setAdded] = useState<RemoteProvidersAdded | null>(null);
+	useTauriEvent<RemoteProvidersAdded>("remote://providers-added", (event) => {
+		void queryClient.invalidateQueries({ queryKey: providersQuery().queryKey });
+		void queryClient.invalidateQueries({ queryKey: channelsQuery().queryKey });
+		setAdded(event);
+	});
+	return added ? (
+		<Notice message={providersAddedText(added)} onDismiss={() => setAdded(null)} />
+	) : null;
 };

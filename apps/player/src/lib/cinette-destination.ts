@@ -59,7 +59,13 @@ export interface RemoteSnapshot {
 /** Where the connection to the other device stands. */
 export type LinkPhase =
 	| { phase: "connecting" }
-	| { phase: "verifying"; code: string; name: string }
+	| {
+			phase: "verifying";
+			code: string;
+			name: string;
+			/** What the other device offers besides control, like "providers". */
+			features?: string[];
+	  }
 	| { phase: "pending"; expiresInMs: number }
 	| { phase: "connected" }
 	| { phase: "reconnecting"; attempt: number }

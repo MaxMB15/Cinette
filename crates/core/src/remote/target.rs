@@ -135,6 +135,8 @@ pub enum Action {
     SaveProviders {
         conn: ConnId,
         grant: String,
+        /// The sending device's name, for a provider whose name is taken.
+        from: String,
         providers: Vec<ProviderSettings>,
     },
     /// How a transfer with a controller is going, for the UI.
@@ -1391,11 +1393,21 @@ impl Target {
                     salt,
                     export,
                 }),
-                Step::SaveProviders { grant, providers } => actions.push(Action::SaveProviders {
-                    conn,
-                    grant,
-                    providers,
-                }),
+                Step::SaveProviders { grant, providers } => {
+                    let from = match self.conns.get(&conn) {
+                        Some(Conn {
+                            stage: Stage::InSession(auth),
+                            ..
+                        }) => auth.peer.name.clone(),
+                        _ => String::new(),
+                    };
+                    actions.push(Action::SaveProviders {
+                        conn,
+                        grant,
+                        from,
+                        providers,
+                    })
+                }
                 Step::Progress {
                     transfer,
                     kind,

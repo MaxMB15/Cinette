@@ -577,6 +577,45 @@ pub async fn remote_catalog<R: Runtime>(
     }
 }
 
+/// Asks the device link `link` controls to take the providers with these
+/// ids. Only their names go now; how it goes comes as `remote://transfer`.
+#[command]
+pub async fn remote_send_providers<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+    provider_ids: Vec<String>,
+) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        imp::service(&app)?
+            .send_providers(app.clone(), link, provider_ids)
+            .await
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, link, provider_ids);
+        Err(UNAVAILABLE.into())
+    }
+}
+
+/// Stops the transfer on link `link`. Nothing is written on either device.
+#[command]
+pub async fn remote_cancel_transfer<R: Runtime>(
+    app: AppHandle<R>,
+    link: u64,
+) -> Result<(), String> {
+    #[cfg(remote)]
+    {
+        imp::service(&app)?.cancel_transfer(link);
+        Ok(())
+    }
+    #[cfg(not(remote))]
+    {
+        let _ = (app, link);
+        Err(UNAVAILABLE.into())
+    }
+}
+
 #[cfg(test)]
 #[path = "commands_tests.rs"]
 mod tests;

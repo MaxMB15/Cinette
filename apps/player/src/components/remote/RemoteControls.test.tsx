@@ -21,7 +21,20 @@ vi.mock("@/hooks/useRemoteControl", () => ({
 }));
 
 const sessions = vi.hoisted(() => ({ list: [] as unknown[] }));
-vi.mock("@/hooks/useRemoteTarget", () => ({ useRemoteSessions: () => sessions.list }));
+const tauriEvents = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
+vi.mock("@/hooks/useRemoteTarget", () => ({
+	useRemoteSessions: () => sessions.list,
+	useTauriEvent: (event: string, handler: (payload: unknown) => void) => {
+		tauriEvents.set(event, handler);
+	},
+}));
+vi.mock("@/components/remote/SendProvidersDialog", () => ({
+	SendProvidersDialog: ({ onClose }: { onClose: () => void }) => (
+		<button type="button" onClick={onClose}>
+			Close sending
+		</button>
+	),
+}));
 const os = vi.hoisted(() => ({ platform: "macos" }));
 vi.mock("@/lib/platform", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/platform")>()),
@@ -45,8 +58,10 @@ import {
 	LOOKING,
 	LOOKING_MS,
 	NONE_FOUND,
+	ProvidersAddedNotice,
 	RemoteBar,
 } from "./RemoteControls";
+import { createTestQueryClient, wrapperFor } from "@/test/query";
 
 const tv: RemoteDevice = {
 	deviceId: "tv1",
@@ -86,9 +101,9 @@ const snapshot: RemoteSnapshot = {
 
 const send = vi.fn<(command: unknown) => Promise<number>>(() => Promise.resolve(1));
 
-const link = (phase: Link["phase"], code: string | null = null): Link => {
+const link = (phase: Link["phase"], code: string | null = null, features: string[] = []): Link => {
 	const destination = createCinetteDestination("tv1", "Living Room", send);
-	return { id: 3, deviceId: "tv1", name: "Living Room", phase, code, destination };
+	return { id: 3, deviceId: "tv1", name: "Living Room", phase, code, features, destination };
 };
 
 /** A leave as the store does it: the link goes here at once, and then
@@ -430,6 +445,47 @@ describe("ConnectStatusDialog", () => {
 });
 
 describe("RemoteBar", () => {
+	it("offers to send providers to a connected device that takes them", () => {
+		control.state = {
+			...control.state,
+			link: link({ phase: "connected" }, "123456", ["providers"]),
+		};
+		render(<RemoteBar />);
+		fireEvent.click(screen.getByRole("button", { name: "Send providers" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close sending" }));
+		expect(screen.queryByRole("button", { name: "Close sending" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Send providers" })).toBeInTheDocument();
+	});
+
+	it("doesn't bring the dialog back by itself on the next link", () => {
+		control.state = {
+			...control.state,
+			link: link({ phase: "connected" }, "123456", ["providers"]),
+		};
+		const { rerender } = render(<RemoteBar />);
+		fireEvent.click(screen.getByRole("button", { name: "Send providers" }));
+		expect(screen.getByRole("button", { name: "Close sending" })).toBeInTheDocument();
+		control.state = {
+			...control.state,
+			link: { ...link({ phase: "connected" }, "123456", ["providers"]), id: 4 },
+		};
+		rerender(<RemoteBar />);
+		expect(screen.queryByRole("button", { name: "Close sending" })).toBeNull();
+	});
+
+	it("doesn't offer it to a device that doesn't take them, or while reconnecting", () => {
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		const { unmount } = render(<RemoteBar />);
+		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
+		unmount();
+		control.state = {
+			...control.state,
+			link: link({ phase: "reconnecting", attempt: 1 }, null, ["providers"]),
+		};
+		render(<RemoteBar />);
+		expect(screen.queryByRole("button", { name: "Send providers" })).toBeNull();
+	});
+
 	it("shows nothing without a link or an ending to explain", () => {
 		render(<RemoteBar />);
 		expect(screen.queryByRole("region")).toBeNull();
@@ -642,5 +698,20 @@ describe("ControllersBar", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Disconnect Phone" }));
 		await act(async () => {});
 		expect(screen.getByRole("region")).toBeInTheDocument();
+	});
+});
+
+describe("ProvidersAddedNotice", () => {
+	it("says what was added and loads the lists again", () => {
+		const client = createTestQueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		render(<ProvidersAddedNotice />, { wrapper: wrapperFor(client) });
+		expect(screen.queryByRole("status")).toBeNull();
+		act(() => tauriEvents.get("remote://providers-added")!({ from: "Mac", names: ["Home"] }));
+		expect(screen.getByRole("status")).toHaveTextContent("Added “Home” from Mac.");
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["local", "providers"] });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["local", "channels"] });
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("status")).toBeNull();
 	});
 });

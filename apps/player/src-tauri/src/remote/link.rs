@@ -14,11 +14,11 @@
 
 use super::conn::{self, Read, Writer};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
-use mvp_core::remote::controller::{Controller, Event, PING_INTERVAL};
+use mvp_core::remote::controller::{AskError, Controller, Event, PING_INTERVAL};
 use mvp_core::remote::identity::{DeviceId, DeviceKey};
-use mvp_core::remote::message::{CloseReason, Command, ErrorCode, Hello, VersionedState};
+use mvp_core::remote::message::{CloseReason, Command, ErrorCode, Feature, Hello, VersionedState};
 use mvp_core::remote::target::IDLE_TIMEOUT;
-use mvp_core::remote::transfer::flow::ControllerEvent;
+use mvp_core::remote::transfer::flow::{ControllerEvent, ProviderName, ProviderSettings};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -94,6 +94,8 @@ pub enum Phase {
         /// The name the other device gave in the handshake, which its
         /// key vouches for, unlike the one discovery found.
         name: String,
+        /// What it offers besides control, such as taking providers.
+        features: Vec<Feature>,
     },
     /// The target is asking its user.
     Pending {
@@ -160,6 +162,9 @@ pub enum LinkError {
 enum Input {
     Command(Command, oneshot::Sender<Result<u64, LinkError>>),
     Catalog(CatalogQuery, oneshot::Sender<Page>),
+    AskProviders(Vec<ProviderName>, oneshot::Sender<Result<(), AskError>>),
+    SendProviders(String, Vec<ProviderSettings>),
+    CancelTransfer,
     Leave(oneshot::Sender<()>),
 }
 
@@ -198,6 +203,26 @@ impl LinkHandle {
             .send(Input::Catalog(query, tx))
             .map_err(|_| LinkError::NotConnected)?;
         rx.await.unwrap_or(Err(LinkError::NotConnected))
+    }
+
+    /// Asks the target to take these providers. Resolves once the request
+    /// went out; the answer comes through [`LinkHost::transfer`].
+    pub async fn ask_providers(&self, names: Vec<ProviderName>) -> Result<(), AskError> {
+        let (tx, rx) = oneshot::channel();
+        self.inbox
+            .send(Input::AskProviders(names, tx))
+            .map_err(|_| AskError::NotConnected)?;
+        rx.await.unwrap_or(Err(AskError::NotConnected))
+    }
+
+    /// Sends the providers' settings after the target allowed them.
+    pub fn send_providers(&self, grant: String, providers: Vec<ProviderSettings>) {
+        let _ = self.inbox.send(Input::SendProviders(grant, providers));
+    }
+
+    /// Stops the transfer asked for or running. Nothing is written.
+    pub fn cancel_transfer(&self) {
+        let _ = self.inbox.send(Input::CancelTransfer);
     }
 
     /// Stops asking, or ends the session. The target keeps playing.
@@ -508,6 +533,7 @@ async fn connection(
                             let verifying = Phase::Verifying {
                                 code: code.to_string(),
                                 name: peer.name,
+                                features: peer.features,
                             };
                             if resuming {
                                 code_for_a_new_request = Some(verifying);
@@ -596,6 +622,37 @@ async fn connection(
                         let _ = reply.send(Err(LinkError::NotConnected));
                     }
                 },
+                Some(Input::AskProviders(names, reply)) => {
+                    let asked = controller.ask_providers(names, (config.clock)()).map(|bytes| {
+                        let _ = writer.send(bytes);
+                        last_sent = (config.clock)();
+                    });
+                    let _ = reply.send(asked);
+                }
+                Some(Input::SendProviders(grant, providers)) => {
+                    let out = controller.send_providers(&grant, providers, (config.clock)());
+                    for bytes in out.send {
+                        let _ = writer.send(bytes);
+                        last_sent = (config.clock)();
+                    }
+                    for event in out.events {
+                        if let Event::Transfer(event) = event {
+                            host.transfer(link, device, &event);
+                        }
+                    }
+                }
+                Some(Input::CancelTransfer) => {
+                    let out = controller.cancel_transfer();
+                    for bytes in out.send {
+                        let _ = writer.send(bytes);
+                        last_sent = (config.clock)();
+                    }
+                    for event in out.events {
+                        if let Event::Transfer(event) = event {
+                            host.transfer(link, device, &event);
+                        }
+                    }
+                }
                 Some(Input::Catalog(query, reply)) => match controller.catalog(query) {
                     Ok((id, bytes)) => {
                         let _ = writer.send(bytes);
@@ -620,7 +677,6 @@ async fn connection(
         let mut closed = false;
         for event in given_up.events {
             match event {
-                // mutants: skip MatchArm: nothing in the app asks for a transfer until the next pull request, whose link test covers this.
                 Event::Transfer(event) => host.transfer(link, device, &event),
                 _ => closed = true,
             }

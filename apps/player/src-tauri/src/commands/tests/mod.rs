@@ -191,10 +191,10 @@ fn every_registered_command_has_a_row_in_the_argument_table() {
 fn sample(argument: &str) -> Value {
     match argument {
         "groupsWithSamples" | "uncategorizedGroups" | "existingCategories" => json!([]),
-        "episodes" | "ids" => json!([]),
+        "episodes" | "ids" | "providerIds" => json!([]),
         "rangeStart" | "rangeEnd" | "duration" | "fileId" | "durationSeconds" | "limit"
         | "positionSeconds" | "newSortOrder" | "sortOrder" | "n" | "startAt" | "endAt"
-        | "source" | "generation" => {
+        | "source" | "generation" | "link" => {
             json!(1)
         }
         "keep" | "allow" | "restart" => json!(true),
