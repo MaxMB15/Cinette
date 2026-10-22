@@ -1544,18 +1544,26 @@ export const PlayerView = () => {
 				},
 			})
 			.then((why) => setNotice(afterCast(why)));
+	// Each kind of receiver has its own button, and a Mac can show both:
+	// AirPlay while an AirPlay TV is in reach, and Cast once it has found a
+	// Cast receiver.
 	const castSlot =
-		airplay.available && activeChannel && !tv ? (
-			<AirPlayButton
-				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
-				warning={airplayConvertWarning(mac)}
-			/>
-		) : showsCastButton(cast) && activeChannel && !tv ? (
-			<CastButton
-				cast={cast}
-				channel={activeChannel}
-				onSend={(id) => sendToCast(id, activeChannel)}
-			/>
+		activeChannel && !tv && (airplay.available || showsCastButton(cast)) ? (
+			<>
+				{airplay.available && (
+					<AirPlayButton
+						onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+						warning={airplayConvertWarning(mac)}
+					/>
+				)}
+				{showsCastButton(cast) && (
+					<CastButton
+						cast={cast}
+						channel={activeChannel}
+						onSend={(id) => sendToCast(id, activeChannel)}
+					/>
+				)}
+			</>
 		) : undefined;
 
 	const castTv = cast.destination;
