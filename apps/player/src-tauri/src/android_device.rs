@@ -2,12 +2,13 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 //! What the app needs to know from Android: whether this is a TV, told to
-//! the page before any page script runs, and the device type remote control
-//! advertises. Also the Wi-Fi multicast lock that DNS-SD needs.
+//! the page before any page script runs, the device type remote control
+//! advertises, and the store the build is for. Also the Wi-Fi multicast lock
+//! that DNS-SD needs.
 
 use crate::remote::device::{AndroidFacts, TV_FEATURES};
 use crate::remote::held::Held;
-use jni::objects::{Global, JObject, JValue};
+use jni::objects::{Global, JObject, JString, JValue};
 use jni::{jni_sig, jni_str};
 use mvp_core::remote::message::DeviceType;
 use std::sync::{Mutex, OnceLock};
@@ -94,6 +95,52 @@ fn facts() -> AndroidFacts {
     })
 }
 
+/// The manifest's `app.cinette.STORE`, which `app/build.gradle.kts` sets
+/// from its `store` property: `google` or `amazon`.
+fn read_store() -> jni::errors::Result<String> {
+    with_context(|env, context| {
+        let packages = env
+            .call_method(
+                context,
+                jni_str!("getPackageManager"),
+                jni_sig!(() -> android.content.pm.PackageManager),
+                &[],
+            )?
+            .l()?;
+        let name = env
+            .call_method(
+                context,
+                jni_str!("getPackageName"),
+                jni_sig!(() -> java.lang.String),
+                &[],
+            )?
+            .l()?;
+        // PackageManager.GET_META_DATA
+        const GET_META_DATA: i32 = 128;
+        let info = env
+            .call_method(
+                &packages,
+                jni_str!("getApplicationInfo"),
+                jni_sig!((java.lang.String, jint) -> android.content.pm.ApplicationInfo),
+                &[JValue::from(&name), JValue::Int(GET_META_DATA)],
+            )?
+            .l()?;
+        let meta = env
+            .get_field(&info, jni_str!("metaData"), jni_sig!(android.os.Bundle))?
+            .l()?;
+        let key = env.new_string("app.cinette.STORE")?;
+        let value = env
+            .call_method(
+                &meta,
+                jni_str!("getString"),
+                jni_sig!((java.lang.String) -> java.lang.String),
+                &[JValue::from(&key)],
+            )?
+            .l()?;
+        env.cast_local::<JString>(value)?.try_to_string(env)
+    })
+}
+
 /// The type remote control advertises.
 pub fn device_type() -> DeviceType {
     facts().device_type()
@@ -170,6 +217,10 @@ fn release_multicast(lock: Option<Global<JObject<'static>>>) -> jni::errors::Res
 pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     let tv = facts().tv;
     tracing::info!("Android device is a TV: {tv}");
+    match read_store() {
+        Ok(store) => tracing::info!("Built for the {store} store"),
+        Err(e) => tracing::warn!("Couldn't read the store from the manifest: {e}"),
+    }
     tauri::plugin::Builder::new("android-device")
         .js_init_script(format!("window.__CINETTE_TV__ = {tv};"))
         .build()

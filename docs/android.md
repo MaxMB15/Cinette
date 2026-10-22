@@ -72,6 +72,28 @@ Mac's emulator runs `aarch64`.
 
 A release APK or app bundle has to be signed. That isn't set up yet.
 
+### Google and Amazon builds
+
+The app builds for Google's store or Amazon's. The Gradle property `store` picks
+one, `google` by default. Set it in the environment around the Tauri CLI:
+
+```bash
+ORG_GRADLE_PROJECT_store=amazon pnpm tauri android build --debug --target armv7 --apk
+```
+
+Both get the same Rust library, frontend and manifest. The store only goes into the
+manifest as `app.cinette.STORE`, which the app reads at startup and logs. The output
+has the same name either way, so copy the APK away before building the other store.
+
+`store` is a property and not a Gradle flavor dimension, because a second dimension
+renames the variant tasks, like `mergeUniversalDebugJniLibFolders`, that Tauri's
+`buildSrc/.../RustPlugin.kt` and CLI expect. `RustPlugin.kt` is written again by
+`pnpm tauri android init`.
+
+Fire TV sticks run 32-bit userspace even on 64-bit chips, so `armv7` is the target
+for them. CI's Android workflow builds both stores and checks the store in each
+manifest.
+
 ### Lint
 
 `pnpm tauri android build` prints Rust warnings but doesn't fail on them. Run Clippy
@@ -116,8 +138,8 @@ The arrow keys on a TV remote come through as D-pad events. You can send them wi
 `.gitignore` files leave those out. Changes made by hand:
 
 - `app/build.gradle.kts`: `minSdk` 28, plain HTTP allowed in release builds too,
-  Java 17, the `rustls-platform-verifier` dependency, and `libs/android` as a
-  folder of native libraries.
+  Java 17, the `rustls-platform-verifier` dependency, `libs/android` as a
+  folder of native libraries, and the `store` property.
 - `build.gradle.kts`: rustls' Maven repository, for the `org.rustls` group only.
 - `app/src/main/res/xml/network_security_config.xml`: allows plain HTTP and trusts
   the user's CAs.
@@ -127,6 +149,7 @@ The arrow keys on a TV remote come through as D-pad events. You can send them wi
 - `app/src/main/res/drawable-xhdpi/banner.png` and the manifest's `android:banner`
   and `uses-feature` lines: the TV launcher banner.
 - `app/src/main/java/app/cinette/MainActivity.kt`: hands Back to the page.
+- The manifest's `app.cinette.STORE` meta-data, from the `store` property.
 
 Running `pnpm tauri android init` again overwrites these. Check the diff afterwards.
 
