@@ -2687,3 +2687,32 @@ fn a_target_key_names_its_device_and_no_other_key_does() {
     assert_eq!(target_key_device(&link_key(4)), None);
     assert_eq!(target_key_device("in:nocolon"), None);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_close_from_an_old_link_leaves_the_new_links_transfer_alone() {
+    let running = Running::start(|_| {}).await;
+    let own = DeviceKey::generate().device_id();
+    let device = DeviceKey::generate().device_id();
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let keep = kept.clone();
+    let host = TauriLinkHost {
+        transfers: Arc::new(Transfers::new(Box::new(move |on| lock(&keep).push(on)))),
+        app: running.app.handle(),
+        devices: Arc::new(Mutex::new(Devices::new(own))),
+        link: Arc::new(Mutex::new(Some(LinkHandle::detached(2, device.clone())))),
+        throttle: Arc::new(Mutex::new(Throttle::default())),
+        sending: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(None)),
+    };
+    host.transfer(2, &device, &TransferUpdate::Pending { expires_in: 30 });
+    // Link 1, which link 2 replaced, says it closed only now.
+    host.phase(
+        1,
+        &device,
+        &Phase::Closed {
+            reason: super::link::Ended::Left,
+        },
+    );
+    assert_eq!(*lock(&kept), [true], "link 2's transfer still runs");
+    assert_ne!(link_key(1), link_key(2));
+}

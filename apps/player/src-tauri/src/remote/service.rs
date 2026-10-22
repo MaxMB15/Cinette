@@ -47,8 +47,6 @@ use tokio::sync::oneshot;
 /// discovery found, and the device this one controls, if any.
 pub struct RemoteService {
     pub(crate) handle: TargetHandle,
-    /// The transfers under way, shared with the hosts.
-    transfers: Arc<Transfers>,
     key_dir: PathBuf,
     state: Mutex<Saved>,
     resetting: Mutex<()>,
@@ -210,7 +208,6 @@ impl RemoteService {
         let old = slot.replace(link::start(config, self.link_host.clone()));
         drop(slot);
         if let Some(old) = old {
-            self.end_link_transfer(old.generation());
             tauri::async_runtime::spawn(async move { old.leave().await });
         }
         Ok(())
@@ -234,16 +231,9 @@ impl RemoteService {
             }
         };
         if let Some(old) = old {
-            self.end_link_transfer(link);
             old.leave().await;
         }
         self.forget_kept();
-    }
-
-    /// A link this device left, or replaced, reports nothing more, so a
-    /// transfer it had under way ends here.
-    fn end_link_transfer(&self, link: u64) {
-        self.transfers.set(&link_key(link), false);
     }
 
     /// Stops keeping the device left in the list, unless a link to another
@@ -488,7 +478,6 @@ impl RemoteService {
         // webview didn't ask, so it's told.
         let old = lock(&self.link).take();
         if let Some(old) = old {
-            self.end_link_transfer(old.generation());
             self.events.left(old.generation(), old.device());
             tauri::async_runtime::spawn(async move { old.leave().await });
             self.forget_kept();
@@ -1625,7 +1614,7 @@ fn start_on<R: Runtime>(
     let sending = Arc::new(Mutex::new(None));
     let link_host = Arc::new(TauriLinkHost {
         app: app.clone(),
-        transfers: transfers.clone(),
+        transfers,
         devices: devices.clone(),
         link: link.clone(),
         throttle: Arc::new(Mutex::new(Throttle::default())),
@@ -1634,7 +1623,6 @@ fn start_on<R: Runtime>(
     });
     app.manage(RemoteService {
         handle,
-        transfers,
         key_dir,
         state: Mutex::new(Saved { settings, key }),
         link_host: link_host.clone(),
