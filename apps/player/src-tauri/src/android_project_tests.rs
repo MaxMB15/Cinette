@@ -93,3 +93,15 @@ fn wifi_is_not_required() {
         r#"<uses-feature android:name="android.hardware.wifi" android:required="false" />"#
     ));
 }
+
+/// Fire TV's launcher shows a sideloaded app's activity icon, not its
+/// banner, so the Amazon build makes that icon the banner.
+#[test]
+fn the_amazon_launcher_icon_is_the_banner() {
+    let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(r#"android:icon="${launcherIcon}""#));
+    let gradle = include_str!("../gen/android/app/build.gradle.kts");
+    assert!(gradle.contains(
+        r#"if (store == "amazon") "@drawable/banner" else "@mipmap/ic_launcher""#
+    ));
+}
