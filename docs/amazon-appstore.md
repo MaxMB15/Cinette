@@ -103,7 +103,7 @@ All plain text, in English, with no prices, emoji or capitals for emphasis.
 
 > Cinette is a player for IPTV services you already have. Add an M3U playlist or an
 > Xtream Codes login from your provider, and watch its live channels, movies and series
-> with a programme guide, all from the remote.
+> with a program guide, all from the remote.
 >
 > Cinette provides no channels, movies, series or other content, and isn't linked to
 > any provider. You need a playlist or login from a service you're allowed to use.
@@ -129,7 +129,7 @@ All plain text, in English, with no prices, emoji or capitals for emphasis.
 **Feature bullets** (3 to 5):
 
 - Plays your own M3U playlists and Xtream Codes logins: live TV, movies and series
-- Programme guide, favorites, history and resume, all on the remote
+- Program guide, favorites, history and resume, all on the remote
 - Hardware-decoded playback of HLS, MPEG-TS, MP4, MKV and more
 - No accounts, ads or tracking; your data stays on the device
 - Free and open source
