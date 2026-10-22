@@ -201,6 +201,10 @@ const TvLayout = () => {
 				{/* Other devices controlling this TV, each with Disconnect.
 				    Settings lists them too, so the player keeps the screen. */}
 				{!isPlayer && <ControllersBar />}
+				{/* What another device sent here. They float over the page,
+				    the player included, and take the focus. */}
+				<ProvidersAddedNotice />
+				<HistoryImportedNotice />
 				<div className="flex-1 min-h-0">
 					<Outlet />
 				</div>

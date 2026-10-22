@@ -239,9 +239,20 @@ describe("AppLayout", () => {
 			unmount();
 			render(tree("/player"));
 			expect(screen.queryByText("Controllers bar")).toBeNull();
-			expect(screen.queryByText("Providers added")).toBeNull();
-			expect(screen.queryByText("History imported")).toBeNull();
 			expect(screen.getByText("page")).toBeInTheDocument();
+		});
+
+		it("shows what another device sent on every TV page, the player included", () => {
+			// They also load the lists again, which mustn't wait for the
+			// player to close.
+			platform.layoutMode = "tv";
+			platform.controller = false;
+			for (const path of ["/", "/player"]) {
+				const { unmount } = render(tree(path));
+				expect(screen.getByText("Providers added")).toBeInTheDocument();
+				expect(screen.getByText("History imported")).toBeInTheDocument();
+				unmount();
+			}
 		});
 	});
 });

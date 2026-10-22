@@ -122,7 +122,9 @@ opened Devices or Settings, so the local network prompt comes then. `remote_open
 starts it then, and anywhere a start at launch failed. On both, going to the
 background withdraws the record and closes the listener, and coming back listens and
 advertises again. Open sessions carry on. A TV is only controlled; a phone or tablet
-can also control.
+can also control. While a transfer is under way on iOS, `remote/running.rs` asks for a
+background task (about 30 seconds), so switching away doesn't stall it; Android keeps
+running for a while anyway.
 The target listens on TCP port 47130, or any free port when that one is taken, on one
 socket that takes IPv4 and IPv6. It only takes connections from this machine and from
 the subnets of its own network interfaces, so a computer with a public IPv4 or a global

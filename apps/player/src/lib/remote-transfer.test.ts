@@ -19,6 +19,7 @@ import {
 	providerResultText,
 	refusalText,
 	type SendState,
+	stayOpenNote,
 } from "./remote-transfer";
 import type { RemoteAsked, RemoteTransferNotice, TransferReport } from "./tauri";
 
@@ -409,5 +410,20 @@ describe("nextHistoryState", () => {
 				nextHistoryState(state, notice({ step: "pending", expiresInMs: 1 }), "TV", 0)
 			).toBe(state);
 		}
+	});
+});
+
+describe("stayOpenNote", () => {
+	it("asks phones, tablets and TVs to stay open, where leaving can stop a transfer", () => {
+		for (const p of ["ios", "android", "tv"] as const) {
+			expect(stayOpenNote(p)).toBe(
+				"Keep Cinette open until it's done. If it stops, nothing is changed on either device."
+			);
+		}
+	});
+
+	it("says nothing on a computer", () => {
+		expect(stayOpenNote("macos")).toBeNull();
+		expect(stayOpenNote("linux")).toBeNull();
 	});
 });

@@ -13,6 +13,7 @@ import {
 	historyPrivacy,
 	nextHistoryState,
 	reportLines,
+	stayOpenNote,
 	unmatchedLines,
 	type HistoryState,
 } from "@/lib/remote-transfer";
@@ -86,6 +87,8 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 		};
 	}, [sending, what]);
 	const waiting = state.step === "waiting";
+	// On a phone, tablet or TV, leaving the app can stop a transfer.
+	const stayOpen = stayOpenNote();
 	useEffect(() => {
 		if (!waiting) return;
 		const timer = setInterval(() => setNow(performance.now()), 250);
@@ -228,6 +231,7 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 							Expires in {secondsLeft(state.expiresAt, now)} s
 						</p>
 					)}
+					{stayOpen && <p className="text-xs text-muted-foreground mb-3">{stayOpen}</p>}
 					<div className="flex justify-end">
 						<button type="button" className={PLAIN} onClick={close}>
 							Cancel
@@ -259,10 +263,12 @@ export const TransferHistoryDialog = ({ link, onClose }: { link: Link; onClose: 
 					<p className="text-sm mb-3" role="status">
 						{progressText(state, sending)}
 					</p>
-					{tooLate && (
+					{tooLate ? (
 						<p className="text-xs text-muted-foreground mb-3">
 							It's too late to stop it now. Closing this doesn't undo it.
 						</p>
+					) : (
+						stayOpen && <p className="text-xs text-muted-foreground mb-3">{stayOpen}</p>
 					)}
 					<div className="flex justify-end">
 						<button type="button" className={PLAIN} onClick={close}>

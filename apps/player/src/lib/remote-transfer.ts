@@ -6,7 +6,8 @@
  * dialogs say, and how a send moves along on the device that asked.
  */
 
-import type { Provider } from "@/lib/types";
+import { getPlatform, isMobilePlatform } from "@/lib/platform";
+import type { Platform, Provider } from "@/lib/types";
 import type {
 	ProviderResult,
 	RemoteAsked,
@@ -65,6 +66,17 @@ export const consentBody = (deviceType: string, asked: RemoteAsked | undefined):
 		? `Its ${parts(asked)} will be added to this device's own. Nothing here is deleted. Only allow it if the code matches the one on that device.`
 		: `It will get a copy of this device's ${parts(asked)}. Provider logins aren't part of it. Only allow it if the code matches the one on that device.`;
 };
+
+/**
+ * What a transfer sheet adds on a phone, tablet or TV while it waits or
+ * moves data: the system may stop an app that's left, and a transfer that
+ * stops writes nothing. iOS gives a transfer about 30 seconds after the app
+ * is left. Computers keep it running.
+ */
+export const stayOpenNote = (platform: Platform = getPlatform()): string | null =>
+	isMobilePlatform(platform)
+		? "Keep Cinette open until it's done. If it stops, nothing is changed on either device."
+		: null;
 
 /** Why another device didn't take a transfer, as a sentence. */
 export const refusalText = (name: string, code: RemoteErrorCode): string => {

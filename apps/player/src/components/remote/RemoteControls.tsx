@@ -10,6 +10,7 @@ import { DevicePicker } from "@/components/remote/DevicePicker";
 import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
 import { TransferHistoryDialog } from "@/components/remote/TransferHistoryDialog";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
+import { useTvNoticeFocus } from "@/hooks/useTvNoticeFocus";
 import { useRemoteSessions, useTauriEvent } from "@/hooks/useRemoteTarget";
 import { channelsQuery, providersQuery } from "@/lib/queries";
 import { providersAddedText } from "@/lib/remote-transfer";
@@ -149,7 +150,8 @@ export const LEAVE_FAILED =
 	"Couldn't end the session. If the other device still shows this one, disconnect it there.";
 
 /** A note at the bottom of the screen. A `raised` one sits above the
- *  others, so two don't cover each other. */
+ *  others, so two don't cover each other. On a TV it takes the focus, so
+ *  the remote can reach its Dismiss, and Back closes it. */
 const Notice = ({
 	message,
 	onDismiss,
@@ -158,10 +160,12 @@ const Notice = ({
 	message: string;
 	onDismiss: () => void;
 	raised?: boolean;
-}) =>
-	createPortal(
+}) => {
+	const tv = useTvNoticeFocus(message, onDismiss);
+	return createPortal(
 		<div
 			role="status"
+			{...tv}
 			className={cn(
 				"fixed left-1/2 -translate-x-1/2 z-10000 flex items-center gap-3 rounded-md border border-border bg-card px-4 py-2 text-sm shadow-xl max-w-[calc(100vw-2rem)] break-words",
 				raised ? "bottom-20" : "bottom-4"
@@ -179,6 +183,7 @@ const Notice = ({
 		</div>,
 		document.body
 	);
+};
 
 /**
  * While this device waits for another to let it in: the code to compare

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import type { Channel } from "@/lib/types";
 import type { RemoteHistoryImported } from "@/lib/tauri";
@@ -11,6 +11,11 @@ vi.mock("@/hooks/useRemoteTarget", () => ({
 	useTauriEvent: (event: string, handler: (payload: unknown) => void) => {
 		events.set(event, handler);
 	},
+}));
+const os = vi.hoisted(() => ({ platform: "macos" }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/platform")>()),
+	getPlatform: () => os.platform,
 }));
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("react-router", () => ({ useNavigate: () => navigate }));
@@ -72,7 +77,36 @@ beforeEach(() => {
 	vi.mocked(getPlaybackPosition).mockReset().mockResolvedValue(saved(1234));
 });
 
+afterEach(() => {
+	os.platform = "macos";
+});
+
 describe("HistoryImportedNotice", () => {
+	it("brings a TV remote to the notice, not to Continue watching, and Back closes it", async () => {
+		os.platform = "tv";
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(imported());
+		const notice = screen.getByRole("status");
+		expect(notice).toHaveFocus();
+		// A center press meant for the player, or a second one after Allow.
+		fireEvent.keyDown(notice, { key: "Enter" });
+		fireEvent.keyUp(notice, { key: "Enter" });
+		await act(async () => {});
+		expect(target.load, "nothing plays").not.toHaveBeenCalled();
+		expect(navigate).not.toHaveBeenCalled();
+		expect(screen.getByRole("status")).toBeInTheDocument();
+		fireEvent.keyDown(notice, { key: "Escape" });
+		expect(screen.queryByRole("status")).toBeNull();
+		expect(target.load, "Back plays nothing").not.toHaveBeenCalled();
+	});
+
+	it("leaves the focus where it is off a TV", () => {
+		render(<HistoryImportedNotice />, { wrapper: wrapperFor() });
+		show(imported());
+		expect(screen.getByRole("status")).not.toHaveFocus();
+		expect(screen.getByRole("button", { name: /Continue watching/ })).not.toHaveFocus();
+	});
+
 	it("says where the history came from and loads the lists again", () => {
 		const client = createTestQueryClient();
 		const invalidate = vi.spyOn(client, "invalidateQueries");

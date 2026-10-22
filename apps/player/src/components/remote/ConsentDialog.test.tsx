@@ -109,6 +109,18 @@ describe("ConsentDialog", () => {
 		expect(screen.getByText("042 917")).toBeInTheDocument();
 	});
 
+	it("scrolls a long list inside the dialog, so Deny and Allow stay on screen", async () => {
+		const providers = Array.from({ length: 40 }, (_, i) => ({
+			name: `Provider ${i}`,
+			kind: "xtream" as const,
+		}));
+		await shown();
+		ask(4, 30_000, { kind: "providers", providers });
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("Provider 39");
+		expect(dialog).toHaveClass("max-h-[calc(100dvh-2rem)]", "overflow-y-auto");
+	});
+
 	it("allows once it has been on screen for a moment", async () => {
 		await shownOnFakeTime();
 		ask(7);

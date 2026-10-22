@@ -1547,7 +1547,8 @@ fn cancelling_tells_the_target_what_it_knows_of() {
     let mut out = ControllerOut::default();
     controller_asking(send_history()).cancel(&mut out);
     assert_eq!(out.send, [Message::Cancel]);
-    assert!(out.events.is_empty());
+    // No transfer id came yet, so the end is said as a refusal.
+    assert_eq!(out.events, [ControllerEvent::Refused(ErrorCode::Cancelled)]);
     let mut out = ControllerOut::default();
     ControllerFlow::Exporting {
         transfer: "t".into(),
