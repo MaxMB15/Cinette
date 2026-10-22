@@ -10,8 +10,8 @@ vi.mock("@/hooks/useRemoteControl", () => ({ useRemoteControl: () => control }))
 vi.mock("@/components/channels/ChannelList", () => ({
 	ChannelList: () => <p>This device's channels</p>,
 }));
-const platform = vi.hoisted(() => ({ mobile: false }));
-vi.mock("@/lib/platform", () => ({ isMobilePlatform: () => platform.mobile }));
+const platform = vi.hoisted(() => ({ controller: true }));
+vi.mock("@/lib/platform", () => ({ controlsOthers: () => platform.controller }));
 vi.mock("@/components/remote/RemoteCatalog", () => ({
 	RemoteCatalog: ({ link }: { link: Link }) => <p>{link.name}'s catalog</p>,
 }));
@@ -40,12 +40,12 @@ describe("ChannelsPage", () => {
 		}
 	});
 
-	it("shows this device's channels on a phone, where remote control doesn't run", () => {
-		platform.mobile = true;
+	it("shows this device's channels where it can't control others", () => {
+		platform.controller = false;
 		control.link = link({ phase: "connected" });
 		render(<ChannelsPage />);
 		expect(screen.getByText("This device's channels")).toBeInTheDocument();
-		platform.mobile = false;
+		platform.controller = true;
 	});
 
 	it("keeps this device's channels while still asking", () => {

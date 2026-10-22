@@ -10,7 +10,7 @@ import { mpvSetVisible } from "@/lib/tauri";
 import { useFullscreen } from "@/lib/fullscreen-context";
 import { Tv, List, FolderOpen, Settings as SettingsIcon } from "lucide-react";
 import { ControllersBar, DevicesButton, RemoteBar } from "@/components/remote/RemoteControls";
-import { isMobilePlatform } from "@/lib/platform";
+import { controlsOthers } from "@/lib/platform";
 
 const navItems = [
 	{ to: "/", label: "Channels", icon: Tv },
@@ -67,9 +67,10 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 					compact && !isPlayer && "pt-safe pl-safe pr-safe"
 				)}
 			>
-				{/* Remote control runs on macOS and Linux for now. */}
-				{!isMobilePlatform() && <RemoteBar />}
-				{!isMobilePlatform() && <ControllersBar />}
+				{/* A phone's player keeps the whole screen; the bars would sit
+				    under the status bar there. */}
+				{!(compact && isPlayer) && controlsOthers() && <RemoteBar />}
+				{!(compact && isPlayer) && <ControllersBar />}
 				<div className="flex-1 min-h-0">
 					<Outlet />
 				</div>
@@ -109,7 +110,7 @@ const Sidebar = ({ hidden }: { hidden: boolean }) => (
 				)}
 			</NavLink>
 		))}
-		{!isMobilePlatform() && <DevicesButton className="mt-auto" />}
+		{controlsOthers() && <DevicesButton className="mt-auto" />}
 	</aside>
 );
 
@@ -135,6 +136,9 @@ const TabBar = ({ hidden }: { hidden: boolean }) => (
 				<span className="text-[10px] mt-0.5">{label}</span>
 			</NavLink>
 		))}
+		{controlsOthers() && (
+			<DevicesButton className="min-h-[49px] min-w-[64px] w-auto py-1.5 px-3" />
+		)}
 	</nav>
 );
 
@@ -185,8 +189,13 @@ const TvLayout = () => {
 					</NavLink>
 				))}
 			</aside>
-			<main className="flex-1 overflow-hidden">
-				<Outlet />
+			<main className="flex-1 overflow-hidden flex flex-col">
+				{/* Other devices controlling this TV, each with Disconnect.
+				    Settings lists them too, so the player keeps the screen. */}
+				{!isPlayer && <ControllersBar />}
+				<div className="flex-1 min-h-0">
+					<Outlet />
+				</div>
 			</main>
 		</div>
 	);

@@ -28,6 +28,7 @@ use mvp_core::remote::target::{
 use mvp_core::remote::ConnId;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
@@ -89,6 +90,10 @@ enum Input {
     Finished(u64, Result<(), ErrorCode>),
     CatalogDone(Epoch, ConnId, u64, CatalogPage),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    Background(oneshot::Sender<()>),
+    Foreground(TcpListener),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -96,13 +101,14 @@ enum Input {
 #[derive(Clone)]
 pub struct TargetHandle {
     inbox: mpsc::UnboundedSender<Input>,
-    port: u16,
+    port: Arc<AtomicU16>,
 }
 
 impl TargetHandle {
-    /// The TCP port the target listens on.
+    /// The TCP port the target listens on, or last listened on while in the
+    /// background.
     pub fn port(&self) -> u16 {
-        self.port
+        self.port.load(Ordering::Relaxed)
     }
 
     fn send(&self, input: Input) {
@@ -140,6 +146,28 @@ impl TargetHandle {
         let (tx, rx) = oneshot::channel();
         self.send(Input::Sessions(tx));
         rx.await.unwrap_or_default()
+    }
+
+    /// Stops advertising and closes the listener, for an app that went to
+    /// the background. Open connections and sessions carry on for as long as
+    /// the system lets the app run. Returns once the listener is closed, so
+    /// its port is free to bind again.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub async fn background(&self) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Input::Background(tx));
+        let _ = rx.await;
+    }
+
+    /// Listens on `listener` and advertises again, for an app back in the
+    /// foreground.
+    // Only the mobile apps go to the background.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub fn foreground(&self, listener: TcpListener) -> std::io::Result<()> {
+        self.port.store(listener.local_addr()?.port(), Ordering::Relaxed);
+        self.send(Input::Foreground(listener));
+        Ok(())
     }
 
     /// Closes every connection with `shutdown`, stops advertising, and
@@ -196,26 +224,7 @@ pub(crate) fn start_with(
 ) -> std::io::Result<TargetHandle> {
     let port = listener.local_addr()?.port();
     let (inbox, rx) = mpsc::unbounded_channel();
-    let accept_inbox = inbox.clone();
-    let accept = tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, from)) => {
-                    if accept_inbox
-                        .send(Input::Accepted(stream, from.ip()))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                // Too many open files and the like pass; don't spin on them.
-                Err(e) => {
-                    tracing::warn!("[remote] accept failed: {e}");
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        }
-    });
+    let accept = spawn_accept(listener, inbox.clone());
     let (reads, read_rx) = mpsc::unbounded_channel();
     let task = Task {
         target: Target::new(key.clone(), device_type, settings),
@@ -233,9 +242,37 @@ pub(crate) fn start_with(
         next_token: 0,
         last_load: None,
         limits,
+        accept: Some(accept),
     };
-    tokio::spawn(task.run(rx, read_rx, accept));
-    Ok(TargetHandle { inbox, port })
+    tokio::spawn(task.run(rx, read_rx));
+    Ok(TargetHandle {
+        inbox,
+        port: Arc::new(AtomicU16::new(port)),
+    })
+}
+
+/// Takes connections on `listener` and hands them to the target's inbox,
+/// until it's aborted or the target has gone.
+fn spawn_accept(
+    listener: TcpListener,
+    inbox: mpsc::UnboundedSender<Input>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, from)) => {
+                    if inbox.send(Input::Accepted(stream, from.ip())).is_err() {
+                        break;
+                    }
+                }
+                // Too many open files and the like pass; don't spin on them.
+                Err(e) => {
+                    tracing::warn!("[remote] accept failed: {e}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+    })
 }
 
 struct Pending {
@@ -265,6 +302,8 @@ struct Task {
     /// When a controller's load last went to the player.
     last_load: Option<Instant>,
     limits: Limits,
+    /// The task taking new connections, while the app is in the foreground.
+    accept: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// What the target allows. The app uses [`Limits::STANDARD`]; tests change it.
@@ -294,7 +333,6 @@ impl Task {
         mut self,
         mut inbox: mpsc::UnboundedReceiver<Input>,
         mut reads: mpsc::UnboundedReceiver<((Epoch, ConnId), Read)>,
-        accept: tokio::task::JoinHandle<()>,
     ) {
         self.advertise(self.target.discovery_record());
         loop {
@@ -305,7 +343,7 @@ impl Task {
             tokio::select! {
                 input = inbox.recv() => match input {
                     Some(Input::Shutdown(done)) => {
-                        accept.abort();
+                        self.stop_accepting();
                         let actions = self.target.shutdown();
                         self.carry_out(actions);
                         self.writers.clear();
@@ -316,7 +354,7 @@ impl Task {
                     }
                     Some(input) => self.handle(input),
                     None => {
-                        accept.abort();
+                        self.stop_accepting();
                         return;
                     }
                 },
@@ -449,6 +487,29 @@ impl Task {
                 let _ = reply.send(self.target.sessions());
                 Vec::new()
             }
+            Input::Background(done) => {
+                let accept = self.accept.take();
+                self.host.advertise(None);
+                // The listener closes when its task has stopped, which an
+                // abort only asks for.
+                tokio::spawn(async move {
+                    if let Some(accept) = accept {
+                        accept.abort();
+                        let _ = accept.await;
+                    }
+                    let _ = done.send(());
+                });
+                Vec::new()
+            }
+            Input::Foreground(listener) => {
+                self.stop_accepting();
+                // Checked by the handle before it sent this.
+                if let Ok(addr) = listener.local_addr() {
+                    self.port = addr.port();
+                }
+                self.accept = Some(spawn_accept(listener, self.inbox.clone()));
+                vec![Action::Advertise(self.target.discovery_record())]
+            }
             Input::Shutdown(_) => unreachable!("run handles Shutdown"),
         };
         self.carry_out(actions);
@@ -544,7 +605,17 @@ impl Task {
         }
     }
 
+    /// Closes the listener, if one is open.
+    fn stop_accepting(&mut self) {
+        if let Some(accept) = self.accept.take() {
+            accept.abort();
+        }
+    }
+
+    /// Advertises `record`, or stops. In the background, with no listener,
+    /// nothing is advertised whatever the settings say.
     fn advertise(&self, record: Option<DiscoveryRecord>) {
+        let record = record.filter(|_| self.accept.is_some());
         self.host
             .advertise(record.map(|r| registration(r, &self.key, self.port)));
     }

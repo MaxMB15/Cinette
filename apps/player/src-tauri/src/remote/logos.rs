@@ -3,7 +3,7 @@
 
 //! Which logos may go to another device, past what the core checks.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::catalog::provider_host;
 
@@ -32,7 +32,7 @@ fn site(host: &str) -> &str {
 }
 
 /// `item` with its logo dropped unless [`fetchable`].
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 pub fn checked(mut item: CatalogItem) -> CatalogItem {
     if item.logo.as_deref().is_some_and(|logo| !fetchable(logo)) {
         item.logo = None;
@@ -43,7 +43,7 @@ pub fn checked(mut item: CatalogItem) -> CatalogItem {
 /// Names that point into a home or office network, or at this machine:
 /// the usual private suffixes, the routers' own names, and public names
 /// that resolve to any address written in them.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 const LOCAL_NAMES: [&str; 14] = [
     "local",
     "localhost",
@@ -69,7 +69,7 @@ const LOCAL_NAMES: [&str; 14] = [
 /// This is a best effort on the name, not a guarantee: a public name can
 /// still resolve to a private address. The full fix is for Rust to fetch
 /// these logos and refuse any address it connects to that isn't public.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(remote)]
 pub fn fetchable(logo: &str) -> bool {
     let Ok(url) = url::Url::parse(logo) else {
         return false;
