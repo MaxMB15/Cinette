@@ -624,6 +624,7 @@ pub async fn airplay_set_detection<R: Runtime>(
 /// Keeps and emits what detection found.
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 pub(crate) fn detected<R: Runtime>(app: &AppHandle<R>, available: bool) {
+    tracing::debug!("[AirPlay] receivers in reach: {available}");
     app.state::<AirPlay>().detected(available);
     let _ = app.emit(EVENT_AVAILABLE, available);
 }
