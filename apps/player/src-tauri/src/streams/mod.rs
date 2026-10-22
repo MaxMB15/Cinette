@@ -303,23 +303,39 @@ fn format_of(probed: &Probed) -> StreamFormat {
 /// it is logged. Phones and tablets have no ffmpeg to probe with, so only
 /// what mpv says while it plays is known there.
 pub(crate) async fn probe<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<Probed, ProbeError> {
+    probe_unless(app, url, std::future::pending()).await
+}
+
+/// [`probe`] that gives up once `cancel` finishes, as when a newer cast
+/// overtakes it.
+pub(crate) async fn probe_unless<R: Runtime>(
+    app: &AppHandle<R>,
+    url: &str,
+    cancel: impl std::future::Future<Output = ()>,
+) -> Result<Probed, ProbeError> {
     #[cfg(desktop)]
-    return probe_within(app, url, PROBE_LIMIT).await;
+    return probe_within(app, url, PROBE_LIMIT, cancel).await;
     #[cfg(mobile)]
     {
-        let _ = (app, url);
+        let _ = (app, url, cancel);
         Err(ProbeError::Unreachable)
     }
 }
 
-/// [`probe`] with `limit`, which tests shorten. An ffmpeg still running at
-/// the limit is killed, so it doesn't keep holding the provider's
+/// How long a probe that gave up waits for ffmpeg to exit.
+#[cfg(desktop)]
+const EXIT_LIMIT: Duration = Duration::from_secs(5);
+
+/// [`probe_unless`] with `limit`, which tests shorten. An ffmpeg still
+/// running at the limit, or when `cancel` finishes, is killed, and this
+/// returns once it has exited, so it no longer holds the provider's
 /// connection, which many accounts allow only one of.
 #[cfg(desktop)]
 async fn probe_within<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,
     limit: Duration,
+    cancel: impl std::future::Future<Output = ()>,
 ) -> Result<Probed, ProbeError> {
     use tauri_plugin_shell::process::CommandEvent;
     use tauri_plugin_shell::ShellExt;
@@ -340,8 +356,15 @@ async fn probe_within<R: Runtime>(
             }
         }
     };
-    if tokio::time::timeout(limit, read).await.is_err() {
+    let finished = tokio::select! {
+        read = tokio::time::timeout(limit, read) => read.is_ok(),
+        () = cancel => false,
+    };
+    if !finished {
         let _ = child.kill();
+        // The events end once ffmpeg has exited.
+        let _ = tokio::time::timeout(EXIT_LIMIT, async { while events.recv().await.is_some() {} })
+            .await;
         return Err(ProbeError::Unreachable);
     }
     mvp_core::streams::probe::parse(&String::from_utf8_lossy(&stderr))

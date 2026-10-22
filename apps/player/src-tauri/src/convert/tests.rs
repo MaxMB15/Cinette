@@ -13,6 +13,7 @@ use super::*;
 use crate::downloads::test_support::{missing_url, process_runs, video_url};
 use crate::test_support::TestApp;
 use mvp_core::convert::{AacEncoder, AudioPlan, Encoders, HardwareEncoder, VideoPlan};
+use std::future::pending;
 
 const NO_HARDWARE: Encoders = Encoders {
     video: None,
@@ -39,7 +40,15 @@ async fn start_copy(
     source: &str,
     receiver: IpAddr,
 ) -> Result<Conversion, ConvertError> {
-    let conversion = start(&app.handle(), source, &copy_audio(), NO_HARDWARE, receiver).await?;
+    let conversion = start(
+        &app.handle(),
+        source,
+        &copy_audio(),
+        NO_HARDWARE,
+        receiver,
+        pending(),
+    )
+    .await?;
     conversion
         .server
         .files
@@ -199,6 +208,7 @@ async fn a_track_ffmpeg_cant_convert_is_unsupported() {
         &plan,
         NO_HARDWARE,
         LOOPBACK,
+        pending(),
     )
     .await
     .err()
@@ -228,10 +238,17 @@ async fn a_transcode_without_an_encoder_never_starts() {
         video: VideoPlan::Transcode { deinterlace: true },
         ..copy_audio()
     };
-    let err = start(&app.handle(), &video_url("x"), &plan, NO_HARDWARE, LOOPBACK)
-        .await
-        .err()
-        .unwrap();
+    let err = start(
+        &app.handle(),
+        &video_url("x"),
+        &plan,
+        NO_HARDWARE,
+        LOOPBACK,
+        pending(),
+    )
+    .await
+    .err()
+    .unwrap();
     assert_eq!(err, ConvertError::NoEncoder);
     assert_eq!(
         err.to_string(),
@@ -396,7 +413,7 @@ fn live_source(head: Vec<u8>, chunks: Vec<Vec<u8>>, every: Duration, end: End) -
             std::thread::spawn(move || {
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request);
-                let answer = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
+                let answer = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n";
                 if stream.write_all(answer.as_bytes()).is_err() || stream.write_all(&head).is_err()
                 {
                     return;
@@ -432,7 +449,7 @@ fn file_source(body: Vec<u8>) -> String {
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request);
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
                     body.len()
                 );
                 let _ = stream.write_all(head.as_bytes());
@@ -596,9 +613,16 @@ async fn a_file_is_read_at_its_own_pace_after_a_burst() {
         ..copy_audio()
     };
     let started = std::time::Instant::now();
-    let mut live = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
-        .await
-        .unwrap();
+    let mut live = start(
+        &app.handle(),
+        &source,
+        &plan,
+        NO_HARDWARE,
+        LOOPBACK,
+        pending(),
+    )
+    .await
+    .unwrap();
     assert_eq!(ended(&mut live).await, Ended::Dropped);
     assert!(
         started.elapsed() < Duration::from_secs(3),
@@ -622,9 +646,16 @@ async fn a_live_channel_whose_connection_closes_has_dropped() {
         Duration::from_millis(25),
         End::After(8),
     );
-    let mut conversion = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
-        .await
-        .unwrap();
+    let mut conversion = start(
+        &app.handle(),
+        &source,
+        &plan,
+        NO_HARDWARE,
+        LOOPBACK,
+        pending(),
+    )
+    .await
+    .unwrap();
     assert_eq!(ended(&mut conversion).await, Ended::Dropped);
 }
 
@@ -691,9 +722,16 @@ async fn starts_a_file_partway_through() {
         start_at: Some(6.0),
         ..copy_audio()
     };
-    let mut later = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
-        .await
-        .unwrap();
+    let mut later = start(
+        &app.handle(),
+        &source,
+        &plan,
+        NO_HARDWARE,
+        LOOPBACK,
+        pending(),
+    )
+    .await
+    .unwrap();
     let mut response = get(&later.url).await;
     let rest = read_to_end(&mut response).await;
     assert_eq!(ended(&mut later).await, Ended::Finished);
@@ -839,9 +877,16 @@ async fn a_late_request_with_video_starts_at_a_keyframe() {
         live: true,
         ..copy_audio()
     };
-    let conversion = start(&app.handle(), &source, &plan, NO_HARDWARE, LOOPBACK)
-        .await
-        .unwrap();
+    let conversion = start(
+        &app.handle(),
+        &source,
+        &plan,
+        NO_HARDWARE,
+        LOOPBACK,
+        pending(),
+    )
+    .await
+    .unwrap();
     // Read until a cluster that starts between keyframes has gone by.
     let mut first = get(&conversion.url).await;
     let mut splitter = mvp_core::convert::mkv::MkvSplitter::default();
@@ -874,4 +919,51 @@ fn a_hung_encoder_test_counts_as_no_encoder_this_time() {
     assert_eq!(encoder_works(Ok(Some(vec![]))), (true, Finished(true)));
     assert_eq!(encoder_works(Ok(None)), (false, Finished(true)));
     assert_eq!(encoder_works(Err(Unfinished)), (false, Finished(false)));
+}
+
+#[test]
+fn a_live_channel_that_ended_or_lost_its_connection_can_start_again() {
+    assert_eq!(ending(true, None), Ended::Dropped);
+    assert_eq!(
+        ending(true, Some(ConvertError::Unreachable)),
+        Ended::Dropped
+    );
+    assert_eq!(ending(false, None), Ended::Finished);
+    // A file that broke off would start again at the wrong place.
+    assert_eq!(
+        ending(false, Some(ConvertError::Unreachable)),
+        Ended::Failed(ConvertError::Unreachable)
+    );
+    // Starting again would fail the same way.
+    assert_eq!(
+        ending(true, Some(ConvertError::Refused(403))),
+        Ended::Failed(ConvertError::Refused(403))
+    );
+    assert_eq!(
+        ending(true, Some(ConvertError::Unsupported)),
+        Ended::Failed(ConvertError::Unsupported)
+    );
+}
+
+#[tokio::test]
+async fn a_start_that_a_newer_load_overtakes_ends_its_ffmpeg_first() {
+    let app = TestApp::new();
+    // A source that answers and then sends nothing, so no header comes.
+    let source = live_wav(End::Pause);
+    let started = std::time::Instant::now();
+    let err = start(
+        &app.handle(),
+        &source,
+        &copy_audio(),
+        NO_HARDWARE,
+        LOOPBACK,
+        tokio::time::sleep(Duration::from_millis(300)),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(err, ConvertError::Unreachable);
+    assert!(started.elapsed() < Duration::from_secs(10));
+    // It returns once ffmpeg has exited.
+    assert!(!ffmpeg_runs_for(&source));
 }
