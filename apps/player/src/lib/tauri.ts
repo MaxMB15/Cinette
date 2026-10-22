@@ -670,6 +670,8 @@ export type CastUpdate =
 	| {
 			kind: "media";
 			media: {
+				/** The receiver's id for this media, which a new load changes. */
+				mediaSessionId: number;
 				player: "idle" | "buffering" | "playing" | "paused";
 				idleReason: "finished" | "cancelled" | "interrupted" | "error" | null;
 				position: number;
@@ -683,6 +685,10 @@ export type CastUpdate =
 	| { kind: "playbackError"; code: number | null }
 	| { kind: "rejected"; reason: string | null }
 	| { kind: "conversionFailed"; refused: boolean }
+	/** The converted stream has to start again: `dropped` when a live
+	 *  channel's connection ended, `moved` when this computer's address on
+	 *  the way to the receiver changed. */
+	| { kind: "conversionStopped"; why: "dropped" | "moved" }
 	| {
 			kind: "closed";
 			reason:
@@ -700,15 +706,18 @@ export const CAST_UPDATE_EVENT = "cast://update";
 /**
  * Play `channel` on a Cast receiver, connecting first when needed. Rejects
  * with `notFound`, `unreachable`, `refused`, `noConverter`,
- * `noEncoder`, `unsupported`, `noRoute`, `converterFailed` or `stale`, or,
- * for a direct HLS route, `notPlaylist` or `cors`.
+ * `noEncoder`, `unsupported`, `noRoute`, `converterFailed`, `stale` or
+ * `superseded`, or, for a direct HLS route, `notPlaylist` or `cors`.
+ * `restart` when the cast starts its stream again by itself: it never
+ * opens a cast, and rejects with `notConnected` once the cast has ended.
  */
 export const castLoad = (
 	receiverId: string,
 	channel: Channel,
 	route: CastRoute,
-	startAt?: number
-): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt });
+	startAt: number | undefined,
+	restart: boolean
+): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt, restart });
 
 /** Rejects with `notConnected` when nothing is cast to that receiver. */
 export const castControl = (receiverId: string, action: CastAction): Promise<void> =>

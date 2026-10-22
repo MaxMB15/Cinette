@@ -481,17 +481,18 @@ fn ffmpeg_runs_for(url: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// A server that sends a byte every half second, so ffmpeg keeps waiting,
+/// and its URL, which names `name`.
 #[cfg(desktop)]
-#[tokio::test]
-async fn a_probe_that_runs_too_long_stops_its_ffmpeg() {
-    // A server that sends a byte every half second, so ffmpeg keeps waiting.
+fn slow_source(name: &str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     std::thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
             std::thread::spawn(move || {
                 use std::io::Write;
-                let head = "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\n\r\n";
+                let head =
+                    "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nConnection: close\r\n\r\n";
                 if stream.write_all(head.as_bytes()).is_err() {
                     return;
                 }
@@ -501,15 +502,39 @@ async fn a_probe_that_runs_too_long_stops_its_ffmpeg() {
             });
         }
     });
-    let url = format!("http://{address}/live/u/SECRET/slow.ts");
+    format!("http://{address}/live/u/SECRET/{name}.ts")
+}
+
+#[cfg(desktop)]
+#[tokio::test]
+async fn a_probe_that_runs_too_long_stops_its_ffmpeg() {
+    let url = slow_source("slow");
     let app = TestApp::new();
-    let probed = probe_within(&app.handle(), &url, Duration::from_millis(500)).await;
+    let probed = probe_within(
+        &app.handle(),
+        &url,
+        Duration::from_millis(500),
+        std::future::pending(),
+    )
+    .await;
     assert_eq!(probed.err(), Some(ProbeError::Unreachable));
-    for _ in 0..50 {
-        if !ffmpeg_runs_for(&url) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("the probe's ffmpeg still runs");
+    // It returns once ffmpeg has exited.
+    assert!(!ffmpeg_runs_for(&url));
+}
+
+#[cfg(desktop)]
+#[tokio::test]
+async fn a_probe_that_a_newer_cast_overtakes_stops_its_ffmpeg() {
+    let url = slow_source("overtaken");
+    let app = TestApp::new();
+    let started = std::time::Instant::now();
+    let probed = probe_unless(
+        &app.handle(),
+        &url,
+        tokio::time::sleep(Duration::from_millis(500)),
+    )
+    .await;
+    assert_eq!(probed.err(), Some(ProbeError::Unreachable));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(!ffmpeg_runs_for(&url));
 }

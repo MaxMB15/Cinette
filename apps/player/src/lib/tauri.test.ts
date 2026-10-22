@@ -710,7 +710,8 @@ describe("backend commands", () => {
 					"cast:tv",
 					episode,
 					{ via: "direct", generation: 3, source: 1, container: "hls-ts" },
-					30
+					30,
+					true
 				),
 			"cast_load",
 			{
@@ -718,6 +719,7 @@ describe("backend commands", () => {
 				channel: episode,
 				route: { via: "direct", generation: 3, source: 1, container: "hls-ts" },
 				startAt: 30,
+				restart: true,
 			},
 		],
 		[

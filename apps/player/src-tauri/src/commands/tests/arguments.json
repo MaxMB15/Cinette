@@ -116,7 +116,10 @@
 	"stop_recording": { "required": ["id"] },
 	"get_cast_receivers": {},
 	"hold_cast_receivers": { "required": ["ids"] },
-	"cast_load": { "required": ["receiverId", "channel", "route"], "optional": ["startAt"] },
+	"cast_load": {
+		"required": ["receiverId", "channel", "route", "restart"],
+		"optional": ["startAt"]
+	},
 	"cast_control": { "required": ["receiverId", "action"] },
 	"cast_stop": { "required": ["receiverId"] },
 	"cast_release": { "required": ["receiverId"] },
