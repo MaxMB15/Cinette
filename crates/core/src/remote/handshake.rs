@@ -167,8 +167,7 @@ fn peer_from(state: &snow::HandshakeState, hello: &Hello) -> Result<Peer, Failur
     }
     Ok(Peer {
         id,
-        name: settings::clean_name(&hello.name)
-            .unwrap_or_else(|| settings::default_name(hello.device_type).to_owned()),
+        name: settings::shown_name(&hello.name, hello.device_type),
         device_type: hello.device_type,
         features: hello.features.clone(),
     })

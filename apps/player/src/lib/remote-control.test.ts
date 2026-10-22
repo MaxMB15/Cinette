@@ -77,7 +77,7 @@ describe("createRemoteControl", () => {
 		expect(rc.getState().devices).toStrictEqual([tv, den]);
 		expect(changes).toHaveBeenCalledTimes(2);
 		stop();
-		expect(stops).toHaveLength(3);
+		expect(stops).toHaveLength(4);
 		for (const s of stops) expect(s).toHaveBeenCalledTimes(1);
 	});
 
@@ -205,6 +205,26 @@ describe("createRemoteControl", () => {
 		const link = rc.getState().link!;
 		expect(link.phase).toStrictEqual({ phase: "connecting" });
 		expect(link.destination.getState().status).toBe("idle");
+	});
+
+	it("follows a name the device takes during the session", async () => {
+		const { b, emit } = backend();
+		const rc = createRemoteControl(b);
+		await rc.start();
+		await rc.connect(tv);
+		const { id } = rc.getState().link!;
+		const changes = vi.fn();
+		rc.subscribe(changes);
+		// Another device, and an earlier link to this one, change nothing.
+		emit("remote://renamed", { deviceId: "den1", link: id, name: "Attic" });
+		emit("remote://renamed", { deviceId: "tv1", link: id - 1, name: "Attic" });
+		expect(changes).not.toHaveBeenCalled();
+		emit("remote://renamed", { deviceId: "tv1", link: id, name: "Kitchen" });
+		expect(rc.getState().link!.name).toBe("Kitchen");
+		expect(rc.getState().link!.phase).toStrictEqual({ phase: "connecting" });
+		// It's the name the ended notice gives too.
+		emit("remote://controller", { deviceId: "tv1", link: id, phase: "closed", reason: "lost" });
+		expect(rc.getState().ended).toStrictEqual({ name: "Kitchen", reason: "lost" });
 	});
 
 	it("drops the link and says why when it ends", async () => {

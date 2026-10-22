@@ -187,6 +187,7 @@ impl RemoteService {
                 Feature::Catalog,
                 Feature::History,
                 Feature::Providers,
+                Feature::Rename,
             ],
         };
         let devices = self.devices.clone();
@@ -253,13 +254,20 @@ impl RemoteService {
     /// Hands the settings to the target, then saves them. The target takes
     /// them first, so Never allow ends the sessions even when the file
     /// can't be written; the error then says the choice won't last past a
-    /// restart. One call at a time, so the file and the target agree.
+    /// restart. One call at a time, so the file and the target agree. A
+    /// new name also goes to the device this one controls.
     pub fn set_settings<R: Runtime>(
         &self,
         app: &AppHandle<R>,
         settings: RemoteSettings,
     ) -> Result<(), String> {
         let mut state = lock(&self.state);
+        let name = settings.name(device_type());
+        if name != state.settings.name(device_type())
+            && let Some(link) = lock(&self.link).as_ref()
+        {
+            link.rename(name);
+        }
         state.settings = settings.clone();
         self.handle.update_settings(settings.clone());
         save_settings(app, &settings)
@@ -981,6 +989,16 @@ pub struct ControllerEvent<'a> {
     pub phase: &'a Phase,
 }
 
+/// What `remote://renamed` carries: the device a link controls has a new
+/// name.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamedEvent<'a> {
+    pub device_id: String,
+    pub link: u64,
+    pub name: &'a str,
+}
+
 /// What `remote://state` carries.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1138,6 +1156,20 @@ impl<R: Runtime> LinkHost for TauriLinkHost<R> {
                 let _ = app.emit("remote://state", event);
             }
         });
+    }
+
+    fn renamed(&self, link: u64, device: &DeviceId, name: &str) {
+        if !self.current(link) {
+            return;
+        }
+        let _ = self.app.emit(
+            "remote://renamed",
+            RenamedEvent {
+                device_id: device.to_string(),
+                link,
+                name,
+            },
+        );
     }
 
     fn transfer(&self, link: u64, device: &DeviceId, event: &TransferUpdate) {

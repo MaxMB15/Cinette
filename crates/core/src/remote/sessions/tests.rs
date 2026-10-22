@@ -52,21 +52,21 @@ fn only_the_same_device_resumes_and_only_in_time() {
     sessions.detach(ConnId(1), now);
     let other = peer("Q");
     assert_eq!(
-        sessions.resume(&s.id, &other.id, ConnId(2), now),
+        sessions.resume(&s.id, &other, ConnId(2), now),
         Err(NoSession)
     );
     assert_eq!(
-        sessions.resume("nope", &p.id, ConnId(2), now),
+        sessions.resume("nope", &p, ConnId(2), now),
         Err(NoSession)
     );
     assert_eq!(
-        sessions.resume(&s.id, &p.id, ConnId(2), now + RESUME_GRACE),
+        sessions.resume(&s.id, &p, ConnId(2), now + RESUME_GRACE),
         Err(NoSession)
     );
     assert_eq!(
         sessions.resume(
             &s.id,
-            &p.id,
+            &p,
             ConnId(2),
             now + RESUME_GRACE - Duration::from_millis(1)
         ),
@@ -82,9 +82,39 @@ fn resuming_a_session_still_connected_hands_back_the_old_connection() {
     let p = peer("P");
     let s = sessions.open(p.clone(), ConnId(1), now).unwrap().0;
     assert_eq!(
-        sessions.resume(&s.id, &p.id, ConnId(2), now),
+        sessions.resume(&s.id, &p, ConnId(2), now),
         Ok(Some(ConnId(1)))
     );
+}
+
+#[test]
+fn a_resume_takes_the_name_the_device_has_now() {
+    let now = Instant::now();
+    let mut sessions = Sessions::new();
+    let p = peer("Old");
+    let s = sessions.open(p.clone(), ConnId(1), now).unwrap().0;
+    sessions.detach(ConnId(1), now);
+    let renamed = Peer {
+        name: "New".into(),
+        ..p
+    };
+    sessions.resume(&s.id, &renamed, ConnId(2), now).unwrap();
+    assert_eq!(sessions.by_conn(ConnId(2)).unwrap().peer.name, "New");
+}
+
+#[test]
+fn a_rename_reaches_only_the_session_on_that_connection() {
+    let now = Instant::now();
+    let mut sessions = Sessions::new();
+    sessions.open(peer("A"), ConnId(1), now).unwrap();
+    sessions.open(peer("B"), ConnId(2), now).unwrap();
+    assert!(sessions.rename(ConnId(2), "C".into()));
+    assert!(!sessions.rename(ConnId(3), "D".into()));
+    let names: Vec<&str> = sessions.list().iter().map(|s| s.peer.name.as_str()).collect();
+    assert_eq!(names, ["A", "C"]);
+    // A dropped session has no connection to be renamed through.
+    sessions.detach(ConnId(1), now);
+    assert!(!sessions.rename(ConnId(1), "E".into()));
 }
 
 #[test]

@@ -830,3 +830,30 @@ fn a_frame_on_an_unknown_connection_is_ignored() {
     assert!(target.receive(ConnId(7), b"x", Instant::now()).is_empty());
     assert!(target.disconnected(ConnId(7), Instant::now()).is_empty());
 }
+
+#[test]
+fn a_rename_before_asking_or_during_the_handshake_is_refused() {
+    let mut target = target();
+    let now = Instant::now();
+    // Let in, but not asking yet: it closes, like any other message there.
+    let (conn, channel) = shake(&mut target, now);
+    let mut channel = channel.unwrap();
+    let rename = Message::Renamed { name: "Den".into() };
+    let actions = say(&mut target, conn, &mut channel, &rename, now);
+    closed_for(&actions, conn, &mut channel, CloseReason::Protocol);
+    // A closed connection takes nothing more.
+    assert!(say(&mut target, conn, &mut channel, &rename, now).is_empty());
+
+    // Before the handshake is done there's no channel: a rename is only
+    // handshake bytes, and all that comes back is the handshake's reply.
+    let conn = target.accept(now).unwrap();
+    let plain = br#"{"v":1,"type":"renamed","name":"Den"}"#;
+    let actions = target.receive(conn, plain, now);
+    assert!(
+        actions
+            .iter()
+            .all(|a| matches!(a, Action::Send { conn: to, .. } | Action::Close { conn: to } if *to == conn)),
+        "{actions:?}"
+    );
+    assert!(target.sessions().is_empty());
+}

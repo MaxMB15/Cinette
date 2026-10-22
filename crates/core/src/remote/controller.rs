@@ -21,6 +21,7 @@ use super::identity::{DeviceId, DeviceKey};
 use super::message::{
     self, CloseReason, Command, DecodeError, ErrorCode, Feature, Hello, Message, VersionedState,
 };
+use super::settings;
 use super::target::HANDSHAKE_TIMEOUT;
 use super::transfer::flow::{
     Asked, ControllerEvent, ControllerFlow, ControllerOut, Direction, ProviderName,
@@ -68,6 +69,8 @@ pub enum Event {
     Error(ErrorCode),
     /// Something about the transfer this controller asked for.
     Transfer(ControllerEvent),
+    /// The target's name changed. [`Controller::peer`] has it too.
+    Renamed(String),
     /// The connection ended. Close the socket. [`CloseReason::Timeout`]
     /// means the controller gave up on the target itself.
     Closed(CloseReason),
@@ -244,7 +247,7 @@ impl Controller {
             }
             Stage::InSession {
                 mut channel,
-                peer,
+                mut peer,
                 session_id,
             } => {
                 let message = match read(&mut channel, frame, &mut out) {
@@ -291,6 +294,13 @@ impl Controller {
                     Some(Message::Closed { reason }) => {
                         self.lose_flow(&mut out);
                         return closed(out, reason);
+                    }
+                    Some(Message::Renamed { name }) => {
+                        let name = settings::shown_name(&name, peer.device_type);
+                        if name != peer.name {
+                            peer.name.clone_from(&name);
+                            out.events.push(Event::Renamed(name));
+                        }
                     }
                     // A grant for a request this device stopped making,
                     // such as one cancelled on its way: the target is told,
@@ -507,6 +517,22 @@ impl Controller {
         self.flow = self.flow.take().and_then(|f| f.lost(&mut flow_out));
         out.events
             .extend(flow_out.events.into_iter().map(Event::Transfer));
+    }
+
+    /// Tells the target this device is called `name` now. `None` outside a
+    /// session, or when the target's hello doesn't offer
+    /// [`Feature::Rename`]: it learns the name on the next connection.
+    pub fn rename(&mut self, name: &str) -> Option<Vec<u8>> {
+        match &mut self.stage {
+            Stage::InSession { channel, peer, .. } if peer.features.contains(&Feature::Rename) => {
+                channel
+                    .seal(&Message::Renamed {
+                        name: name.to_owned(),
+                    })
+                    .ok()
+            }
+            _ => None,
+        }
     }
 
     /// A ping, to send when nothing else went out for [`PING_INTERVAL`].

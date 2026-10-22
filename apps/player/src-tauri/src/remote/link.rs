@@ -137,6 +137,8 @@ pub trait LinkHost: Send + Sync + 'static {
     fn state(&self, link: u64, device: &DeviceId, state: &VersionedState);
     /// Something about a transfer this device asked for.
     fn transfer(&self, _link: u64, _device: &DeviceId, _event: &ControllerEvent) {}
+    /// The other device has a new name.
+    fn renamed(&self, _link: u64, _device: &DeviceId, _name: &str) {}
 }
 
 /// Where to reach the target. Asked again before each attempt, since its
@@ -178,6 +180,7 @@ enum Input {
     SendExport(String, Box<Result<Export, ErrorCode>>),
     StartImport(String),
     Imported(String, Box<Result<Report, ErrorCode>>),
+    Rename(String),
     Leave(oneshot::Sender<()>),
 }
 
@@ -270,6 +273,12 @@ impl LinkHandle {
         let _ = self.inbox.send(Input::Imported(transfer, Box::new(result)));
     }
 
+    /// This device is called `name` now. The target hears it in the
+    /// session, or with the next connection.
+    pub fn rename(&self, name: String) {
+        let _ = self.inbox.send(Input::Rename(name));
+    }
+
     /// Stops asking, or ends the session. The target keeps playing.
     pub async fn leave(&self) {
         let (tx, rx) = oneshot::channel();
@@ -339,6 +348,8 @@ async fn run(
 ) {
     let device = config.target.clone();
     let link = config.generation;
+    // Its name follows this device's while the link runs.
+    let mut hello = config.hello.clone();
     let mut session: Option<String> = None;
     let mut dropped_at: Option<Instant> = None;
     let mut attempt: u32 = 0;
@@ -361,13 +372,14 @@ async fn run(
         let mut from = 0;
         let mut why_not: Option<Ended> = None;
         let outcome = loop {
-            break match connect_any(&addresses[from..], &mut inbox).await {
+            break match connect_any(&addresses[from..], &mut hello, &mut inbox).await {
                 Reached::Left => Outcome::Ended(Ended::Left),
                 Reached::Stream(stream, at) => {
                     let mut session_back = false;
                     let result = connection(
                         &config,
                         &host,
+                        &mut hello,
                         stream,
                         &mut session,
                         &mut session_back,
@@ -404,7 +416,7 @@ async fn run(
                     // The last try comes as the grace runs out.
                     let wait = (config.limits.backoff)(attempt).min(left);
                     attempt += 1;
-                    match wait_or_leave(wait, &mut inbox).await {
+                    match wait_or_leave(wait, &mut hello, &mut inbox).await {
                         true => Some(Ended::Left),
                         false => None,
                     }
@@ -434,7 +446,11 @@ fn more_telling(old: Option<Ended>, new: Ended) -> Ended {
 
 /// Waits before the next attempt, answering what comes in meanwhile. True
 /// when this device left.
-async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input>) -> bool {
+async fn wait_or_leave(
+    wait: Duration,
+    hello: &mut Hello,
+    inbox: &mut mpsc::UnboundedReceiver<Input>,
+) -> bool {
     let until = tokio::time::Instant::now() + wait;
     loop {
         tokio::select! {
@@ -444,6 +460,7 @@ async fn wait_or_leave(wait: Duration, inbox: &mut mpsc::UnboundedReceiver<Input
                     let _ = done.send(());
                     return true;
                 }
+                Some(Input::Rename(name)) => hello.name = name,
                 // Dropping a request answers it with NotConnected.
                 Some(_) => {}
             },
@@ -462,7 +479,11 @@ enum Reached {
 }
 
 /// The first of `addrs` that takes a connection. Leaving stops it at once.
-async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<Input>) -> Reached {
+async fn connect_any(
+    addrs: &[SocketAddr],
+    hello: &mut Hello,
+    inbox: &mut mpsc::UnboundedReceiver<Input>,
+) -> Reached {
     for (at, addr) in addrs.iter().enumerate() {
         let attempt = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr));
         tokio::pin!(attempt);
@@ -480,6 +501,7 @@ async fn connect_any(addrs: &[SocketAddr], inbox: &mut mpsc::UnboundedReceiver<I
                         let _ = done.send(());
                         return Reached::Left;
                     }
+                    Some(Input::Rename(name)) => hello.name = name,
                     // Dropping a request answers it with NotConnected.
                     Some(_) => {}
                 },
@@ -511,6 +533,7 @@ impl Waiting {
 async fn connection(
     config: &LinkConfig,
     host: &Arc<dyn LinkHost>,
+    hello: &mut Hello,
     stream: TcpStream,
     session: &mut Option<String>,
     session_back: &mut bool,
@@ -518,9 +541,11 @@ async fn connection(
 ) -> Outcome {
     let device = &config.target;
     let link = config.generation;
+    // The name the target hears in the handshake.
+    let said = hello.name.clone();
     let (mut controller, first) = match Controller::connect(
         &config.key,
-        config.hello.clone(),
+        hello.clone(),
         config.target.clone(),
         session.clone(),
         (config.clock)(),
@@ -597,6 +622,13 @@ async fn connection(
                             );
                         }
                         Event::Connected { session_id, state } => {
+                            // Renamed while asking: the handshake had the old name.
+                            if hello.name != said
+                                && let Some(bytes) = controller.rename(&hello.name)
+                            {
+                                let _ = writer.send(bytes);
+                                last_sent = (config.clock)();
+                            }
                             *session = Some(session_id);
                             *session_back = true;
                             host.phase(link, device, &Phase::Connected);
@@ -618,6 +650,7 @@ async fn connection(
                             tracing::debug!("[remote] {device} reported {code:?}");
                         }
                         Event::Transfer(event) => host.transfer(link, device, &event),
+                        Event::Renamed(name) => host.renamed(link, device, &name),
                         Event::Closed(reason) if !verified => {
                             // Another device is at this address, which it
                             // may have taken over, or claims the target's id
@@ -700,6 +733,13 @@ async fn connection(
                 Some(Input::CancelTransfer) => {
                     let out = controller.cancel_transfer();
                     pass_on(out, &writer, &mut last_sent, config, host, link, device);
+                }
+                Some(Input::Rename(name)) => {
+                    if let Some(bytes) = controller.rename(&name) {
+                        let _ = writer.send(bytes);
+                        last_sent = (config.clock)();
+                    }
+                    hello.name = name;
                 }
                 Some(Input::Catalog(query, reply)) => match controller.catalog(query) {
                     Ok((id, bytes)) => {
