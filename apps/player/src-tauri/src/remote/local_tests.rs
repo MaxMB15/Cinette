@@ -68,17 +68,24 @@ fn this_machine_and_its_own_addresses_are_local_and_the_internet_isnt() {
 }
 
 fn interface(addr: &str, mask: &str, is_p2p: bool) -> if_addrs::Interface {
-    let (std::net::IpAddr::V4(ip), std::net::IpAddr::V4(netmask)) = (ip(addr), ip(mask)) else {
-        panic!("IPv4 only here");
-    };
-    if_addrs::Interface {
-        name: "if0".into(),
-        addr: if_addrs::IfAddr::V4(if_addrs::Ifv4Addr {
+    let addr = match (ip(addr), ip(mask)) {
+        (IpAddr::V4(ip), IpAddr::V4(netmask)) => if_addrs::IfAddr::V4(if_addrs::Ifv4Addr {
             ip,
             netmask,
             prefixlen: u32::from(netmask).count_ones() as u8,
             broadcast: None,
         }),
+        (IpAddr::V6(ip), IpAddr::V6(netmask)) => if_addrs::IfAddr::V6(if_addrs::Ifv6Addr {
+            ip,
+            netmask,
+            prefixlen: u128::from(netmask).count_ones() as u8,
+            broadcast: None,
+        }),
+        _ => panic!("one family"),
+    };
+    if_addrs::Interface {
+        name: "if0".into(),
+        addr,
         index: None,
         oper_status: if_addrs::IfOperStatus::Up,
         is_p2p,
@@ -86,16 +93,36 @@ fn interface(addr: &str, mask: &str, is_p2p: bool) -> if_addrs::Interface {
 }
 
 #[test]
-fn a_point_to_point_link_doesnt_make_its_subnet_local() {
-    // A phone on cellular, as iOS's pdp_ip0 often is.
-    let cellular = subnets([interface("10.20.30.40", "255.0.0.0", true)]);
-    assert!(cellular.is_empty());
+fn a_point_to_point_link_counts_only_its_own_address() {
+    // A phone on cellular, as iOS's pdp_ip0 often is, or a VPN tunnel.
+    let cellular = subnets([interface("10.0.0.5", "255.0.0.0", true)]);
+    assert_eq!(cellular, [(ip("10.0.0.5"), ip("255.255.255.255"))]);
+    assert!(on_local_network(ip("10.0.0.5"), &cellular));
     assert!(!on_local_network(ip("10.1.2.3"), &cellular));
 }
 
 #[test]
 fn a_broadcast_link_makes_its_subnet_local() {
-    let wifi = subnets([interface("10.20.30.40", "255.0.0.0", false)]);
-    assert_eq!(wifi, [(ip("10.20.30.40"), ip("255.0.0.0"))]);
+    let wifi = subnets([interface("10.0.0.5", "255.0.0.0", false)]);
+    assert_eq!(wifi, [(ip("10.0.0.5"), ip("255.0.0.0"))]);
+    assert!(on_local_network(ip("10.0.0.5"), &wifi));
     assert!(on_local_network(ip("10.1.2.3"), &wifi));
+}
+
+#[test]
+fn a_point_to_point_ipv6_link_counts_only_its_own_address() {
+    let tunnel = subnets([interface(
+        "fd7a:115c:a1e0::5",
+        "ffff:ffff:ffff:ffff::",
+        true,
+    )]);
+    assert!(on_local_network(ip("fd7a:115c:a1e0::5"), &tunnel));
+    assert!(!on_local_network(ip("fd7a:115c:a1e0::9"), &tunnel));
+    // macOS's utun interfaces also carry link-local addresses, which count
+    // as local anyway.
+    let link = subnets([interface("fe80::5", "ffff:ffff:ffff:ffff::", true)]);
+    assert!(on_local_network(ip("fe80::9"), &link));
+    // A broadcast IPv6 link keeps its whole /64.
+    let lan = subnets([interface("fd00:1::5", "ffff:ffff:ffff:ffff::", false)]);
+    assert!(on_local_network(ip("fd00:1::9"), &lan));
 }
