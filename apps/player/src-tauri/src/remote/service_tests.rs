@@ -2484,3 +2484,52 @@ async fn a_transfer_that_ends_however_it_ends_frees_the_link_for_the_next() {
         assert_eq!(held(&host), (false, false), "{end:?}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ask_that_fails_to_go_out_leaves_nothing_waiting() {
+    let running = Running::start(|app| {
+        app.state()
+            .cache
+            .lock()
+            .unwrap()
+            .upsert_provider(&Provider {
+                id: "p1".into(),
+                name: "Mine".into(),
+                provider_type: ProviderType::Xtream,
+                url: "http://iptv.example:8080".into(),
+                username: Some("made-up-user".into()),
+                password: Some("made-up-password".into()),
+                last_updated: None,
+                channel_count: 0,
+                epg_url: None,
+            })
+            .unwrap();
+    })
+    .await;
+    // A link whose task is gone: every ask fails, and no transfer starts
+    // whose end could free anything.
+    let device = DeviceKey::generate().device_id();
+    {
+        let handle = running.app.handle();
+        let service = handle.state::<RemoteService>();
+        *service.link.lock().unwrap() = Some(LinkHandle::detached(1, device));
+    }
+    let gone = Err(json!("Not connected to that device."));
+    for _ in 0..2 {
+        let sent = invoke_async(
+            &running,
+            "remote_send_providers",
+            json!({ "link": 1, "providerIds": ["p1"] }),
+        )
+        .await;
+        assert_eq!(sent, gone);
+        let asked = invoke_async(
+            &running,
+            "remote_ask_history",
+            json!({ "link": 1, "direction": "send",
+                    "what": { "history": true, "favorites": true, "pins": true } }),
+        )
+        .await;
+        assert_eq!(asked, gone);
+    }
+}
