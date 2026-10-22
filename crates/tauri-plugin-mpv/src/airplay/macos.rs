@@ -418,8 +418,20 @@ impl Host {
         }
     }
 
+    /// Stops AirPlay and hands the route back to this Mac. The route
+    /// belongs to the player, so the player, its layer and the picker's
+    /// hold on it go, and the next pick or load makes a new one, which
+    /// starts on this Mac. The picker then shows this Mac ticked, and a
+    /// close without a pick can't send the video back to the TV.
     fn stop(&mut self) {
         self.stop_item();
+        if let Some(picker) = &self.picker {
+            unsafe { picker.setPlayer(None) };
+        }
+        if let Some(holder) = self.layer_view.take() {
+            holder.removeFromSuperview();
+        }
+        self.player = None;
         send(Callback::Route(None));
     }
 
