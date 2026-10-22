@@ -47,12 +47,11 @@ const START_LIMIT: Duration = Duration::from_secs(30);
 const MAX_ERRORS: usize = 64 << 10;
 /// How long the error reader gets to finish once ffmpeg has exited.
 const ERRORS_LIMIT: Duration = Duration::from_secs(1);
-/// How long a stopped conversion waits before it kills ffmpeg, so a test
-/// can tell a caller that waited for the exit from one that only dropped
-/// the conversion. Zero but in the tests that set it.
+/// How long a stopped conversion of the app a test manages this in waits
+/// before it kills ffmpeg, so the test can tell a caller that waited for
+/// the exit from one that only dropped the conversion.
 #[cfg(test)]
-pub(crate) static KILL_DELAY_MS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+pub(crate) struct KillDelay(pub Duration);
 
 /// How long [`Conversion::stop`] waits for ffmpeg to exit.
 const STOP_LIMIT: Duration = Duration::from_secs(5);
@@ -171,6 +170,11 @@ pub async fn start<R: Runtime>(
 
     let (stop, stopped) = oneshot::channel();
     let collector = tokio::spawn(collect_errors(stderr, errors.clone()));
+    let stopped = Stop {
+        signal: stopped,
+        #[cfg(test)]
+        delay: tauri::Manager::try_state::<KillDelay>(app).map_or(Duration::ZERO, |d| d.0),
+    };
     let reader = tokio::spawn(read_output(
         child,
         stdout,
@@ -275,6 +279,15 @@ async fn collect_errors(mut stderr: tokio::process::ChildStderr, errors: Arc<Mut
     }
 }
 
+/// What tells a conversion's reader to stop ffmpeg: the [`Conversion`]'s
+/// `stop` closing.
+struct Stop {
+    signal: oneshot::Receiver<()>,
+    /// See [`KillDelay`].
+    #[cfg(test)]
+    delay: Duration,
+}
+
 /// ffmpeg's error text and the task that reads it.
 struct Errors {
     text: Arc<Mutex<Vec<u8>>>,
@@ -304,7 +317,7 @@ impl Errors {
 async fn read_output(
     mut child: Child,
     mut stdout: tokio::process::ChildStdout,
-    mut stop: oneshot::Receiver<()>,
+    mut stop: Stop,
     live: bool,
     feed_tx: watch::Sender<Option<LiveFeed>>,
     ended: watch::Sender<Option<Ended>>,
@@ -317,7 +330,7 @@ async fn read_output(
     let stopped = 'read: loop {
         let read = tokio::select! {
             read = stdout.read(&mut buf) => read,
-            _ = &mut stop => break 'read true,
+            _ = &mut stop.signal => break 'read true,
         };
         let n = match read {
             Ok(0) | Err(_) => break false,
@@ -341,7 +354,7 @@ async fn read_output(
                     let Some(feed) = &feed else { continue };
                     tokio::select! {
                         () = feed.push(bytes, start) => {}
-                        _ = &mut stop => break 'read true,
+                        _ = &mut stop.signal => break 'read true,
                     }
                 }
             }
@@ -352,8 +365,7 @@ async fn read_output(
     }
     #[cfg(test)]
     if stopped {
-        let delay = KILL_DELAY_MS.load(std::sync::atomic::Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(delay)).await;
+        tokio::time::sleep(stop.delay).await;
     }
     if stopped || broken.is_some() {
         let _ = child.start_kill();
@@ -362,7 +374,7 @@ async fn read_output(
         status = child.wait() => status,
         // ffmpeg exits once its output closes. If it doesn't, a stop still
         // ends it.
-        _ = &mut stop, if !stopped => {
+        _ = &mut stop.signal, if !stopped => {
             let _ = child.kill().await;
             return;
         }

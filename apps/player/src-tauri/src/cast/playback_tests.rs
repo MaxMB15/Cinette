@@ -4,7 +4,7 @@
 //! The cast commands on a mock app, casting to fake receivers on loopback.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -1476,23 +1476,6 @@ async fn a_newer_load_waits_until_the_one_it_overtook_lets_go_of_the_provider() 
     assert!(ffmpeg_starts_at(&source, "2.000"));
 }
 
-/// Has stopped conversions wait before they kill ffmpeg, until dropped.
-struct SlowKill;
-
-impl SlowKill {
-    fn new(delay: Duration) -> Self {
-        let ms = u64::try_from(delay.as_millis()).unwrap();
-        crate::convert::KILL_DELAY_MS.store(ms, Ordering::SeqCst);
-        Self
-    }
-}
-
-impl Drop for SlowKill {
-    fn drop(&mut self) {
-        crate::convert::KILL_DELAY_MS.store(0, Ordering::SeqCst);
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn an_overtaken_load_lets_go_of_the_provider_before_it_returns() {
     let app = TestApp::new();
@@ -1510,7 +1493,8 @@ async fn an_overtaken_load_lets_go_of_the_provider_before_it_returns() {
     add_channel(&app, &other);
     // A stopped ffmpeg takes a moment to go, so a load that only dropped it
     // would return while it still runs.
-    let _slow = SlowKill::new(Duration::from_millis(1500));
+    app.handle()
+        .manage(crate::convert::KillDelay(Duration::from_millis(1500)));
     let first = load_in_background(&app, &film, converted(), None);
     // Its converter runs, and it connects to the receiver.
     wait_until("the connection to the receiver", || {
@@ -1537,7 +1521,8 @@ async fn a_release_waits_for_an_overtaken_load_to_let_go_of_the_provider() {
     let (source, connections) = counting_source(wav16_lasting(24), Duration::ZERO, false);
     let film = channel("m-1", &source, "movie");
     add_channel(&app, &film);
-    let _slow = SlowKill::new(Duration::from_millis(1500));
+    app.handle()
+        .manage(crate::convert::KillDelay(Duration::from_millis(1500)));
     let first = load_in_background(&app, &film, converted(), None);
     // Its converter runs, and it connects to the receiver.
     wait_until("the connection to the receiver", || {
@@ -1687,6 +1672,38 @@ fn closed_within(events: &mpsc::Receiver<Value>, within: Duration) -> Option<Val
     None
 }
 
+/// A proxy on loopback to `to`, which drops each new connection while
+/// the flag it gives is set and counts them.
+fn proxy_to(to: SocketAddr) -> (SocketAddr, Arc<AtomicBool>, Arc<AtomicUsize>) {
+    use std::io::copy;
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let blocked = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let (block, count) = (blocked.clone(), dropped.clone());
+    std::thread::spawn(move || {
+        for client in listener.incoming().flatten() {
+            if block.load(Ordering::SeqCst) {
+                count.fetch_add(1, Ordering::SeqCst);
+                continue;
+            }
+            let Ok(server) = TcpStream::connect(to) else {
+                continue;
+            };
+            let pipe = |mut from: TcpStream, mut into: TcpStream| {
+                std::thread::spawn(move || {
+                    let _ = copy(&mut from, &mut into);
+                    let _ = into.shutdown(Shutdown::Write);
+                });
+            };
+            pipe(client.try_clone().unwrap(), server.try_clone().unwrap());
+            pipe(server, client);
+        }
+    });
+    (address, blocked, dropped)
+}
+
 static GONE_AFTER_A_MOVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1694,26 +1711,22 @@ async fn a_session_that_went_with_the_old_address_connects_again() {
     let app = TestApp::new();
     let ours = |ip| !(GONE_AFTER_A_MOVE.load(Ordering::SeqCst) && ip == LOOPBACK);
     let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), ours).await;
-    // This computer's address changes, and the old connection's route goes
-    // with it: the receiver hears nothing more on it. For a moment it can't
-    // be reached at all, as while Wi-Fi comes back.
+    // New connections reach the receiver through a proxy, which the move
+    // below makes drop them for a moment, as while Wi-Fi comes back. The
+    // receiver's listing stays as it is.
     let handle = app.handle();
     let receivers = handle.state::<super::CastReceivers>();
-    let addr = receivers.registry().get("cast:tv").unwrap();
-    let addr = SocketAddr::new(addr.addr, addr.port);
-    let gone = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
-    add_receiver(&app, "tv", gone);
+    let listed = receivers.registry().get("cast:tv").unwrap();
+    let (proxy, blocked, dropped) = proxy_to(SocketAddr::new(listed.addr, listed.port));
+    add_receiver(&app, "tv", proxy);
+    // This computer's address changes, and the old connection's route goes
+    // with it: the receiver hears nothing more on it.
+    blocked.store(true, Ordering::SeqCst);
     GONE_AFTER_A_MOVE.store(true, Ordering::SeqCst);
     first.go_quiet();
     // A try to connect again fails, and later ones go on.
-    wait_until("a failed try", || {
-        !receivers.registry().get("cast:tv").unwrap().available
-    })
-    .await;
-    add_receiver(&app, "tv", addr);
+    wait_until("a failed try", || dropped.load(Ordering::SeqCst) >= 1).await;
+    blocked.store(false, Ordering::SeqCst);
     // The session connects again by itself.
     let again = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(message) = got.recv().await {
@@ -1726,8 +1739,10 @@ async fn a_session_that_went_with_the_old_address_connects_again() {
     .await;
     assert_eq!(again, Ok(true));
     GONE_AFTER_A_MOVE.store(false, Ordering::SeqCst);
-    // Well past the silence limit, the cast goes on, on the new connection.
+    // Well past the silence limit, the cast goes on, on the new connection,
+    // and the receiver still shows as available, though tries failed.
     assert_eq!(closed_within(&events, Duration::from_secs(4)), None);
+    assert!(receivers.registry().get("cast:tv").unwrap().available);
     // The fake answers a new connection with no media, so the volume, which
     // needs none, shows where controls go.
     control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
@@ -1842,22 +1857,6 @@ async fn a_cast_to_another_receiver_leaves_the_first_ones_converter_behind() {
 
 static MOVED_FOR_A_LOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Keeps a replaced session running until dropped.
-struct KeepReplaced;
-
-impl KeepReplaced {
-    fn new() -> Self {
-        super::playback::KEEP_REPLACED.store(true, Ordering::SeqCst);
-        Self
-    }
-}
-
-impl Drop for KeepReplaced {
-    fn drop(&mut self) {
-        super::playback::KEEP_REPLACED.store(false, Ordering::SeqCst);
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_a_newer_one_replaced_says_nothing_more() {
     let app = TestApp::new();
@@ -1877,12 +1876,13 @@ async fn a_session_a_newer_one_replaced_says_nothing_more() {
     next_of(&mut got, "LOAD").await;
     // The address moved, so the next load connects again. The old session
     // still runs a moment, and here it goes on to stop and say it closed.
-    {
-        let _keep = KeepReplaced::new();
-        MOVED_FOR_A_LOAD.store(true, Ordering::SeqCst);
-        load(&app, "cast:tv", &second, direct("mp4"), None).unwrap();
-        MOVED_FOR_A_LOAD.store(false, Ordering::SeqCst);
-    }
+    app.handle()
+        .state::<super::playback::CastPlayback>()
+        .keep_replaced
+        .store(true, Ordering::SeqCst);
+    MOVED_FOR_A_LOAD.store(true, Ordering::SeqCst);
+    load(&app, "cast:tv", &second, direct("mp4"), None).unwrap();
+    MOVED_FOR_A_LOAD.store(false, Ordering::SeqCst);
     // The load goes out on the new connection, and the old session stops on
     // its own.
     let (mut loaded, mut stopped) = (false, false);

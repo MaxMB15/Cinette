@@ -243,6 +243,11 @@ pub struct CastPlayback {
     loading: tokio::sync::Mutex<()>,
     addresses: Mutex<AddressCheck>,
     timing: Mutex<Timing>,
+    /// Has `begin` leave the session it replaces for the same receiver
+    /// running, as it is for a moment before its abort lands, so a test can
+    /// see that what it says no longer counts.
+    #[cfg(test)]
+    pub(crate) keep_replaced: std::sync::atomic::AtomicBool,
 }
 
 impl CastPlayback {
@@ -435,7 +440,7 @@ where
         // keeps its app and the frontend sees no end.
         Some(old) if old.receiver_id == receiver_id => {
             #[cfg(test)]
-            if KEEP_REPLACED.load(std::sync::atomic::Ordering::SeqCst) {
+            if state.keep_replaced.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
             old.driver.abort();
@@ -456,12 +461,6 @@ fn replaced(active: Option<&Active>, receiver_id: &str, generation: u64) -> bool
     active.is_some_and(|a| a.receiver_id == receiver_id && a.generation > generation)
 }
 
-/// Has `begin` leave the session it replaces for the same receiver
-/// running, as it is for a moment before its abort lands, so a test can
-/// see that what it says no longer counts.
-#[cfg(test)]
-pub(crate) static KEEP_REPLACED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 /// Connects to `receiver_id` again after session `generation` lost its
 /// connection with this computer's old address, trying for a while, as
@@ -493,8 +492,7 @@ async fn reconnect<R: Runtime>(app: &AppHandle<R>, receiver_id: &str, generation
 /// A TLS connection to a receiver.
 type Connection = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 
-/// A connection to `receiver_id`, and this computer's address on it. A
-/// receiver that doesn't answer is marked unreachable for a while.
+/// A connection to `receiver_id`, and this computer's address on it.
 async fn connect<R: Runtime>(
     app: &AppHandle<R>,
     receiver_id: &str,
@@ -505,10 +503,9 @@ async fn connect<R: Runtime>(
         .get(receiver_id)
         .map(|r| (r.addr, r.port))
         .ok_or("notFound")?;
-    let Ok((stream, _)) = tls::connect(addr, port).await else {
-        super::mark_unreachable(app, receiver_id);
-        return Err("unreachable".into());
-    };
+    let (stream, _) = tls::connect(addr, port)
+        .await
+        .map_err(|_| "unreachable".to_string())?;
     let local = stream.get_ref().0.local_addr().ok().map(|a| a.ip());
     Ok((stream, local))
 }
@@ -536,7 +533,13 @@ async fn ensure_connected<R: Runtime>(
     if open {
         return Ok(false);
     }
-    let (stream, local) = connect(app, receiver_id).await?;
+    // A receiver that doesn't answer shows as unavailable for a while. One
+    // that isn't listed, the only other way this fails, isn't marked. A
+    // reconnect after a move doesn't mark it either, since one try that
+    // fails while Wi-Fi comes back says nothing about the receiver.
+    let (stream, local) = connect(app, receiver_id)
+        .await
+        .inspect_err(|_| super::mark_unreachable(app, receiver_id))?;
     begin(app, receiver_id, stream, local);
     Ok(true)
 }
