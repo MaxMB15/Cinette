@@ -197,7 +197,7 @@ fn sample(argument: &str) -> Value {
         | "source" | "generation" | "link" => {
             json!(1)
         }
-        "keep" | "allow" => json!(true),
+        "keep" | "allow" | "restart" => json!(true),
         "request" | "token" => json!(1),
         "outcome" => json!("ok"),
         "command" => json!({ "action": "stop" }),

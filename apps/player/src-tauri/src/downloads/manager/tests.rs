@@ -665,7 +665,10 @@ fn a_download_put_back_for_a_recording_waits_until_it_ends() {
     assert_eq!(queued.avg_rate_bps, None);
     assert_eq!(queued.error, None);
     assert!(!is_running(&app, &id));
-    assert_eq!(events.progress(&id)[0], queued);
+    // Tauri holds back an event sent while another thread is sending one,
+    // here the end of the old ffmpeg, so the record can go out just after
+    // requeue returns.
+    assert_eq!(events.wait_for(&id, DownloadStatus::Queued), queued);
     wait_until("the download's ffmpeg ends", || !process_runs(pid));
 
     // The end of its ffmpeg starts the queue again, and the download keeps

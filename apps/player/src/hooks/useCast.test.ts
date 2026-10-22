@@ -516,7 +516,8 @@ describe("useCast", () => {
 				"cast:tv",
 				third,
 				expect.anything(),
-				undefined
+				undefined,
+				false
 			);
 		});
 
@@ -615,7 +616,8 @@ describe("useCast", () => {
 			"cast:tv",
 			film,
 			{ via: "direct", generation: 5, source: 2, container: "mp4" },
-			600
+			600,
+			false
 		);
 		expect(result.current.destination?.id).toBe("cast:tv");
 		expect(result.current.state?.status).toBe("opening");
@@ -764,7 +766,8 @@ describe("useCast", () => {
 				"cast:tv",
 				other,
 				expect.objectContaining({ via: "direct", generation: 6 }),
-				undefined
+				undefined,
+				false
 			);
 			expect(result.current.destination?.id).toBe("cast:tv");
 		});
@@ -868,7 +871,13 @@ describe("useCast", () => {
 		await act(async () => {
 			await result.current.send("cast:tv", film, { stopLocal });
 		});
-		expect(tauri.castLoad).toHaveBeenCalledWith("cast:tv", film, expect.anything(), undefined);
+		expect(tauri.castLoad).toHaveBeenCalledWith(
+			"cast:tv",
+			film,
+			expect.anything(),
+			undefined,
+			false
+		);
 	});
 
 	it("says why it can't cast, before stopping anything", async () => {
@@ -913,6 +922,7 @@ describe("useCast", () => {
 		act(() =>
 			events.emit("cast://update", { receiverId: "cast:tv", update: { kind: "ready" } })
 		);
+		expect(tauri.castStop).not.toHaveBeenCalled();
 		act(() =>
 			events.emit("cast://update", {
 				receiverId: "cast:tv",
@@ -922,6 +932,9 @@ describe("useCast", () => {
 		expect(result.current.destination).toBeNull();
 		expect(result.current.state).toBeNull();
 		expect(report).toHaveBeenCalledWith("Playback was stopped on Hotel TV.");
+		// The destination is stopped too, so nothing it had under way, such
+		// as starting its stream again, brings it back.
+		expect(tauri.castStop).toHaveBeenCalledWith("cast:tv");
 	});
 
 	it("says it lost the connection when the receiver gave no reason", async () => {

@@ -42,7 +42,8 @@ pub enum CloseReason {
     AppStopped,
     /// The receiver couldn't start the Default Media Receiver.
     LaunchFailed(Option<String>),
-    /// Nothing came from the receiver for [`SILENCE_LIMIT`].
+    /// Nothing came from the receiver for [`SILENCE_LIMIT`], or the
+    /// session's own limit.
     Timeout,
     /// The receiver sent something that isn't a valid frame.
     Protocol(FrameError),
@@ -177,6 +178,10 @@ pub struct Session {
     /// The load waiting for its first status.
     loading: Option<(u64, Instant)>,
     media: Option<MediaState>,
+    /// How often it pings the receiver, and how long the receiver may say
+    /// nothing before the session ends.
+    ping_interval: Duration,
+    silence_limit: Duration,
 }
 
 impl Session {
@@ -204,12 +209,22 @@ impl Session {
             queued_load: None,
             loading: None,
             media: None,
+            ping_interval: PING_INTERVAL,
+            silence_limit: SILENCE_LIMIT,
         };
         let connect = session.connect_to(PLATFORM);
         let status = session
             .request(PLATFORM, NS_RECEIVER, json!({ "type": "GET_STATUS" }))
             .1;
         (session, vec![connect, status])
+    }
+
+    /// The session pinging every `ping` in place of [`PING_INTERVAL`], and
+    /// ending after `silence` in place of [`SILENCE_LIMIT`].
+    pub fn with_heartbeat(mut self, ping: Duration, silence: Duration) -> Self {
+        self.ping_interval = ping;
+        self.silence_limit = silence;
+        self
     }
 
     pub fn is_closed(&self) -> bool {
@@ -250,7 +265,7 @@ impl Session {
         if self.is_closed() {
             return out;
         }
-        if now.duration_since(self.last_received) >= SILENCE_LIMIT {
+        if now.duration_since(self.last_received) >= self.silence_limit {
             self.close(CloseReason::Timeout, &mut out);
             return out;
         }
@@ -275,7 +290,7 @@ impl Session {
                 detailed_error_code: None,
             });
         }
-        if now.duration_since(self.last_ping) >= PING_INTERVAL {
+        if now.duration_since(self.last_ping) >= self.ping_interval {
             self.last_ping = now;
             out.send
                 .push(self.send(PLATFORM, NS_HEARTBEAT, json!({ "type": "PING" })));

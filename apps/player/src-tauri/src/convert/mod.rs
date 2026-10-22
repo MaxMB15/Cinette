@@ -13,6 +13,7 @@
 // The Cast destination starts conversions from the next step on.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -46,6 +47,12 @@ const START_LIMIT: Duration = Duration::from_secs(30);
 const MAX_ERRORS: usize = 64 << 10;
 /// How long the error reader gets to finish once ffmpeg has exited.
 const ERRORS_LIMIT: Duration = Duration::from_secs(1);
+/// How long a stopped conversion of the app a test manages this in waits
+/// before it kills ffmpeg, so the test can tell a caller that waited for
+/// the exit from one that only dropped the conversion.
+#[cfg(test)]
+pub(crate) struct KillDelay(pub Duration);
+
 /// How long [`Conversion::stop`] waits for ffmpeg to exit.
 const STOP_LIMIT: Duration = Duration::from_secs(5);
 
@@ -84,10 +91,11 @@ pub enum Ended {
     ///
     /// [`LIVE_BYTES`]: crate::lan_server::LIVE_BYTES
     Finished,
-    /// A live channel's connection ended. It has no end of its own, so
-    /// it can be started again.
+    /// A live channel's connection ended, timed out or broke. It has no
+    /// end of its own, so it can be started again.
     Dropped,
-    /// ffmpeg stopped with an error.
+    /// ffmpeg stopped with an error that starting again wouldn't fix, or
+    /// a file's connection failed.
     Failed(ConvertError),
 }
 
@@ -129,12 +137,17 @@ impl Conversion {
 /// take a few seconds. A source that stops sending before then holds it
 /// back until the read times out, and ffmpeg then writes what it has and
 /// ends, so `ended` can change as soon as this returns.
+///
+/// It gives up once `cancel` finishes, as when a newer load overtakes it.
+/// Whenever it fails, it returns only after ffmpeg has exited, so a
+/// conversion started next isn't a second connection to the provider.
 pub async fn start<R: Runtime>(
     app: &AppHandle<R>,
     source: &str,
     plan: &Plan,
     encoders: Encoders,
     receiver: IpAddr,
+    cancel: impl Future<Output = ()>,
 ) -> Result<Conversion, ConvertError> {
     let args = args(source, plan, encoders)?;
     let server = LanServer::start(receiver)
@@ -157,6 +170,11 @@ pub async fn start<R: Runtime>(
 
     let (stop, stopped) = oneshot::channel();
     let collector = tokio::spawn(collect_errors(stderr, errors.clone()));
+    let stopped = Stop {
+        signal: stopped,
+        #[cfg(test)]
+        delay: tauri::Manager::try_state::<KillDelay>(app).map_or(Duration::ZERO, |d| d.0),
+    };
     let reader = tokio::spawn(read_output(
         child,
         stdout,
@@ -170,7 +188,7 @@ pub async fn start<R: Runtime>(
         },
     ));
 
-    let feed = tokio::time::timeout(START_LIMIT, async {
+    let header = tokio::time::timeout(START_LIMIT, async {
         loop {
             if let Some(feed) = feed_rx.borrow_and_update().clone() {
                 return Ok(feed);
@@ -188,13 +206,20 @@ pub async fn start<R: Runtime>(
                 _ = ended.changed() => {}
             }
         }
-    })
-    .await;
+    });
+    let feed = tokio::select! {
+        header = header => header.unwrap_or(Err(ConvertError::Unreachable)),
+        () = cancel => Err(ConvertError::Unreachable),
+    };
     let feed = match feed {
-        Ok(Ok(feed)) => feed,
-        Ok(Err(e)) => return Err(e),
-        // Dropping `stop` kills ffmpeg.
-        Err(_) => return Err(ConvertError::Unreachable),
+        Ok(feed) => feed,
+        Err(e) => {
+            // Dropping `stop` kills ffmpeg, and the reader ends once it has
+            // exited.
+            drop(stop);
+            let _ = tokio::time::timeout(STOP_LIMIT, reader).await;
+            return Err(e);
+        }
     };
 
     let stalls = feed.stalls();
@@ -254,6 +279,15 @@ async fn collect_errors(mut stderr: tokio::process::ChildStderr, errors: Arc<Mut
     }
 }
 
+/// What tells a conversion's reader to stop ffmpeg: the [`Conversion`]'s
+/// `stop` closing.
+struct Stop {
+    signal: oneshot::Receiver<()>,
+    /// See [`KillDelay`].
+    #[cfg(test)]
+    delay: Duration,
+}
+
 /// ffmpeg's error text and the task that reads it.
 struct Errors {
     text: Arc<Mutex<Vec<u8>>>,
@@ -283,7 +317,7 @@ impl Errors {
 async fn read_output(
     mut child: Child,
     mut stdout: tokio::process::ChildStdout,
-    mut stop: oneshot::Receiver<()>,
+    mut stop: Stop,
     live: bool,
     feed_tx: watch::Sender<Option<LiveFeed>>,
     ended: watch::Sender<Option<Ended>>,
@@ -296,7 +330,7 @@ async fn read_output(
     let stopped = 'read: loop {
         let read = tokio::select! {
             read = stdout.read(&mut buf) => read,
-            _ = &mut stop => break 'read true,
+            _ = &mut stop.signal => break 'read true,
         };
         let n = match read {
             Ok(0) | Err(_) => break false,
@@ -320,7 +354,7 @@ async fn read_output(
                     let Some(feed) = &feed else { continue };
                     tokio::select! {
                         () = feed.push(bytes, start) => {}
-                        _ = &mut stop => break 'read true,
+                        _ = &mut stop.signal => break 'read true,
                     }
                 }
             }
@@ -329,6 +363,10 @@ async fn read_output(
     if let Some(feed) = &feed {
         feed.end();
     }
+    #[cfg(test)]
+    if stopped {
+        tokio::time::sleep(stop.delay).await;
+    }
     if stopped || broken.is_some() {
         let _ = child.start_kill();
     }
@@ -336,7 +374,7 @@ async fn read_output(
         status = child.wait() => status,
         // ffmpeg exits once its output closes. If it doesn't, a stop still
         // ends it.
-        _ = &mut stop, if !stopped => {
+        _ = &mut stop.signal, if !stopped => {
             let _ = child.kill().await;
             return;
         }
@@ -346,14 +384,22 @@ async fn read_output(
     }
     let end = match broken {
         Some(e) => Ended::Failed(e),
-        None if status.is_ok_and(|s| s.success()) => {
-            if live {
-                Ended::Dropped
-            } else {
-                Ended::Finished
-            }
-        }
-        None => Ended::Failed(errors.reason().await),
+        None if status.is_ok_and(|s| s.success()) => ending(live, None),
+        None => ending(live, Some(errors.reason().await)),
     };
     let _ = ended.send(Some(end));
+}
+
+/// How a conversion that ffmpeg ended by itself ended, from whether the
+/// source is `live` and why ffmpeg failed, if it did. A live channel whose
+/// connection ended, closed, timed out or broke can start again. A refused
+/// login or a track ffmpeg can't convert stays failed, since starting again
+/// would do the same.
+fn ending(live: bool, error: Option<ConvertError>) -> Ended {
+    match error {
+        None if live => Ended::Dropped,
+        None => Ended::Finished,
+        Some(ConvertError::Unreachable) if live => Ended::Dropped,
+        Some(e) => Ended::Failed(e),
+    }
 }
