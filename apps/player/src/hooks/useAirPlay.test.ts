@@ -145,6 +145,35 @@ describe("useAirPlay", () => {
 		expect(result.current.available).toBe(false);
 	});
 
+	it("keeps a report that came before the command's answer of nothing yet", async () => {
+		let answer: (known: boolean | null) => void = () => {};
+		tauri.airplaySetDetection.mockImplementationOnce(
+			() => new Promise((resolve) => (answer = resolve))
+		);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		act(() => events.emit("airplay://available", true));
+		await act(async () => answer(null));
+		expect(result.current.available).toBe(true);
+	});
+
+	it("ignores an answer to a player that has turned off since", async () => {
+		let first: (known: boolean | null) => void = () => {};
+		tauri.airplaySetDetection
+			.mockImplementationOnce(() => new Promise((resolve) => (first = resolve)))
+			.mockResolvedValue(null);
+		const { result, rerender } = renderHook(({ on }) => useAirPlay(on), {
+			initialProps: { on: true },
+		});
+		await flush();
+		rerender({ on: false });
+		await act(async () => first(true));
+		rerender({ on: true });
+		await flush();
+		// Nothing has said a TV is in reach since it came back on.
+		expect(result.current.available).toBe(false);
+	});
+
 	it("ignores what detection found once the page has gone", async () => {
 		let answer: (known: boolean) => void = () => {};
 		tauri.airplaySetDetection.mockImplementationOnce(
