@@ -78,6 +78,8 @@ pub struct FirstConnection {
     quiet: Arc<AtomicBool>,
     hung_up: Arc<Notify>,
     accepted: Arc<AtomicUsize>,
+    /// The receiver's app runs, for every connection, as on a TV.
+    launched: Arc<AtomicBool>,
 }
 
 impl FirstConnection {
@@ -91,6 +93,11 @@ impl FirstConnection {
     /// connection whose route went away does.
     pub fn go_quiet(&self) {
         self.quiet.store(true, Ordering::SeqCst);
+    }
+
+    /// The receiver's app ends, as when someone presses home on the TV.
+    pub fn end_app(&self) {
+        self.launched.store(false, Ordering::SeqCst);
     }
 
     /// It closes, as when the receiver ends the connection.
@@ -116,17 +123,19 @@ async fn serve(
     let (got, messages) = mpsc::unbounded_channel();
     let first = FirstConnection::default();
     let control = first.clone();
+    let launched = first.launched.clone();
     tokio::spawn(async move {
         let mut connection = 0;
         while let Ok((tcp, _)) = listener.accept().await {
             control.accepted.fetch_add(1, Ordering::SeqCst);
             let acceptor = acceptors[connection % acceptors.len()].clone();
             let got = got.clone();
+            let launched = launched.clone();
             let control = (connection == 0).then(|| control.clone());
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
                 if let Ok(stream) = acceptor.accept(tcp).await {
-                    answer_unless(stream, got, connection, control).await;
+                    answer_unless(stream, got, connection, launched, control).await;
                 }
             });
             connection += 1;
@@ -142,19 +151,20 @@ pub async fn answer<S: AsyncRead + AsyncWrite + Unpin>(
     got: mpsc::UnboundedSender<Got>,
     connection: usize,
 ) {
-    answer_unless(stream, got, connection, None).await;
+    answer_unless(stream, got, connection, Arc::default(), None).await;
 }
 
-/// [`answer`], going quiet or hanging up when `control` says.
+/// [`answer`] for a receiver whose app runs while `launched`, going quiet
+/// or hanging up when `control` says.
 async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     got: mpsc::UnboundedSender<Got>,
     connection: usize,
+    launched: Arc<AtomicBool>,
     control: Option<FirstConnection>,
 ) {
     let mut reader = FrameReader::default();
     let mut buf = [0u8; 4096];
-    let mut launched = false;
     let control = control.unwrap_or_default();
     loop {
         let read = tokio::select! {
@@ -218,12 +228,20 @@ async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
                     NS_HEARTBEAT,
                     json!({ "type": "PONG" }),
                 )),
-                (NS_RECEIVER, "GET_STATUS") => Some(receiver_status(launched)),
+                (NS_RECEIVER, "GET_STATUS") => {
+                    Some(receiver_status(launched.load(Ordering::SeqCst)))
+                }
                 (NS_RECEIVER, "LAUNCH") => {
-                    launched = true;
+                    launched.store(true, Ordering::SeqCst);
                     Some(receiver_status(true))
                 }
-                (NS_RECEIVER, "SET_VOLUME") => Some(receiver_status(launched)),
+                (NS_RECEIVER, "SET_VOLUME") => {
+                    Some(receiver_status(launched.load(Ordering::SeqCst)))
+                }
+                (NS_RECEIVER, "STOP") => {
+                    launched.store(false, Ordering::SeqCst);
+                    Some(receiver_status(false))
+                }
                 (NS_MEDIA, "GET_STATUS") => Some(reply(
                     "web-1",
                     NS_MEDIA,
@@ -236,10 +254,10 @@ async fn answer_unless<S: AsyncRead + AsyncWrite + Unpin>(
                 (_, "CLOSE") if message.destination == "receiver-0" => return,
                 _ => None,
             };
-            if let Some(answer) = answer
-                && stream.write_all(&answer).await.is_err()
-            {
-                return;
+            // A sender that has stopped may close before its answer goes
+            // out; what it sent before that still counts.
+            if let Some(answer) = answer {
+                let _ = stream.write_all(&answer).await;
             }
         }
     }

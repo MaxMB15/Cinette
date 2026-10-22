@@ -367,19 +367,21 @@ where
     R: Runtime,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    start_session(app, receiver_id, stream, local, None);
+    let _ = start_session(app, receiver_id, stream, local, None, None);
 }
 
 /// [`begin`], but only in place of session `replacing` when it's given:
-/// if another session is active by then, or none is, `stream` is dropped
-/// and this says so.
+/// if another session is active by then, or none is, this gives `stream`
+/// back. `rejoin` is the receiver app's session to pick up again, rather
+/// than any it runs.
 fn start_session<R, S>(
     app: &AppHandle<R>,
     receiver_id: &str,
     stream: S,
     local: Option<IpAddr>,
     replacing: Option<u64>,
-) -> bool
+    rejoin: Option<String>,
+) -> Result<(), S>
 where
     R: Runtime,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -389,7 +391,7 @@ where
     // the one it's meant to replace meanwhile.
     let mut active = lock(&state.active);
     if replacing.is_some_and(|g| active.as_ref().is_none_or(|a| a.generation != g)) {
-        return false;
+        return Err(stream);
     }
     let generation = {
         let mut generation = lock(&state.generation);
@@ -397,7 +399,11 @@ where
         *generation
     };
     let (commands, receiver) = mpsc::unbounded_channel();
-    let (session, first) = Session::start(sender_id(), std::time::Instant::now());
+    let now = std::time::Instant::now();
+    let (session, first) = match rejoin {
+        Some(id) => Session::rejoin(sender_id(), id, now),
+        None => Session::start(sender_id(), now),
+    };
     let timing = *lock(&state.timing);
     let session = session.with_heartbeat(timing.ping, timing.silence);
     let driver = {
@@ -407,7 +413,7 @@ where
             let state = app.state::<CastPlayback>();
             let ours = lock(&state.addresses).ours;
             let mut lost = None;
-            drive(stream, session, first, receiver, |update| {
+            let joined = drive(stream, session, first, receiver, |update| {
                 let dropped = matches!(
                     update,
                     CastUpdate::Closed {
@@ -435,7 +441,7 @@ where
             })
             .await;
             let lost = match lost {
-                Some(_) if reconnect(&app, &id, generation).await => return,
+                Some(_) if reconnect(&app, &id, generation, joined).await => return,
                 lost => lost,
             };
             // Over, unless something newer took over meanwhile: the
@@ -476,7 +482,7 @@ where
                 .keep_replaced
                 .load(std::sync::atomic::Ordering::SeqCst)
             {
-                return true;
+                return Ok(());
             }
             old.driver.abort();
         }
@@ -485,7 +491,24 @@ where
         }
         None => {}
     }
-    true
+    Ok(())
+}
+
+/// How long a connection that only stops the receiver's app gets to do it.
+const STOP_APP_LIMIT: Duration = Duration::from_secs(10);
+
+/// Stops the receiver app's session `session_id` over `stream`, which
+/// never launches an app or opens a cast, and waits until it's sent.
+async fn stop_app<S>(stream: S, session_id: String)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (session, first) = Session::stop_app(sender_id(), session_id, std::time::Instant::now());
+    // Kept until the session ends, since dropping it would stop it.
+    let (commands, receiver) = mpsc::unbounded_channel();
+    let stopping = drive(stream, session, first, receiver, |_| {});
+    let _ = tokio::time::timeout(STOP_APP_LIMIT, stopping).await;
+    drop(commands);
 }
 
 /// Whether `active`, the newest session, is a newer one for `receiver_id`
@@ -502,7 +525,12 @@ fn replaced(active: Option<&Active>, receiver_id: &str, generation: u64) -> bool
 /// while Wi-Fi comes back. Says whether the cast goes on: on the new
 /// connection, on one a load opened meanwhile, or not at all because it
 /// ended or went to another receiver meanwhile, which says so itself.
-async fn reconnect<R: Runtime>(app: &AppHandle<R>, receiver_id: &str, generation: u64) -> bool {
+async fn reconnect<R: Runtime>(
+    app: &AppHandle<R>,
+    receiver_id: &str,
+    generation: u64,
+    joined: Option<String>,
+) -> bool {
     let state = app.state::<CastPlayback>();
     let timing = *lock(&state.timing);
     let until = tokio::time::Instant::now() + timing.reconnect_for;
@@ -516,8 +544,21 @@ async fn reconnect<R: Runtime>(app: &AppHandle<R>, receiver_id: &str, generation
         if let Ok((stream, local)) = connect(app, receiver_id).await {
             // The cast may have gone on without it while it connected: to
             // another receiver, by a stop, or on a connection a load
-            // opened. Then this one isn't needed.
-            start_session(app, receiver_id, stream, local, Some(generation));
+            // opened. Then this one isn't needed, but after a stop it tells
+            // the TV, which the old connection couldn't.
+            let refused = start_session(
+                app,
+                receiver_id,
+                stream,
+                local,
+                Some(generation),
+                joined.clone(),
+            );
+            if let (Err(stream), Some(joined)) = (refused, joined)
+                && state.stopped(receiver_id)
+            {
+                stop_app(stream, joined).await;
+            }
             return true;
         }
         if tokio::time::Instant::now() >= until {

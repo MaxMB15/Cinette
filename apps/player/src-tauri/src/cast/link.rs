@@ -158,20 +158,26 @@ impl From<Event> for CastUpdate {
 /// Runs the cast until it closes, the connection drops, or the commands'
 /// sender is dropped, which stops it. `first` are the frames
 /// [`Session::start`] returned. Every update goes to `emit`, and the last
-/// one is always [`CastUpdate::Closed`].
+/// one is always [`CastUpdate::Closed`]. Returns the receiver app's session
+/// id the cast joined, if it got that far, so a new connection can rejoin
+/// or stop that app.
 pub async fn drive<S>(
     mut stream: S,
     mut session: Session,
     first: Vec<Vec<u8>>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     mut emit: impl FnMut(CastUpdate),
-) where
+) -> Option<String>
+where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut out = Output {
         send: first,
         events: Vec::new(),
     };
+    // The receiver app's session the cast joined, which a new connection
+    // can find again.
+    let mut joined = None;
     let mut ticks = tokio::time::interval(TICK);
     let mut buf = vec![0u8; 16 * 1024];
     loop {
@@ -180,22 +186,25 @@ pub async fn drive<S>(
                 emit(CastUpdate::Closed {
                     reason: "connectionLost",
                 });
-                return;
+                return joined;
             }
         }
         for event in out.events.drain(..) {
+            if let Event::Ready { session_id } = &event {
+                joined = Some(session_id.clone());
+            }
             emit(event.into());
         }
         if session.is_closed() {
             let _ = stream.shutdown().await;
-            return;
+            return joined;
         }
         out = tokio::select! {
             read = stream.read(&mut buf) => match read {
                 Ok(n) if n > 0 => session.receive(&buf[..n], Instant::now()),
                 _ => {
                     emit(CastUpdate::Closed { reason: "connectionLost" });
-                    return;
+                    return joined;
                 }
             },
             _ = ticks.tick() => session.tick(Instant::now()),

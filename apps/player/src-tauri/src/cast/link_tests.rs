@@ -245,3 +245,29 @@ fn every_update_reads_as_the_frontend_expects() {
         serde_json::json!({ "kind": "conversionFailed", "refused": true })
     );
 }
+
+#[tokio::test]
+async fn says_which_receiver_app_the_cast_joined() {
+    let (sender_end, receiver_end) = tokio::io::duplex(64 * 1024);
+    let (got_tx, _got) = mpsc::unbounded_channel();
+    tokio::spawn(answer(receiver_end, got_tx, 0));
+    let (commands, command_rx) = mpsc::unbounded_channel();
+    let (updates_tx, mut updates) = mpsc::unbounded_channel();
+    let (session, first) = Session::start("sender-1".into(), Instant::now());
+    let driving = tokio::spawn(drive(sender_end, session, first, command_rx, move |u| {
+        let _ = updates_tx.send(u);
+    }));
+    next_update(&mut updates, |u| *u == CastUpdate::Ready).await;
+    commands.send(Command::Stop).unwrap();
+    assert_eq!(driving.await.unwrap().as_deref(), Some("s1"));
+
+    // One that never joined an app has none.
+    let (sender_end, receiver_end) = tokio::io::duplex(1024);
+    drop(receiver_end);
+    let (_commands, command_rx) = mpsc::unbounded_channel();
+    let (session, first) = Session::start("sender-1".into(), Instant::now());
+    assert_eq!(
+        drive(sender_end, session, first, command_rx, |_| {}).await,
+        None
+    );
+}
