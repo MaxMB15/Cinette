@@ -211,11 +211,11 @@ impl ChannelMoves {
     /// names the right series even where `old_id` now names another one.
     fn for_episode(&self, old_id: &str, episode_id: &str) -> Option<String> {
         let moved = self.by_old_id.get(old_id)?;
-        let series = episode_id
-            .strip_prefix(moved.provider_id.as_str())?
-            .strip_prefix('-')
-            .and_then(xtream::series_id_for_episode_id)?;
-        Some(format!("{}-{series}", moved.provider_id))
+        let card = xtream::series_card_for_episode(episode_id)?;
+        // Only an episode of the provider that moved.
+        card.strip_prefix(moved.provider_id.as_str())?
+            .starts_with("-series-")
+            .then_some(card)
     }
 
     /// The new id of the channel row `old_id` names, for a row with nothing
@@ -2197,27 +2197,6 @@ impl CacheStore {
         Ok(())
     }
 
-    /// The series whose cached episodes include `episode_id`, if one does.
-    pub fn series_of_episode(&self, episode_id: &str) -> Result<Option<String>, CacheError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT series_channel_id, episodes_json FROM series_episode_cache
-             WHERE instr(episodes_json, ?1) > 0 ORDER BY series_channel_id",
-        )?;
-        let rows = stmt.query_map(params![episode_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (series, json) = row?;
-            // The text match only narrows it down; the id has to be an
-            // episode's own.
-            let episodes: Vec<Channel> = serde_json::from_str(&json).unwrap_or_default();
-            if episodes.iter().any(|e| e.id == episode_id) {
-                return Ok(Some(series));
-            }
-        }
-        Ok(None)
-    }
-
     /// Read the cached episode list for a series (empty if nothing cached).
     pub fn get_series_episodes(
         &self,
@@ -3808,28 +3787,6 @@ mod tests {
         // Overwrite replaces the previous list.
         store.save_series_episodes("series-1", &[make_ep("e1", 1)]).unwrap();
         assert_eq!(store.get_series_episodes("series-1").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn an_episode_names_the_series_it_was_cached_under() {
-        let store = CacheStore::open_in_memory().unwrap();
-        let episode = |id: &str, name: &str| Channel {
-            id: id.into(),
-            name: name.into(),
-            content_type: "series".into(),
-            ..Channel::default()
-        };
-        assert_eq!(store.series_of_episode("e1").unwrap(), None, "nothing cached");
-        store
-            .save_series_episodes("series-1", &[episode("e1", "Pilot"), episode("e2", "Two")])
-            .unwrap();
-        // The text "e2" is only in this one's name, which doesn't count.
-        store
-            .save_series_episodes("series-2", &[episode("e20", "Like e2")])
-            .unwrap();
-        assert_eq!(store.series_of_episode("e2").unwrap().as_deref(), Some("series-1"));
-        assert_eq!(store.series_of_episode("e20").unwrap().as_deref(), Some("series-2"));
-        assert_eq!(store.series_of_episode("e3").unwrap(), None);
     }
 
     // --- Channel id changes ---
