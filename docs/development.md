@@ -517,13 +517,20 @@ a U+2029 or a CR that no LF follows, so the two number the lines differently in 
 with one of those. The job fails for a changed file with one. Write a U+2028 or a U+2029
 as an escape like `\u2028`, and replace each CR that no LF follows with an LF.
 
-A pull request that changes the Stryker or Vitest setup, the files in `src/test`, or the
-versions of Vitest, Vite, jsdom, Testing Library or Stryker gets a run of all of
-`src/lib`, plus the changed lines in other files. That run still fails only on the
-lines the pull request changes, or on `date.ts` when it changes none. A change to the
-Changed code workflow, `scripts/changed-code.py` or `scripts/stryker-summary.py` alone
-only runs `date.ts`. The Monday run lists the changes that survive and fails only on an
-error.
+A pull request that changes the Stryker or Vitest config, the two files Vitest loads
+before every test, `src/test/polyfills.ts` and `src/test/setup.ts`, or the versions of
+Vitest, Vite, jsdom, Testing Library or Stryker gets a run of all of `src/lib`, plus
+the changed lines in other files. The other files in `src/test` are helpers that only
+some tests import, so a change to one is a change to tests and mutates nothing. A run
+of all of `src/lib` still fails only on the lines the pull request changes, or on
+`date.ts` when it changes none. A change to the Changed code workflow,
+`scripts/changed-code.py` or `scripts/stryker-summary.py` alone only runs `date.ts`.
+The Monday run lists the changes that survive and fails only on an error.
+
+Both workflows split a large run into shards of about 1,500 lines, at most eight, so a
+shard takes about 20 minutes plus its setup. Each file stays in one shard, and each
+shard of a pull request's run checks the changed lines in its own files. Each shard has
+its own summary and its own report artifact.
 
 ### Changed code
 
@@ -542,8 +549,9 @@ require that one. It runs three checks.
   lists every frontend file a test could load, so a changed frontend file missing from
   its report fails the check. A Rust file can be missing, since Linux doesn't build the
   macOS and iOS code, but a Rust report with no data for any file fails.
-- Stryker mutates the changed lines of the frontend, and a change that no test catches
-  fails the job, as [Mutation testing](#mutation-testing) explains.
+- Stryker mutates the changed lines of the frontend, in shards of about 1,500 lines, and
+  a change that no test catches fails the job, as [Mutation testing](#mutation-testing)
+  explains.
 - cargo-mutants mutates the changed lines of each crate, and a change that no test
   catches fails the job unless a skip comment covers it. A change that runs past the
   timeout counts as caught, and one that doesn't build doesn't count. The run is split
@@ -780,7 +788,7 @@ render as often as it did before the compiler.
 | [Build & Bundle](../.github/workflows/build.yml) | Pushes and pull requests to `main`, `dev` and `release-*`; manual runs | Lint, Clippy, formatting, tests, coverage, and macOS and Linux builds uploaded as artifacts. Rust line coverage below 80% fails the Linux job. The plugin's tests also run against the system libmpv of Debian 12 and Ubuntu 24.04, which the .deb uses. Pull requests build only the platforms their changes affect. The `ci-status` job fails when any other job failed or was cancelled. A manual run builds a signed macOS app. |
 | [Changed code](../.github/workflows/changed-code.yml) | Pull requests to `dev` | Checks the lines a pull request changes. Tests must run at least 80% of them, for the frontend and for Rust each, and every change that Stryker and cargo-mutants make to them must fail a test, unless a comment with a reason skips it. The last job, Changed code, fails when any other job failed or was cancelled. See [Changed code](#changed-code). |
 | [Mutation testing](../.github/workflows/mutants.yml) | Mondays, manual runs | Runs cargo-mutants on `mvp-core`, the mpv plugin and the app. A manual run tests one crate or all three, split into shards, and adds up each crate's results. Every Monday, the schedule starts one for all three on `dev`. A missed change is reported and fails nothing. Only an error, such as a build that breaks, fails a run. |
-| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Mondays, manual runs | Runs StrykerJS on all of the frontend helpers in `src/lib`. Every Monday, the schedule starts a run on `dev`. It reports the changes that survive and fails only on an error. |
+| [Frontend mutation testing](../.github/workflows/mutants-frontend.yml) | Mondays, manual runs | Runs StrykerJS on all of the frontend helpers in `src/lib`, split into shards of about 1,500 lines. Every Monday, the schedule starts a run on `dev`. It reports the changes that survive and fails only on an error. |
 | [Website](../.github/workflows/site.yml) | Pull requests to `main` and `dev` and pushes to `main` that change the site, full releases, manual runs | Tests and builds the website. Pull requests use a made-up release. Pushes to `main`, releases and manual runs from `main` build `main`'s site with the latest release and publish it to GitHub Pages. A pre-release starts it only once it's changed to a full release. See [Website](#website). |
 | [iOS](../.github/workflows/ios.yml) | Pushes and pull requests to `main` and `dev` that touch the app | A debug build for the iOS simulator, and Clippy for the iOS target |
 | [iOS TestFlight](../.github/workflows/ios-testflight.yml) | Manual | Builds the iOS app for devices and uploads it to TestFlight. See [ios.md](ios.md). |
