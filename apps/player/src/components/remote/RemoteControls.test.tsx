@@ -53,6 +53,9 @@ vi.mock("@/lib/tauri", () => ({
 	remoteLocalNetworkDenied: vi.fn(() => Promise.resolve(false)),
 	remoteOpen: vi.fn(() => Promise.resolve()),
 	getVpnActive: vi.fn(() => Promise.resolve(false)),
+	savePlaybackPosition: vi.fn(() => Promise.resolve()),
+	deletePlaybackPosition: vi.fn(() => Promise.resolve()),
+	markPositionFinished: vi.fn(() => Promise.resolve()),
 }));
 
 import { getVpnActive, remoteDisconnect, remoteLocalNetworkDenied, remoteOpen } from "@/lib/tauri";
@@ -68,7 +71,11 @@ import {
 	NONE_FOUND,
 	ProvidersAddedNotice,
 	RemoteBar,
+	TvBar,
 } from "./RemoteControls";
+import { nowPlaying } from "@/lib/now-playing";
+import { fakeDestination, playbackState } from "@/test/destination-fixtures";
+import { makeMovie } from "@/test/detail-fixtures";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
 
 const tv: RemoteDevice = {
@@ -771,6 +778,93 @@ describe("RemoteBar", () => {
 	it("says nothing when this device left", () => {
 		control.state = { ...control.state, ended: { name: "Den", reason: "left" } };
 		render(<RemoteBar />, { wrapper: MemoryRouter });
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+});
+
+describe("TvBar", () => {
+	const film = makeMovie({ id: "mv1", name: "A Film" });
+
+	/** Hotel TV, playing the film over Cast. */
+	const playing = async (lost?: () => string) => {
+		const tv = fakeDestination("cast", "Hotel TV");
+		await act(() =>
+			nowPlaying.send(tv, film, {
+				decision: { ok: true, route: { via: "direct", format: 0 } },
+				stopLocal: () => Promise.resolve(),
+				lost,
+			})
+		);
+		return tv;
+	};
+
+	afterEach(async () => {
+		await act(() => nowPlaying.stop());
+		act(() => nowPlaying.dismiss());
+	});
+
+	it("shows nothing while no TV plays", () => {
+		render(<TvBar />, { wrapper: MemoryRouter });
+		expect(screen.queryByRole("region")).toBeNull();
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("shows the TV and what plays there, on any page, with Play, Pause and Stop", async () => {
+		const tv = await playing();
+		render(
+			<MemoryRouter>
+				<Routes>
+					<Route path="/" element={<TvBar />} />
+					<Route path="/player" element={<p>Player page</p>} />
+				</Routes>
+			</MemoryRouter>
+		);
+		const bar = screen.getByRole("region", { name: "Now playing" });
+		expect(bar).toHaveTextContent("Playing on Hotel TV");
+		expect(bar).toHaveTextContent("A Film");
+		expect(within(bar).queryByRole("button", { name: "More" })).toBeNull();
+		fireEvent.click(within(bar).getByRole("button", { name: "Pause" }));
+		expect(tv.pause).toHaveBeenCalled();
+		fireEvent.click(within(bar).getByRole("button", { name: "Stop" }));
+		expect(tv.stop).toHaveBeenCalled();
+		fireEvent.click(within(bar).getByRole("link", { name: /Playing on Hotel TV/ }));
+		expect(screen.getByText("Player page")).toBeInTheDocument();
+	});
+
+	it("leaves Play and Stop to the player page there", async () => {
+		await playing();
+		render(
+			<MemoryRouter initialEntries={["/player"]}>
+				<TvBar />
+			</MemoryRouter>
+		);
+		expect(screen.getByRole("region", { name: "Now playing" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+	});
+
+	it("leaves the bar to a device this one controls", async () => {
+		await playing();
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		const { rerender } = render(<TvBar />, { wrapper: MemoryRouter });
+		expect(screen.queryByRole("region")).toBeNull();
+		control.state = { ...control.state, link: link({ phase: "reconnecting", attempt: 1 }) };
+		rerender(<TvBar />);
+		expect(screen.queryByRole("region")).toBeNull();
+		// Not to one still asking.
+		control.state = { ...control.state, link: link({ phase: "connecting" }) };
+		rerender(<TvBar />);
+		expect(screen.getByRole("region", { name: "Now playing" })).toBeInTheDocument();
+	});
+
+	it("says in its row why the TV ended, until it's dismissed", async () => {
+		const tv = await playing(() => "Lost the connection to Hotel TV.");
+		render(<TvBar />, { wrapper: MemoryRouter });
+		act(() => tv.set(playbackState({ connection: "lost" })));
+		expect(screen.queryByRole("region")).toBeNull();
+		const row = screen.getByRole("status");
+		expect(row).toHaveTextContent("Lost the connection to Hotel TV.");
+		expect(row).toHaveClass("min-h-12", "bg-card");
+		fireEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
 	});
 });

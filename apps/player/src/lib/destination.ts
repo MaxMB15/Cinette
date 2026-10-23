@@ -167,9 +167,14 @@ export interface PlaybackDestination {
 	 *  before `load`, so the UI can warn about a converted route first. */
 	route(item: PlaybackItem): Promise<RouteDecision>;
 	/** `route` is what `route()` gave for this item, so the destination plays
-	 *  the format the UI warned about. Resolves once the item has started
-	 *  loading there, and rejects if it couldn't. */
-	load(item: PlaybackItem, opts?: { startAt?: number; route?: PlayRoute }): Promise<void>;
+	 *  the format the UI warned about. `freed` says something on this device
+	 *  just let go of the provider's stream, which a provider can count for
+	 *  a moment after. Resolves once the item has started loading there, and
+	 *  rejects if it couldn't. */
+	load(
+		item: PlaybackItem,
+		opts?: { startAt?: number; route?: PlayRoute; freed?: boolean }
+	): Promise<void>;
 	play(): Promise<void>;
 	pause(): Promise<void>;
 	/** To an absolute position, in seconds. */
@@ -178,6 +183,11 @@ export interface PlaybackDestination {
 	selectSubtitle(trackId: string | null): Promise<void>;
 	selectAudio(trackId: string): Promise<void>;
 	stop(): Promise<void>;
+	/** Lets go of the provider's stream and keeps the session, so the
+	 *  provider allows another connection, where the destination can. */
+	release?(): Promise<void>;
+	/** Lets go of what it holds once it's done with, where it holds any. */
+	dispose?(): void;
 
 	/** The latest state. The same object until the state changes, so it
 	 *  works with `useSyncExternalStore`. */

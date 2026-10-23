@@ -195,7 +195,8 @@ export interface CastBackend {
 		channel: Channel,
 		route: CastRoute,
 		startAt: number | undefined,
-		restart: boolean
+		restart: boolean,
+		freed: boolean
 	) => Promise<void>;
 	castControl: (receiverId: string, action: CastAction) => Promise<void>;
 	castStop: (receiverId: string) => Promise<void>;
@@ -387,7 +388,8 @@ export const createCastDestination = (
 		route: CastRoute,
 		formats: StreamFormats,
 		startAt?: number,
-		quiet = false
+		quiet = false,
+		freed = false
 	) => {
 		const converted = route.via === "converted";
 		const sent = {};
@@ -409,18 +411,20 @@ export const createCastDestination = (
 		});
 		loaded = { channel, route, formats };
 		restarts.sent();
-		await backend.castLoad(receiver.id, channel, route, startAt, quiet).catch((e: unknown) => {
-			// The backend stopped what played before it asked for this, so
-			// nothing plays now. A newer load or a stop says for itself.
-			if (sent === newest && !quiet)
-				publish({
-					...snapshot,
-					loading: false,
-					media: null,
-					error: { code: "openFailed", message: String(e) },
-				});
-			throw e;
-		});
+		await backend
+			.castLoad(receiver.id, channel, route, startAt, quiet, freed)
+			.catch((e: unknown) => {
+				// The backend stopped what played before it asked for this, so
+				// nothing plays now. A newer load or a stop says for itself.
+				if (sent === newest && !quiet)
+					publish({
+						...snapshot,
+						loading: false,
+						media: null,
+						error: { code: "openFailed", message: String(e) },
+					});
+				throw e;
+			});
 	};
 	const control = (action: CastAction) => backend.castControl(receiver.id, action);
 	/** Says the stream stopped, after the tries to start it again ran out. */
@@ -480,7 +484,7 @@ export const createCastDestination = (
 			const startAt = channel.contentType === "live" ? undefined : opts?.startAt;
 			if (asked !== newest) throw SUPERSEDED;
 			try {
-				await send(channel, castRoute, formats, startAt);
+				await send(channel, castRoute, formats, startAt, false, opts?.freed);
 			} catch (e) {
 				if (FORMAT_FAILED.includes(String(e))) forget(channel, formats, castRoute.source);
 				// The backend has a newer list of the item's URLs, so ask again.

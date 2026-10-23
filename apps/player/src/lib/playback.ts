@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { seriesTitleOf } from "./channels";
+import { deletePlaybackPosition, markPositionFinished, savePlaybackPosition } from "./tauri";
 import type { Channel } from "./types";
 
 /** Positions earlier than this aren't worth offering a resume for. */
@@ -36,3 +37,64 @@ export const isFinished = (position: number, duration: number): boolean =>
 /** Whether a saved position should trigger the "resume or start over" prompt. */
 export const shouldOfferResume = (position: number, duration: number): boolean =>
 	position >= MIN_RESUME_SECONDS && !isFinished(position, duration);
+
+/** How often (ms) watch progress is persisted while playing. */
+export const PROGRESS_SAVE_INTERVAL = 5000;
+
+/** Where a movie or episode got to, as a player keeps it until it's saved. */
+export interface PlaybackProgress {
+	/** Resume key (see playbackKey); null for live or nothing playing. */
+	key: string | null;
+	/** URL the progress belongs to — mpv state for any other URL is ignored. */
+	url: string | null;
+	position: number;
+	duration: number;
+	/** Position changed since the last save. */
+	dirty: boolean;
+	lastSaved: number;
+	/**
+	 * Resume point the load was started at. Until playback reaches it, earlier
+	 * positions (mpv reporting the start of the file before the seek lands) are
+	 * ignored so they can't overwrite or delete the saved resume point.
+	 */
+	pendingStart: number | null;
+}
+
+export const EMPTY_PROGRESS: PlaybackProgress = {
+	key: null,
+	url: null,
+	position: 0,
+	duration: 0,
+	dirty: false,
+	lastSaved: 0,
+	pendingStart: null,
+};
+
+export const progressFor = (ch: Channel, startPos?: number, url = ch.url): PlaybackProgress => ({
+	key: playbackKey(ch),
+	url,
+	position: startPos ?? 0,
+	duration: 0,
+	dirty: false,
+	lastSaved: Date.now(),
+	pendingStart: startPos ?? null,
+});
+
+/**
+ * Persists `p`'s position, if it moved since the last save. A finished item is
+ * kept as finished, so it counts as watched and isn't offered to resume. One
+ * rewound to the very start (e.g. "Start over") is forgotten, so it doesn't
+ * keep offering a stale resume point.
+ */
+export const saveProgress = (p: PlaybackProgress): Promise<void> | undefined => {
+	if (!p.key || !p.dirty || p.duration <= 0) return;
+	p.dirty = false;
+	p.lastSaved = Date.now();
+	if (isFinished(p.position, p.duration)) {
+		return markPositionFinished(p.key, p.duration).catch(() => {});
+	}
+	if (p.position < MIN_RESUME_SECONDS) {
+		return deletePlaybackPosition(p.key).catch(() => {});
+	}
+	return savePlaybackPosition(p.key, p.position, p.duration).catch(() => {});
+};

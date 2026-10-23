@@ -769,6 +769,7 @@ pub async fn load<R: Runtime>(
     route: CastRoute,
     start_at: Option<f64>,
     restart: bool,
+    freed_here: bool,
 ) -> Result<(), String> {
     let state = app.state::<CastPlayback>();
     // Starting a stream again goes on with the cast it belongs to, and
@@ -791,8 +792,9 @@ pub async fn load<R: Runtime>(
         .as_mut()
         .filter(|a| a.receiver_id == receiver_id)
         .and_then(|a| Some((a.conversion.take()?, a.commands.clone())));
-    // This load closed the receiver's connection to the provider.
-    let freed = old.is_some();
+    // This load closed the receiver's connection to the provider, or
+    // something on this computer, such as its player, just closed its own.
+    let freed = old.is_some() || freed_here;
     if let Some((old, commands)) = old {
         // The receiver ends the old media as cancelled before its stream
         // goes away, rather than fetch from a stream that's gone and give

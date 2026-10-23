@@ -724,8 +724,9 @@ export const castLoad = (
 	channel: Channel,
 	route: CastRoute,
 	startAt: number | undefined,
-	restart: boolean
-): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt, restart });
+	restart: boolean,
+	freed: boolean
+): Promise<void> => invoke("cast_load", { receiverId, channel, route, startAt, restart, freed });
 
 /** Rejects with `notConnected` when nothing is cast to that receiver. */
 export const castControl = (receiverId: string, action: CastAction): Promise<void> =>

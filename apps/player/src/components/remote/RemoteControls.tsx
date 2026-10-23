@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useId, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { Link, useLocation } from "react-router";
@@ -11,6 +11,7 @@ import { Menu, MenuItem } from "@/components/ui/menu";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
 import { TransferHistoryDialog } from "@/components/remote/TransferHistoryDialog";
+import { useNowPlaying } from "@/hooks/useNowPlaying";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useTvNoticeFocus } from "@/hooks/useTvNoticeFocus";
 import { useRemoteSessions, useTauriEvent } from "@/hooks/useRemoteTarget";
@@ -25,7 +26,8 @@ import {
 } from "@/lib/tauri";
 import { VPN_HINT } from "@/lib/cast";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
-import type { CinetteDestination } from "@/lib/cinette-destination";
+import type { PlaybackDestination } from "@/lib/destination";
+import { nowPlaying } from "@/lib/now-playing";
 import { endedText, formatCode, localNetworkDenied } from "@/lib/remote-devices";
 import { getPlatform } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -254,11 +256,11 @@ export const ConnectStatusDialog = () => {
 	);
 };
 
-const useDestinationState = (destination: CinetteDestination) =>
+const useDestinationState = (destination: PlaybackDestination) =>
 	useSyncExternalStore(destination.subscribe, destination.getState);
 
 /** Play or Pause, and Stop, for what plays there. */
-const PlayStop = ({ destination }: { destination: CinetteDestination }) => {
+const PlayStop = ({ destination }: { destination: PlaybackDestination }) => {
 	const state = useDestinationState(destination);
 	const playing = state.status === "playing" || state.status === "buffering";
 	const run = (action: () => Promise<void>) => void action().catch(() => {});
@@ -292,7 +294,7 @@ const PlayStop = ({ destination }: { destination: CinetteDestination }) => {
 };
 
 /** What plays there, under the device's name. */
-const Title = ({ destination }: { destination: CinetteDestination }) => {
+const Title = ({ destination }: { destination: PlaybackDestination }) => {
 	const state = useDestinationState(destination);
 	return (
 		<span className="block truncate text-sm">
@@ -358,8 +360,6 @@ export const RemoteBar = () => {
 	const [transferringFor, setTransferringFor] = useState<number | null>(null);
 	// The link the menu was opened for, so it doesn't open by itself on the next.
 	const [menuFor, setMenuFor] = useState<number | null>(null);
-	// The player page has its own Play and Stop for the device.
-	const onPlayer = useLocation().pathname === "/player";
 	// Leaving clears the link here before the backend answers, so this
 	// shows whatever the bar shows by then.
 	const failed = leaveFailed && (
@@ -388,50 +388,109 @@ export const RemoteBar = () => {
 			},
 		].filter((action) => action !== false);
 		return (
-			<div
-				role="region"
-				aria-label="Remote control"
-				// One row at any width, like a music app's mini player: the
-				// actions go in a menu on a phone.
-				className={BAR}
-			>
-				<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
-				<Link
-					to="/player"
-					className={cn(
-						"min-w-0 flex-1 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-						TOUCH
-					)}
-				>
-					<span
-						className="block truncate text-xs text-muted-foreground"
-						title={link.name}
-					>
+			<DestinationBar
+				label="Remote control"
+				destination={link.destination}
+				heading={
+					<>
 						{connected ? "Playing on " : "Reconnecting to "}
 						<bdi>{link.name}</bdi>
 						{connected ? "" : "…"}
-					</span>
-					<Title destination={link.destination} />
-				</Link>
-				{!onPlayer && <PlayStop destination={link.destination} />}
-				{!onPlayer && (
-					<span className="hidden sm:flex shrink-0 gap-1">
-						{actions.map((action) => (
-							<button
-								key={action.label}
-								type="button"
-								className={`${BUTTON} hover:bg-accent`}
-								onClick={action.run}
-							>
-								{action.label}
-							</button>
-						))}
-					</span>
+					</>
+				}
+				title={link.name}
+				actions={actions}
+				menuOpen={menuFor === link.id}
+				onMenuOpenChange={(open) => setMenuFor(open ? link.id : null)}
+			>
+				{sendingFor === link.id && (
+					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
 				)}
+				{transferringFor === link.id && (
+					<TransferHistoryDialog link={link} onClose={() => setTransferringFor(null)} />
+				)}
+				{failed}
+			</DestinationBar>
+		);
+	}
+	const text = ended && ended !== dismissed ? endedText(ended.name, ended.reason) : null;
+	return (
+		<>
+			{failed}
+			{text && <EndedRow text={text} onDismiss={() => setDismissed(ended)} />}
+		</>
+	);
+};
+
+/** One thing the bar can do, inline from `sm` up and in its menu below. */
+interface BarAction {
+	label: string;
+	run: () => void;
+}
+
+/**
+ * The bar's one row while something plays elsewhere, like a music app's mini
+ * player: the device and what plays there, which open the player, Play or
+ * Pause and Stop, and its `actions`, in a menu on a phone. The player page
+ * has its own Play and Stop, so there the bar has only the rest.
+ */
+const DestinationBar = ({
+	label,
+	destination,
+	heading,
+	title,
+	actions,
+	menuOpen,
+	onMenuOpenChange,
+	children,
+}: {
+	label: string;
+	destination: PlaybackDestination;
+	/** The line over the title, such as "Playing on <name>". */
+	heading: ReactNode;
+	/** The device's name in full, for when the heading is cut short. */
+	title: string;
+	actions: BarAction[];
+	menuOpen: boolean;
+	onMenuOpenChange: (open: boolean) => void;
+	children?: ReactNode;
+}) => {
+	const onPlayer = useLocation().pathname === "/player";
+	return (
+		<div role="region" aria-label={label} className={BAR}>
+			<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
+			<Link
+				to="/player"
+				className={cn(
+					"min-w-0 flex-1 rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+					TOUCH
+				)}
+			>
+				<span className="block truncate text-xs text-muted-foreground" title={title}>
+					{heading}
+				</span>
+				<Title destination={destination} />
+			</Link>
+			{!onPlayer && <PlayStop destination={destination} />}
+			{!onPlayer && actions.length > 0 && (
+				<span className="hidden sm:flex shrink-0 gap-1">
+					{actions.map((action) => (
+						<button
+							key={action.label}
+							type="button"
+							className={`${BUTTON} hover:bg-accent`}
+							onClick={action.run}
+						>
+							{action.label}
+						</button>
+					))}
+				</span>
+			)}
+			{actions.length > 0 && (
 				<span className={cn("shrink-0", !onPlayer && "sm:hidden")}>
 					<Menu
-						open={menuFor === link.id}
-						onOpenChange={(open) => setMenuFor(open ? link.id : null)}
+						open={menuOpen}
+						onOpenChange={onMenuOpenChange}
 						trigger={(props) => (
 							<button
 								{...props}
@@ -455,39 +514,59 @@ export const RemoteBar = () => {
 						))}
 					</Menu>
 				</span>
-				{sendingFor === link.id && (
-					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
-				)}
-				{transferringFor === link.id && (
-					<TransferHistoryDialog link={link} onClose={() => setTransferringFor(null)} />
-				)}
-				{failed}
-			</div>
-		);
-	}
-	const text = ended && ended !== dismissed ? endedText(ended.name, ended.reason) : null;
-	return (
-		<>
-			{failed}
-			{/* In the bar's row, so the page doesn't move until it's dismissed. */}
-			{text && (
-				<div role="status" className={cn(BAR, "text-sm")}>
-					<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
-					<span className="min-w-0 flex-1 truncate" title={text}>
-						{text}
-					</span>
-					<button
-						type="button"
-						aria-label="Dismiss"
-						className={cn(ICON_BUTTON, "shrink-0 p-1 rounded hover:bg-accent")}
-						onClick={() => setDismissed(ended)}
-					>
-						<X className="h-4 w-4" aria-hidden />
-					</button>
-				</div>
 			)}
-		</>
+			{children}
+		</div>
 	);
+};
+
+/** Why something that played elsewhere ended, in the bar's row, so the page
+ *  doesn't move until it's dismissed. */
+const EndedRow = ({ text, onDismiss }: { text: string; onDismiss: () => void }) => (
+	<div role="status" className={cn(BAR, "text-sm")}>
+		<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
+		<span className="min-w-0 flex-1 truncate" title={text}>
+			{text}
+		</span>
+		<button
+			type="button"
+			aria-label="Dismiss"
+			className={cn(ICON_BUTTON, "shrink-0 p-1 rounded hover:bg-accent")}
+			onClick={onDismiss}
+		>
+			<X className="h-4 w-4" aria-hidden />
+		</button>
+	</div>
+);
+
+/**
+ * The bar at the top of every page while a TV plays over AirPlay or Cast,
+ * which goes on with the player page closed, or why one ended by itself.
+ * A device this one controls has the bar to itself.
+ */
+export const TvBar = () => {
+	const { destination, ended } = useNowPlaying();
+	const { link } = useRemoteControl();
+	const phase = link?.phase.phase;
+	if (phase === "connected" || phase === "reconnecting") return null;
+	if (destination)
+		return (
+			<DestinationBar
+				label="Now playing"
+				destination={destination}
+				heading={
+					<>
+						{"Playing on "}
+						<bdi>{destination.name}</bdi>
+					</>
+				}
+				title={destination.name}
+				actions={[]}
+				menuOpen={false}
+				onMenuOpenChange={() => {}}
+			/>
+		);
+	return ended ? <EndedRow text={ended} onDismiss={nowPlaying.dismiss} /> : null;
 };
 
 /**

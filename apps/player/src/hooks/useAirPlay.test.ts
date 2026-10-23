@@ -8,7 +8,11 @@ import type { StreamFormat } from "@/lib/route";
 import type { AirPlayNativeState } from "@/lib/airplay";
 import { NOT_READY } from "@/lib/route-profiles";
 import { makeMovie } from "@/test/detail-fixtures";
-import { useAirPlay } from "./useAirPlay";
+import type { NowPlaying } from "@/lib/now-playing";
+
+// AirPlay and the store outlive a page, so each test gets its own.
+let useAirPlay: typeof import("./useAirPlay").useAirPlay;
+let nowPlaying: NowPlaying;
 
 /** Events the backend would send, by name. */
 const events = vi.hoisted(() => {
@@ -74,7 +78,10 @@ const flush = () =>
 		for (let i = 0; i < 10; i++) await Promise.resolve();
 	});
 
-beforeEach(() => {
+beforeEach(async () => {
+	vi.resetModules();
+	({ useAirPlay } = await import("./useAirPlay"));
+	({ nowPlaying } = await import("@/lib/now-playing"));
 	events.handlers.clear();
 	events.failing.clear();
 	tauri.getStreamFormats.mockResolvedValue({
@@ -462,7 +469,7 @@ describe("useAirPlay", () => {
 		expect(events.count("airplay://picker-closed")).toBe(0);
 	});
 
-	it("ends AirPlay when told to and when the page goes", async () => {
+	it("ends AirPlay when told to, and goes on when the page goes", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
@@ -479,11 +486,76 @@ describe("useAirPlay", () => {
 		await act(async () => {
 			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
 		});
-		tauri.airplayStop.mockRejectedValue(new Error("gone"));
 		unmount();
 		await flush();
+		expect(tauri.airplayStop).toHaveBeenCalledTimes(1);
+		// It still follows the TV, and a page that opens again finds it.
+		expect(events.count("airplay://state")).toBe(1);
+		const playing = nowPlaying.getState().destination;
+		expect(playing?.kind).toBe("airplay");
+		const again = renderHook(() => useAirPlay(true));
+		await flush();
+		expect(again.result.current.destination).toBe(playing);
+		expect(again.result.current.current()).toBe(playing);
+		tauri.airplayStop.mockRejectedValue(new Error("gone"));
+		const current = again.result.current.current;
+		await act(() => again.result.current.stop());
+		expect(current()).toBeNull();
 		expect(tauri.airplayStop).toHaveBeenCalledTimes(2);
+		expect(nowPlaying.getState().destination).toBeNull();
 		expect(events.count("airplay://state")).toBe(0);
+	});
+});
+
+describe("useAirPlay's resend", () => {
+	const other = makeMovie({ id: "mv2", name: "Another Film" });
+
+	it("sends another item to the TV that plays, without the picker", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		const moveTo = vi.fn(async () => {});
+		// Nothing plays over AirPlay yet.
+		expect(await result.current.resend(other, { stopLocal: moveTo, confirm })).toEqual({
+			sent: false,
+			why: "cancelled",
+		});
+		expect(moveTo).not.toHaveBeenCalled();
+		await act(async () => {
+			await result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		});
+		tauri.airplayChoose.mockClear();
+		let sent: unknown;
+		await act(async () => {
+			sent = await result.current.resend(other, { startAt: 120, stopLocal: moveTo, confirm });
+		});
+		expect(sent).toEqual({ sent: true });
+		expect(moveTo).toHaveBeenCalled();
+		expect(tauri.airplayChoose).not.toHaveBeenCalled();
+		expect(tauri.airplayLoad).toHaveBeenLastCalledWith(other, 5, 2, 120);
+		expect(nowPlaying.getState().channel).toBe(other);
+	});
+
+	it("keeps the TV when a newer item for it overtakes a send", async () => {
+		tauri.airplayGetRoute.mockResolvedValue(tv);
+		const { result } = renderHook(() => useAirPlay(true));
+		await flush();
+		let superseded: () => void = () => {};
+		tauri.airplayLoad.mockReturnValueOnce(
+			new Promise<void>((_, reject) => (superseded = () => reject("superseded")))
+		);
+		const first = result.current.send(film, { anchor, stopLocal: async () => {}, confirm });
+		await flush();
+		const playing = nowPlaying.getState().destination;
+		expect(playing?.kind).toBe("airplay");
+		await act(async () => {
+			await result.current.resend(other, { stopLocal: async () => {}, confirm });
+		});
+		superseded();
+		expect(await first).toEqual({ sent: false, why: "cancelled" });
+		// The TV that plays still hears from AirPlay.
+		expect(nowPlaying.getState().destination).toBe(playing);
+		expect(events.count("airplay://state")).toBe(1);
 	});
 });
 
@@ -557,7 +629,7 @@ describe("useAirPlay's switching", () => {
 		expect(events.count("airplay://state")).toBe(0);
 	});
 
-	it("starts nothing when the page goes while this device stops", async () => {
+	it("goes on when the page goes while this device stops", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
 		const { result, unmount } = renderHook(() => useAirPlay(true));
 		await flush();
@@ -567,10 +639,9 @@ describe("useAirPlay's switching", () => {
 		await flush();
 		unmount();
 		stopped();
-		expect(await sent).toEqual({ sent: false, why: "cancelled" });
-		expect(tauri.airplayLoad).not.toHaveBeenCalled();
-		await flush();
-		expect(events.count("airplay://state")).toBe(0);
+		expect(await sent).toEqual({ sent: true });
+		expect(tauri.airplayLoad).toHaveBeenCalled();
+		expect(nowPlaying.getState().destination?.kind).toBe("airplay");
 	});
 
 	it("doesn't open the picker once the page has gone", async () => {

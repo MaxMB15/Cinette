@@ -241,13 +241,20 @@ const mirror = vi.hoisted(
 
 /** Stands in for useAirPlay, which has tests of its own. */
 const fakeAirPlay = vi.hoisted(() => {
+	// As the hook does, a stop, or Play here, ends AirPlay at once.
+	const end = () => {
+		current = { ...current, destination: null, state: null };
+		listeners.forEach((listener) => listener());
+	};
 	const initial = (): AirPlay => ({
 		available: false,
 		destination: null,
+		current: () => current.destination,
 		state: null,
 		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
-		stop: vi.fn<AirPlay["stop"]>(async () => {}),
-		returnHere: vi.fn<AirPlay["returnHere"]>(async () => {}),
+		resend: vi.fn<AirPlay["resend"]>(async () => ({ sent: true })),
+		stop: vi.fn<AirPlay["stop"]>(async () => end()),
+		returnHere: vi.fn<AirPlay["returnHere"]>(async () => end()),
 		notPicked: false,
 	});
 	let current = initial();
@@ -308,7 +315,6 @@ const fakeCast = vi.hoisted(() => {
 	return {
 		enabled: [] as boolean[],
 		/** What the player gave the hook to say why a cast ended. */
-		report: (() => {}) as (message: string) => void,
 		get: () => current,
 		subscribe: (listener: () => void) => {
 			listeners.add(listener);
@@ -330,9 +336,8 @@ const fakeCast = vi.hoisted(() => {
 vi.mock("@/hooks/useCast", async () => {
 	const { useSyncExternalStore } = await import("react");
 	return {
-		useCast: (enabled: boolean, report: (message: string) => void) => {
+		useCast: (enabled: boolean) => {
 			fakeCast.enabled.push(enabled);
-			fakeCast.report = report;
 			return useSyncExternalStore(fakeCast.subscribe, fakeCast.get);
 		},
 	};
@@ -3962,24 +3967,29 @@ describe("AirPlay", () => {
 	it("plays here again from where the TV was", async () => {
 		await openItem(lanternKeeper());
 		fakeMpv.actions.load.mockClear();
-		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
-		// The last reading came too soon after the one before to be saved.
-		act(() => fakeAirPlay.set({ state: tvState({ position: 605 }) }));
-		await flush();
-		vi.mocked(tauri.savePlaybackPosition).mockClear();
-		act(() => fakeAirPlay.set({ state: tvState({ position: 606 }) }));
-		await flush();
-		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
+		act(() =>
+			fakeAirPlay.set({
+				destination: tv(),
+				state: tvState({ position: 606, status: "paused" }),
+			})
+		);
 		const returnHere = vi.mocked(fakeAirPlay.get().returnHere);
 		let letGo: () => void = () => {};
-		returnHere.mockReturnValueOnce(new Promise((r) => (letGo = r)));
+		// As the hook does, AirPlay ends once it has let go.
+		returnHere.mockReturnValueOnce(
+			new Promise<void>(
+				(r) =>
+					(letGo = () => {
+						fakeAirPlay.set({ destination: null, state: null });
+						r();
+					})
+			)
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Play here from 10:06" }));
 		await flush();
 		// It waits for AirPlay to let go of the stream and the sound.
 		expect(returnHere).toHaveBeenCalledWith(expect.any(Object));
 		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
-		// The position the TV had is saved as soon as Play here is pressed.
-		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 606, 5400);
 		await act(async () => letGo());
 		await flush();
 		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 606);
@@ -4054,18 +4064,12 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper());
 		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
 		const panel = screen.getByRole("region", { name: "AirPlay" });
-		act(() => fakeAirPlay.set({ state: tvState({ position: 700 }) }));
-		await flush();
-		vi.mocked(tauri.savePlaybackPosition).mockClear();
-		act(() => fakeAirPlay.set({ state: tvState({ position: 701 }) }));
-		await flush();
 		const stop = vi.mocked(fakeAirPlay.get().stop);
 		let stopped: () => void = () => {};
 		stop.mockReturnValueOnce(new Promise((r) => (stopped = r)));
 		fireEvent.click(within(panel).getByRole("button", { name: "Stop" }));
 		await flush();
-		// It saves where the TV was, and leaves once AirPlay has stopped.
-		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
+		// It leaves once AirPlay has stopped.
 		expect(screen.queryByText("Channel list")).toBeNull();
 		await act(async () => stopped());
 		await flush();
@@ -4174,27 +4178,6 @@ describe("AirPlay", () => {
 		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
 		await press("f");
 		expect(fullscreenSpy).toHaveBeenCalledWith(true);
-	});
-
-	it("saves the position on the TV as the resume point", async () => {
-		await openItem(lanternKeeper());
-		vi.mocked(tauri.savePlaybackPosition).mockClear();
-		act(() => fakeAirPlay.set({ destination: tv(), state: tvState({ position: 900 }) }));
-		await flush();
-		// The first reading saves at once, then every few seconds.
-		act(() => fakeAirPlay.set({ state: tvState({ position: 901 }) }));
-		await flush();
-		act(() => fakeAirPlay.set({ state: tvState({ position: 1200, status: "paused" }) }));
-		await flush();
-		expect(tauri.savePlaybackPosition).toHaveBeenLastCalledWith(MOVIE_KEY, 1200, 5400);
-		// No length yet, or the very start, saves nothing.
-		vi.mocked(tauri.savePlaybackPosition).mockClear();
-		act(() =>
-			fakeAirPlay.set({ state: tvState({ position: 1300, duration: 0, status: "paused" }) })
-		);
-		act(() => fakeAirPlay.set({ state: tvState({ position: 0.5, status: "paused" }) }));
-		await flush();
-		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
 	});
 
 	it("says so in the player when AirPlay fails after this device stopped", async () => {
@@ -4392,10 +4375,7 @@ describe("Google Cast", () => {
 			fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
 			await flush();
 		};
-		act(() => fakeCast.report("Lost the connection to Hotel TV."));
-		await castTo();
-		expect(screen.queryByRole("alert")).toBeNull();
-		// Nor a note that one didn't start.
+		// A note that one didn't start goes once one does.
 		vi.mocked(fakeCast.get().send).mockResolvedValueOnce("Couldn't reach Hotel TV.");
 		await castTo();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Hotel TV.");
@@ -4539,18 +4519,24 @@ describe("Google Cast", () => {
 		expect(screen.getByText("Channel list")).toBeTruthy();
 	});
 
-	it("says why a cast ended by itself, until it's dismissed", async () => {
+	it("puts a note away after a while, or once it's dismissed", async () => {
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV")],
+			statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+		});
 		await openItem(lanternKeeper());
-		act(() => fakeCast.report("Lost the connection to Hotel TV."));
-		expect(screen.getByRole("alert").textContent).toBe("Lost the connection to Hotel TV.");
+		const castTo = async () => {
+			vi.mocked(fakeCast.get().send).mockResolvedValueOnce("Couldn't reach Hotel TV.");
+			fireEvent.click(castButton()!);
+			await flush();
+			fireEvent.click(screen.getByRole("button", { name: /Hotel TV/ }));
+			await flush();
+		};
+		await castTo();
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("alert")).toBeNull();
-	});
-
-	it("puts a note away after a while", async () => {
-		vi.useFakeTimers();
-		await openItem(lanternKeeper());
-		act(() => fakeCast.report("Lost the connection to Hotel TV."));
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		await castTo();
 		act(() => vi.advanceTimersByTime(5999));
 		expect(screen.queryByRole("alert")).not.toBeNull();
 		act(() => vi.advanceTimersByTime(1));
@@ -4620,45 +4606,6 @@ describe("Google Cast", () => {
 		await openItem(lanternKeeper());
 		act(() => fakeCast.set({ destination: tv() as unknown as CastDestination, state: null }));
 		expect(screen.queryByRole("region", { name: "Google Cast" })).toBeNull();
-	});
-
-	it("saves where the receiver was before it plays here", async () => {
-		await openItem(lanternKeeper());
-		act(() =>
-			fakeCast.set({
-				destination: tv() as unknown as CastDestination,
-				state: castState({ position: 700 }),
-			})
-		);
-		await flush();
-		vi.mocked(tauri.savePlaybackPosition).mockClear();
-		act(() => fakeCast.set({ state: castState({ position: 701 }) }));
-		await flush();
-		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
-		const stop = vi.mocked(fakeCast.get().stop);
-		stop.mockReturnValueOnce(new Promise(() => {}));
-		fireEvent.click(screen.getByRole("button", { name: /^Play here from 11:4/ }));
-		await flush();
-		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
-	});
-
-	it("saves where the receiver was when it stops", async () => {
-		await openItem(lanternKeeper());
-		act(() =>
-			fakeCast.set({
-				destination: tv() as unknown as CastDestination,
-				state: castState({ position: 700 }),
-			})
-		);
-		await flush();
-		vi.mocked(tauri.savePlaybackPosition).mockClear();
-		act(() => fakeCast.set({ state: castState({ position: 701 }) }));
-		await flush();
-		expect(tauri.savePlaybackPosition).not.toHaveBeenCalled();
-		fakeCast.get().stop = vi.fn(() => new Promise<void>(() => {}));
-		fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-		await flush();
-		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 701, 5400);
 	});
 
 	it("plays live here again from now, and says so when it can't", async () => {
@@ -4860,20 +4807,124 @@ describe("Google Cast", () => {
 			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
 		});
 
-		it("leaves the episode keys alone while AirPlay plays", async () => {
-			await openItem(ep1, { episodes: [ep1, ep2] });
-			fakeMpv.actions.load.mockClear();
-			const airplayTv = { ...tv(), id: "airplay:tv", kind: "airplay" as const };
-			act(() =>
-				fakeAirPlay.set({
-					destination: airplayTv as unknown as AirPlay["destination"],
-					state: castState(),
-				})
-			);
-			await press("n");
-			await press("p");
-			expect(fakeMpv.actions.load).not.toHaveBeenCalled();
-			expect(vi.mocked(fakeCast.get().send)).not.toHaveBeenCalled();
+		describe("while AirPlay plays", () => {
+			const airplaying = () => {
+				const airplayTv = {
+					...tv(),
+					id: "airplay:tv",
+					kind: "airplay" as const,
+					name: "Living Room TV",
+				};
+				act(() =>
+					fakeAirPlay.set({
+						destination: airplayTv as unknown as AirPlay["destination"],
+						state: castState(),
+					})
+				);
+				return vi.mocked(fakeAirPlay.get().resend);
+			};
+
+			it("takes the episode keys and buttons to the TV", async () => {
+				await openItem(ep1, { episodes: [ep1, ep2] });
+				fakeMpv.actions.load.mockClear();
+				const resend = airplaying();
+				await press("n");
+				expect(resend).toHaveBeenLastCalledWith(
+					expect.objectContaining({ id: ep2.id }),
+					expect.objectContaining({ startAt: undefined })
+				);
+				const view = screen.getByRole("region", { name: "AirPlay" });
+				fireEvent.click(within(view).getByRole("button", { name: "Next episode" }));
+				await flush();
+				expect(resend).toHaveBeenCalledTimes(2);
+				expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+				expect(vi.mocked(fakeCast.get().send)).not.toHaveBeenCalled();
+			});
+
+			it("plays another title there without the AirPlay menu", async () => {
+				await openItem(lanternKeeper());
+				fakeMpv.actions.load.mockClear();
+				const resend = airplaying();
+				await goTo({ url: harborLights().url, channel: harborLights() });
+				expect(resend).toHaveBeenCalledWith(
+					expect.objectContaining({ id: harborLights().id }),
+					expect.anything()
+				);
+				expect(fakeAirPlay.get().send).not.toHaveBeenCalled();
+				expect(fakeMpv.actions.load).not.toHaveBeenCalled();
+				// The player moves on once it's going to the TV.
+				await act(() => resend.mock.calls[0][1].stopLocal());
+				expect(getMountedPlayer()?.getState().item?.ref).toBe(harborLights().id);
+			});
+
+			it("resumes it there where it was left", async () => {
+				await openItem(ep1, { episodes: [ep1, ep2] });
+				const resend = airplaying();
+				vi.mocked(tauri.getPlaybackPosition).mockResolvedValue({
+					positionSeconds: 1200,
+					durationSeconds: 5400,
+				} as Awaited<ReturnType<typeof Bridge.getPlaybackPosition>>);
+				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+				await flush();
+				fireEvent.click(screen.getByRole("button", { name: /Resume/ }));
+				await flush();
+				expect(resend.mock.calls[0][1].startAt).toBe(1200);
+			});
+
+			it("asks before this device converts it for the TV", async () => {
+				await openItem(ep1, { episodes: [ep1, ep2] });
+				const resend = airplaying();
+				const answers: boolean[] = [];
+				resend.mockImplementation(async (_, opts) => {
+					answers.push(await opts.confirm("on"));
+					return { sent: true };
+				});
+				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+				await flush();
+				const dialog = screen.getByRole("dialog", { name: "Play on Living Room TV?" });
+				fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
+				await flush();
+				expect(answers).toEqual([true]);
+			});
+
+			it("says why the next item can't go to the TV", async () => {
+				await openItem(ep1, { episodes: [ep1, ep2] });
+				const resend = airplaying();
+				resend.mockResolvedValueOnce({
+					sent: false,
+					why: "failed",
+					error: "refused",
+					stopped: true,
+				});
+				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
+				await flush();
+				expect(screen.getByRole("alert").textContent).toMatch(/Nothing is playing\.$/);
+			});
+
+			it("goes on to the next episode when the TV reaches the end", async () => {
+				await openItem(ep1, { episodes: [ep1, ep2] });
+				const resend = airplaying();
+				const item = { title: ep1.name, contentType: "series" as const, ref: ep1.id };
+				act(() => fakeAirPlay.set({ state: castState({ item, status: "playing" }) }));
+				expect(resend).not.toHaveBeenCalled();
+				act(() => fakeAirPlay.set({ state: castState({ item, status: "ended" }) }));
+				await flush();
+				expect(resend).toHaveBeenCalledWith(
+					expect.objectContaining({ id: ep2.id }),
+					expect.anything()
+				);
+				// Not for an item the player doesn't have.
+				resend.mockClear();
+				const elsewhere = { ...item, ref: "other" };
+				act(() =>
+					fakeAirPlay.set({ state: castState({ item: elsewhere, status: "playing" }) })
+				);
+				act(() =>
+					fakeAirPlay.set({ state: castState({ item: elsewhere, status: "ended" }) })
+				);
+				await flush();
+				expect(resend).not.toHaveBeenCalled();
+			});
 		});
 
 		it("leaves the receiver alone while it asks", async () => {
@@ -4936,11 +4987,13 @@ describe("Google Cast", () => {
 		it("keeps a note up when a key's control fails with nothing to say", async () => {
 			await openItem(lanternKeeper());
 			const tvNow = casting();
-			act(() => fakeCast.report("Lost the connection to Den."));
+			tvNow.pause.mockRejectedValueOnce("refused");
+			await press(" ");
+			const note = screen.getByRole("alert").textContent;
 			tvNow.getState.mockReturnValue(castState({ connection: "reconnecting" }));
 			tvNow.pause.mockRejectedValueOnce("notConnected");
 			await press(" ");
-			expect(screen.getByRole("alert").textContent).toBe("Lost the connection to Den.");
+			expect(screen.getByRole("alert").textContent).toBe(note);
 		});
 
 		it("closes the question at once on Cancel or Escape, as a no", async () => {

@@ -15,6 +15,7 @@ import {
 	DevicesButton,
 	ProvidersAddedNotice,
 	RemoteBar,
+	TvBar,
 } from "@/components/remote/RemoteControls";
 import { controlsOthers } from "@/lib/platform";
 
@@ -76,6 +77,8 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 				{/* A phone's player keeps the whole screen; the bars would sit
 				    under the status bar there. */}
 				{!(compact && isPlayer) && controlsOthers() && <RemoteBar />}
+				{/* A TV that plays over AirPlay or Cast, from any page. */}
+				{!(compact && isPlayer) && <TvBar />}
 				{!(compact && isPlayer) && <ControllersBar />}
 				{!(compact && isPlayer) && <ProvidersAddedNotice />}
 				{!(compact && isPlayer) && <HistoryImportedNotice />}

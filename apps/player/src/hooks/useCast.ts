@@ -4,8 +4,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import { usePlayerPref } from "@/hooks/usePlayerPref";
-import { readStreamThrough, STREAM_THROUGH_EVENT } from "@/lib/player-prefs";
+import { useNowPlaying } from "@/hooks/useNowPlaying";
+import { readStreamThrough } from "@/lib/player-prefs";
 import {
 	SUPERSEDED,
 	createCastDestination,
@@ -15,7 +15,8 @@ import {
 import { castEndedMessage, castFailureMessage, castStatus, newerList } from "@/lib/cast";
 import type { PlaybackState } from "@/lib/destination";
 import { blockerText, type DestinationStatus } from "@/lib/device-picker";
-import type { PlayRoute, RouteDecision } from "@/lib/route";
+import { nowPlaying } from "@/lib/now-playing";
+import type { RouteDecision } from "@/lib/route";
 import {
 	CAST_RECEIVERS_EVENT,
 	CAST_UPDATE_EVENT,
@@ -51,17 +52,37 @@ const noState = () => () => {};
 const getNull = () => null;
 const NO_RECEIVERS: CastReceiver[] = [];
 
-/**
- * How long to wait before each new look at an item, after a switch let go
- * of the stream. The receiver may take a moment to hang up on the
- * provider.
- */
-export const RELEASE_RETRY_MS = [0, 1000, 2000];
+/** Each receiver's destination. They outlive the player page, as a cast
+ *  does, so the one that plays keeps getting its receiver's updates. */
+const destinations = new Map<string, CastDestination>();
+let following: Promise<unknown> | null = null;
 
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Passes the receivers' updates to their destinations from the first
+ *  use on, for as long as the app runs. */
+const followUpdates = () => {
+	following ??= listen<{ receiverId: string; update: CastUpdate }>(CAST_UPDATE_EVENT, (e) =>
+		destinations.get(e.payload.receiverId)?.receive(e.payload.update)
+	).catch(() => {
+		following = null;
+	});
+};
 
-/** What working out a route came to: a decision, or why it couldn't. */
-type Routed = { decision: RouteDecision } | { error: unknown };
+const destinationFor = (receiver: CastReceiver): CastDestination => {
+	let found = destinations.get(receiver.id);
+	if (!found) {
+		// "Stream through this computer", from Settings: convert even what a
+		// receiver could fetch itself, so it never gets the provider's link.
+		found = createCastDestination(receiver, backend, { streamThrough: readStreamThrough });
+		destinations.set(receiver.id, found);
+	}
+	return found;
+};
+
+/** The cast playing, if what plays is one. */
+const castPlaying = (): CastDestination | null => {
+	const { destination } = nowPlaying.getState();
+	return destination?.kind === "cast" ? (destination as CastDestination) : null;
+};
 
 /** The key of a route the picker showed. */
 const routeKey = (receiverId: string, channel: Channel) => `${receiverId}\n${channel.id}`;
@@ -109,57 +130,30 @@ export interface Cast {
 }
 
 /**
- * Google Cast for the player page, on macOS and Linux. Off elsewhere,
- * where every list stays empty. Leaving the page ends the cast. `report`
- * says why a cast ended by itself.
+ * Google Cast, on macOS and Linux: the receivers, the picker's routes, and
+ * sending to one. Off elsewhere, where every list stays empty. A cast keeps
+ * playing when the player page closes; the now-playing store holds it.
  */
-export const useCast = (enabled: boolean, report: (message: string) => void): Cast => {
+export const useCast = (enabled: boolean): Cast => {
 	const [list, setList] = useState<CastReceiverList | null>(null);
 	const [statuses, setStatuses] = useState<ReadonlyMap<string, DestinationStatus>>(new Map());
-	const [destination, setDestination] = useState<CastDestination | null>(null);
 	const [vpnActive, setVpnActive] = useState(false);
-	const reportRef = useLatestRef(report);
-	// "Stream through this computer", from Settings: convert even what a
-	// receiver could fetch itself, so it never gets the provider's link.
-	const throughRef = useLatestRef(usePlayerPref(readStreamThrough, STREAM_THROUGH_EVENT));
-	const destinations = useRef(new Map<string, CastDestination>());
+	const playing = useNowPlaying().destination;
+	const destination = playing?.kind === "cast" ? (playing as CastDestination) : null;
 	/** The routes the picker showed, by receiver and channel. */
 	const decisions = useRef(new Map<string, RouteDecision>());
-	const active = useRef<CastDestination | null>(null);
-	/** The newest send's token. A newer send, a stop or leaving the page
-	 *  puts in another, so a send overtaken gives up quietly wherever it is. */
-	// Stryker disable next-line ObjectLiteral: Each send puts in its own token before one is compared, so the first one is never read.
-	const turn = useRef({ token: {} as object });
 	const checking = useRef(0);
 	/** What the open picker checks, and the receivers it asked about. */
 	const picking = useRef<{ channel: Channel; asked: Set<string> } | null>(null);
 	const [held, setHeld] = useState<string[]>([]);
 
-	const destinationFor = useCallback(
-		(receiver: CastReceiver): CastDestination => {
-			let found = destinations.current.get(receiver.id);
-			if (!found) {
-				found = createCastDestination(receiver, backend, {
-					streamThrough: () => throughRef.current,
-				});
-				destinations.current.set(receiver.id, found);
-			}
-			return found;
-		},
-		// Stryker disable next-line ArrayDeclaration: throughRef is a ref, so the function is the same with any deps.
-		[throughRef]
-	);
-
 	useEffect(() => {
 		if (!enabled) return;
 		let current = true;
-		const sends = turn.current;
+		followUpdates();
 		const unlisten = [
 			listen<CastReceiverList>(CAST_RECEIVERS_EVENT, (e) =>
 				setList((old) => newerList(old, e.payload))
-			),
-			listen<{ receiverId: string; update: CastUpdate }>(CAST_UPDATE_EVENT, (e) =>
-				destinations.current.get(e.payload.receiverId)?.receive(e.payload.update)
 			),
 		];
 		void getCastReceivers()
@@ -174,13 +168,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 			.catch(() => {});
 		return () => {
 			current = false;
-			sends.token = {};
 			for (const p of unlisten) void p.then((fn) => fn());
-			// Leaving the page ends the cast, as the stop button ends local
-			// playback.
-			const left = active.current;
-			active.current = null;
-			if (left) void left.stop().catch(() => {});
 		};
 	}, [enabled]);
 
@@ -209,8 +197,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 					setStatuses((old) => new Map(old).set(receiver.id, castStatus(decision)));
 				});
 		},
-		// Stryker disable next-line ArrayDeclaration: destinationFor never changes, so the function is the same with any deps.
-		[destinationFor]
+		[]
 	);
 
 	const check = useCallback(
@@ -257,118 +244,38 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		destination?.getState ?? getNull
 	);
 
-	// A cast that's lost goes back to this device, and says why.
-	useEffect(() => {
-		if (!destination) return;
-		return destination.subscribe((next) => {
-			if (next.connection !== "lost" || active.current !== destination) return;
-			active.current = null;
-			setDestination(null);
-			// Nothing it was still doing, such as starting its stream again,
-			// may bring it back.
-			void destination.stop().catch(() => {});
-			reportRef.current(castEndedMessage(destination.name, destination.closedReason()));
-		});
-	}, [destination, reportRef]);
-
 	const send: Cast["send"] = useCallback(
 		async (receiverId, channel, opts) => {
-			const mine = {};
-			turn.current.token = mine;
-			const newest = () => turn.current.token === mine;
 			const receiver = receiversRef.current.find((r) => r.id === receiverId);
 			if (!receiver) return "That receiver is gone.";
 			const target = destinationFor(receiver);
-			const item = { kind: "local" as const, channel };
-			const look = (): Promise<Routed> =>
-				target.route(item).then(
-					(decision) => ({ decision }),
-					(error: unknown) => ({ error })
-				);
-			let released = false;
-			/** The route to load by, why there's none, or `null` once something
-			 *  overtook this send. */
-			const prepare = async (): Promise<
-				{ route: PlayRoute } | { why: string | null } | null
-			> => {
-				const shown = decisions.current.get(routeKey(receiverId, channel));
-				let routed: Routed = shown ? { decision: shown } : await look();
-				// While this receiver plays, the provider may refuse a second
-				// connection, as many accounts allow one. It lets go of the
-				// stream, keeping the cast, and looks again.
-				if ("error" in routed && active.current === target) {
-					released = true;
-					await target.release().catch(() => {});
-					for (const ms of RELEASE_RETRY_MS) {
-						await wait(ms);
-						if (!newest()) return null;
-						routed = await look();
-						if (!("error" in routed)) break;
-					}
-					if ("error" in routed) {
-						const why = castFailureMessage(receiver.name, routed.error);
-						return { why: `${why} Nothing is playing.` };
-					}
-				}
-				if ("error" in routed) return { why: blockerText("unreachable") };
-				// Nothing is asked of a send that something overtook.
-				if (!newest()) return null;
-				const { decision } = routed;
-				if (!decision.ok) return { why: blockerText(decision.reason, decision.detail) };
-				const { route } = decision;
-				if (route.via === "converted" && opts.confirm && !(await opts.confirm(route.keep)))
-					return { why: null };
-				return { route };
-			};
-			const ready = await prepare();
-			// A newer send or a stop took over, and says for itself.
-			// Stryker disable next-line ConditionalExpression: prepare gives null only once something overtook this send, when newest() is false too.
-			if (ready === null || !newest()) return null;
-			if ("why" in ready) {
-				// A cast that let go of its stream has stopped.
-				if (released) target.settle();
-				return ready.why;
+			const sent = await nowPlaying.send(target, channel, {
+				...opts,
+				decision: decisions.current.get(routeKey(receiverId, channel)),
+				lost: () => castEndedMessage(target.name, target.closedReason()),
+			});
+			if (sent.ok || sent.why === "overtaken") return null;
+			// A cast that let go of its stream, and gets nothing new, has
+			// stopped.
+			if (sent.why !== "failed" && sent.released) target.settle();
+			if (sent.why === "declined") return null;
+			if (sent.why === "blocked")
+				return blockerText(sent.decision.reason, sent.decision.detail);
+			if (sent.why === "unrouted") {
+				if (!sent.released) return blockerText("unreachable");
+				return `${castFailureMessage(receiver.name, sent.error)} Nothing is playing.`;
 			}
-			const { route } = ready;
-			await opts.stopLocal();
-			if (!newest()) return null;
-			const switching = active.current === target;
-			const old = active.current;
-			if (old && old !== target) void old.stop().catch(() => {});
-			active.current = target;
-			setDestination(target);
-			// On the promise, since the React Compiler can't compile a
-			// condition inside `catch`.
-			return target.load(item, { startAt: opts.startAt, route }).then(
-				() => null,
-				(e: unknown) => {
-					if (!newest() || String(e) === SUPERSEDED) return null;
-					// A first cast that failed lets go of the receiver. A switch
-					// keeps the cast, whose panel says why and offers Play here.
-					if (!switching) {
-						active.current = null;
-						setDestination(null);
-						void target.stop().catch(() => {});
-					}
-					return `${castFailureMessage(receiver.name, e)} Nothing is playing.`;
-				}
-			);
+			// A switch keeps the cast, whose view says why and offers Play here.
+			if (String(sent.error) === SUPERSEDED) return null;
+			return `${castFailureMessage(receiver.name, sent.error)} Nothing is playing.`;
 		},
-		// Stryker disable next-line ArrayDeclaration: destinationFor never changes and receiversRef is a ref, so the function is the same with any deps.
-		[destinationFor, receiversRef]
+		// Stryker disable next-line ArrayDeclaration: receiversRef is a ref, so the function is the same with any deps.
+		[receiversRef]
 	);
 
-	const stop = useCallback(
-		async () => {
-			turn.current.token = {};
-			const left = active.current;
-			active.current = null;
-			setDestination(null);
-			if (left) await left.stop();
-		},
-		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
-		[]
-	);
+	const stop = useCallback(async () => {
+		if (castPlaying()) await nowPlaying.stop();
+	}, []);
 
 	return {
 		receivers,
@@ -378,8 +285,7 @@ export const useCast = (enabled: boolean, report: (message: string) => void): Ca
 		check,
 		release,
 		destination,
-		// Stryker disable next-line ArrayDeclaration: It only reads a ref, so it's the same function with any deps.
-		current: useCallback(() => active.current, []),
+		current: castPlaying,
 		state: destination ? state : null,
 		send,
 		stop,

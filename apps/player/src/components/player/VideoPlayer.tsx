@@ -17,7 +17,7 @@ import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } fr
 import { useLocation, useNavigate } from "react-router";
 import { useMpv } from "@/hooks/useMpv";
 import { useLocalPlayback } from "@/hooks/useLocalPlayback";
-import { useAirPlay } from "@/hooks/useAirPlay";
+import { useAirPlay, type SendResult } from "@/hooks/useAirPlay";
 import { useCast } from "@/hooks/useCast";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import {
@@ -26,7 +26,6 @@ import {
 	airplayFailureMessage,
 	airplaySeekMessage,
 	airplayKey,
-	airplayProgress,
 } from "@/lib/airplay";
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { CastButton } from "@/components/player/CastButton";
@@ -55,8 +54,6 @@ import {
 	mpvSetSubDelay,
 	mpvGetState,
 	getPlaybackPosition,
-	markPositionFinished,
-	savePlaybackPosition,
 	deletePlaybackPosition,
 	handOffProgress,
 	resolveLocalDownload,
@@ -72,7 +69,15 @@ import { useFullscreen } from "@/lib/fullscreen-context";
 import { useLeaveFullscreenOnUnmount } from "@/hooks/useLeaveFullscreenOnUnmount";
 import { useDownloads } from "@/hooks/useDownloads";
 import { DownloadButton } from "@/components/downloads/DownloadButton";
-import { playbackKey, isFinished, shouldOfferResume, MIN_RESUME_SECONDS } from "@/lib/playback";
+import {
+	EMPTY_PROGRESS,
+	PROGRESS_SAVE_INTERVAL,
+	playbackKey,
+	progressFor,
+	saveProgress,
+	shouldOfferResume,
+	type PlaybackProgress,
+} from "@/lib/playback";
 import { channelSources, withSource } from "@/lib/sources";
 import { downloadIconState } from "@/lib/download-status";
 import { sortEpisodes } from "@/lib/episodes";
@@ -153,8 +158,6 @@ const afterCast =
 		if (why) return { text: why, cast: true };
 		return notice?.cast ? null : notice;
 	};
-/** How often (ms) watch progress is persisted while playing. */
-const PROGRESS_SAVE_INTERVAL = 5000;
 const MAX_VOLUME = 150;
 const LOADED_URL_KEY = "mvp_lastLoadedUrl";
 /** Position jumps larger than this between polls are seeks, not watching. */
@@ -179,44 +182,6 @@ const END_SEEN_WITHIN_MS = 30_000;
  * page reads them.
  */
 let subtitleSessionReads = 0;
-
-interface PlaybackProgress {
-	/** Resume key (see playbackKey); null for live or nothing playing. */
-	key: string | null;
-	/** URL the progress belongs to — mpv state for any other URL is ignored. */
-	url: string | null;
-	position: number;
-	duration: number;
-	/** Position changed since the last save. */
-	dirty: boolean;
-	lastSaved: number;
-	/**
-	 * Resume point the load was started at. Until playback reaches it, earlier
-	 * positions (mpv reporting the start of the file before the seek lands) are
-	 * ignored so they can't overwrite or delete the saved resume point.
-	 */
-	pendingStart: number | null;
-}
-
-const EMPTY_PROGRESS: PlaybackProgress = {
-	key: null,
-	url: null,
-	position: 0,
-	duration: 0,
-	dirty: false,
-	lastSaved: 0,
-	pendingStart: null,
-};
-
-const progressFor = (ch: Channel, startPos?: number, url = ch.url): PlaybackProgress => ({
-	key: playbackKey(ch),
-	url,
-	position: startPos ?? 0,
-	duration: 0,
-	dirty: false,
-	lastSaved: Date.now(),
-	pendingStart: startPos ?? null,
-});
 
 /**
  * Has Rust save `p`'s position from now on, or stop saving when `p` has
@@ -422,23 +387,8 @@ export const PlayerView = () => {
 
 	// --- Watch progress (resume support) ---
 
-	// Persist the tracked position for the current item. A finished item is
-	// kept as finished, so it counts as watched and isn't offered to resume.
-	// One rewound to the very start (e.g. "Start over") is forgotten, so it
-	// doesn't keep offering a stale resume point.
-	const flushProgress = useCallback(() => {
-		const p = progressRef.current;
-		if (!p.key || !p.dirty || p.duration <= 0) return;
-		p.dirty = false;
-		p.lastSaved = Date.now();
-		if (isFinished(p.position, p.duration)) {
-			return markPositionFinished(p.key, p.duration).catch(() => {});
-		}
-		if (p.position < MIN_RESUME_SECONDS) {
-			return deletePlaybackPosition(p.key).catch(() => {});
-		}
-		return savePlaybackPosition(p.key, p.position, p.duration).catch(() => {});
-	}, []);
+	// Persists the tracked position for the current item.
+	const flushProgress = useCallback(() => saveProgress(progressRef.current), []);
 
 	useEffect(() => {
 		const p = progressRef.current;
@@ -518,8 +468,12 @@ export const PlayerView = () => {
 	// AirPlay's, and another Cinette device's.
 	const deviceNotice = (text: string) => setNotice({ text, cast: false });
 	// Google Cast from a computer.
-	const cast = useCast(platform === "macos" || platform === "linux", castNotice);
+	const cast = useCast(platform === "macos" || platform === "linux");
 	const castRef = useLatestRef(cast);
+	// AirPlay video on iOS and macOS.
+	const mac = platform === "macos";
+	const airplay = useAirPlay(platform === "ios" || mac, mac);
+	const airplayRef = useLatestRef(airplay);
 	/** Asks before a cast switches to a route this computer converts. */
 	const [castConfirm, setCastConfirm] = useState<{
 		name: string;
@@ -543,45 +497,66 @@ export const PlayerView = () => {
 	);
 	// Stryker disable next-line ArrayDeclaration: The cleanup reads the ref when it runs, so any deps that never change run it only on unmount.
 	useEffect(() => () => castQuestion.current?.(false), []);
+	/** Says why sending to AirPlay didn't work, if it didn't. */
+	const airplaySaid = useCallback(
+		(result: SendResult) => {
+			if (result.sent || result.why === "cancelled") return;
+			if (result.why === "blocked") {
+				setNotice({ text: airplayBlockedMessage(result.decision), cast: false });
+				return;
+			}
+			console.warn("[VideoPlayer] AirPlay failed:", result.error);
+			const message = airplayFailureMessage(result.error);
+			const text = result.stopped ? `${message} Nothing is playing.` : message;
+			setNotice({ text, cast: false });
+		},
+		// Stryker disable next-line ArrayDeclaration: It only uses a state setter, so it's the same function with any deps.
+		[]
+	);
 
 	/**
 	 * Actually start playing `ch` (optionally from `startPos`), replacing
-	 * whatever is playing. While a Cast receiver plays, `ch` goes there
-	 * instead, by its own route for that receiver, after the confirm step
-	 * when this computer starts converting for it. Resolves once mpv has opened the stream, or at once
+	 * whatever is playing. While a TV plays, over Cast or AirPlay, `ch` goes
+	 * there instead, by its own route for that TV, after the confirm step
+	 * when this device starts converting for it. Resolves once mpv has opened the stream, or at once
 	 * if another item replaced this one first, and rejects if mpv couldn't
 	 * open it. The player shows that error itself, so callers can ignore it.
 	 */
 	const commitPlayback = useCallback(
 		(ch: Channel, startPos?: number, apply?: () => void): Promise<void> => {
+			// Nothing plays here while a TV does, so this only moves the player
+			// to the new item once it's going to the TV.
+			const moveTo = async () => {
+				recordEnd();
+				playStartTimeRef.current = Date.now();
+				recordPlayStart(ch.id, ch.name, ch.logoUrl ?? null, ch.contentType).catch(() => {});
+				setActiveChannelName(ch.name);
+				setActiveChannel(ch);
+				apply?.();
+			};
+			// The TV drops a live channel's start, and a live channel has no
+			// resume point to keep one in.
 			const casting = castRef.current.current();
 			if (casting) {
-				// The Cast destination drops a live channel's start, and a live
-				// channel has no resume point to keep one in.
 				return castRef.current
 					.send(casting.id, ch, {
 						startAt: startPos,
 						confirm: casting.converted()
 							? undefined
 							: (keep) => confirmCast(casting.name, keep),
-						// Nothing plays here, so this only moves the player to the
-						// new item once it's going to the receiver.
-						stopLocal: async () => {
-							recordEnd();
-							playStartTimeRef.current = Date.now();
-							recordPlayStart(
-								ch.id,
-								ch.name,
-								ch.logoUrl ?? null,
-								ch.contentType
-							).catch(() => {});
-							progressRef.current = progressFor(ch, startPos);
-							setActiveChannelName(ch.name);
-							setActiveChannel(ch);
-							apply?.();
-						},
+						stopLocal: moveTo,
 					})
 					.then((why) => setNotice(afterCast(why)));
+			}
+			const airplaying = airplayRef.current.current();
+			if (airplaying) {
+				return airplayRef.current
+					.resend(ch, {
+						startAt: startPos,
+						confirm: (keep) => confirmCast(airplaying.name, keep),
+						stopLocal: moveTo,
+					})
+					.then(airplaySaid);
 			}
 			recordEnd();
 			playStartTimeRef.current = Date.now();
@@ -613,8 +588,8 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
-		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, and castRef and confirmCast are a ref and a function that never changes.
-		[mpv, rememberLoadedUrl, recordEnd, castRef, confirmCast]
+		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef and airplayRef are refs, and confirmCast and airplaySaid never change.
+		[mpv, rememberLoadedUrl, recordEnd, castRef, airplayRef, confirmCast, airplaySaid]
 	);
 
 	/**
@@ -633,10 +608,6 @@ export const PlayerView = () => {
 	// The player's controls go through the active destination, which is
 	// always this device for now. It starts an item the way the player does.
 	const playback = useLocalPlayback(mpv, activeChannel, loadFromDestination);
-	// AirPlay video on iOS and macOS, with its own panel until the device picker
-	// takes over.
-	const mac = platform === "macos";
-	const airplay = useAirPlay(platform === "ios" || mac, mac);
 	// The receiver the player's controls drive instead of mpv, while one plays.
 	// Another Cinette device this one controls, where it can control others.
 	const { link } = useRemoteControl();
@@ -672,18 +643,9 @@ export const PlayerView = () => {
 	useEffect(() => {
 		if (canSend && activeChannel) void warmStreamFormats(activeChannel).catch(() => {});
 	}, [canSend, activeChannel]);
-	// The receiver's position goes into the same resume point as local
-	// playback's, since mpv is stopped while AirPlay or Cast plays.
+	// The now-playing store keeps the TV's resume point, also with the page
+	// closed.
 	const tvState = airplay.state ?? cast.state;
-	useEffect(() => {
-		const p = progressRef.current;
-		// flushProgress skips an item with no resume point, such as live.
-		if (!tvState) return;
-		const next = airplayProgress(p, tvState, Date.now(), PROGRESS_SAVE_INTERVAL);
-		if (!next) return;
-		Object.assign(p, next.progress);
-		if (next.save) flushProgress();
-	}, [tvState, flushProgress]);
 	// Where the item was when it went to AirPlay. On a Mac, closing the
 	// picker without a TV, or with this Mac, sends it nowhere, and it plays
 	// here again from there, as if AirPlay never started.
@@ -1155,6 +1117,12 @@ export const PlayerView = () => {
 	// Use refs to avoid stale closures while keeping the effect dependency minimal
 	const nextEpisodeRef = useLatestRef(nextEpisode);
 	const autoplayRef = useLatestRef(autoplay);
+	/** Plays the next episode of a series, when autoplay is on. */
+	const autoplayNext = useCallback(() => {
+		if (!autoplayRef.current || activeChannelRef.current?.contentType !== "series") return;
+		const next = nextEpisodeRef.current;
+		if (next) playEpisode(next);
+	}, [playEpisode, autoplayRef, activeChannelRef, nextEpisodeRef]);
 
 	// Advance when the episode reaches its end, not when it stops near it. A
 	// pause in the last seconds, or the resume prompt pausing the player, leaves
@@ -1185,11 +1153,14 @@ export const PlayerView = () => {
 		if (!seen || seen.url !== loadedUrl) return;
 		seenNearEndRef.current = null;
 		if (Date.now() - seen.at > END_SEEN_WITHIN_MS) return;
-		if (autoplayRef.current && activeChannelRef.current?.contentType === "series") {
-			const next = nextEpisodeRef.current;
-			if (next) playEpisode(next);
-		}
-	}, [mpv.state, loadedUrl, playEpisode, autoplayRef, activeChannelRef, nextEpisodeRef]);
+		autoplayNext();
+	}, [mpv.state, loadedUrl, autoplayNext]);
+	// A TV that reaches the end of the episode the player has goes on too,
+	// while this page is open.
+	const tvEnded = tvState?.status === "ended" ? tvState.item?.ref : undefined;
+	useEffect(() => {
+		if (tvEnded !== undefined && tvEnded === activeChannelRef.current?.id) autoplayNext();
+	}, [tvEnded, activeChannelRef, autoplayNext]);
 
 	// --- Controls visibility ---
 	// Bumped by each click or tap so pressing a button, such as skip a few
@@ -1367,11 +1338,11 @@ export const PlayerView = () => {
 			if (e.repeat && !repeatsWhenHeld(action)) return;
 
 			// While the TV plays, the keys drive it, and nothing starts here. A
-			// Cast receiver also takes the next or previous episode, which
+			// Cast or AirPlay TV also takes the next or previous episode, which
 			// goes there.
 			const tv = tvRef.current;
 			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
-			if (tv && !(tv.kind === "cast" && episode)) {
+			if (tv && !(episode && (tv.kind === "cast" || tv.kind === "airplay"))) {
 				const key = airplayKey(action, tv.getState(), tv.capabilities, performance.now());
 				const failed = (seeking: boolean) => (error: unknown) =>
 					reportFailureRef.current(error, seeking);
@@ -1558,20 +1529,7 @@ export const PlayerView = () => {
 	): Promise<string | null> => {
 		const startAt = sendFrom(channel);
 		airplayFrom.current = startAt;
-		const result = await airplay.send(channel, {
-			anchor,
-			startAt,
-			confirm,
-			stopLocal,
-		});
-		if (result.sent || result.why === "cancelled") return null;
-		if (result.why === "blocked") {
-			deviceNotice(airplayBlockedMessage(result.decision));
-			return null;
-		}
-		console.warn("[VideoPlayer] AirPlay failed:", result.error);
-		const message = airplayFailureMessage(result.error);
-		deviceNotice(result.stopped ? `${message} Nothing is playing.` : message);
+		airplaySaid(await airplay.send(channel, { anchor, startAt, confirm, stopLocal }));
 		return null;
 	};
 	/** Casts `channel` to `receiverId`, from where it plays here for a movie
@@ -1618,6 +1576,11 @@ export const PlayerView = () => {
 			.catch(() => failed("Couldn't play it on this device."));
 	};
 	const shared = { touchLayout: touchDevice, skip, onFailed: reportFailure };
+	// An episode picked on a TV's view goes to that TV.
+	const episodes = {
+		onPrevEpisode: prevEpisode ? () => playEpisode(prevEpisode) : undefined,
+		onNextEpisode: nextEpisode ? () => playEpisode(nextEpisode) : undefined,
+	};
 	const destinationView = airplayTv ? (
 		<DestinationView
 			{...shared}
@@ -1625,8 +1588,8 @@ export const PlayerView = () => {
 			name={airplayTv.name}
 			label="AirPlay"
 			icon={Airplay}
+			{...episodes}
 			onPlayHere={async (position, anchor) => {
-				flushProgress();
 				// AirPlay lets go of the stream before mpv opens it, since many
 				// accounts allow one connection at a time.
 				await airplay.returnHere(anchor);
@@ -1639,7 +1602,6 @@ export const PlayerView = () => {
 					: "Play here opens the AirPlay list. Choose this iPhone so the sound comes back too."
 			}
 			onStop={async () => {
-				flushProgress();
 				await airplay.stop();
 				handleStop();
 			}}
@@ -1652,17 +1614,14 @@ export const PlayerView = () => {
 			label="Google Cast"
 			icon={Cast}
 			failure={(message) => castFailureMessage(castTv.name, message)}
-			onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
-			onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
+			{...episodes}
 			onPlayHere={async (position) => {
-				flushProgress();
 				// The receiver lets go of the stream before mpv opens it, since
 				// many accounts allow one connection at a time.
 				await cast.stop().catch(() => {});
 				await playHereFrom(position, castNotice);
 			}}
 			onStop={async () => {
-				flushProgress();
 				await cast.stop().catch(() => {});
 				handleStop();
 			}}

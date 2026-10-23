@@ -8,7 +8,11 @@ import type { StreamFormats } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import { makeMovie } from "@/test/detail-fixtures";
 import { writeStreamThrough } from "@/lib/player-prefs";
-import { RELEASE_RETRY_MS, useCast } from "./useCast";
+import { RELEASE_RETRY_MS, type NowPlaying } from "@/lib/now-playing";
+
+// The cast and the store outlive a page, so each test gets its own.
+let useCast: typeof import("./useCast").useCast;
+let nowPlaying: NowPlaying;
 
 /** Events the backend would send, by name. */
 const events = vi.hoisted(() => {
@@ -74,10 +78,11 @@ const flush = () =>
 	});
 
 const stopLocal = vi.fn(async () => {});
-/** What the hook says about a cast that ended by itself. */
-const report = vi.fn();
 
-beforeEach(() => {
+beforeEach(async () => {
+	vi.resetModules();
+	({ useCast } = await import("./useCast"));
+	({ nowPlaying } = await import("@/lib/now-playing"));
 	events.handlers.clear();
 	localStorage.clear();
 	tauri.getCastReceivers.mockResolvedValue(receivers(1, [tv]));
@@ -97,7 +102,7 @@ afterEach(() => {
 });
 
 const render = async (enabled = true) => {
-	const hook = renderHook(() => useCast(enabled, report));
+	const hook = renderHook(() => useCast(enabled));
 	await flush();
 	return hook;
 };
@@ -114,7 +119,7 @@ describe("useCast", () => {
 
 	it("starts looking once it's turned on, and holds nothing until asked", async () => {
 		tauri.getCastReceivers.mockReturnValueOnce(new Promise(() => {}));
-		const hook = renderHook(({ on }) => useCast(on, report), { initialProps: { on: false } });
+		const hook = renderHook(({ on }) => useCast(on), { initialProps: { on: false } });
 		hook.rerender({ on: true });
 		await flush();
 		expect(tauri.getCastReceivers).toHaveBeenCalledTimes(1);
@@ -132,7 +137,7 @@ describe("useCast", () => {
 		let vpn: (on: boolean) => void = () => {};
 		tauri.getCastReceivers.mockReturnValueOnce(new Promise((r) => (list = r)));
 		tauri.getVpnActive.mockReturnValueOnce(new Promise((r) => (vpn = r)));
-		const hook = renderHook(({ on }) => useCast(on, report), { initialProps: { on: true } });
+		const hook = renderHook(({ on }) => useCast(on), { initialProps: { on: true } });
 		hook.rerender({ on: false });
 		list(receivers(1, [tv]));
 		vpn(true);
@@ -290,7 +295,7 @@ describe("useCast", () => {
 			});
 			await stopping;
 		});
-		expect(report).not.toHaveBeenCalled();
+		expect(nowPlaying.getState().ended).toBeNull();
 	});
 
 	it("lets an older cast's failure go quietly once a newer one is under way", async () => {
@@ -358,7 +363,7 @@ describe("useCast", () => {
 			expect(result.current.destination).toBeNull();
 		});
 
-		it("plays nothing when the page goes while a cast starts", async () => {
+		it("goes on casting when the page goes while a cast starts", async () => {
 			const answer = heldLookup();
 			const hook = await render();
 			let sent: Promise<string | null> = Promise.resolve("");
@@ -368,8 +373,9 @@ describe("useCast", () => {
 			hook.unmount();
 			answer();
 			await sent;
-			expect(stopLocal).not.toHaveBeenCalled();
-			expect(tauri.castLoad).not.toHaveBeenCalled();
+			expect(stopLocal).toHaveBeenCalled();
+			expect(tauri.castLoad).toHaveBeenCalled();
+			expect(nowPlaying.getState().destination?.id).toBe("cast:tv");
 		});
 
 		it("asks nothing when the cast stops while the next item is looked up", async () => {
@@ -517,6 +523,7 @@ describe("useCast", () => {
 				third,
 				expect.anything(),
 				undefined,
+				false,
 				false
 			);
 		});
@@ -617,7 +624,9 @@ describe("useCast", () => {
 			film,
 			{ via: "direct", generation: 5, source: 2, container: "mp4" },
 			600,
-			false
+			false,
+			// This device's player just let go of the stream.
+			true
 		);
 		expect(result.current.destination?.id).toBe("cast:tv");
 		expect(result.current.state?.status).toBe("opening");
@@ -767,6 +776,7 @@ describe("useCast", () => {
 				other,
 				expect.objectContaining({ via: "direct", generation: 6 }),
 				undefined,
+				false,
 				false
 			);
 			expect(result.current.destination?.id).toBe("cast:tv");
@@ -876,7 +886,8 @@ describe("useCast", () => {
 			film,
 			expect.anything(),
 			undefined,
-			false
+			false,
+			true
 		);
 	});
 
@@ -931,7 +942,7 @@ describe("useCast", () => {
 		);
 		expect(result.current.destination).toBeNull();
 		expect(result.current.state).toBeNull();
-		expect(report).toHaveBeenCalledWith("Playback was stopped on Hotel TV.");
+		expect(nowPlaying.getState().ended).toBe("Playback was stopped on Hotel TV.");
 		// The destination is stopped too, so nothing it had under way, such
 		// as starting its stream again, brings it back.
 		expect(tauri.castStop).toHaveBeenCalledWith("cast:tv");
@@ -948,7 +959,7 @@ describe("useCast", () => {
 				update: { kind: "closed", reason: "timeout" },
 			})
 		);
-		expect(report).toHaveBeenCalledWith("Lost the connection to Hotel TV.");
+		expect(nowPlaying.getState().ended).toBe("Lost the connection to Hotel TV.");
 	});
 
 	it("ends the cast on a stop, and when another receiver takes over", async () => {
@@ -976,15 +987,22 @@ describe("useCast", () => {
 		await act(() => result.current.stop());
 	});
 
-	it("ends the cast when the page goes", async () => {
+	it("goes on casting, with the receiver's updates, when the page goes", async () => {
 		const { result, unmount } = await render();
 		await act(async () => {
 			await result.current.send("cast:tv", film, { stopLocal });
 		});
 		unmount();
 		await flush();
-		expect(tauri.castStop).toHaveBeenCalledWith("cast:tv");
-		expect(events.count("cast://update")).toBe(0);
+		expect(tauri.castStop).not.toHaveBeenCalled();
+		expect(events.count("cast://receivers")).toBe(0);
+		const cast = nowPlaying.getState().destination!;
+		events.emit("cast://update", { receiverId: "cast:tv", update: { kind: "ready" } });
+		expect(cast.getState().connection).toBe("connected");
+		// A page that opens again finds it.
+		const again = await render();
+		expect(again.result.current.destination).toBe(cast);
+		expect(again.result.current.current()).toBe(cast);
 	});
 
 	it("streams through this computer once Settings turns that on", async () => {
