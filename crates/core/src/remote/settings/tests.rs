@@ -180,3 +180,9 @@ fn clean_name_drops_control_characters_and_cuts_long_names() {
     let spaced = format!("{} b", "a".repeat(62));
     assert_eq!(clean_name(&spaced), Some("a".repeat(62)));
 }
+
+#[test]
+fn a_name_another_device_gave_is_cleaned_or_its_types() {
+    assert_eq!(shown_name(" Den\u{202E} ", DeviceType::Mac), "Den");
+    assert_eq!(shown_name("\u{200B}", DeviceType::Mac), "Mac");
+}

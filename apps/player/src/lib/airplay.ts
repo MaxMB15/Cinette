@@ -32,6 +32,7 @@ import {
 	type StreamFormats,
 } from "@/lib/route-profiles";
 import type { PlayerAction } from "@/lib/hotkeys";
+import { createRestarts } from "@/lib/restarts";
 import type { Channel } from "@/lib/types";
 
 /** The receiver the audio route goes to, from the backend. */
@@ -60,6 +61,9 @@ export interface AirPlayNativeState {
 		 *  one, or with this Mac. The player plays here again, as if AirPlay
 		 *  never started, so it shows as opening, with no error. */
 		notPicked?: boolean;
+		/** This device's converter stopped by itself, so converting again
+		 *  might work. */
+		conversionStopped?: boolean;
 	} | null;
 }
 
@@ -355,8 +359,23 @@ export const createAirPlayDestination = (
 	 *  `route`. */
 	const sources = new Map<string, Pick<StreamFormats, "sources" | "generation">>();
 
+	/** The tries to convert again after the converter stopped by itself,
+	 *  with Cast's waits. */
+	const restarts = createRestarts(bridge.now);
+	/** The try that waits or runs. A load, a seek or a stop overtakes it. */
+	let restarting: object | null = null;
+	/** The user asked for something else, so the tries start again. */
+	const takeOver = () => {
+		restarting = null;
+		restarts.reset();
+	};
+
 	const publish = () => {
-		state = airplayPlaybackState(native, item, bridge.now());
+		// While it converts again, the TV is waiting, not stopped.
+		const shown: AirPlayNativeState = restarting
+			? { ...native, status: "buffering", error: null }
+			: native;
+		state = airplayPlaybackState(shown, item, bridge.now());
 		for (const listener of listeners) listener(state);
 	};
 
@@ -368,6 +387,14 @@ export const createAirPlayDestination = (
 	void bridge
 		.listen((next) => {
 			native = next;
+			if (next.status === "playing") restarts.playing();
+			// The converter stopped by itself: convert again, as Cast does,
+			// until the tries run out.
+			const stopped = next.error?.conversionStopped && next.error.code !== "refused";
+			if (converted && stopped && (restarting !== null || convertAgain(converted))) {
+				publish();
+				return;
+			}
 			// The TV is gone, it took nothing, or the item failed, so nothing
 			// will fetch what this device converts.
 			if (converted && (next.connection === "lost" || next.error)) {
@@ -400,7 +427,40 @@ export const createAirPlayDestination = (
 		}
 	};
 
+	/**
+	 * Converts `from` again after the converter stopped by itself: a movie
+	 * from where the TV was, a live channel from now. Returns false once the
+	 * tries have run out. A try that fails to start makes the next one.
+	 */
+	const convertAgain = (from: NonNullable<typeof converted>): boolean => {
+		const delay = restarts.nextDelay();
+		if (delay === null) return false;
+		const mine = {};
+		restarting = mine;
+		const at = live ? undefined : positionNow(state, bridge.now());
+		const attempt = async () => {
+			await bridge.sleep(delay);
+			if (restarting !== mine) return;
+			restarts.sent();
+			await bridge.loadConverted(from.channel, from.generation, from.source, at);
+			if (restarting === mine) restarting = null;
+		};
+		attempt().catch((error: unknown) => {
+			if (restarting !== mine || error === SUPERSEDED) return;
+			restarting = null;
+			// Refused won't change, and the tries may have run out, either of
+			// which shows the stop.
+			if (error === REFUSED || !convertAgain(from)) {
+				converted = null;
+				ending = bridge.endConversion().catch(() => {});
+			}
+			publish();
+		});
+		return true;
+	};
+
 	const seekConverted = (from: NonNullable<typeof converted>, seconds: number) => {
+		takeOver();
 		wanted = seconds;
 		if (!seeking)
 			seeking = reconvert(from).finally(() => {
@@ -442,6 +502,7 @@ export const createAirPlayDestination = (
 			const source = listed?.sources[route.format];
 			if (!listed || source === undefined) throw new Error("Check the route before loading");
 			const { channel } = target;
+			takeOver();
 			live = channel.contentType === "live";
 			item = { title: channel.name, contentType: channel.contentType, ref: channel.id };
 			native = { ...IDLE_NATIVE_STATE, status: "opening" };
@@ -472,6 +533,7 @@ export const createAirPlayDestination = (
 			bridge.selectSubtitle(trackId === null ? null : index(trackId)),
 		selectAudio: async (trackId) => bridge.selectAudio(index(trackId)),
 		stop: async () => {
+			takeOver();
 			const wasConverted = converted !== null;
 			converted = null;
 			if (wasConverted) await bridge.endConversion();

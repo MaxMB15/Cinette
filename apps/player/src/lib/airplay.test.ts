@@ -26,6 +26,7 @@ import { UnsupportedError, type PlaybackState } from "@/lib/destination";
 import { airplayTvProfile, desktopSender, NOT_READY, REFUSED } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import type { Channel } from "@/lib/types";
+import { RESTART_DELAYS_MS, STEADY_MS } from "@/lib/restarts";
 
 const channel = (over: Partial<Channel> = {}): Channel =>
 	({
@@ -82,7 +83,7 @@ const fakeBridge = (formats: StreamFormat[] = [mp4], sources = [3]) => {
 			return unlisten;
 		}),
 		now: vi.fn(() => 1000),
-		sleep: vi.fn(async () => {}),
+		sleep: vi.fn<AirPlayBridge["sleep"]>(async () => {}),
 	} satisfies AirPlayBridge;
 	const emit = (s: AirPlayNativeState) => handler?.(s);
 	return { bridge, emit, unlisten };
@@ -521,6 +522,224 @@ describe("createAirPlayDestination", () => {
 		hungUp();
 		await loading;
 		expect(bridge.load.mock.calls.length + bridge.loadConverted.mock.calls.length).toBe(1);
+	});
+
+	const converterStopped: AirPlayNativeState = {
+		...playing,
+		status: "error",
+		error: { code: "failed", conversionStopped: true },
+	};
+
+	it("converts a movie again from where the TV was when the converter stopped", async () => {
+		const { bridge, emit, d, film } = await convertedMovie();
+		emit(playing);
+		emit(converterStopped);
+		// Waiting, not stopped, while it converts again.
+		expect(d.getState()).toMatchObject({ status: "buffering", error: null });
+		await settle();
+		expect(bridge.sleep).toHaveBeenLastCalledWith(0);
+		expect(bridge.loadConverted).toHaveBeenCalledWith(film, 9, 2, 41);
+		expect(bridge.endConversion).not.toHaveBeenCalled();
+		// Its own reports again once it starts.
+		emit({ ...playing, position: 45 });
+		expect(d.getState()).toMatchObject({ status: "playing", position: 45 });
+	});
+
+	it("converts a live channel again from now", async () => {
+		const { bridge, emit } = fakeBridge([{ ...mp4, container: "ts" }], [0]);
+		const d = createAirPlayDestination(receiver, bridge, converter);
+		await settle();
+		const live = channel({ id: "live-1", contentType: "live" });
+		await d.route({ kind: "local", channel: live });
+		await d.load({ kind: "local", channel: live }, { route: converting });
+		bridge.loadConverted.mockClear();
+		emit(converterStopped);
+		await settle();
+		expect(bridge.loadConverted).toHaveBeenCalledWith(live, 9, 0, undefined);
+	});
+
+	it("waits longer each try, and says it stopped once the tries run out", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		bridge.loadConverted.mockRejectedValue("Couldn't reach the stream to convert it.");
+		emit(converterStopped);
+		for (let i = 0; i < 10; i++) await settle();
+		expect(bridge.sleep.mock.calls.map(([ms]) => ms)).toEqual([0, 1_000, 2_000, 4_000, 8_000]);
+		expect(bridge.loadConverted).toHaveBeenCalledTimes(5);
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		expect(d.getState().status).toBe("error");
+		expect(d.getState().error?.message).toBe("The stream stopped on the TV.");
+	});
+
+	it("doesn't convert again a stream the provider refused", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		emit({ ...converterStopped, error: { code: "refused", conversionStopped: true } });
+		await settle();
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		expect(d.getState().error?.code).toBe("refused");
+		// Nor a try that's refused.
+		const second = await convertedMovie();
+		second.bridge.loadConverted.mockRejectedValueOnce(REFUSED);
+		second.emit(converterStopped);
+		for (let i = 0; i < 4; i++) await settle();
+		expect(second.bridge.loadConverted).toHaveBeenCalledTimes(1);
+		expect(second.bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("tries once at a time, and a stop overtakes the try", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		let wake: () => void = () => {};
+		bridge.sleep.mockImplementationOnce(() => new Promise<void>((resolve) => (wake = resolve)));
+		emit(converterStopped);
+		// A second report of the same stop doesn't spend a try.
+		emit(converterStopped);
+		expect(bridge.sleep).toHaveBeenCalledTimes(1);
+		await d.stop();
+		wake();
+		await settle();
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+	});
+
+	it("starts the tries again for a seek the user asks for", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		bridge.loadConverted.mockRejectedValueOnce("no").mockRejectedValueOnce("no");
+		emit(converterStopped);
+		for (let i = 0; i < 6; i++) await settle();
+		expect(bridge.sleep.mock.calls.map(([ms]) => ms)).toEqual([0, 1_000, 2_000]);
+		await d.seek(100);
+		bridge.sleep.mockClear();
+		emit(converterStopped);
+		await settle();
+		expect(bridge.sleep).toHaveBeenLastCalledWith(0);
+	});
+
+	/** The waits of the tries so far. */
+	const waits = (bridge: ReturnType<typeof fakeBridge>["bridge"]) =>
+		bridge.sleep.mock.calls.map(([ms]) => ms);
+
+	it("starts the count again once a try has played a steady minute", async () => {
+		const { bridge, emit } = await convertedMovie();
+		emit(converterStopped);
+		await settle();
+		// It plays again, for a minute.
+		emit(playing);
+		bridge.now.mockReturnValue(1000 + STEADY_MS);
+		emit(converterStopped);
+		await settle();
+		expect(waits(bridge)).toEqual([0, 0]);
+	});
+
+	it("counts a try that plays and stops again within the minute", async () => {
+		const { bridge, emit } = await convertedMovie();
+		emit(playing);
+		bridge.now.mockReturnValue(1000 + STEADY_MS * 2);
+		// The first stop after a long play starts at once.
+		emit(converterStopped);
+		await settle();
+		// The try plays for half a minute, then stops.
+		emit(playing);
+		bridge.now.mockReturnValue(1000 + STEADY_MS * 2 + STEADY_MS / 2);
+		emit(converterStopped);
+		await settle();
+		expect(waits(bridge)).toEqual([0, 1_000]);
+	});
+
+	it("counts only playing as playing, not opening", async () => {
+		const { bridge, emit } = await convertedMovie();
+		emit(converterStopped);
+		await settle();
+		// The try opens, but never plays, for a minute.
+		emit({ ...playing, status: "opening" });
+		bridge.now.mockReturnValue(1000 + STEADY_MS);
+		emit(converterStopped);
+		await settle();
+		expect(waits(bridge)).toEqual([0, 1_000]);
+	});
+
+	it("runs out of tries for a stream that never plays again, however long it takes", async () => {
+		const { bridge, emit } = await convertedMovie();
+		for (let i = 0; i <= RESTART_DELAYS_MS.length; i++) {
+			bridge.now.mockReturnValue(1000 + STEADY_MS * 2 * (i + 1));
+			emit(converterStopped);
+			await settle();
+		}
+		expect(waits(bridge)).toEqual(RESTART_DELAYS_MS);
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("says nothing for a try that a newer load overtook", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		bridge.loadConverted.mockRejectedValueOnce(SUPERSEDED);
+		emit(converterStopped);
+		await settle();
+		await settle();
+		expect(waits(bridge)).toEqual([0]);
+		expect(bridge.endConversion).not.toHaveBeenCalled();
+		expect(d.getState().error).toBeNull();
+	});
+
+	it("says nothing for a try that failed after a stop overtook it", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		let fail: (e: unknown) => void = () => {};
+		bridge.loadConverted.mockImplementationOnce(
+			() => new Promise<void>((_, reject) => (fail = reject))
+		);
+		emit(converterStopped);
+		await settle();
+		await d.stop();
+		const stops = bridge.endConversion.mock.calls.length;
+		fail("Couldn't reach the stream to convert it.");
+		await settle();
+		await settle();
+		expect(waits(bridge)).toEqual([0]);
+		expect(bridge.endConversion).toHaveBeenCalledTimes(stops);
+		expect(d.getState().status).toBe("idle");
+	});
+
+	it("keeps a newer try waiting when an older try's load finishes", async () => {
+		const { bridge, emit, d } = await convertedMovie();
+		let finish: () => void = () => {};
+		bridge.loadConverted.mockImplementationOnce(
+			() => new Promise<void>((resolve) => (finish = resolve))
+		);
+		emit(converterStopped);
+		await settle();
+		// The user seeks, and the converter stops again before the first
+		// try's load is done.
+		bridge.loadConverted.mockImplementationOnce(() => new Promise<void>(() => {}));
+		void d.seek(300);
+		await settle();
+		bridge.sleep.mockImplementationOnce(() => new Promise<void>(() => {}));
+		emit(converterStopped);
+		finish();
+		await settle();
+		// The newer try still waits, so the same stop reported again is no
+		// new try.
+		emit(converterStopped);
+		await settle();
+		expect(waits(bridge)).toEqual([0, 0]);
+		expect(d.getState()).toMatchObject({ status: "buffering", error: null });
+	});
+
+	it("cancels a waiting try for a load the user asks for, and starts the count again", async () => {
+		const { bridge, emit, d, film } = await convertedMovie();
+		bridge.loadConverted.mockRejectedValueOnce("no");
+		emit(converterStopped);
+		await settle();
+		await settle();
+		let wake: () => void = () => {};
+		bridge.sleep.mockImplementationOnce(() => new Promise<void>((resolve) => (wake = resolve)));
+		await settle();
+		expect(waits(bridge)).toEqual([0, 1_000]);
+		await d.load({ kind: "local", channel: film }, { route: converting });
+		bridge.loadConverted.mockClear();
+		wake();
+		await settle();
+		// Only the user's load ran.
+		expect(bridge.loadConverted).not.toHaveBeenCalled();
+		emit(converterStopped);
+		await settle();
+		expect(bridge.sleep).toHaveBeenLastCalledWith(0);
 	});
 
 	it("ends the conversion when the TV is gone", async () => {

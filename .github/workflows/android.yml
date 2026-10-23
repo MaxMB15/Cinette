@@ -169,6 +169,18 @@ jobs:
               echo "::error::The $store APK has no TV launcher activity"
               exit 1
             fi
+            # Fire TV's launcher shows the activity's icon, not the banner, for
+            # an app that didn't come from the Appstore, so the Amazon build
+            # gives it the wide banner. See launcherIcon in app/build.gradle.kts.
+            ACTIVITY=$(grep "^leanback-launchable-activity:" "$BADGING")
+            if [ "$store" = amazon ] && ! grep -q "icon='[^']*/banner.png'" <<< "$ACTIVITY"; then
+              echo "::error::The amazon APK's launcher activity doesn't use the banner as its icon"
+              exit 1
+            fi
+            if [ "$store" = google ] && grep -q "icon='[^']*/banner.png'" <<< "$ACTIVITY"; then
+              echo "::error::The google APK's launcher activity uses the banner as its icon"
+              exit 1
+            fi
             # Both stores hide an app from every device that lacks a feature
             # it requires, including one a permission implies, like Wi-Fi.
             if grep -E "^\s*uses-feature:" "$BADGING"; then

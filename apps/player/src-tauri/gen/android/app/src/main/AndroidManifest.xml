@@ -31,6 +31,7 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"
+            android:icon="${launcherIcon}"
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
