@@ -380,3 +380,13 @@ fn an_established_handshake_debugs_as_its_peer_and_version_only() {
         "{printed}"
     );
 }
+
+#[test]
+fn a_peer_takes_a_new_name_cleaned_and_says_whether_it_changed() {
+    let mut peer = crate::remote::tests::peer("Phone");
+    assert!(!peer.rename("Phone\u{200B}"));
+    assert!(peer.rename(" Kitchen "));
+    assert_eq!(peer.name, "Kitchen");
+    assert!(peer.rename(""));
+    assert_eq!(peer.name, "iPhone");
+}

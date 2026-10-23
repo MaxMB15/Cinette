@@ -86,6 +86,17 @@ pub struct Peer {
     pub features: Vec<Feature>,
 }
 
+impl Peer {
+    /// Takes the name the device sent in a rename, cleaned like its hello's.
+    /// True when it changed.
+    pub fn rename(&mut self, name: &str) -> bool {
+        let name = settings::shown_name(name, self.device_type);
+        let changed = self.name != name;
+        self.name = name;
+        changed
+    }
+}
+
 /// A finished handshake.
 pub struct Established {
     pub channel: Channel,
@@ -167,8 +178,7 @@ fn peer_from(state: &snow::HandshakeState, hello: &Hello) -> Result<Peer, Failur
     }
     Ok(Peer {
         id,
-        name: settings::clean_name(&hello.name)
-            .unwrap_or_else(|| settings::default_name(hello.device_type).to_owned()),
+        name: settings::shown_name(&hello.name, hello.device_type),
         device_type: hello.device_type,
         features: hello.features.clone(),
     })

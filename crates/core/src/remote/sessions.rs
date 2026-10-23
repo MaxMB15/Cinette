@@ -9,7 +9,6 @@
 //! to ask again.
 
 use super::handshake::Peer;
-use super::identity::DeviceId;
 use super::message::CloseReason;
 use super::ConnId;
 use std::time::{Duration, Instant};
@@ -92,20 +91,21 @@ impl Sessions {
         Some(session)
     }
 
-    /// Moves a session to a new connection from the same device. Returns the
-    /// connection it was on, if it still had one, which should be closed.
-    /// `Err` when there's no such session for that device.
+    /// Moves a session to a new connection from the same device, which may
+    /// have a new name since. Returns the connection it was on, if it still
+    /// had one, which should be closed. `Err` when there's no such session
+    /// for that device.
     pub fn resume(
         &mut self,
         id: &str,
-        device: &DeviceId,
+        peer: &Peer,
         conn: ConnId,
         now: Instant,
     ) -> Result<Option<ConnId>, NoSession> {
         let session = self
             .list
             .iter_mut()
-            .find(|s| s.id == id && s.peer.id == *device)
+            .find(|s| s.id == id && s.peer.id == peer.id)
             .ok_or(NoSession)?;
         if session
             .dropped_at
@@ -115,7 +115,19 @@ impl Sessions {
         }
         let old = session.conn.replace(conn);
         session.dropped_at = None;
+        session.peer = peer.clone();
         Ok(old)
+    }
+
+    /// The device on `conn` has a new name. True when a session took it.
+    pub fn rename(&mut self, conn: ConnId, name: String) -> bool {
+        match self.list.iter_mut().find(|s| s.conn == Some(conn)) {
+            Some(session) => {
+                session.peer.name = name;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn end(&mut self, id: &str) -> Option<Session> {
