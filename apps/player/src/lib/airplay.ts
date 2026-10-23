@@ -121,6 +121,9 @@ export const airplayErrorMessage = (error: NonNullable<AirPlayNativeState["error
 	return "The stream stopped on the TV.";
 };
 
+/** Why AirPlay ended when no TV took the video, on a Mac. */
+export const NOT_PICKED = "No TV took the video.";
+
 /**
  * What the player says when sending to AirPlay failed: the provider's
  * refusal, the backend's own message, or a plain one.
@@ -337,6 +340,11 @@ export interface AirPlayDestination extends PlaybackDestination {
 	/** No receiver took the video, on a Mac, so the player plays it here
 	 *  again. */
 	readonly notPicked: boolean;
+	/** Whether this device converts what plays. */
+	converted(): boolean;
+	/** Ends this device's conversion, if one runs, so the provider allows
+	 *  another connection, and keeps the item. */
+	release(): Promise<void>;
 	/** Stops listening. The destination can't be used after. */
 	dispose(): void;
 }
@@ -469,6 +477,16 @@ export const createAirPlayDestination = (
 		return seeking;
 	};
 
+	/** Ends the conversion that runs, if one does, and waits until the
+	 *  provider's connection is closed, before something else plays. */
+	const letGo = async () => {
+		takeOver();
+		const wasConverted = converted !== null;
+		converted = null;
+		if (wasConverted) await bridge.endConversion();
+		else await ending;
+	};
+
 	const index = (trackId: string) => {
 		const i = Number(trackId);
 		if (!Number.isInteger(i) || i < 0) throw new Error(`No track ${trackId}`);
@@ -502,9 +520,11 @@ export const createAirPlayDestination = (
 			const source = listed?.sources[route.format];
 			if (!listed || source === undefined) throw new Error("Check the route before loading");
 			const { channel } = target;
-			takeOver();
+			// Whatever this device converted for the last item lets go first.
+			const released = letGo();
 			live = channel.contentType === "live";
-			item = { title: channel.name, contentType: channel.contentType, ref: channel.id };
+			const mine = { title: channel.name, contentType: channel.contentType, ref: channel.id };
+			item = mine;
 			native = { ...IDLE_NATIVE_STATE, status: "opening" };
 			const { generation } = listed;
 			converted = route.via === "converted" ? { channel, generation, source } : null;
@@ -512,9 +532,22 @@ export const createAirPlayDestination = (
 			// after it's set, and subscribers read both together.
 			publish();
 			const from = live ? undefined : startAt;
-			await ending;
-			if (converted) await bridge.loadConverted(channel, generation, source, from);
-			else await bridge.load(channel, generation, source, from);
+			await released;
+			const loading = converted
+				? bridge.loadConverted(channel, generation, source, from)
+				: bridge.load(channel, generation, source, from);
+			// One that didn't start shows why, unless another took over.
+			await loading.catch((error: unknown) => {
+				if (item === mine && error !== SUPERSEDED) {
+					native = {
+						...native,
+						status: "error",
+						error: { code: error === REFUSED ? "refused" : "openFailed" },
+					};
+					publish();
+				}
+				throw error;
+			});
 		},
 		// Nothing plays or pauses while the TV is lost: a Mac would play it
 		// itself.
@@ -532,12 +565,10 @@ export const createAirPlayDestination = (
 		selectSubtitle: async (trackId) =>
 			bridge.selectSubtitle(trackId === null ? null : index(trackId)),
 		selectAudio: async (trackId) => bridge.selectAudio(index(trackId)),
+		converted: () => converted !== null,
+		release: letGo,
 		stop: async () => {
-			takeOver();
-			const wasConverted = converted !== null;
-			converted = null;
-			if (wasConverted) await bridge.endConversion();
-			else await ending;
+			await letGo();
 			await bridge.stop();
 			native = IDLE_NATIVE_STATE;
 			item = null;

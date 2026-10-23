@@ -73,7 +73,7 @@ import {
 	RemoteBar,
 	TvBar,
 } from "./RemoteControls";
-import { nowPlaying } from "@/lib/now-playing";
+import { nowPlaying, type SendOptions } from "@/lib/now-playing";
 import { fakeDestination, playbackState } from "@/test/destination-fixtures";
 import { makeMovie } from "@/test/detail-fixtures";
 import { createTestQueryClient, wrapperFor } from "@/test/query";
@@ -786,13 +786,13 @@ describe("TvBar", () => {
 	const film = makeMovie({ id: "mv1", name: "A Film" });
 
 	/** Hotel TV, playing the film over Cast. */
-	const playing = async (lost?: () => string) => {
+	const playing = async (ends?: SendOptions["ends"]) => {
 		const tv = fakeDestination("cast", "Hotel TV");
 		await act(() =>
 			nowPlaying.send(tv, film, {
 				decision: { ok: true, route: { via: "direct", format: 0 } },
 				stopLocal: () => Promise.resolve(),
-				lost,
+				ends,
 			})
 		);
 		return tv;
@@ -825,10 +825,35 @@ describe("TvBar", () => {
 		expect(within(bar).queryByRole("button", { name: "More" })).toBeNull();
 		fireEvent.click(within(bar).getByRole("button", { name: "Pause" }));
 		expect(tv.pause).toHaveBeenCalled();
-		fireEvent.click(within(bar).getByRole("button", { name: "Stop" }));
-		expect(tv.stop).toHaveBeenCalled();
+		expect(bar.querySelector(".lucide-cast")).not.toBeNull();
 		fireEvent.click(within(bar).getByRole("link", { name: /Playing on Hotel TV/ }));
 		expect(screen.getByText("Player page")).toBeInTheDocument();
+	});
+
+	it("stops the TV through the store, which forgets it", async () => {
+		const tv = await playing();
+		render(<TvBar />, { wrapper: MemoryRouter });
+		const bar = screen.getByRole("region", { name: "Now playing" });
+		await act(async () => {
+			fireEvent.click(within(bar).getByRole("button", { name: "Stop" }));
+		});
+		expect(tv.stop).toHaveBeenCalled();
+		expect(nowPlaying.getState().destination).toBeNull();
+		expect(screen.queryByRole("region")).toBeNull();
+	});
+
+	it("shows AirPlay's icon for an AirPlay TV", async () => {
+		const airplay = fakeDestination("airplay", "Living Room TV");
+		await act(() =>
+			nowPlaying.send(airplay, film, {
+				decision: { ok: true, route: { via: "direct", format: 0 } },
+				stopLocal: () => Promise.resolve(),
+			})
+		);
+		render(<TvBar />, { wrapper: MemoryRouter });
+		const bar = screen.getByRole("region", { name: "Now playing" });
+		expect(bar.querySelector(".lucide-airplay")).not.toBeNull();
+		expect(bar.querySelector(".lucide-cast")).toBeNull();
 	});
 
 	it("leaves Play and Stop to the player page there", async () => {
@@ -857,7 +882,9 @@ describe("TvBar", () => {
 	});
 
 	it("says in its row why the TV ended, until it's dismissed", async () => {
-		const tv = await playing(() => "Lost the connection to Hotel TV.");
+		const tv = await playing((s) =>
+			s.connection === "lost" ? "Lost the connection to Hotel TV." : null
+		);
 		render(<TvBar />, { wrapper: MemoryRouter });
 		act(() => tv.set(playbackState({ connection: "lost" })));
 		expect(screen.queryByRole("region")).toBeNull();

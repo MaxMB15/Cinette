@@ -228,8 +228,6 @@ export interface CastDestination extends PlaybackDestination {
 	 *  and keeps the cast, for an account that allows one connection. It
 	 *  shows as opening, since the next item is on its way. */
 	release(): Promise<void>;
-	/** The next item didn't come after a release, so it shows as stopped. */
-	settle(): void;
 }
 
 /** The backend's form of `route` for `formats`. */
@@ -551,6 +549,5 @@ export const createCastDestination = (
 			publish({ ...snapshot, loading: true, media: null, error: null });
 			await backend.castRelease(receiver.id);
 		},
-		settle: () => publish({ ...snapshot, loading: false }),
 	};
 };

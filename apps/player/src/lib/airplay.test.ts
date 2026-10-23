@@ -454,6 +454,65 @@ describe("createAirPlayDestination", () => {
 		return { ...fake, d, film };
 	};
 
+	it("ends its conversion before the next item plays, even a direct one", async () => {
+		const { bridge, d } = await convertedMovie();
+		expect(d.converted()).toBe(true);
+		const other = channel({ id: "movie-8", name: "Another" });
+		bridge.formats.mockResolvedValueOnce({
+			formats: [mp4],
+			sources: [5],
+			duration: null,
+			generation: 9,
+		});
+		await d.route({ kind: "local", channel: other });
+		await d.load({ kind: "local", channel: other }, { route: { via: "direct", format: 0 } });
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		expect(bridge.endConversion.mock.invocationCallOrder[0]).toBeLessThan(
+			bridge.load.mock.invocationCallOrder[0]
+		);
+		expect(d.converted()).toBe(false);
+	});
+
+	it("lets go of the provider for another item and keeps its own", async () => {
+		const { bridge, d } = await convertedMovie();
+		await d.release();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+		expect(d.converted()).toBe(false);
+		expect(d.getState().item?.ref).toBe("movie-7");
+		// Nothing to end the second time.
+		await d.release();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows why an item didn't start on the TV", async () => {
+		const { bridge, emit } = fakeBridge();
+		const d = createAirPlayDestination(receiver, bridge, noConverter);
+		await settle();
+		const film = channel();
+		await d.route({ kind: "local", channel: film });
+		const direct = { route: { via: "direct" as const, format: 0 } };
+		bridge.load.mockRejectedValueOnce(REFUSED);
+		await expect(d.load({ kind: "local", channel: film }, direct)).rejects.toBe(REFUSED);
+		expect(d.getState()).toMatchObject({ status: "error", error: { code: "refused" } });
+		bridge.load.mockRejectedValueOnce("gone");
+		await expect(d.load({ kind: "local", channel: film }, direct)).rejects.toBe("gone");
+		expect(d.getState()).toMatchObject({ status: "error", error: { code: "openFailed" } });
+		// One a newer load or a stop took over says nothing.
+		emit(playing);
+		bridge.load.mockRejectedValueOnce(SUPERSEDED);
+		await expect(d.load({ kind: "local", channel: film }, direct)).rejects.toBe(SUPERSEDED);
+		expect(d.getState().error).toBeNull();
+		let fail: (e: unknown) => void = () => {};
+		bridge.load.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+		const older = d.load({ kind: "local", channel: film }, direct);
+		const newer = channel({ id: "movie-9" });
+		await d.route({ kind: "local", channel: newer });
+		await d.load({ kind: "local", channel: newer }, direct);
+		fail("gone");
+		await expect(older).rejects.toBe("gone");
+		expect(d.getState().error).toBeNull();
+	});
+
 	it("runs one converted seek at a time, and only the last of those asked meanwhile", async () => {
 		const { bridge, d, film } = await convertedMovie();
 		let finish: () => void = () => {};
@@ -858,8 +917,10 @@ describe("createAirPlayDestination", () => {
 		expect(bridge.load).toHaveBeenCalledWith(film, 9, 1, undefined);
 		await d.seek(5);
 		expect(bridge.seek).toHaveBeenCalledWith(5);
+		// The direct load ended the conversion, so a stop has none to end.
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
 		await d.stop();
-		expect(bridge.endConversion).not.toHaveBeenCalled();
+		expect(bridge.endConversion).toHaveBeenCalledTimes(1);
 	});
 
 	it("follows the backend's state, and the capabilities with it", async () => {

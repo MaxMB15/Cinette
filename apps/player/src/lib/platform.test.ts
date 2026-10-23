@@ -9,6 +9,7 @@ import {
 	layoutModeFor,
 	controlsOthers,
 	type Viewport,
+	playsOnTvs,
 } from "./platform";
 
 vi.mock("@tauri-apps/plugin-os", () => ({ platform: vi.fn() }));
@@ -107,6 +108,13 @@ describe("isMobilePlatform", () => {
 		expect(isMobilePlatform("tv")).toBe(true);
 		expect(isMobilePlatform("macos")).toBe(false);
 		expect(isMobilePlatform("linux")).toBe(false);
+	});
+});
+
+describe("playsOnTvs", () => {
+	it("is AirPlay's iOS and macOS, and Cast's macOS and Linux", () => {
+		for (const p of ["macos", "linux", "ios"] as const) expect(playsOnTvs(p)).toBe(true);
+		for (const p of ["windows", "android", "tv"] as const) expect(playsOnTvs(p)).toBe(false);
 	});
 });
 

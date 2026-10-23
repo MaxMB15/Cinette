@@ -5,9 +5,13 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Routes, Route } from "react-router";
-import type { LayoutMode } from "@/lib/types";
+import type { LayoutMode, Platform } from "@/lib/types";
 
-const platform = vi.hoisted(() => ({ layoutMode: "desktop" as LayoutMode, controller: true }));
+const platform = vi.hoisted(() => ({
+	os: "ios" as Platform,
+	layoutMode: "desktop" as LayoutMode,
+	controller: true,
+}));
 
 vi.mock("@/lib/platform", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@/lib/platform")>()),
@@ -15,7 +19,7 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
 }));
 
 vi.mock("@/hooks/usePlatform", () => ({
-	usePlatform: () => ({ platform: "ios", layoutMode: platform.layoutMode }),
+	usePlatform: () => ({ platform: platform.os, layoutMode: platform.layoutMode }),
 }));
 
 vi.mock("@/lib/tauri", () => ({
@@ -178,6 +182,7 @@ describe("AppLayout", () => {
 
 	describe("remote control", () => {
 		afterEach(() => {
+			platform.os = "ios";
 			platform.controller = true;
 			platform.layoutMode = "desktop";
 		});
@@ -191,6 +196,14 @@ describe("AppLayout", () => {
 			expect(screen.getByText("Providers added")).toBeInTheDocument();
 			expect(screen.getByText("History imported")).toBeInTheDocument();
 			expect(screen.getByText("page")).toBeInTheDocument();
+		});
+
+		it("leaves the TV bar off where there's no AirPlay or Cast", () => {
+			platform.os = "android";
+			platform.layoutMode = "mobile";
+			render(tree("/"));
+			expect(screen.getByText("Remote bar")).toBeInTheDocument();
+			expect(screen.queryByText("TV bar")).toBeNull();
 		});
 
 		it("puts the devices button in a phone's tab bar, beside the pages", () => {

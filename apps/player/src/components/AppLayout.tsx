@@ -17,7 +17,7 @@ import {
 	RemoteBar,
 	TvBar,
 } from "@/components/remote/RemoteControls";
-import { controlsOthers } from "@/lib/platform";
+import { controlsOthers, playsOnTvs } from "@/lib/platform";
 
 const navItems = [
 	{ to: "/", label: "Channels", icon: Tv },
@@ -44,6 +44,7 @@ export const AppLayout = () => {
  * components remounted the player, which restarted the stream.
  */
 const MainLayout = ({ compact }: { compact: boolean }) => {
+	const { platform } = usePlatform();
 	const { pathname } = useLocation();
 	const isPlayer = pathname === "/player";
 	const { isFullscreen } = useFullscreen();
@@ -78,7 +79,7 @@ const MainLayout = ({ compact }: { compact: boolean }) => {
 				    under the status bar there. */}
 				{!(compact && isPlayer) && controlsOthers() && <RemoteBar />}
 				{/* A TV that plays over AirPlay or Cast, from any page. */}
-				{!(compact && isPlayer) && <TvBar />}
+				{!(compact && isPlayer) && playsOnTvs(platform) && <TvBar />}
 				{!(compact && isPlayer) && <ControllersBar />}
 				{!(compact && isPlayer) && <ProvidersAddedNotice />}
 				{!(compact && isPlayer) && <HistoryImportedNotice />}

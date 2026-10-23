@@ -1,16 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
 import { Link, useLocation } from "react-router";
-import { Ellipsis, MonitorSmartphone, Pause, Play, Square, X } from "lucide-react";
+import {
+	Airplay,
+	Cast,
+	Ellipsis,
+	MonitorSmartphone,
+	Pause,
+	Play,
+	Square,
+	X,
+	type LucideIcon,
+} from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { Menu, MenuItem } from "@/components/ui/menu";
 import { DevicePicker } from "@/components/remote/DevicePicker";
 import { SendProvidersDialog } from "@/components/remote/SendProvidersDialog";
 import { TransferHistoryDialog } from "@/components/remote/TransferHistoryDialog";
+import { useDestinationState } from "@/hooks/useDestinationState";
 import { useNowPlaying } from "@/hooks/useNowPlaying";
 import { useRemoteControl } from "@/hooks/useRemoteControl";
 import { useTvNoticeFocus } from "@/hooks/useTvNoticeFocus";
@@ -256,11 +267,14 @@ export const ConnectStatusDialog = () => {
 	);
 };
 
-const useDestinationState = (destination: PlaybackDestination) =>
-	useSyncExternalStore(destination.subscribe, destination.getState);
-
 /** Play or Pause, and Stop, for what plays there. */
-const PlayStop = ({ destination }: { destination: PlaybackDestination }) => {
+const PlayStop = ({
+	destination,
+	onStop,
+}: {
+	destination: PlaybackDestination;
+	onStop: () => Promise<void>;
+}) => {
 	const state = useDestinationState(destination);
 	const playing = state.status === "playing" || state.status === "buffering";
 	const run = (action: () => Promise<void>) => void action().catch(() => {});
@@ -285,7 +299,7 @@ const PlayStop = ({ destination }: { destination: PlaybackDestination }) => {
 				type="button"
 				aria-label="Stop"
 				className={cn(ICON_BUTTON, "shrink-0 p-1 rounded hover:bg-accent")}
-				onClick={() => run(destination.stop)}
+				onClick={() => run(onStop)}
 			>
 				<Square className="h-4 w-4" aria-hidden />
 			</button>
@@ -399,9 +413,12 @@ export const RemoteBar = () => {
 					</>
 				}
 				title={link.name}
-				actions={actions}
-				menuOpen={menuFor === link.id}
-				onMenuOpenChange={(open) => setMenuFor(open ? link.id : null)}
+				onStop={link.destination.stop}
+				menu={{
+					actions,
+					open: menuFor === link.id,
+					onOpenChange: (open) => setMenuFor(open ? link.id : null),
+				}}
 			>
 				{sendingFor === link.id && (
 					<SendProvidersDialog link={link} onClose={() => setSendingFor(null)} />
@@ -436,29 +453,31 @@ interface BarAction {
  */
 const DestinationBar = ({
 	label,
+	icon: Icon = MonitorSmartphone,
 	destination,
 	heading,
 	title,
-	actions,
-	menuOpen,
-	onMenuOpenChange,
+	onStop,
+	menu,
 	children,
 }: {
 	label: string;
+	icon?: LucideIcon;
 	destination: PlaybackDestination;
 	/** The line over the title, such as "Playing on <name>". */
 	heading: ReactNode;
 	/** The device's name in full, for when the heading is cut short. */
 	title: string;
-	actions: BarAction[];
-	menuOpen: boolean;
-	onMenuOpenChange: (open: boolean) => void;
+	/** Stops it there, and whatever else stopping means for this bar. */
+	onStop: () => Promise<void>;
+	/** What else it can do, inline from `sm` up and in a menu below. */
+	menu?: { actions: BarAction[]; open: boolean; onOpenChange: (open: boolean) => void };
 	children?: ReactNode;
 }) => {
 	const onPlayer = useLocation().pathname === "/player";
 	return (
 		<div role="region" aria-label={label} className={BAR}>
-			<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
+			<Icon className="h-4 w-4 text-primary shrink-0" aria-hidden />
 			<Link
 				to="/player"
 				className={cn(
@@ -471,10 +490,10 @@ const DestinationBar = ({
 				</span>
 				<Title destination={destination} />
 			</Link>
-			{!onPlayer && <PlayStop destination={destination} />}
-			{!onPlayer && actions.length > 0 && (
+			{!onPlayer && <PlayStop destination={destination} onStop={onStop} />}
+			{!onPlayer && menu && (
 				<span className="hidden sm:flex shrink-0 gap-1">
-					{actions.map((action) => (
+					{menu.actions.map((action) => (
 						<button
 							key={action.label}
 							type="button"
@@ -486,11 +505,11 @@ const DestinationBar = ({
 					))}
 				</span>
 			)}
-			{actions.length > 0 && (
+			{menu && (
 				<span className={cn("shrink-0", !onPlayer && "sm:hidden")}>
 					<Menu
-						open={menuOpen}
-						onOpenChange={onMenuOpenChange}
+						open={menu.open}
+						onOpenChange={menu.onOpenChange}
 						trigger={(props) => (
 							<button
 								{...props}
@@ -503,7 +522,7 @@ const DestinationBar = ({
 						)}
 						className="right-0 top-full mt-1 w-64 border border-border bg-card text-sm"
 					>
-						{actions.map((action) => (
+						{menu.actions.map((action) => (
 							<MenuItem
 								key={action.label}
 								onSelect={action.run}
@@ -553,6 +572,7 @@ export const TvBar = () => {
 		return (
 			<DestinationBar
 				label="Now playing"
+				icon={destination.kind === "airplay" ? Airplay : Cast}
 				destination={destination}
 				heading={
 					<>
@@ -561,9 +581,8 @@ export const TvBar = () => {
 					</>
 				}
 				title={destination.name}
-				actions={[]}
-				menuOpen={false}
-				onMenuOpenChange={() => {}}
+				// The store saves where it got to and lets go of it too.
+				onStop={nowPlaying.stop}
 			/>
 		);
 	return ended ? <EndedRow text={ended} onDismiss={nowPlaying.dismiss} /> : null;

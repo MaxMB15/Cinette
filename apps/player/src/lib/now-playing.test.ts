@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlaybackDestination } from "./destination";
-import { createNowPlaying, RELEASE_RETRY_MS, type SendOptions } from "./now-playing";
+import type { PlaybackDestination, PlaybackState } from "./destination";
+import { createNowPlaying, RELEASE_RETRY_MS, sentMessage, type SendOptions } from "./now-playing";
 import * as tauri from "./tauri";
 import type { RouteDecision } from "./route";
 import { deferred } from "@/test/deferred";
@@ -69,6 +69,9 @@ const setUp = () => {
 		tick: (ms: number) => vi.advanceTimersByTime(ms),
 	};
 };
+
+const lostEnds = (s: PlaybackState) =>
+	s.connection === "lost" ? "Lost the connection to Hotel TV." : null;
 
 const opts = (more: Partial<SendOptions> = {}): SendOptions => ({
 	stopLocal: vi.fn(() => Promise.resolve()),
@@ -298,6 +301,28 @@ describe("createNowPlaying", () => {
 			});
 			expect(waits).toEqual(RELEASE_RETRY_MS);
 			expect(target.route).toHaveBeenCalledTimes(2 + RELEASE_RETRY_MS.length);
+			// It let go of its stream and got nothing new, so it goes.
+			expect(store.getState().destination).toBeNull();
+			expect(target.stop).toHaveBeenCalled();
+		});
+
+		it("stops the TV that let go when the next item is blocked or called off", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, film, opts());
+			const blocked: RouteDecision = { ok: false, reason: "unreachable" };
+			target.route.mockRejectedValueOnce("refused").mockResolvedValueOnce(blocked);
+			expect(await store.send(target, other, opts())).toMatchObject({
+				why: "blocked",
+				released: true,
+			});
+			expect(store.getState().destination).toBeNull();
+			await store.send(target, film, opts());
+			target.route.mockRejectedValueOnce("refused").mockResolvedValueOnce(converted);
+			expect(
+				await store.send(target, other, opts({ confirm: async () => false }))
+			).toMatchObject({ why: "declined", released: true });
+			expect(store.getState().destination).toBeNull();
 		});
 
 		it("says so at once for a TV that doesn't play", async () => {
@@ -420,6 +445,17 @@ describe("createNowPlaying", () => {
 		});
 	});
 
+	it("saves where the TV got to when asked", async () => {
+		const { store, save, tick } = setUp();
+		const target = tv();
+		await store.send(target, film, opts());
+		tick(1000);
+		target.set(playbackState({ position: 700 }));
+		expect(save).not.toHaveBeenCalled();
+		await store.flush();
+		expect(save).toHaveBeenCalledWith("movie:a film", 700, 5400);
+	});
+
 	describe("stop", () => {
 		it("stops the TV, forgets it, and lets go of it", async () => {
 			const { store } = setUp();
@@ -451,11 +487,7 @@ describe("createNowPlaying", () => {
 		it("ends a TV that ends when lost, and says why", async () => {
 			const { store } = setUp();
 			const target = tv();
-			await store.send(
-				target,
-				film,
-				opts({ lost: () => "Lost the connection to Hotel TV." })
-			);
+			await store.send(target, film, opts({ ends: lostEnds }));
 			target.set(playbackState({ connection: "lost" }));
 			expect(store.getState()).toEqual({
 				destination: null,
@@ -479,10 +511,64 @@ describe("createNowPlaying", () => {
 		it("forgets why the last one ended once another starts", async () => {
 			const { store } = setUp();
 			const target = tv();
-			await store.send(target, film, opts({ lost: () => "Lost." }));
+			await store.send(target, film, opts({ ends: lostEnds }));
 			target.set(playbackState({ connection: "lost" }));
 			await store.send(target, film, opts());
 			expect(store.getState().ended).toBeNull();
+		});
+
+		it("keeps why a TV ends when it switches items there, but not on another TV", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, film, opts({ ends: lostEnds }));
+			await store.send(target, other, opts());
+			target.set(playbackState({ connection: "lost" }));
+			expect(store.getState().ended).toBe("Lost the connection to Hotel TV.");
+			const elsewhere = tv("Den TV");
+			await store.send(target, film, opts({ ends: lostEnds }));
+			await store.send(elsewhere, other, opts());
+			elsewhere.set(playbackState({ connection: "lost" }));
+			expect(store.getState().destination).toBe(elsewhere);
+		});
+
+		it("hears nothing more from a TV it stopped or switched from", async () => {
+			const { store, save, tick } = setUp();
+			const first = tv("Den TV");
+			await store.send(first, film, opts({ ends: lostEnds }));
+			// Another TV plays the same film, from the start.
+			const second = tv();
+			await store.send(second, film, opts({ ends: lostEnds }));
+			tick(5000);
+			first.set(playbackState({ position: 900, status: "paused" }));
+			first.set(playbackState({ connection: "lost" }));
+			expect(save).not.toHaveBeenCalled();
+			expect(store.getState()).toMatchObject({ destination: second, ended: null });
+			await store.stop();
+			await store.send(first, film, opts());
+			tick(5000);
+			second.set(playbackState({ position: 900, status: "paused" }));
+			expect(save).not.toHaveBeenCalled();
+		});
+
+		it("forgets why a TV ends once it's stopped", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, film, opts({ ends: lostEnds }));
+			await store.stop();
+			// The same TV, sent to again with nothing to say when it ends.
+			await store.send(target, other, opts());
+			target.set(playbackState({ connection: "lost" }));
+			expect(store.getState().destination).toBe(target);
+		});
+
+		it("follows an update with no item, keeping no resume point", async () => {
+			const { store, save, tick } = setUp();
+			const target = tv();
+			await store.send(target, film, opts());
+			tick(5000);
+			target.set(playbackState({ item: null, position: 900 }));
+			expect(save).not.toHaveBeenCalled();
+			expect(store.getState().destination).toBe(target);
 		});
 	});
 
@@ -493,5 +579,50 @@ describe("createNowPlaying", () => {
 		unsubscribe();
 		await store.send(tv(), film, opts());
 		expect(listener).not.toHaveBeenCalled();
+	});
+});
+
+describe("sentMessage", () => {
+	const cast = fakeDestination("cast", "Hotel TV");
+	const airplay = fakeDestination("airplay", "Living Room TV");
+
+	it("says nothing for a send that went, was overtaken or called off", () => {
+		expect(sentMessage(cast, { ok: true })).toBeNull();
+		expect(sentMessage(cast, { ok: false, why: "overtaken" })).toBeNull();
+		expect(sentMessage(cast, { ok: false, why: "declined", released: true })).toBeNull();
+	});
+
+	it("says why a route is blocked, in each kind of TV's words", () => {
+		const decision = { ok: false as const, reason: "unreachable" as const };
+		const blocked = { ok: false as const, why: "blocked" as const, decision, released: false };
+		expect(sentMessage(cast, blocked)).toBe("Couldn't reach the stream");
+		expect(sentMessage(airplay, blocked)).toMatch(/\S/);
+		expect(sentMessage(airplay, blocked)).not.toBe(sentMessage(cast, blocked));
+	});
+
+	it("says why it failed, and that nothing plays when nothing does", () => {
+		const failed = (switching: boolean) => ({
+			ok: false as const,
+			why: "failed" as const,
+			error: "unreachable",
+			switching,
+		});
+		expect(sentMessage(cast, failed(false))).toBe(
+			"Couldn't reach Hotel TV. Nothing is playing."
+		);
+		// The switch failed, so nothing plays there either.
+		expect(sentMessage(cast, failed(true))).toBe(
+			"Couldn't reach Hotel TV. Nothing is playing."
+		);
+		const unrouted = (released: boolean) => ({
+			ok: false as const,
+			why: "unrouted" as const,
+			error: "refused",
+			released,
+		});
+		expect(sentMessage(airplay, unrouted(false))).toBe(
+			"The provider refused the stream. The login may have expired, or another device may be using it."
+		);
+		expect(sentMessage(airplay, unrouted(true))).toMatch(/ Nothing is playing\.$/);
 	});
 });

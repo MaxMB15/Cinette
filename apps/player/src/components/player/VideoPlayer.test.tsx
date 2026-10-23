@@ -53,6 +53,7 @@ import { installPointerEvent } from "@/test/pointer-event";
 import { makeSegment } from "@/test/segments";
 import { fakeDestination, playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 import { getMountedPlayer } from "@/lib/remote-target";
+import { nowPlaying } from "@/lib/now-playing";
 import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
 
@@ -251,8 +252,7 @@ const fakeAirPlay = vi.hoisted(() => {
 		destination: null,
 		current: () => current.destination,
 		state: null,
-		send: vi.fn<AirPlay["send"]>(async () => ({ sent: true })),
-		resend: vi.fn<AirPlay["resend"]>(async () => ({ sent: true })),
+		send: vi.fn<AirPlay["send"]>(async () => null),
 		stop: vi.fn<AirPlay["stop"]>(async () => end()),
 		returnHere: vi.fn<AirPlay["returnHere"]>(async () => end()),
 		notPicked: false,
@@ -801,6 +801,8 @@ beforeEach(() => {
 	fakeMpv.reset();
 	fakeAirPlay.reset();
 	fakeCast.reset();
+	// The player sends the next item to the TV that plays through the store.
+	vi.spyOn(nowPlaying, "send").mockResolvedValue({ ok: true });
 	fakeRemote.set(null);
 	fakeAirPlay.enabled = [];
 	fakeAirPlay.macs = [];
@@ -1012,8 +1014,11 @@ describe("opening something to watch", () => {
 		await openItem(lanternKeeper());
 		await setMpv({ state: playing(MOVIE_URL, 900, 3600) });
 		tauri.savePlaybackPosition.mockClear();
+		const flush = vi.spyOn(nowPlaying, "flush");
 		await expect(saveProgressNow()).resolves.toBe("mv1");
 		expect(tauri.savePlaybackPosition).toHaveBeenCalledWith(MOVIE_KEY, 900, 3600);
+		// A TV's too, which goes on with the page closed.
+		expect(flush).toHaveBeenCalled();
 	});
 
 	it("opening another movie from inside the player saves the first and records its end", async () => {
@@ -3734,6 +3739,8 @@ describe("AirPlay", () => {
 			playbackCapabilities({ volume: "none", subtitles: "select", audioTracks: true })
 		),
 		notPicked: false,
+		converted: vi.fn(() => false),
+		release: vi.fn(async () => {}),
 		dispose: vi.fn(),
 	});
 
@@ -3846,7 +3853,7 @@ describe("AirPlay", () => {
 		let answered: boolean | null = null;
 		send.mockImplementationOnce(async (_, opts) => {
 			answered = await opts.confirm();
-			return { sent: true };
+			return null;
 		});
 		fireEvent.click(airplayButton()!);
 		await flush();
@@ -3863,7 +3870,7 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper());
 		vi.mocked(fakeAirPlay.get().send).mockImplementationOnce(async (_, opts) => {
 			await opts.confirm();
-			return { sent: true };
+			return null;
 		});
 		fireEvent.click(airplayButton()!);
 		await flush();
@@ -3893,49 +3900,14 @@ describe("AirPlay", () => {
 		fakeAirPlay.set({ available: true });
 		await openItem(lanternKeeper());
 		const send = vi.mocked(fakeAirPlay.get().send);
-		send.mockResolvedValueOnce({ sent: false, why: "cancelled" });
+		send.mockResolvedValueOnce(null);
 		fireEvent.click(airplayButton()!);
 		await flush();
 		expect(screen.queryByRole("alert")).toBeNull();
-
-		send.mockResolvedValueOnce({
-			sent: false,
-			why: "blocked",
-			decision: { ok: false, reason: "container", detail: "mkv" },
-		});
+		send.mockResolvedValueOnce("AirPlay can't play MKV files.");
 		fireEvent.click(airplayButton()!);
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
-
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const error = new Error("x");
-		send.mockResolvedValueOnce({ sent: false, why: "failed", error, stopped: false });
-		fireEvent.click(airplayButton()!);
-		await flush();
-		expect(screen.getByRole("alert").textContent).toBe("Couldn't start AirPlay.");
-		expect(warn).toHaveBeenCalledWith("[VideoPlayer] AirPlay failed:", error);
-
-		send.mockResolvedValueOnce({
-			sent: false,
-			why: "failed",
-			error: "refused",
-			stopped: false,
-		});
-		fireEvent.click(airplayButton()!);
-		await flush();
-		expect(screen.getByRole("alert").textContent).toMatch(/^The provider refused the stream/);
-
-		send.mockResolvedValueOnce({
-			sent: false,
-			why: "failed",
-			error: "Connect to Wi-Fi to send this to the TV.",
-			stopped: false,
-		});
-		fireEvent.click(airplayButton()!);
-		await flush();
-		expect(screen.getByRole("alert").textContent).toBe(
-			"Connect to Wi-Fi to send this to the TV."
-		);
 	});
 
 	it("covers the player with its own controls while the TV plays", async () => {
@@ -4006,16 +3978,13 @@ describe("AirPlay", () => {
 		act(() => fakeAirPlay.set({ destination: tv(), state: tvState({ status: "opening" }) }));
 		await flush();
 		fakeMpv.actions.load.mockClear();
-		const stop = vi.mocked(fakeAirPlay.get().stop);
-		expect(stop).not.toHaveBeenCalled();
-		act(() => fakeAirPlay.set({ notPicked: true }));
+		const dismiss = vi.spyOn(nowPlaying, "dismiss");
+		// The store ended AirPlay, as it does when no TV took the video.
+		act(() => fakeAirPlay.set({ destination: null, state: null, notPicked: true }));
 		await flush();
-		expect(stop).toHaveBeenCalledTimes(1);
 		expect(fakeMpv.actions.load).toHaveBeenCalledWith(MOVIE_URL, 600);
-		// AirPlay let go first.
-		expect(stop.mock.invocationCallOrder[0]).toBeLessThan(
-			fakeMpv.actions.load.mock.invocationCallOrder[0]
-		);
+		// It plays here, so the bar has nothing to say.
+		expect(dismiss).toHaveBeenCalled();
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
@@ -4023,7 +3992,8 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper());
 		fakeMpv.actions.load.mockRejectedValueOnce(new Error("no"));
 		act(() => fakeAirPlay.set({ destination: tv(), state: tvState() }));
-		act(() => fakeAirPlay.set({ notPicked: true }));
+		// The store ended AirPlay, as it does when no TV took the video.
+		act(() => fakeAirPlay.set({ destination: null, state: null, notPicked: true }));
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on this device.");
 	});
@@ -4185,12 +4155,9 @@ describe("AirPlay", () => {
 		await openItem(lanternKeeper());
 		vi.useFakeTimers();
 		vi.spyOn(console, "warn").mockImplementation(() => {});
-		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
-			sent: false,
-			why: "failed",
-			error: new Error("nope"),
-			stopped: true,
-		});
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce(
+			"Couldn't start AirPlay. Nothing is playing."
+		);
 		fireEvent.click(airplayButton()!);
 		await act(async () => {
 			for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -4204,12 +4171,7 @@ describe("AirPlay", () => {
 
 		// A second note gets its own six seconds, whatever the first one's
 		// timer had left.
-		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
-			sent: false,
-			why: "failed",
-			error: "nope",
-			stopped: true,
-		});
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce("nope Nothing is playing.");
 		fireEvent.click(airplayButton()!);
 		await act(async () => {
 			for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -4386,11 +4348,7 @@ describe("Google Cast", () => {
 	it("keeps a note about AirPlay up when a cast starts", async () => {
 		fakeAirPlay.set({ available: true });
 		await openItem(lanternKeeper());
-		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce({
-			sent: false,
-			why: "blocked",
-			decision: { ok: false, reason: "container", detail: "mkv" },
-		});
+		vi.mocked(fakeAirPlay.get().send).mockResolvedValueOnce("AirPlay can't play MKV files.");
 		fireEvent.click(screen.getByRole("button", { name: "AirPlay" }));
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe("AirPlay can't play MKV files.");
@@ -4640,11 +4598,11 @@ describe("Google Cast", () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });
 			fakeMpv.actions.load.mockClear();
 			casting();
-			const send = vi.mocked(fakeCast.get().send);
+			const send = vi.mocked(nowPlaying.send);
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
 			expect(send).toHaveBeenCalledWith(
-				"cast:tv",
+				expect.objectContaining({ id: "cast:tv" }),
 				expect.objectContaining({ id: ep2.id }),
 				expect.objectContaining({ startAt: undefined })
 			);
@@ -4659,7 +4617,7 @@ describe("Google Cast", () => {
 			expect(fakeMpv.actions.stop).not.toHaveBeenCalled();
 			await press("p");
 			expect(send).toHaveBeenLastCalledWith(
-				"cast:tv",
+				expect.objectContaining({ id: "cast:tv" }),
 				expect.objectContaining({ id: ep1.id }),
 				expect.anything()
 			);
@@ -4671,17 +4629,17 @@ describe("Google Cast", () => {
 			casting(true);
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
-			expect(vi.mocked(fakeCast.get().send).mock.calls[0][2].confirm).toBeUndefined();
+			expect(vi.mocked(nowPlaying.send).mock.calls[0][2].confirm).toBeUndefined();
 		});
 
 		it("asks before this computer starts converting, and a no keeps what plays", async () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });
 			casting();
-			const send = vi.mocked(fakeCast.get().send);
+			const send = vi.mocked(nowPlaying.send);
 			const answers: boolean[] = [];
 			send.mockImplementation(async (_, __, opts) => {
 				answers.push(await opts.confirm!("on"));
-				return null;
+				return { ok: true };
 			});
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
@@ -4701,9 +4659,9 @@ describe("Google Cast", () => {
 			await openItem(ep2, { episodes: [ep1, ep2, ep3] });
 			casting();
 			const answers: boolean[] = [];
-			vi.mocked(fakeCast.get().send).mockImplementation(async (_, __, opts) => {
+			vi.mocked(nowPlaying.send).mockImplementation(async (_, __, opts) => {
 				answers.push(await opts.confirm!("on"));
-				return null;
+				return { ok: true };
 			});
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
@@ -4720,7 +4678,12 @@ describe("Google Cast", () => {
 		it("says why the new item can't go to the receiver", async () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });
 			casting();
-			vi.mocked(fakeCast.get().send).mockResolvedValueOnce("Can't play this format");
+			vi.mocked(nowPlaying.send).mockResolvedValueOnce({
+				ok: false,
+				why: "blocked",
+				decision: { ok: false, reason: "container" },
+				released: false,
+			});
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
 			expect(screen.getByRole("alert").textContent).toBe("Can't play this format");
@@ -4737,7 +4700,7 @@ describe("Google Cast", () => {
 			await flush();
 			fireEvent.click(screen.getByRole("button", { name: /Resume/ }));
 			await flush();
-			expect(vi.mocked(fakeCast.get().send).mock.calls[0][2].startAt).toBe(1200);
+			expect(vi.mocked(nowPlaying.send).mock.calls[0][2].startAt).toBe(1200);
 		});
 
 		it("records the item's play, from what it's going to", async () => {
@@ -4747,7 +4710,7 @@ describe("Google Cast", () => {
 			vi.mocked(tauri.recordPlayStart).mockClear();
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
-			const send = vi.mocked(fakeCast.get().send);
+			const send = vi.mocked(nowPlaying.send);
 			expect(tauri.recordPlayEnd).not.toHaveBeenCalled();
 			await act(() => send.mock.calls[0][2].stopLocal());
 			expect(tauri.recordPlayEnd).toHaveBeenCalledWith(ep1.id, expect.any(Number));
@@ -4762,14 +4725,14 @@ describe("Google Cast", () => {
 		it("sends what another device asks for to the receiver", async () => {
 			await openItem(lanternKeeper());
 			casting();
-			const send = vi.mocked(fakeCast.get().send);
+			const send = vi.mocked(nowPlaying.send);
 			let loaded: Promise<void> = Promise.resolve();
 			act(() => {
 				loaded = destination().load({ kind: "local", channel: harborLights() });
 			});
 			await flush();
 			expect(send).toHaveBeenCalledWith(
-				"cast:tv",
+				expect.objectContaining({ id: "cast:tv" }),
 				expect.objectContaining({ id: harborLights().id }),
 				expect.anything()
 			);
@@ -4796,8 +4759,8 @@ describe("Google Cast", () => {
 			fakeMpv.actions.load.mockClear();
 			const tvNow = casting();
 			await press("n");
-			expect(vi.mocked(fakeCast.get().send)).toHaveBeenCalledWith(
-				"cast:tv",
+			expect(vi.mocked(nowPlaying.send)).toHaveBeenCalledWith(
+				expect.objectContaining({ id: "cast:tv" }),
 				expect.objectContaining({ id: ep2.id }),
 				expect.anything()
 			);
@@ -4821,7 +4784,7 @@ describe("Google Cast", () => {
 						state: castState(),
 					})
 				);
-				return vi.mocked(fakeAirPlay.get().resend);
+				return vi.mocked(nowPlaying.send);
 			};
 
 			it("takes the episode keys and buttons to the TV", async () => {
@@ -4830,6 +4793,7 @@ describe("Google Cast", () => {
 				const resend = airplaying();
 				await press("n");
 				expect(resend).toHaveBeenLastCalledWith(
+					expect.objectContaining({ kind: "airplay" }),
 					expect.objectContaining({ id: ep2.id }),
 					expect.objectContaining({ startAt: undefined })
 				);
@@ -4838,7 +4802,7 @@ describe("Google Cast", () => {
 				await flush();
 				expect(resend).toHaveBeenCalledTimes(2);
 				expect(fakeMpv.actions.load).not.toHaveBeenCalled();
-				expect(vi.mocked(fakeCast.get().send)).not.toHaveBeenCalled();
+				expect(fakeCast.get().send).not.toHaveBeenCalled();
 			});
 
 			it("plays another title there without the AirPlay menu", async () => {
@@ -4847,13 +4811,14 @@ describe("Google Cast", () => {
 				const resend = airplaying();
 				await goTo({ url: harborLights().url, channel: harborLights() });
 				expect(resend).toHaveBeenCalledWith(
+					expect.objectContaining({ kind: "airplay" }),
 					expect.objectContaining({ id: harborLights().id }),
 					expect.anything()
 				);
 				expect(fakeAirPlay.get().send).not.toHaveBeenCalled();
 				expect(fakeMpv.actions.load).not.toHaveBeenCalled();
 				// The player moves on once it's going to the TV.
-				await act(() => resend.mock.calls[0][1].stopLocal());
+				await act(() => resend.mock.calls[0][2].stopLocal());
 				expect(getMountedPlayer()?.getState().item?.ref).toBe(harborLights().id);
 			});
 
@@ -4868,16 +4833,16 @@ describe("Google Cast", () => {
 				await flush();
 				fireEvent.click(screen.getByRole("button", { name: /Resume/ }));
 				await flush();
-				expect(resend.mock.calls[0][1].startAt).toBe(1200);
+				expect(resend.mock.calls[0][2].startAt).toBe(1200);
 			});
 
 			it("asks before this device converts it for the TV", async () => {
 				await openItem(ep1, { episodes: [ep1, ep2] });
 				const resend = airplaying();
 				const answers: boolean[] = [];
-				resend.mockImplementation(async (_, opts) => {
-					answers.push(await opts.confirm("on"));
-					return { sent: true };
+				resend.mockImplementation(async (_, __, opts) => {
+					answers.push(await opts.confirm!("on"));
+					return { ok: true };
 				});
 				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 				await flush();
@@ -4891,14 +4856,24 @@ describe("Google Cast", () => {
 				await openItem(ep1, { episodes: [ep1, ep2] });
 				const resend = airplaying();
 				resend.mockResolvedValueOnce({
-					sent: false,
+					ok: false,
 					why: "failed",
 					error: "refused",
-					stopped: true,
+					switching: true,
 				});
 				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 				await flush();
 				expect(screen.getByRole("alert").textContent).toMatch(/Nothing is playing\.$/);
+			});
+
+			it("stops at the end of the last episode", async () => {
+				await openItem(ep2, { episodes: [ep1, ep2] });
+				const resend = airplaying();
+				const item = { title: ep2.name, contentType: "series" as const, ref: ep2.id };
+				act(() => fakeAirPlay.set({ state: castState({ item, status: "playing" }) }));
+				act(() => fakeAirPlay.set({ state: castState({ item, status: "ended" }) }));
+				await flush();
+				expect(resend).not.toHaveBeenCalled();
 			});
 
 			it("goes on to the next episode when the TV reaches the end", async () => {
@@ -4910,6 +4885,7 @@ describe("Google Cast", () => {
 				act(() => fakeAirPlay.set({ state: castState({ item, status: "ended" }) }));
 				await flush();
 				expect(resend).toHaveBeenCalledWith(
+					expect.objectContaining({ kind: "airplay" }),
 					expect.objectContaining({ id: ep2.id }),
 					expect.anything()
 				);
@@ -4930,9 +4906,9 @@ describe("Google Cast", () => {
 		it("leaves the receiver alone while it asks", async () => {
 			await openItem(ep1, { episodes: [ep1, ep2, ep3] });
 			const tvNow = casting();
-			vi.mocked(fakeCast.get().send).mockImplementation(async (_, __, opts) => {
+			vi.mocked(nowPlaying.send).mockImplementation(async (_, __, opts) => {
 				await opts.confirm!("on");
-				return null;
+				return { ok: true };
 			});
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
@@ -4940,7 +4916,7 @@ describe("Google Cast", () => {
 			for (const key of ["ArrowRight", " ", "n", "p"]) await press(key);
 			expect(tvNow.seek).not.toHaveBeenCalled();
 			expect(tvNow.pause).not.toHaveBeenCalled();
-			expect(vi.mocked(fakeCast.get().send)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(nowPlaying.send)).toHaveBeenCalledTimes(1);
 		});
 
 		it("says in the cast's words why a key's control failed", async () => {
@@ -5000,9 +4976,9 @@ describe("Google Cast", () => {
 			await openItem(ep1, { episodes: [ep1, ep2] });
 			casting();
 			const answers: boolean[] = [];
-			vi.mocked(fakeCast.get().send).mockImplementation(async (_, __, opts) => {
+			vi.mocked(nowPlaying.send).mockImplementation(async (_, __, opts) => {
 				answers.push(await opts.confirm!("on"));
-				return null;
+				return { ok: true };
 			});
 			fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 			await flush();
