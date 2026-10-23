@@ -34,7 +34,7 @@ struct Running {
     kept: Arc<Mutex<Vec<bool>>>,
 }
 
-const EVENTS: [&str; 13] = [
+const EVENTS: [&str; 14] = [
     "remote://save-progress",
     "remote://history-imported",
     "remote://consent",
@@ -48,6 +48,7 @@ const EVENTS: [&str; 13] = [
     "remote://transfer-target",
     "remote://providers-added",
     "remote://renamed",
+    "remote://blocked",
 ];
 
 impl Running {
@@ -121,14 +122,12 @@ impl Running {
     }
 
     async fn phone(&self) -> Client {
-        test_client::connect(
-            self.port,
-            self.device_id(),
-            DeviceKey::generate(),
-            "Phone",
-            None,
-        )
-        .await
+        self.phone_with(DeviceKey::generate()).await
+    }
+
+    /// A phone with `key`, as the same device asking again.
+    async fn phone_with(&self, key: DeviceKey) -> Client {
+        test_client::connect(self.port, self.device_id(), key, "Phone", None).await
     }
 
     /// The oldest event called `name` not yet taken, waiting for one.
@@ -153,9 +152,10 @@ impl Running {
     }
 }
 
-fn saved_settings(app: &TestApp) -> Value {
+/// What the settings file holds under `key`.
+fn saved(app: &TestApp, key: &str) -> Value {
     let text = std::fs::read_to_string(app.app_dir().join(SETTINGS_STORE_FILE)).unwrap();
-    serde_json::from_str::<Value>(&text).unwrap()[SETTINGS_KEY].clone()
+    serde_json::from_str::<Value>(&text).unwrap()[key].clone()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -211,7 +211,7 @@ async fn saving_settings_writes_them_and_tells_the_target() {
     assert_eq!(view["remoteControl"], json!("always"));
     assert_eq!(view["deviceName"], json!("Den"));
     assert_eq!(
-        saved_settings(&running.app),
+        saved(&running.app, SETTINGS_KEY),
         json!({ "discoverable": true, "remoteControl": "always", "deviceName": "Den" })
     );
     assert_eq!(
@@ -234,7 +234,7 @@ async fn saving_settings_writes_them_and_tells_the_target() {
 async fn never_allow_ends_sessions_even_when_it_cant_be_saved() {
     let running = Running::start(|_| {}).await;
     let mut phone = connected(&running).await;
-    let saved = saved_settings(&running.app);
+    let saved = saved(&running.app, SETTINGS_KEY);
     // A folder where the file goes makes every write of it fail.
     let file = running.app.app_dir().join(SETTINGS_STORE_FILE);
     std::fs::remove_file(&file).unwrap();
@@ -284,7 +284,7 @@ async fn consent_goes_to_the_webview_and_its_answer_comes_back() {
     running
         .invoke(
             "remote_answer_consent",
-            json!({ "request": consent["request"], "allow": true }),
+            json!({ "request": consent["request"], "answer": "allow" }),
         )
         .unwrap();
     phone.connected().await;
@@ -318,7 +318,7 @@ async fn consent_goes_to_the_webview_and_its_answer_comes_back() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_denied_request_grants_nothing() {
+async fn a_denied_device_is_blocked_until_unblocked() {
     let mut running = Running::start(|_| {}).await;
     let mut phone = running.phone().await;
     phone.pending().await;
@@ -326,9 +326,85 @@ async fn a_denied_request_grants_nothing() {
     running
         .invoke(
             "remote_answer_consent",
-            json!({ "request": consent["request"], "allow": false }),
+            json!({ "request": consent["request"], "answer": "deny" }),
         )
         .unwrap();
+    assert_eq!(phone.closed().await, Some(CloseReason::Denied));
+    let id = phone.key.device_id().to_string();
+    let blocked = json!([{ "deviceId": id, "name": "Phone" }]);
+    assert_eq!(running.event("remote://blocked").await, blocked);
+    assert_eq!(
+        running.invoke("remote_blocked", json!({})).unwrap(),
+        blocked
+    );
+    assert_eq!(saved(&running.app, BLOCKED_KEY), blocked);
+
+    // Asking again gets no dialog.
+    assert_eq!(
+        running.phone_with(phone.key.clone()).await.closed().await,
+        Some(CloseReason::Denied)
+    );
+
+    assert_eq!(
+        running.invoke("remote_unblock", json!({ "deviceId": "nope" })),
+        Err(json!("That isn't a device id."))
+    );
+    running
+        .invoke("remote_unblock", json!({ "deviceId": id }))
+        .unwrap();
+    assert_eq!(running.event("remote://blocked").await, json!([]));
+    assert_eq!(saved(&running.app, BLOCKED_KEY), json!([]));
+    // No longer denied. The denial's short backoff still turns away every
+    // new request for a few seconds, which the core's tests cover.
+    assert_eq!(
+        running.phone_with(phone.key.clone()).await.closed().await,
+        Some(CloseReason::Busy)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dismissed_request_blocks_nothing() {
+    let mut running = Running::start(|_| {}).await;
+    let mut phone = running.phone().await;
+    phone.pending().await;
+    let consent = running.event("remote://consent").await;
+    // Only allow, deny and dismiss are answers.
+    assert!(running
+        .invoke(
+            "remote_answer_consent",
+            json!({ "request": consent["request"], "answer": "block" }),
+        )
+        .is_err());
+    running
+        .invoke(
+            "remote_answer_consent",
+            json!({ "request": consent["request"], "answer": "dismiss" }),
+        )
+        .unwrap();
+    assert_eq!(phone.closed().await, Some(CloseReason::Denied));
+    assert_eq!(
+        running.invoke("remote_blocked", json!({})).unwrap(),
+        json!([])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn devices_blocked_before_stay_blocked_after_a_restart_and_a_new_identity() {
+    let key = DeviceKey::generate();
+    let blocked = json!([{ "deviceId": key.device_id().to_string(), "name": "Phone" }]);
+    let saved_list = blocked.clone();
+    let running = Running::start(move |app| {
+        let store = app.handle().store(SETTINGS_STORE_FILE).unwrap();
+        store.set(BLOCKED_KEY, saved_list);
+        store.save().unwrap();
+    })
+    .await;
+    running.invoke("remote_reset_identity", json!({})).unwrap();
+    assert_eq!(
+        running.invoke("remote_blocked", json!({})).unwrap(),
+        blocked
+    );
+    let mut phone = running.phone_with(key).await;
     assert_eq!(phone.closed().await, Some(CloseReason::Denied));
 }
 
@@ -721,7 +797,7 @@ async fn one_instance_controls_another() {
     phase(&mut mac, "pending").await;
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     phase(&mut mac, "connected").await;
@@ -844,7 +920,7 @@ async fn a_name_changed_while_asking_reaches_the_session() {
     rename(&mac, "ask", "Kitchen");
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     phase(&mut mac, "connected").await;
@@ -1728,7 +1804,7 @@ async fn one_instance_sends_a_provider_to_another_after_its_own_allow() {
     assert_eq!(pending["expiresInMs"], json!(30_000));
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
 
@@ -1791,7 +1867,7 @@ async fn one_instance_sends_a_provider_to_another_after_its_own_allow() {
     let consent = tv.event("remote://consent").await;
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     loop {
@@ -1831,7 +1907,7 @@ async fn a_denied_provider_request_sends_no_login() {
     let consent = tv.event("remote://consent").await;
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": false }),
+        json!({ "request": consent["request"], "answer": "deny" }),
     )
     .unwrap();
     let refused = transfer_step(&mut mac, "refused").await;
@@ -2002,7 +2078,7 @@ async fn history_sent_to_another_instance_resumes_there() {
         .unwrap();
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     // The Mac says it's sending as soon as it's allowed.
@@ -2057,7 +2133,7 @@ async fn history_imported_from_another_instance_waits_for_the_preview() {
     assert_eq!(consent["asked"]["direction"], json!("import"));
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     // The TV's player saves where it is before the export.
@@ -2110,7 +2186,7 @@ async fn a_denied_history_transfer_writes_nothing() {
     let consent = tv.event("remote://consent").await;
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": false }),
+        json!({ "request": consent["request"], "answer": "deny" }),
     )
     .unwrap();
     let refused = transfer_step(&mut mac, "refused").await;
@@ -2249,7 +2325,7 @@ async fn a_provider_removed_before_the_allow_sends_nothing() {
         .unwrap();
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     let refused = transfer_step(&mut mac, "refused").await;
@@ -2280,7 +2356,7 @@ async fn after_a_denial_the_same_providers_can_be_sent_again() {
     );
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": false }),
+        json!({ "request": consent["request"], "answer": "deny" }),
     )
     .unwrap();
     transfer_step(&mut mac, "refused").await;
@@ -2352,7 +2428,7 @@ async fn a_second_history_ask_while_one_waits_is_busy_and_leaves_the_first() {
     // The first still carries the channel the player had open.
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     let imported = tv.event("remote://history-imported").await;
@@ -2389,7 +2465,7 @@ async fn a_history_ask_refused_as_busy_doesnt_hold_up_the_next() {
     locked_rx.recv().unwrap();
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     transfer_step(&mut mac, "granted").await;
@@ -2458,7 +2534,7 @@ async fn a_second_send_while_one_waits_is_busy_and_leaves_the_first() {
     // The first one still goes once it's allowed.
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     loop {
@@ -2479,7 +2555,7 @@ async fn a_cancel_on_another_link_leaves_a_send_alone() {
         .unwrap();
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     loop {
@@ -2509,7 +2585,7 @@ async fn a_send_refused_as_busy_doesnt_hold_up_the_next() {
     locked_rx.recv().unwrap();
     tv.invoke(
         "remote_answer_consent",
-        json!({ "request": consent["request"], "allow": true }),
+        json!({ "request": consent["request"], "answer": "allow" }),
     )
     .unwrap();
     loop {

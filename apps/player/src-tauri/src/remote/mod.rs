@@ -61,3 +61,7 @@ pub const SETTINGS_STORE_FILE: &str = "settings.json";
 /// Their key in the store.
 #[cfg(remote)]
 pub const SETTINGS_KEY: &str = "remote";
+/// The key of the devices the user denied, kept apart from the settings so
+/// saving those never touches the list.
+#[cfg(remote)]
+pub const BLOCKED_KEY: &str = "remoteBlocked";

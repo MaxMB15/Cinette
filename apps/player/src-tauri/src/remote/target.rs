@@ -19,11 +19,11 @@ use super::local::is_local_peer;
 use crate::discovery::{Registration, Txt};
 use mvp_core::remote::catalog::{CatalogItem, CatalogQuery};
 use mvp_core::remote::consent::{Answer, RequestId};
-use mvp_core::remote::identity::DeviceKey;
+use mvp_core::remote::identity::{DeviceId, DeviceKey};
 use mvp_core::remote::message::{Command, DeviceType, ErrorCode, PlaybackSnapshot, RequestKind};
 use mvp_core::remote::settings::RemoteSettings;
 use mvp_core::remote::target::{
-    Action, ConsentPrompt, DiscoveryRecord, SessionInfo, Target, SERVICE_TYPE,
+    Action, BlockedDevice, ConsentPrompt, DiscoveryRecord, SessionInfo, Target, SERVICE_TYPE,
 };
 use mvp_core::remote::transfer::flow::{Progress, ProviderResult, ProviderSettings};
 use mvp_core::remote::transfer::merge::Report;
@@ -76,6 +76,8 @@ pub trait TargetHost: Send + Sync + 'static {
     fn hide_consent(&self, request: RequestId);
     /// The controllers changed.
     fn sessions_changed(&self, sessions: &[SessionInfo]);
+    /// The blocked devices changed: save them for the next start.
+    fn blocked_changed(&self, _blocked: &[BlockedDevice]) {}
     /// Carry out a command on the player, then call
     /// [`TargetHandle::finish_command`] with `token`.
     fn apply(&self, token: u64, command: &Command);
@@ -132,6 +134,7 @@ enum Input {
     Accepted(TcpStream, IpAddr),
     Answer(RequestId, Answer),
     Disconnect(String),
+    Unblock(DeviceId),
     Settings(RemoteSettings),
     ResetIdentity(DeviceKey),
     State(Box<PlaybackSnapshot>),
@@ -141,6 +144,7 @@ enum Input {
     Exported(Epoch, ConnId, String, Box<Result<Export, ErrorCode>>),
     Imported(Epoch, ConnId, String, Box<Result<Report, ErrorCode>>),
     Sessions(oneshot::Sender<Vec<SessionInfo>>),
+    Blocked(oneshot::Sender<Vec<BlockedDevice>>),
     // Only the mobile apps go to the background.
     #[cfg_attr(not(mobile), allow(dead_code))]
     Background(oneshot::Sender<()>),
@@ -179,6 +183,11 @@ impl TargetHandle {
         self.send(Input::Settings(settings));
     }
 
+    /// Lets a device the user denied ask again.
+    pub fn unblock(&self, device: DeviceId) {
+        self.send(Input::Unblock(device));
+    }
+
     /// Ends every session and starts again with this key.
     pub fn reset_identity(&self, key: DeviceKey) {
         self.send(Input::ResetIdentity(key));
@@ -196,6 +205,13 @@ impl TargetHandle {
     pub async fn sessions(&self) -> Vec<SessionInfo> {
         let (tx, rx) = oneshot::channel();
         self.send(Input::Sessions(tx));
+        rx.await.unwrap_or_default()
+    }
+
+    /// The devices the user denied, oldest first.
+    pub async fn blocked(&self) -> Vec<BlockedDevice> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Input::Blocked(tx));
         rx.await.unwrap_or_default()
     }
 
@@ -262,23 +278,32 @@ fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
 }
 
 /// A target that offers what this device carries out, history transfers
-/// and receiving providers, under this device's default name.
-fn new_target(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Target {
+/// and receiving providers, under this device's default name, with
+/// `blocked` refused.
+fn new_target(
+    key: DeviceKey,
+    device_type: DeviceType,
+    settings: RemoteSettings,
+    blocked: Vec<BlockedDevice>,
+) -> Target {
     let mut target = Target::new(key, device_type, settings);
     target.offer(true, true);
     target.name_by_default(super::device::default_name());
+    target.block(blocked);
     target
 }
 
 /// The port remote control uses when it's free, so a firewall rule can name it.
 pub const DEFAULT_PORT: u16 = 47130;
 
-/// Starts the target on `listener`, within `limits`.
+/// Starts the target on `listener`, within `limits`, with the devices the
+/// user denied before blocked.
 pub(crate) fn start_with(
     listener: TcpListener,
     key: DeviceKey,
     device_type: DeviceType,
     settings: RemoteSettings,
+    blocked: Vec<BlockedDevice>,
     host: Arc<dyn TargetHost>,
     limits: Limits,
 ) -> std::io::Result<TargetHandle> {
@@ -287,7 +312,7 @@ pub(crate) fn start_with(
     let accept = spawn_accept(listener, inbox.clone());
     let (reads, read_rx) = mpsc::unbounded_channel();
     let task = Task {
-        target: new_target(key.clone(), device_type, settings),
+        target: new_target(key.clone(), device_type, settings, blocked),
         key,
         device_type,
         host,
@@ -514,6 +539,7 @@ impl Task {
                 None => Vec::new(),
             },
             Input::Disconnect(session_id) => self.target.disconnect(&session_id),
+            Input::Unblock(device) => self.target.unblock(&device),
             Input::Settings(settings) => self.target.update_settings(settings, now),
             Input::ResetIdentity(key) => {
                 // The old target's goodbyes and hidden dialogs go out under
@@ -521,8 +547,10 @@ impl Task {
                 let goodbye = self.target.shutdown();
                 self.carry_out(goodbye);
                 let settings = self.target.settings().clone();
+                // The devices the user denied stay blocked under a new identity.
+                let blocked = self.target.blocked().to_vec();
                 self.key = key;
-                self.target = new_target(self.key.clone(), self.device_type, settings);
+                self.target = new_target(self.key.clone(), self.device_type, settings, blocked);
                 self.epoch += 1;
                 self.pending.clear();
                 vec![
@@ -566,6 +594,10 @@ impl Task {
             }
             Input::Sessions(reply) => {
                 let _ = reply.send(self.target.sessions());
+                Vec::new()
+            }
+            Input::Blocked(reply) => {
+                let _ = reply.send(self.target.blocked().to_vec());
                 Vec::new()
             }
             Input::Background(done) => {
@@ -756,6 +788,7 @@ impl Task {
                     );
                 }
                 Action::Advertise(record) => self.advertise(record),
+                Action::BlockedChanged(blocked) => self.host.blocked_changed(&blocked),
             }
         }
     }

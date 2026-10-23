@@ -64,7 +64,7 @@ describe("listOf", () => {
 describe("consentBody", () => {
 	it("explains control", () => {
 		expect(consentBody("Mac", undefined)).toBe(
-			"Mac on your network. It will be able to play, pause and choose what plays here, and see what this device can play. Only allow it if the code matches the one on that device."
+			"Mac on your network. It will be able to play, pause and choose what plays here, and see what this device can play. Only allow it if the code matches the one on that device. Deny blocks it until you unblock it in Settings."
 		);
 	});
 

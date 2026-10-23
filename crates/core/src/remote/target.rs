@@ -50,6 +50,7 @@ use super::transfer::merge::Report;
 use super::transfer::refs::Salt;
 use super::transfer::{Export, What};
 use super::ConnId;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -111,6 +112,9 @@ pub enum Action {
     },
     /// Advertise this record, replacing any earlier one, or stop advertising.
     Advertise(Option<DiscoveryRecord>),
+    /// The blocked devices changed: save the list, for [`Target::block`]
+    /// at the next start.
+    BlockedChanged(Vec<BlockedDevice>),
     /// A controller is importing this device's history: save the playback
     /// position, export the history under `salt` with only `what`, and call
     /// [`Target::exported`].
@@ -164,6 +168,16 @@ pub struct ConsentPrompt {
     pub expires_at: Instant,
     /// What a controller in a session asks for. `None` asks for control.
     pub asked: Option<Asked>,
+}
+
+/// A device the user denied, which is refused without a dialog until the
+/// user unblocks it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedDevice {
+    pub device_id: DeviceId,
+    /// Its name when it was denied, for the list in settings.
+    pub name: String,
 }
 
 /// One controller in the target's list.
@@ -247,6 +261,8 @@ pub struct Target {
     evicted: Vec<(ConnId, Instant)>,
     /// What this device's hello offers.
     features: Vec<Feature>,
+    /// The devices the user denied, oldest first.
+    blocked: Vec<BlockedDevice>,
     /// This device's name when the user gave it none.
     default_name: String,
 }
@@ -269,10 +285,35 @@ impl Target {
             nonces: TokenBucket::new(NONCES_PER_SECOND, f64::from(NONCE_BURST)),
             evicted: Vec::new(),
             features: Vec::new(),
+            blocked: Vec::new(),
             default_name: settings::default_name(device_type).to_owned(),
         };
         target.offer(false, false);
         target
+    }
+
+    /// Takes the blocked devices saved from [`Action::BlockedChanged`].
+    pub fn block(&mut self, blocked: Vec<BlockedDevice>) {
+        self.blocked = blocked;
+    }
+
+    pub fn blocked(&self) -> &[BlockedDevice] {
+        &self.blocked
+    }
+
+    fn is_blocked(&self, device: &DeviceId) -> bool {
+        self.blocked.iter().any(|b| b.device_id == *device)
+    }
+
+    /// Lets the device with this id ask again, from now on.
+    pub fn unblock(&mut self, device: &DeviceId) -> Vec<Action> {
+        self.consent.forgive(device);
+        let before = self.blocked.len();
+        self.blocked.retain(|b| b.device_id != *device);
+        if self.blocked.len() == before {
+            return Vec::new();
+        }
+        vec![Action::BlockedChanged(self.blocked.clone())]
     }
 
     /// Names the device `name` when the user gave it none, such as the name
@@ -705,10 +746,14 @@ impl Target {
         now: Instant,
         actions: &mut Vec<Action>,
     ) {
+        // A device the user denied hears so again, whatever the setting, and
+        // can't resume a session either.
+        let blocked = self.is_blocked(&auth.peer.id);
         // A session that dropped a moment ago comes back without asking.
         // It isn't a new connection, so being undiscoverable doesn't stop it,
         // but Never allow ended every session already.
-        if let Some(id) = resume
+        if !blocked
+            && let Some(id) = resume
             && let Ok(old) = self.sessions.resume(&id, &auth.peer, conn, now)
         {
             if let Some(old) = old {
@@ -728,7 +773,12 @@ impl Target {
             actions.push(self.sessions_changed());
             return;
         }
-        match self.settings.decide() {
+        let decision = if blocked {
+            Decision::Reject(CloseReason::Denied)
+        } else {
+            self.settings.decide()
+        };
+        match decision {
             Decision::Reject(reason) => {
                 self.set_stage(conn, Stage::Ready(auth));
                 self.close(conn, Some(reason), actions);
@@ -805,10 +855,26 @@ impl Target {
         }
     }
 
-    /// The user answered the dialog.
+    /// The user answered the dialog. Deny on a request for control blocks
+    /// that device and ends any session it has, as Disconnect does.
+    /// Dismissing it refuses only this request.
     pub fn answer(&mut self, request: RequestId, answer: Answer, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         if let Some(resolved) = self.consent.answer(request, answer, now) {
+            // A blocked device never gets this far, so it's never listed twice.
+            let peer = &resolved.request.peer;
+            if answer == Answer::Deny && resolved.request.kind == RequestKind::Control {
+                self.blocked.push(BlockedDevice {
+                    device_id: peer.id.clone(),
+                    name: peer.name.clone(),
+                });
+                actions.push(Action::BlockedChanged(self.blocked.clone()));
+                // A device has one session at most.
+                let held = self.sessions.list().iter().find(|s| s.peer.id == peer.id);
+                if let Some(session) = held.map(|s| s.id.clone()) {
+                    actions.extend(self.disconnect(&session));
+                }
+            }
             self.resolve(resolved, now, &mut actions);
         }
         self.sync_prompt(&mut actions);
