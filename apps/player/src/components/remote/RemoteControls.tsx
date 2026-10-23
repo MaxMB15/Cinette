@@ -52,11 +52,13 @@ const BUTTON = cn(
 	TOUCH
 );
 
+/** The background of the bars at the top: opaque, with the tint on top, so
+ *  the page, or the video on the player page, doesn't show through. */
+const TINT = "border-b border-border bg-card bg-linear-to-r from-primary/10 to-primary/10";
+
 /** The bar at the top while another device is controlled, and after its
- *  link ended by itself: one row, opaque, with the tint on top so the page
- *  doesn't show through. */
-const BAR =
-	"flex min-h-12 items-center gap-2 px-4 py-1.5 border-b border-border bg-card bg-linear-to-r from-primary/10 to-primary/10";
+ *  link ended by itself: one row. */
+const BAR = cn("flex min-h-12 items-center gap-2 px-4 py-1.5", TINT);
 
 /** A button with only an icon. */
 const ICON_BUTTON = cn("inline-flex items-center justify-center", TOUCH);
@@ -330,7 +332,7 @@ export const ControllersBar = () => {
 		<div
 			role="region"
 			aria-label="Devices controlling this one"
-			className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 border-b border-border bg-primary/10 text-sm"
+			className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm", TINT)}
 		>
 			<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
 			<span className="font-medium">Controlled from</span>
