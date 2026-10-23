@@ -10,10 +10,10 @@ import {
 	showsCastButton,
 	VPN_HINT,
 	castEntries,
-	castFailureMessage,
 	castStatus,
 	newerList,
 } from "@/lib/cast";
+import { tvFailureMessage } from "@/lib/device-picker";
 import type { CastReceiver, CastReceiverList } from "@/lib/tauri";
 
 const receiver = (id: string, name: string, available = true): CastReceiver => ({
@@ -91,24 +91,6 @@ describe("castEntries", () => {
 	});
 });
 
-describe("castFailureMessage", () => {
-	it("says why each kind of failure happened", () => {
-		expect(castFailureMessage("TV", "unreachable")).toBe("Couldn't reach TV.");
-		expect(castFailureMessage("TV", "notFound")).toBe("Couldn't reach TV.");
-		expect(castFailureMessage("TV", "refused")).toBe(
-			"The provider refused the stream. The login may have expired."
-		);
-		for (const code of ["noConverter", "noEncoder", "unsupported"])
-			expect(castFailureMessage("TV", code)).toBe(
-				"This computer can't convert this stream for TV."
-			);
-		expect(castFailureMessage("TV", "noRoute")).toBe(
-			"This computer has no network address TV can reach."
-		);
-		expect(castFailureMessage("TV", new Error("x"))).toBe("Couldn't play it on TV.");
-	});
-});
-
 describe("castEndedMessage", () => {
 	it("says why a cast was lost", () => {
 		expect(castEndedMessage("TV", null)).toBe("Lost the connection to TV.");
@@ -168,6 +150,7 @@ describe("castControlMessage", () => {
 		for (const code of [
 			"unreachable",
 			"notFound",
+			"streamUnreachable",
 			"refused",
 			"noConverter",
 			"noEncoder",
@@ -175,8 +158,8 @@ describe("castControlMessage", () => {
 			"noRoute",
 			"converterFailed",
 		])
-			expect(castControlMessage("TV", code)).toBe(castFailureMessage("TV", code));
-		expect(castControlMessage("TV", "converterFailed")).toBe("Couldn't play it on TV.");
-		expect(castControlMessage("TV", "notConnected")).toBe("TV didn't respond.");
+			expect(castControlMessage("TV", code)).toBe(tvFailureMessage("TV", code));
+		for (const error of ["notConnected", "stale", "superseded", "", new Error("x"), undefined])
+			expect(castControlMessage("TV", error)).toBe("TV didn't respond.");
 	});
 });

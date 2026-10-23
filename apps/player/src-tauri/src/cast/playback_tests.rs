@@ -792,7 +792,7 @@ async fn a_converted_route_says_when_the_provider_refuses() {
     let route = json!({ "via": "converted", "source": 0, "container": "mkv", "video": "copy", "audio": "copy" });
     assert_eq!(
         load(&app, "cast:tv", &unreachable, route, None),
-        Err(json!("unreachable"))
+        Err(json!("streamUnreachable"))
     );
 }
 

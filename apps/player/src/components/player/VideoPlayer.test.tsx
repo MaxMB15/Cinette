@@ -58,7 +58,6 @@ import { makeSegment } from "@/test/segments";
 import { fakeDestination, playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 import { getMountedPlayer } from "@/lib/remote-target";
 import { nowPlaying } from "@/lib/now-playing";
-import { MAC_CONVERT_WARNING } from "@/lib/airplay";
 import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
 
@@ -3864,7 +3863,7 @@ describe("AirPlay", () => {
 		fireEvent.click(airplayButton()!);
 		await flush();
 		const dialog = screen.getByRole("dialog", { name: "Convert on this device?" });
-		expect(dialog.textContent).toContain("This Mac converts the stream");
+		expect(dialog.textContent).toContain("Closing the lid ends it.");
 		fireEvent.click(within(dialog).getByRole("button", { name: "Send to TV" }));
 		await flush();
 		expect(answered).toBe(true);
@@ -4538,7 +4537,7 @@ describe("Google Cast", () => {
 		fireEvent.click(within(panel).getByRole("button", { name: "Play" }));
 		await flush();
 		expect(screen.getByRole("alert").textContent).toBe(
-			"The provider refused the stream. The login may have expired."
+			"The provider refused the stream. The login may have expired, or another device may be using it."
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		act(() => fakeCast.set({ state: castState() }));
@@ -4865,8 +4864,10 @@ describe("Google Cast", () => {
 				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 				await flush();
 				const dialog = screen.getByRole("dialog", { name: "Play on Living Room TV?" });
-				// AirPlay's words, which say this Mac stays awake.
-				expect(dialog).toHaveTextContent(MAC_CONVERT_WARNING);
+				// Cast's words, which say closing the lid ends it.
+				expect(dialog).toHaveTextContent(
+					"Playing this on Living Room TV needs this computer to stay on and connected. Closing the lid ends it."
+				);
 				fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
 				await flush();
 				expect(answers).toEqual([true]);
@@ -4988,7 +4989,9 @@ describe("Google Cast", () => {
 			tvNow.getState.mockReturnValue(castState({ status: "paused" }));
 			tvNow.play.mockRejectedValueOnce("converterFailed");
 			await press(" ");
-			expect(screen.getByRole("alert").textContent).toBe("Couldn't play it on Hotel TV.");
+			expect(screen.getByRole("alert").textContent).toBe(
+				"Couldn't convert the stream on this device."
+			);
 			fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 			// Once the connection is going, the cast says so itself.
 			tvNow.getState.mockReturnValue(castState({ connection: "reconnecting" }));

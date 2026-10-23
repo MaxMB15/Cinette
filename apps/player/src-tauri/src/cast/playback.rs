@@ -695,7 +695,7 @@ async fn conversion_plan<R: Runtime>(
         .await
         .map_err(|e| match e {
             ProbeError::Refused(_) => REFUSED.to_string(),
-            _ => "unreachable".to_string(),
+            _ => "streamUnreachable".to_string(),
         })?;
     // AAC from MPEG-TS or HLS can't be copied into the Matroska the
     // converter writes, so it's converted like any other.
@@ -744,7 +744,7 @@ async fn start_conversion<R: Runtime>(
             ConvertError::NoEncoder => "noEncoder".to_string(),
             ConvertError::Unsupported => "unsupported".to_string(),
             ConvertError::NoRoute => "noRoute".to_string(),
-            ConvertError::Unreachable => "unreachable".to_string(),
+            ConvertError::Unreachable => "streamUnreachable".to_string(),
             ConvertError::Failed(_) => "converterFailed".to_string(),
         })
 }
@@ -759,7 +759,7 @@ async fn start_conversion<R: Runtime>(
 /// a stop for the same receiver makes this one give up wherever it is, with
 /// [`SUPERSEDED`], dropping what it started.
 ///
-/// Rejects with `notFound`, `unreachable`, `refused`,
+/// Rejects with `notFound`, `unreachable`, `refused`, `streamUnreachable`,
 /// `noConverter`, `noEncoder`, `unsupported`, `noRoute`, `converterFailed`,
 /// `stale` or `superseded`, or, for a direct HLS route, `notPlaylist` or
 /// `cors`, after which the frontend routes the item again without that

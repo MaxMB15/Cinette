@@ -5,13 +5,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	AIRPLAY_RECEIVER,
 	CONVERT_WARNING,
-	MAC_CONVERT_WARNING,
 	airplayConvertWarning,
 	IDLE_NATIVE_STATE,
 	airplayBlockedMessage,
 	airplayCapabilities,
 	airplayErrorMessage,
-	airplayFailureMessage,
 	airplaySeekMessage,
 	SUPERSEDED,
 	airplaySender,
@@ -23,6 +21,7 @@ import {
 	type AirPlayNativeState,
 } from "@/lib/airplay";
 import { UnsupportedError, type PlaybackState } from "@/lib/destination";
+import { REFUSED_MESSAGE } from "@/lib/device-picker";
 import { airplayTvProfile, desktopSender, NOT_READY, REFUSED } from "@/lib/route-profiles";
 import type { StreamFormat } from "@/lib/route";
 import type { Channel } from "@/lib/types";
@@ -143,10 +142,14 @@ describe("the AirPlay profiles", () => {
 
 	it("warns about the device that converts", () => {
 		expect(airplayConvertWarning(false)).toBe(CONVERT_WARNING);
-		expect(airplayConvertWarning(true)).toBe(MAC_CONVERT_WARNING);
-		expect(MAC_CONVERT_WARNING).toBe(
-			"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network."
+		// A Mac's says what Cast's does, lid included.
+		expect(airplayConvertWarning(true)).toBe(
+			"Playing this on the TV needs this computer to stay on and connected. Closing the lid ends it."
 		);
+		expect(airplayConvertWarning(true, "Den")).toBe(
+			"Playing this on Den needs this computer to stay on and connected. Closing the lid ends it."
+		);
+		expect(airplayConvertWarning(false, "Den")).toBe(CONVERT_WARNING);
 	});
 });
 
@@ -1042,26 +1045,17 @@ describe("createAirPlayDestination", () => {
 	});
 });
 
-describe("airplayFailureMessage", () => {
-	it("words the provider's refusal, passes the backend's message, or says it plainly", () => {
-		expect(airplayFailureMessage("refused")).toBe(airplayErrorMessage({ code: "refused" }));
-		expect(airplayFailureMessage("Connect to Wi-Fi to send this to the TV.")).toBe(
-			"Connect to Wi-Fi to send this to the TV."
-		);
-		expect(airplayFailureMessage("")).toBe("Couldn't start AirPlay.");
-		expect(airplayFailureMessage(new Error("x"))).toBe("Couldn't start AirPlay.");
-		expect(airplayFailureMessage(undefined)).toBe("Couldn't start AirPlay.");
-	});
-});
-
 describe("airplaySeekMessage", () => {
-	it("words the refusal, passes the backend's message, or says it plainly", () => {
-		expect(airplaySeekMessage(REFUSED)).toBe(airplayFailureMessage(REFUSED));
-		expect(airplaySeekMessage("Couldn't reach the stream to convert it.")).toBe(
+	it("words the backend's code as a TV's, or says it plainly", () => {
+		expect(airplaySeekMessage(REFUSED)).toBe(REFUSED_MESSAGE);
+		expect(airplaySeekMessage("streamUnreachable")).toBe(
 			"Couldn't reach the stream to convert it."
 		);
-		expect(airplaySeekMessage("")).toBe("Couldn't move the stream on the TV.");
-		expect(airplaySeekMessage(new Error("x"))).toBe("Couldn't move the stream on the TV.");
+		expect(airplaySeekMessage("noRoute")).toBe(
+			"This device has no network address the TV can reach."
+		);
+		for (const error of ["stale", SUPERSEDED, "something new", "", new Error("x"), undefined])
+			expect(airplaySeekMessage(error)).toBe("Couldn't move the stream on the TV.");
 		expect(SUPERSEDED).toBe("superseded");
 	});
 });

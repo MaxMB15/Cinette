@@ -26,8 +26,8 @@ import { airplayConvertWarning, airplaySeekMessage, airplayKey } from "@/lib/air
 import { AirPlayButton } from "@/components/player/AirPlayButton";
 import { CastButton } from "@/components/player/CastButton";
 import { DestinationView } from "@/components/player/DestinationView";
-import { castControlMessage, castFailureMessage, showsCastButton } from "@/lib/cast";
-import { convertWarning } from "@/lib/device-picker";
+import { castControlMessage, showsCastButton } from "@/lib/cast";
+import { convertWarning, tvFailureMessage } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { remoteItem, type CatalogItem } from "@/lib/cinette-destination";
@@ -535,7 +535,7 @@ export const PlayerView = () => {
 									confirmCast(
 										tv.name,
 										tv.kind === "airplay"
-											? airplayConvertWarning(mac)
+											? airplayConvertWarning(mac, tv.name)
 											: convertWarning(tv.name, keep)
 									),
 						stopLocal: moveTo,
@@ -1563,6 +1563,7 @@ export const PlayerView = () => {
 			{airplay.available && (
 				<AirPlayButton
 					onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+					// The AirPlay menu hasn't named a TV yet.
 					warning={airplayConvertWarning(mac)}
 				/>
 			)}
@@ -1622,7 +1623,7 @@ export const PlayerView = () => {
 			name={castTv.name}
 			label="Google Cast"
 			icon={Cast}
-			failure={(message) => castFailureMessage(castTv.name, message)}
+			failure={(message) => tvFailureMessage(castTv.name, message)}
 			{...episodes}
 			onPlayHere={async (position) => {
 				// The receiver lets go of the stream before mpv opens it, since

@@ -384,23 +384,16 @@ fn turns_the_converters_errors_into_the_players() {
     for (from, to) in cases {
         assert_eq!(HlsError::from(from.clone()), to, "{from:?}");
     }
-    assert_eq!(HlsError::Refused.for_player(), crate::streams::REFUSED);
-    assert_eq!(
-        HlsError::VideoCodec.for_player(),
-        "The TV can't play this video, and this device can't convert it."
-    );
-    assert_eq!(
-        HlsError::Unreachable.for_player(),
-        "Couldn't reach the stream to convert it."
-    );
-    assert_eq!(
-        HlsError::NoNetwork.for_player(),
-        "Connect to Wi-Fi to send this to the TV."
-    );
-    assert_eq!(
-        HlsError::Failed.for_player(),
-        "Couldn't convert the stream on this device."
-    );
+    let codes = [
+        (HlsError::Refused, crate::streams::REFUSED),
+        (HlsError::Unreachable, "streamUnreachable"),
+        (HlsError::VideoCodec, "unsupported"),
+        (HlsError::NoNetwork, "noRoute"),
+        (HlsError::Failed, "converterFailed"),
+    ];
+    for (error, code) in codes {
+        assert_eq!(error.for_player(), code, "{error:?}");
+    }
 }
 
 fn publisher() -> (Publisher, oneshot::Receiver<Result<(), HlsError>>) {

@@ -8,15 +8,9 @@
  * the store keeps the item's resume point while it plays.
  */
 
-import {
-	SUPERSEDED,
-	airplayBlockedMessage,
-	airplayFailureMessage,
-	airplayProgress,
-} from "./airplay";
-import { castFailureMessage } from "./cast";
+import { SUPERSEDED, airplayBlockedMessage, airplayProgress } from "./airplay";
 import type { PlaybackDestination, PlaybackState } from "./destination";
-import { blockerText } from "./device-picker";
+import { blockerText, tvFailureMessage } from "./device-picker";
 import {
 	EMPTY_PROGRESS,
 	PROGRESS_SAVE_INTERVAL,
@@ -83,14 +77,11 @@ export const RELEASE_RETRY_MS = [0, 1000, 2000];
  *  off. */
 export const sentMessage = (target: PlaybackDestination, sent: Sent): string | null => {
 	if (sent.ok || sent.why === "overtaken" || sent.why === "declined") return null;
-	const airplay = target.kind === "airplay";
 	if (sent.why === "blocked")
-		return airplay
+		return target.kind === "airplay"
 			? airplayBlockedMessage(sent.decision)
 			: blockerText(sent.decision.reason, sent.decision.detail);
-	const why = airplay
-		? airplayFailureMessage(sent.error)
-		: castFailureMessage(target.name, sent.error);
+	const why = tvFailureMessage(target.name, sent.error);
 	// A route that failed leaves the TV playing, unless it let go of its
 	// stream to look again. A load that failed played nothing there.
 	const stopped = sent.why === "failed" || sent.released;

@@ -5,12 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type * as Bridge from "@/lib/tauri";
 import type { StreamFormat } from "@/lib/route";
-import {
-	IDLE_NATIVE_STATE,
-	airplayBlockedMessage,
-	airplayFailureMessage,
-	type AirPlayNativeState,
-} from "@/lib/airplay";
+import { IDLE_NATIVE_STATE, airplayBlockedMessage, type AirPlayNativeState } from "@/lib/airplay";
+import { REFUSED_MESSAGE } from "@/lib/device-picker";
 import { NOT_READY } from "@/lib/route-profiles";
 import { makeMovie } from "@/test/detail-fixtures";
 import { fakeDestination } from "@/test/destination-fixtures";
@@ -507,7 +503,7 @@ describe("useAirPlay", () => {
 		await act(async () => {
 			expect(
 				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
-			).toEqual("Couldn't start AirPlay.");
+			).toEqual("Couldn't play it on the TV.");
 		});
 		expect(events.count("airplay://route")).toBe(1);
 		expect(events.count("airplay://picker-closed")).toBe(0);
@@ -757,13 +753,13 @@ describe("useAirPlay's switching", () => {
 
 	it("takes the panel away when the TV never starts", async () => {
 		tauri.airplayGetRoute.mockResolvedValue(tv);
-		tauri.airplayLoad.mockRejectedValue("That stream format is no longer offered");
+		tauri.airplayLoad.mockRejectedValue("streamUnreachable");
 		const { result } = renderHook(() => useAirPlay(true));
 		await flush();
 		await act(async () => {
 			expect(
 				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
-			).toEqual("That stream format is no longer offered Nothing is playing.");
+			).toEqual("Couldn't reach the stream to convert it. Nothing is playing.");
 		});
 		expect(result.current.destination).toBeNull();
 		expect(result.current.state).toBeNull();
@@ -1026,7 +1022,7 @@ describe("useAirPlay converting", () => {
 		await act(async () => {
 			expect(
 				await result.current.send(film, { anchor, stopLocal: async () => {}, confirm })
-			).toEqual(`${airplayFailureMessage("refused")} Nothing is playing.`);
+			).toEqual(`${REFUSED_MESSAGE} Nothing is playing.`);
 		});
 		await flush();
 		expect(result.current.destination).toBeNull();
