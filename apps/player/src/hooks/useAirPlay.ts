@@ -12,7 +12,6 @@ import {
 	AIRPLAY_STATE_EVENT,
 	NOT_PICKED,
 	airplayBlockedMessage,
-	airplayFailureMessage,
 	airplaySender,
 	createAirPlayDestination,
 	type AirPlayBridge,
@@ -20,6 +19,7 @@ import {
 	type AirPlayNativeState,
 	type AirPlayRoute,
 } from "@/lib/airplay";
+import { tvFailureMessage } from "@/lib/device-picker";
 import { destinationStatus, type PlaybackState } from "@/lib/destination";
 import { nowPlaying, ofKind, sentMessage } from "@/lib/now-playing";
 import type { ConverterSupport } from "@/lib/route-profiles";
@@ -277,7 +277,7 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 				if (!sent.ok && airplayPlaying() !== target) target.dispose();
 				return sentMessage(target, sent);
 			};
-			return attempt().catch(airplayFailureMessage);
+			return attempt().catch((e: unknown) => tvFailureMessage("the TV", e));
 		},
 		[route, support]
 	);

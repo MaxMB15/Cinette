@@ -34,18 +34,15 @@ pub enum HlsError {
 }
 
 impl HlsError {
-    /// What the player shows when a conversion doesn't start. A refused
-    /// login is [`REFUSED`], which the player words itself, as it does for
-    /// `get_stream_formats`.
+    /// What the player is told when a conversion doesn't start: the same
+    /// codes a cast answers, which the player words for either TV.
     pub fn for_player(self) -> String {
         match self {
             HlsError::Refused => REFUSED,
-            HlsError::Unreachable => "Couldn't reach the stream to convert it.",
-            HlsError::VideoCodec => {
-                "The TV can't play this video, and this device can't convert it."
-            }
-            HlsError::NoNetwork => "Connect to Wi-Fi to send this to the TV.",
-            HlsError::Failed => "Couldn't convert the stream on this device.",
+            HlsError::Unreachable => "streamUnreachable",
+            HlsError::VideoCodec => "unsupported",
+            HlsError::NoNetwork => "noRoute",
+            HlsError::Failed => "converterFailed",
         }
         .to_string()
     }

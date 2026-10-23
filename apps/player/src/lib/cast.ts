@@ -7,7 +7,7 @@
  * when a cast can't start or ends by itself.
  */
 
-import type { DestinationStatus, PickerEntry } from "@/lib/device-picker";
+import { tvFailureMessage, type DestinationStatus, type PickerEntry } from "@/lib/device-picker";
 import type { RouteDecision } from "@/lib/route";
 import type { CastReceiver, CastReceiverList, CastUpdate } from "@/lib/tauri";
 
@@ -39,26 +39,6 @@ export const castEntries = (
 		status: r.available ? (statuses.get(r.id) ?? "checking") : "unavailable",
 		...(r.available ? {} : { why: "Can't be reached" }),
 	}));
-
-/** What to say when a cast didn't start, from what `castLoad` or the route
- *  rejected with. */
-export const castFailureMessage = (name: string, error: unknown): string => {
-	switch (String(error)) {
-		case "unreachable":
-		case "notFound":
-			return `Couldn't reach ${name}.`;
-		case "refused":
-			return "The provider refused the stream. The login may have expired.";
-		case "noConverter":
-		case "noEncoder":
-		case "unsupported":
-			return `This computer can't convert this stream for ${name}.`;
-		case "noRoute":
-			return `This computer has no network address ${name} can reach.`;
-		default:
-			return `Couldn't play it on ${name}.`;
-	}
-};
 
 /** What to say when a cast to `name` was lost, from why it closed. */
 export const castEndedMessage = (
@@ -107,18 +87,4 @@ export const showsCastButton = (cast: Pick<CastLookout, "receivers">): boolean =
 /** What to say when a control for the receiver failed. Play after a long
  *  pause converts again, so it fails as a cast that didn't start does. */
 export const castControlMessage = (name: string, error: unknown): string =>
-	LOAD_FAILURES.includes(String(error))
-		? castFailureMessage(name, error)
-		: `${name} didn't respond.`;
-
-/** What a load rejects with, which `castFailureMessage` explains. */
-const LOAD_FAILURES = [
-	"unreachable",
-	"notFound",
-	"refused",
-	"noConverter",
-	"noEncoder",
-	"unsupported",
-	"noRoute",
-	"converterFailed",
-];
+	tvFailureMessage(name, error, `${name} didn't respond.`);
