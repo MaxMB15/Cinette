@@ -278,7 +278,8 @@ fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
 }
 
 /// A target that offers what this device carries out, history transfers
-/// and receiving providers, with `blocked` refused.
+/// and receiving providers, under this device's default name, with
+/// `blocked` refused.
 fn new_target(
     key: DeviceKey,
     device_type: DeviceType,
@@ -287,6 +288,7 @@ fn new_target(
 ) -> Target {
     let mut target = Target::new(key, device_type, settings);
     target.offer(true, true);
+    target.name_by_default(super::device::default_name());
     target.block(blocked);
     target
 }

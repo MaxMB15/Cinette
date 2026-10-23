@@ -556,6 +556,25 @@ fn the_discovery_record_holds_nothing_private() {
 }
 
 #[test]
+fn the_systems_name_stands_in_for_the_type_until_the_user_names_it() {
+    let mut net = Net::with_mode(ControlMode::Always);
+    net.target.name_by_default(" Den Mac ");
+    // A name with nothing left keeps the last one.
+    net.target.name_by_default("\u{200B}");
+    assert_eq!(net.target.discovery_record().unwrap().instance, "Den Mac");
+    let phone = net.connect("Phone");
+    assert_eq!(
+        net.clients[phone].controller.peer().unwrap().name,
+        "Den Mac"
+    );
+    net.change_settings(RemoteSettings {
+        device_name: Some("Kitchen".into()),
+        ..net.target.settings().clone()
+    });
+    assert_eq!(net.target.discovery_record().unwrap().instance, "Kitchen");
+}
+
+#[test]
 fn an_undiscoverable_device_refuses_new_connections_and_isnt_advertised() {
     for mode in [ControlMode::Always, ControlMode::Ask] {
         let mut net = Net::new(RemoteSettings {

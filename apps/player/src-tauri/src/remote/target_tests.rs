@@ -209,14 +209,17 @@ async fn advertises_the_cores_record_under_the_device_id() {
     };
     let id = key.device_id().to_string();
     assert_eq!(r.service_type, "_cinette._tcp");
-    assert_eq!(r.instance, "Linux PC");
+    assert_eq!(r.instance, crate::remote::device::default_name());
     assert_eq!(r.host_label, id);
     assert_eq!(r.port, port);
     assert_eq!(r.txt.get_str("id"), Some(id.as_str()));
     assert_eq!(r.txt.get_str("t"), Some("linux-pc"));
     assert_eq!(r.txt.get_str("rc"), Some("1"));
     assert_eq!(r.txt.get_str("v"), Some("1"));
-    assert_eq!(r.txt.get_str("n"), Some("Linux PC"));
+    assert_eq!(
+        r.txt.get_str("n"),
+        Some(crate::remote::device::default_name())
+    );
 }
 
 #[tokio::test]

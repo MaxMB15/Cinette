@@ -593,7 +593,10 @@ describe("RemoteControlSettings", () => {
 
 		fireEvent.click(unblock(2));
 		backendLists();
-		expect(screen.getByText("Blocked devices")).toHaveFocus();
+		const heading = screen.getByText("Blocked devices");
+		expect(heading).toHaveFocus();
+		// It takes focus from code, but isn't a Tab stop.
+		expect(heading).toHaveAttribute("tabindex", "-1");
 	});
 
 	it("moves focus to the row now in the first one's place, not the last", async () => {

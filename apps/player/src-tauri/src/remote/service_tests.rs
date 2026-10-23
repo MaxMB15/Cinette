@@ -14,7 +14,7 @@ use mvp_core::models::playlist::{Provider, ProviderType};
 use mvp_core::remote::catalog::CatalogItem;
 use mvp_core::remote::controller::Event;
 use mvp_core::remote::message::{CloseReason, ErrorCode};
-use mvp_core::remote::settings::{default_name, ControlMode};
+use mvp_core::remote::settings::ControlMode;
 use serde_json::{json, Value};
 use tauri::test::MockRuntime;
 use tauri::Listener;
@@ -165,7 +165,7 @@ async fn starts_with_the_defaults_and_a_saved_key() {
     assert_eq!(view["discoverable"], json!(true));
     assert_eq!(view["remoteControl"], json!("ask"));
     assert_eq!(view["deviceName"], Value::Null);
-    assert_eq!(view["defaultName"], json!(default_name(device_type())));
+    assert_eq!(view["defaultName"], json!(default_name()));
     let key = std::fs::read(running.app.app_dir().join(identity::KEY_FILE)).unwrap();
     let key = DeviceKey::from_private(key.try_into().unwrap());
     assert_eq!(view["deviceId"], json!(key.device_id().to_string()));
@@ -178,7 +178,7 @@ async fn starts_with_the_defaults_and_a_saved_key() {
     }
     let record = running.last_advertised().expect("advertised");
     assert_eq!(record.port, running.port);
-    assert_eq!(record.instance, default_name(device_type()));
+    assert_eq!(record.instance, default_name());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -793,7 +793,7 @@ async fn one_instance_controls_another() {
         consent["code"], verifying["code"],
         "both screens show one code"
     );
-    assert_eq!(consent["name"], json!(default_name(device_type())));
+    assert_eq!(consent["name"], json!(default_name()));
     phase(&mut mac, "pending").await;
     tv.invoke(
         "remote_answer_consent",
@@ -892,7 +892,7 @@ async fn a_new_name_reaches_an_open_session_both_ways() {
     mac.invoke("remote_connect", json!({ "deviceId": tv_id, "link": 1 }))
         .unwrap();
     phase(&mut mac, "connected").await;
-    session_named(&mut tv, default_name(device_type())).await;
+    session_named(&mut tv, default_name()).await;
 
     rename(&mac, "ask", "Kitchen");
     session_named(&mut tv, "Kitchen").await;
