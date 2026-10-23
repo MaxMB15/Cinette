@@ -158,6 +158,10 @@ pub struct PlaybackError {
     /// one, or with this Mac.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub not_picked: bool,
+    /// This device's converter stopped by itself, so starting the
+    /// conversion again might work.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub conversion_stopped: bool,
 }
 
 /// What the frontend shows, in the terms of `PlaybackState`. The frontend
@@ -303,7 +307,7 @@ impl Tracker {
             // The video left the receiver: the TV went off, another device
             // took it, or the user picked this device in Control Center.
             // AVPlayer would carry on here, which Swift stops.
-            self.lost = true;
+            self.lose("the video left the receiver", report.position);
         }
         state.status = match report.status.as_str() {
             "opening" => Status::Opening,
@@ -333,6 +337,15 @@ impl Tracker {
         state
     }
 
+    /// Counts the receiver as lost for good, and logs the first time.
+    fn lose(&mut self, why: &str, position: f64) {
+        // mutants: skip UnaryOperator: It only decides whether a debug line is written, which no test reads.
+        if !self.lost {
+            tracing::debug!("[AirPlay] lost the receiver at {position:.1} s: {why}");
+        }
+        self.lost = true;
+    }
+
     fn error(&self, error: Option<&ReportError>) -> PlaybackError {
         let refused = error
             .and_then(|e| e.http_status)
@@ -348,6 +361,7 @@ impl Tracker {
             code,
             unsupported: error.is_some_and(is_unsupported),
             not_picked: false,
+            conversion_stopped: false,
         }
     }
 
@@ -368,16 +382,28 @@ impl Tracker {
         };
         let waited = now.saturating_duration_since(since);
         if waited >= LOST_AFTER {
-            self.lost = true;
+            self.lose("it waited too long for data", position);
         } else if waited >= RECONNECTING_AFTER && self.ready {
             state.connection = Connection::Reconnecting;
         }
     }
 }
 
+/// Who wants receiver detection, and what it last found.
+#[derive(Debug, Default)]
+struct Detection {
+    /// Turns on less turns off. A player that mounts and one that goes
+    /// each ask, and the commands can run in either order, so this counts
+    /// them instead of taking the last one.
+    users: i64,
+    /// What the backend last said while detection was on.
+    available: Option<bool>,
+}
+
 /// Tauri managed state: the item AirPlay plays, if any.
 #[derive(Default)]
 pub struct AirPlay {
+    detection: Mutex<Detection>,
     /// The tracked item, and the load it came from.
     tracker: Mutex<Option<(u64, Tracker)>>,
     last: Mutex<Option<AirPlayState>>,
@@ -385,6 +411,32 @@ pub struct AirPlay {
 }
 
 impl AirPlay {
+    /// One player wants detection on, or no longer does. Calls `switch`
+    /// with the new setting when that changes, under the lock, so the
+    /// backend gets them in order. Returns what detection last found, for
+    /// a player that turns it on.
+    pub fn set_detection(&self, enabled: bool, switch: impl FnOnce(bool)) -> Option<bool> {
+        let mut detection = lock_or_recover(&self.detection);
+        let was_on = detection.users > 0;
+        detection.users += if enabled { 1 } else { -1 };
+        let on = detection.users > 0;
+        if on != was_on {
+            if !on {
+                detection.available = None;
+            }
+            switch(on);
+        }
+        detection.available.filter(|_| enabled)
+    }
+
+    /// The backend found receivers in reach, or none.
+    pub fn detected(&self, available: bool) {
+        let mut detection = lock_or_recover(&self.detection);
+        if detection.users > 0 {
+            detection.available = Some(available);
+        }
+    }
+
     /// Starts tracking a new item. Returns its load, which the reports
     /// about it carry on a Mac.
     pub fn begin(&self, tracker: Tracker) -> u64 {
@@ -431,12 +483,14 @@ impl AirPlay {
         Some(state)
     }
 
-    /// Stops tracking, with the item in error as `code`.
+    /// Stops tracking, with the item in error as `code`, after this
+    /// device's converter stopped by itself.
     pub fn fail(&self, code: &'static str) -> AirPlayState {
         self.fail_with(PlaybackError {
             code,
             unsupported: false,
             not_picked: false,
+            conversion_stopped: true,
         })
     }
 
@@ -450,6 +504,7 @@ impl AirPlay {
             code: "openFailed",
             unsupported: false,
             not_picked: true,
+            conversion_stopped: false,
         }))
     }
 
@@ -567,13 +622,28 @@ fn start_position(start_at: Option<f64>, live: bool) -> f64 {
     start_at.filter(|_| !live).unwrap_or(0.0)
 }
 
-/// Turns receiver detection on while the player is open. It costs power,
-/// so it's off otherwise.
+/// Turns receiver detection on while a player is open. It costs power, so
+/// it's off otherwise. Each player turns it on and off once, and it stays
+/// on while any player wants it. Turning it on answers what it last found,
+/// or `null` before the backend has said, when an [`EVENT_AVAILABLE`]
+/// follows.
 #[command]
-pub async fn airplay_set_detection(enabled: bool) -> Result<(), String> {
+pub async fn airplay_set_detection<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<Option<bool>, String> {
     backend::ensure()?;
-    backend::set_detection(enabled);
-    Ok(())
+    Ok(app
+        .state::<AirPlay>()
+        .set_detection(enabled, backend::set_detection))
+}
+
+/// Keeps and emits what detection found.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+pub(crate) fn detected<R: Runtime>(app: &AppHandle<R>, available: bool) {
+    tracing::debug!("[AirPlay] receivers in reach: {available}");
+    app.state::<AirPlay>().detected(available);
+    let _ = app.emit(EVENT_AVAILABLE, available);
 }
 
 /// Opens the system route picker, anchored at a rect in the page's CSS

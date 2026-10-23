@@ -189,11 +189,28 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 		};
 		if (!enabled) return leave;
 		let current = true;
+		// Whether a report reached this player, which is newer than the
+		// command's answer, since the two aren't ordered.
+		let heard = false;
 		const unlisten = [
-			listen<boolean>(AIRPLAY_AVAILABLE_EVENT, (e) => setAvailable(e.payload)),
+			listen<boolean>(AIRPLAY_AVAILABLE_EVENT, (e) => {
+				heard = true;
+				setAvailable(e.payload);
+			}),
 			listen<AirPlayRoute | null>(AIRPLAY_ROUTE_EVENT, (e) => setRoute(e.payload)),
 		];
-		void airplaySetDetection(true).catch(() => {});
+		// Detection goes on once the listeners are there, so the backend's
+		// first report isn't missed, and it answers what it last found,
+		// which may never change again while a receiver stays in reach. It
+		// goes on even if a listener failed, since the cleanup always turns
+		// it off, and the backend counts the two.
+		void Promise.allSettled(unlisten)
+			.then(() => airplaySetDetection(true))
+			.then((known) => {
+				// Nothing found yet is no TV in reach, until a report says.
+				if (current && !heard) setAvailable(known === true);
+			})
+			.catch(() => {});
 		void airplayGetRoute()
 			.then((r) => {
 				if (current) setRoute(r);
@@ -206,7 +223,7 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 			.catch(() => {});
 		return () => {
 			current = false;
-			for (const p of unlisten) void p.then((fn) => fn());
+			for (const p of unlisten) void p.then((fn) => fn()).catch(() => {});
 			void airplaySetDetection(false).catch(() => {});
 			leave();
 		};

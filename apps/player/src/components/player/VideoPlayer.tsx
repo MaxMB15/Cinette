@@ -1535,13 +1535,28 @@ export const PlayerView = () => {
 		/>
 	) : undefined;
 
+	/**
+	 * Where a receiver should start the item. Until mpv reaches the start it
+	 * was given, as just after a resume, that start; mpv still reports the
+	 * beginning then. After that, mpv's last known position, which a
+	 * reconnect doesn't reset to 0. A live channel, or an item that hasn't
+	 * got going, starts where the receiver does.
+	 */
+	const sendFrom = (channel: Channel): number | undefined => {
+		if (channel.contentType === "live") return undefined;
+		const pending = progressRef.current.pendingStart;
+		if (pending !== null) return pending;
+		// 0 until mpv has played past the first second.
+		const at = mpv.getLastKnownPosition();
+		return at > 0 ? at : undefined;
+	};
 	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
 	const sendToAirPlay = async (
 		channel: Channel,
 		anchor: DOMRect,
 		confirm: () => Promise<boolean>
 	): Promise<string | null> => {
-		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
+		const startAt = sendFrom(channel);
 		airplayFrom.current = startAt;
 		const result = await airplay.send(channel, {
 			anchor,
@@ -1564,23 +1579,30 @@ export const PlayerView = () => {
 	const sendToCast = (receiverId: string, channel: Channel): Promise<void> =>
 		cast
 			.send(receiverId, channel, {
-				startAt: mpv.state.duration > 0 ? mpv.state.position : undefined,
+				startAt: sendFrom(channel),
 				stopLocal,
 			})
 			.then((why) => setNotice(afterCast(why)));
-	const castSlot =
-		airplay.available && activeChannel && !tv ? (
-			<AirPlayButton
-				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
-				warning={airplayConvertWarning(mac)}
-			/>
-		) : showsCastButton(cast) && activeChannel && !tv ? (
-			<CastButton
-				cast={cast}
-				channel={activeChannel}
-				onSend={(id) => sendToCast(id, activeChannel)}
-			/>
-		) : undefined;
+	// Each kind of receiver has its own button, and a Mac can show both:
+	// AirPlay while an AirPlay TV is in reach, and Cast once it has found a
+	// Cast receiver. The controls that hold them only show while no TV plays.
+	const castSlot = activeChannel ? (
+		<>
+			{airplay.available && (
+				<AirPlayButton
+					onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+					warning={airplayConvertWarning(mac)}
+				/>
+			)}
+			{showsCastButton(cast) && (
+				<CastButton
+					cast={cast}
+					channel={activeChannel}
+					onSend={(id) => sendToCast(id, activeChannel)}
+				/>
+			)}
+		</>
+	) : undefined;
 
 	const castTv = cast.destination;
 	const airplayTv = airplay.destination;

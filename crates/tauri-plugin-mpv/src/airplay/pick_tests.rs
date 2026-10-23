@@ -17,6 +17,7 @@ fn stays_muted_until_the_video_is_on_a_receiver() {
         not_picked: false,
         ready_after: None,
         reached_after: None,
+        changed: false,
     };
     assert_eq!(step(&mut pick, false, false, now), quiet);
     let ready = Step {
@@ -43,6 +44,7 @@ fn mutes_and_pauses_once_when_the_video_leaves_the_receiver() {
             not_picked: false,
             ready_after: None,
             reached_after: None,
+            changed: true,
         }
     );
     // Only the change pauses, so a play while it's gone stays quiet,
@@ -56,6 +58,7 @@ fn mutes_and_pauses_once_when_the_video_leaves_the_receiver() {
             not_picked: false,
             ready_after: None,
             reached_after: None,
+            changed: false,
         }
     );
     // Back on the receiver, it's heard there again.
@@ -113,4 +116,15 @@ fn times_the_load_to_ready_and_to_the_receiver_once_each() {
         )
         .not_picked
     );
+}
+
+#[test]
+fn says_each_time_the_video_goes_to_or_leaves_the_receiver() {
+    let now = Instant::now();
+    let mut pick = Pick::loaded(now);
+    let changes: Vec<bool> = [false, false, true, true, false, false, true]
+        .into_iter()
+        .map(|external| step(&mut pick, true, external, now).changed)
+        .collect();
+    assert_eq!(changes, [false, false, true, false, true, false, true]);
 }

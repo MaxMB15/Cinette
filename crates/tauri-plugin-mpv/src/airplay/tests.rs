@@ -136,6 +136,7 @@ fn a_failure_before_the_item_is_ready_is_open_failed() {
             code: "openFailed",
             unsupported: false,
             not_picked: false,
+            conversion_stopped: false,
         })
     );
 }
@@ -426,7 +427,10 @@ fn route_ids_carry_the_uid() {
 fn every_command_fails_where_there_is_no_airplay() {
     let app = TestApp::new();
     let unavailable = Err(UNAVAILABLE.to_string());
-    assert_eq!(block_on(airplay_set_detection(true)), unavailable);
+    assert_eq!(
+        block_on(airplay_set_detection(app.handle(), true)),
+        Err(UNAVAILABLE.to_string())
+    );
     assert_eq!(block_on(airplay_choose(0.0, 0.0, 10.0, 10.0)), unavailable);
     assert_eq!(block_on(airplay_get_route()), Err(UNAVAILABLE.to_string()));
     assert_eq!(block_on(airplay_play()), unavailable);
@@ -467,7 +471,11 @@ fn every_command_fails_where_there_is_no_airplay() {
 fn on_a_mac_the_commands_queue_their_work_and_track_the_item() {
     let app = TestApp::new();
     let handle = app.handle();
-    assert_eq!(block_on(airplay_set_detection(true)), Ok(()));
+    // Nothing found yet: the backend says so with an event.
+    assert_eq!(
+        block_on(airplay_set_detection(handle.clone(), true)),
+        Ok(None)
+    );
     assert_eq!(block_on(airplay_choose(0.0, 0.0, 10.0, 10.0)), Ok(()));
     // Nothing was picked.
     assert_eq!(block_on(airplay_get_route()), Ok(None));
@@ -564,6 +572,7 @@ fn a_failed_conversion_ends_the_item_where_it_was() {
             code: "refused",
             unsupported: false,
             not_picked: false,
+            conversion_stopped: true,
         })
     );
     // Everything else stays as AVPlayer last had it.
@@ -587,6 +596,7 @@ fn a_failure_with_nothing_tracked_starts_from_idle() {
                 code: "failed",
                 unsupported: false,
                 not_picked: false,
+                conversion_stopped: true,
             }),
             ..AirPlayState::idle()
         }
@@ -602,7 +612,10 @@ fn emits_a_failed_conversion() {
     fail_converted(&handle, "failed");
     let state = events.wait_for(EVENT_STATE);
     assert_eq!(state["status"], json!("error"));
-    assert_eq!(state["error"], json!({ "code": "failed" }));
+    assert_eq!(
+        state["error"],
+        json!({ "code": "failed", "conversionStopped": true })
+    );
 }
 
 #[test]
@@ -619,6 +632,7 @@ fn a_receiver_that_never_took_the_video_ends_the_item_as_not_picked() {
             code: "openFailed",
             unsupported: false,
             not_picked: true,
+            conversion_stopped: false,
         })
     );
     assert_eq!(state.position, opening.position);
@@ -760,4 +774,65 @@ fn emits_the_state_of_a_report_given_as_it_is() {
     handle(&app_handle, &report("playing"), Instant::now());
     let state = events.wait_for(EVENT_STATE);
     assert_eq!(state["status"], json!("playing"));
+}
+
+#[test]
+fn detection_stays_on_while_any_player_wants_it_in_any_order() {
+    let airplay = AirPlay::default();
+    let switched = std::cell::RefCell::new(Vec::new());
+    let set = |enabled| airplay.set_detection(enabled, |on| switched.borrow_mut().push(on));
+    // One player opens, then the next opens before the first's off lands.
+    set(true);
+    set(true);
+    set(false);
+    assert_eq!(*switched.borrow(), [true]);
+    // The off of a player that went, landing before the on of the next.
+    set(false);
+    set(false);
+    set(true);
+    assert_eq!(*switched.borrow(), [true, false]);
+    set(true);
+    assert_eq!(*switched.borrow(), [true, false, true]);
+}
+
+#[test]
+fn a_player_that_turns_detection_on_hears_what_it_last_found() {
+    let airplay = AirPlay::default();
+    let ignore = |_| {};
+    // Before the backend said anything.
+    assert_eq!(airplay.set_detection(true, ignore), None);
+    airplay.detected(true);
+    // The next player gets it at once, without waiting for a change.
+    assert_eq!(airplay.set_detection(true, ignore), Some(true));
+    // Turning off answers nothing.
+    assert_eq!(airplay.set_detection(false, ignore), None);
+    airplay.detected(false);
+    assert_eq!(airplay.set_detection(true, ignore), Some(false));
+    // Off for everyone forgets it, and what comes while it's off isn't kept.
+    airplay.set_detection(false, ignore);
+    airplay.set_detection(false, ignore);
+    airplay.detected(true);
+    assert_eq!(airplay.set_detection(true, ignore), None);
+    // An on that still leaves it off, after an off that came early, has
+    // nothing to tell either.
+    let airplay = AirPlay::default();
+    airplay.set_detection(true, ignore);
+    airplay.detected(true);
+    airplay.set_detection(false, ignore);
+    airplay.set_detection(false, ignore);
+    assert_eq!(airplay.set_detection(true, ignore), None);
+}
+
+#[test]
+fn emits_and_keeps_what_detection_found() {
+    let app = TestApp::new();
+    let events = app.record(&[EVENT_AVAILABLE]);
+    let handle = app.handle();
+    handle.state::<AirPlay>().set_detection(true, |_| {});
+    detected(&handle, true);
+    assert_eq!(events.wait_for(EVENT_AVAILABLE), json!(true));
+    assert_eq!(
+        handle.state::<AirPlay>().set_detection(true, |_| {}),
+        Some(true)
+    );
 }

@@ -25,9 +25,7 @@
 
 use super::pick::Pick;
 use super::reading::{failed_report, finite, http_status, is_numeric};
-use super::{
-    handle_from, Report, ReportError, Route, EVENT_AVAILABLE, EVENT_PICKER_CLOSED, EVENT_ROUTE,
-};
+use super::{handle_from, Report, ReportError, Route, EVENT_PICKER_CLOSED, EVENT_ROUTE};
 use crate::lock::lock_or_recover;
 use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 use objc2::rc::Retained;
@@ -96,9 +94,7 @@ pub fn ensure() -> Result<(), String> {
 pub fn install<R: Runtime>(app: &AppHandle<R>) {
     let sink_app = app.clone();
     let sink: Sink = Box::new(move |callback| match callback {
-        Callback::Available(available) => {
-            let _ = sink_app.emit(EVENT_AVAILABLE, available);
-        }
+        Callback::Available(available) => super::detected(&sink_app, available),
         Callback::Route(route) => {
             *lock_or_recover(&ROUTE) = route.clone();
             let _ = sink_app.emit(EVENT_ROUTE, route);
@@ -479,6 +475,13 @@ impl Host {
             tracing::debug!(
                 "[AirPlay] the item was ready {} ms after the load",
                 after.as_millis()
+            );
+        }
+        if step.changed {
+            tracing::debug!(
+                "[AirPlay] external playback {} at {:.1} s",
+                if external { "on" } else { "off" },
+                finite(unsafe { player.currentTime().seconds() })
             );
         }
         if let Some(after) = step.reached_after {
