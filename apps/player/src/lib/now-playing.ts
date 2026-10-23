@@ -160,6 +160,7 @@ export const createNowPlaying = ({
 		// TV that would start converting only now doesn't.
 		void send(destination, next, {
 			stopLocal: async () => {},
+			// Stryker disable next-line ArrowFunction: An answer of undefined declines as false does.
 			confirm: destination.converted?.() ? undefined : async () => false,
 		});
 	};

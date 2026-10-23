@@ -583,6 +583,10 @@ describe("createNowPlaying", () => {
 			const play = vi.fn();
 			store.setUpNext(upNext({ play }));
 			await store.send(target, ep1, opts());
+			// Still playing it, or at an end that names no item, isn't its end.
+			target.set(playbackState({ item: ended(ep1).item }));
+			target.set(playbackState({ status: "ended", item: null }));
+			expect(play).not.toHaveBeenCalled();
 			target.set(ended(ep1));
 			target.set(ended(ep1));
 			expect(play).toHaveBeenCalledTimes(1);
