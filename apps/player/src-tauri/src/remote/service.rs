@@ -839,7 +839,7 @@ impl<R: Runtime> TargetHost for TauriHost<R> {
             self.loading.leave(gate);
             let episodes = episodes?;
             let providers = super::catalog::read(&state.cache, |c| c.get_providers())?;
-            return super::catalog::episode_page(&providers, &episodes, cursor, limit);
+            return super::catalog::episode_page(&providers, &series_id, &episodes, cursor, limit);
         }
         super::catalog::answer(&state.cache, query)
     }

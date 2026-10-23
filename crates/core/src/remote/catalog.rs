@@ -37,6 +37,11 @@ pub struct CatalogItem {
     /// What's on now, for a live channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub now_playing: Option<String>,
+    /// For an episode, the `itemId` of its series, the one `catalog.episodes`
+    /// takes, so a controller can list the episodes around it. Only for
+    /// episodes, and never a URL. Older targets leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_id: Option<String>,
 }
 
 impl CatalogItem {
@@ -58,6 +63,7 @@ impl CatalogItem {
             season: channel.season,
             episode: channel.episode,
             now_playing: None,
+            series_id: None,
         }
     }
 }

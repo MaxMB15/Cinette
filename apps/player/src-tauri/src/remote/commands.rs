@@ -112,8 +112,13 @@ fn finite(value: f64) -> f64 {
 
 impl PlayerState {
     /// The snapshot controllers get. `provider_hosts` decide which logos
-    /// can go.
-    pub fn into_snapshot(self, provider_hosts: &[String]) -> PlaybackSnapshot {
+    /// can go. `series_of` finds an episode's series, which the item names
+    /// so a controller can find the episodes around it.
+    pub fn into_snapshot(
+        self,
+        provider_hosts: &[String],
+        series_of: impl FnOnce(&str) -> Option<String>,
+    ) -> PlaybackSnapshot {
         let item = self.item.map(|i| {
             let mut hosts = provider_hosts.to_vec();
             hosts.extend(i.stream_hosts.iter().map(|h| h.to_ascii_lowercase()));
@@ -129,6 +134,10 @@ impl PlayerState {
                 ..Channel::default()
             };
             let mut item = mvp_core::remote::catalog::CatalogItem::from_channel(&channel, &hosts);
+            // Only an episode has a series.
+            if channel.content_type == "series" {
+                item.series_id = series_of(&channel.id);
+            }
             if item
                 .logo
                 .as_deref()
@@ -390,7 +399,13 @@ pub async fn remote_set_state<R: Runtime>(
     {
         let service = imp::service(&app)?;
         let hosts = imp::provider_hosts(&app);
-        service.handle.set_state(state.into_snapshot(&hosts));
+        let series_of = |episode: &str| {
+            use tauri::Manager;
+            let state = app.state::<crate::commands::AppState>();
+            let cache = state.cache.lock().ok()?;
+            cache.series_of_episode(episode).ok().flatten()
+        };
+        service.handle.set_state(state.into_snapshot(&hosts, series_of));
         Ok(())
     }
     #[cfg(not(remote))]
