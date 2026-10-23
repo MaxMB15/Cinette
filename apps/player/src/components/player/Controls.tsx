@@ -18,6 +18,7 @@ import {
 	Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Menu, MenuItem } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
@@ -125,18 +126,7 @@ export const Controls = ({
 	// Where the bar shows during a drag. Playback carries on underneath.
 	const [dragPos, setDragPos] = useState<number | null>(null);
 	const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
-	const sourceMenuRef = useRef<HTMLDivElement>(null);
 	const hasSourceChoice = !!onSelectSource && (sources?.length ?? 0) > 1;
-
-	// Close the source menu on any click outside it.
-	useEffect(() => {
-		if (!sourceMenuOpen) return;
-		const handle = (e: PointerEvent) => {
-			if (!sourceMenuRef.current?.contains(e.target as Node)) setSourceMenuOpen(false);
-		};
-		window.addEventListener("pointerdown", handle);
-		return () => window.removeEventListener("pointerdown", handle);
-	}, [sourceMenuOpen]);
 
 	// Hiding the controls closes the menu with them.
 	if (!visible && sourceMenuOpen) setSourceMenuOpen(false);
@@ -421,73 +411,69 @@ export const Controls = ({
 						)}
 
 					{hasSourceChoice && (
-						<div className="relative" ref={sourceMenuRef}>
-							<Button
-								variant="ghost"
-								size="icon"
-								className={cn(
-									"text-white hover:bg-white/20",
-									sourceMenuOpen && "bg-white/20"
-								)}
-								onClick={() => setSourceMenuOpen((v) => !v)}
-								aria-label="Source"
-								aria-expanded={sourceMenuOpen}
-								title="Source"
-							>
-								<Layers className="h-5 w-5" />
-							</Button>
-							{sourceMenuOpen && (
-								<div
-									role="menu"
-									className="absolute bottom-full right-0 z-20 mb-2 w-60 max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-black/90 p-1 shadow-xl backdrop-blur-xs"
+						<Menu
+							open={sourceMenuOpen}
+							onOpenChange={setSourceMenuOpen}
+							trigger={(props) => (
+								<Button
+									{...props}
+									variant="ghost"
+									size="icon"
+									className={cn(
+										"text-white hover:bg-white/20",
+										sourceMenuOpen && "bg-white/20"
+									)}
+									aria-label="Source"
+									title="Source"
 								>
-									<p className="px-2.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-white/40">
-										Source
-									</p>
-									{sources!.map((url, idx) => {
-										const active = url === currentSource;
-										const detail = describeSource(url);
-										return (
-											<button
-												key={url}
-												role="menuitemradio"
-												aria-checked={active}
-												onClick={() => {
-													setSourceMenuOpen(false);
-													if (!active) onSelectSource!(url);
-												}}
-												className={cn(
-													"flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-white hover:bg-white/10",
-													active && "bg-white/10"
-												)}
-											>
-												<span className="w-3.5 shrink-0">
-													{active && (
-														<Check className="h-3.5 w-3.5 text-blue-400" />
-													)}
-												</span>
-												<span className="min-w-0 flex-1">
-													<span className="block text-xs font-medium">
-														Source {idx + 1}
-														{idx === 0 && (
-															<span className="text-white/40 font-normal">
-																{" "}
-																(default)
-															</span>
-														)}
-													</span>
-													{detail && (
-														<span className="block truncate text-[10px] text-white/50">
-															{detail}
-														</span>
-													)}
-												</span>
-											</button>
-										);
-									})}
-								</div>
+									<Layers className="h-5 w-5" />
+								</Button>
 							)}
-						</div>
+							className="bottom-full right-0 mb-2 w-60 max-h-72 border border-white/10 bg-black/90 backdrop-blur-xs"
+						>
+							<p className="px-2.5 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-white/40">
+								Source
+							</p>
+							{sources!.map((url, idx) => {
+								const active = url === currentSource;
+								const detail = describeSource(url);
+								return (
+									<MenuItem
+										key={url}
+										checked={active}
+										onSelect={() => {
+											if (!active) onSelectSource!(url);
+										}}
+										className={cn(
+											"text-white hover:bg-white/10 focus-visible:bg-white/10",
+											active && "bg-white/10"
+										)}
+									>
+										<span className="w-3.5 shrink-0">
+											{active && (
+												<Check className="h-3.5 w-3.5 text-blue-400" />
+											)}
+										</span>
+										<span className="min-w-0 flex-1">
+											<span className="block text-xs font-medium">
+												Source {idx + 1}
+												{idx === 0 && (
+													<span className="text-white/40 font-normal">
+														{" "}
+														(default)
+													</span>
+												)}
+											</span>
+											{detail && (
+												<span className="block truncate text-[10px] text-white/50">
+													{detail}
+												</span>
+											)}
+										</span>
+									</MenuItem>
+								);
+							})}
+						</Menu>
 					)}
 
 					{onSubtitles && (
