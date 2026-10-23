@@ -11,6 +11,7 @@
  * for this receiver.
  */
 
+import { createRestarts } from "@/lib/restarts";
 import type {
 	PlaybackCapabilities,
 	PlaybackDestination,
@@ -278,16 +279,7 @@ const FORMAT_FAILED = ["notPlaylist", "cors"];
  */
 export const PAUSE_LIMIT_MS = 10_000;
 
-/**
- * How long a converted stream waits before each try to start it again,
- * after the backend said it has to: at once, then longer each time. After
- * the last try the cast says the stream stopped.
- */
-export const RESTART_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000];
-
-/** How long a stream that started again has to play before its next stop
- *  counts as a first one again. */
-export const STEADY_MS = 60_000;
+export { RESTART_DELAYS_MS, STEADY_MS } from "@/lib/restarts";
 
 /** What `castLoad` rejects with when the provider refused the login, which
  *  trying again won't change. */
@@ -373,9 +365,7 @@ export const createCastDestination = (
 	 *  only the newest load's answer shows. */
 	let newest: object = {};
 	/** The tries to start the stream again since it last ran steadily. */
-	let tries = 0;
-	/** When the stream was first seen playing since it last started. */
-	let playingSince: number | null = null;
+	const restarts = createRestarts(now);
 	/** The highest id of the media the receiver has reported, which a new
 	 *  load's media goes above. */
 	let seenMedia = 0;
@@ -388,7 +378,7 @@ export const createCastDestination = (
 	 *  for. */
 	const resetRestarts = () => {
 		cancelRestart();
-		tries = 0;
+		restarts.reset();
 	};
 	/** `quiet` for a try to start the stream again, which says nothing when
 	 *  it fails, since the next try or giving up does. */
@@ -418,7 +408,7 @@ export const createCastDestination = (
 			media: null,
 		});
 		loaded = { channel, route, formats };
-		playingSince = null;
+		restarts.sent();
 		await backend.castLoad(receiver.id, channel, route, startAt, quiet).catch((e: unknown) => {
 			// The backend stopped what played before it asked for this, so
 			// nothing plays now. A newer load or a stop says for itself.
@@ -447,10 +437,8 @@ export const createCastDestination = (
 		cancelRestart();
 		// A cast that ended stays ended, whatever it played.
 		if (loaded === null || snapshot.phase === "closed") return;
-		if (playingSince !== null && now() - playingSince >= STEADY_MS) tries = 0;
-		if (tries >= RESTART_DELAYS_MS.length) return giveUp("loadFailed");
-		const delay = RESTART_DELAYS_MS[tries];
-		tries += 1;
+		const delay = restarts.nextDelay();
+		if (delay === null) return giveUp("loadFailed");
 		const { channel, route, formats } = loaded;
 		const startAt = channel.contentType === "live" ? undefined : positionNow(state, now());
 		publish({ ...snapshot, loading: true, error: null });
@@ -547,8 +535,7 @@ export const createCastDestination = (
 			if (update.kind === "closed") resetRestarts();
 			const media = snapshot.media;
 			if (media !== null) seenMedia = Math.max(seenMedia, media.mediaSessionId);
-			if (media?.player === "playing" && media.mediaSessionId > oldMedia)
-				playingSince ??= now();
+			if (media?.player === "playing" && media.mediaSessionId > oldMedia) restarts.playing();
 		},
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,
