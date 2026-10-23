@@ -49,7 +49,7 @@ export const Menu = ({ open, onOpenChange, trigger, className, children }: MenuP
 		const items = [...menuRef.current!.querySelectorAll<HTMLElement>(ITEMS)];
 		(items.find((item) => item.getAttribute("aria-checked") === "true") ?? items[0])?.focus();
 		const outside = (e: PointerEvent) => {
-			if (!ref.current?.contains(e.target as Node)) onOpenChangeRef.current(false);
+			if (!ref.current!.contains(e.target as Node)) onOpenChangeRef.current(false);
 		};
 		window.addEventListener("pointerdown", outside);
 		return () => window.removeEventListener("pointerdown", outside);
@@ -59,7 +59,14 @@ export const Menu = ({ open, onOpenChange, trigger, className, children }: MenuP
 		onOpenChange(false);
 		ref.current!.querySelector<HTMLElement>('[aria-haspopup="menu"]')!.focus();
 	};
+	// The keys it handles stay here, away from the player's and a TV
+	// remote's own keys.
 	const onKeyDown = (e: KeyboardEvent) => {
+		// Tab moves on as it would, out of a menu that's done.
+		if (e.key === "Tab") {
+			onOpenChange(false);
+			return;
+		}
 		if (e.key === "Escape") {
 			e.preventDefault();
 			e.stopPropagation();
@@ -80,7 +87,9 @@ export const Menu = ({ open, onOpenChange, trigger, className, children }: MenuP
 							: null;
 		if (to === null) return;
 		e.preventDefault();
-		items[to].focus();
+		e.stopPropagation();
+		// A menu with no items has nowhere to go.
+		items[to]?.focus();
 	};
 	return (
 		<div className="relative" ref={ref}>
@@ -95,7 +104,7 @@ export const Menu = ({ open, onOpenChange, trigger, className, children }: MenuP
 					role="menu"
 					onKeyDown={onKeyDown}
 					className={cn(
-						"absolute z-20 overflow-y-auto rounded-lg p-1 shadow-xl",
+						"absolute z-50 overflow-y-auto rounded-lg p-1 shadow-xl",
 						className
 					)}
 				>

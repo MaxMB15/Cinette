@@ -58,7 +58,7 @@ describe("Menu", () => {
 		expect(screen.queryByRole("menu")).toBeNull();
 		fireEvent.click(trigger());
 		expect(trigger()).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getByRole("menu")).toHaveClass("absolute", "z-20", "w-40");
+		expect(screen.getByRole("menu")).toHaveClass("absolute", "z-50", "w-40");
 		fireEvent.click(trigger());
 		expect(screen.queryByRole("menu")).toBeNull();
 	});
@@ -127,6 +127,60 @@ describe("Menu", () => {
 		expect(outer).not.toHaveBeenCalled();
 		expect(screen.queryByRole("menu")).toBeNull();
 		expect(trigger()).toHaveFocus();
+	});
+
+	it("keeps the keys it handles from the page, and lets the rest through", () => {
+		const outer = vi.fn();
+		render(
+			<div onKeyDown={(e) => outer(e.key)}>
+				<Harness />
+			</div>
+		);
+		fireEvent.click(trigger());
+		for (const key of ["ArrowDown", "ArrowUp", "Home", "End"])
+			fireEvent.keyDown(document.activeElement!, { key });
+		expect(outer).not.toHaveBeenCalled();
+		fireEvent.keyDown(document.activeElement!, { key: "a" });
+		expect(outer).toHaveBeenCalledWith("a");
+	});
+
+	it("closes on Tab and lets it move on", () => {
+		const outer = vi.fn();
+		render(
+			<div onKeyDown={(e) => outer(e.key)}>
+				<Harness />
+			</div>
+		);
+		fireEvent.click(trigger());
+		const tab = fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+		expect(tab).toBe(true);
+		expect(outer).toHaveBeenCalledWith("Tab");
+		expect(screen.queryByRole("menu")).toBeNull();
+	});
+
+	it("opens with no items, and the keys find nothing to move to", () => {
+		const Empty = () => {
+			const [open, setOpen] = useState(false);
+			return (
+				<Menu
+					open={open}
+					onOpenChange={setOpen}
+					trigger={(props) => (
+						<button type="button" {...props}>
+							More
+						</button>
+					)}
+				>
+					<p>Nothing</p>
+				</Menu>
+			);
+		};
+		render(<Empty />);
+		fireEvent.click(trigger());
+		expect(() =>
+			fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" })
+		).not.toThrow();
+		expect(screen.getByRole("menu")).toBeInTheDocument();
 	});
 
 	it("moves between the items with the arrow keys, Home and End, round the ends", () => {

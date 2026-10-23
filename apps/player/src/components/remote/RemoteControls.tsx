@@ -38,6 +38,12 @@ const BUTTON = cn(
 	TOUCH
 );
 
+/** The bar at the top while another device is controlled, and after its
+ *  link ended by itself: one row, opaque, with the tint on top so the page
+ *  doesn't show through. */
+const BAR =
+	"flex min-h-12 items-center gap-2 px-4 py-1.5 border-b border-border bg-card bg-linear-to-r from-primary/10 to-primary/10";
+
 /** A button with only an icon. */
 const ICON_BUTTON = cn("inline-flex items-center justify-center", TOUCH);
 
@@ -350,7 +356,8 @@ export const RemoteBar = () => {
 	// on the next link.
 	const [sendingFor, setSendingFor] = useState<number | null>(null);
 	const [transferringFor, setTransferringFor] = useState<number | null>(null);
-	const [menuOpen, setMenuOpen] = useState(false);
+	// The link the menu was opened for, so it doesn't open by itself on the next.
+	const [menuFor, setMenuFor] = useState<number | null>(null);
 	// The player page has its own Play and Stop for the device.
 	const onPlayer = useLocation().pathname === "/player";
 	// Leaving clears the link here before the backend answers, so this
@@ -385,9 +392,8 @@ export const RemoteBar = () => {
 				role="region"
 				aria-label="Remote control"
 				// One row at any width, like a music app's mini player: the
-				// actions go in a menu on a phone. Opaque, with the tint on
-				// top, so the page doesn't show through.
-				className="flex items-center gap-2 px-4 py-1.5 border-b border-border bg-card bg-linear-to-r from-primary/10 to-primary/10"
+				// actions go in a menu on a phone.
+				className={BAR}
 			>
 				<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
 				<Link
@@ -424,8 +430,8 @@ export const RemoteBar = () => {
 				)}
 				<span className={cn("shrink-0", !onPlayer && "sm:hidden")}>
 					<Menu
-						open={menuOpen}
-						onOpenChange={setMenuOpen}
+						open={menuFor === link.id}
+						onOpenChange={(open) => setMenuFor(open ? link.id : null)}
 						trigger={(props) => (
 							<button
 								{...props}
@@ -463,7 +469,23 @@ export const RemoteBar = () => {
 	return (
 		<>
 			{failed}
-			{text && <Notice message={text} onDismiss={() => setDismissed(ended)} />}
+			{/* In the bar's row, so the page doesn't move until it's dismissed. */}
+			{text && (
+				<div role="status" className={cn(BAR, "text-sm")}>
+					<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
+					<span className="min-w-0 flex-1 truncate" title={text}>
+						{text}
+					</span>
+					<button
+						type="button"
+						aria-label="Dismiss"
+						className={cn(ICON_BUTTON, "shrink-0 p-1 rounded hover:bg-accent")}
+						onClick={() => setDismissed(ended)}
+					>
+						<X className="h-4 w-4" aria-hidden />
+					</button>
+				</div>
+			)}
 		</>
 	);
 };

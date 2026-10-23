@@ -596,7 +596,7 @@ describe("RemoteBar", () => {
 		expect(bar).toHaveClass("flex", "items-center");
 		expect(bar).not.toHaveClass("flex-wrap");
 		// Opaque, so the page under it doesn't show through.
-		expect(bar).toHaveClass("bg-card", "from-primary/10", "to-primary/10");
+		expect(bar).toHaveClass("bg-card", "from-primary/10", "to-primary/10", "min-h-12");
 		const inline = screen.getByRole("button", { name: "Return to independent playback" });
 		expect(inline.parentElement).toHaveClass("hidden", "sm:flex");
 		const more = screen.getByRole("button", { name: "More" });
@@ -637,6 +637,25 @@ describe("RemoteBar", () => {
 		expect(more.parentElement).not.toHaveClass("sm:hidden");
 		fireEvent.click(more);
 		expect(screen.getByRole("menuitem", { name: "Transfer history" })).toBeInTheDocument();
+	});
+
+	it("has only the way back in its menu where the device offers no transfers", () => {
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		render(<RemoteBar />, { wrapper: MemoryRouter });
+		fireEvent.click(screen.getByRole("button", { name: "More" }));
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toStrictEqual([
+			"Return to independent playback",
+		]);
+	});
+
+	it("doesn't open its menu by itself on the next link", () => {
+		control.state = { ...control.state, link: link({ phase: "connected" }) };
+		const { rerender } = render(<RemoteBar />, { wrapper: MemoryRouter });
+		fireEvent.click(screen.getByRole("button", { name: "More" }));
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+		control.state = { ...control.state, link: { ...link({ phase: "connected" }), id: 4 } };
+		rerender(<RemoteBar />);
+		expect(screen.queryByRole("menu")).toBeNull();
 	});
 
 	it("opens the player from what plays there", () => {
@@ -737,9 +756,9 @@ describe("RemoteBar", () => {
 		expect(screen.getByRole("status")).toHaveTextContent(
 			"Living Room disconnected this device."
 		);
-		// It sits at the bottom, below where a raised notice goes.
-		expect(screen.getByRole("status")).toHaveClass("bottom-4");
-		expect(screen.getByRole("status")).not.toHaveClass("bottom-20");
+		// It takes the bar's row, the same height, so nothing moves until
+		// it's dismissed.
+		expect(screen.getByRole("status")).toHaveClass("flex", "min-h-12", "border-b", "bg-card");
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("status")).toBeNull();
 		rerender(<RemoteBar />);
