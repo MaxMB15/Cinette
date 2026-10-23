@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Cast } from "lucide-react";
 import type { PlaybackState } from "@/lib/destination";
 import {
@@ -207,7 +207,11 @@ describe("DestinationView", () => {
 
 	it("has no pickers where it has no tracks to pick", () => {
 		show();
+		expect(screen.queryByRole("group", { name: "Tracks" })).toBeNull();
 		expect(screen.queryByRole("combobox")).toBeNull();
+		cleanup();
+		show(state(), capabilities({ audioTracks: true }));
+		expect(screen.getByRole("group", { name: "Tracks" })).toBeInTheDocument();
 	});
 
 	it("shows no subtitle picked as none, and leaves out pickers it can't use", () => {
@@ -310,6 +314,14 @@ describe("DestinationView", () => {
 		expect(unmute.querySelector(".lucide-volume-2")).toBeNull();
 		fireEvent.click(unmute);
 		expect(destination.setVolume).toHaveBeenLastCalledWith(30);
+	});
+
+	it("unmutes to the level the TV last had, set there or here", () => {
+		const { destination, set } = show(state({ volume: 30 }));
+		set(state({ volume: 70 }));
+		set(state({ volume: 0 }));
+		fireEvent.click(screen.getByRole("button", { name: "Unmute" }));
+		expect(destination.setVolume).toHaveBeenLastCalledWith(70);
 	});
 
 	it("has no button in the middle while it plays where it can't pause", () => {

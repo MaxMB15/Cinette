@@ -78,6 +78,7 @@ export const DestinationView = ({
 		void command().catch((error: unknown) => onFailed(error, seeking));
 	const seekTo = (to: number) =>
 		run(() => destination.seek(Math.min(Math.max(0, to), state.duration)), true);
+	// Stryker disable next-line StringLiteral: It's only how the two pickers look.
 	const select = "max-w-full rounded bg-white/10 px-2 py-1 text-sm pointer-coarse:min-h-11";
 
 	return (
@@ -110,7 +111,11 @@ export const DestinationView = ({
 					</p>
 				)}
 				{!controls.over && (caps.subtitles === "select" || caps.audioTracks) && (
-					<div className="flex max-w-full flex-wrap justify-center gap-2">
+					<div
+						role="group"
+						aria-label="Tracks"
+						className="flex max-w-full flex-wrap justify-center gap-2"
+					>
 						{caps.subtitles === "select" && (
 							<select
 								className={select}
