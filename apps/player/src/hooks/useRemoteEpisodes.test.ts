@@ -6,6 +6,7 @@ import { act, renderHook } from "@testing-library/react";
 import {
 	createCinetteDestination,
 	type CatalogItem,
+	type LinkPhase,
 	type RemoteSnapshot,
 } from "@/lib/cinette-destination";
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
@@ -45,13 +46,18 @@ const snapshot = (item: CatalogItem | null): RemoteSnapshot => ({
 	error: null,
 });
 
-/** A link to a device playing `item`. */
-const linkPlaying = (item: CatalogItem | null, id = 4) => {
+/** A link to a device playing `item`, connected unless `phase` says. */
+const linkPlaying = (
+	item: CatalogItem | null,
+	id = 4,
+	phase: LinkPhase = { phase: "connected" }
+) => {
 	const destination = createCinetteDestination("dev", "Den TV", async () => undefined);
 	destination.receive({ epoch: "e", version: 1, state: snapshot(item) }, 0);
 	let version = 1;
 	return {
 		id,
+		phase,
 		destination,
 		/** The other device plays `next` now. */
 		plays: (next: CatalogItem | null) =>
@@ -154,6 +160,38 @@ describe("useRemoteEpisodes", () => {
 		const { result } = renderHook(() => useRemoteEpisodes(linkPlaying(episode(2))));
 		await flush();
 		expect(result.current).toEqual({ prev: null, next: null });
+	});
+
+	it("has none from the last device while the next one's list comes", async () => {
+		const later = deferred<{ items: CatalogItem[]; next: string | null }>();
+		vi.mocked(remoteCatalog)
+			.mockResolvedValueOnce({ items: [episode(1), episode(2), episode(3)], next: null })
+			.mockReturnValueOnce(later.promise);
+		const { result, rerender } = renderHook(({ link }) => useRemoteEpisodes(link), {
+			initialProps: { link: linkPlaying(episode(2), 4) },
+		});
+		await flush();
+		expect(result.current.next?.id).toBe("e3");
+		// Another device on the same provider, whose ids are the same.
+		rerender({ link: linkPlaying(episode(2), 5) });
+		await flush();
+		expect(result.current).toEqual({ prev: null, next: null });
+		later.resolve({ items: [episode(2), episode(3)], next: null });
+		await flush();
+		expect(result.current).toMatchObject({ prev: null, next: { id: "e3" } });
+	});
+
+	it("waits while the link reconnects, and asks once it's back", async () => {
+		answer({ "s1@": { items: [episode(1), episode(2)], next: null } });
+		const reconnecting: LinkPhase = { phase: "reconnecting", attempt: 1 };
+		const { result, rerender } = renderHook(({ link }) => useRemoteEpisodes(link), {
+			initialProps: { link: linkPlaying(episode(2), 4, reconnecting) },
+		});
+		await flush();
+		expect(remoteCatalog).not.toHaveBeenCalled();
+		rerender({ link: linkPlaying(episode(2), 4) });
+		await flush();
+		expect(result.current.prev?.id).toBe("e1");
 	});
 
 	it("asks the new device when the link changes", async () => {

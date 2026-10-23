@@ -305,6 +305,10 @@ describe("createCinetteDestination", () => {
 		await d.pause();
 		await d.load({ kind: "remote", itemId: "live-1", title: "One" });
 		expect(d.getState().position, "from the start").toBe(0);
+		expect(d.getState().item).not.toHaveProperty("seriesId");
+		// An episode keeps its series, so what's around it stays known.
+		await d.load({ kind: "remote", itemId: "e2", title: "Two", seriesId: "s9" });
+		expect(d.getState().item).toMatchObject({ ref: "e2", seriesId: "s9" });
 		d.receive(versioned(snapshot(), 2), 10);
 		expect(d.getState().item?.ref).toBe("live-7");
 	});

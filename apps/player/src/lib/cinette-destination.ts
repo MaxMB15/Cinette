@@ -20,10 +20,10 @@ import { UnsupportedError } from "@/lib/destination";
 import type { RemoteCommand } from "@/lib/remote-target";
 import type { Channel } from "@/lib/types";
 
-/** One item of the other device's catalog. */
 /** Catalog items asked for in one page. */
 export const CATALOG_PAGE = 100;
 
+/** One item of the other device's catalog. */
 export interface CatalogItem {
 	id: string;
 	name: string;
@@ -281,7 +281,13 @@ export const createCinetteDestination = (
 				...snapshot,
 				status: "opening",
 				// Stryker disable next-line StringLiteral: an empty type reads as live too, and the group shows nowhere.
-				item: { id: item.itemId, name: item.title, contentType: "live", group: "" },
+				item: {
+					id: item.itemId,
+					name: item.title,
+					contentType: "live",
+					group: "",
+					seriesId: item.seriesId,
+				},
 				position: startAt ?? 0,
 				duration: 0,
 				subtitles: [],

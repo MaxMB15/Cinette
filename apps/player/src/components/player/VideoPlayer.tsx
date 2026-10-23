@@ -1256,24 +1256,26 @@ export const PlayerView = () => {
 		if (!fullscreenButton && isFullscreen) setFullscreen(false);
 	}, [fullscreenButton, isFullscreen, setFullscreen]);
 
-	const playRemote = (item: CatalogItem) =>
-		void remoteLink?.destination
-			.load({ kind: "remote", itemId: item.id, title: item.name })
+	/** Plays `item` of the other device's catalog there. */
+	const playOn = (device: PlaybackDestination, item: CatalogItem) =>
+		void device
+			.load({ kind: "remote", itemId: item.id, title: item.name, seriesId: item.seriesId })
 			.catch((error: unknown) => reportFailure(error, false));
-	// The episodes around the one that plays, which a TV's view and the keys
-	// go to: another Cinette device's, from its catalog, or this player's.
+	// The episodes around the one that plays, which the controls, a TV's view
+	// and the keys go to: another Cinette device's, from its catalog, or this
+	// player's.
 	const { prev: remotePrev, next: remoteNext } = remoteEpisodes;
-	const tvEpisodes =
+	const episodes =
 		tv?.kind === "cinette"
 			? {
-					onPrevEpisode: remotePrev ? () => playRemote(remotePrev) : undefined,
-					onNextEpisode: remoteNext ? () => playRemote(remoteNext) : undefined,
+					onPrevEpisode: remotePrev ? () => playOn(tv, remotePrev) : undefined,
+					onNextEpisode: remoteNext ? () => playOn(tv, remoteNext) : undefined,
 				}
 			: {
 					onPrevEpisode: prevEpisode ? () => playEpisode(prevEpisode) : undefined,
 					onNextEpisode: nextEpisode ? () => playEpisode(nextEpisode) : undefined,
 				};
-	const tvEpisodesRef = useLatestRef(tvEpisodes);
+	const episodesRef = useLatestRef(episodes);
 
 	// --- Keyboard ---
 	const flashOsd = useCallback((text: string) => {
@@ -1330,16 +1332,10 @@ export const PlayerView = () => {
 			if (e.repeat && !repeatsWhenHeld(action)) return;
 
 			// While the TV plays, the keys drive it, and nothing starts here. The
-			// next or previous episode goes there too.
+			// next or previous episode goes where the controls send it, there too.
 			const tv = tvRef.current;
-			if (tv && (action.type === "nextEpisode" || action.type === "prevEpisode")) {
-				const episodes = tvEpisodesRef.current;
-				(action.type === "nextEpisode"
-					? episodes.onNextEpisode
-					: episodes.onPrevEpisode)?.();
-				return;
-			}
-			if (tv) {
+			const episode = action.type === "nextEpisode" || action.type === "prevEpisode";
+			if (tv && !episode) {
 				const key = airplayKey(action, tv.getState(), tv.capabilities, performance.now());
 				const failed = (seeking: boolean) => (error: unknown) =>
 					reportFailureRef.current(error, seeking);
@@ -1391,10 +1387,10 @@ export const PlayerView = () => {
 					break;
 				}
 				case "nextEpisode":
-					if (nextEpisode) playEpisode(nextEpisode);
+					episodesRef.current.onNextEpisode?.();
 					break;
 				case "prevEpisode":
-					if (prevEpisode) playEpisode(prevEpisode);
+					episodesRef.current.onPrevEpisode?.();
 					break;
 				case "toggleSubtitles":
 					if (canShowSubtitles) setShowSubtitlePicker((v) => !v);
@@ -1431,7 +1427,7 @@ export const PlayerView = () => {
 			mpv,
 			playback,
 			tvRef,
-			tvEpisodesRef,
+			episodesRef,
 			reportFailureRef,
 			pendingResume,
 			castConfirm,
@@ -1444,9 +1440,6 @@ export const PlayerView = () => {
 			subtitleEditMode,
 			toggleFullscreen,
 			flashOsd,
-			nextEpisode,
-			prevEpisode,
-			playEpisode,
 			canShowSubtitles,
 			hasInfo,
 			flushProgress,
@@ -1575,7 +1568,6 @@ export const PlayerView = () => {
 			.catch(() => failed("Couldn't play it on this device."));
 	};
 	const shared = { touchLayout: touchDevice, skip, onFailed: reportFailure };
-	// An episode picked on a TV's view goes to that TV.
 	const destinationView = airplayTv ? (
 		<DestinationView
 			{...shared}
@@ -1583,7 +1575,7 @@ export const PlayerView = () => {
 			name={airplayTv.name}
 			label="AirPlay"
 			icon={Airplay}
-			{...tvEpisodes}
+			{...episodes}
 			onPlayHere={async (position, anchor) => {
 				// AirPlay lets go of the stream before mpv opens it, since many
 				// accounts allow one connection at a time.
@@ -1609,7 +1601,7 @@ export const PlayerView = () => {
 			label="Google Cast"
 			icon={Cast}
 			failure={(message) => castFailureMessage(castTv.name, message)}
-			{...tvEpisodes}
+			{...episodes}
 			onPlayHere={async (position) => {
 				// The receiver lets go of the stream before mpv opens it, since
 				// many accounts allow one connection at a time.
@@ -1629,7 +1621,7 @@ export const PlayerView = () => {
 			name={remoteLink.name}
 			label="Cinette device"
 			icon={MonitorSmartphone}
-			{...tvEpisodes}
+			{...episodes}
 			// It stops there, and this page goes back to that device's catalog.
 			onStop={() =>
 				void remoteLink.destination.stop().then(
@@ -1850,8 +1842,7 @@ export const PlayerView = () => {
 					onToggleMute={mpv.toggleMute}
 					onFullscreen={fullscreenButton ? toggleFullscreen : undefined}
 					onInfo={hasInfo ? () => setShowInfoDrawer(true) : undefined}
-					onPrevEpisode={prevEpisode ? () => playEpisode(prevEpisode) : undefined}
-					onNextEpisode={nextEpisode ? () => playEpisode(nextEpisode) : undefined}
+					{...episodes}
 					autoplay={autoplay}
 					onAutoplayChange={setAutoplay}
 					hasSubtitles={selectedSubtitleId !== null}

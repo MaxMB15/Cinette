@@ -21,7 +21,10 @@ export type CatalogSource = { kind: "local" } | { kind: "remote"; deviceId: stri
  * here only by its id, never by a URL.
  */
 export type PlaybackItem =
-	{ kind: "local"; channel: Channel } | { kind: "remote"; itemId: string; title: string };
+	| { kind: "local"; channel: Channel }
+	/** An item of another device's catalog, with its series for an
+	 *  episode, where that device names it. */
+	| { kind: "remote"; itemId: string; title: string; seriesId?: string };
 
 export type PlaybackStatus =
 	"idle" | "opening" | "playing" | "paused" | "buffering" | "ended" | "error";

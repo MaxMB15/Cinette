@@ -138,10 +138,11 @@ describe("episodeNeighbors", () => {
 		expect(episodeNeighbors(list, -1)).toEqual({ prev: null, next: null });
 	});
 
-	it("tells unnumbered episodes apart by id", () => {
+	it("tells unnumbered episodes apart by id, past another entry with the same one", () => {
 		const items = [{ id: "x" }, { id: "y" }, { id: "x" }];
 		expect(episodeNeighbors(items, 1)).toEqual({ prev: items[0], next: items[2] });
-		expect(episodeNeighbors(items, 0)).toEqual({ prev: null, next: items[1] });
+		const twice = [{ id: "x" }, { id: "x" }, { id: "y" }];
+		expect(episodeNeighbors(twice, 0)).toEqual({ prev: null, next: twice[2] });
 	});
 
 	it("works on another device's catalog items", () => {

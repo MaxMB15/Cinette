@@ -7,9 +7,13 @@ import { render, screen, fireEvent, act, waitFor, within } from "@testing-librar
 vi.mock("@/lib/tauri", () => ({ remoteCatalog: vi.fn() }));
 
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
-import { RemoteCatalog, PAGE, SEARCH_DELAY_MS, episodeLabel, groupName } from "./RemoteCatalog";
+import { RemoteCatalog, SEARCH_DELAY_MS, episodeLabel, groupName } from "./RemoteCatalog";
 import { deferred } from "@/test/deferred";
-import { createCinetteDestination, type CatalogItem } from "@/lib/cinette-destination";
+import {
+	CATALOG_PAGE,
+	createCinetteDestination,
+	type CatalogItem,
+} from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 
 const item = (id: string, name: string, extra: Partial<CatalogItem> = {}): CatalogItem => ({
@@ -43,14 +47,14 @@ const answer = (pages: Record<string, { items: CatalogItem[]; next: string | nul
 	});
 
 const groups = (contentType: string, cursor?: string) =>
-	JSON.stringify({ kind: "groups", contentType, cursor, limit: PAGE });
+	JSON.stringify({ kind: "groups", contentType, cursor, limit: CATALOG_PAGE });
 const episodes = (seriesId: string, cursor?: string) =>
-	JSON.stringify({ kind: "episodes", seriesId, cursor, limit: PAGE });
+	JSON.stringify({ kind: "episodes", seriesId, cursor, limit: CATALOG_PAGE });
 const groupItems = (group: string, cursor?: string) =>
 	JSON.stringify(
 		cursor === undefined
-			? { kind: "items", contentType: "live", group, limit: PAGE }
-			: { kind: "items", contentType: "live", group, cursor, limit: PAGE }
+			? { kind: "items", contentType: "live", group, limit: CATALOG_PAGE }
+			: { kind: "items", contentType: "live", group, cursor, limit: CATALOG_PAGE }
 	);
 
 beforeEach(() => {
@@ -273,13 +277,19 @@ describe("RemoteCatalog", () => {
 			if (q.kind === "episodes")
 				return {
 					items: [
-						item("ep-1", "Pilot", { contentType: "series", season: 1, episode: 1 }),
+						item("ep-1", "Pilot", {
+							contentType: "series",
+							season: 1,
+							episode: 1,
+							seriesId: "series-1",
+						}),
 					],
 					next: null,
 				};
 			throw new Error("unexpected");
 		});
-		render(<RemoteCatalog link={link()} />);
+		const l = link();
+		render(<RemoteCatalog link={l} />);
 		fireEvent.click(screen.getByRole("button", { name: "Series" }));
 		fireEvent.click(await screen.findByRole("button", { name: "Drama" }));
 		fireEvent.click(await screen.findByRole("button", { name: "The Show" }));
@@ -288,13 +298,20 @@ describe("RemoteCatalog", () => {
 		expect(remoteCatalog).toHaveBeenCalledWith(9, JSON.parse(episodes("series-1")));
 		fireEvent.click(episode);
 		await waitFor(() => expect(send).toHaveBeenCalledWith({ action: "load", itemId: "ep-1" }));
+		// It names its series, so the player can offer the episodes around it.
+		await waitFor(() =>
+			expect(l.destination.getState().item).toMatchObject({
+				ref: "ep-1",
+				seriesId: "series-1",
+			})
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Back" }));
 		expect(await screen.findByRole("button", { name: "The Show" })).toBeInTheDocument();
 		expect(remoteCatalog).toHaveBeenLastCalledWith(9, {
 			kind: "items",
 			contentType: "series",
 			group: "Drama",
-			limit: PAGE,
+			limit: CATALOG_PAGE,
 		});
 	});
 
@@ -318,7 +335,7 @@ describe("RemoteCatalog", () => {
 			kind: "search",
 			query: "bbc",
 			contentType: "live",
-			limit: PAGE,
+			limit: CATALOG_PAGE,
 		});
 		await act(async () => {});
 		expect(screen.getByRole("heading"), "the results come from every group").toHaveTextContent(
@@ -444,7 +461,7 @@ describe("RemoteCatalog", () => {
 			expect(remoteCatalog).toHaveBeenLastCalledWith(9, {
 				kind: "groups",
 				contentType: "movie",
-				limit: PAGE,
+				limit: CATALOG_PAGE,
 			})
 		);
 		fireEvent.click(screen.getByRole("button", { name: "Live" }));
@@ -452,12 +469,12 @@ describe("RemoteCatalog", () => {
 			expect(remoteCatalog).toHaveBeenLastCalledWith(9, {
 				kind: "groups",
 				contentType: "live",
-				limit: PAGE,
+				limit: CATALOG_PAGE,
 			})
 		);
 		expect(vi.mocked(remoteCatalog).mock.calls[0]).toEqual([
 			9,
-			{ kind: "groups", contentType: "live", limit: PAGE },
+			{ kind: "groups", contentType: "live", limit: CATALOG_PAGE },
 		]);
 	});
 

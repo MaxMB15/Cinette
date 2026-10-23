@@ -5098,33 +5098,67 @@ describe("another Cinette device", () => {
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
 	});
 
-	it("goes to the episode before or after there, by button or key", async () => {
-		const episode = (n: number): CatalogItem => ({
-			id: `e${n}`,
-			name: `Episode ${n}`,
-			contentType: "series",
-			group: "Drama",
-			season: 1,
-			episode: n,
-			seriesId: "s9",
-		});
+	/** An episode of the series s9 on the other device. */
+	const episode = (n: number): CatalogItem => ({
+		id: `e${n}`,
+		name: `Episode ${n}`,
+		contentType: "series",
+		group: "Drama",
+		season: 1,
+		episode: n,
+		seriesId: "s9",
+	});
+
+	/** The player, with the link to a device playing episode 2 of three. */
+	const playingEpisodeTwo = async () => {
 		vi.mocked(tauri.remoteCatalog).mockResolvedValue({
 			items: [episode(3), episode(1), episode(2)],
 			next: null,
 		});
 		renderPlayer(null);
 		await flush();
-		const { link, send } = linkTo(undefined, undefined, episode(2));
-		act(() => fakeRemote.set(link));
+		const linked = linkTo(undefined, undefined, episode(2));
+		act(() => fakeRemote.set(linked.link));
 		await flush();
+		return linked;
+	};
+
+	it("goes to the episode before or after there, by button or key", async () => {
+		const { send } = await playingEpisodeTwo();
 		expect(tauri.remoteCatalog).toHaveBeenCalledWith(
 			1,
 			expect.objectContaining({ kind: "episodes", seriesId: "s9" })
 		);
 		fireEvent.click(within(panel()!).getByRole("button", { name: "Next episode" }));
 		expect(send).toHaveBeenLastCalledWith({ action: "load", itemId: "e3" });
+		await flush();
+		// It plays episode 3 there now, and the series is still known.
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Previous episode" }));
+		expect(send).toHaveBeenLastCalledWith({ action: "load", itemId: "e2" });
+		await flush();
 		await press("p");
 		expect(send).toHaveBeenLastCalledWith({ action: "load", itemId: "e1" });
+		expect(tauri.remoteCatalog).toHaveBeenCalledTimes(1);
+	});
+
+	it("says when the episode couldn't go to the other device", async () => {
+		const { send } = await playingEpisodeTwo();
+		send.mockRejectedValueOnce("unreachable");
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Next episode" }));
+		await flush();
+		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+	});
+
+	it("does nothing on the episode keys for what has none around it", async () => {
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo();
+		act(() => fakeRemote.set(link));
+		await flush();
+		send.mockClear();
+		await press("n");
+		await press("p");
+		expect(send).not.toHaveBeenCalled();
 	});
 
 	it("has no episode buttons for what names no series", async () => {
