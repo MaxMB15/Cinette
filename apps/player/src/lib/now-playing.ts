@@ -139,6 +139,7 @@ export const createNowPlaying = ({
 	let progress: PlaybackProgress = EMPTY_PROGRESS;
 	let ends: SendOptions["ends"];
 	let unfollow = () => {};
+	// Stryker disable next-line BooleanLiteral: With no episodes there's no next one, so autoplay can't matter.
 	let upNext: UpNext = { episodes: [], autoplay: false, play: null };
 
 	const publish = (next: Partial<NowPlayingState>) => {
