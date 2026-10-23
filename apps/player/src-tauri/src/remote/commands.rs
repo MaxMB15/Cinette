@@ -31,7 +31,7 @@ pub struct RemoteSettingsView {
     pub remote_control: ControlMode,
     /// The name the user gave, if any.
     pub device_name: Option<String>,
-    /// The name used when none is given: the device type.
+    /// The name used when none is given: the system's, or the device type.
     pub default_name: String,
     pub device_id: String,
 }
@@ -187,7 +187,7 @@ impl CommandOutcome {
 #[cfg(remote)]
 mod imp {
     use super::*;
-    use crate::remote::device::device_type;
+    use crate::remote::device::default_name;
     use crate::remote::service::SessionEvent;
     use crate::remote::RemoteService;
     use mvp_core::remote::consent::Answer;
@@ -204,7 +204,7 @@ mod imp {
             discoverable: settings.discoverable,
             remote_control: settings.remote_control,
             device_name: settings.device_name,
-            default_name: mvp_core::remote::settings::default_name(device_type()).to_owned(),
+            default_name: default_name().to_owned(),
             device_id: service.device_id().to_string(),
         }
     }

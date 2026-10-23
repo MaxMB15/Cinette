@@ -261,11 +261,12 @@ fn bind_dual_stack(port: u16) -> std::io::Result<std::net::TcpListener> {
     Ok(socket.into())
 }
 
-/// A target that offers what this device carries out: history transfers
-/// and receiving providers.
+/// A target that offers what this device carries out, history transfers
+/// and receiving providers, under this device's default name.
 fn new_target(key: DeviceKey, device_type: DeviceType, settings: RemoteSettings) -> Target {
     let mut target = Target::new(key, device_type, settings);
     target.offer(true, true);
+    target.name_by_default(super::device::default_name());
     target
 }
 

@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Max Boksem. See NOTICE for additional terms under GPLv3 section 7.
 
-//! What kind of device this is, as other devices see it.
+//! What kind of device this is, and its name until the user gives one, as
+//! other devices see them.
 
 use mvp_core::remote::message::DeviceType;
+use mvp_core::remote::settings::{self, clean_name};
+use std::sync::OnceLock;
 
 /// The smallest screen width, in dp, that Android calls a tablet's.
 #[cfg(any(target_os = "android", test))]
@@ -62,6 +65,85 @@ pub fn device_type() -> DeviceType {
         &model_identifier(),
         std::env::var("SIMULATOR_MODEL_IDENTIFIER").ok().as_deref(),
     );
+}
+
+/// This device's name until the user gives it one: the name the system has
+/// for it, or else its type. It's read once, when first asked for.
+pub fn default_name() -> &'static str {
+    static NAME: OnceLock<String> = OnceLock::new();
+    NAME.get_or_init(|| {
+        system_name()
+            .as_deref()
+            .and_then(clean_name)
+            .unwrap_or_else(|| settings::default_name(device_type()).to_owned())
+    })
+}
+
+/// The name the system's settings give this device, where it has one.
+fn system_name() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    return computer_name();
+    #[cfg(target_os = "linux")]
+    return linux_name(
+        std::fs::read_to_string("/etc/machine-info").ok().as_deref(),
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .ok()
+            .as_deref(),
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    None
+}
+
+/// The Mac's computer name, as System Settings, General, About shows it.
+#[cfg(target_os = "macos")]
+fn computer_name() -> Option<String> {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::{CFString, CFStringRef};
+
+    #[link(name = "SystemConfiguration", kind = "framework")]
+    unsafe extern "C" {
+        fn SCDynamicStoreCopyComputerName(
+            store: *const std::ffi::c_void,
+            encoding: *mut u32,
+        ) -> CFStringRef;
+    }
+    // SAFETY: a null store asks the system's own, and a null encoding isn't
+    // written. The name comes back as a new reference, or null.
+    let name = unsafe { SCDynamicStoreCopyComputerName(std::ptr::null(), std::ptr::null_mut()) };
+    // SAFETY: a non-null name is a CFString this call created, which the
+    // wrapper releases.
+    (!name.is_null()).then(|| unsafe { CFString::wrap_under_create_rule(name) }.to_string())
+}
+
+/// The pretty hostname in `machine_info`, the name a Linux desktop's
+/// settings show, or else `hostname`.
+#[cfg(any(target_os = "linux", test))]
+fn linux_name(machine_info: Option<&str>, hostname: Option<&str>) -> Option<String> {
+    machine_info.and_then(pretty_hostname).or_else(|| {
+        hostname
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+/// `PRETTY_HOSTNAME` from `/etc/machine-info`, which holds `KEY=value` lines
+/// with values quoted as in a shell when they need it.
+#[cfg(any(target_os = "linux", test))]
+fn pretty_hostname(machine_info: &str) -> Option<String> {
+    let value = machine_info
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("PRETTY_HOSTNAME="))?;
+    let unquoted = match value.as_bytes().first() {
+        Some(&q @ (b'"' | b'\'')) => value[1..].strip_suffix(char::from(q))?,
+        _ => value,
+    };
+    let mut name = String::with_capacity(unquoted.len());
+    let mut chars = unquoted.chars();
+    while let Some(c) = chars.next() {
+        name.push(if c == '\\' { chars.next()? } else { c });
+    }
+    (!name.trim().is_empty()).then_some(name)
 }
 
 /// The model identifier, such as `iPhone17,1` or `iPad16,3`. The simulator
@@ -187,6 +269,45 @@ mod tests {
     fn the_simulator_names_the_model_it_simulates() {
         assert_eq!(ios_type("arm64", Some("iPad16,3")), DeviceType::Ipad);
         assert_eq!(ios_type("arm64", Some("iPhone17,1")), DeviceType::Iphone);
+    }
+
+    #[test]
+    fn linux_takes_the_pretty_hostname_then_the_hostname() {
+        let info = "ICON_NAME=computer-laptop\nPRETTY_HOSTNAME=\"Max's \\\"Den\\\" PC\"\n";
+        assert_eq!(
+            linux_name(Some(info), Some("den-pc\n")),
+            Some("Max's \"Den\" PC".into())
+        );
+        assert_eq!(
+            linux_name(Some("PRETTY_HOSTNAME='Den PC'"), None),
+            Some("Den PC".into())
+        );
+        assert_eq!(
+            linux_name(Some("PRETTY_HOSTNAME=DenPC"), None),
+            Some("DenPC".into())
+        );
+        // Nothing, an empty value or a broken quote falls back.
+        for info in [
+            "",
+            "PRETTY_HOSTNAME=",
+            "PRETTY_HOSTNAME=\"  \"",
+            "PRETTY_HOSTNAME=\"Den",
+        ] {
+            assert_eq!(
+                linux_name(Some(info), Some("den-pc\n")),
+                Some("den-pc".into()),
+                "{info}"
+            );
+        }
+        assert_eq!(linux_name(None, Some(" \n")), None);
+        assert_eq!(linux_name(None, None), None);
+    }
+
+    #[test]
+    fn the_default_name_is_this_machines_cleaned_and_kept() {
+        let name = default_name();
+        assert_eq!(clean_name(name).as_deref(), Some(name));
+        assert!(std::ptr::eq(name, default_name()));
     }
 
     #[test]
