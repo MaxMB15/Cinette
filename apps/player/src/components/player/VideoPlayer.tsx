@@ -1505,22 +1505,40 @@ export const PlayerView = () => {
 		/>
 	) : undefined;
 
+	/**
+	 * Where a receiver should start the item. Until mpv reaches the start it
+	 * was given, as just after a resume, that start; mpv still reports the
+	 * beginning then. After that, mpv's last known position, which a
+	 * reconnect doesn't reset to 0. A live channel, or an item that hasn't
+	 * got going, starts where the receiver does.
+	 */
+	const sendFrom = (channel: Channel): number | undefined => {
+		if (channel.contentType === "live") return undefined;
+		const pending = progressRef.current.pendingStart;
+		if (pending !== null) return pending;
+		// 0 until mpv has played past the first second.
+		const at = mpv.getLastKnownPosition();
+		return at > 0 ? at : undefined;
+	};
+	/** Stops the item here once a receiver takes it, saving where it was. */
+	const stopForReceiver = async () => {
+		flushProgress();
+		await playback.stop();
+	};
+
 	/** Sends `channel` to AirPlay. Resolves to why it couldn't, if it couldn't. */
 	const sendToAirPlay = async (
 		channel: Channel,
 		anchor: DOMRect,
 		confirm: () => Promise<boolean>
 	): Promise<string | null> => {
-		const startAt = mpv.state.duration > 0 ? mpv.state.position : undefined;
+		const startAt = sendFrom(channel);
 		airplayFrom.current = startAt;
 		const result = await airplay.send(channel, {
 			anchor,
 			startAt,
 			confirm,
-			stopLocal: async () => {
-				flushProgress();
-				await playback.stop();
-			},
+			stopLocal: stopForReceiver,
 		});
 		if (result.sent || result.why === "cancelled") return null;
 		if (result.why === "blocked") {
@@ -1537,11 +1555,8 @@ export const PlayerView = () => {
 	const sendToCast = (receiverId: string, channel: Channel): Promise<void> =>
 		cast
 			.send(receiverId, channel, {
-				startAt: mpv.state.duration > 0 ? mpv.state.position : undefined,
-				stopLocal: async () => {
-					flushProgress();
-					await playback.stop();
-				},
+				startAt: sendFrom(channel),
+				stopLocal: stopForReceiver,
 			})
 			.then((why) => setNotice(afterCast(why)));
 	const castSlot =

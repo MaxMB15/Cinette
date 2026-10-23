@@ -131,7 +131,10 @@ const fakeMpv = vi.hoisted(() => {
 	const actions = {
 		load: vi.fn<Mpv["load"]>(async () => {}),
 		reload: vi.fn<Mpv["reload"]>(async () => true),
-		getLastKnownPosition: vi.fn<Mpv["getLastKnownPosition"]>(() => 0),
+		// As useMpv's: the last position past 1 s that mpv reported.
+		getLastKnownPosition: vi.fn<Mpv["getLastKnownPosition"]>(() =>
+			current.state.position > 1 ? current.state.position : 0
+		),
 		play: vi.fn<Mpv["play"]>(async () => {}),
 		pause: vi.fn<Mpv["pause"]>(async () => {}),
 		stop: vi.fn<Mpv["stop"]>(async () => {}),
@@ -3751,6 +3754,46 @@ describe("AirPlay", () => {
 		expect(airplayButton()).not.toBeNull();
 	});
 
+	it("sends a resumed movie from its resume point before mpv gets there", async () => {
+		fakeAirPlay.set({ available: true });
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Resume from 30:00" }));
+		await flush();
+		// mpv still reports the start of the file before its seek lands.
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		const send = vi.mocked(fakeAirPlay.get().send);
+		expect(send.mock.calls[0][1].startAt).toBe(1800);
+		// Once mpv is there, it's where mpv is.
+		await setMpv({ state: playing(MOVIE_URL, 1805, 3600) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(send.mock.calls[1][1].startAt).toBe(1805);
+	});
+
+	it("sends a movie that hasn't got going from the start", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 0, 5400) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(vi.mocked(fakeAirPlay.get().send).mock.calls[0][1].startAt).toBeUndefined();
+	});
+
+	it("sends the movie from where it last was while mpv reconnects", async () => {
+		fakeAirPlay.set({ available: true });
+		await openItem(lanternKeeper());
+		await setMpv({ state: playing(MOVIE_URL, 900, 5400) });
+		// A fresh load in flight reads 0 for a moment.
+		fakeMpv.actions.getLastKnownPosition.mockReturnValue(900);
+		await setMpv({ state: playing(MOVIE_URL, 0, 0) });
+		fireEvent.click(airplayButton()!);
+		await flush();
+		expect(vi.mocked(fakeAirPlay.get().send).mock.calls[0][1].startAt).toBe(900);
+	});
+
 	it("sends the movie from where it is, after stopping it here", async () => {
 		fakeAirPlay.set({ available: true });
 		await openItem(lanternKeeper());
@@ -4244,6 +4287,25 @@ describe("Google Cast", () => {
 		await act(() => send.mock.calls[0][2].stopLocal());
 		expect(fakeMpv.actions.stop).toHaveBeenCalled();
 		expect(tauri.savePlaybackPosition).toHaveBeenCalled();
+	});
+
+	it("casts a resumed movie from its resume point before mpv gets there", async () => {
+		fakeCast.set({
+			receivers: [receiver("cast:tv", "Hotel TV")],
+			statuses: new Map([["cast:tv", { via: "direct" as const }]]),
+		});
+		remember(saved(MOVIE_KEY, 1800, 3600));
+		await openItem(lanternKeeper());
+		fireEvent.click(screen.getByRole("button", { name: "Resume from 30:00" }));
+		await flush();
+		await setMpv({ state: playing(MOVIE_URL, 2, 3600) });
+		fireEvent.click(castButton()!);
+		await flush();
+		const picker = screen.getByRole("dialog", { name: "Play on" });
+		const group = within(picker).getByRole("region", { name: "Google Cast" });
+		fireEvent.click(within(group).getByRole("button", { name: /Hotel TV/ }));
+		await flush();
+		expect(vi.mocked(fakeCast.get().send).mock.calls[0][2].startAt).toBe(1800);
 	});
 
 	it("asks before this computer converts, and casts live from now", async () => {
