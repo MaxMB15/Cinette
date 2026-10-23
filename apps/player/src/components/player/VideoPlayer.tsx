@@ -1559,19 +1559,26 @@ export const PlayerView = () => {
 				stopLocal: stopForReceiver,
 			})
 			.then((why) => setNotice(afterCast(why)));
-	const castSlot =
-		airplay.available && activeChannel && !tv ? (
-			<AirPlayButton
-				onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
-				warning={airplayConvertWarning(mac)}
-			/>
-		) : showsCastButton(cast) && activeChannel && !tv ? (
-			<CastButton
-				cast={cast}
-				channel={activeChannel}
-				onSend={(id) => sendToCast(id, activeChannel)}
-			/>
-		) : undefined;
+	// Each kind of receiver has its own button, and a Mac can show both:
+	// AirPlay while an AirPlay TV is in reach, and Cast once it has found a
+	// Cast receiver. The controls that hold them only show while no TV plays.
+	const castSlot = activeChannel ? (
+		<>
+			{airplay.available && (
+				<AirPlayButton
+					onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+					warning={airplayConvertWarning(mac)}
+				/>
+			)}
+			{showsCastButton(cast) && (
+				<CastButton
+					cast={cast}
+					channel={activeChannel}
+					onSend={(id) => sendToCast(id, activeChannel)}
+				/>
+			)}
+		</>
+	) : undefined;
 
 	const castTv = cast.destination;
 	/** Says why a control on the receiver failed, unless the cast is going,
