@@ -599,6 +599,37 @@ describe("RemoteControlSettings", () => {
 		expect(heading).toHaveAttribute("tabindex", "-1");
 	});
 
+	it("moves focus on even when its first effects were still to run at the press", async () => {
+		const devices = (list: number[]) =>
+			list.map((i) => ({ deviceId: `d${i}abcdefgh`, name: `Device ${i}` }));
+		sessions.blocked = devices([1, 2]);
+		vi.mocked(remoteGetSettings).mockResolvedValue(defaults);
+		const view = render(<RemoteControlSettings />);
+		// Goes on as soon as the card shows, before React has run that
+		// render's effects, which findBy only waits for most of the time.
+		await new Promise<void>((resolve) => {
+			const seen = new MutationObserver(() => {
+				if (!screen.queryByRole("button", { name: /^Unblock Device 1/ })) return;
+				seen.disconnect();
+				resolve();
+			});
+			seen.observe(document.body, { childList: true, subtree: true });
+		});
+		unblock(1).focus();
+		fireEvent.click(unblock(1));
+		sessions.blocked = devices([2]);
+		view.rerender(<RemoteControlSettings />);
+		expect(unblock(2)).toHaveFocus();
+	});
+
+	it("moves focus on when another device is blocked as the row goes", async () => {
+		const backendLists = await showBlocked(1, 2);
+		unblock(1).focus();
+		fireEvent.click(unblock(1));
+		backendLists(2, 3);
+		expect(unblock(2)).toHaveFocus();
+	});
+
 	it("moves focus to the row now in the first one's place, not the last", async () => {
 		const backendLists = await showBlocked(1, 2, 3);
 		unblock(1).focus();
