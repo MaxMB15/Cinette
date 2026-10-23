@@ -4,14 +4,42 @@
 import type { Channel } from "./types";
 import { withSource } from "./sources";
 
+/** What an episode is told apart by, in this device's list or another's. */
+interface Numbered {
+	id: string;
+	season?: number;
+	episode?: number;
+}
+
 /** Episodes ordered by season, then episode number. */
-export const sortEpisodes = (eps: Channel[]): Channel[] =>
+export const sortEpisodes = <T extends Numbered>(eps: T[]): T[] =>
 	[...eps].sort((a, b) => {
 		const sa = a.season ?? 0,
 			sb = b.season ?? 0;
 		if (sa !== sb) return sa - sb;
 		return (a.episode ?? 0) - (b.episode ?? 0);
 	});
+
+/** Same season + episode (duplicate entries of one episode from different sources). */
+export const isSameEpisode = (a: Numbered, b: Numbered): boolean =>
+	a.season != null && a.episode != null && a.season === b.season && a.episode === b.episode;
+
+/**
+ * The episodes before and after the one at `index` in `sorted`, skipping
+ * other copies of it, as from another source.
+ */
+export const episodeNeighbors = <T extends Numbered>(
+	sorted: T[],
+	index: number
+): { prev: T | null; next: T | null } => {
+	if (index < 0) return { prev: null, next: null };
+	const current = sorted[index];
+	const differs = (ep: T) => !isSameEpisode(ep, current) && ep.id !== current.id;
+	return {
+		prev: sorted.slice(0, index).reverse().find(differs) ?? null,
+		next: sorted.slice(index + 1).find(differs) ?? null,
+	};
+};
 
 /**
  * One entry per season + episode. Duplicate entries (the same episode from

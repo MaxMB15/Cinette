@@ -57,6 +57,16 @@ describe("remotePlaybackState", () => {
 		});
 	});
 
+	it("names an episode's series where the other device does", () => {
+		const item = { id: "e2", name: "Two", contentType: "series", group: "", seriesId: "s9" };
+		expect(remotePlaybackState(snapshot({ item }), "connected", 0).item).toStrictEqual({
+			title: "Two",
+			contentType: "series",
+			ref: "e2",
+			seriesId: "s9",
+		});
+	});
+
 	it("reads each known content type and calls anything else live", () => {
 		for (const t of ["live", "movie", "series", "recording"]) {
 			const item = { id: "x", name: "X", contentType: t, group: "" };

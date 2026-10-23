@@ -21,6 +21,9 @@ import type { RemoteCommand } from "@/lib/remote-target";
 import type { Channel } from "@/lib/types";
 
 /** One item of the other device's catalog. */
+/** Catalog items asked for in one page. */
+export const CATALOG_PAGE = 100;
+
 export interface CatalogItem {
 	id: string;
 	name: string;
@@ -106,6 +109,7 @@ export const remotePlaybackState = (
 					title: snapshot.item.name,
 					contentType: contentTypeOf(snapshot.item.contentType),
 					ref: snapshot.item.id,
+					...(snapshot.item.seriesId ? { seriesId: snapshot.item.seriesId } : {}),
 				}
 			: null,
 		position: snapshot.position,

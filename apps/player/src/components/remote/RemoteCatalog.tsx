@@ -6,7 +6,7 @@ import { ChevronLeft, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import type { CatalogItem } from "@/lib/cinette-destination";
+import { CATALOG_PAGE, type CatalogItem } from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
 
@@ -19,7 +19,7 @@ const TYPES: { value: ContentType; label: string }[] = [
 ];
 
 /** Items asked for in one page. */
-export const PAGE = 100;
+export const PAGE = CATALOG_PAGE;
 /** How long typing has to pause before a search goes out. */
 export const SEARCH_DELAY_MS = 300;
 

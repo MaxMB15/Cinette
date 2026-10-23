@@ -42,7 +42,13 @@ export interface PlaybackError {
 
 export interface PlaybackState {
 	status: PlaybackStatus;
-	item: { title: string; contentType: Channel["contentType"]; ref: string } | null;
+	item: {
+		title: string;
+		contentType: Channel["contentType"];
+		ref: string;
+		/** For an episode, its series, where the destination knows it. */
+		seriesId?: string;
+	} | null;
 	/** Seconds, as of `positionAt`. */
 	position: number;
 	/** `performance.now()` on this device when `position` was read. */

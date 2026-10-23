@@ -25,7 +25,11 @@ import type { useMpv } from "@/hooks/useMpv";
 import type { AirPlay } from "@/hooks/useAirPlay";
 import type { Cast } from "@/hooks/useCast";
 import type { Link } from "@/lib/remote-control";
-import { createCinetteDestination, type LinkPhase } from "@/lib/cinette-destination";
+import {
+	createCinetteDestination,
+	type CatalogItem,
+	type LinkPhase,
+} from "@/lib/cinette-destination";
 import type { RemoteCommand } from "@/lib/remote-target";
 import type { CastDestination } from "@/lib/cast-destination";
 import type { PlaybackDestination, PlaybackState } from "@/lib/destination";
@@ -100,6 +104,7 @@ const tauri = vi.hoisted(() => ({
 	downloadSubtitle: vi.fn<typeof Bridge.downloadSubtitle>(async () => "/subtitles/chosen.srt"),
 	readSubtitleFile: vi.fn<typeof Bridge.readSubtitleFile>(async () => ""),
 	getPlaybackPosition: vi.fn<typeof Bridge.getPlaybackPosition>(async () => null),
+	remoteCatalog: vi.fn<typeof Bridge.remoteCatalog>(async () => ({ items: [], next: null })),
 	savePlaybackPosition: vi.fn<typeof Bridge.savePlaybackPosition>(async () => {}),
 	deletePlaybackPosition: vi.fn<typeof Bridge.deletePlaybackPosition>(async () => {}),
 	markPositionFinished: vi.fn<typeof Bridge.markPositionFinished>(async () => {}),
@@ -5021,8 +5026,13 @@ describe("Google Cast", () => {
 });
 
 describe("another Cinette device", () => {
-	/** A link to the Mac called `name`, playing a live channel. */
-	const linkTo = (phase: LinkPhase = { phase: "connected" }, name = "Den Mac") => {
+	/** A link to the Mac called `name`, playing `item`, a live channel unless
+	 *  given another. */
+	const linkTo = (
+		phase: LinkPhase = { phase: "connected" },
+		name = "Den Mac",
+		item: CatalogItem = { id: "live-7", name: "News", contentType: "live", group: "UK" }
+	) => {
 		const send = vi.fn<(command: RemoteCommand) => Promise<unknown>>(async () => undefined);
 		const destination = createCinetteDestination("dev1", name, send);
 		destination.setPhase(phase);
@@ -5032,7 +5042,7 @@ describe("another Cinette device", () => {
 				version: 1,
 				state: {
 					status: "playing",
-					item: { id: "live-7", name: "News", contentType: "live", group: "UK" },
+					item,
 					position: 30,
 					duration: 0,
 					volume: 55,
@@ -5110,6 +5120,44 @@ describe("another Cinette device", () => {
 		act(() => fakeRemote.set(link));
 		await press(" ");
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
+	});
+
+	it("goes to the episode before or after there, by button or key", async () => {
+		const episode = (n: number): CatalogItem => ({
+			id: `e${n}`,
+			name: `Episode ${n}`,
+			contentType: "series",
+			group: "Drama",
+			season: 1,
+			episode: n,
+			seriesId: "s9",
+		});
+		vi.mocked(tauri.remoteCatalog).mockResolvedValue({
+			items: [episode(3), episode(1), episode(2)],
+			next: null,
+		});
+		renderPlayer(null);
+		await flush();
+		const { link, send } = linkTo(undefined, undefined, episode(2));
+		act(() => fakeRemote.set(link));
+		await flush();
+		expect(tauri.remoteCatalog).toHaveBeenCalledWith(
+			1,
+			expect.objectContaining({ kind: "episodes", seriesId: "s9" })
+		);
+		fireEvent.click(within(panel()!).getByRole("button", { name: "Next episode" }));
+		expect(send).toHaveBeenLastCalledWith({ action: "load", itemId: "e3" });
+		await press("p");
+		expect(send).toHaveBeenLastCalledWith({ action: "load", itemId: "e1" });
+	});
+
+	it("has no episode buttons for what names no series", async () => {
+		renderPlayer(null);
+		await flush();
+		act(() => fakeRemote.set(linkTo().link));
+		await flush();
+		expect(within(panel()!).queryByRole("button", { name: "Next episode" })).toBeNull();
+		expect(tauri.remoteCatalog).not.toHaveBeenCalled();
 	});
 
 	it("shows while the link reconnects, and not before it connects", async () => {
