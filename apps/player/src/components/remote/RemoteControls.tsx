@@ -13,6 +13,7 @@ import {
 	Pause,
 	Play,
 	Square,
+	Tv,
 	X,
 	type LucideIcon,
 } from "lucide-react";
@@ -37,7 +38,7 @@ import {
 } from "@/lib/tauri";
 import { VPN_HINT } from "@/lib/cast";
 import { cinetteEntries, cinetteId, LOCAL_ENTRY } from "@/lib/device-picker";
-import type { PlaybackDestination } from "@/lib/destination";
+import { destinationStatus, type PlaybackDestination } from "@/lib/destination";
 import { nowPlaying } from "@/lib/now-playing";
 import { endedText, formatCode, localNetworkDenied } from "@/lib/remote-devices";
 import { getPlatform } from "@/lib/platform";
@@ -543,7 +544,7 @@ const DestinationBar = ({
  *  doesn't move until it's dismissed. */
 const EndedRow = ({ text, onDismiss }: { text: string; onDismiss: () => void }) => (
 	<div role="status" className={cn(BAR, "text-sm")}>
-		<MonitorSmartphone className="h-4 w-4 text-primary shrink-0" aria-hidden />
+		<Tv className="h-4 w-4 text-primary shrink-0" aria-hidden />
 		<span className="min-w-0 flex-1 truncate" title={text}>
 			{text}
 		</span>
@@ -565,6 +566,7 @@ const EndedRow = ({ text, onDismiss }: { text: string; onDismiss: () => void }) 
  */
 export const TvBar = () => {
 	const { destination, ended } = useNowPlaying();
+	const state = useDestinationState(destination);
 	const { link } = useRemoteControl();
 	const phase = link?.phase.phase;
 	if (phase === "connected" || phase === "reconnecting") return null;
@@ -575,10 +577,13 @@ export const TvBar = () => {
 				icon={destination.kind === "airplay" ? Airplay : Cast}
 				destination={destination}
 				heading={
-					<>
-						{"Playing on "}
-						<bdi>{destination.name}</bdi>
-					</>
+					// A destination always has a state.
+					destinationStatus(state!, destination.name) ?? (
+						<>
+							{"Playing on "}
+							<bdi>{destination.name}</bdi>
+						</>
+					)
 				}
 				title={destination.name}
 				// The store saves where it got to and lets go of it too.

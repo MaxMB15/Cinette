@@ -227,7 +227,7 @@ export interface CastDestination extends PlaybackDestination {
 	/** Has the receiver and this computer let go of the provider's stream,
 	 *  and keeps the cast, for an account that allows one connection. It
 	 *  shows as opening, since the next item is on its way. */
-	release(): Promise<void>;
+	release(): Promise<boolean>;
 }
 
 /** The backend's form of `route` for `formats`. */
@@ -548,6 +548,7 @@ export const createCastDestination = (
 			resetRestarts();
 			publish({ ...snapshot, loading: true, media: null, error: null });
 			await backend.castRelease(receiver.id);
+			return true;
 		},
 	};
 };

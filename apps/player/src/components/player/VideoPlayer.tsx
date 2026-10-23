@@ -108,7 +108,13 @@ import { usePlatform } from "@/hooks/usePlatform";
 import { usePlayerPref } from "@/hooks/usePlayerPref";
 import { useSkipSegments } from "@/hooks/useSkipSegments";
 import { skipButtonShows, useSegmentSkipping } from "@/hooks/useSegmentSkipping";
-import { controlsOthers, getPlatform, isMobilePlatform } from "@/lib/platform";
+import {
+	airplaysFrom,
+	castsFrom,
+	controlsOthers,
+	getPlatform,
+	isMobilePlatform,
+} from "@/lib/platform";
 import { hasFullscreenButton } from "@/lib/fullscreen";
 import { Airplay, Cast, ChevronLeft, MonitorSmartphone, X } from "lucide-react";
 
@@ -467,16 +473,16 @@ export const PlayerView = () => {
 	// AirPlay's, and another Cinette device's.
 	const deviceNotice = (text: string) => setNotice({ text, cast: false });
 	// Google Cast from a computer.
-	const cast = useCast(platform === "macos" || platform === "linux");
+	const cast = useCast(castsFrom(platform));
 	const castRef = useLatestRef(cast);
 	// AirPlay video on iOS and macOS.
 	const mac = platform === "macos";
-	const airplay = useAirPlay(platform === "ios" || mac, mac);
+	const airplay = useAirPlay(airplaysFrom(platform), mac);
 	const airplayRef = useLatestRef(airplay);
-	/** Asks before a cast switches to a route this computer converts. */
+	/** Asks before a TV switches to a route this device converts. */
 	const [castConfirm, setCastConfirm] = useState<{
 		name: string;
-		keep: "on" | "onScreen";
+		warning: string;
 		answer: (ok: boolean) => void;
 	} | null>(null);
 	// The question waiting for an answer, so a newer one, or leaving the
@@ -485,11 +491,11 @@ export const PlayerView = () => {
 	// asked stays here.
 	const castQuestion = useRef<((ok: boolean) => void) | null>(null);
 	const confirmCast = useCallback(
-		(name: string, keep: "on" | "onScreen") =>
+		(name: string, warning: string) =>
 			new Promise<boolean>((answer) => {
 				castQuestion.current?.(false);
 				castQuestion.current = answer;
-				setCastConfirm({ name, keep, answer });
+				setCastConfirm({ name, warning, answer });
 			}),
 		// Stryker disable next-line ArrayDeclaration: It only uses a ref and a state setter, so it's the same function with any deps.
 		[]
@@ -527,7 +533,13 @@ export const PlayerView = () => {
 						startAt: startPos,
 						confirm: tv.converted?.()
 							? undefined
-							: (keep) => confirmCast(tv.name, keep),
+							: (keep) =>
+									confirmCast(
+										tv.name,
+										tv.kind === "airplay"
+											? airplayConvertWarning(mac)
+											: convertWarning(tv.name, keep)
+									),
 						stopLocal: moveTo,
 					})
 					.then((sent) => {
@@ -567,8 +579,8 @@ export const PlayerView = () => {
 			apply?.();
 			return loaded;
 		},
-		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef and airplayRef are refs, and confirmCast never changes.
-		[mpv, rememberLoadedUrl, recordEnd, castRef, airplayRef, confirmCast]
+		// Stryker disable next-line ArrayDeclaration: mpv's load is the one useMpv keeps with useCallback, recordEnd and rememberLoadedUrl only read refs, castRef and airplayRef are refs, and confirmCast and mac never change.
+		[mpv, rememberLoadedUrl, recordEnd, castRef, airplayRef, confirmCast, mac]
 	);
 
 	/**
@@ -1768,9 +1780,7 @@ export const PlayerView = () => {
 					<h2 id="cast-confirm-title" className="text-sm font-semibold mb-3">
 						Play on <bdi>{castConfirm.name}</bdi>?
 					</h2>
-					<p className="text-xs text-muted-foreground mb-4">
-						{convertWarning(castConfirm.name, castConfirm.keep)}
-					</p>
+					<p className="text-xs text-muted-foreground mb-4">{castConfirm.warning}</p>
 					<div className="flex justify-end gap-2">
 						<Button
 							variant="ghost"

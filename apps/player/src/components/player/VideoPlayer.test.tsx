@@ -54,6 +54,7 @@ import { makeSegment } from "@/test/segments";
 import { fakeDestination, playbackCapabilities, playbackState } from "@/test/destination-fixtures";
 import { getMountedPlayer } from "@/lib/remote-target";
 import { nowPlaying } from "@/lib/now-playing";
+import { MAC_CONVERT_WARNING } from "@/lib/airplay";
 import { saveProgressNow } from "@/lib/player-progress";
 import { PlayerView } from "./VideoPlayer";
 
@@ -3740,7 +3741,7 @@ describe("AirPlay", () => {
 		),
 		notPicked: false,
 		converted: vi.fn(() => false),
-		release: vi.fn(async () => {}),
+		release: vi.fn(async () => false),
 		dispose: vi.fn(),
 	});
 
@@ -4859,6 +4860,8 @@ describe("Google Cast", () => {
 				fireEvent.click(screen.getByRole("button", { name: "Next episode" }));
 				await flush();
 				const dialog = screen.getByRole("dialog", { name: "Play on Living Room TV?" });
+				// AirPlay's words, which say this Mac stays awake.
+				expect(dialog).toHaveTextContent(MAC_CONVERT_WARNING);
 				fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
 				await flush();
 				expect(answers).toEqual([true]);

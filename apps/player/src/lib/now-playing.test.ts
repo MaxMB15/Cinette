@@ -32,7 +32,7 @@ const tv = (name = "Hotel TV", decision: RouteDecision = direct) => {
 	return {
 		...d,
 		route: vi.fn<PlaybackDestination["route"]>().mockResolvedValue(decision),
-		release: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+		release: vi.fn<() => Promise<boolean>>(() => Promise.resolve(true)),
 		dispose: vi.fn(),
 	};
 };
@@ -286,6 +286,75 @@ describe("createNowPlaying", () => {
 			expect(await store.send(target, other, opts())).toEqual({ ok: true });
 			expect(target.release).toHaveBeenCalledTimes(1);
 			expect(waits).toEqual(RELEASE_RETRY_MS.slice(0, 2));
+			// It let go of the stream itself, so the provider may still count it.
+			expect(target.load).toHaveBeenLastCalledWith(
+				expect.anything(),
+				expect.objectContaining({ freed: true })
+			);
+		});
+
+		it("keeps a TV that had nothing to let go of, and doesn't look again", async () => {
+			const { store, waits } = setUp();
+			const target = tv();
+			await store.send(target, film, opts());
+			target.release.mockResolvedValueOnce(false);
+			target.route.mockRejectedValueOnce("refused");
+			expect(await store.send(target, other, opts())).toEqual({
+				ok: false,
+				why: "unrouted",
+				error: "refused",
+				released: false,
+			});
+			expect(waits).toEqual([]);
+			expect(store.getState().destination).toBe(target);
+			expect(target.stop).not.toHaveBeenCalled();
+		});
+
+		it("counts a TV that couldn't let go as one that may have", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, film, opts());
+			target.release.mockRejectedValueOnce("failed");
+			target.route.mockRejectedValue("refused");
+			expect(await store.send(target, other, opts())).toMatchObject({ released: true });
+			expect(store.getState().destination).toBeNull();
+		});
+
+		it("leaves a newer send alone when its last look fails after that one started", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, film, opts());
+			const last = deferred<RouteDecision>();
+			// Every look fails but the last, which waits.
+			for (let i = 0; i < RELEASE_RETRY_MS.length; i++)
+				target.route.mockRejectedValueOnce("x");
+			target.route.mockReturnValueOnce(last.promise);
+			const older = store.send(target, other, opts());
+			await vi.waitFor(() =>
+				expect(target.route).toHaveBeenCalledTimes(2 + RELEASE_RETRY_MS.length)
+			);
+			const newer = store.send(target, film, opts({ decision: direct }));
+			expect(await newer).toEqual({ ok: true });
+			last.reject("refused");
+			expect(await older).toEqual({ ok: false, why: "overtaken" });
+			expect(store.getState()).toMatchObject({ destination: target, channel: film });
+			expect(target.stop).not.toHaveBeenCalled();
+		});
+
+		it("leaves a newer send alone when the user says no to an older one after", async () => {
+			const { store } = setUp();
+			const target = tv();
+			await store.send(target, film, opts());
+			target.route.mockRejectedValueOnce("refused").mockResolvedValueOnce(converted);
+			const answer = deferred<boolean>();
+			const older = store.send(target, other, opts({ confirm: () => answer.promise }));
+			await vi.waitFor(() => expect(target.route).toHaveBeenCalledTimes(3));
+			const newer = store.send(target, film, opts({ decision: direct }));
+			expect(await newer).toEqual({ ok: true });
+			answer.resolve(false);
+			expect(await older).toEqual({ ok: false, why: "overtaken" });
+			expect(store.getState()).toMatchObject({ destination: target, channel: film });
+			expect(target.stop).not.toHaveBeenCalled();
 		});
 
 		it("says so once every look failed, and that it let go", async () => {
@@ -354,13 +423,13 @@ describe("createNowPlaying", () => {
 			const { store } = setUp();
 			const target = tv();
 			await store.send(target, film, opts());
-			const released = deferred();
+			const released = deferred<boolean>();
 			target.release.mockReturnValueOnce(released.promise);
 			target.route.mockRejectedValueOnce("refused");
 			const older = store.send(target, other, opts());
 			await vi.waitFor(() => expect(target.release).toHaveBeenCalled());
 			const newer = store.send(target, film, opts({ decision: direct }));
-			released.resolve();
+			released.resolve(true);
 			expect(await older).toEqual({ ok: false, why: "overtaken" });
 			expect(await newer).toEqual({ ok: true });
 		});

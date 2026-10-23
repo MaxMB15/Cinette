@@ -15,7 +15,7 @@ import {
 import { castEndedMessage, castStatus, newerList } from "@/lib/cast";
 import type { PlaybackState } from "@/lib/destination";
 import type { DestinationStatus } from "@/lib/device-picker";
-import { nowPlaying, sentMessage } from "@/lib/now-playing";
+import { nowPlaying, ofKind, sentMessage } from "@/lib/now-playing";
 import type { RouteDecision } from "@/lib/route";
 import {
 	CAST_RECEIVERS_EVENT,
@@ -75,10 +75,7 @@ const destinationFor = (receiver: CastReceiver): CastDestination => {
 };
 
 /** The cast playing, if what plays is one. */
-const castPlaying = (): CastDestination | null => {
-	const { destination } = nowPlaying.getState();
-	return destination?.kind === "cast" ? (destination as CastDestination) : null;
-};
+const castPlaying = () => ofKind<CastDestination>(nowPlaying.getState().destination, "cast");
 
 /** The key of a route the picker showed. */
 const routeKey = (receiverId: string, channel: Channel) => `${receiverId}\n${channel.id}`;
@@ -135,7 +132,7 @@ export const useCast = (enabled: boolean): Cast => {
 	const [statuses, setStatuses] = useState<ReadonlyMap<string, DestinationStatus>>(new Map());
 	const [vpnActive, setVpnActive] = useState(false);
 	const playing = useNowPlaying().destination;
-	const destination = playing?.kind === "cast" ? (playing as CastDestination) : null;
+	const destination = ofKind<CastDestination>(playing, "cast");
 	/** The routes the picker showed, by receiver and channel. */
 	const decisions = useRef(new Map<string, RouteDecision>());
 	const checking = useRef(0);

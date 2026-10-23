@@ -682,7 +682,7 @@ describe("createCastDestination", () => {
 		const cast = createCastDestination(receiver, fake, { now: () => clock });
 		await cast.load({ kind: "local", channel: movie });
 		await cast.pause();
-		await cast.release();
+		expect(await cast.release()).toBe(true);
 		expect(fake.castRelease).toHaveBeenCalledWith("cast:tv");
 		expect(fake.castStop).not.toHaveBeenCalled();
 		// Nothing is loaded now, so Play after a long pause converts nothing.

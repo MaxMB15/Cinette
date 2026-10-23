@@ -343,8 +343,9 @@ export interface AirPlayDestination extends PlaybackDestination {
 	/** Whether this device converts what plays. */
 	converted(): boolean;
 	/** Ends this device's conversion, if one runs, so the provider allows
-	 *  another connection, and keeps the item. */
-	release(): Promise<void>;
+	 *  another connection, and keeps the item. Resolves to whether one ran:
+	 *  a TV that fetches the stream itself keeps it. */
+	release(): Promise<boolean>;
 	/** Stops listening. The destination can't be used after. */
 	dispose(): void;
 }
@@ -478,13 +479,15 @@ export const createAirPlayDestination = (
 	};
 
 	/** Ends the conversion that runs, if one does, and waits until the
-	 *  provider's connection is closed, before something else plays. */
+	 *  provider's connection is closed, before something else plays.
+	 *  Resolves to whether one ran. */
 	const letGo = async () => {
 		takeOver();
 		const wasConverted = converted !== null;
 		converted = null;
 		if (wasConverted) await bridge.endConversion();
 		else await ending;
+		return wasConverted;
 	};
 
 	const index = (trackId: string) => {
@@ -521,7 +524,9 @@ export const createAirPlayDestination = (
 			if (!listed || source === undefined) throw new Error("Check the route before loading");
 			const { channel } = target;
 			// Whatever this device converted for the last item lets go first.
-			const released = letGo();
+			// The load goes even if that fails, and says for itself if it can't
+			// play.
+			const released = letGo().catch(() => {});
 			live = channel.contentType === "live";
 			const mine = { title: channel.name, contentType: channel.contentType, ref: channel.id };
 			item = mine;

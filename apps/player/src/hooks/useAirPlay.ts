@@ -20,8 +20,8 @@ import {
 	type AirPlayNativeState,
 	type AirPlayRoute,
 } from "@/lib/airplay";
-import type { PlaybackState } from "@/lib/destination";
-import { nowPlaying, sentMessage } from "@/lib/now-playing";
+import { destinationStatus, type PlaybackState } from "@/lib/destination";
+import { nowPlaying, ofKind, sentMessage } from "@/lib/now-playing";
 import type { ConverterSupport } from "@/lib/route-profiles";
 import {
 	airplayChoose,
@@ -154,10 +154,8 @@ export interface AirPlay {
 }
 
 /** The AirPlay TV playing, if what plays is one. */
-const airplayPlaying = (): AirPlayDestination | null => {
-	const { destination } = nowPlaying.getState();
-	return destination?.kind === "airplay" ? (destination as AirPlayDestination) : null;
-};
+const airplayPlaying = () =>
+	ofKind<AirPlayDestination>(nowPlaying.getState().destination, "airplay");
 
 /**
  * AirPlay on iOS and macOS: whether a TV is in reach, the system picker,
@@ -171,7 +169,7 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 	const [available, setAvailable] = useState(false);
 	const [route, setRoute] = useState<AirPlayRoute | null>(null);
 	const { destination: playing, ended } = useNowPlaying();
-	const destination = playing?.kind === "airplay" ? (playing as AirPlayDestination) : null;
+	const destination = ofKind<AirPlayDestination>(playing, "airplay");
 	const [support, setSupport] = useState(NO_CONVERTER);
 	// Stryker disable next-line BooleanLiteral: The effect below sets it before any send can run.
 	const mounted = useRef(false);
@@ -265,8 +263,14 @@ export const useAirPlay = (enabled: boolean, mac = false): AirPlay => {
 					decision: settled,
 					startAt,
 					stopLocal,
-					// On a Mac, no TV took it, so it plays here again.
-					ends: () => (target.notPicked ? NOT_PICKED : null),
+					// On a Mac, no TV took it, so it plays here again. A TV that's
+					// gone goes back to this device too, and says why.
+					ends: (s) =>
+						target.notPicked
+							? NOT_PICKED
+							: s.connection === "lost"
+								? destinationStatus(s, target.name)
+								: null,
 				});
 				// One that didn't start is done with, unless a newer send to the
 				// same TV took over.
