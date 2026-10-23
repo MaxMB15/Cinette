@@ -61,6 +61,12 @@ export interface CastSnapshot {
 	 *  asked to start, then what the receiver said. It stays when the media
 	 *  goes, so a resume point keeps it. */
 	position: number;
+	/** The highest media id the receiver app has reported. A new load's
+	 *  media goes above it. */
+	seenMedia: number;
+	/** {@link seenMedia} when the stream was last sent. Media up to it is
+	 *  the old item's, whose late reports are left out. */
+	oldMedia: number;
 }
 
 export const idleSnapshot: CastSnapshot = {
@@ -77,6 +83,8 @@ export const idleSnapshot: CastSnapshot = {
 	converted: false,
 	loading: false,
 	position: 0,
+	seenMedia: 0,
+	oldMedia: 0,
 };
 
 /** The snapshot after `update`, which arrived at `at`. */
@@ -86,11 +94,14 @@ export const applyUpdate = (
 	at: number
 ): CastSnapshot => {
 	switch (update.kind) {
+		// A receiver app that starts counts its media from 1 again.
 		case "ready":
-			return { ...snapshot, phase: "ready" };
+			return { ...snapshot, phase: "ready", seenMedia: 0, oldMedia: 0 };
 		case "volume":
 			return { ...snapshot, volume: update.level, volumeFixed: update.fixed };
 		case "media": {
+			if (update.media !== null && update.media.mediaSessionId <= snapshot.oldMedia)
+				return snapshot;
 			const played = update.media !== null && update.media.player !== "idle";
 			return {
 				...snapshot,
@@ -101,6 +112,7 @@ export const applyUpdate = (
 					: snapshot.position,
 				loading: snapshot.loading && !played && update.media?.idleReason !== "error",
 				error: played ? null : snapshot.error,
+				seenMedia: Math.max(snapshot.seenMedia, update.media?.mediaSessionId ?? 0),
 			};
 		}
 		case "loadFailed":
@@ -365,12 +377,6 @@ export const createCastDestination = (
 	let newest: object = {};
 	/** The tries to start the stream again since it last ran steadily. */
 	const restarts = createRestarts(now);
-	/** The highest id of the media the receiver has reported, which a new
-	 *  load's media goes above. */
-	let seenMedia = 0;
-	/** {@link seenMedia} when the stream was last sent: media up to it is
-	 *  older, and its late reports don't count as the new stream playing. */
-	let oldMedia = 0;
 	/** Cancels the try waiting to start the stream again, if one is. */
 	let cancelRestart = () => {};
 	/** Forgets the tries, for a load, a stop or a release the user asked
@@ -393,7 +399,6 @@ export const createCastDestination = (
 		const sent = {};
 		newest = sent;
 		if (!quiet) resetRestarts();
-		oldMedia = seenMedia;
 		publish({
 			...snapshot,
 			// A closed cast connects again for this load.
@@ -406,6 +411,7 @@ export const createCastDestination = (
 			position: startAt ?? 0,
 			duration: formats.duration ?? 0,
 			media: null,
+			oldMedia: snapshot.seenMedia,
 		});
 		loaded = { channel, route, formats };
 		restarts.sent();
@@ -535,9 +541,7 @@ export const createCastDestination = (
 			if (update.kind === "conversionStopped") restart();
 			// A cast that ended takes the tries to start it again with it.
 			if (update.kind === "closed") resetRestarts();
-			const media = snapshot.media;
-			if (media !== null) seenMedia = Math.max(seenMedia, media.mediaSessionId);
-			if (media?.player === "playing" && media.mediaSessionId > oldMedia) restarts.playing();
+			if (snapshot.media?.player === "playing") restarts.playing();
 		},
 		closedReason: () => snapshot.closedReason,
 		converted: () => snapshot.converted,

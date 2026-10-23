@@ -132,6 +132,34 @@ describe("applyUpdate", () => {
 		expect(playing.loading).toBe(false);
 	});
 
+	it("leaves out the old item's late reports, until a receiver app starts", () => {
+		const sent = snap({ loading: true, seenMedia: 3, oldMedia: 3, position: 40 });
+		const late = applyUpdate(
+			sent,
+			{ kind: "media", media: media({ mediaSessionId: 3, position: 900 }) },
+			1
+		);
+		expect(late).toBe(sent);
+		const fresh = applyUpdate(
+			sent,
+			{ kind: "media", media: media({ mediaSessionId: 4, position: 2 }) },
+			2
+		);
+		expect(fresh).toMatchObject({ loading: false, position: 2, seenMedia: 4, oldMedia: 3 });
+		// The highest id stays when a lower one passes.
+		const lower = applyUpdate(
+			snap({ seenMedia: 6, oldMedia: 3 }),
+			{ kind: "media", media: media({ mediaSessionId: 5 }) },
+			3
+		);
+		expect(lower.seenMedia).toBe(6);
+		expect(applyUpdate(late, { kind: "media", media: null }, 4).seenMedia).toBe(3);
+		// A new app counts from 1 again.
+		const ready = applyUpdate(sent, { kind: "ready" }, 5);
+		expect(ready).toMatchObject({ seenMedia: 0, oldMedia: 0 });
+		expect(applyUpdate(ready, { kind: "media", media: media() }, 6).loading).toBe(false);
+	});
+
 	it("turns failures into the player's error codes", () => {
 		const loading = snap({ loading: true });
 		expect(applyUpdate(loading, { kind: "loadFailed", code: 104 }, 1)).toMatchObject({
@@ -329,6 +357,17 @@ describe("createCastDestination", () => {
 		cast.receive({ kind: "media", media: media() });
 		expect(cast.capabilities).not.toBe(before);
 		expect(cast.capabilities.pause).toBe(true);
+	});
+
+	it("doesn't take the last item's late report for the new one", async () => {
+		const cast = createCastDestination(receiver, backend({ ...xtream, duration: 600 }));
+		await cast.load(item);
+		cast.receive({ kind: "media", media: media({ mediaSessionId: 1, position: 500 }) });
+		await cast.load({ kind: "local", channel: movie }, { startAt: 30 });
+		cast.receive({ kind: "media", media: media({ mediaSessionId: 1, position: 510 }) });
+		expect(cast.getState()).toMatchObject({ status: "opening", position: 30 });
+		cast.receive({ kind: "media", media: media({ mediaSessionId: 2, position: 31 }) });
+		expect(cast.getState()).toMatchObject({ status: "playing", position: 31 });
 	});
 
 	it("routes HLS with CORS directly, asking for the formats once", async () => {
