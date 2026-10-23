@@ -102,10 +102,10 @@ export const airplaySender = (support: ConverterSupport): SenderProfile =>
 export const CONVERT_WARNING =
 	"This iPhone converts the stream and sends it to the TV. Keep it on Wi-Fi and charged. It can lock.";
 
-/** The confirm step's warning for this device. A Mac says what Cast says,
- *  before the AirPlay menu names the TV. */
-export const airplayConvertWarning = (mac: boolean) =>
-	mac ? convertWarning("the TV", "on") : CONVERT_WARNING;
+/** The confirm step's warning for this device, sending to `name`. A Mac
+ *  says what Cast says. */
+export const airplayConvertWarning = (mac: boolean, name = "the TV") =>
+	mac ? convertWarning(name, "on") : CONVERT_WARNING;
 
 const tracks = (list: AirPlayNativeState["subtitles"]): Track[] =>
 	list.map((t, i) => ({ id: String(i), label: t.label, language: t.language }));

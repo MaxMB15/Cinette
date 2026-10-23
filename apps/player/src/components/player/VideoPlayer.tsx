@@ -535,7 +535,7 @@ export const PlayerView = () => {
 									confirmCast(
 										tv.name,
 										tv.kind === "airplay"
-											? airplayConvertWarning(mac)
+											? airplayConvertWarning(mac, tv.name)
 											: convertWarning(tv.name, keep)
 									),
 						stopLocal: moveTo,
@@ -1563,6 +1563,7 @@ export const PlayerView = () => {
 			{airplay.available && (
 				<AirPlayButton
 					onSend={(anchor, confirm) => sendToAirPlay(activeChannel, anchor, confirm)}
+					// The AirPlay menu hasn't named a TV yet.
 					warning={airplayConvertWarning(mac)}
 				/>
 			)}

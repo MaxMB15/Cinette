@@ -4866,7 +4866,7 @@ describe("Google Cast", () => {
 				const dialog = screen.getByRole("dialog", { name: "Play on Living Room TV?" });
 				// Cast's words, which say closing the lid ends it.
 				expect(dialog).toHaveTextContent(
-					"Playing this on the TV needs this computer to stay on and connected. Closing the lid ends it."
+					"Playing this on Living Room TV needs this computer to stay on and connected. Closing the lid ends it."
 				);
 				fireEvent.click(within(dialog).getByRole("button", { name: "Confirm" }));
 				await flush();

@@ -146,6 +146,10 @@ describe("the AirPlay profiles", () => {
 		expect(airplayConvertWarning(true)).toBe(
 			"Playing this on the TV needs this computer to stay on and connected. Closing the lid ends it."
 		);
+		expect(airplayConvertWarning(true, "Den")).toBe(
+			"Playing this on Den needs this computer to stay on and connected. Closing the lid ends it."
+		);
+		expect(airplayConvertWarning(false, "Den")).toBe(CONVERT_WARNING);
 	});
 });
 
