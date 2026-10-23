@@ -473,19 +473,18 @@ export const PlayerView = () => {
 	// Google Cast from a computer.
 	const cast = useCast(castsFrom(platform));
 	const castRef = useLatestRef(cast);
-	/** The subtitle the overlay draws, for a cast to show. */
-	const externalSubtitle = useMemo(
-		(): ExternalSubtitle | null =>
-			subtitleCues.length === 0
-				? null
-				: {
-						cues: subtitleCues,
-						delay: subtitleDelay,
-						name: selectedSubtitleEntry?.releaseName ?? "Subtitles",
-						language: selectedSubtitleEntry?.languageCode ?? null,
-					},
-		[subtitleCues, subtitleDelay, selectedSubtitleEntry]
-	);
+	/** The subtitle picked, for a cast to show. Cues always come with the
+	 *  entry they were read from, and a file the overlay can't read has none. */
+	const externalSubtitle = useMemo((): ExternalSubtitle | null => {
+		if (selectedSubtitleEntry === null) return null;
+		const { releaseName, languageCode } = selectedSubtitleEntry;
+		return {
+			cues: subtitleCues,
+			delay: subtitleDelay,
+			name: releaseName ?? languageCode,
+			language: languageCode,
+		};
+	}, [subtitleCues, subtitleDelay, selectedSubtitleEntry]);
 	const externalSubtitleRef = useLatestRef(externalSubtitle);
 	// A cast follows each change to it. The page opening isn't one, so a cast
 	// that plays on keeps what it shows.
@@ -493,7 +492,7 @@ export const PlayerView = () => {
 	useEffect(() => {
 		if (shownSubtitle.current === externalSubtitle) return;
 		shownSubtitle.current = externalSubtitle;
-		castRef.current.destination?.setExternalSubtitle?.(externalSubtitle);
+		castRef.current.destination?.setExternalSubtitle(externalSubtitle);
 	}, [castRef, externalSubtitle]);
 	// AirPlay video on iOS and macOS.
 	const mac = platform === "macos";

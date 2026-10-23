@@ -4226,6 +4226,7 @@ describe("Google Cast", () => {
 		...fakeDestination("cast", "Hotel TV", castState()),
 		receive: vi.fn(),
 		closedReason: vi.fn(() => null),
+		setExternalSubtitle: vi.fn(),
 	});
 
 	const castButton = () => screen.queryByRole("button", { name: "Cast" });
@@ -4479,6 +4480,17 @@ describe("Google Cast", () => {
 		);
 	});
 
+	it("leaves what the receiver shows alone when the page opens while it casts", async () => {
+		const destination = tv();
+		fakeCast.set({
+			destination: destination as unknown as CastDestination,
+			state: castState(),
+		});
+		await openItem(lanternKeeper());
+		expect(screen.getByRole("region", { name: "Google Cast" })).toBeTruthy();
+		expect(destination.setExternalSubtitle).not.toHaveBeenCalled();
+	});
+
 	it("has no subtitles button for a receiver that can't show them, or an item without any", async () => {
 		await openItem(lanternKeeper());
 		act(() =>
@@ -4492,6 +4504,7 @@ describe("Google Cast", () => {
 					),
 					receive: vi.fn(),
 					closedReason: vi.fn(() => null),
+					setExternalSubtitle: vi.fn(),
 				} as unknown as CastDestination,
 				state: castState(),
 			})

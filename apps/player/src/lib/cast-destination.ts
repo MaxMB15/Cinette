@@ -233,6 +233,8 @@ export interface CastDestination extends PlaybackDestination {
 	closedReason(): CastSnapshot["closedReason"];
 	/** Whether this computer converts what the receiver plays now. */
 	converted(): boolean;
+	/** Shows `subtitle` with what the receiver plays, or hides it. */
+	setExternalSubtitle(subtitle: ExternalSubtitle | null): void;
 	/** Has the receiver and this computer let go of the provider's stream,
 	 *  and keeps the cast, for an account that allows one connection. It
 	 *  shows as opening, since the next item is on its way. */
@@ -551,11 +553,9 @@ export const createCastDestination = (
 				if (loaded !== at) return;
 				send(at.channel, at.route, at.formats, positionNow(state, now())).catch(() => {});
 			};
-			// The receiver only has a track the load gave it.
-			if (carried === null) {
-				if (next !== null) reload();
-				return;
-			}
+			// The receiver only has a track the load gave it. A load takes the
+			// newest subtitle, so with none there, `next` is a new one.
+			if (carried === null) return reload();
 			if (next === null || (sameFile(next, carried) && next.delay === carried.delay)) {
 				control({ action: "tracks", on: next !== null }).catch(() => {});
 				return;
