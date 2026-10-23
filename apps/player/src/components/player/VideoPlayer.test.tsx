@@ -5202,9 +5202,10 @@ describe("another Cinette device", () => {
 		expect(screen.getByRole("alert").textContent).toBe("Couldn't reach Den Mac.");
 	});
 
-	it("does nothing on the episode keys for what has none around it", async () => {
-		renderPlayer(null);
-		await flush();
+	it("does nothing on the episode keys for what has none around it there", async () => {
+		// This player has episodes on either side, which the keys leave alone.
+		await openItem(ep2, { episodes: [ep1, ep2, ep3] });
+		fakeMpv.actions.load.mockClear();
 		const { link, send } = linkTo();
 		act(() => fakeRemote.set(link));
 		await flush();
@@ -5212,6 +5213,7 @@ describe("another Cinette device", () => {
 		await press("n");
 		await press("p");
 		expect(send).not.toHaveBeenCalled();
+		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
 	});
 
 	it("has no episode buttons for what names no series", async () => {
@@ -5220,6 +5222,7 @@ describe("another Cinette device", () => {
 		act(() => fakeRemote.set(linkTo().link));
 		await flush();
 		expect(within(panel()!).queryByRole("button", { name: "Next episode" })).toBeNull();
+		expect(within(panel()!).queryByRole("button", { name: "Previous episode" })).toBeNull();
 		expect(tauri.remoteCatalog).not.toHaveBeenCalled();
 	});
 
@@ -5265,16 +5268,6 @@ describe("another Cinette device", () => {
 		await flush();
 		expect(panel()).not.toBeNull();
 		expect(view.container.querySelector(".from-black\\/60")).toBeNull();
-	});
-
-	it("starts no episode here from the keys while it controls another device", async () => {
-		await openItem(ep1, { episodes: [ep1, ep2] });
-		fakeMpv.actions.load.mockClear();
-		act(() => fakeRemote.set(linkTo().link));
-		await flush();
-		await press("n");
-		await press("p");
-		expect(fakeMpv.actions.load).not.toHaveBeenCalled();
 	});
 
 	it("shows while the link reconnects, and not before it connects", async () => {

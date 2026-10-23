@@ -6,7 +6,7 @@ import { ChevronLeft, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useLatestRef } from "@/hooks/useLatestRef";
-import { CATALOG_PAGE, type CatalogItem } from "@/lib/cinette-destination";
+import { CATALOG_PAGE, remoteItem, type CatalogItem } from "@/lib/cinette-destination";
 import type { Link } from "@/lib/remote-control";
 import { remoteCatalog, type CatalogQuery } from "@/lib/tauri";
 
@@ -171,17 +171,15 @@ export const RemoteCatalog = ({
 		setMessage(null);
 		const pick = {};
 		pickRef.current = pick;
-		link.destination
-			.load({ kind: "remote", itemId: item.id, title: item.name, seriesId: item.seriesId })
-			.then(
-				() => {
-					if (pickRef.current === pick) onPlayed();
-				},
-				() => {
-					if (pickRef.current === pick)
-						setMessage(`${link.name} couldn't play ${item.name}.`);
-				}
-			);
+		link.destination.load(remoteItem(item)).then(
+			() => {
+				if (pickRef.current === pick) onPlayed();
+			},
+			() => {
+				if (pickRef.current === pick)
+					setMessage(`${link.name} couldn't play ${item.name}.`);
+			}
+		);
 	};
 
 	const choose = (item: CatalogItem) => {

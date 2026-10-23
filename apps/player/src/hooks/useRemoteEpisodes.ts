@@ -29,7 +29,8 @@ export const useRemoteEpisodes = (
 	const key = seriesId ? `${linkId}\n${seriesId}` : null;
 	const [found, setFound] = useState<{ key: string; episodes: CatalogItem[] } | null>(null);
 	useEffect(() => {
-		if (key === null || !connected) return;
+		// A reconnect keeps the series it has.
+		if (key === null || !connected || found?.key === key) return;
 		let current = true;
 		const episodes: CatalogItem[] = [];
 		// A key is only made with both.
@@ -48,7 +49,7 @@ export const useRemoteEpisodes = (
 		return () => {
 			current = false;
 		};
-	}, [key, linkId, seriesId, connected]);
+	}, [key, linkId, seriesId, connected, found?.key]);
 	if (found?.key !== key) return NONE;
 	return episodeNeighbors(
 		found.episodes,

@@ -194,6 +194,20 @@ describe("useRemoteEpisodes", () => {
 		expect(result.current.prev?.id).toBe("e1");
 	});
 
+	it("keeps the series it has through a reconnect", async () => {
+		answer({ "s1@": { items: [episode(1), episode(2)], next: null } });
+		const { result, rerender } = renderHook(({ link }) => useRemoteEpisodes(link), {
+			initialProps: { link: linkPlaying(episode(2), 4) },
+		});
+		await flush();
+		rerender({ link: linkPlaying(episode(2), 4, { phase: "reconnecting", attempt: 1 }) });
+		await flush();
+		rerender({ link: linkPlaying(episode(2), 4) });
+		await flush();
+		expect(result.current.prev?.id).toBe("e1");
+		expect(remoteCatalog).toHaveBeenCalledTimes(1);
+	});
+
 	it("asks the new device when the link changes", async () => {
 		answer({ "s1@": { items: [episode(1), episode(2)], next: null } });
 		const { rerender } = renderHook(({ link }) => useRemoteEpisodes(link), {

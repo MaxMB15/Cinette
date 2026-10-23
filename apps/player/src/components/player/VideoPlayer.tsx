@@ -30,7 +30,7 @@ import { castControlMessage, castFailureMessage, showsCastButton } from "@/lib/c
 import { convertWarning } from "@/lib/device-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import type { CatalogItem } from "@/lib/cinette-destination";
+import { remoteItem, type CatalogItem } from "@/lib/cinette-destination";
 import type { PlaybackDestination } from "@/lib/destination";
 import { usePublishRemoteState } from "@/hooks/useRemoteTarget";
 import { setProgressSaver } from "@/lib/player-progress";
@@ -1277,12 +1277,12 @@ export const PlayerView = () => {
 		if (!fullscreenButton && isFullscreen) setFullscreen(false);
 	}, [fullscreenButton, isFullscreen, setFullscreen]);
 
+	/** Says why something the other Cinette device was asked to do failed. */
+	// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
+	const remoteFailed = (error: unknown) => reportFailure(error, false);
 	/** Plays `item` of the other device's catalog there. */
 	const playOn = (device: PlaybackDestination, item: CatalogItem) =>
-		void device
-			.load({ kind: "remote", itemId: item.id, title: item.name, seriesId: item.seriesId })
-			// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
-			.catch((error: unknown) => reportFailure(error, false));
+		void device.load(remoteItem(item)).catch(remoteFailed);
 	// The episodes around the one that plays, which the controls, a TV's view
 	// and the keys go to: another Cinette device's, from its catalog, or this
 	// player's.
@@ -1646,11 +1646,7 @@ export const PlayerView = () => {
 			{...episodes}
 			// It stops there, and this page goes back to that device's catalog.
 			onStop={() =>
-				void remoteLink.destination.stop().then(
-					() => navigate("/"),
-					// Stryker disable next-line BooleanLiteral: Another Cinette device's failure reads the same for a seek.
-					(error: unknown) => reportFailure(error, false)
-				)
+				void remoteLink.destination.stop().then(() => navigate("/"), remoteFailed)
 			}
 		/>
 	) : null;

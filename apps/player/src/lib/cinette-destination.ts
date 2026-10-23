@@ -12,6 +12,7 @@ import type {
 	PlaybackCapabilities,
 	PlaybackDestination,
 	PlaybackError,
+	PlaybackItem,
 	PlaybackState,
 	PlaybackStatus,
 	Track,
@@ -38,6 +39,14 @@ export interface CatalogItem {
 	 *  targets leave it out. */
 	seriesId?: string;
 }
+
+/** `item`, to play on the device whose catalog it's from. */
+export const remoteItem = (item: CatalogItem): PlaybackItem => ({
+	kind: "remote",
+	itemId: item.id,
+	title: item.name,
+	seriesId: item.seriesId,
+});
 
 /** The other device's state, as its player reports it. */
 export interface RemoteSnapshot {
