@@ -94,6 +94,7 @@ fn system_name() -> Option<String> {
     None
 }
 
+// mutants: skip FnValue, UnaryOperator: It only builds for macOS, and mutation runs build on Linux.
 /// The Mac's computer name, as System Settings, General, About shows it.
 #[cfg(target_os = "macos")]
 fn computer_name() -> Option<String> {
@@ -303,11 +304,47 @@ mod tests {
         assert_eq!(linux_name(None, None), None);
     }
 
+    /// The system's name for this machine, read here as the app reads it.
+    #[cfg(target_os = "linux")]
+    fn this_machines_name() -> Option<String> {
+        linux_name(
+            std::fs::read_to_string("/etc/machine-info").ok().as_deref(),
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
-    fn the_default_name_is_this_machines_cleaned_and_kept() {
-        let name = default_name();
-        assert_eq!(clean_name(name).as_deref(), Some(name));
-        assert!(std::ptr::eq(name, default_name()));
+    fn linux_reads_this_machines_name() {
+        assert_eq!(system_name(), this_machines_name());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_default_name_is_this_machines_cleaned_or_its_type() {
+        let expected = this_machines_name()
+            .as_deref()
+            .and_then(clean_name)
+            .unwrap_or_else(|| settings::default_name(device_type()).to_owned());
+        assert_eq!(default_name(), expected);
+        // It's read once.
+        assert!(std::ptr::eq(default_name(), default_name()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_mac_reads_its_computer_name() {
+        let scutil = std::process::Command::new("/usr/sbin/scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .unwrap();
+        let expected = String::from_utf8(scutil.stdout).unwrap();
+        assert_eq!(
+            computer_name().as_deref(),
+            Some(expected.trim_end_matches('\n'))
+        );
     }
 
     #[test]
