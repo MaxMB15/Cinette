@@ -125,10 +125,10 @@ describe("tvFailureMessage", () => {
 describe("keepWarning", () => {
 	it("warns only before a converted route", () => {
 		expect(keepWarning({ ...chromecast, status: { via: "converted", keep: "on" } })).toBe(
-			"Casting this to Bedroom TV needs this computer to stay on and connected. Closing the lid ends it."
+			"Playing this on Bedroom TV needs this computer to stay on and connected. Closing the lid ends it."
 		);
 		expect(keepWarning({ ...chromecast, status: { via: "converted", keep: "onScreen" } })).toBe(
-			"Casting this to Bedroom TV needs Cinette to stay open on this device."
+			"Playing this on Bedroom TV needs Cinette to stay open on this device."
 		);
 		for (const status of [
 			undefined,

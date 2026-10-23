@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	AIRPLAY_RECEIVER,
 	CONVERT_WARNING,
-	MAC_CONVERT_WARNING,
 	airplayConvertWarning,
 	IDLE_NATIVE_STATE,
 	airplayBlockedMessage,
@@ -143,10 +142,14 @@ describe("the AirPlay profiles", () => {
 
 	it("warns about the device that converts", () => {
 		expect(airplayConvertWarning(false)).toBe(CONVERT_WARNING);
-		expect(airplayConvertWarning(true)).toBe(MAC_CONVERT_WARNING);
-		expect(MAC_CONVERT_WARNING).toBe(
-			"This Mac converts the stream and sends it to the TV. It stays awake while it does. Keep it on the TV's network."
+		// A Mac's says what Cast's does, lid included.
+		expect(airplayConvertWarning(true)).toBe(
+			"Playing this on the TV needs this computer to stay on and connected. Closing the lid ends it."
 		);
+		expect(airplayConvertWarning(true, "Den")).toBe(
+			"Playing this on Den needs this computer to stay on and connected. Closing the lid ends it."
+		);
+		expect(airplayConvertWarning(false, "Den")).toBe(CONVERT_WARNING);
 	});
 });
 
