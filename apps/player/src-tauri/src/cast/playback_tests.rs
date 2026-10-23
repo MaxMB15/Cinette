@@ -1616,14 +1616,16 @@ async fn a_restart_whose_cast_ended_while_it_started_opens_none() {
         connections.load(Ordering::SeqCst) >= 1
     })
     .await;
-    // The receiver ends the cast meanwhile.
+    // The receiver ends the cast meanwhile: its app ends and it closes the
+    // connection, which the session's try to rejoin the app finds.
+    first.end_app();
     first.hang_up();
     assert_eq!(restarting.join().unwrap(), Err(json!("notConnected")));
     assert!(!ffmpeg_runs_for(&source));
-    // It never connected again.
+    // It opened no app and loaded nothing again.
     let opened = tokio::time::timeout(Duration::from_millis(500), async {
         while let Some(message) = got.recv().await {
-            if message.connection > 0 {
+            if message.connection > 0 && matches!(message.kind(), "LAUNCH" | "LOAD") {
                 return true;
             }
         }
@@ -1797,16 +1799,12 @@ async fn a_session_that_went_with_the_old_address_connects_again() {
     assert_eq!(next_of(&mut got, "SET_VOLUME").await.connection, 1);
 }
 
-static GONE_FOR_GOOD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 #[tokio::test(flavor = "multi_thread")]
-async fn a_session_that_cant_connect_again_after_a_move_says_the_cast_was_lost() {
+async fn a_session_that_cant_connect_again_says_the_cast_was_lost() {
     let app = TestApp::new();
-    let ours = |ip| !(GONE_FOR_GOOD.load(Ordering::SeqCst) && ip == LOOPBACK);
-    let (events, _got, first) = quiet_cast(&app, Duration::from_secs(1), ours).await;
-    GONE_FOR_GOOD.store(true, Ordering::SeqCst);
+    let (events, _got, first) = quiet_cast(&app, Duration::from_secs(1), |_| true).await;
     first.go_quiet();
-    // The receiver can't be reached on the new network either.
+    // The receiver can't be reached any more, as when it was turned off.
     let gone = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -1823,26 +1821,30 @@ async fn a_session_that_cant_connect_again_after_a_move_says_the_cast_was_lost()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_receiver_that_goes_quiet_on_the_same_address_is_lost() {
+async fn a_session_that_drops_on_the_same_network_picks_its_app_up_again() {
     let app = TestApp::new();
     let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), |_| true).await;
+    // The connection drops, as while this computer sleeps, and the receiver
+    // app plays on.
     first.go_quiet();
-    assert_eq!(
-        closed_within(&events, Duration::from_secs(10)),
-        Some(json!("timeout"))
-    );
-    // It didn't connect again.
-    let opened = tokio::time::timeout(Duration::from_millis(500), async {
+    // The session connects again and asks the app what it plays.
+    let again = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(message) = got.recv().await {
-            if message.connection > 0 {
+            if message.connection == 1
+                && message.namespace.ends_with(".media")
+                && message.kind() == "GET_STATUS"
+            {
                 return true;
             }
         }
         false
     })
-    .await
-    .unwrap_or(false);
-    assert!(!opened);
+    .await;
+    assert_eq!(again, Ok(true));
+    assert_eq!(closed_within(&events, Duration::from_secs(4)), None);
+    control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
+    let volume = next_of(&mut got, "SET_VOLUME").await;
+    assert_eq!(volume.connection, 1);
 }
 
 static GONE_WHILE_CONVERTING: std::sync::atomic::AtomicBool =
@@ -2176,14 +2178,10 @@ async fn a_reconnect_that_gives_up_after_a_load_connected_says_nothing() {
     control(&app, "cast:tv", json!({ "action": "volume", "level": 0.3 })).unwrap();
 }
 
-static GONE_THEN_ENDED: AtomicBool = AtomicBool::new(false);
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reconnect_finds_an_app_that_ended_meanwhile_and_says_so() {
     let app = TestApp::new();
-    let ours = |ip| !(GONE_THEN_ENDED.load(Ordering::SeqCst) && ip == LOOPBACK);
-    let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), ours).await;
-    GONE_THEN_ENDED.store(true, Ordering::SeqCst);
+    let (events, mut got, first) = quiet_cast(&app, Duration::from_secs(5), |_| true).await;
     first.go_quiet();
     // Someone ends the app on the TV while the connection is gone.
     first.end_app();
@@ -2193,7 +2191,6 @@ async fn a_reconnect_finds_an_app_that_ended_meanwhile_and_says_so() {
         closed_within(&events, Duration::from_secs(10)),
         Some(json!("appStopped"))
     );
-    GONE_THEN_ENDED.store(false, Ordering::SeqCst);
     let opened = tokio::time::timeout(Duration::from_millis(500), async {
         while let Some(message) = got.recv().await {
             assert!(!(message.connection == 1 && message.kind() == "LAUNCH"));
