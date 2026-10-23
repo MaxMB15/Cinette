@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 
 use super::link::{drive, CastUpdate, Command};
 use super::tls;
-use super::CastReceivers;
+use super::{CastReceivers, Subtitle};
 use crate::commands::AppState;
 use crate::convert::{Conversion, ConvertError, Ended};
 use crate::lan_server::{route_to, LanServer, NoRoute};
@@ -110,16 +110,6 @@ pub enum CastAction {
     Tracks {
         on: bool,
     },
-}
-
-/// A subtitle for the receiver to show, which the frontend wrote as
-/// WebVTT.
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Subtitle {
-    pub vtt: String,
-    pub name: String,
-    pub language: Option<String>,
 }
 
 /// The most WebVTT a load takes, many times a film's subtitles.

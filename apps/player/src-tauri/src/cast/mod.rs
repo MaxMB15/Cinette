@@ -39,6 +39,17 @@ mod tls_tests;
 
 use receivers::{ReceiverList, Registry};
 
+/// A subtitle for the receiver to show, which the frontend wrote as
+/// WebVTT. Only Linux and macOS cast.
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
+pub struct Subtitle {
+    pub vtt: String,
+    pub name: String,
+    pub language: Option<String>,
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::discovery::Event;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -281,15 +292,11 @@ pub async fn cast_load<R: Runtime>(
     start_at: Option<f64>,
     restart: bool,
     freed: bool,
-    subtitle: Option<serde_json::Value>,
+    subtitle: Option<Subtitle>,
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let route = serde_json::from_value(route).map_err(|e| e.to_string())?;
-        let subtitle = subtitle
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|e| e.to_string())?;
         let options = playback::LoadOptions {
             start_at,
             restart,
