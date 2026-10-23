@@ -673,7 +673,9 @@ export type CastAction =
 
 /** What a Cast receiver reports, as `cast://update` carries it. */
 export type CastUpdate =
-	| { kind: "ready" }
+	/** The receiver app runs. `sessionId` is new when it was launched, and
+	 *  the same when an app that ran was joined again. */
+	| { kind: "ready"; sessionId: string }
 	| { kind: "volume"; level: number; muted: boolean; fixed: boolean }
 	| {
 			kind: "media";

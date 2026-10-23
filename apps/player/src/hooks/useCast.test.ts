@@ -681,7 +681,10 @@ describe("useCast", () => {
 		expect(result.current.state?.status).toBe("playing");
 		// One for another receiver doesn't.
 		act(() =>
-			events.emit("cast://update", { receiverId: "cast:den", update: { kind: "ready" } })
+			events.emit("cast://update", {
+				receiverId: "cast:den",
+				update: { kind: "ready", sessionId: "s1" },
+			})
 		);
 		expect(result.current.state?.status).toBe("playing");
 	});
@@ -962,7 +965,10 @@ describe("useCast", () => {
 			await result.current.send("cast:tv", film, { stopLocal });
 		});
 		act(() =>
-			events.emit("cast://update", { receiverId: "cast:tv", update: { kind: "ready" } })
+			events.emit("cast://update", {
+				receiverId: "cast:tv",
+				update: { kind: "ready", sessionId: "s1" },
+			})
 		);
 		expect(tauri.castStop).not.toHaveBeenCalled();
 		act(() =>
@@ -1028,7 +1034,10 @@ describe("useCast", () => {
 		expect(tauri.castStop).not.toHaveBeenCalled();
 		expect(events.count("cast://receivers")).toBe(0);
 		const cast = nowPlaying.getState().destination!;
-		events.emit("cast://update", { receiverId: "cast:tv", update: { kind: "ready" } });
+		events.emit("cast://update", {
+			receiverId: "cast:tv",
+			update: { kind: "ready", sessionId: "s1" },
+		});
 		expect(cast.getState().connection).toBe("connected");
 		// A page that opens again finds it.
 		const again = await render();

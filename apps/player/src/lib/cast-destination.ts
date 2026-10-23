@@ -64,6 +64,8 @@ export interface CastSnapshot {
 	/** The highest media id the receiver app has reported. A new load's
 	 *  media goes above it. */
 	seenMedia: number;
+	/** The receiver app's session the ids count in, once it's ready. */
+	appSession: string | null;
 	/** {@link seenMedia} when the stream was last sent. Media up to it is
 	 *  the old item's, whose late reports are left out. */
 	oldMedia: number;
@@ -84,6 +86,7 @@ export const idleSnapshot: CastSnapshot = {
 	loading: false,
 	position: 0,
 	seenMedia: 0,
+	appSession: null,
 	oldMedia: 0,
 };
 
@@ -94,9 +97,18 @@ export const applyUpdate = (
 	at: number
 ): CastSnapshot => {
 	switch (update.kind) {
-		// A receiver app that starts counts its media from 1 again.
+		// A receiver app that was launched counts its media from 1 again. One
+		// that was joined again, as after the connection dropped, goes on.
 		case "ready":
-			return { ...snapshot, phase: "ready", seenMedia: 0, oldMedia: 0 };
+			return update.sessionId === snapshot.appSession
+				? { ...snapshot, phase: "ready" }
+				: {
+						...snapshot,
+						phase: "ready",
+						appSession: update.sessionId,
+						seenMedia: 0,
+						oldMedia: 0,
+					};
 		case "volume":
 			return { ...snapshot, volume: update.level, volumeFixed: update.fixed };
 		case "media": {

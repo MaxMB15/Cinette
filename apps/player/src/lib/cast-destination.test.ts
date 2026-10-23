@@ -81,7 +81,7 @@ const snap = (over: Partial<CastSnapshot>): CastSnapshot => ({ ...idleSnapshot, 
 
 describe("applyUpdate", () => {
 	it("follows the receiver from connecting to ready to closed", () => {
-		const ready = applyUpdate(idleSnapshot, { kind: "ready" }, 1);
+		const ready = applyUpdate(idleSnapshot, { kind: "ready", sessionId: "s1" }, 1);
 		expect(ready.phase).toBe("ready");
 		const closed = applyUpdate(
 			snap({ phase: "ready", loading: true, media: media() }),
@@ -154,10 +154,30 @@ describe("applyUpdate", () => {
 		);
 		expect(lower.seenMedia).toBe(6);
 		expect(applyUpdate(late, { kind: "media", media: null }, 4).seenMedia).toBe(3);
-		// A new app counts from 1 again.
-		const ready = applyUpdate(sent, { kind: "ready" }, 5);
-		expect(ready).toMatchObject({ seenMedia: 0, oldMedia: 0 });
+		// A launched app counts from 1 again.
+		const ready = applyUpdate(sent, { kind: "ready", sessionId: "s1" }, 5);
+		expect(ready).toMatchObject({
+			phase: "ready",
+			appSession: "s1",
+			seenMedia: 0,
+			oldMedia: 0,
+		});
 		expect(applyUpdate(ready, { kind: "media", media: media() }, 6).loading).toBe(false);
+		// The same app joined again goes on counting.
+		const counted = { ...sent, appSession: "s1" };
+		const joined = applyUpdate(counted, { kind: "ready", sessionId: "s1" }, 7);
+		expect(joined).toMatchObject({
+			phase: "ready",
+			appSession: "s1",
+			seenMedia: 3,
+			oldMedia: 3,
+		});
+		expect(applyUpdate(joined, { kind: "media", media: media({ mediaSessionId: 3 }) }, 8)).toBe(
+			joined
+		);
+		// Another app starts over.
+		const other = applyUpdate(counted, { kind: "ready", sessionId: "s2" }, 9);
+		expect(other).toMatchObject({ appSession: "s2", seenMedia: 0, oldMedia: 0 });
 	});
 
 	it("turns failures into the player's error codes", () => {
@@ -367,6 +387,22 @@ describe("createCastDestination", () => {
 		cast.receive({ kind: "media", media: media({ mediaSessionId: 1, position: 510 }) });
 		expect(cast.getState()).toMatchObject({ status: "opening", position: 30 });
 		cast.receive({ kind: "media", media: media({ mediaSessionId: 2, position: 31 }) });
+		expect(cast.getState()).toMatchObject({ status: "playing", position: 31 });
+	});
+
+	it("doesn't take the last item's report for the new one after joining the app again", async () => {
+		const cast = createCastDestination(receiver, backend({ ...xtream, duration: 600 }));
+		cast.receive({ kind: "ready", sessionId: "s1" });
+		await cast.load(item);
+		cast.receive({ kind: "media", media: media({ mediaSessionId: 3, position: 500 }) });
+		// The connection drops while the TV plays on, and the next load
+		// connects again and joins the app that still plays the last item.
+		cast.receive({ kind: "closed", reason: "connectionLost" });
+		await cast.load({ kind: "local", channel: movie }, { startAt: 30 });
+		cast.receive({ kind: "ready", sessionId: "s1" });
+		cast.receive({ kind: "media", media: media({ mediaSessionId: 3, position: 510 }) });
+		expect(cast.getState()).toMatchObject({ status: "opening", position: 30 });
+		cast.receive({ kind: "media", media: media({ mediaSessionId: 4, position: 31 }) });
 		expect(cast.getState()).toMatchObject({ status: "playing", position: 31 });
 	});
 
@@ -597,7 +633,7 @@ describe("createCastDestination", () => {
 		const cast = createCastDestination(receiver, backend());
 		await cast.load(item);
 		expect(cast.getState().connection).toBe("reconnecting");
-		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "ready", sessionId: "s1" });
 		expect(cast.getState().connection).toBe("connected");
 	});
 
@@ -610,7 +646,7 @@ describe("createCastDestination", () => {
 
 	it("tells when the receiver goes away", () => {
 		const cast = createCastDestination(receiver, backend());
-		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "ready", sessionId: "s1" });
 		cast.receive({ kind: "closed", reason: "appStopped" });
 		expect(cast.getState().status).toBe("idle");
 		expect(cast.getState()).toBe(cast.getState());
@@ -619,7 +655,7 @@ describe("createCastDestination", () => {
 	it("says why it closed, and connects again for the next load", async () => {
 		const cast = createCastDestination(receiver, backend());
 		expect(cast.closedReason()).toBeNull();
-		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "ready", sessionId: "s1" });
 		cast.receive({ kind: "closed", reason: "connectionLost" });
 		expect(cast.closedReason()).toBe("connectionLost");
 		expect(cast.getState().connection).toBe("lost");
@@ -627,7 +663,7 @@ describe("createCastDestination", () => {
 		expect(cast.closedReason()).toBeNull();
 		expect(cast.getState().connection).toBe("reconnecting");
 		// A load on a cast that's still open keeps it connected.
-		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "ready", sessionId: "s1" });
 		await cast.load(item);
 		expect(cast.getState().connection).toBe("connected");
 	});
@@ -762,7 +798,7 @@ describe("createCastDestination", () => {
 		const fake = backend();
 		const cast = createCastDestination(receiver, fake);
 		await cast.load(item);
-		cast.receive({ kind: "ready" });
+		cast.receive({ kind: "ready", sessionId: "s1" });
 		cast.receive({ kind: "media", media: media() });
 		let letGo: () => void = () => {};
 		fake.castRelease.mockReturnValueOnce(new Promise<void>((r) => (letGo = r)));
@@ -876,7 +912,7 @@ describe("createCastDestination", () => {
 			const fake = backend(film);
 			const cast = createCastDestination(receiver, fake);
 			await cast.load({ kind: "local", channel: movie }, { startAt: 1200 });
-			cast.receive({ kind: "ready" });
+			cast.receive({ kind: "ready", sessionId: "s1" });
 			cast.receive({
 				kind: "media",
 				media: media({ position: 1200, duration: null, live: true }),

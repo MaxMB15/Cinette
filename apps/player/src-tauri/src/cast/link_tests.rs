@@ -71,8 +71,10 @@ async fn launches_loads_and_controls_the_receiver() {
     let (commands, mut updates, mut got) = cast();
     commands.send(Command::Load(Box::new(request()))).unwrap();
     assert_eq!(
-        next_update(&mut updates, |u| *u == CastUpdate::Ready).await,
-        CastUpdate::Ready
+        next_update(&mut updates, |u| matches!(u, CastUpdate::Ready { .. })).await,
+        CastUpdate::Ready {
+            session_id: "s1".into()
+        }
     );
     let load = next_of(&mut got, "LOAD").await;
     assert_eq!(load.body["media"]["contentId"], "http://192.0.2.1/1.mp4");
@@ -128,7 +130,7 @@ async fn launches_loads_and_controls_the_receiver() {
 #[tokio::test]
 async fn a_control_before_anything_plays_is_rejected() {
     let (commands, mut updates, _got) = cast();
-    next_update(&mut updates, |u| *u == CastUpdate::Ready).await;
+    next_update(&mut updates, |u| matches!(u, CastUpdate::Ready { .. })).await;
     commands.send(Command::Pause).unwrap();
     assert_eq!(
         next_update(&mut updates, |u| matches!(u, CastUpdate::Rejected { .. })).await,
@@ -141,7 +143,7 @@ async fn a_control_before_anything_plays_is_rejected() {
 #[tokio::test]
 async fn dropping_the_commands_stops_the_cast() {
     let (commands, mut updates, mut got) = cast();
-    next_update(&mut updates, |u| *u == CastUpdate::Ready).await;
+    next_update(&mut updates, |u| matches!(u, CastUpdate::Ready { .. })).await;
     drop(commands);
     next_of(&mut got, "CLOSE").await;
     assert_eq!(
@@ -257,7 +259,7 @@ async fn says_which_receiver_app_the_cast_joined() {
     let driving = tokio::spawn(drive(sender_end, session, first, command_rx, move |u| {
         let _ = updates_tx.send(u);
     }));
-    next_update(&mut updates, |u| *u == CastUpdate::Ready).await;
+    next_update(&mut updates, |u| matches!(u, CastUpdate::Ready { .. })).await;
     commands.send(Command::Stop).unwrap();
     assert_eq!(driving.await.unwrap().as_deref(), Some("s1"));
 

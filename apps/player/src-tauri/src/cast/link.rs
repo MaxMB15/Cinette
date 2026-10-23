@@ -90,8 +90,11 @@ impl From<&MediaState> for MediaView {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum CastUpdate {
-    /// The Default Media Receiver runs and takes commands.
-    Ready,
+    /// The Default Media Receiver runs and takes commands. `session_id` is
+    /// the receiver app's session, which is new when the app was launched and
+    /// the same when an app that ran was joined again.
+    #[serde(rename_all = "camelCase")]
+    Ready { session_id: String },
     #[serde(rename_all = "camelCase")]
     Volume {
         level: f64,
@@ -122,7 +125,7 @@ pub enum CastUpdate {
 impl From<Event> for CastUpdate {
     fn from(event: Event) -> Self {
         match event {
-            Event::Ready { .. } => CastUpdate::Ready,
+            Event::Ready { session_id } => CastUpdate::Ready { session_id },
             Event::Volume(v) => CastUpdate::Volume {
                 level: v.level,
                 muted: v.muted,
